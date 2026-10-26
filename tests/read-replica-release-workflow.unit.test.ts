@@ -75,7 +75,6 @@ describe('production read-replica release gate', () => {
       for (const job of [
         'deploy_webapp',
         'deploy_api',
-        'deploy_r2_inventory',
         'deploy_translation_worker',
         'deploy_files',
         'deploy_plugin_regions',

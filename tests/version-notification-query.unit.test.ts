@@ -29,6 +29,8 @@ beforeAll(async () => {
       app_version_id bigint NOT NULL, s3_path text
     );
     CREATE INDEX manifest_version_idx ON public.manifest(app_version_id);
+    CREATE TABLE public.delta_files (id bigint PRIMARY KEY, s3_path text NOT NULL);
+    CREATE TABLE public.version_files (app_version_id bigint PRIMARY KEY, file_ids bigint[] NOT NULL);
     CREATE TABLE public.onboarding_demo_data (
       app_id text, relation_name text, row_key text,
       UNIQUE (app_id, relation_name, row_key)
@@ -42,7 +44,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   mocks.query.mockImplementation((sql: string, params: unknown[]) => database.query(sql, params))
   mocks.getPgClient.mockResolvedValue({ query: mocks.query })
-  await database.exec('TRUNCATE public.app_versions, public.manifest, public.onboarding_demo_data, public.deploy_history')
+  await database.exec('TRUNCATE public.app_versions, public.manifest, public.delta_files, public.version_files, public.onboarding_demo_data, public.deploy_history')
   await database.query('INSERT INTO public.app_versions(id, app_id) VALUES (123, $1)', [appId])
   await database.query('INSERT INTO public.deploy_history VALUES (456, $1, 123)', [appId])
 })
@@ -122,6 +124,14 @@ describe('version notification provenance on Postgres', () => {
 
   it('recognizes untracked legacy versions whose files all use reserved demo paths', async () => {
     await addManifest([`demo/${appId}/1.0.0/index.html`, `demo/${appId}/1.0.0/main.js`])
+    expect(await shouldSkipVersionNotifications(context, appId, 123)).toBe(true)
+  })
+
+  it('reads converted version_files paths alongside legacy rows', async () => {
+    await database.query('INSERT INTO public.delta_files(id, s3_path) VALUES (1, $1), (2, $2)', [`demo/${appId}/1.0.0/index.html`, 'orgs/example/apps/example/main.js'])
+    await database.query('INSERT INTO public.version_files(app_version_id, file_ids) VALUES (123, ARRAY[1, 2]::bigint[])')
+    expect(await shouldSkipVersionNotifications(context, appId, 123)).toBe(false)
+    await database.query('UPDATE public.version_files SET file_ids = ARRAY[1]::bigint[] WHERE app_version_id = 123')
     expect(await shouldSkipVersionNotifications(context, appId, 123)).toBe(true)
   })
 
@@ -208,6 +218,10 @@ describe('version notification provenance on Postgres', () => {
       SELECT 123, 'demo/${appId}/file-' || id FROM generate_series(1, 5000) id;
       INSERT INTO public.onboarding_demo_data
       SELECT 'com.example.noise', 'app_versions', id::text FROM generate_series(1000, 10999) id;
+      INSERT INTO public.delta_files(id, s3_path)
+      SELECT id, 'orgs/noise/delta/file-' || id FROM generate_series(1, 20000) id;
+      INSERT INTO public.version_files(app_version_id, file_ids)
+      SELECT id, ARRAY[id - 999, id + 9001]::bigint[] FROM generate_series(1000, 10999) id;
       ANALYZE;
     `)
     expect(await shouldSkipVersionNotifications(context, appId, 123, 456)).toBe(true)
@@ -217,5 +231,6 @@ describe('version notification provenance on Postgres', () => {
     expect(plan).not.toContain('Seq Scan')
     expect(plan).toContain('manifest_version_idx')
     expect(plan).toContain('app_versions_pkey')
+    expect(plan).toContain('version_files_pkey')
   }, 30_000)
 })

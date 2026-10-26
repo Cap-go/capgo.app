@@ -199,19 +199,21 @@ export const honoFactory = createFactory<MiddlewareKeyVariables>()
 type TriggerOperation = 'DELETE' | 'INSERT' | 'UPDATE'
 
 export function triggerValidator(
-  table: keyof Database['public']['Tables'],
+  table: keyof Database['public']['Tables'] | readonly (keyof Database['public']['Tables'])[],
   type: TriggerOperation | readonly TriggerOperation[],
 ) {
+  const allowedTables: readonly string[] = typeof table === 'string' ? [table] : table
+  const tableLabel = allowedTables.join(' or ')
   return honoFactory.createMiddleware(async (c, next) => {
     const rawBody = await parseBody<unknown>(c)
     if (rawBody === null || typeof rawBody !== 'object' || Array.isArray(rawBody))
       throw simpleError('invalid_payload', 'Expected a JSON object', { body: rawBody })
 
-    const body = rawBody as DeletePayload<typeof table> | InsertPayload<typeof table> | UpdatePayload<typeof table>
+    const body = rawBody as DeletePayload<keyof Database['public']['Tables']> | InsertPayload<keyof Database['public']['Tables']> | UpdatePayload<keyof Database['public']['Tables']>
     const allowedTypes: readonly TriggerOperation[] = typeof type === 'string' ? [type] : type
 
-    if (body.table !== String(table)) {
-      cloudlog({ requestId: c.get('requestId'), message: `Not ${String(table)}` })
+    if (!allowedTables.includes(String(body.table))) {
+      cloudlog({ requestId: c.get('requestId'), message: `Not ${tableLabel}` })
       throw simpleError('table_not_match', 'Not table', { body })
     }
 

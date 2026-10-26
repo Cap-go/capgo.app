@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { closeClient, getPgClient } from './pg.ts'
+import { versionManifestSizeRowsSql } from './version_manifest_sql.ts'
 
 export interface ManifestSizeRequestFile {
   file_name?: string | null
@@ -167,12 +168,15 @@ const MANIFEST_SIZE_FILE_VERSION_BRANCH = `
     OFFSET 0
   ) av ON av.app_id = $2 AND av.deleted = false
 )
+, allowed_version_rows AS MATERIALIZED (
+  SELECT av.id AS version_id, rows.file_hash, rows.file_size
+  FROM allowed_versions av
+  CROSS JOIN LATERAL ${versionManifestSizeRowsSql('av.id')} AS rows
+)
 SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
 FROM requested r
+INNER JOIN allowed_version_rows m ON m.version_id = r.version_id AND m.file_hash = r.file_hash
 INNER JOIN allowed_versions av ON av.id = r.version_id
-INNER JOIN public.manifest m
-  ON m.app_version_id = av.id
- AND m.file_hash = r.file_hash
 WHERE r.version_id IS NOT NULL
 GROUP BY r.file_hash, av.id`
 
@@ -185,26 +189,30 @@ CROSS JOIN (
   WHERE id = $3
   OFFSET 0
 ) av
-INNER JOIN public.manifest m
-  ON m.app_version_id = av.id
- AND m.file_hash = r.file_hash
+INNER JOIN (
+  SELECT rows.file_hash, rows.file_size
+  FROM ${versionManifestSizeRowsSql('$3::bigint')} AS rows
+  OFFSET 0
+) m ON m.file_hash = r.file_hash
 WHERE r.version_id IS NULL
   AND av.app_id = $2
   AND av.deleted = false
 GROUP BY r.file_hash, av.id`
 
 const MANIFEST_SIZE_FALLBACK_NAME_BRANCH = `
-SELECT r.file_hash, av.id AS version_id, MAX(m.file_size) AS file_size
+, named_version_rows AS MATERIALIZED (
+  SELECT av.id AS version_id, rows.file_hash, rows.file_size
+  FROM public.app_versions av
+  CROSS JOIN LATERAL ${versionManifestSizeRowsSql('av.id')} AS rows
+  WHERE av.app_id = $2
+    AND av.name = $3
+    AND av.deleted = false
+)
+SELECT r.file_hash, m.version_id, MAX(m.file_size) AS file_size
 FROM requested r
-INNER JOIN public.app_versions av
-  ON av.app_id = $2
- AND av.name = $3
- AND av.deleted = false
-INNER JOIN public.manifest m
-  ON m.app_version_id = av.id
- AND m.file_hash = r.file_hash
+INNER JOIN named_version_rows m ON m.file_hash = r.file_hash
 WHERE r.version_id IS NULL
-GROUP BY r.file_hash, av.id`
+GROUP BY r.file_hash, m.version_id`
 
 export function buildManifestSizeLookupQuery(
   appId: string,

@@ -554,7 +554,55 @@ async function getObject(c: Context, fileId: string): Promise<Response | null> {
   }
 }
 
+export interface ListedObject { key: string, lastModified: Date }
+
+/** One listing page (at most 1,000 keys) plus the token for the next page. */
+async function listObjectPage(c: Context, prefix: string, continuationToken: string | null, pageSize = 1_000) {
+  const client = initS3(c)
+  const iterator = client.listObjectsGrouped({ prefix, pageSize, maxResults: pageSize, continuationToken: continuationToken ?? undefined })
+  const objects: ListedObject[] = []
+  let result = await iterator.next()
+  while (!result.done) {
+    if (result.value.type === 'Object')
+      objects.push({ key: result.value.key, lastModified: result.value.lastModified })
+    result = await iterator.next()
+  }
+  return { objects, nextToken: result.value ?? null }
+}
+
+/** Server-side copy into the lifecycle trash; the source stays in place. */
+async function copyObjectToTrash(c: Context, fileId: string) {
+  if (fileId.startsWith(R2_TRASH_PREFIX))
+    return true
+  try {
+    await initS3(c).copyObject({ sourceKey: fileId }, getTrashPath(fileId))
+    return true
+  }
+  catch (error) {
+    if (isMissingObjectError(error))
+      return false
+    cloudlogErr({ requestId: c.get('requestId'), message: 'copy R2 object to trash failed', fileId, error: serializeStorageError(error) })
+    return false
+  }
+}
+
+async function deleteObjectKey(c: Context, fileId: string) {
+  try {
+    await initS3(c).deleteObject(fileId)
+    return true
+  }
+  catch (error) {
+    if (isMissingObjectError(error))
+      return true
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delete R2 object failed', fileId, error: serializeStorageError(error) })
+    return false
+  }
+}
+
 export const s3 = {
+  copyObjectToTrash,
+  deleteObjectKey,
+  listObjectPage,
   getSize,
   deleteObject,
   getSizeDiagnostics,

@@ -9,10 +9,14 @@ export const MANIFEST_CLEANUP_BUDGET_MS = 10_000
  * Commit a bounded database-only batch. The last deletion and counter update
  * share a transaction, including when legacy rows have manifest_count = 0.
  * The version lock is shared with manifest persistence, never with R2 I/O.
+ *
+ * Legacy rows are moved into version_files first: deleted versions keep their
+ * file references for the 7-day restore window, and delta storage GC releases
+ * the R2 objects afterwards. Only onboarding demo rows are deleted in place.
  */
 export async function deleteVersionManifestBatch(database: ReturnType<typeof getDrizzleClient>, versionId: number) {
   return database.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL statement_timeout = '5s'`)
+    await tx.execute(sql`SET LOCAL statement_timeout = '15s'`)
     await tx.execute(sql`SET LOCAL lock_timeout = '2s'`)
     await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock(${versionId}::bigint)`)
     const version = await tx.execute<{ deleted: boolean, deleted_at: string | null }>(sql`
@@ -20,6 +24,11 @@ export async function deleteVersionManifestBatch(database: ReturnType<typeof get
     `)
     if (!version.rows[0] || (!version.rows[0].deleted && !version.rows[0].deleted_at))
       return { deleted: 0, complete: true }
+
+    const converted = await tx.execute<{ removed: number }>(sql`
+      SELECT public.convert_version_manifest_rows(${versionId}::bigint) AS removed
+    `)
+    const convertedRows = Number(converted.rows[0]?.removed ?? 0)
 
     // Start on the app_version_id index; no all-manifest scan, ID array, sort,
     // cross-version reference check, or per-file lock/connection is needed.
@@ -34,7 +43,7 @@ export async function deleteVersionManifestBatch(database: ReturnType<typeof get
     const remaining = await tx.execute<{ remaining: boolean }>(sql`
       SELECT EXISTS (SELECT 1 FROM public.manifest WHERE app_version_id = ${versionId}) AS remaining
     `)
-    const deleted = removed.rowCount ?? 0
+    const deleted = convertedRows + (removed.rowCount ?? 0)
     if (remaining.rows[0]?.remaining)
       return { deleted, complete: false }
 

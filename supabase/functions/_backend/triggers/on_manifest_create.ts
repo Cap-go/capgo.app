@@ -171,11 +171,55 @@ export async function updateManifestSize(c: Context, record: Database['public'][
   return c.json(BRES)
 }
 
+type DeltaFileRecord = Database['public']['Tables']['delta_files']['Row']
+
+function isDeltaFileRecord(record: object): record is DeltaFileRecord {
+  return 'entry_key' in record || 'path_key' in record
+}
+
+// One R2 lookup per unique unsized delta file; versions share the row.
+export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, queue = getQueueLogMetadata(c)) {
+  if (!record.id || !record.s3_path)
+    throw simpleError('no_s3_path', 'No s3 path', { record })
+
+  const { data: current, error: currentError } = await supabaseAdmin(c)
+    .from('delta_files')
+    .select('file_size')
+    .eq('id', record.id)
+    .maybeSingle()
+  if (currentError)
+    throw simpleError('delta_file_read_failed', 'Failed to read delta file', { id: record.id }, currentError)
+  if (!current || current.file_size > 0) {
+    cloudlog({ requestId: c.get('requestId'), message: 'delta file gone or already sized', id: record.id, queue })
+    return c.json(BRES)
+  }
+
+  const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, record.s3_path)
+  const size = diagnostics?.size ?? 0
+  if (size <= 0) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: record.s3_path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
+    // Non-2xx keeps the message under the 5-read queue budget.
+    throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: record.s3_path, storageDiagnostics: diagnostics }, lastError, { alert: false })
+  }
+
+  await runManifestUpdateWithRetry(c, async () => await supabaseAdmin(c)
+    .from('delta_files')
+    .update({ file_size: size })
+    .eq('id', record.id)
+    .eq('file_size', 0))
+  cloudlog({ requestId: c.get('requestId'), message: 'delta file file_size updated', id: record.id, s3_path: record.s3_path, size, attempts, queue })
+  return c.json(BRES)
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
-app.post('/', middlewareAPISecret, triggerValidator('manifest', 'INSERT'), (c) => {
-  const record = c.get('webhookBody') as Database['public']['Tables']['manifest']['Row']
-  cloudlog({ requestId: c.get('requestId'), message: 'record', record })
+app.post('/', middlewareAPISecret, triggerValidator(['manifest', 'delta_files'], 'INSERT'), (c) => {
+  const webhookRecord = c.get('webhookBody') as object
+  cloudlog({ requestId: c.get('requestId'), message: 'record', record: webhookRecord })
+  if (isDeltaFileRecord(webhookRecord))
+    return updateDeltaFileSize(c, webhookRecord)
+
+  const record = webhookRecord as Database['public']['Tables']['manifest']['Row']
 
   if (!record.app_version_id || !record.s3_path) {
     cloudlog({ requestId: c.get('requestId'), message: 'no app_version_id or s3_path' })

@@ -11,7 +11,9 @@ import { defaultApiHost, useConsole } from '~/services/console'
 import { formatBytes } from '~/services/conversion'
 import { useDisplayStore } from '~/stores/display'
 
-type ManifestEntry = Database['public']['Tables']['manifest']['Row']
+type ManifestViewRow = Database['public']['Views']['version_manifest']['Row']
+// View columns are typed nullable; every row the view returns is complete.
+type ManifestEntry = { [K in keyof ManifestViewRow]: K extends 'file_size' ? ManifestViewRow[K] : NonNullable<ManifestViewRow[K]> }
 
 type VersionRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name' | 'created_at' | 'manifest_count' | 'app_id'>
 
@@ -195,7 +197,7 @@ async function fetchManifestEntries(versionId: number) {
   let offset = 0
   while (true) {
     const { data, error } = await capgo
-      .from('manifest')
+      .from('version_manifest')
       .select('id, file_name, file_hash, file_size, s3_path, app_version_id')
       .eq('app_version_id', versionId)
       .order('file_name', { ascending: true })
@@ -206,7 +208,7 @@ async function fetchManifestEntries(versionId: number) {
       return []
     }
 
-    const batch = data ?? []
+    const batch = (data ?? []) as ManifestEntry[]
     allEntries.push(...batch)
 
     if (batch.length < MANIFEST_PAGE_SIZE)

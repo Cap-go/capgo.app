@@ -8,9 +8,11 @@ export const REPLICA_TABLES = [
   'app_versions',
   'channels',
   'channel_devices',
+  'delta_files',
   'manifest',
   'notifications',
   'onboarding_demo_data',
+  'version_files',
 ] as const
 
 export const REPLICA_TYPES = [
@@ -39,6 +41,11 @@ export const REPLICA_EXCLUDED_INDEXES = [
   'app_versions_manifest_present_idx',
   // Plugin reads manifest by app_version_id only; this index just adds WAL that every regional replica downloads.
   'idx_manifest_file_name',
+  // Delta storage writes and GC lookups run on the primary; plugin reads join by primary key only.
+  'delta_files_app_id_idx',
+  'delta_files_entry_key_idx',
+  'delta_files_path_key_idx',
+  'version_files_file_ids_gin_idx',
 ] as const
 
 export function replicaConfigPattern(values: readonly string[]): string {

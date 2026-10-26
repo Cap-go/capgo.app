@@ -1,19 +1,20 @@
 # Deleted-version manifest cleanup
 
-`on_version_update` removes the deleted version's `public.manifest` rows without
-checking other versions or touching delta objects in R2. Both shared objects and
-objects with no remaining manifest references stay physically intact. Orphaned
-delta storage therefore accumulates until a separately implemented collector is
-enabled. Row deletions continue to replicate normally. Inventory, notifications,
-upload protocols and queue configuration are unchanged.
+`on_version_update` releases the deleted version's legacy `public.manifest` rows
+by moving them into `delta_files` / `version_files`
+(`convert_version_manifest_rows`); onboarding demo rows are deleted in place.
+The version keeps its `version_files` row, so its delta files survive the 7-day
+restore window. Delta storage GC reclaims R2 objects afterwards; see
+[delta storage](delta-storage.md).
 
-One write pool runs sequential Drizzle transactions of at most 1,000 rows,
-starting from `idx_manifest_app_version_id_file_hash`. A pass stops after 20
-batches or ten seconds between batches; statements have a five-second timeout
+One write pool runs sequential Drizzle transactions: the conversion moves the
+whole version (at most 10,000 rows) at once, then leftover demo rows are deleted
+in batches of at most 1,000, starting from `idx_manifest_app_version_id_file_hash`. A pass stops after 20
+batches or ten seconds between batches; statements have a 15-second timeout
 and lock waits a two-second timeout. Incomplete passes raise the existing cleanup
 error; committed batches survive retries and the existing 15-minute sweeper
 requeues remaining work. Queue reads remain capped at five. A 5,000-file bundle
-needs five deletion transactions, with no per-file connections or network calls.
+needs one conversion transaction, with no per-file connections or network calls.
 
 The last row deletion and version/app counter finalization commit together.
 Retries cannot double-decrement `manifest_bundle_count`, including legacy rows

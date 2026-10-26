@@ -471,7 +471,7 @@ app.get('/manifest', middlewareKey(), versionedRoute<CliContext>({
     for (let page = 0; page < MANIFEST_MAX_PAGES; page++) {
       const from = page * MANIFEST_PAGE_SIZE
       const data = unwrap(await supabase
-        .from('manifest')
+        .from('version_manifest')
         .select('file_name, file_hash')
         .eq('app_version_id', appVersionId)
         .order('id')

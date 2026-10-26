@@ -101,10 +101,6 @@
       ],
       "queues": {
         "producers": [
-          { "binding": "INVENTORY_EVENT_QUEUE", "queue": "capgo-r2-inventory-prod" },
-          { "binding": "INVENTORY_REPAIR_QUEUE", "queue": "capgo-r2-inventory-prod-repair" },
-          { "binding": "INVENTORY_EVENT_DLQ", "queue": "capgo-r2-inventory-prod-dlq" },
-          { "binding": "INVENTORY_REPAIR_DLQ", "queue": "capgo-r2-inventory-prod-repair-dlq" },
           {
             "binding": "NOTIFICATION_QUEUE",
             "queue": "capgo-native-notifications-prod"
@@ -133,7 +129,6 @@
       },
       "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
       "hyperdrive": [
-        { "binding": "HYPERDRIVE_R2_INVENTORY", "id": "af73fa6a112b495f80e81718b153db76" },
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"

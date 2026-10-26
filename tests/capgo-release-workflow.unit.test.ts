@@ -1,6 +1,5 @@
 /* eslint-disable no-template-curly-in-string -- Tests assert literal GitHub Actions expressions. */
 import { readFile } from 'node:fs/promises'
-import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 
@@ -100,7 +99,6 @@ describe('native-aware Capgo release workflow', () => {
       'read_replica_schema',
       'deploy_webapp',
       'deploy_api',
-      'deploy_r2_inventory',
       'deploy_translation_worker',
       'deploy_files',
       'deploy_plugin_regions',
@@ -148,62 +146,6 @@ describe('native-aware Capgo release workflow', () => {
     const supabaseDeployIndex = workflowSource.indexOf('  supabase_deploy:')
     expect(supabaseDeployIndex).toBeGreaterThan(-1)
     expect(workflowSource.slice(supabaseDeployIndex)).not.toContain('github.ref')
-  })
-
-  it.concurrent('provisions only production inventory queues before deploying the consumer without enabling bucket notifications', async () => {
-    const source = await readWorkflow(workflowPaths.deploy)
-    const workflow = parseWorkflow(source)
-    const job = workflow.jobs?.deploy_r2_inventory
-    const steps = job?.steps ?? []
-    const provision = steps.find(step => step.name === 'Ensure R2 inventory queues')
-    const deploy = steps.find(step => step.name === 'Deploy CF Worker R2 inventory')
-    const environment = steps.find(step => step.name === 'Select inventory environment')
-
-    expect(source).toContain('r2_inventory: ${{ steps.scope.outputs.r2_inventory }}')
-    expect(job?.needs).toEqual(['changes', 'supabase_deploy', 'read_replica_schema'])
-    expect(job?.if).toContain('needs.changes.outputs.r2_inventory == \'true\'')
-    expect(job?.if).toContain('needs.supabase_deploy.result == \'success\'')
-    expect(job?.if).toContain('needs.changes.outputs.supabase != \'true\'')
-    expect(job?.if).toContain('needs.read_replica_schema.result == \'success\'')
-    expect(job?.if).toContain('needs.changes.outputs.is_alpha == \'false\'')
-    expect(job?.permissions).toEqual({ contents: 'read' })
-    expect(environment).toBeUndefined()
-    expect(provision?.run).toContain('ensure-r2-inventory-queues.ts prod')
-    expect(deploy?.run).toContain('wrangler deploy --config cloudflare_workers/r2_inventory/wrangler.jsonc --env=prod --minify')
-    expect(steps.indexOf(provision!)).toBeLessThan(steps.indexOf(deploy!))
-    for (const step of [provision, deploy]) {
-      expect(step?.run?.split('\n')[0]).toBe('bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"')
-      expect(step?.env).toEqual({
-        CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
-        CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}',
-      })
-    }
-    expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('notification create')
-  })
-
-  it.concurrent.each([
-    { isAlpha: 'false', schema: 'true', supabase: 'success', replica: 'success', expected: true },
-    { isAlpha: 'false', schema: 'false', supabase: 'skipped', replica: 'skipped', expected: true },
-    { isAlpha: 'true', schema: 'true', supabase: 'success', replica: 'skipped', expected: false },
-    { isAlpha: 'true', schema: 'false', supabase: 'skipped', replica: 'skipped', expected: false },
-    { isAlpha: '', schema: 'false', supabase: 'skipped', replica: 'skipped', expected: false },
-    { isAlpha: 'false', schema: 'true', supabase: 'failure', replica: 'success', expected: false },
-    { isAlpha: 'false', schema: 'true', supabase: 'success', replica: 'failure', expected: false },
-    { isAlpha: 'false', schema: 'true', supabase: 'skipped', replica: 'skipped', expected: false },
-  ])('gates inventory deployment for release and schema outcomes: %j', async ({ isAlpha, schema, supabase, replica, expected }) => {
-    const workflow = parseWorkflow(await readWorkflow(workflowPaths.deploy))
-    const condition = workflow.jobs?.deploy_r2_inventory?.if
-    expect(condition).toBeDefined()
-    // This job uses the shared boolean/comparison subset of Actions and JavaScript.
-    const result = runInNewContext(condition!.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {
-      always: () => true,
-      needs: {
-        changes: { result: 'success', outputs: { r2_inventory: 'true', is_alpha: isAlpha, supabase: schema } },
-        supabase_deploy: { result: supabase },
-        read_replica_schema: { result: replica },
-      },
-    })
-    expect(result).toBe(expected)
   })
 
   it.concurrent('keeps post-merge tests and publishes release refs atomically', async () => {

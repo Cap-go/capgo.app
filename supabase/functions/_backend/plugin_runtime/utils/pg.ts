@@ -22,6 +22,7 @@ import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness
 import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
+import { versionManifestJsonSql } from './version_manifest_sql.ts'
 
 /**
  * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -737,13 +738,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     rollout_cache_ttl_seconds: channelAlias.rollout_cache_ttl_seconds,
     paused_at: channelAlias.paused_at,
   }
-  const manifestSelect = sql<{ file_name: string, file_hash: string, s3_path: string }[]>`COALESCE(json_agg(
-        json_build_object(
-          'file_name', ${schema.manifest.file_name},
-          'file_hash', ${schema.manifest.file_hash},
-          's3_path', ${schema.manifest.s3_path}
-        )
-      ) FILTER (WHERE ${schema.manifest.file_name} IS NOT NULL), '[]'::json)`
+  const manifestSelect = versionManifestJsonSql(versionAlias.id)
   return { versionSelect, rolloutVersionSelect, channelDevicesAlias, channelAlias, channelSelect, manifestSelect, versionAlias, rolloutVersionAlias }
 }
 
@@ -791,9 +786,7 @@ export function requestInfosChannelDevicePostgres(
     .innerJoin(channelAlias, eq(channelDevicesAlias.channel_id, channelAlias.id))
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelDevice = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelDevice = baseQuery
     .where(and(
       eq(channelDevicesAlias.device_id, device_id),
       eq(channelDevicesAlias.app_id, app_id),
@@ -927,9 +920,7 @@ export function requestInfosChannelByIdPostgres(
     .from(channelAlias)
     .innerJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channel = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channel = baseQuery
     .where(and(
       eq(channelAlias.app_id, app_id),
       eq(channelAlias.id, channelId),
@@ -966,9 +957,7 @@ export function requestInfosChannelPostgres(
     .from(channelAlias)
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelQuery = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelQuery = baseQuery
     .where(and(
       defaultChannel
         ? and(
@@ -1044,15 +1033,13 @@ export async function requestManifestEntriesPostgres(
   if (cached)
     return cached
 
-  const rows = await retryOnRecoveryConflict(c, 'manifest_entries', () => drizzleClient
-    .select({
-      file_name: schema.manifest.file_name,
-      file_hash: schema.manifest.file_hash,
-      s3_path: schema.manifest.s3_path,
-    })
-    .from(schema.manifest)
-    .where(eq(schema.manifest.app_version_id, versionId))
-    .execute())
+  const rows = await retryOnRecoveryConflict(c, 'manifest_entries', async () => {
+    const result = await drizzleClient
+      .select({ entries: versionManifestJsonSql(sql`${versionId}::bigint`) })
+      .from(sql`(SELECT 1) AS one`)
+      .execute()
+    return (result[0]?.entries ?? []) as ManifestRow[]
+  })
 
   // Cache API size limits may reject huge manifests; the put fails open.
   // With the /updates edge cache on, the rows also carry the app's purge tag.

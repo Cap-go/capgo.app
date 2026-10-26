@@ -59,8 +59,8 @@ app.post('/', middlewareAuth, async (c) => {
 
   if (body.isManifest) {
     const { data: manifest, error: getManifestError } = await supabase
-      .from('manifest')
-      .select('*')
+      .from('version_manifest')
+      .select('file_name, file_hash, s3_path')
       .eq('app_version_id', bundle.id)
 
     if (getManifestError) {

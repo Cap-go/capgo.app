@@ -289,8 +289,9 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
 }
 
 /**
- * Delete only this version's database references. Delta bytes remain in R2 until
- * a separately enabled collector owns reclamation. Committed progress survives
+ * Release only this version's legacy manifest rows (moved to version_files).
+ * Delta bytes stay in R2; delta storage GC reclaims them once no version kept
+ * for the 7-day restore window references them. Committed progress survives
  * timeouts; the existing sweeper requeues unfinished work within the five-read
  * queue ceiling. Final counters commit with the last row deletion.
  */

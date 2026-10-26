@@ -1001,6 +1001,96 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "d",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "delta_files",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": true,
+      "position": 2,
+      "table": "delta_files",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "s3_path",
+      "notNull": true,
+      "position": 3,
+      "table": "delta_files",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "file_name",
+      "notNull": true,
+      "position": 4,
+      "table": "delta_files",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "file_hash",
+      "notNull": true,
+      "position": 5,
+      "table": "delta_files",
+      "type": "character varying"
+    },
+    {
+      "default": "0",
+      "generated": "",
+      "identity": "",
+      "name": "file_size",
+      "notNull": true,
+      "position": 6,
+      "table": "delta_files",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "path_key",
+      "notNull": true,
+      "position": 7,
+      "table": "delta_files",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "entry_key",
+      "notNull": true,
+      "position": 8,
+      "table": "delta_files",
+      "type": "bytea"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": true,
+      "position": 9,
+      "table": "delta_files",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "nextval('manifest_id_seq'::regclass)",
       "generated": "",
       "identity": "",
@@ -1869,6 +1959,36 @@
       "position": 28,
       "table": "stripe_info",
       "type": "text"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_version_id",
+      "notNull": true,
+      "position": 1,
+      "table": "version_files",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "file_ids",
+      "notNull": true,
+      "position": 2,
+      "table": "version_files",
+      "type": "bigint[]"
+    },
+    {
+      "default": "now()",
+      "generated": "",
+      "identity": "",
+      "name": "created_at",
+      "notNull": true,
+      "position": 3,
+      "table": "version_files",
+      "type": "timestamp with time zone"
     }
   ],
   "constraints": [
@@ -2014,6 +2134,13 @@
     },
     {
       "definition": "PRIMARY KEY (id)",
+      "name": "delta_files_pkey",
+      "table": "delta_files",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
       "name": "manifest_pkey",
       "table": "manifest",
       "type": "p",
@@ -2135,6 +2262,13 @@
       "definition": "PRIMARY KEY (customer_id)",
       "name": "stripe_info_pkey",
       "table": "stripe_info",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "PRIMARY KEY (app_version_id)",
+      "name": "version_files_pkey",
+      "table": "version_files",
       "type": "p",
       "valid": true
     }
@@ -2477,16 +2611,16 @@
       "valid": true
     },
     {
-      "constraintOwned": false,
-      "definition": "CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size)",
-      "name": "idx_manifest_app_version_id_file_hash",
-      "table": "manifest",
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX delta_files_pkey ON public.delta_files USING btree (id)",
+      "name": "delta_files_pkey",
+      "table": "delta_files",
       "valid": true
     },
     {
       "constraintOwned": false,
-      "definition": "CREATE INDEX idx_manifest_file_hash ON public.manifest USING btree (file_hash)",
-      "name": "idx_manifest_file_hash",
+      "definition": "CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size)",
+      "name": "idx_manifest_app_version_id_file_hash",
       "table": "manifest",
       "valid": true
     },
@@ -2671,6 +2805,13 @@
       "name": "stripe_info_pkey",
       "table": "stripe_info",
       "valid": true
+    },
+    {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX version_files_pkey ON public.version_files USING btree (app_version_id)",
+      "name": "version_files_pkey",
+      "table": "version_files",
+      "valid": true
     }
   ],
   "sequences": [
@@ -2707,6 +2848,18 @@
       "name": "channel_id_seq",
       "ownedColumn": "id",
       "ownedTable": "channels",
+      "start": "1",
+      "type": "bigint"
+    },
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
+      "max": "9223372036854775807",
+      "min": "1",
+      "name": "delta_files_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "delta_files",
       "start": "1",
       "type": "bigint"
     },
@@ -2773,6 +2926,11 @@
     },
     {
       "kind": "r",
+      "name": "delta_files",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
       "name": "manifest",
       "reloptions": [
         "autovacuum_analyze_scale_factor=0.02",
@@ -2802,6 +2960,11 @@
     {
       "kind": "r",
       "name": "stripe_info",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "version_files",
       "reloptions": []
     }
   ],

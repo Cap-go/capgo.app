@@ -2,7 +2,7 @@ import type { ManifestEntry } from '../supabase/functions/_backend/utils/downloa
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { createAppVersions, getBaseData, getSupabaseClient, ORG_ID, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { createAppVersions, executeSQL, getBaseData, getSupabaseClient, ORG_ID, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
 
 const id = randomUUID()
@@ -161,6 +161,32 @@ describe('update manifest scenarios', () => {
     expect(response.status).toBe(200)
     const json = await response.json<UpdateRes>()
     expect(json.manifest).toBeDefined()
+    expect(json.manifest?.[0].file_name).toBe('test')
+    expect(json.manifest?.[0].download_url).toContain('/test_file.html')
+    expect(json.manifest?.[0].file_hash).toBe('1234567890')
+  })
+
+  it('serves a manifest stored only in version_files/delta_files', async () => {
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 2000}`
+    const version = await createAppVersions(versionName, APPNAME, {
+      checksum: 'delta-storage-v2',
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, versionName),
+    })
+    createdVersionIds.push(version.id)
+    await insertManifestEntries(version.id)
+    // Move the legacy rows into the new tables, as the converter does after the switch.
+    const [converted] = await executeSQL<{ removed: number }>('SELECT public.convert_version_manifest_rows($1) AS removed', [version.id])
+    expect(converted?.removed).toBe(1)
+    await setProductionVersion(version.id)
+
+    const baseData = getBaseData(APPNAME)
+    baseData.version_name = '1.1.0'
+    baseData.plugin_version = '6.25.0'
+    const response = await postUpdate(baseData)
+    expect(response.status).toBe(200)
+    const json = await response.json<UpdateRes>()
+    expect(json.version).toBe(version.name)
+    expect(json.manifest).toHaveLength(1)
     expect(json.manifest?.[0].file_name).toBe('test')
     expect(json.manifest?.[0].download_url).toContain('/test_file.html')
     expect(json.manifest?.[0].file_hash).toBe('1234567890')
