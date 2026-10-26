@@ -68,9 +68,13 @@ const MAX_EDGE_STAT_HEADER_BYTES = 8000
 const APP_ID_RE = /^[a-z0-9]+(?:\.[\w-]+)+$/i
 const DEVICE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const PLAIN_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
-// @std/semver FULL_REGEXP, with the core numbers kept below MAX_SAFE_INTEGER
-// (its parse rejects larger ones) and no surrounding whitespace (it trims).
-const FULL_SEMVER_RE = /^v?(?:0|[1-9]\d{0,14})\.(?:0|[1-9]\d{0,14})\.(?:0|[1-9]\d{0,14})(?:-(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*))*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?$/i
+// @std/semver FULL_REGEXP, piece by piece: core numbers kept below
+// MAX_SAFE_INTEGER (its parse rejects larger ones), no surrounding whitespace
+// (it trims) and a lowercase v prefix only.
+const SEMVER_PARTS_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+(.+))?$/
+const SEMVER_CORE_NUMBER_RE = /^(?:0|[1-9]\d{0,14})$/
+const SEMVER_PRERELEASE_ID_RE = /^(?:0|[1-9]\d*|\d*[a-zA-Z-][\da-zA-Z-]*)$/
+const SEMVER_BUILD_ID_RE = /^[\da-zA-Z-]+$/
 const MAX_SEMVER_LENGTH = 256
 const DEVICE_PLATFORMS = new Set(['ios', 'android', 'electron'])
 
@@ -523,7 +527,17 @@ function isAnswerableStatsVersionBuild(versionBuild) {
   if (typeof versionBuild !== 'string')
     return false
   const version = fixSemver(versionBuild)
-  return version.length <= MAX_SEMVER_LENGTH && FULL_SEMVER_RE.test(version)
+  return version.length <= MAX_SEMVER_LENGTH && isSemver(version)
+}
+
+function isSemver(version) {
+  const parts = SEMVER_PARTS_RE.exec(version)
+  if (!parts)
+    return false
+  const [, major, minor, patch, prerelease, build] = parts
+  return [major, minor, patch].every(part => SEMVER_CORE_NUMBER_RE.test(part))
+    && (prerelease === undefined || prerelease.split('.').every(id => SEMVER_PRERELEASE_ID_RE.test(id)))
+    && (build === undefined || build.split('.').every(id => SEMVER_BUILD_ID_RE.test(id)))
 }
 
 /**
