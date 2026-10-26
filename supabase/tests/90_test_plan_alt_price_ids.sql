@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(11);
 
 -- A user with no membership in the org, for the permission check.
 SELECT tests.create_supabase_user('legacy_price_outsider', 'legacy-price-outsider@example.com');
@@ -11,9 +11,37 @@ ON CONFLICT (id) DO NOTHING;
 
 -- A replaced Solo price still billed on an existing subscription (seed org of test_user).
 UPDATE public.plans
-SET legacy_price_m_ids = ARRAY['price_legacy_solo_m'],
-  legacy_price_y_ids = ARRAY['price_legacy_solo_y']
+SET alt_price_m_ids = ARRAY['price_legacy_solo_m'],
+  alt_price_y_ids = ARRAY['price_legacy_solo_y']
 WHERE name = 'Solo';
+
+-- Regional tier prices are copied into the alt arrays, and a replaced one stays there.
+UPDATE public.plans
+SET regional_price_ids = '{"p50": {"price_m_id": "price_p50_m", "price_y_id": "price_p50_y", "price_m_id_us": "price_p50_m_us"}}'::jsonb
+WHERE name = 'Solo';
+
+SELECT is(
+  (SELECT alt_price_m_ids @> ARRAY['price_legacy_solo_m', 'price_p50_m', 'price_p50_m_us'] AND alt_price_y_ids @> ARRAY['price_legacy_solo_y', 'price_p50_y'] FROM public.plans WHERE name = 'Solo'),
+  true,
+  'regional tier prices are added to the alt price arrays'
+);
+
+UPDATE public.plans
+SET regional_price_ids = '{"p50": {"price_m_id": "price_p50_m_v2"}}'::jsonb
+WHERE name = 'Solo';
+
+SELECT is(
+  (SELECT alt_price_m_ids @> ARRAY['price_p50_m', 'price_p50_m_v2'] FROM public.plans WHERE name = 'Solo'),
+  true,
+  'a replaced regional price keeps counting as the plan'
+);
+
+SELECT throws_ok(
+  $$UPDATE public.plans SET regional_price_ids = '[]'::jsonb WHERE name = 'Solo'$$,
+  '23514',
+  NULL,
+  'regional_price_ids must be an object'
+);
 
 CREATE TEMP TABLE customer_counts_before AS
 SELECT * FROM public.get_customer_counts();

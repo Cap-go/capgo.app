@@ -1,16 +1,64 @@
--- Plan prices can be replaced in Stripe (e.g. new per-currency PPP prices: Stripe never lets an existing
--- currency_options amount change). price_m_id / price_y_id (+ _us) stay the prices Checkout sells; the
--- replaced ones move to these arrays so existing subscriptions are still recognised as monthly/yearly.
+-- Plans can bill through more than one Stripe price: one per regional price tier (PPP: a price has a
+-- single amount per currency, so countries sharing a currency need separate prices), and replaced
+-- prices kept for existing subscriptions (Stripe never lets an existing currency_options amount change).
+-- price_m_id / price_y_id (+ _us) stay the full-price tier; regional_price_ids names the other tiers
+-- Checkout sells; alt_price_*_ids lists every other price so subscriptions resolve to monthly/yearly.
 ALTER TABLE public.plans
-  ADD COLUMN IF NOT EXISTS legacy_price_m_ids text[] NOT NULL DEFAULT '{}'::text[],
-  ADD COLUMN IF NOT EXISTS legacy_price_y_ids text[] NOT NULL DEFAULT '{}'::text[];
+  ADD COLUMN IF NOT EXISTS alt_price_m_ids text[] NOT NULL DEFAULT '{}'::text[],
+  ADD COLUMN IF NOT EXISTS alt_price_y_ids text[] NOT NULL DEFAULT '{}'::text[],
+  ADD COLUMN IF NOT EXISTS regional_price_ids jsonb NOT NULL DEFAULT '{}'::jsonb;
 
-COMMENT ON COLUMN public.plans.legacy_price_m_ids IS
-  'Replaced monthly Stripe price IDs (EE and US) still billed on existing subscriptions.';
-COMMENT ON COLUMN public.plans.legacy_price_y_ids IS
-  'Replaced yearly Stripe price IDs (EE and US) still billed on existing subscriptions.';
+ALTER TABLE public.plans
+  DROP CONSTRAINT IF EXISTS plans_regional_price_ids_object,
+  ADD CONSTRAINT plans_regional_price_ids_object CHECK (jsonb_typeof(regional_price_ids) = 'object');
 
--- Same definitions as 20261016180100_dual_stripe_plan_lookups.sql, also matching the legacy price IDs.
+COMMENT ON COLUMN public.plans.alt_price_m_ids IS
+  'Every other monthly Stripe price ID (EE and US) billed as this plan: regional tiers and replaced prices.';
+COMMENT ON COLUMN public.plans.alt_price_y_ids IS
+  'Every other yearly Stripe price ID (EE and US) billed as this plan: regional tiers and replaced prices.';
+COMMENT ON COLUMN public.plans.regional_price_ids IS
+  'Stripe prices per regional price tier: {"<tier>": {"price_m_id", "price_y_id", "price_m_id_us", "price_y_id_us"}}. Tiers absent here sell the full price.';
+
+-- Regional prices always count as this plan, and a replaced one keeps counting: IDs are only ever added.
+CREATE OR REPLACE FUNCTION public.plans_sync_alt_price_ids()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+BEGIN
+  -- Left to the plans_regional_price_ids_object check, which reports it properly.
+  IF jsonb_typeof(NEW.regional_price_ids) IS DISTINCT FROM 'object' THEN
+    RETURN NEW;
+  END IF;
+  NEW.alt_price_m_ids := ARRAY(
+    SELECT DISTINCT id FROM unnest(
+      NEW.alt_price_m_ids
+      || ARRAY(SELECT tier.value->>'price_m_id' FROM jsonb_each(NEW.regional_price_ids) AS tier)
+      || ARRAY(SELECT tier.value->>'price_m_id_us' FROM jsonb_each(NEW.regional_price_ids) AS tier)
+    ) AS id
+    WHERE id IS NOT NULL AND id <> ''
+  );
+  NEW.alt_price_y_ids := ARRAY(
+    SELECT DISTINCT id FROM unnest(
+      NEW.alt_price_y_ids
+      || ARRAY(SELECT tier.value->>'price_y_id' FROM jsonb_each(NEW.regional_price_ids) AS tier)
+      || ARRAY(SELECT tier.value->>'price_y_id_us' FROM jsonb_each(NEW.regional_price_ids) AS tier)
+    ) AS id
+    WHERE id IS NOT NULL AND id <> ''
+  );
+  RETURN NEW;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.plans_sync_alt_price_ids() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS plans_sync_alt_price_ids ON public.plans;
+CREATE TRIGGER plans_sync_alt_price_ids
+  BEFORE INSERT OR UPDATE OF alt_price_m_ids, alt_price_y_ids, regional_price_ids ON public.plans
+  FOR EACH ROW
+  EXECUTE FUNCTION public.plans_sync_alt_price_ids();
+
+-- Same definitions as 20261016180100_dual_stripe_plan_lookups.sql, also matching alt_price_*_ids.
 CREATE OR REPLACE FUNCTION public.get_customer_counts()
  RETURNS TABLE(yearly bigint, monthly bigint, total bigint)
  LANGUAGE plpgsql
@@ -29,8 +77,8 @@ BEGIN
     ORDER BY customer_id, created_at DESC
   )
   SELECT
-    COUNT(CASE WHEN s.price_id IN (SELECT price_y_id FROM public.plans WHERE price_y_id IS NOT NULL UNION ALL SELECT price_y_id_us FROM public.plans WHERE price_y_id_us IS NOT NULL UNION ALL SELECT unnest(legacy_price_y_ids) FROM public.plans) THEN 1 END) AS yearly,
-    COUNT(CASE WHEN s.price_id IN (SELECT price_m_id FROM public.plans WHERE price_m_id IS NOT NULL UNION ALL SELECT price_m_id_us FROM public.plans WHERE price_m_id_us IS NOT NULL UNION ALL SELECT unnest(legacy_price_m_ids) FROM public.plans) THEN 1 END) AS monthly,
+    COUNT(CASE WHEN s.price_id IN (SELECT price_y_id FROM public.plans WHERE price_y_id IS NOT NULL UNION ALL SELECT price_y_id_us FROM public.plans WHERE price_y_id_us IS NOT NULL UNION ALL SELECT unnest(alt_price_y_ids) FROM public.plans) THEN 1 END) AS yearly,
+    COUNT(CASE WHEN s.price_id IN (SELECT price_m_id FROM public.plans WHERE price_m_id IS NOT NULL UNION ALL SELECT price_m_id_us FROM public.plans WHERE price_m_id_us IS NOT NULL UNION ALL SELECT unnest(alt_price_m_ids) FROM public.plans) THEN 1 END) AS monthly,
     COUNT(*) AS total
   FROM ActiveSubscriptions s;
 END;
@@ -54,7 +102,7 @@ BEGIN
 
   SELECT
     CASE
-      WHEN si.price_id IN (p.price_y_id, p.price_y_id_us) OR si.price_id = ANY(p.legacy_price_y_ids) THEN true
+      WHEN si.price_id IN (p.price_y_id, p.price_y_id_us) OR si.price_id = ANY(p.alt_price_y_ids) THEN true
       ELSE false
     END INTO is_yearly
   FROM public.orgs o
@@ -304,7 +352,7 @@ BEGIN
     CASE
       WHEN tfa.should_redact_2fa OR ppa.should_redact_password
         OR COALESCE(billing_acc.should_redact_billing, true) THEN false
-      ELSE COALESCE(si.price_id IN (p.price_y_id, p.price_y_id_us) OR si.price_id = ANY(p.legacy_price_y_ids), false)
+      ELSE COALESCE(si.price_id IN (p.price_y_id, p.price_y_id_us) OR si.price_id = ANY(p.alt_price_y_ids), false)
     END AS is_yearly,
     CASE
       WHEN refresh_state.org_id IS NULL THEN o.stats_updated_at

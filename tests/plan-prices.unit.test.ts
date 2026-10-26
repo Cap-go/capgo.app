@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { getCommonCurrencies, pickCurrency, pickPriceCurrencies, planPricesVersion } from '../supabase/functions/_backend/private/plan_prices.ts'
 import { currencyForCountry, isCurrencyAllowedForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
+import { PRICE_TIERS, priceTierForCountry } from '../supabase/functions/_backend/utils/country_price_tier.ts'
 import { getPlanPriceInterval } from '../supabase/functions/_backend/utils/plan_price_interval.ts'
+import { getRegionalPlanPriceId } from '../supabase/functions/_backend/utils/stripe_billing.ts'
 import { getCurrencyRatios, getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
 import { getPlanAmounts, getUsdRatio } from '../src/services/planPrices'
 
@@ -102,7 +104,7 @@ describe('plan prices', () => {
   })
 
   it.concurrent('recognises current and replaced plan prices', () => {
-    const plan = { price_m_id: 'price_m_new', price_y_id: 'price_y_new', price_m_id_us: 'price_m_us', price_y_id_us: null, legacy_price_m_ids: ['price_m_old'], legacy_price_y_ids: ['price_y_old'] }
+    const plan = { price_m_id: 'price_m_new', price_y_id: 'price_y_new', price_m_id_us: 'price_m_us', price_y_id_us: null, alt_price_m_ids: ['price_m_old'], alt_price_y_ids: ['price_y_old'] }
     expect(getPlanPriceInterval(plan, 'price_m_new')).toBe('monthly')
     expect(getPlanPriceInterval(plan, 'price_m_us')).toBe('monthly')
     expect(getPlanPriceInterval(plan, 'price_m_old')).toBe('monthly')
@@ -112,8 +114,38 @@ describe('plan prices', () => {
   })
 
   it.concurrent('changes the catalog cache version when a plan switches price', () => {
-    const plan = { stripe_id: 'prod_solo', price_m_id: 'price_m_old', price_y_id: 'price_y_old', price_m_id_us: null, price_y_id_us: null }
+    const plan = { stripe_id: 'prod_solo', price_m_id: 'price_m_old', price_y_id: 'price_y_old', price_m_id_us: null, price_y_id_us: null, regional_price_ids: {} }
     expect(planPricesVersion([plan])).toBe(planPricesVersion([{ ...plan }]))
     expect(planPricesVersion([{ ...plan, price_m_id: 'price_m_new' }])).not.toBe(planPricesVersion([plan]))
+    expect(planPricesVersion([{ ...plan, regional_price_ids: { p50: { price_m_id: 'price_m_p50' } } }])).not.toBe(planPricesVersion([plan]))
+  })
+
+  it.concurrent('prices euro countries by their own purchasing power', () => {
+    expect(priceTierForCountry('LU')).toBe('p100')
+    expect(priceTierForCountry('de')).toBe('p85')
+    expect(priceTierForCountry('FR')).toBe('p70')
+    expect(priceTierForCountry('ES')).toBe('p60')
+    expect(priceTierForCountry('BG')).toBe('p50')
+    expect(priceTierForCountry('CH')).toBe('p115')
+    expect(priceTierForCountry('IN')).toBe('p50')
+    // Unknown or missing countries pay the full price.
+    expect(priceTierForCountry('ZZ')).toBe('p100')
+    expect(priceTierForCountry(null)).toBe('p100')
+  })
+
+  it.concurrent('puts every country with a currency in a tier', () => {
+    for (const country of ['US', 'GB', 'JP', 'BR', 'MC', 'RE', 'JE', 'LI', 'TW'])
+      expect(PRICE_TIERS).toContain(priceTierForCountry(country))
+  })
+
+  it.concurrent('reads the regional price for the tier, account and interval', () => {
+    const regional = { p50: { price_m_id: 'price_m_ee', price_y_id: 'price_y_ee', price_m_id_us: 'price_m_us', price_y_id_us: ' ' } }
+    expect(getRegionalPlanPriceId(regional, 'p50', 'ee', 'month')).toBe('price_m_ee')
+    expect(getRegionalPlanPriceId(regional, 'p50', 'ee', 'year')).toBe('price_y_ee')
+    expect(getRegionalPlanPriceId(regional, 'p50', 'us', 'month')).toBe('price_m_us')
+    expect(getRegionalPlanPriceId(regional, 'p50', 'us', 'year')).toBeNull()
+    expect(getRegionalPlanPriceId(regional, 'p85', 'ee', 'month')).toBeNull()
+    expect(getRegionalPlanPriceId(null, 'p50', 'ee', 'month')).toBeNull()
+    expect(getRegionalPlanPriceId({ p50: 'price_x' }, 'p50', 'ee', 'month')).toBeNull()
   })
 })

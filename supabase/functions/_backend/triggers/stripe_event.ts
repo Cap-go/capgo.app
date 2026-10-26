@@ -86,7 +86,7 @@ type StripeInfoRevenueState = {
   product_id?: string | null
   status?: Database['public']['Enums']['stripe_status'] | null
 } | null | undefined
-type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'legacy_price_m_ids' | 'legacy_price_y_ids'>
+type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'alt_price_m_ids' | 'alt_price_y_ids'>
 type RevenuePlanKey = 'solo' | 'maker' | 'team' | 'enterprise'
 type ChurnReason = 'past_due_unresolved'
 const CHURNED_SUBSCRIPTION_STATUSES = new Set<Database['public']['Enums']['stripe_status']>(['canceled', 'deleted'])
@@ -262,7 +262,7 @@ function compactMetadata(metadata: Record<string, string | undefined>) {
   ) as Record<string, string>
 }
 
-type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'legacy_price_m_ids' | 'legacy_price_y_ids'>
+type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'alt_price_m_ids' | 'alt_price_y_ids'>
 
 function getPlanType(
   plan: PlanPriceIdsRow,
@@ -638,7 +638,7 @@ function isStaleStripeEvent(
 async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
   const { data: plans, error } = await supabaseAdmin(c)
     .from('plans')
-    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, legacy_price_m_ids, legacy_price_y_ids')
+    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, alt_price_m_ids, alt_price_y_ids')
     .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
 
   if (error) {
@@ -1120,7 +1120,7 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
   if (productIds.length) {
     const { data: plans } = await supabaseAdmin(c)
       .from('plans')
-      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us, legacy_price_y_ids')
+      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us, alt_price_y_ids')
       .or(productIds.map(productId => planProductIdOrFilter(productId)).join(','))
     const plan = plans?.[0]
     if (!plan) {
@@ -1128,7 +1128,7 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
     }
     planName = plan.name
     const linePriceIds = (invoice.lines?.data ?? []).map((line: any) => line.pricing?.price_details?.price)
-    const yearlyPriceIds = [plan.price_y_id, plan.price_y_id_us, ...(plan.legacy_price_y_ids ?? [])].filter((id): id is string => !!id)
+    const yearlyPriceIds = [plan.price_y_id, plan.price_y_id_us, ...(plan.alt_price_y_ids ?? [])].filter((id): id is string => !!id)
     if (yearlyPriceIds.includes(stripeData.data.price_id ?? '') || linePriceIds.some((id: unknown) => typeof id === 'string' && yearlyPriceIds.includes(id))) {
       planType = 'yearly'
     }

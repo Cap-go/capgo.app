@@ -621,6 +621,47 @@ describe('stripe redirect URL allowlist', () => {
     }))
   })
 
+  it.each([
+    ['FR', 'price_monthly_p70'],
+    ['ES', 'price_monthly_from_plan'],
+    ['US', 'price_monthly_from_plan'],
+  ])('sells the regional price of the visitor country (%s)', async (country, expectedPrice) => {
+    const plan = {
+      stripe_id: 'prod_test',
+      price_m_id: 'price_monthly_from_plan',
+      price_y_id: 'price_yearly_from_plan',
+      // Spain (p60) has no price of its own here, so it must fall back to the full price, never a cheaper tier.
+      regional_price_ids: { p70: { price_m_id: 'price_monthly_p70', price_y_id: 'price_yearly_p70' }, p50: { price_m_id: 'price_monthly_p50' } },
+    }
+    mockedSupabaseAdmin.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: { billing_account: 'ee' }, error: null }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: plan, error: null }),
+            maybeSingle: vi.fn().mockResolvedValue({ data: plan, error: null }),
+          }),
+        }),
+      }),
+    })
+
+    const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/subscription' })
+    const mocks = subscriptionCheckoutMocks()
+    vi.mocked(Stripe).mockImplementation(function () {
+      return { customers: mocks.customers, prices: { retrieve: mocks.retrievePrice, list: vi.fn() }, checkout: { sessions: { create: createSession } } }
+    } as any)
+
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    await createCheckout(createContext(country), 'cus_123', 'month', 'prod_test', '/app/success', '/app/cancel')
+
+    expect(mocks.retrievePrice).toHaveBeenCalledWith(expectedPrice, expect.anything())
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      line_items: [expect.objectContaining({ price: expectedPrice, quantity: 1 })],
+    }))
+  })
+
   it('updates Stripe customer email without overwriting the organization name', async () => {
     const updateCustomer = vi.fn().mockResolvedValue({ id: 'cus_123' })
     const stripeClient = {
