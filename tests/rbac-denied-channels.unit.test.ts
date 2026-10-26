@@ -78,11 +78,11 @@ describe('getDeniedChannelIdsForPermission', () => {
   it('fails closed when the lookup errors', async () => {
     executeMock.mockRejectedValue(new Error('boom'))
 
-    await expect(getDeniedChannelIdsForPermission(context({ authType: 'jwt', userId: USER_ID }), 'channel.read_history', APP_ID)).rejects.toThrow()
+    await expect(getDeniedChannelIdsForPermission(context({ authType: 'jwt', userId: USER_ID }), 'channel.read_history', APP_ID)).rejects.toMatchObject({ status: 403 })
   })
 
   it('requires an authenticated caller', async () => {
-    await expect(getDeniedChannelIdsForPermission(context(undefined), 'channel.read_history', APP_ID)).rejects.toThrow()
+    await expect(getDeniedChannelIdsForPermission(context(undefined), 'channel.read_history', APP_ID)).rejects.toMatchObject({ status: 401 })
     expect(executeMock).not.toHaveBeenCalled()
   })
 })
