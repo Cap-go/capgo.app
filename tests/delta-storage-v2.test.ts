@@ -299,10 +299,24 @@ describe('delta storage v2 legacy guards', () => {
          VALUES ($1, $2::text, 'old.js', 'h', public.delta_path_key($2::text), public.delta_entry_key($2::text, 'old.js', 'h'))`,
         [goneApp, `orgs/${formerOrg}/apps/${goneApp}/delta/old.js`],
       )
+      // An unconverted legacy row under a second former owner.
+      const legacyOrg = '00000000-0000-4000-8000-0000000000cc'
+      const [{ id: goneVersion }] = (await client.query<{ id: string }>(
+        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, checksum)
+         VALUES ($1, '1.0.0', $2, $3, 'r2', 'c') RETURNING id`,
+        [goneApp, ORG_ID, USER_ID],
+      )).rows
+      await client.query(
+        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'l.js', 'h', $2, 1)`,
+        [goneVersion, `orgs/${legacyOrg}/apps/${goneApp}/delta/l.js`],
+      )
       await client.query('DELETE FROM public.apps WHERE app_id = $1', [goneApp])
+      const recorded = await client.query<{ org: string }>('SELECT org FROM public.delta_gc_orphan_prefixes WHERE app_id = $1 ORDER BY org', [goneApp])
+      expect(recorded.rows.map(row => row.org)).toEqual([formerOrg, legacyOrg].sort())
       const claimed = await client.query<{ prefix: string }>('SELECT prefix FROM public.delta_gc_claim_orphan_prefixes(50)')
       expect(claimed.rows.map(row => row.prefix)).toContain(`orgs/${formerOrg}/apps/${goneApp}/`)
       await client.query('SELECT public.delta_gc_finish_orphan_prefix($1, NULL)', [`orgs/${formerOrg}/apps/${goneApp}/`])
+      await client.query('SELECT public.delta_gc_finish_orphan_prefix($1, NULL)', [`orgs/${legacyOrg}/apps/${goneApp}/`])
       const left = await client.query('SELECT count(*)::int AS count FROM public.delta_gc_orphan_prefixes WHERE app_id = $1', [goneApp])
       expect(left.rows[0].count).toBe(0)
     })

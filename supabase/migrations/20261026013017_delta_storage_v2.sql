@@ -636,6 +636,17 @@ BEGIN
     SELECT pg_catalog.unnest(state.known_orgs)
     FROM public.delta_gc_state AS state
     WHERE state.app_id = OLD.app_id
+    UNION
+    -- Unconverted legacy rows and inline manifests also point at old prefixes.
+    SELECT pg_catalog.split_part(m.s3_path, '/', 2)
+    FROM public.app_versions AS av
+    INNER JOIN public.manifest AS m ON m.app_version_id = av.id
+    WHERE av.app_id = OLD.app_id AND m.s3_path LIKE 'orgs/%'
+    UNION
+    SELECT pg_catalog.split_part(entry.s3_path, '/', 2)
+    FROM public.app_versions AS av
+    CROSS JOIN LATERAL pg_catalog.unnest(av.manifest) AS entry (file_name, s3_path, file_hash)
+    WHERE av.app_id = OLD.app_id AND av.manifest IS NOT NULL AND entry.s3_path LIKE 'orgs/%'
   ) AS orgs
   WHERE orgs.org <> '' AND orgs.org <> OLD.owner_org::text
   ON CONFLICT (prefix) DO NOTHING;
