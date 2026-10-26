@@ -151,25 +151,33 @@ describe('R2 image storage', () => {
   })
 })
 
-describe('image read tokens', () => {
-  it('verifies a token only for the path it was issued for', async () => {
-    const token = await storage.createImageReadToken(context(), 'org/x/logo/a.png', 60)
-    expect(token).toMatch(/^\d+\.[\w-]+$/)
-    await expect(storage.verifyImageReadToken(context(), 'org/x/logo/a.png', token!)).resolves.toBe(true)
-    await expect(storage.verifyImageReadToken(context(), 'org/x/logo/b.png', token!)).resolves.toBe(false)
+describe('image tokens', () => {
+  it('round-trips the user it was issued to', async () => {
+    const issued = await storage.createImageToken(context(), USER_ID)
+    expect(issued?.token).toMatch(new RegExp(`^${USER_ID}\\.\\d+\\.[\\w-]+$`))
+    expect(issued!.expiresAt - Math.floor(Date.now() / 1000)).toBe(storage.IMAGE_TOKEN_TTL_SECONDS)
+    await expect(storage.verifyImageToken(context(), issued!.token)).resolves.toBe(USER_ID)
   })
 
-  it('rejects expired, tampered and malformed tokens', async () => {
-    const token = (await storage.createImageReadToken(context(), 'a/b.png', 60))!
-    const [expiresAt, signature] = token.split('.')
-    await expect(storage.verifyImageReadToken(context(), 'a/b.png', `${Number(expiresAt) + 10}.${signature}`)).resolves.toBe(false)
-    await expect(storage.verifyImageReadToken(context(), 'a/b.png', `${expiresAt}.${signature.slice(0, -2)}AA`)).resolves.toBe(false)
-    await expect(storage.verifyImageReadToken(context(), 'a/b.png', 'garbage')).resolves.toBe(false)
+  it('rejects a token moved to another user, extended, tampered or malformed', async () => {
+    const { token } = (await storage.createImageToken(context(), USER_ID))!
+    const [, expiresAt, signature] = token.split('.')
+    await expect(storage.verifyImageToken(context(), `${OTHER_USER_ID}.${expiresAt}.${signature}`)).resolves.toBeNull()
+    await expect(storage.verifyImageToken(context(), `${USER_ID}.${Number(expiresAt) + 10}.${signature}`)).resolves.toBeNull()
+    await expect(storage.verifyImageToken(context(), `${USER_ID}.${expiresAt}.${signature.slice(0, -2)}AA`)).resolves.toBeNull()
+    await expect(storage.verifyImageToken(context(), 'garbage')).resolves.toBeNull()
+    await expect(storage.createImageToken(context(), 'not-a-uuid')).resolves.toBeNull()
+  })
+
+  it('rejects an expired token and caps the lifetime', async () => {
+    const short = (await storage.createImageToken(context(), USER_ID, 60))!
+    const long = (await storage.createImageToken(context(), USER_ID, 30 * 24 * 3600))!
+    expect(long.expiresAt - Math.floor(Date.now() / 1000)).toBe(storage.IMAGE_TOKEN_TTL_SECONDS)
 
     vi.useFakeTimers()
     try {
       vi.setSystemTime(Date.now() + 120_000)
-      await expect(storage.verifyImageReadToken(context(), 'a/b.png', token)).resolves.toBe(false)
+      await expect(storage.verifyImageToken(context(), short.token)).resolves.toBeNull()
     }
     finally {
       vi.useRealTimers()

@@ -40,6 +40,24 @@ async function sign(path: string) {
   return response.json() as Promise<StorageResponse<{ signedUrl: string }>>
 }
 
+async function imageToken() {
+  const response = await fetch(getEndpointUrl('/private/console/images/token'), {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+  })
+  expect(response.status).toBe(200)
+  const body = await response.json() as StorageResponse<{ token: string, expiresAt: number }>
+  expect(body.error).toBeNull()
+  return body.data!.token
+}
+
+function readUrl(path: string, token: string) {
+  const url = new URL(getEndpointUrl('/private/console/images/read'))
+  url.searchParams.set('path', path)
+  url.searchParams.set('t', token)
+  return url
+}
+
 async function remove(paths: string[]) {
   const response = await fetch(getEndpointUrl('/private/console/images/remove'), {
     method: 'POST',
@@ -77,22 +95,29 @@ describe('console image endpoints (R2)', () => {
     const conflict = await upload(path)
     expect(conflict.error?.statusCode).toBe('409')
 
-    const signed = await sign(path)
-    expect(signed.error).toBeNull()
-    expect(new URL(signed.data!.signedUrl).pathname).toMatch(/\/images\/read$/)
-    // The relay URL carries the API host the runtime sees; locally that is the
-    // container address, so call the same route through the test base URL.
-    const signedUrl = new URL(getEndpointUrl('/private/console/images/read'))
-    signedUrl.search = new URL(signed.data!.signedUrl).search
-
-    const read = await fetch(signedUrl)
+    // One token reads every image the user may see; the URL is built locally.
+    const token = await imageToken()
+    const read = await fetch(readUrl(path, token))
     expect(read.status).toBe(200)
     expect(read.headers.get('content-type')).toBe('image/png')
     expect(read.headers.get('x-content-type-options')).toBe('nosniff')
     expect(new Uint8Array(await read.arrayBuffer())).toEqual(PNG_BYTES)
 
-    signedUrl.searchParams.set('path', `${USER_ID}/someone-else.png`)
-    expect((await fetch(signedUrl)).status).toBe(403)
+    const etag = read.headers.get('etag')
+    expect(etag).toBeTruthy()
+    const revalidated = await fetch(readUrl(path, token), { headers: { 'if-none-match': etag! } })
+    expect(revalidated.status).toBe(304)
+
+    expect((await fetch(readUrl(path, `${token}x`))).status).toBe(401)
+    // The token is the user's, not the path's: another user's private folder stays closed.
+    expect((await fetch(readUrl(`${USER_ID_NONMEMBER}/avatar.png`, token))).status).toBe(404)
+
+    // The legacy sign endpoint now returns the same kind of relay URL.
+    const signed = await sign(path)
+    expect(signed.error).toBeNull()
+    const signedUrl = new URL(signed.data!.signedUrl)
+    expect(signedUrl.pathname).toMatch(/\/images\/read$/)
+    expect(signedUrl.searchParams.get('t')).toBeTruthy()
 
     const removed = await remove([path])
     expect(removed.error).toBeNull()

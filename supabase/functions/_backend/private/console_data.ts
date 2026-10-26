@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { DurableObjectNamespace } from '@cloudflare/workers-types'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
@@ -7,7 +8,7 @@ import { CONSOLE_RPCS, CONSOLE_TABLES } from '../utils/console_query_allowlist.t
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { canAccessImagePath } from '../utils/image_access.ts'
-import { createImageReadToken, downloadImage, imageExists, removeImages, uploadImage, verifyImageReadToken } from '../utils/image_storage.ts'
+import { createImageToken, downloadImage, imageExists, removeImages, uploadImage, verifyImageToken } from '../utils/image_storage.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { runConsoleQuery } from './console_query_run.ts'
 import { getStorageAllowedOrigins, normalizeImagePath } from '../utils/storage.ts'
@@ -110,12 +111,31 @@ app.post('/images/upload', middlewareAuth, async (c) => {
   return c.json({ data: { path, fullPath: `images/${path}` }, error: null })
 })
 
+// Image elements cannot send the session bearer header, so the console asks
+// once for an image token (a JWT-like credential that can only read images) and
+// puts it in every image URL: `/images/read?path=<object path>&t=<token>`.
+app.post('/images/token', middlewareAuth, async (c) => {
+  const issued = await createImageToken(c, c.get('auth')!.userId)
+  if (!issued)
+    return quickError(502, 'image_token_failed', 'Unable to issue an image token')
+  return c.json({ data: issued, error: null })
+})
+
+function imageReadUrl(c: Context, path: string, token: string) {
+  const url = new URL(c.req.url)
+  url.pathname = url.pathname.replace(/\/images\/[a-z]+\/?$/, '/images/read')
+  url.search = ''
+  url.searchParams.set('path', path)
+  url.searchParams.set('t', token)
+  return url.href
+}
+
+// Kept for legacy values stored as full storage URLs (only this server knows the
+// storage origin) and for consoles loaded before image tokens existed.
 app.post('/images/sign', middlewareAuth, async (c) => {
   const body = z.object({ path: imagePathSchema, expiresIn: z.number().int().min(1).max(604800) }).safeParse(await parseBody(c))
   if (!body.success)
     return quickError(400, 'invalid_body', 'Invalid image request')
-  // Legacy values are full storage URLs. Only this server knows the storage origin,
-  // so it extracts the key here and refuses storage-shaped URLs from any other host.
   let path = body.data.path
   if (path.includes('://')) {
     const key = imagePathSchema.safeParse(normalizeImagePath(path, { allowedOrigins: getStorageAllowedOrigins(c) }))
@@ -136,25 +156,23 @@ app.post('/images/sign', middlewareAuth, async (c) => {
   }
   if (!exists)
     return c.json(storageError('Object not found', '404'))
-  const token = await createImageReadToken(c, path, body.data.expiresIn)
-  if (!token)
+  const issued = await createImageToken(c, c.get('auth')!.userId, body.data.expiresIn)
+  if (!issued)
     return quickError(502, 'image_sign_failed', 'Unable to sign image')
-  // Serve the image through this API so the browser never loads the bucket directly.
-  const signedUrl = new URL(c.req.url)
-  signedUrl.pathname = signedUrl.pathname.replace(/\/images\/sign\/?$/, '/images/read')
-  signedUrl.search = ''
-  signedUrl.searchParams.set('path', path)
-  signedUrl.searchParams.set('token', token)
-  return c.json({ data: { signedUrl: signedUrl.href }, error: null })
+  return c.json({ data: { signedUrl: imageReadUrl(c, path, issued.token), path }, error: null })
 })
 
-// The signed capability was issued after the read check; image elements do not send bearer headers.
 app.get('/images/read', async (c) => {
-  const query = z.object({ path: imagePathSchema, token: z.string().min(1).max(4096) }).safeParse(c.req.query())
+  const query = z.object({ path: imagePathSchema, t: z.string().min(1).max(512) }).safeParse(c.req.query())
   if (!query.success)
     return quickError(400, 'invalid_image', 'Invalid image request')
-  if (!await verifyImageReadToken(c, query.data.path, query.data.token))
-    return quickError(403, 'image_unavailable', 'Image is unavailable')
+  const userId = await verifyImageToken(c, query.data.t)
+  if (!userId)
+    return quickError(401, 'invalid_image_token', 'Image token is invalid or expired')
+  // Run the same per-path check as any signed-in request, as the token's user.
+  c.set('auth', { userId, authType: 'jwt', apikey: null, jwt: null })
+  if (!await canAccessImagePath(c, query.data.path, 'read'))
+    return quickError(404, 'image_unavailable', 'Image is unavailable')
   let response: Response | null
   try {
     response = await downloadImage(c, query.data.path)
@@ -165,14 +183,22 @@ app.get('/images/read', async (c) => {
   }
   if (!response)
     return quickError(404, 'image_unavailable', 'Image is unavailable')
-  return new Response(response.body as unknown as ReadableStream, {
-    headers: {
-      'Content-Type': response.headers.get('content-type') ?? 'application/octet-stream',
-      'Cache-Control': 'private, no-store',
-      'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': 'sandbox; default-src \'none\'',
-    },
+  // The browser keeps the image and revalidates: icons are replaced in place
+  // (`.../icon`), so a max-age would show a stale one after an upload.
+  const headers = new Headers({
+    'Cache-Control': 'private, no-cache',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': 'sandbox; default-src \'none\'',
   })
+  const etag = response.headers.get('etag')
+  if (etag)
+    headers.set('ETag', etag)
+  if (etag && c.req.header('if-none-match') === etag) {
+    await response.body?.cancel()
+    return new Response(null, { status: 304, headers })
+  }
+  headers.set('Content-Type', response.headers.get('content-type') ?? 'application/octet-stream')
+  return new Response(response.body as unknown as ReadableStream, { headers })
 })
 
 app.post('/images/remove', middlewareAuth, async (c) => {

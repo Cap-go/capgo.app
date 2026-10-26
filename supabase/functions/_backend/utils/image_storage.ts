@@ -11,7 +11,11 @@ export const IMAGE_KEY_PREFIX = 'images/'
 // Same lifetime the Supabase signed URLs had; also the S3 presign maximum.
 export const IMAGE_SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
 
-const READ_TOKEN_VERSION = 'v1'
+const IMAGE_TOKEN_VERSION = 'v1'
+// Long enough to keep image URLs stable across a working session; the console
+// fetches a new one before it runs out.
+export const IMAGE_TOKEN_TTL_SECONDS = 60 * 60 * 12
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const encoder = new TextEncoder()
 
 export interface ImageFolderEntry {
@@ -153,16 +157,16 @@ export async function presignImageUrl(c: Context, path: string, expirySeconds = 
   })
 }
 
-async function readTokenKey(c: Context) {
+async function imageTokenKey(c: Context) {
   const secret = getEnv(c, 'S3_SECRET_ACCESS_KEY')
   if (!secret)
     return null
-  const material = await crypto.subtle.digest('SHA-256', encoder.encode(`capgo-image-read:${READ_TOKEN_VERSION}:${secret}`))
+  const material = await crypto.subtle.digest('SHA-256', encoder.encode(`capgo-image-token:${IMAGE_TOKEN_VERSION}:${secret}`))
   return crypto.subtle.importKey('raw', material, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'])
 }
 
-function readTokenPayload(path: string, expiresAt: number) {
-  return encoder.encode(`${READ_TOKEN_VERSION}\n${expiresAt}\n${path}`)
+function imageTokenPayload(userId: string, expiresAt: number) {
+  return encoder.encode(`${IMAGE_TOKEN_VERSION}\n${expiresAt}\n${userId}`)
 }
 
 function toBase64Url(bytes: ArrayBuffer) {
@@ -180,31 +184,34 @@ function fromBase64Url(value: string) {
 }
 
 /**
- * Capability for the console image relay: `<expiresAt>.<hmac>` bound to one
- * object path. Image elements cannot send bearer headers, so the token is the
- * proof that an authorized caller asked for this path.
+ * Image token: `<userId>.<expiresAt>.<hmac>`. A JWT-like credential that can
+ * only read images, so it may sit in `<img src>` URLs, which cannot send the
+ * session bearer header. The read endpoint resolves the user from it and runs
+ * the normal per-path permission check, so one token covers every image the
+ * user may see and URLs stay stable (cacheable) for its lifetime.
  */
-export async function createImageReadToken(c: Context, path: string, expiresInSeconds: number) {
-  const key = await readTokenKey(c)
-  if (!key)
+export async function createImageToken(c: Context, userId: string, expiresInSeconds = IMAGE_TOKEN_TTL_SECONDS) {
+  const key = await imageTokenKey(c)
+  if (!key || !UUID_REGEX.test(userId))
     return null
-  const expiresAt = Math.floor(Date.now() / 1000) + Math.min(expiresInSeconds, IMAGE_SIGNED_URL_TTL_SECONDS)
-  const signature = await crypto.subtle.sign('HMAC', key, readTokenPayload(path, expiresAt))
-  return `${expiresAt}.${toBase64Url(signature)}`
+  const expiresAt = Math.floor(Date.now() / 1000) + Math.min(expiresInSeconds, IMAGE_TOKEN_TTL_SECONDS)
+  const signature = await crypto.subtle.sign('HMAC', key, imageTokenPayload(userId, expiresAt))
+  return { token: `${userId}.${expiresAt}.${toBase64Url(signature)}`, expiresAt }
 }
 
-export async function verifyImageReadToken(c: Context, path: string, token: string) {
-  const [expiresAtRaw, signatureRaw, ...rest] = token.split('.')
-  if (rest.length > 0 || !expiresAtRaw || !signatureRaw || !/^\d{1,12}$/.test(expiresAtRaw))
-    return false
+/** The user an image token was issued to, or null when it is invalid or expired. */
+export async function verifyImageToken(c: Context, token: string): Promise<string | null> {
+  const [userId, expiresAtRaw, signatureRaw, ...rest] = token.split('.')
+  if (rest.length > 0 || !userId || !UUID_REGEX.test(userId) || !expiresAtRaw || !/^\d{1,12}$/.test(expiresAtRaw) || !signatureRaw)
+    return null
   const expiresAt = Number(expiresAtRaw)
   if (expiresAt < Math.floor(Date.now() / 1000))
-    return false
+    return null
   const signature = fromBase64Url(signatureRaw)
-  const key = await readTokenKey(c)
+  const key = await imageTokenKey(c)
   if (!signature || !key)
-    return false
-  return crypto.subtle.verify('HMAC', key, signature, readTokenPayload(path, expiresAt))
+    return null
+  return await crypto.subtle.verify('HMAC', key, signature, imageTokenPayload(userId, expiresAt)) ? userId : null
 }
 
 /**

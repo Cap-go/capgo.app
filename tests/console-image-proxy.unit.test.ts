@@ -4,6 +4,7 @@ import { app } from '../supabase/functions/_backend/private/console_data'
 const mocks = vi.hoisted(() => ({
   canAccess: vi.fn(),
   createToken: vi.fn(),
+  auth: vi.fn(),
   download: vi.fn(),
   exists: vi.fn(),
   remove: vi.fn(),
@@ -28,25 +29,28 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: (_c: unknown, key: string) => key === 'SUPABASE_URL' ? 'https://storage.example.com' : '',
 }))
 vi.mock('../supabase/functions/_backend/utils/image_access.ts', () => ({
-  canAccessImagePath: (_c: unknown, ...args: unknown[]) => mocks.canAccess(...args),
+  canAccessImagePath: (c: any, ...args: unknown[]) => {
+    mocks.auth(c.get('auth'))
+    return mocks.canAccess(...args)
+  },
 }))
 vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({
-  createImageReadToken: (_c: unknown, ...args: unknown[]) => mocks.createToken(...args),
+  createImageToken: (_c: unknown, ...args: unknown[]) => mocks.createToken(...args),
   downloadImage: (_c: unknown, ...args: unknown[]) => mocks.download(...args),
   imageExists: (_c: unknown, ...args: unknown[]) => mocks.exists(...args),
   removeImages: (_c: unknown, ...args: unknown[]) => mocks.remove(...args),
   uploadImage: (_c: unknown, ...args: unknown[]) => mocks.upload(...args),
-  verifyImageReadToken: (_c: unknown, ...args: unknown[]) => mocks.verifyToken(...args),
+  verifyImageToken: (_c: unknown, ...args: unknown[]) => mocks.verifyToken(...args),
 }))
 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.canAccess.mockResolvedValue(true)
-  mocks.createToken.mockResolvedValue('fixture-capability')
+  mocks.createToken.mockResolvedValue({ token: 'fixture-capability', expiresAt: 4102444800 })
   mocks.exists.mockResolvedValue(true)
   mocks.remove.mockResolvedValue(undefined)
   mocks.upload.mockResolvedValue('ok')
-  mocks.verifyToken.mockResolvedValue(true)
+  mocks.verifyToken.mockResolvedValue('caller')
 })
 
 function sign(path: string) {
@@ -66,9 +70,9 @@ describe('console image proxy', () => {
     // Derived from the request URL, so it works behind any mount path or proxy.
     expect(url.pathname).toBe('/images/read')
     expect(url.searchParams.get('path')).toBe('org/logo.png')
-    expect(url.searchParams.get('token')).toBe('fixture-capability')
+    expect(url.searchParams.get('t')).toBe('fixture-capability')
     expect(mocks.canAccess).toHaveBeenCalledWith('org/logo.png', 'read')
-    expect(mocks.createToken).toHaveBeenCalledWith('org/logo.png', 60)
+    expect(mocks.createToken).toHaveBeenCalledWith('caller', 60)
   })
 
   it('answers like storage when the caller may not read the path or it is missing', async () => {
@@ -86,7 +90,7 @@ describe('console image proxy', () => {
   it('signs a legacy storage URL only when it comes from the storage origin', async () => {
     const ours = await sign('https://storage.example.com/storage/v1/object/public/%69mages/org/my%20logo.png')
     const { data } = await ours.json() as { data: { signedUrl: string } }
-    expect(mocks.createToken).toHaveBeenCalledWith('org/my logo.png', 60)
+    expect(mocks.createToken).toHaveBeenCalledWith('caller', 60)
     expect(new URL(data.signedUrl).searchParams.get('path')).toBe('org/my logo.png')
 
     mocks.createToken.mockClear()
@@ -95,34 +99,58 @@ describe('console image proxy', () => {
     expect(mocks.createToken).not.toHaveBeenCalled()
   })
 
-  it('streams image bytes from R2 for a valid capability', async () => {
-    mocks.download.mockResolvedValue(new Response('fixture-image', { headers: { 'content-type': 'image/png' } }))
-    const response = await app.request('https://api.example.com/images/read?path=org%2Fmy%20logo.png&token=fixture-capability')
+  it('issues one image token for the signed-in caller', async () => {
+    const response = await app.request('https://api.example.com/images/token', { method: 'POST' })
+    expect(await response.json()).toEqual({ data: { token: 'fixture-capability', expiresAt: 4102444800 }, error: null })
+    expect(mocks.createToken).toHaveBeenCalledWith('caller')
+  })
+
+  it('streams image bytes from R2 after checking the token user may read the path', async () => {
+    mocks.download.mockResolvedValue(new Response('fixture-image', { headers: { 'content-type': 'image/png', 'etag': '"abc"' } }))
+    const response = await app.request('https://api.example.com/images/read?path=org%2Fmy%20logo.png&t=fixture-capability')
     expect(await response.text()).toBe('fixture-image')
     expect(response.headers.get('content-type')).toBe('image/png')
-    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('cache-control')).toBe('private, no-cache')
+    expect(response.headers.get('etag')).toBe('"abc"')
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
-    expect(mocks.verifyToken).toHaveBeenCalledWith('org/my logo.png', 'fixture-capability')
+    expect(mocks.verifyToken).toHaveBeenCalledWith('fixture-capability')
+    expect(mocks.auth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'caller', authType: 'jwt' }))
+    expect(mocks.canAccess).toHaveBeenCalledWith('org/my logo.png', 'read')
     expect(mocks.download).toHaveBeenCalledWith('org/my logo.png')
   })
 
-  it('does not serve an expired or invalid capability', async () => {
-    mocks.verifyToken.mockResolvedValue(false)
-    const response = await app.request('https://api.example.com/images/read?path=org%2Flogo.png&token=expired-capability')
-    expect(response.status).toBe(403)
-    expect(await response.json()).toEqual({ error: 'image_unavailable' })
+  it('answers 304 when the browser already has this version', async () => {
+    mocks.download.mockResolvedValue(new Response('fixture-image', { headers: { etag: '"abc"' } }))
+    const response = await app.request('https://api.example.com/images/read?path=org%2Flogo.png&t=t', { headers: { 'if-none-match': '"abc"' } })
+    expect(response.status).toBe(304)
+    expect(await response.text()).toBe('')
+  })
+
+  it('does not serve an expired or invalid token', async () => {
+    mocks.verifyToken.mockResolvedValue(null)
+    const response = await app.request('https://api.example.com/images/read?path=org%2Flogo.png&t=expired-capability')
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'invalid_image_token' })
+    expect(mocks.canAccess).not.toHaveBeenCalled()
+    expect(mocks.download).not.toHaveBeenCalled()
+  })
+
+  it('does not serve a path the token user may not read', async () => {
+    mocks.canAccess.mockResolvedValue(false)
+    const response = await app.request('https://api.example.com/images/read?path=org%2Fother%2Flogo%2Fa.png&t=fixture-capability')
+    expect(response.status).toBe(404)
     expect(mocks.download).not.toHaveBeenCalled()
   })
 
   it('returns 404 when the object is gone and 502 when R2 fails', async () => {
     mocks.download.mockResolvedValueOnce(null)
-    expect((await app.request('https://api.example.com/images/read?path=org%2Flogo.png&token=t')).status).toBe(404)
+    expect((await app.request('https://api.example.com/images/read?path=org%2Flogo.png&t=t')).status).toBe(404)
     mocks.download.mockRejectedValueOnce(new Error('r2 down'))
-    expect((await app.request('https://api.example.com/images/read?path=org%2Flogo.png&token=t')).status).toBe(502)
+    expect((await app.request('https://api.example.com/images/read?path=org%2Flogo.png&t=t')).status).toBe(502)
   })
 
   it('rejects traversal before making a storage request', async () => {
-    const response = await app.request('https://api.example.com/images/read?path=..%2Fother-bucket%2Fsecret&token=fixture-capability')
+    const response = await app.request('https://api.example.com/images/read?path=..%2Fother-bucket%2Fsecret&t=fixture-capability')
     expect(response.status).toBe(400)
     expect(mocks.verifyToken).not.toHaveBeenCalled()
     expect(mocks.download).not.toHaveBeenCalled()
