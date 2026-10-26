@@ -241,6 +241,7 @@ export interface AppLogDimensions {
   country_code?: string | null
   plugin_version?: string | null
   channel?: VersionUsageChannel | null
+  uncounted_failure?: boolean
 }
 
 function normalizeAppLogDimension(value: string | null | undefined, maxLength: number) {
@@ -256,6 +257,7 @@ function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
   // blob5=platform, blob6=country_code, blob7=plugin_version (denormalized for public /data breakdowns)
   // blob8=channel name, blob9=channel id: only set on failure logs, so the live
   // release view can break failures down per channel.
+  // blob10='1': failure log not counted as a version_usage fail (legacy download_fail).
   const channelId = dimensions?.channel?.id
   return [
     normalizeAppLogDimension(dimensions?.platform, 16),
@@ -263,6 +265,7 @@ function appLogDimensionBlobs(dimensions?: AppLogDimensions) {
     normalizeAppLogDimension(dimensions?.plugin_version, 32),
     normalizeAppLogDimension(dimensions?.channel?.name, 128),
     channelId ? String(channelId) : '',
+    ...(dimensions?.uncounted_failure ? ['1'] : []),
   ]
 }
 

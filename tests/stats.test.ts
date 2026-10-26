@@ -474,7 +474,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           baseData.device_id = uuid
           baseData.action = action
           if (action === 'download_fail')
-            baseData.plugin_version = '7.17.0'
+            baseData.plugin_version = '8.53.0'
           baseData.version_build = getVersionFromAction(action)
 
           const version = await createAppVersions(baseData.version_build, appId)
@@ -701,13 +701,18 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
   })
 
   it('filters legacy download_fail before saved stats and logs', async () => {
+    // Plugins before 6.53.0 / 7.53.0 / 8.53.0 also send download_fail for a failed
+    // update check, against the running bundle: logged, never a version fail.
     const cases = [
-      { pluginVersion: '7.16.9', shouldRecord: false, createVersion: true },
-      { pluginVersion: '7.16.9', shouldRecord: false, createVersion: false },
-      { pluginVersion: '7.17.0', shouldRecord: true, createVersion: true },
-      { pluginVersion: '6.14.24', shouldRecord: false, createVersion: true },
-      { pluginVersion: '6.14.25', shouldRecord: true, createVersion: true },
-      { pluginVersion: 'not-a-version', shouldRecord: false, createVersion: true },
+      { pluginVersion: '7.16.9', shouldRecord: false, countsAsFail: false, createVersion: true },
+      { pluginVersion: '7.16.9', shouldRecord: false, countsAsFail: false, createVersion: false },
+      { pluginVersion: '7.17.0', shouldRecord: true, countsAsFail: false, createVersion: true },
+      { pluginVersion: '6.14.24', shouldRecord: false, countsAsFail: false, createVersion: true },
+      { pluginVersion: '6.14.25', shouldRecord: true, countsAsFail: false, createVersion: true },
+      { pluginVersion: '8.51.16', shouldRecord: true, countsAsFail: false, createVersion: true },
+      { pluginVersion: '8.53.0', shouldRecord: true, countsAsFail: true, createVersion: true },
+      { pluginVersion: '7.53.0', shouldRecord: true, countsAsFail: true, createVersion: true },
+      { pluginVersion: 'not-a-version', shouldRecord: false, countsAsFail: false, createVersion: true },
     ]
 
     for (const [caseIndex, testCase] of cases.entries()) {
@@ -746,7 +751,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         .eq('action', 'fail')
 
       expect(versionUsageError).toBeNull()
-      expect(versionUsageCount).toBe(testCase.shouldRecord ? 1 : 0)
+      expect(versionUsageCount).toBe(testCase.countsAsFail ? 1 : 0)
     }
   })
 
@@ -1387,7 +1392,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats device version attribution', () =
         const data = getBaseData(appId) as StatsPayload
         data.device_id = uuid
         data.action = action
-        data.plugin_version = '7.17.0'
+        data.plugin_version = '8.53.0'
         data.version_name = versionName
         const response = await postStats(data)
         expect(response.status).toBe(200)

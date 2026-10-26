@@ -1550,10 +1550,24 @@ async function handleCustomerProfileStripeEvent(
   }
 
   if (stripeEvent.type === 'customer.created') {
-    // Compatibility with the native Stripe -> Bento trigger: one Stripe customer
-    // email, even before provisioning links the org. Never fan out to org members.
-    // This contract includes every customer.created on both accounts; org metadata
-    // provides optional context, not a product/cohort eligibility check for US.
+    // Backend replacement for Bento's native Stripe "CustomerCreated" trigger:
+    // one send per customer.created delivery on BOTH billing accounts (EE/US), to
+    // the Stripe customer's email only. Never fan out to org members.
+    // Two live Bento flows use org:legacy_stripe_trial_started as their trigger:
+    // - "Trial": countdown/upgrade emails on days 7/12/14/15/18/23/28:
+    //   "Halfway", "3 days left", "ends today", "trial ended",
+    //   "Stuck after trial? Reply EXTEND or ONBOARD", "Without Capgo...",
+    //   "What was missing". The flow has its own "already paying" checks.
+    // - "Onboarding": email drip from day 1 ("Can you DM Ionic's founder..."),
+    //   then Channels, Device logs, "Live updates were one command. Native builds
+    //   are too.", and Notifications. Deduplicated by flow_onboarding:started;
+    //   stops on onboarded / first_app_update / onboarding_disabled.
+    // Despite its name, ALWAYS send this event for every customer.created, even if
+    // the org/user is NOT eligible for a trial (e.g. direct-offer/paid-ads signups
+    // with no trial, or a customer created before the org is linked).
+    // Onboarding depends on it for every new customer. Trial/paid filtering belongs
+    // in Bento flows, not here: do not add trial/plan/cohort eligibility checks.
+    // Org metadata is optional context, never an eligibility requirement.
     const email = getStripeCustomerEmailFromEvent(stripeEvent)
     const event = 'org:legacy_stripe_trial_started'
     const context = {
