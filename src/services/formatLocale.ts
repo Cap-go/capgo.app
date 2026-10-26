@@ -76,8 +76,30 @@ export function normalizeFormatLocale(locale?: string | null) {
   return hasDateSupport && hasNumberSupport ? canonical : null
 }
 
+// Regional convention used when the account has no explicit format_locale, so a French UI shows French numbers.
+const UI_LANGUAGE_FORMAT_LOCALES: Record<string, string> = {
+  'de': 'de-DE',
+  'es': 'es-ES',
+  'fr': 'fr-FR',
+  'hi': 'en-IN',
+  'id': 'id-ID',
+  'it': 'it-IT',
+  'ja': 'ja-JP',
+  'ko': 'ko-KR',
+  'pl': 'pl-PL',
+  'pt-br': 'pt-BR',
+  'ru': 'ru-RU',
+  'tr': 'tr-TR',
+  'vi': 'vi-VN',
+  'zh-cn': 'zh-CN',
+}
+
+export function getUiFormatLocale() {
+  return UI_LANGUAGE_FORMAT_LOCALES[String(i18n.global.locale.value)] ?? DEFAULT_FORMAT_LOCALE
+}
+
 export function resolveFormatLocale(locale?: string | null) {
-  return normalizeFormatLocale(locale) ?? DEFAULT_FORMAT_LOCALE
+  return normalizeFormatLocale(locale) ?? getUiFormatLocale()
 }
 
 function getAccountFormatLocale() {

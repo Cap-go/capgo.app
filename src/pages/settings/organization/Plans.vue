@@ -692,7 +692,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
                 </template>
               </template>
               <template v-else-if="isYearlyPlan(p, segmentVal)">
-                {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ hasYearlyDiscount(p) ? p.price_y : p.price_m }}
+                {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatUsd(hasYearlyDiscount(p) ? p.price_y : p.price_m) }}
               </template>
             </p>
 
@@ -733,12 +733,12 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           <div v-else class="mb-6 shrink-0">
             <div class="flex items-baseline">
               <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-                ${{ getPrice(p, segmentVal) }}
+                {{ formatUsd(getPrice(p, segmentVal)) }}
               </span>
               <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ hasYearlyDiscount(p) ? p.price_y : p.price_m }}
+              {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatUsd(hasYearlyDiscount(p) ? p.price_y : p.price_m) }}
             </p>
           </div>
 
