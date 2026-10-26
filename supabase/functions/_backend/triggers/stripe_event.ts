@@ -18,6 +18,7 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { getOpenAIFirstPaymentAt, trackOpenAIFirstPayment } from '../utils/openai_ads_first_payment.ts'
 import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications.ts'
 import { beginWriteTransaction, closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { getPlanPriceInterval } from '../utils/plan_price_interval.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
@@ -85,7 +86,7 @@ type StripeInfoRevenueState = {
   product_id?: string | null
   status?: Database['public']['Enums']['stripe_status'] | null
 } | null | undefined
-type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us'>
+type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'legacy_price_m_ids' | 'legacy_price_y_ids'>
 type RevenuePlanKey = 'solo' | 'maker' | 'team' | 'enterprise'
 type ChurnReason = 'past_due_unresolved'
 const CHURNED_SUBSCRIPTION_STATUSES = new Set<Database['public']['Enums']['stripe_status']>(['canceled', 'deleted'])
@@ -261,19 +262,13 @@ function compactMetadata(metadata: Record<string, string | undefined>) {
   ) as Record<string, string>
 }
 
-type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us'>
+type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'legacy_price_m_ids' | 'legacy_price_y_ids'>
 
 function getPlanType(
   plan: PlanPriceIdsRow,
   priceId: string | null | undefined,
 ) {
-  if (!priceId)
-    return undefined
-  if (plan.price_m_id === priceId || plan.price_m_id_us === priceId)
-    return 'monthly'
-  if (plan.price_y_id === priceId || plan.price_y_id_us === priceId)
-    return 'yearly'
-  return undefined
+  return getPlanPriceInterval(plan, priceId)
 }
 
 function getSubscriptionTrackingState(
@@ -292,8 +287,8 @@ function getSubscriptionTrackingState(
 
 function buildSubscriptionEventMetadata(
   stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
-  currentPlan: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'>,
-  previousPlan?: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'> | null,
+  currentPlan: Pick<PlanRow, 'name' | 'stripe_id' | 'stripe_id_us'> & PlanPriceIdsRow,
+  previousPlan?: (Pick<PlanRow, 'name' | 'stripe_id' | 'stripe_id_us'> & PlanPriceIdsRow) | null,
 ) {
   const currentPlanType = getPlanType(currentPlan, stripeData.data.price_id)
   const fallbackPreviousPlan = stripeData.previousProductId === currentPlan.stripe_id
@@ -331,10 +326,11 @@ function getPlanMrr(plan: RevenuePlanRow | null | undefined, priceId: string | n
   if (!plan || !priceId)
     return 0
 
-  if (plan.price_m_id === priceId || plan.price_m_id_us === priceId)
+  const interval = getPlanPriceInterval(plan, priceId)
+  if (interval === 'monthly')
     return Number(plan.price_m) || 0
 
-  if (plan.price_y_id === priceId || plan.price_y_id_us === priceId)
+  if (interval === 'yearly')
     return (Number(plan.price_y) || 0) / 12
 
   return 0
@@ -642,7 +638,7 @@ function isStaleStripeEvent(
 async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
   const { data: plans, error } = await supabaseAdmin(c)
     .from('plans')
-    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us')
+    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, legacy_price_m_ids, legacy_price_y_ids')
     .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
 
   if (error) {
@@ -1124,7 +1120,7 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
   if (productIds.length) {
     const { data: plans } = await supabaseAdmin(c)
       .from('plans')
-      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us')
+      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us, legacy_price_y_ids')
       .or(productIds.map(productId => planProductIdOrFilter(productId)).join(','))
     const plan = plans?.[0]
     if (!plan) {
@@ -1132,7 +1128,7 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
     }
     planName = plan.name
     const linePriceIds = (invoice.lines?.data ?? []).map((line: any) => line.pricing?.price_details?.price)
-    const yearlyPriceIds = [plan.price_y_id, plan.price_y_id_us].filter((id): id is string => !!id)
+    const yearlyPriceIds = [plan.price_y_id, plan.price_y_id_us, ...(plan.legacy_price_y_ids ?? [])].filter((id): id is string => !!id)
     if (yearlyPriceIds.includes(stripeData.data.price_id ?? '') || linePriceIds.some((id: unknown) => typeof id === 'string' && yearlyPriceIds.includes(id))) {
       planType = 'yearly'
     }

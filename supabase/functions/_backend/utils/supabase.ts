@@ -14,6 +14,7 @@ import { getDirectOfferStatus } from './direct_offer.ts'
 import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
+import { getPlanPriceInterval } from './plan_price_interval.ts'
 import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
@@ -1215,7 +1216,7 @@ async function customerToSegmentOrgBase(
     trial1: false,
     trial0: false,
     paying: false,
-    payingMonthly: !!price_id && (plan?.price_m_id === price_id || plan?.price_m_id_us === price_id),
+    payingMonthly: !!plan && getPlanPriceInterval(plan, price_id) === 'monthly',
     overuse: false,
     canceled: await isCanceledOrg(c, orgId),
     issueSegment: false,

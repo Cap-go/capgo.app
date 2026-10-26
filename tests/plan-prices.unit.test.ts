@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { getCommonCurrencies, pickCurrency, pickPriceCurrencies } from '../supabase/functions/_backend/private/plan_prices.ts'
 import { currencyForCountry, isCurrencyAllowedForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
+import { getPlanPriceInterval } from '../supabase/functions/_backend/utils/plan_price_interval.ts'
 import { getCurrencyRatios, getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
 import { getPlanAmounts, getUsdRatio } from '../src/services/planPrices'
 
@@ -98,5 +99,15 @@ describe('plan prices', () => {
     const prices = { ent: { month: { usd: 24900, jpy: 24000 }, year: { usd: 249000, jpy: 240000 } } }
     expect(getUsdRatio(prices, 'ent', 'jpy', 'month')).toBeCloseTo(24000 / 249)
     expect(getUsdRatio(prices, 'ent', 'eur', 'month')).toBeNull()
+  })
+
+  it.concurrent('recognises current and replaced plan prices', () => {
+    const plan = { price_m_id: 'price_m_new', price_y_id: 'price_y_new', price_m_id_us: 'price_m_us', price_y_id_us: null, legacy_price_m_ids: ['price_m_old'], legacy_price_y_ids: ['price_y_old'] }
+    expect(getPlanPriceInterval(plan, 'price_m_new')).toBe('monthly')
+    expect(getPlanPriceInterval(plan, 'price_m_us')).toBe('monthly')
+    expect(getPlanPriceInterval(plan, 'price_m_old')).toBe('monthly')
+    expect(getPlanPriceInterval(plan, 'price_y_old')).toBe('yearly')
+    expect(getPlanPriceInterval(plan, 'price_other')).toBeUndefined()
+    expect(getPlanPriceInterval(plan, null)).toBeUndefined()
   })
 })

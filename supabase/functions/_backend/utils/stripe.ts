@@ -734,6 +734,11 @@ async function getPriceIds(c: Context, planId: string, recurrence: string, billi
   let priceId = null
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return { priceId }
+  // The plans table names the price Checkout sells: a replaced price stays active in Stripe until it is
+  // archived after the release, so the Stripe listing alone could still pick it.
+  priceId = await getStoredPlanPriceId(c, planId, recurrence, billingAccount)
+  if (priceId)
+    return { priceId }
   try {
     const prices = await listPricesByProduct(c, planId, billingAccount)
     cloudlog({ requestId: c.get('requestId'), message: 'prices stripe', prices })
@@ -745,10 +750,7 @@ async function getPriceIds(c: Context, planId: string, recurrence: string, billi
   catch (err) {
     cloudlog({ requestId: c.get('requestId'), message: 'search err', error: err })
   }
-  if (!priceId) {
-    priceId = await getStoredPlanPriceId(c, planId, recurrence, billingAccount)
-    cloudlog({ requestId: c.get('requestId'), message: 'prices fallback', planId, recurrence, priceId })
-  }
+  cloudlog({ requestId: c.get('requestId'), message: 'prices fallback', planId, recurrence, priceId })
   return { priceId }
 }
 

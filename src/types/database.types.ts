@@ -2591,6 +2591,8 @@ export type Database = {
           credit_id_us: string | null
           description: string
           id: string
+          legacy_price_m_ids: string[]
+          legacy_price_y_ids: string[]
           market_desc: string | null
           mau: number
           name: string
@@ -2614,6 +2616,8 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          legacy_price_m_ids?: string[]
+          legacy_price_y_ids?: string[]
           market_desc?: string | null
           mau?: number
           name?: string
@@ -2637,6 +2641,8 @@ export type Database = {
           credit_id_us?: string | null
           description?: string
           id?: string
+          legacy_price_m_ids?: string[]
+          legacy_price_y_ids?: string[]
           market_desc?: string | null
           mau?: number
           name?: string
