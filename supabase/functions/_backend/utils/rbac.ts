@@ -280,10 +280,15 @@ export async function checkPermission(
  *
  * Use this when a route returns data for several channels at once (for example
  * deploy history across an app) and must drop rows for channels the caller
- * cannot see. Only channels carrying an explicit override for the permission
- * can differ from the app-level result, so those are the only candidates, and
- * each one is evaluated with rbac_check_permission_direct so the outcome
- * matches checkPermission() with a concrete channelId.
+ * cannot see. The result is the effective permission, matching checkPermission()
+ * with a concrete channelId: the app-level grant is evaluated once, then
+ * channel overrides and channel-scoped role bindings are applied.
+ *
+ * A channel can only differ from the app-level result when it carries an
+ * override for the permission or a channel-scoped role binding, so only those
+ * channels are evaluated individually with rbac_check_permission_direct. When
+ * the app-level grant is missing (for example an app_preview key), every
+ * channel without such a grant is denied.
  *
  * Fails closed: infrastructure errors throw instead of returning an empty list.
  */
@@ -304,22 +309,44 @@ export async function getDeniedChannelIdsForPermission(
     pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT candidates.id
+      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT ch.id
         FROM (
-          SELECT DISTINCT ch.id, ch.owner_org, ch.app_id
-          FROM public.channel_permission_overrides o
-          INNER JOIN public.channels ch ON ch.id = o.channel_id
-          WHERE ch.app_id = ${appId}
-            AND o.permission_key = ${permission}
-        ) AS candidates
-        WHERE NOT public.rbac_check_permission_direct(
-          ${permission},
-          ${userId}::uuid,
-          candidates.owner_org,
-          candidates.app_id,
-          candidates.id,
-          ${apikeyString}
-        )`,
+          SELECT
+            a.app_id,
+            public.rbac_check_permission_direct(
+              ${permission},
+              ${userId}::uuid,
+              a.owner_org,
+              a.app_id,
+              NULL::bigint,
+              ${apikeyString}
+            ) AS allowed
+          FROM public.apps a
+          WHERE a.app_id = ${appId}
+          OFFSET 0
+        ) AS app_level
+        INNER JOIN public.channels ch ON ch.app_id = app_level.app_id
+        WHERE CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM public.channel_permission_overrides o
+            WHERE o.channel_id = ch.id
+              AND o.permission_key = ${permission}
+          ) OR EXISTS (
+            SELECT 1
+            FROM public.role_bindings rb
+            WHERE rb.scope_type = public.rbac_scope_channel()
+              AND rb.channel_id = ch.rbac_id
+          ) THEN NOT public.rbac_check_permission_direct(
+            ${permission},
+            ${userId}::uuid,
+            ch.owner_org,
+            ch.app_id,
+            ch.id,
+            ${apikeyString}
+          )
+          ELSE NOT app_level.allowed
+        END`,
     )
     return new Set((result.rows as Array<{ id: number | string }>).map(row => Number(row.id)))
   }
