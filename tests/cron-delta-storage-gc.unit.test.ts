@@ -253,6 +253,32 @@ describe('delta storage GC worker', () => {
     expect(queries.some(text => text.includes('delta_gc_end_delete'))).toBe(true)
   })
 
+  it('fails a stalled listing within the storage timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.listObjectPage.mockReturnValue(new Promise(() => {}))
+      mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+        const text = sqlText(query)
+        if (text.includes('delta_gc_claim_orphan_prefixes'))
+          return { rows: [] }
+        if (text.includes('delta_gc_claim'))
+          return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
+        return { rows: [] }
+      })
+
+      const pending = app.request('/', { method: 'POST' })
+      await vi.advanceTimersByTimeAsync(DELTA_GC_STORAGE_TIMEOUT_MS + 10)
+      const response = await pending
+
+      expect(response.status).toBe(200)
+      const finish = mocks.execute.mock.calls.map(([query]) => sqlText(query)).find(text => text.includes('delta_gc_finish('))
+      expect(finish).toContain('R2 listing timed out')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('restarts the listing after a storage error', async () => {
     mocks.listObjectPage.mockRejectedValue(new Error('list failed'))
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {

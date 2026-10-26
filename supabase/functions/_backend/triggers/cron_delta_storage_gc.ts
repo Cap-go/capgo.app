@@ -71,6 +71,19 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
   }
 }
 
+// A listing that outlives the timeout fails the page; the next run retries it.
+async function withDeadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([promise, new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(reject, timeoutMs, new Error(`${label} timed out after ${timeoutMs}ms`))
+    })])
+  }
+  finally {
+    clearTimeout(timer)
+  }
+}
+
 async function forEachBounded<T>(items: T[], concurrency: number, shouldStart: () => boolean, worker: (item: T) => Promise<void>) {
   let next = 0
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
@@ -128,7 +141,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
 }
 
 async function collectAppPage(c: Context, db: Database, app: ClaimedApp, deadline: number) {
-  const { objects, nextToken } = await s3.listObjectPage(c, deltaPrefix(app.list_org, app.app_id), app.list_cursor, DELTA_GC_LIST_PAGE_SIZE)
+  const { objects, nextToken } = await withDeadline(s3.listObjectPage(c, deltaPrefix(app.list_org, app.app_id), app.list_cursor, DELTA_GC_LIST_PAGE_SIZE), DELTA_GC_STORAGE_TIMEOUT_MS, 'R2 listing')
   const candidates = await unreferencedPaths(db, selectAgedKeys(objects, Date.now()))
   let deleted = 0
   let processed = 0
@@ -155,7 +168,7 @@ type OrphanPrefix = Record<string, unknown> & { prefix: string, list_cursor: str
  * is deleted directly, one bounded page per run.
  */
 async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix, deadline: number) {
-  const { objects, nextToken } = await s3.listObjectPage(c, orphan.prefix, orphan.list_cursor, DELTA_GC_LIST_PAGE_SIZE)
+  const { objects, nextToken } = await withDeadline(s3.listObjectPage(c, orphan.prefix, orphan.list_cursor, DELTA_GC_LIST_PAGE_SIZE), DELTA_GC_STORAGE_TIMEOUT_MS, 'R2 listing')
   let deleted = 0
   let started = 0
   await forEachBounded(objects, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (object) => {
