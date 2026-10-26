@@ -828,9 +828,16 @@ BEGIN
   )
   -- An in-progress upload may already have skipped re-sending the object
   -- while its version_files row does not exist yet: treat it as referenced.
+  -- A kept version's bundle zip at that key counts too.
   SELECT claimed.path,
     public.delta_app_has_upload_in_progress(claimed.app_id)
     OR NOT (claimed.path = ANY (public.delta_gc_unreferenced_paths(ARRAY[claimed.path])))
+    OR EXISTS (
+      SELECT 1 FROM public.app_versions AS av
+      WHERE av.app_id = claimed.app_id
+        AND av.r2_path = claimed.path
+        AND public.delta_version_keeps_files(av.deleted, av.deleted_at, av.updated_at)
+    )
   FROM claimed;
 END;
 $$;
@@ -927,8 +934,11 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
+  -- A row whose delete lease is active stays until the lease ends: its
+  -- lease is what makes this app's first uploads wait for those deletes.
   DELETE FROM public.delta_gc_orphan_prefixes
-  WHERE app_id = NEW.app_id AND org = NEW.owner_org::text;
+  WHERE app_id = NEW.app_id AND org = NEW.owner_org::text
+    AND (lease_until IS NULL OR lease_until <= pg_catalog.clock_timestamp());
   RETURN NULL;
 END;
 $$;
@@ -956,7 +966,8 @@ BEGIN
   WHERE EXISTS (
     SELECT 1 FROM public.apps AS a
     WHERE a.app_id = o.app_id AND a.owner_org::text = o.org
-  );
+  )
+    AND (o.lease_until IS NULL OR o.lease_until <= pg_catalog.clock_timestamp());
 
   RETURN QUERY
   WITH due AS (
@@ -1010,7 +1021,8 @@ BEGIN
     SELECT 1 FROM public.apps AS a
     WHERE a.app_id = v_orphan.app_id AND a.owner_org::text = v_orphan.org
   ) THEN
-    DELETE FROM public.delta_gc_orphan_prefixes WHERE prefix = p_prefix;
+    DELETE FROM public.delta_gc_orphan_prefixes
+    WHERE prefix = p_prefix AND (lease_until IS NULL OR lease_until <= pg_catalog.clock_timestamp());
     RETURN NULL;
   END IF;
   -- NULL: refused for now; the page is listed again instead of skipped.
@@ -1079,10 +1091,11 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
   DELETE FROM public.delta_gc_orphan_prefixes
-  WHERE prefix = p_prefix AND p_page_done AND p_list_cursor IS NULL;
+  WHERE prefix = p_prefix AND p_page_done AND p_list_cursor IS NULL
+    AND (lease_until IS NULL OR lease_until <= pg_catalog.clock_timestamp());
   UPDATE public.delta_gc_orphan_prefixes
   SET list_cursor = p_list_cursor, claimed_until = NULL
-  WHERE prefix = p_prefix AND NOT (p_page_done AND p_list_cursor IS NULL);
+  WHERE prefix = p_prefix;
 $$;
 ALTER FUNCTION public.delta_gc_finish_orphan_prefix(text, text, boolean) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text, boolean) FROM PUBLIC;

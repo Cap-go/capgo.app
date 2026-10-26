@@ -636,8 +636,18 @@ describe('delta storage v2 legacy guards', () => {
       const zipBegin = await client.query<{ paths: string[] | null }>('SELECT public.delta_gc_begin_orphan_delete($1, $2::text[], 1000) AS paths', [orphan, [zip]])
       expect(zipBegin.rows[0].paths).toEqual([])
 
-      // Moving the app id into an organization retires that organization's task.
-      await client.query('INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org) VALUES ($1, $2, $3)', [own, APP_ID, ORG_ID])
+      // Recovery treats that zip as referenced too.
+      await client.query(`INSERT INTO public.delta_gc_unsettled_deletes (path, app_id, recorded_at) VALUES ($1, $2, now() - interval '2 minutes')`, [zip, APP_ID])
+      const zipRepair = await client.query<{ referenced: boolean }>('SELECT referenced FROM public.delta_gc_claim_unsettled(50) WHERE path = $1', [zip])
+      expect(zipRepair.rows).toEqual([{ referenced: true }])
+
+      // Moving the app id into an organization retires that organization's
+      // task, but only once its delete lease has ended.
+      await client.query(`INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org, lease_until) VALUES ($1, $2, $3, clock_timestamp() + interval '2 seconds')`, [own, APP_ID, ORG_ID])
+      await client.query('UPDATE public.apps SET owner_org = owner_org WHERE app_id = $1', [APP_ID])
+      const leased = await client.query('SELECT 1 FROM public.delta_gc_orphan_prefixes WHERE prefix = $1', [own])
+      expect(leased.rows).toHaveLength(1)
+      await client.query(`UPDATE public.delta_gc_orphan_prefixes SET lease_until = clock_timestamp() - interval '1 second' WHERE prefix = $1`, [own])
       await client.query('UPDATE public.apps SET owner_org = owner_org WHERE app_id = $1', [APP_ID])
       const retired = await client.query('SELECT 1 FROM public.delta_gc_orphan_prefixes WHERE prefix = $1', [own])
       expect(retired.rows).toEqual([])
