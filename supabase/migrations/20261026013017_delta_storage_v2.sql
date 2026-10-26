@@ -756,6 +756,59 @@ CREATE OR REPLACE FUNCTION "public"."app_version_manifest_jsonb_unmigrated"("p_v
   );
 $$;
 
+-- Production carries the 3-argument variant, fresh databases the 0-argument
+-- one from 20260722082019. Patch whichever exists; never add an overload.
+DO $do$
+BEGIN
+  IF pg_catalog.to_regprocedure('public.null_migrated_app_version_manifests()') IS NOT NULL THEN
+    EXECUTE $fn$
+CREATE OR REPLACE FUNCTION "public"."null_migrated_app_version_manifests"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  batch_size integer := 200;
+  max_batches integer := 50;
+  batch_no integer := 0;
+  updated_batch integer;
+  updated_total bigint := 0;
+BEGIN
+  LOOP
+    batch_no := batch_no + 1;
+    EXIT WHEN batch_no > max_batches;
+
+    WITH doomed AS (
+      SELECT av.id
+      FROM public.app_versions AS av
+      WHERE av.manifest IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM pg_catalog.unnest(av.manifest) AS entry(file_name, s3_path, file_hash)
+          WHERE NOT public.delta_version_has_entry(av.id, entry.s3_path, entry.file_hash)
+        )
+      ORDER BY av.id
+      LIMIT batch_size
+    )
+    UPDATE public.app_versions AS av
+    SET manifest = NULL
+    FROM doomed
+    WHERE av.id = doomed.id;
+
+    GET DIAGNOSTICS updated_batch = ROW_COUNT;
+    updated_total := updated_total + updated_batch;
+    EXIT WHEN updated_batch = 0;
+  END LOOP;
+
+  RAISE NOTICE
+    'null_migrated_app_version_manifests: updated=% max_batches=%',
+    updated_total,
+    max_batches;
+END;
+$$;
+$fn$;
+  END IF;
+  IF pg_catalog.to_regprocedure('public.null_migrated_app_version_manifests(integer, integer, integer)') IS NOT NULL THEN
+    EXECUTE $fn$
 CREATE OR REPLACE FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 50, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -829,6 +882,10 @@ BEGIN
     v_max_runtime_ms;
 END;
 $$;
+$fn$;
+  END IF;
+END;
+$do$;
 
 SELECT pgmq.create('cron_delta_storage_gc');
 
