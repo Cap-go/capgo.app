@@ -644,8 +644,9 @@ function matchesAllowedNewReplicaTable(
 ): boolean {
   // Compare the fields the allowlist pins, in a stable key order.
   const same = (actual: readonly object[], expected: readonly object[]) => {
-    const keys = expected.length ? Object.keys(expected[0]).sort() : []
-    const shape = (entries: readonly object[]) => entries.map(entry => JSON.stringify(entry, keys)).sort()
+    const byText = (left: string, right: string) => left.localeCompare(right)
+    const keys = expected.length ? Object.keys(expected[0]).sort(byText) : []
+    const shape = (entries: readonly object[]) => entries.map(entry => JSON.stringify(entry, keys)).sort(byText)
     return JSON.stringify(shape(actual)) === JSON.stringify(shape(expected))
   }
   return same((catalog.columns ?? []).filter(entry => entry.table === table), allowed.catalog.columns)
