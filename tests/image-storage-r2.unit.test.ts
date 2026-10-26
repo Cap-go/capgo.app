@@ -6,8 +6,8 @@ const OTHER_USER_ID = '33333333-3333-4333-8333-333333333333'
 
 const mocks = vi.hoisted(() => ({
   checkPermission: vi.fn(),
+  checkPermissionInMemberOrgs: vi.fn(),
   app: { data: null as unknown, error: null as unknown },
-  memberships: { data: [] as unknown[], error: null as unknown },
   client: {
     copyObject: vi.fn(),
     deleteObject: vi.fn(),
@@ -41,6 +41,7 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => mocks.checkPermission(...args),
+  checkPermissionInMemberOrgs: (...args: unknown[]) => mocks.checkPermissionInMemberOrgs(...args),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
@@ -49,7 +50,6 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
       const query: Record<string, any> = {}
       query.select = () => query
       query.eq = () => query
-      query.limit = async () => mocks.memberships
       query.maybeSingle = async () => (table === 'apps' ? mocks.app : { data: null, error: null })
       return query
     },
@@ -75,12 +75,12 @@ async function* yieldAll<T>(items: T[]) {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.app = { data: null, error: null }
-  mocks.memberships = { data: [], error: null }
   mocks.client.exists.mockResolvedValue(false)
   mocks.client.getPresignedUrl.mockResolvedValue('https://r2.example/put')
   fetchMock.mockResolvedValue(new Response(null, { status: 200 }))
   mocks.client.deleteObject.mockResolvedValue(undefined)
   mocks.checkPermission.mockResolvedValue(false)
+  mocks.checkPermissionInMemberOrgs.mockResolvedValue(false)
 })
 
 describe('R2 image storage', () => {
@@ -284,10 +284,12 @@ describe('image access rules', () => {
     await expect(canAccessImagePath(context(), `${OTHER_USER_ID}/a.png`, 'delete')).resolves.toBe(false)
   })
 
-  it('lets org member readers see a teammate avatar', async () => {
-    mocks.memberships = { data: [{ org_id: ORG_ID }], error: null }
-    mocks.checkPermission.mockImplementation(async (_c: unknown, permission: string, scope: { orgId?: string }) => permission === 'org.read_members' && scope.orgId === ORG_ID)
+  it('lets org member readers see a teammate avatar with one batched check', async () => {
+    mocks.checkPermissionInMemberOrgs.mockResolvedValue(true)
     await expect(canAccessImagePath(context(), `${OTHER_USER_ID}/a.png`, 'read')).resolves.toBe(true)
+    expect(mocks.checkPermissionInMemberOrgs).toHaveBeenCalledTimes(1)
+    expect(mocks.checkPermissionInMemberOrgs).toHaveBeenCalledWith(expect.anything(), 'org.read_members', OTHER_USER_ID)
+    expect(mocks.checkPermission).not.toHaveBeenCalled()
   })
 
   it('maps org logo access to org permissions', async () => {

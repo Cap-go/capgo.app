@@ -111,7 +111,7 @@ function handlePermissionCheckError(
   permission: Permission,
   scope: PermissionScope,
   error: unknown,
-  source: 'checkPermission' | 'checkPermissionPg',
+  source: 'checkPermission' | 'checkPermissionPg' | 'checkPermissionInMemberOrgs',
 ): false {
   if (error instanceof HTTPException)
     throw error
@@ -272,6 +272,51 @@ export async function checkPermission(
     if (pgClient) {
       closeClient(c, pgClient)
     }
+  }
+}
+
+/**
+ * Whether the caller holds an org-scoped permission in ANY organization that
+ * `memberUserId` belongs to, evaluated in one query instead of one
+ * checkPermission round trip per organization.
+ */
+export async function checkPermissionInMemberOrgs(
+  c: Context<MiddlewareKeyVariables>,
+  permission: Permission,
+  memberUserId: string,
+): Promise<boolean> {
+  const auth = c.get('auth')
+  if (!auth?.userId)
+    return false
+
+  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+  const scope: PermissionScope = {}
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const result = await getDrizzleClient(pgClient).execute(
+      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT EXISTS (
+        SELECT 1
+        FROM public.org_users ou
+        WHERE ou.user_id = ${memberUserId}::uuid
+          AND public.rbac_check_permission_direct(
+            ${permission},
+            ${auth.userId}::uuid,
+            ou.org_id,
+            NULL::character varying,
+            NULL::bigint,
+            ${apikeyString}
+          )
+      ) AS allowed`,
+    )
+    return (result.rows[0] as any)?.allowed === true
+  }
+  catch (e) {
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionInMemberOrgs')
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
   }
 }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
-import { getAuthHeaders, getEndpointUrl, getSupabaseClient, ORG_ID, USER_ID, USER_ID_NONMEMBER } from './test-utils'
+import { getAuthHeaders, getEndpointUrl, getSupabaseClient, ORG_ID, USER_ID, USER_ID_2, USER_ID_NONMEMBER } from './test-utils'
 
 // Images live in R2 under `images/`. Locally the S3 endpoint is the Supabase
 // Storage `capgo` bucket, which is where these objects must land; nothing may
@@ -135,6 +135,22 @@ describe('console image endpoints (R2)', () => {
     const uploaded = await upload(path, { upsert: true })
     expect(uploaded.error).toBeNull()
     expect(await r2Has(path)).toBe(true)
+  })
+
+  it('reads a teammate avatar but not an outsider avatar', async () => {
+    // Seeded directly in the local R2 stand-in: USER_ID_2 shares ORG_ID with the
+    // caller (org.read_members); USER_ID_NONMEMBER shares no organization.
+    const teammate = `${USER_ID_2}/r2-teammate-${randomUUID()}.png`
+    const outsider = `${USER_ID_NONMEMBER}/r2-outsider-${randomUUID()}.png`
+    for (const path of [teammate, outsider]) {
+      createdPaths.push(path)
+      const { error } = await getSupabaseClient().storage.from(LOCAL_R2_BUCKET).upload(`images/${path}`, new Blob([PNG_BYTES], { type: 'image/png' }), { upsert: true })
+      expect(error).toBeNull()
+    }
+
+    const token = await imageToken()
+    expect((await fetch(readUrl(teammate, token))).status).toBe(200)
+    expect((await fetch(readUrl(outsider, token))).status).toBe(404)
   })
 
   it('refuses to write or delete another user folder', async () => {

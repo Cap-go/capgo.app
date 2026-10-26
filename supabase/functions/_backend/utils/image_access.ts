@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import { z } from 'zod'
-import { checkPermission } from './rbac.ts'
+import { checkPermission, checkPermissionInMemberOrgs } from './rbac.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 // Image objects moved from the Supabase Storage `images` bucket to R2, so the
@@ -65,22 +65,6 @@ async function canWriteAppImage(c: Context<MiddlewareKeyVariables>, orgId: strin
   return checkPermission(c, 'org.create_app', { orgId })
 }
 
-async function canReadUserImage(c: Context<MiddlewareKeyVariables>, userId: string) {
-  const { data: memberships, error } = await supabaseAdmin(c)
-    .from('org_users')
-    .select('org_id')
-    .eq('user_id', userId)
-    .limit(100)
-  if (error || !memberships)
-    return false
-  const orgIds = [...new Set(memberships.map(row => row.org_id))]
-  for (const orgId of orgIds) {
-    if (await checkPermission(c, 'org.read_members', { orgId }))
-      return true
-  }
-  return false
-}
-
 export async function canAccessImagePath(c: Context<MiddlewareKeyVariables>, path: string, access: ImageAccess) {
   const callerId = c.get('auth')?.userId
   if (!callerId)
@@ -103,6 +87,7 @@ export async function canAccessImagePath(c: Context<MiddlewareKeyVariables>, pat
     case 'user':
       if (parsed.userId === callerId)
         return true
-      return access === 'read' && canReadUserImage(c, parsed.userId)
+      // One query over the owner's memberships, like the storage policy it replaces.
+      return access === 'read' && checkPermissionInMemberOrgs(c, 'org.read_members', parsed.userId)
   }
 }
