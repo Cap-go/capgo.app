@@ -24,7 +24,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => 
   middlewareAPISecret: async (_c: unknown, next: () => Promise<void>) => next(),
 }))
 
-const { app, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
+const { app, DELTA_GC_DELETE_START_WINDOW_MS, DELTA_GC_DELETE_TIMEOUT_MS, DELTA_GC_LEASE_MS, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
 
 const DAY = 24 * 60 * 60 * 1000
 const prefix = deltaPrefix('org-1', 'com.example.gc')
@@ -75,6 +75,10 @@ describe('delta storage GC worker', () => {
         // A concurrent upload referenced b_index.html: only a_main.js may go.
         return { rows: [{ paths: [`${prefix}a_main.js`] }] }
       }
+      if (text.includes('delta_gc_end_delete')) {
+        calls.push('end')
+        return { rows: [] }
+      }
       if (text.includes('delta_gc_finish')) {
         calls.push('finish')
         return { rows: [] }
@@ -101,6 +105,7 @@ describe('delta storage GC worker', () => {
       'copy:b_index.html',
       'begin',
       'delete:a_main.js',
+      'end',
       'finish',
     ])
     const finish = mocks.execute.mock.calls.map(([query]) => sqlText(query)).find(text => text.includes('delta_gc_finish'))
@@ -126,6 +131,29 @@ describe('delta storage GC worker', () => {
     expect(mocks.listObjectPage).toHaveBeenCalledWith(expect.anything(), prefix, 'token', 1000)
     expect(mocks.copyObjectToTrash).toHaveBeenCalledOnce()
     expect(mocks.deleteObjectKey).not.toHaveBeenCalled()
+  })
+
+  it('bounds every delete and releases the lease even when a delete fails', async () => {
+    const old = new Date(Date.now() - 2 * DAY)
+    mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: old }], nextToken: null })
+    const queries: string[] = []
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      queries.push(text)
+      if (text.includes('delta_gc_claim'))
+        return { rows: [{ app_id: 'com.example.gc', owner_org: 'org-1', list_cursor: null }] }
+      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+        return { rows: [{ paths: [`${prefix}a.js`] }] }
+      return { rows: [] }
+    })
+    mocks.deleteObjectKey.mockRejectedValue(new Error('network'))
+
+    const response = await app.request('/', { method: 'POST' })
+
+    expect(response.status).toBe(200)
+    expect(mocks.deleteObjectKey).toHaveBeenCalledWith(expect.anything(), `${prefix}a.js`, DELTA_GC_DELETE_TIMEOUT_MS)
+    expect(DELTA_GC_DELETE_START_WINDOW_MS + DELTA_GC_DELETE_TIMEOUT_MS).toBeLessThan(DELTA_GC_LEASE_MS)
+    expect(queries.some(text => text.includes('delta_gc_end_delete'))).toBe(true)
   })
 
   it('restarts the listing after a storage error', async () => {

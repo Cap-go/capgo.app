@@ -31,18 +31,29 @@ export function versionManifestJsonSql(versionId: unknown): SQL<VersionManifestJ
 }
 
 // Rows (file_hash, file_size) of one version for raw SQL size lookups.
-// `versionIdSql` is a SQL expression evaluated once per version row.
+// `versionIdSql` is a SQL expression evaluated once per version row. Like
+// versionManifestJsonSql, new rows are used only when complete.
 export function versionManifestSizeRowsSql(versionIdSql: string): string {
+  const complete = `EXISTS (
+    SELECT 1
+    FROM public.version_files AS checked
+    CROSS JOIN LATERAL pg_catalog.unnest(checked.file_ids) AS checked_entry (file_id)
+    INNER JOIN public.delta_files AS checked_file ON checked_file.id = checked_entry.file_id
+    WHERE checked.app_version_id = ${versionIdSql}
+    GROUP BY checked.file_ids
+    HAVING count(*) = pg_catalog.cardinality(checked.file_ids)
+  )`
   return `(
   SELECT delta_file.file_hash, delta_file.file_size
   FROM public.version_files AS version_file
   CROSS JOIN LATERAL pg_catalog.unnest(version_file.file_ids) AS entry (file_id)
   INNER JOIN public.delta_files AS delta_file ON delta_file.id = entry.file_id
   WHERE version_file.app_version_id = ${versionIdSql}
+    AND ${complete}
   UNION ALL
   SELECT legacy.file_hash, legacy.file_size
   FROM public.manifest AS legacy
   WHERE legacy.app_version_id = ${versionIdSql}
-    AND NOT EXISTS (SELECT 1 FROM public.version_files AS converted WHERE converted.app_version_id = ${versionIdSql})
+    AND NOT ${complete}
 )`
 }

@@ -186,3 +186,52 @@ describe('delta storage v2 GC guards', () => {
     }
   })
 })
+
+describe('delta storage v2 legacy guards', () => {
+  it('lets delta-only channels and jsonb clearing see converted versions', async () => {
+    const versionId = await insertVersion(pool)
+    await insertLegacyRows(versionId, ['guard.js'])
+    await pool.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
+
+    const mismatch = await pool.query<{ reason: string | null }>(
+      `SELECT public.channel_update_package_mismatch('delta'::public.channel_update_package, $1, 'production') AS reason`,
+      [versionId],
+    )
+    expect(mismatch.rows[0].reason).toBeNull()
+
+    const unmigrated = await pool.query<{ unmigrated: boolean }>(
+      `SELECT public.app_version_manifest_jsonb_unmigrated($1, ARRAY[ROW('guard.js', $2, 'hash-guard.js')::public.manifest_entry]) AS unmigrated`,
+      [versionId, deltaPath('guard.js')],
+    )
+    expect(unmigrated.rows[0].unmigrated).toBe(false)
+  })
+
+  it('does not postpone GC for apps whose only legacy rows are onboarding demo rows', async () => {
+    const versionId = await insertVersion(pool)
+    await pool.query(
+      `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'demo.js', 'demo', $2, 1)`,
+      [versionId, `demo/${APP_ID}/demo.js`],
+    )
+    await withConfig({ gc_enabled: true }, async (client) => {
+      // Convert this app's other legacy rows; demo versions are skipped by design.
+      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
+      // Only this app is due inside the transaction.
+      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() + interval '1 day'`)
+      await client.query('UPDATE public.delta_gc_state SET next_run_at = now() - interval \'1 minute\' WHERE app_id = $1', [APP_ID])
+      const claimed = await client.query<{ app_id: string }>('SELECT app_id FROM public.delta_gc_claim(5)')
+      expect(claimed.rows.map(row => row.app_id)).toEqual([APP_ID])
+    })
+  })
+
+  it('caps the delete lease at 2 seconds', async () => {
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])
+      await client.query('SELECT public.delta_gc_begin_delete($1, $2::text[], 60000)', [APP_ID, [deltaPath('cap.js')]])
+      const lease = await client.query<{ ms: number }>('SELECT EXTRACT(EPOCH FROM lease_until - clock_timestamp()) * 1000 AS ms FROM public.delta_gc_state WHERE app_id = $1', [APP_ID])
+      expect(Number(lease.rows[0].ms)).toBeLessThanOrEqual(2000)
+      await client.query('SELECT public.delta_gc_end_delete($1)', [APP_ID])
+      const ended = await client.query('SELECT lease_until FROM public.delta_gc_state WHERE app_id = $1', [APP_ID])
+      expect(ended.rows[0].lease_until).toBeNull()
+    })
+  })
+})

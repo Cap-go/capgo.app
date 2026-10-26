@@ -18,20 +18,25 @@ import { s3 } from '../utils/s3.ts'
  *  3. copy the rest to the deleted-after-7-days/ trash, which the R2
  *     lifecycle rule purges, so a bad delete stays recoverable for 7 days;
  *  4. delta_gc_begin_delete re-checks under the per-app lock and opens a
- *     short lease that holds new uploads of this app; deletes are only started
- *     before that lease expires.
+ *     2-second lease that holds new uploads of this app (published CLIs insert
+ *     through PostgREST under a 3-second anon statement timeout). Deletes only
+ *     start in the first DELTA_GC_DELETE_START_WINDOW_MS and each one is
+ *     aborted after DELTA_GC_DELETE_TIMEOUT_MS, so every request is settled
+ *     well before the lease ends; then delta_gc_end_delete releases it.
  * No database transaction stays open during R2 calls.
  */
 
 export const DELTA_GC_APPS_PER_RUN = 5
 export const DELTA_GC_LIST_PAGE_SIZE = 1_000
 export const DELTA_GC_MIN_OBJECT_AGE_MS = 24 * 60 * 60 * 1000
-export const DELTA_GC_DELETE_BATCH = 200
-export const DELTA_GC_LEASE_MS = 6_000
-// Deletes start only while this much of the lease remains.
-export const DELTA_GC_LEASE_MARGIN_MS = 2_000
+export const DELTA_GC_DELETE_BATCH = 100
+export const DELTA_GC_LEASE_MS = 2_000
+export const DELTA_GC_DELETE_START_WINDOW_MS = 400
+export const DELTA_GC_DELETE_TIMEOUT_MS = 800
 export const DELTA_GC_BUDGET_MS = 25_000
-const DELTA_GC_STORAGE_CONCURRENCY = 25
+const DELTA_GC_COPY_CONCURRENCY = 25
+// One batch starts all of its deletes at once inside the start window.
+const DELTA_GC_DELETE_CONCURRENCY = DELTA_GC_DELETE_BATCH
 
 type Database = ReturnType<typeof getDrizzleClient>
 
@@ -68,26 +73,34 @@ async function unreferencedPaths(db: Database, paths: string[]) {
 /** Copies, then deletes inside one lease. Returns the number of deleted objects. */
 async function trashBatch(c: Context, db: Database, appId: string, paths: string[], deadline: number) {
   const copied: string[] = []
-  await forEachBounded(paths, DELTA_GC_STORAGE_CONCURRENCY, () => Date.now() < deadline, async (path) => {
+  await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (path) => {
     if (await s3.copyObjectToTrash(c, path))
       copied.push(path)
   })
   if (copied.length === 0)
     return 0
 
+  // Measured before the call: the database lease starts no earlier than this.
   const leaseStartedAt = Date.now()
   const begin = await db.execute<{ paths: string[] }>(sql`
     SELECT public.delta_gc_begin_delete(${appId}, ${copied}::text[], ${DELTA_GC_LEASE_MS}) AS paths
   `)
   const allowed = begin.rows[0]?.paths ?? []
-  const leaseEnd = leaseStartedAt + DELTA_GC_LEASE_MS - DELTA_GC_LEASE_MARGIN_MS
+  if (allowed.length === 0)
+    return 0
+  const startWindowEnd = leaseStartedAt + DELTA_GC_DELETE_START_WINDOW_MS
   let deleted = 0
-  await forEachBounded(allowed, DELTA_GC_STORAGE_CONCURRENCY, () => Date.now() < leaseEnd, async (path) => {
-    if (await s3.deleteObjectKey(c, path))
-      deleted++
-  })
+  try {
+    await forEachBounded(allowed, DELTA_GC_DELETE_CONCURRENCY, () => Date.now() < startWindowEnd, async (path) => {
+      if (await s3.deleteObjectKey(c, path, DELTA_GC_DELETE_TIMEOUT_MS))
+        deleted++
+    })
+  }
+  finally {
+    await db.execute(sql`SELECT public.delta_gc_end_delete(${appId})`)
+  }
   if (deleted < allowed.length)
-    cloudlog({ requestId: c.get('requestId'), message: 'delta gc lease ended before all deletes started', appId, allowed: allowed.length, deleted })
+    cloudlog({ requestId: c.get('requestId'), message: 'delta gc deletes left for the next pass', appId, allowed: allowed.length, deleted })
   return deleted
 }
 

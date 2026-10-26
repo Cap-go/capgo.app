@@ -54,11 +54,14 @@ upload, so one rule covers concurrent uploads and GC:
 - `delta_gc_begin_delete` takes an exclusive per-app transaction advisory lock,
   refuses while the app has an in-progress (`r2-direct`, younger than a day)
   version, re-checks references, deletes unreferenced `delta_files` rows and
-  opens a 6 second lease. It is the only step that authorizes R2 deletes; the
-  worker starts deletes only while at least 2 seconds of the lease remain.
+  opens a lease of at most 2 seconds. It is the only step that authorizes R2
+  deletes. The worker starts deletes only in the first 400 ms, aborts each one
+  after 800 ms, then releases the lease (`delta_gc_end_delete`), so every
+  request is settled before an upload can proceed.
 - The `delta_gc_wait_for_lease` trigger (`BEFORE INSERT ON app_versions`) takes
-  the shared side of that lock and waits out an active lease. An upload
-  therefore either makes GC skip the app or starts after the delete batch.
+  the shared side of that lock and waits out an active lease (at most 2 s,
+  below the 3 s statement timeout published CLIs run under through PostgREST).
+  An upload therefore either makes GC skip the app or starts after the batch.
 - No transaction stays open during R2 calls. Copies happen before the lease and
   are idempotent; an interrupted batch only leaves extra trash copies.
 - Two uploads of the same file share one `delta_files` row
@@ -94,7 +97,14 @@ upload, so one rule covers concurrent uploads and GC:
    `capgo_planetscale_r2_pub` publication and its replication slot (a slot left
    behind retains WAL).
 8. Once only demo rows remain in `public.manifest`, migrate the demo seeding to
-   the new tables and drop `public.manifest`, which frees its storage.
+   the new tables and drop `public.manifest`, which frees its storage. CLI
+   8.42.x reads `manifest` directly for its AI auto-bump diff (after conversion
+   it sees an empty list and suggests a larger bump); replace the table with a
+   `manifest` view over `version_manifest` when dropping it.
+
+Legacy SQL guards that inspected `manifest` rows (`channel_update_package_mismatch`,
+`app_version_manifest_jsonb_unmigrated`, `null_migrated_app_version_manifests`)
+also see converted rows (`delta_version_has_entry`).
 
 Monitoring: `SELECT count(*) FROM public.manifest` shrinks after step 4;
 `SELECT app_id, last_run_at, last_error FROM public.delta_gc_state WHERE last_error IS NOT NULL`

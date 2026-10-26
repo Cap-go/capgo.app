@@ -586,14 +586,18 @@ async function copyObjectToTrash(c: Context, fileId: string) {
   }
 }
 
-async function deleteObjectKey(c: Context, fileId: string) {
+/** Bounded delete: the request is aborted after `timeoutMs`. */
+async function deleteObjectKey(c: Context, fileId: string, timeoutMs = 10_000) {
   try {
-    await initS3(c).deleteObject(fileId)
-    return true
+    const url = await initS3(c).getPresignedUrl('DELETE', fileId)
+    const response = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(timeoutMs) })
+    await response.body?.cancel()
+    if ((response.status >= 200 && response.status < 300) || response.status === 404)
+      return true
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delete R2 object failed', fileId, status: response.status })
+    return false
   }
   catch (error) {
-    if (isMissingObjectError(error))
-      return true
     cloudlogErr({ requestId: c.get('requestId'), message: 'delete R2 object failed', fileId, error: serializeStorageError(error) })
     return false
   }

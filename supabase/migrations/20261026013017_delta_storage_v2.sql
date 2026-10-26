@@ -238,9 +238,11 @@ BEGIN
   FROM public.delta_gc_state
   WHERE app_id = NEW.app_id;
   IF v_lease_until IS NOT NULL AND v_lease_until > pg_catalog.clock_timestamp() THEN
+    -- Leases last at most 2 seconds, well under the 3-second anon statement
+    -- timeout that published CLIs hit through PostgREST.
     PERFORM pg_catalog.pg_sleep(LEAST(
       EXTRACT(EPOCH FROM (v_lease_until - pg_catalog.clock_timestamp())),
-      10
+      2
     ));
   END IF;
   RETURN NEW;
@@ -381,7 +383,11 @@ BEGIN
       SELECT 1
       FROM public.app_versions AS av
       WHERE av.app_id = due.app_id
-        AND EXISTS (SELECT 1 FROM public.manifest AS m WHERE m.app_version_id = av.id)
+        AND EXISTS (
+          SELECT 1 FROM public.manifest AS m
+          -- Onboarding demo rows stay legacy and live outside the delta prefix.
+          WHERE m.app_version_id = av.id AND m.s3_path NOT LIKE 'demo/%'
+        )
     ) AS has_legacy_rows
     FROM due
   ),
@@ -405,7 +411,7 @@ GRANT EXECUTE ON FUNCTION public.delta_gc_claim(integer) TO service_role;
 
 -- The only step that permits R2 deletes. Returns the paths the caller may
 -- delete before the returned lease expires, or an empty array.
-CREATE FUNCTION public.delta_gc_begin_delete(p_app_id text, p_paths text[], p_lease_ms integer DEFAULT 6000)
+CREATE FUNCTION public.delta_gc_begin_delete(p_app_id text, p_paths text[], p_lease_ms integer DEFAULT 2000)
 RETURNS text[]
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -445,7 +451,7 @@ BEGIN
     );
 
   UPDATE public.delta_gc_state
-  SET lease_until = pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => GREATEST(p_lease_ms, 1000) / 1000.0)
+  SET lease_until = pg_catalog.clock_timestamp() + pg_catalog.make_interval(secs => LEAST(GREATEST(COALESCE(p_lease_ms, 2000), 500), 2000) / 1000.0)
   WHERE app_id = p_app_id;
 
   RETURN v_paths;
@@ -454,6 +460,19 @@ $$;
 ALTER FUNCTION public.delta_gc_begin_delete(text, text[], integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_begin_delete(text, text[], integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_begin_delete(text, text[], integer) TO service_role;
+
+-- Releases the lease once every delete of the batch settled.
+CREATE FUNCTION public.delta_gc_end_delete(p_app_id text)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  UPDATE public.delta_gc_state SET lease_until = NULL WHERE app_id = p_app_id
+$$;
+ALTER FUNCTION public.delta_gc_end_delete(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_end_delete(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_end_delete(text) TO service_role;
 
 CREATE FUNCTION public.delta_gc_finish(p_app_id text, p_list_cursor text, p_error text DEFAULT NULL)
 RETURNS void
@@ -489,11 +508,13 @@ SET search_path = ''
 AS $$
 DECLARE
   v_app_id text;
+  v_deleted boolean;
   v_removed integer := 0;
+  v_queued integer := 0;
 BEGIN
   PERFORM pg_catalog.pg_advisory_xact_lock(p_version_id);
 
-  SELECT av.app_id INTO v_app_id FROM public.app_versions AS av WHERE av.id = p_version_id;
+  SELECT av.app_id, av.deleted INTO v_app_id, v_deleted FROM public.app_versions AS av WHERE av.id = p_version_id;
   IF v_app_id IS NULL THEN
     RETURN 0;
   END IF;
@@ -506,21 +527,46 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM public.version_files AS vf WHERE vf.app_version_id = p_version_id) THEN
-    INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
-    SELECT DISTINCT ON (keyed.entry_key)
-      v_app_id, keyed.s3_path, keyed.file_name, keyed.file_hash, keyed.file_size, keyed.path_key, keyed.entry_key
-    FROM (
-      SELECT
-        m.s3_path, m.file_name, m.file_hash, COALESCE(m.file_size, 0) AS file_size,
-        public.delta_path_key(m.s3_path) AS path_key,
-        public.delta_entry_key(m.s3_path, m.file_name, m.file_hash) AS entry_key
-      FROM public.manifest AS m
-      WHERE m.app_version_id = p_version_id
-    ) AS keyed
-    ORDER BY keyed.entry_key, keyed.file_size DESC
-    ON CONFLICT (entry_key) DO UPDATE
-    SET file_size = EXCLUDED.file_size
-    WHERE df.file_size = 0 AND EXCLUDED.file_size > 0;
+    -- Unsized legacy rows: their queued lookups target manifest ids that are
+    -- about to disappear. Queue one lookup per newly inserted unsized file of a
+    -- live version; shared or deleted files are not looked up again.
+    WITH inserted AS (
+      INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
+      SELECT DISTINCT ON (keyed.entry_key)
+        v_app_id, keyed.s3_path, keyed.file_name, keyed.file_hash, keyed.file_size, keyed.path_key, keyed.entry_key
+      FROM (
+        SELECT
+          m.s3_path, m.file_name, m.file_hash, COALESCE(m.file_size, 0) AS file_size,
+          public.delta_path_key(m.s3_path) AS path_key,
+          public.delta_entry_key(m.s3_path, m.file_name, m.file_hash) AS entry_key
+        FROM public.manifest AS m
+        WHERE m.app_version_id = p_version_id
+      ) AS keyed
+      ORDER BY keyed.entry_key, keyed.file_size DESC
+      ON CONFLICT (entry_key) DO UPDATE
+      SET file_size = EXCLUDED.file_size
+      WHERE df.file_size = 0 AND EXCLUDED.file_size > 0
+      RETURNING df.id, df.app_id, df.s3_path, df.file_size, df.entry_key, (df.xmax = 0) AS fresh
+    ),
+    queued AS (
+      SELECT pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
+        'function_name', 'on_manifest_create',
+        'function_type', 'cloudflare',
+        'payload', pg_catalog.jsonb_build_object(
+          'old_record', NULL,
+          'record', pg_catalog.jsonb_build_object('id', inserted.id, 'app_id', inserted.app_id, 's3_path', inserted.s3_path, 'file_size', inserted.file_size, 'entry_key', pg_catalog.encode(inserted.entry_key, 'hex')),
+          'type', 'INSERT',
+          'table', 'delta_files',
+          'schema', 'public'
+        )
+      )) AS msg_id
+      FROM inserted
+      WHERE inserted.fresh AND inserted.file_size = 0 AND NOT v_deleted
+    )
+    SELECT count(*) INTO v_queued FROM queued;
+    IF v_queued > 0 THEN
+      RAISE DEBUG 'convert_version_manifest_rows: version % queued % size lookups', p_version_id, v_queued;
+    END IF;
 
     INSERT INTO public.version_files (app_version_id, file_ids)
     SELECT p_version_id, pg_catalog.array_agg(df.id ORDER BY m.id)
@@ -530,26 +576,6 @@ BEGIN
     WHERE m.app_version_id = p_version_id
     HAVING pg_catalog.count(*) > 0;
 
-    -- Unsized legacy rows: their queued lookups target manifest ids that are
-    -- about to disappear, so queue the lookup against delta_files instead.
-    PERFORM pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
-      'function_name', 'on_manifest_create',
-      'function_type', 'cloudflare',
-      'payload', pg_catalog.jsonb_build_object(
-        'old_record', NULL,
-        'record', pg_catalog.to_jsonb(df),
-        'type', 'INSERT',
-        'table', 'delta_files',
-        'schema', 'public'
-      )
-    ))
-    FROM public.delta_files AS df
-    WHERE df.file_size = 0
-      AND df.id IN (
-        SELECT pg_catalog.unnest(vf.file_ids)
-        FROM public.version_files AS vf
-        WHERE vf.app_version_id = p_version_id
-      );
   END IF;
 
   DELETE FROM public.manifest AS m WHERE m.app_version_id = p_version_id;
@@ -607,6 +633,202 @@ $$;
 ALTER FUNCTION public.convert_legacy_manifest_batch(integer, integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.convert_legacy_manifest_batch(integer, integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.convert_legacy_manifest_batch(integer, integer) TO service_role;
+
+-- Legacy checks that a version contains an entry must see converted rows too.
+CREATE FUNCTION public.delta_version_has_entry(p_version_id bigint, p_s3_path text, p_file_hash text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.manifest AS m
+    WHERE m.app_version_id = p_version_id
+      AND m.s3_path = p_s3_path
+      AND m.file_hash = p_file_hash
+  ) OR EXISTS (
+    SELECT 1
+    FROM public.delta_files AS df
+    INNER JOIN public.version_files AS vf
+      ON vf.app_version_id = p_version_id
+     AND vf.file_ids @> ARRAY[df.id]
+    WHERE df.path_key = public.delta_path_key(p_s3_path)
+      AND df.s3_path = p_s3_path
+      AND df.file_hash = p_file_hash
+  )
+$$;
+ALTER FUNCTION public.delta_version_has_entry(bigint, text, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_version_has_entry(bigint, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_version_has_entry(bigint, text, text) TO service_role;
+
+-- Delta-only channels accept bundles whose files live in version_files.
+CREATE OR REPLACE FUNCTION "public"."channel_update_package_mismatch"("p_update_package" "public"."channel_update_package", "p_version_id" bigint, "p_channel_name" "text") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  v_name text;
+  v_storage_provider text;
+  v_r2_path text;
+  v_external_url text;
+  v_legacy_manifest public.manifest_entry[];
+  v_has_zip boolean;
+  v_has_delta boolean;
+BEGIN
+  IF p_version_id IS NULL OR p_update_package IS NULL OR p_update_package = 'all' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT
+    app_version.name,
+    app_version.storage_provider,
+    app_version.r2_path,
+    app_version.external_url,
+    app_version.manifest
+  INTO
+    v_name,
+    v_storage_provider,
+    v_r2_path,
+    v_external_url,
+    v_legacy_manifest
+  FROM public.app_versions AS app_version
+  WHERE app_version.id = p_version_id;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_name IN ('builtin', 'unknown') THEN
+    RETURN NULL;
+  END IF;
+
+  v_has_zip := (
+    (v_storage_provider = 'external' AND NULLIF(BTRIM(COALESCE(v_external_url, '')), '') IS NOT NULL)
+    OR (
+      v_storage_provider IS DISTINCT FROM 'r2-direct'
+      AND NULLIF(BTRIM(COALESCE(v_r2_path, '')), '') IS NOT NULL
+    )
+  );
+
+  v_has_delta := COALESCE(pg_catalog.array_length(v_legacy_manifest, 1), 0) > 0
+    OR EXISTS (
+      SELECT 1
+      FROM public.manifest AS manifest_row
+      WHERE manifest_row.app_version_id = p_version_id
+    
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM public.version_files AS version_file
+      WHERE version_file.app_version_id = p_version_id
+    );
+
+  IF p_update_package IN ('zip', 'zip_from_builtin') AND NOT v_has_zip THEN
+    RETURN format(
+      'CHANNEL_ZIP_REQUIRED: Channel "%s" requires a zip package, but bundle "%s" has no zip. Upload a full zip (omit --delta-only) or set the channel to delta only / zip and delta.',
+      p_channel_name,
+      v_name
+    );
+  END IF;
+
+  IF p_update_package IN ('delta', 'delta_from_builtin') AND NOT v_has_delta THEN
+    RETURN format(
+      'CHANNEL_DELTA_REQUIRED: Channel "%s" requires a delta package, but bundle "%s" has no delta files. Upload with delta enabled (`npx @capgo/cli@latest bundle upload --delta`) or set the channel to zip only / zip and delta.',
+      p_channel_name,
+      v_name
+    );
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+-- Clearing app_versions.manifest jsonb stays allowed once entries are converted.
+CREATE OR REPLACE FUNCTION "public"."app_version_manifest_jsonb_unmigrated"("p_version_id" bigint, "p_manifest" "public"."manifest_entry"[]) RETURNS boolean
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO ''
+    AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM pg_catalog.unnest(p_manifest) AS entry(file_name, s3_path, file_hash)
+    WHERE NOT public.delta_version_has_entry(p_version_id, entry.s3_path, entry.file_hash)
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION "public"."null_migrated_app_version_manifests"("max_batches" integer DEFAULT 1000000, "batch_size" integer DEFAULT 50, "max_runtime_ms" integer DEFAULT 60000) RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+DECLARE
+  batch_no integer := 0;
+  updated_batch integer;
+  scanned_batch integer;
+  updated_total bigint := 0;
+  scanned_total bigint := 0;
+  last_id bigint := 0;
+  v_max_batches integer := GREATEST(1, COALESCE(max_batches, 1000000));
+  v_batch_size integer := GREATEST(1, COALESCE(batch_size, 50));
+  v_max_runtime_ms integer := GREATEST(1000, COALESCE(max_runtime_ms, 60000));
+  started_at timestamptz := pg_catalog.clock_timestamp();
+BEGIN
+  PERFORM pg_catalog.set_config('statement_timeout', '0', true);
+  PERFORM pg_catalog.set_config('capgo.reclaim_manifest_null', 'on', true);
+
+  LOOP
+    batch_no := batch_no + 1;
+    EXIT WHEN batch_no > v_max_batches;
+    EXIT WHEN (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000) >= v_max_runtime_ms;
+
+    WITH candidates AS (
+      SELECT av.id
+      FROM public.app_versions AS av
+      WHERE av.manifest IS NOT NULL
+        AND av.id > last_id
+      ORDER BY av.id
+      LIMIT v_batch_size
+    ),
+    doomed AS (
+      SELECT c.id
+      FROM candidates AS c
+      JOIN public.app_versions AS av ON av.id = c.id
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.unnest(av.manifest) AS entry(file_name, s3_path, file_hash)
+        WHERE NOT public.delta_version_has_entry(av.id, entry.s3_path, entry.file_hash)
+      )
+    ),
+    updated AS (
+      UPDATE public.app_versions AS av
+      SET manifest = NULL
+      FROM doomed
+      WHERE av.id = doomed.id
+      RETURNING av.id
+    )
+    SELECT
+      (SELECT count(*)::integer FROM candidates),
+      (SELECT count(*)::integer FROM updated),
+      COALESCE((SELECT max(id) FROM candidates), last_id)
+    INTO scanned_batch, updated_batch, last_id;
+
+    scanned_total := scanned_total + scanned_batch;
+    updated_total := updated_total + updated_batch;
+    EXIT WHEN scanned_batch = 0;
+  END LOOP;
+
+  PERFORM pg_catalog.set_config('capgo.reclaim_manifest_null', 'off', true);
+
+  RAISE NOTICE
+    'null_migrated_app_version_manifests: updated=% scanned=% batches=%/% batch_size=% runtime_ms=% budget_ms=%',
+    updated_total,
+    scanned_total,
+    LEAST(batch_no, v_max_batches),
+    v_max_batches,
+    v_batch_size,
+    (EXTRACT(EPOCH FROM (pg_catalog.clock_timestamp() - started_at)) * 1000)::bigint,
+    v_max_runtime_ms;
+END;
+$$;
 
 SELECT pgmq.create('cron_delta_storage_gc');
 

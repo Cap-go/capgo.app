@@ -4323,6 +4323,7 @@ export type Database = {
           owner_org: string
         }[]
       }
+      delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
       delta_gc_finish: {
         Args: { p_app_id: string; p_error?: string; p_list_cursor: string }
         Returns: undefined
@@ -4333,6 +4334,10 @@ export type Database = {
         Returns: string[]
       }
       delta_path_key: { Args: { p_s3_path: string }; Returns: string }
+      delta_version_has_entry: {
+        Args: { p_file_hash: string; p_s3_path: string; p_version_id: number }
+        Returns: boolean
+      }
       delta_version_keeps_files: {
         Args: { p_deleted: boolean; p_deleted_at: string; p_updated_at: string }
         Returns: boolean
