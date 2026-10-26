@@ -6,51 +6,68 @@
     "longtx": false,
     "tick_ms": 100,
     "messages": 3649,
-    "cpu_s": 4.3,
-    "cpu_ms_per_1k_msgs": 1172.2,
-    "wal_mb": 13.9,
-    "wal_bytes_per_msg": 3996,
+    "cpu_s": 4.9,
+    "cpu_ms_per_1k_msgs": 1337.5,
+    "wal_mb": 14.0,
+    "wal_bytes_per_msg": 4009,
     "tuple_writes_per_msg": 3.08,
-    "dead_tuples_max": 6267,
+    "dead_tuples_max": 6234,
     "vacuums": 6,
-    "engine_bytes_end": 13672448,
-    "produce_latency_ms_p50": 6.98,
-    "produce_latency_ms_p99": 14.65,
-    "consumer_poll_s_avg": 0.061,
-    "consumer_poll_s_max": 0.091,
-    "backlog_max": 2996,
+    "engine_bytes_end": 13721600,
+    "produce_latency_ms_p50": 6.6,
+    "produce_latency_ms_p99": 16.0,
+    "consumer_poll_s_avg": 0.056,
+    "consumer_poll_s_max": 0.101,
+    "backlog_max": 2993,
     "statements": {
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 11.825,
-        "max_ms": 43.4,
-        "total_s": 0.35
+        "mean_ms": 10.586,
+        "max_ms": 51.4,
+        "total_s": 0.32
       },
       "send": {
         "calls": 3649,
-        "mean_ms": 0.067,
-        "max_ms": 5.5,
-        "total_s": 0.24
+        "mean_ms": 0.059,
+        "max_ms": 2.2,
+        "total_s": 0.21
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 6.205,
+        "max_ms": 16.0,
+        "total_s": 0.19
       },
       "read": {
         "calls": 333,
-        "mean_ms": 0.441,
-        "max_ms": 8.6,
-        "total_s": 0.15
+        "mean_ms": 0.385,
+        "max_ms": 10.7,
+        "total_s": 0.13
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 4.834,
+        "max_ms": 11.5,
+        "total_s": 0.06
       },
       "delete": {
-        "calls": 160,
-        "mean_ms": 0.114,
-        "max_ms": 1.3,
+        "calls": 161,
+        "mean_ms": 0.093,
+        "max_ms": 1.6,
         "total_s": 0.02
       },
-      "cf_ids_edit": {
-        "calls": 26,
-        "mean_ms": 0.092,
-        "max_ms": 0.2,
-        "total_s": 0.0
+      "cleanup": {
+        "calls": 1,
+        "mean_ms": 6.482,
+        "max_ms": 6.5,
+        "total_s": 0.01
       }
-    }
+    },
+    "pipeline_writes_per_msg": 3.22,
+    "cron_log_writes": 155,
+    "pg_net_writes": 384,
+    "worker_calls": 128,
+    "all_dead_end": 6321
   },
   {
     "run": "pgmq_x10",
@@ -58,52 +75,69 @@
     "load": 10,
     "longtx": false,
     "tick_ms": 100,
-    "messages": 17398,
-    "cpu_s": 7.1,
-    "cpu_ms_per_1k_msgs": 408.2,
-    "wal_mb": 65.3,
-    "wal_bytes_per_msg": 3937,
+    "messages": 17858,
+    "cpu_s": 8.4,
+    "cpu_ms_per_1k_msgs": 471.3,
+    "wal_mb": 67.2,
+    "wal_bytes_per_msg": 3947,
     "tuple_writes_per_msg": 3.16,
-    "dead_tuples_max": 13081,
-    "vacuums": 48,
-    "engine_bytes_end": 2695168,
-    "produce_latency_ms_p50": 7.78,
-    "produce_latency_ms_p99": 15.62,
-    "consumer_poll_s_avg": 0.067,
-    "consumer_poll_s_max": 0.11,
-    "backlog_max": 3086,
+    "dead_tuples_max": 7505,
+    "vacuums": 47,
+    "engine_bytes_end": 2564096,
+    "produce_latency_ms_p50": 6.1,
+    "produce_latency_ms_p99": 12.23,
+    "consumer_poll_s_avg": 0.074,
+    "consumer_poll_s_max": 0.121,
+    "backlog_max": 3085,
     "statements": {
       "send": {
-        "calls": 17398,
-        "mean_ms": 0.083,
-        "max_ms": 4.9,
-        "total_s": 1.45
+        "calls": 17858,
+        "mean_ms": 0.08,
+        "max_ms": 7.0,
+        "total_s": 1.43
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 19.6,
-        "max_ms": 57.1,
-        "total_s": 0.59
+        "mean_ms": 23.875,
+        "max_ms": 60.9,
+        "total_s": 0.72
       },
       "read": {
-        "calls": 397,
-        "mean_ms": 0.636,
-        "max_ms": 9.7,
-        "total_s": 0.25
+        "calls": 399,
+        "mean_ms": 0.779,
+        "max_ms": 13.4,
+        "total_s": 0.31
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 8.44,
+        "max_ms": 18.1,
+        "total_s": 0.26
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 8.515,
+        "max_ms": 16.0,
+        "total_s": 0.11
       },
       "delete": {
-        "calls": 361,
-        "mean_ms": 0.107,
+        "calls": 360,
+        "mean_ms": 0.127,
         "max_ms": 1.3,
-        "total_s": 0.04
+        "total_s": 0.05
       },
-      "cf_ids_edit": {
-        "calls": 29,
-        "mean_ms": 0.192,
-        "max_ms": 0.3,
+      "cleanup": {
+        "calls": 1,
+        "mean_ms": 12.121,
+        "max_ms": 12.1,
         "total_s": 0.01
       }
-    }
+    },
+    "pipeline_writes_per_msg": 3.22,
+    "cron_log_writes": 155,
+    "pg_net_writes": 927,
+    "worker_calls": 309,
+    "all_dead_end": 431
   },
   {
     "run": "pgmq_x100",
@@ -111,46 +145,69 @@
     "load": 100,
     "longtx": false,
     "tick_ms": 100,
-    "messages": 129786,
-    "cpu_s": 32.2,
-    "cpu_ms_per_1k_msgs": 247.9,
-    "wal_mb": 484.1,
-    "wal_bytes_per_msg": 3911,
-    "tuple_writes_per_msg": 3.23,
-    "dead_tuples_max": 60010,
+    "messages": 133048,
+    "cpu_s": 26.6,
+    "cpu_ms_per_1k_msgs": 199.6,
+    "wal_mb": 493.7,
+    "wal_bytes_per_msg": 3891,
+    "tuple_writes_per_msg": 3.22,
+    "dead_tuples_max": 59434,
     "vacuums": 55,
-    "engine_bytes_end": 118013952,
-    "produce_latency_ms_p50": 5.56,
-    "produce_latency_ms_p99": 13.86,
-    "consumer_poll_s_avg": 0.139,
-    "consumer_poll_s_max": 0.204,
-    "backlog_max": 9599,
+    "engine_bytes_end": 107167744,
+    "produce_latency_ms_p50": 4.1,
+    "produce_latency_ms_p99": 10.7,
+    "consumer_poll_s_avg": 0.146,
+    "consumer_poll_s_max": 0.345,
+    "backlog_max": 8966,
     "statements": {
       "send": {
-        "calls": 129786,
-        "mean_ms": 0.066,
-        "max_ms": 6.3,
-        "total_s": 8.57
+        "calls": 133048,
+        "mean_ms": 0.064,
+        "max_ms": 10.4,
+        "total_s": 8.51
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 89.035,
-        "max_ms": 152.9,
-        "total_s": 2.67
+        "mean_ms": 96.433,
+        "max_ms": 265.5,
+        "total_s": 2.89
       },
       "read": {
-        "calls": 1442,
-        "mean_ms": 0.961,
-        "max_ms": 20.8,
-        "total_s": 1.39
+        "calls": 1443,
+        "mean_ms": 0.93,
+        "max_ms": 20.9,
+        "total_s": 1.34
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 12.752,
+        "max_ms": 23.1,
+        "total_s": 0.4
       },
       "delete": {
-        "calls": 1417,
-        "mean_ms": 0.128,
-        "max_ms": 1.4,
+        "calls": 1418,
+        "mean_ms": 0.165,
+        "max_ms": 4.5,
+        "total_s": 0.23
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 13.766,
+        "max_ms": 20.0,
         "total_s": 0.18
+      },
+      "cf_ids_edit": {
+        "calls": 63,
+        "mean_ms": 0.756,
+        "max_ms": 2.9,
+        "total_s": 0.05
       }
-    }
+    },
+    "pipeline_writes_per_msg": 3.25,
+    "cron_log_writes": 155,
+    "pg_net_writes": 3405,
+    "worker_calls": 1135,
+    "all_dead_end": 39450
   },
   {
     "run": "pgmq_x50",
@@ -158,52 +215,69 @@
     "load": 50,
     "longtx": false,
     "tick_ms": 100,
-    "messages": 69537,
-    "cpu_s": 17.9,
-    "cpu_ms_per_1k_msgs": 257.0,
-    "wal_mb": 258.7,
-    "wal_bytes_per_msg": 3902,
-    "tuple_writes_per_msg": 3.21,
-    "dead_tuples_max": 29172,
+    "messages": 73975,
+    "cpu_s": 17.8,
+    "cpu_ms_per_1k_msgs": 240.0,
+    "wal_mb": 276.8,
+    "wal_bytes_per_msg": 3924,
+    "tuple_writes_per_msg": 3.2,
+    "dead_tuples_max": 40396,
     "vacuums": 55,
-    "engine_bytes_end": 34701312,
-    "produce_latency_ms_p50": 7.7,
-    "produce_latency_ms_p99": 15.03,
-    "consumer_poll_s_avg": 0.103,
-    "consumer_poll_s_max": 0.167,
-    "backlog_max": 7413,
+    "engine_bytes_end": 25395200,
+    "produce_latency_ms_p50": 4.91,
+    "produce_latency_ms_p99": 11.16,
+    "consumer_poll_s_avg": 0.099,
+    "consumer_poll_s_max": 0.166,
+    "backlog_max": 7359,
     "statements": {
       "send": {
-        "calls": 69537,
-        "mean_ms": 0.08,
-        "max_ms": 3.2,
-        "total_s": 5.55
+        "calls": 73975,
+        "mean_ms": 0.068,
+        "max_ms": 7.0,
+        "total_s": 5.04
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 51.233,
-        "max_ms": 109.4,
-        "total_s": 1.54
+        "mean_ms": 52.592,
+        "max_ms": 119.7,
+        "total_s": 1.58
       },
       "read": {
-        "calls": 842,
-        "mean_ms": 0.882,
-        "max_ms": 13.4,
-        "total_s": 0.74
+        "calls": 844,
+        "mean_ms": 0.912,
+        "max_ms": 11.8,
+        "total_s": 0.77
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 12.146,
+        "max_ms": 21.9,
+        "total_s": 0.38
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 14.696,
+        "max_ms": 23.1,
+        "total_s": 0.19
       },
       "delete": {
-        "calls": 811,
+        "calls": 812,
         "mean_ms": 0.137,
-        "max_ms": 1.6,
+        "max_ms": 1.4,
         "total_s": 0.11
       },
-      "cf_ids_edit": {
-        "calls": 38,
-        "mean_ms": 0.676,
-        "max_ms": 1.7,
+      "cleanup": {
+        "calls": 1,
+        "mean_ms": 29.042,
+        "max_ms": 29.0,
         "total_s": 0.03
       }
-    }
+    },
+    "pipeline_writes_per_msg": 3.23,
+    "cron_log_writes": 155,
+    "pg_net_writes": 2262,
+    "worker_calls": 754,
+    "all_dead_end": 21
   },
   {
     "run": "pgmq_x50_longtx",
@@ -211,46 +285,63 @@
     "load": 50,
     "longtx": true,
     "tick_ms": 100,
-    "messages": 71428,
-    "cpu_s": 19.8,
-    "cpu_ms_per_1k_msgs": 277.6,
-    "wal_mb": 260.6,
-    "wal_bytes_per_msg": 3826,
-    "tuple_writes_per_msg": 3.21,
-    "dead_tuples_max": 156367,
+    "messages": 74932,
+    "cpu_s": 19.0,
+    "cpu_ms_per_1k_msgs": 253.2,
+    "wal_mb": 273.8,
+    "wal_bytes_per_msg": 3832,
+    "tuple_writes_per_msg": 3.2,
+    "dead_tuples_max": 160574,
     "vacuums": 55,
-    "engine_bytes_end": 281862144,
-    "produce_latency_ms_p50": 8.04,
-    "produce_latency_ms_p99": 14.88,
-    "consumer_poll_s_avg": 0.137,
-    "consumer_poll_s_max": 0.267,
-    "backlog_max": 5368,
+    "engine_bytes_end": 296583168,
+    "produce_latency_ms_p50": 4.45,
+    "produce_latency_ms_p99": 10.23,
+    "consumer_poll_s_avg": 0.144,
+    "consumer_poll_s_max": 0.335,
+    "backlog_max": 5478,
     "statements": {
       "send": {
-        "calls": 71428,
-        "mean_ms": 0.083,
-        "max_ms": 15.2,
-        "total_s": 5.91
+        "calls": 74932,
+        "mean_ms": 0.066,
+        "max_ms": 10.1,
+        "total_s": 4.97
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 85.9,
-        "max_ms": 212.8,
-        "total_s": 2.58
+        "mean_ms": 95.491,
+        "max_ms": 281.0,
+        "total_s": 2.86
       },
       "read": {
-        "calls": 839,
-        "mean_ms": 2.064,
-        "max_ms": 41.1,
-        "total_s": 1.73
+        "calls": 844,
+        "mean_ms": 2.182,
+        "max_ms": 46.8,
+        "total_s": 1.84
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 35.207,
+        "max_ms": 74.1,
+        "total_s": 1.09
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 20.526,
+        "max_ms": 44.9,
+        "total_s": 0.27
       },
       "delete": {
-        "calls": 820,
-        "mean_ms": 0.126,
-        "max_ms": 1.5,
-        "total_s": 0.1
+        "calls": 811,
+        "mean_ms": 0.145,
+        "max_ms": 1.8,
+        "total_s": 0.12
       }
-    }
+    },
+    "pipeline_writes_per_msg": 3.23,
+    "cron_log_writes": 155,
+    "pg_net_writes": 2073,
+    "worker_calls": 691,
+    "all_dead_end": 165593
   },
   {
     "run": "pgque_x1",
@@ -259,39 +350,68 @@
     "longtx": false,
     "tick_ms": 100,
     "messages": 3649,
-    "cpu_s": 13.3,
-    "cpu_ms_per_1k_msgs": 3658.2,
-    "wal_mb": 7.5,
-    "wal_bytes_per_msg": 2152,
+    "cpu_s": 15.6,
+    "cpu_ms_per_1k_msgs": 4281.9,
+    "wal_mb": 7.4,
+    "wal_bytes_per_msg": 2131,
     "tuple_writes_per_msg": 1.35,
-    "dead_tuples_max": 180,
-    "vacuums": 5,
-    "engine_bytes_end": 9117696,
-    "produce_latency_ms_p50": 6.26,
-    "produce_latency_ms_p99": 14.34,
-    "consumer_poll_s_avg": 0.079,
-    "consumer_poll_s_max": 0.193,
+    "dead_tuples_max": 162,
+    "vacuums": 6,
+    "engine_bytes_end": 8978432,
+    "produce_latency_ms_p50": 6.56,
+    "produce_latency_ms_p99": 15.97,
+    "consumer_poll_s_avg": 0.076,
+    "consumer_poll_s_max": 0.094,
     "backlog_max": 2989,
     "statements": {
+      "ticker": {
+        "calls": 310,
+        "mean_ms": 936.047,
+        "max_ms": 954.6,
+        "total_s": 290.17
+      },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 27.41,
-        "max_ms": 147.5,
-        "total_s": 0.82
+        "mean_ms": 24.899,
+        "max_ms": 39.8,
+        "total_s": 0.75
       },
       "send": {
         "calls": 3649,
-        "mean_ms": 0.065,
-        "max_ms": 3.1,
-        "total_s": 0.24
+        "mean_ms": 0.059,
+        "max_ms": 4.9,
+        "total_s": 0.22
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 6.704,
+        "max_ms": 10.2,
+        "total_s": 0.21
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 5.38,
+        "max_ms": 10.0,
+        "total_s": 0.07
       },
       "nack": {
-        "calls": 51,
-        "mean_ms": 3.494,
-        "max_ms": 14.1,
-        "total_s": 0.18
+        "calls": 29,
+        "mean_ms": 1.662,
+        "max_ms": 4.4,
+        "total_s": 0.05
+      },
+      "maint": {
+        "calls": 10,
+        "mean_ms": 3.676,
+        "max_ms": 5.3,
+        "total_s": 0.04
       }
-    }
+    },
+    "pipeline_writes_per_msg": 2.01,
+    "cron_log_writes": 1965,
+    "pg_net_writes": 453,
+    "worker_calls": 151,
+    "all_dead_end": 58
   },
   {
     "run": "pgque_x10",
@@ -299,46 +419,57 @@
     "load": 10,
     "longtx": false,
     "tick_ms": 100,
-    "messages": 16269,
-    "cpu_s": 16.8,
-    "cpu_ms_per_1k_msgs": 1034.3,
-    "wal_mb": 27.8,
-    "wal_bytes_per_msg": 1792,
-    "tuple_writes_per_msg": 1.2,
-    "dead_tuples_max": 412,
+    "messages": 16360,
+    "cpu_s": 16.9,
+    "cpu_ms_per_1k_msgs": 1032.4,
+    "wal_mb": 28.0,
+    "wal_bytes_per_msg": 1794,
+    "tuple_writes_per_msg": 1.21,
+    "dead_tuples_max": 376,
     "vacuums": 6,
-    "engine_bytes_end": 32563200,
-    "produce_latency_ms_p50": 9.46,
-    "produce_latency_ms_p99": 15.81,
-    "consumer_poll_s_avg": 0.108,
-    "consumer_poll_s_max": 0.267,
-    "backlog_max": 3069,
+    "engine_bytes_end": 32743424,
+    "produce_latency_ms_p50": 5.65,
+    "produce_latency_ms_p99": 10.96,
+    "consumer_poll_s_avg": 0.104,
+    "consumer_poll_s_max": 0.277,
+    "backlog_max": 3089,
     "statements": {
+      "ticker": {
+        "calls": 311,
+        "mean_ms": 932.489,
+        "max_ms": 949.2,
+        "total_s": 290.0
+      },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 55.416,
-        "max_ms": 208.9,
-        "total_s": 1.66
+        "mean_ms": 52.801,
+        "max_ms": 222.4,
+        "total_s": 1.58
       },
       "send": {
-        "calls": 16269,
-        "mean_ms": 0.071,
-        "max_ms": 4.7,
-        "total_s": 1.15
+        "calls": 16360,
+        "mean_ms": 0.069,
+        "max_ms": 8.5,
+        "total_s": 1.13
       },
       "nack": {
-        "calls": 302,
-        "mean_ms": 2.021,
-        "max_ms": 18.4,
-        "total_s": 0.61
+        "calls": 310,
+        "mean_ms": 1.667,
+        "max_ms": 18.0,
+        "total_s": 0.52
       },
-      "ack": {
-        "calls": 933,
-        "mean_ms": 0.047,
-        "max_ms": 1.0,
-        "total_s": 0.04
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 7.595,
+        "max_ms": 12.5,
+        "total_s": 0.24
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.38,
+    "cron_log_writes": 1965,
+    "pg_net_writes": 828,
+    "worker_calls": 276,
+    "all_dead_end": 289
   },
   {
     "run": "pgque_x100",
@@ -346,40 +477,57 @@
     "load": 100,
     "longtx": false,
     "tick_ms": 100,
-    "messages": 131169,
+    "messages": 133504,
     "cpu_s": 34.1,
-    "cpu_ms_per_1k_msgs": 260.2,
-    "wal_mb": 206.2,
-    "wal_bytes_per_msg": 1648,
+    "cpu_ms_per_1k_msgs": 255.5,
+    "wal_mb": 210.2,
+    "wal_bytes_per_msg": 1651,
     "tuple_writes_per_msg": 1.05,
-    "dead_tuples_max": 436,
+    "dead_tuples_max": 440,
     "vacuums": 6,
-    "engine_bytes_end": 241778688,
-    "produce_latency_ms_p50": 5.46,
-    "produce_latency_ms_p99": 13.72,
-    "consumer_poll_s_avg": 0.205,
-    "consumer_poll_s_max": 0.55,
-    "backlog_max": 8968,
+    "engine_bytes_end": 246611968,
+    "produce_latency_ms_p50": 4.13,
+    "produce_latency_ms_p99": 10.55,
+    "consumer_poll_s_avg": 0.187,
+    "consumer_poll_s_max": 0.515,
+    "backlog_max": 12819,
     "statements": {
+      "ticker": {
+        "calls": 309,
+        "mean_ms": 928.505,
+        "max_ms": 940.7,
+        "total_s": 286.91
+      },
       "send": {
-        "calls": 131169,
-        "mean_ms": 0.066,
-        "max_ms": 3.2,
-        "total_s": 8.67
+        "calls": 133504,
+        "mean_ms": 0.064,
+        "max_ms": 9.5,
+        "total_s": 8.56
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 153.148,
-        "max_ms": 500.2,
-        "total_s": 4.59
+        "mean_ms": 138.314,
+        "max_ms": 469.3,
+        "total_s": 4.15
       },
       "nack": {
-        "calls": 2519,
-        "mean_ms": 1.104,
-        "max_ms": 24.9,
-        "total_s": 2.78
+        "calls": 2553,
+        "mean_ms": 0.952,
+        "max_ms": 24.6,
+        "total_s": 2.43
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 5.806,
+        "max_ms": 13.0,
+        "total_s": 0.18
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.07,
+    "cron_log_writes": 1960,
+    "pg_net_writes": 996,
+    "worker_calls": 332,
+    "all_dead_end": 51
   },
   {
     "run": "pgque_x100_tick1000",
@@ -387,40 +535,57 @@
     "load": 100,
     "longtx": false,
     "tick_ms": 1000,
-    "messages": 133383,
-    "cpu_s": 31.6,
-    "cpu_ms_per_1k_msgs": 236.8,
-    "wal_mb": 210.1,
-    "wal_bytes_per_msg": 1651,
+    "messages": 129837,
+    "cpu_s": 31.8,
+    "cpu_ms_per_1k_msgs": 244.9,
+    "wal_mb": 203.7,
+    "wal_bytes_per_msg": 1645,
     "tuple_writes_per_msg": 1.05,
-    "dead_tuples_max": 422,
+    "dead_tuples_max": 494,
     "vacuums": 6,
-    "engine_bytes_end": 246628352,
-    "produce_latency_ms_p50": 6.12,
-    "produce_latency_ms_p99": 13.95,
-    "consumer_poll_s_avg": 0.212,
-    "consumer_poll_s_max": 0.554,
-    "backlog_max": 8977,
+    "engine_bytes_end": 239149056,
+    "produce_latency_ms_p50": 4.04,
+    "produce_latency_ms_p99": 10.16,
+    "consumer_poll_s_avg": 0.207,
+    "consumer_poll_s_max": 0.635,
+    "backlog_max": 7217,
     "statements": {
       "send": {
-        "calls": 133383,
+        "calls": 129837,
         "mean_ms": 0.067,
-        "max_ms": 4.5,
-        "total_s": 8.97
+        "max_ms": 8.2,
+        "total_s": 8.76
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 158.594,
-        "max_ms": 509.4,
-        "total_s": 4.76
+        "mean_ms": 157.108,
+        "max_ms": 571.2,
+        "total_s": 4.71
       },
       "nack": {
-        "calls": 2669,
-        "mean_ms": 1.154,
-        "max_ms": 22.8,
-        "total_s": 3.08
+        "calls": 2612,
+        "mean_ms": 1.144,
+        "max_ms": 25.1,
+        "total_s": 2.99
+      },
+      "ticker": {
+        "calls": 310,
+        "mean_ms": 4.779,
+        "max_ms": 17.9,
+        "total_s": 1.48
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 4.742,
+        "max_ms": 8.6,
+        "total_s": 0.15
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.07,
+    "cron_log_writes": 1960,
+    "pg_net_writes": 981,
+    "worker_calls": 327,
+    "all_dead_end": 139
   },
   {
     "run": "pgque_x10_tick1000",
@@ -428,40 +593,69 @@
     "load": 10,
     "longtx": false,
     "tick_ms": 1000,
-    "messages": 17322,
-    "cpu_s": 12.8,
-    "cpu_ms_per_1k_msgs": 736.6,
-    "wal_mb": 29.7,
-    "wal_bytes_per_msg": 1795,
-    "tuple_writes_per_msg": 1.18,
-    "dead_tuples_max": 400,
+    "messages": 16729,
+    "cpu_s": 13.5,
+    "cpu_ms_per_1k_msgs": 807.7,
+    "wal_mb": 28.5,
+    "wal_bytes_per_msg": 1788,
+    "tuple_writes_per_msg": 1.2,
+    "dead_tuples_max": 382,
     "vacuums": 6,
-    "engine_bytes_end": 35078144,
-    "produce_latency_ms_p50": 9.39,
-    "produce_latency_ms_p99": 15.6,
-    "consumer_poll_s_avg": 0.094,
-    "consumer_poll_s_max": 0.227,
-    "backlog_max": 3068,
+    "engine_bytes_end": 33529856,
+    "produce_latency_ms_p50": 5.81,
+    "produce_latency_ms_p99": 11.91,
+    "consumer_poll_s_avg": 0.108,
+    "consumer_poll_s_max": 0.251,
+    "backlog_max": 3063,
     "statements": {
+      "ticker": {
+        "calls": 311,
+        "mean_ms": 6.118,
+        "max_ms": 28.8,
+        "total_s": 1.9
+      },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 45.174,
-        "max_ms": 177.0,
-        "total_s": 1.36
+        "mean_ms": 57.285,
+        "max_ms": 204.2,
+        "total_s": 1.72
       },
       "send": {
-        "calls": 17322,
-        "mean_ms": 0.076,
-        "max_ms": 3.2,
-        "total_s": 1.31
+        "calls": 16729,
+        "mean_ms": 0.074,
+        "max_ms": 6.5,
+        "total_s": 1.23
       },
       "nack": {
-        "calls": 270,
-        "mean_ms": 1.967,
-        "max_ms": 19.4,
-        "total_s": 0.53
+        "calls": 293,
+        "mean_ms": 1.945,
+        "max_ms": 17.6,
+        "total_s": 0.57
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 5.759,
+        "max_ms": 9.7,
+        "total_s": 0.18
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 5.281,
+        "max_ms": 9.0,
+        "total_s": 0.07
+      },
+      "ack": {
+        "calls": 914,
+        "mean_ms": 0.055,
+        "max_ms": 0.9,
+        "total_s": 0.05
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.37,
+    "cron_log_writes": 1965,
+    "pg_net_writes": 948,
+    "worker_calls": 316,
+    "all_dead_end": 350
   },
   {
     "run": "pgque_x1_tick1000",
@@ -470,39 +664,68 @@
     "longtx": false,
     "tick_ms": 1000,
     "messages": 3649,
-    "cpu_s": 9.2,
-    "cpu_ms_per_1k_msgs": 2508.1,
-    "wal_mb": 7.4,
-    "wal_bytes_per_msg": 2131,
-    "tuple_writes_per_msg": 1.31,
-    "dead_tuples_max": 158,
+    "cpu_s": 10.8,
+    "cpu_ms_per_1k_msgs": 2947.3,
+    "wal_mb": 7.3,
+    "wal_bytes_per_msg": 2088,
+    "tuple_writes_per_msg": 1.33,
+    "dead_tuples_max": 154,
     "vacuums": 5,
-    "engine_bytes_end": 9338880,
-    "produce_latency_ms_p50": 9.82,
-    "produce_latency_ms_p99": 17.45,
-    "consumer_poll_s_avg": 0.071,
-    "consumer_poll_s_max": 0.283,
-    "backlog_max": 2992,
+    "engine_bytes_end": 9003008,
+    "produce_latency_ms_p50": 6.71,
+    "produce_latency_ms_p99": 19.83,
+    "consumer_poll_s_avg": 0.068,
+    "consumer_poll_s_max": 0.178,
+    "backlog_max": 2991,
     "statements": {
+      "ticker": {
+        "calls": 310,
+        "mean_ms": 5.923,
+        "max_ms": 13.9,
+        "total_s": 1.84
+      },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 23.254,
-        "max_ms": 235.9,
-        "total_s": 0.7
-      },
-      "nack": {
-        "calls": 35,
-        "mean_ms": 6.101,
-        "max_ms": 15.8,
-        "total_s": 0.21
+        "mean_ms": 22.336,
+        "max_ms": 135.4,
+        "total_s": 0.67
       },
       "send": {
         "calls": 3649,
-        "mean_ms": 0.052,
-        "max_ms": 2.3,
-        "total_s": 0.19
+        "mean_ms": 0.066,
+        "max_ms": 4.2,
+        "total_s": 0.24
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 6.684,
+        "max_ms": 13.4,
+        "total_s": 0.21
+      },
+      "nack": {
+        "calls": 33,
+        "mean_ms": 4.173,
+        "max_ms": 18.9,
+        "total_s": 0.14
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 5.758,
+        "max_ms": 9.2,
+        "total_s": 0.07
+      },
+      "maint": {
+        "calls": 31,
+        "mean_ms": 1.212,
+        "max_ms": 5.9,
+        "total_s": 0.04
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.99,
+    "cron_log_writes": 1960,
+    "pg_net_writes": 450,
+    "worker_calls": 150,
+    "all_dead_end": 76
   },
   {
     "run": "pgque_x50",
@@ -510,40 +733,57 @@
     "load": 50,
     "longtx": false,
     "tick_ms": 100,
-    "messages": 69909,
-    "cpu_s": 25.8,
-    "cpu_ms_per_1k_msgs": 368.6,
-    "wal_mb": 111.5,
-    "wal_bytes_per_msg": 1672,
+    "messages": 67078,
+    "cpu_s": 25.4,
+    "cpu_ms_per_1k_msgs": 378.1,
+    "wal_mb": 106.5,
+    "wal_bytes_per_msg": 1666,
     "tuple_writes_per_msg": 1.07,
-    "dead_tuples_max": 520,
+    "dead_tuples_max": 446,
     "vacuums": 6,
-    "engine_bytes_end": 130711552,
-    "produce_latency_ms_p50": 7.1,
-    "produce_latency_ms_p99": 14.28,
-    "consumer_poll_s_avg": 0.17,
-    "consumer_poll_s_max": 0.595,
-    "backlog_max": 7116,
+    "engine_bytes_end": 124878848,
+    "produce_latency_ms_p50": 4.82,
+    "produce_latency_ms_p99": 10.32,
+    "consumer_poll_s_avg": 0.155,
+    "consumer_poll_s_max": 0.589,
+    "backlog_max": 5938,
     "statements": {
+      "ticker": {
+        "calls": 310,
+        "mean_ms": 930.018,
+        "max_ms": 951.2,
+        "total_s": 288.31
+      },
       "send": {
-        "calls": 69909,
-        "mean_ms": 0.069,
-        "max_ms": 8.9,
-        "total_s": 4.82
+        "calls": 67078,
+        "mean_ms": 0.068,
+        "max_ms": 5.4,
+        "total_s": 4.59
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 117.681,
-        "max_ms": 549.6,
-        "total_s": 3.53
+        "mean_ms": 107.218,
+        "max_ms": 533.9,
+        "total_s": 3.22
       },
       "nack": {
-        "calls": 1335,
-        "mean_ms": 1.573,
-        "max_ms": 28.8,
-        "total_s": 2.1
+        "calls": 1303,
+        "mean_ms": 1.375,
+        "max_ms": 39.2,
+        "total_s": 1.79
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 6.097,
+        "max_ms": 12.0,
+        "total_s": 0.19
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.12,
+    "cron_log_writes": 1965,
+    "pg_net_writes": 993,
+    "worker_calls": 331,
+    "all_dead_end": 113
   },
   {
     "run": "pgque_x50_longtx",
@@ -551,40 +791,57 @@
     "load": 50,
     "longtx": true,
     "tick_ms": 100,
-    "messages": 72176,
-    "cpu_s": 26.1,
-    "cpu_ms_per_1k_msgs": 361.1,
-    "wal_mb": 115.6,
-    "wal_bytes_per_msg": 1679,
+    "messages": 69852,
+    "cpu_s": 23.9,
+    "cpu_ms_per_1k_msgs": 342.6,
+    "wal_mb": 111.5,
+    "wal_bytes_per_msg": 1674,
     "tuple_writes_per_msg": 1.07,
-    "dead_tuples_max": 2172,
+    "dead_tuples_max": 2180,
     "vacuums": 5,
-    "engine_bytes_end": 135733248,
-    "produce_latency_ms_p50": 7.79,
-    "produce_latency_ms_p99": 14.75,
-    "consumer_poll_s_avg": 0.158,
-    "consumer_poll_s_max": 0.354,
-    "backlog_max": 5181,
+    "engine_bytes_end": 131121152,
+    "produce_latency_ms_p50": 4.39,
+    "produce_latency_ms_p99": 9.54,
+    "consumer_poll_s_avg": 0.176,
+    "consumer_poll_s_max": 0.488,
+    "backlog_max": 5230,
     "statements": {
+      "ticker": {
+        "calls": 309,
+        "mean_ms": 926.654,
+        "max_ms": 943.8,
+        "total_s": 286.34
+      },
       "send": {
-        "calls": 72176,
-        "mean_ms": 0.071,
-        "max_ms": 5.4,
-        "total_s": 5.13
+        "calls": 69852,
+        "mean_ms": 0.063,
+        "max_ms": 5.2,
+        "total_s": 4.41
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 106.26,
-        "max_ms": 301.7,
-        "total_s": 3.19
+        "mean_ms": 123.991,
+        "max_ms": 435.7,
+        "total_s": 3.72
       },
       "nack": {
-        "calls": 1276,
-        "mean_ms": 1.405,
-        "max_ms": 22.8,
-        "total_s": 1.79
+        "calls": 1337,
+        "mean_ms": 1.701,
+        "max_ms": 34.2,
+        "total_s": 2.27
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 4.607,
+        "max_ms": 7.0,
+        "total_s": 0.14
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.11,
+    "cron_log_writes": 1960,
+    "pg_net_writes": 996,
+    "worker_calls": 332,
+    "all_dead_end": 2603
   },
   {
     "run": "pgque_x50_longtx_tick1000",
@@ -592,40 +849,57 @@
     "load": 50,
     "longtx": true,
     "tick_ms": 1000,
-    "messages": 75282,
-    "cpu_s": 23.5,
-    "cpu_ms_per_1k_msgs": 312.7,
-    "wal_mb": 120.8,
-    "wal_bytes_per_msg": 1682,
-    "tuple_writes_per_msg": 1.06,
-    "dead_tuples_max": 2130,
-    "vacuums": 6,
-    "engine_bytes_end": 142344192,
-    "produce_latency_ms_p50": 7.63,
-    "produce_latency_ms_p99": 14.74,
-    "consumer_poll_s_avg": 0.159,
-    "consumer_poll_s_max": 0.375,
-    "backlog_max": 5050,
+    "messages": 69770,
+    "cpu_s": 21.8,
+    "cpu_ms_per_1k_msgs": 311.8,
+    "wal_mb": 111.4,
+    "wal_bytes_per_msg": 1674,
+    "tuple_writes_per_msg": 1.07,
+    "dead_tuples_max": 2126,
+    "vacuums": 7,
+    "engine_bytes_end": 130891776,
+    "produce_latency_ms_p50": 4.64,
+    "produce_latency_ms_p99": 10.29,
+    "consumer_poll_s_avg": 0.153,
+    "consumer_poll_s_max": 0.317,
+    "backlog_max": 5181,
     "statements": {
       "send": {
-        "calls": 75282,
-        "mean_ms": 0.071,
-        "max_ms": 6.3,
-        "total_s": 5.37
+        "calls": 69770,
+        "mean_ms": 0.067,
+        "max_ms": 8.1,
+        "total_s": 4.66
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 107.471,
-        "max_ms": 313.7,
-        "total_s": 3.22
+        "mean_ms": 103.779,
+        "max_ms": 270.7,
+        "total_s": 3.11
+      },
+      "ticker": {
+        "calls": 311,
+        "mean_ms": 5.491,
+        "max_ms": 23.3,
+        "total_s": 1.71
       },
       "nack": {
-        "calls": 1336,
-        "mean_ms": 1.337,
-        "max_ms": 22.5,
-        "total_s": 1.79
+        "calls": 1314,
+        "mean_ms": 1.276,
+        "max_ms": 19.3,
+        "total_s": 1.68
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 6.392,
+        "max_ms": 15.7,
+        "total_s": 0.2
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.11,
+    "cron_log_writes": 1965,
+    "pg_net_writes": 999,
+    "worker_calls": 333,
+    "all_dead_end": 2552
   },
   {
     "run": "pgque_x50_tick1000",
@@ -633,39 +907,62 @@
     "load": 50,
     "longtx": false,
     "tick_ms": 1000,
-    "messages": 71127,
-    "cpu_s": 22.8,
-    "cpu_ms_per_1k_msgs": 321.2,
-    "wal_mb": 113.6,
-    "wal_bytes_per_msg": 1674,
+    "messages": 70357,
+    "cpu_s": 21.3,
+    "cpu_ms_per_1k_msgs": 302.3,
+    "wal_mb": 112.2,
+    "wal_bytes_per_msg": 1672,
     "tuple_writes_per_msg": 1.07,
-    "dead_tuples_max": 518,
-    "vacuums": 6,
-    "engine_bytes_end": 133455872,
-    "produce_latency_ms_p50": 7.67,
-    "produce_latency_ms_p99": 14.5,
-    "consumer_poll_s_avg": 0.157,
-    "consumer_poll_s_max": 0.343,
-    "backlog_max": 4733,
+    "dead_tuples_max": 436,
+    "vacuums": 5,
+    "engine_bytes_end": 131858432,
+    "produce_latency_ms_p50": 4.67,
+    "produce_latency_ms_p99": 10.02,
+    "consumer_poll_s_avg": 0.15,
+    "consumer_poll_s_max": 0.42,
+    "backlog_max": 7343,
     "statements": {
       "send": {
-        "calls": 71127,
-        "mean_ms": 0.074,
-        "max_ms": 8.5,
-        "total_s": 5.26
+        "calls": 70357,
+        "mean_ms": 0.063,
+        "max_ms": 3.5,
+        "total_s": 4.44
       },
       "consumer_poll": {
         "calls": 30,
-        "mean_ms": 103.638,
-        "max_ms": 291.7,
-        "total_s": 3.11
+        "mean_ms": 103.959,
+        "max_ms": 367.2,
+        "total_s": 3.12
       },
       "nack": {
-        "calls": 1315,
-        "mean_ms": 1.297,
-        "max_ms": 19.1,
-        "total_s": 1.71
+        "calls": 1329,
+        "mean_ms": 1.26,
+        "max_ms": 24.6,
+        "total_s": 1.67
+      },
+      "ticker": {
+        "calls": 310,
+        "mean_ms": 5.219,
+        "max_ms": 13.9,
+        "total_s": 1.62
+      },
+      "dispatch": {
+        "calls": 31,
+        "mean_ms": 6.928,
+        "max_ms": 11.6,
+        "total_s": 0.21
+      },
+      "health": {
+        "calls": 13,
+        "mean_ms": 6.449,
+        "max_ms": 10.6,
+        "total_s": 0.08
       }
-    }
+    },
+    "pipeline_writes_per_msg": 1.11,
+    "cron_log_writes": 1960,
+    "pg_net_writes": 987,
+    "worker_calls": 329,
+    "all_dead_end": 374
   }
 ]

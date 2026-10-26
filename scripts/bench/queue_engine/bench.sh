@@ -36,6 +36,14 @@ done < <(P -Atc "select name, msg_per_s_1x, burst_mean from bench.queues")
 RATE=$(python3 -c "print(round($TOTAL_EV*$LOAD,4))")
 CPU0=$(docker exec "$CONTAINER" cat /sys/fs/cgroup/cpu.stat | awk '/usage_usec/{print $2}')
 P -At -F'|' -v schema=$SCHEMA -f $H/snapshot.sql > $OUT/snap0
+# Dispatcher on pg_cron every 10 s, like process_all_cron_tasks -> process_function_queue.
+P -Atc "select cron.schedule('bench_dispatch', '10 seconds', 'select bench.dispatch_$SYS()')" >/dev/null
+# /queue_health polls every queue about every 24 s in prod.
+( end=$(( $(date +%s) + DUR )); while [ $(date +%s) -lt $end ]; do P -Atc "select bench.health_$SYS()" >/dev/null; sleep 24; done ) &
+HPID=$!
+# Hourly cleanup_queue_messages / DLQ purge: run once per 300 s run (12x prod frequency).
+( sleep $(( DUR / 2 )); P -Atc "select bench.cleanup_$SYS()" >/dev/null ) &
+LPID=$!
 if [ -n "$LONGTX" ]; then
   # Long reader holding the xmin horizon for the whole run (analytics query, pg_dump, lagging replica)
   ( P -c "begin isolation level repeatable read; select count(*) from pg_class; select pg_sleep($DUR + 30); commit;" >/dev/null 2>&1 & echo $! > $OUT/longtx.pid )
@@ -52,7 +60,8 @@ CPID=$!
     echo "$(date +%s) $(P -Atc "$q") $(P -Atc "select coalesce(sum(n_dead_tup),0) from pg_stat_user_tables where schemaname='$SCHEMA'")" >> $OUT/backlog; sleep 10; done ) &
 BPID=$!
 pgbench -n --random-seed=42 -c 8 -j 4 -T $DUR -R $RATE -r -l --log-prefix=$OUT/pgb "${ARGS[@]}" "$DB_URL" > $OUT/pgbench.txt 2>&1 || true
-wait $CPID $BPID 2>/dev/null || true
+wait $CPID $BPID $HPID $LPID 2>/dev/null || true
+P -Atc "select cron.unschedule('bench_dispatch')" >/dev/null
 CPU1=$(docker exec "$CONTAINER" cat /sys/fs/cgroup/cpu.stat | awk '/usage_usec/{print $2}')
 P -At -F'|' -v schema=$SCHEMA -f $H/snapshot.sql > $OUT/snap1
 [ -n "$LONGTX" ] && { P -Atc "select pg_terminate_backend(pid) from pg_stat_activity where query like '%pg_sleep%' and pid<>pg_backend_pid()" >/dev/null; }

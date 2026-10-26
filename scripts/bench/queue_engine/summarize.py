@@ -11,7 +11,10 @@ def lsn(s):
 def snap(path):
     f = open(path).read().strip().split('|')
     return {'lsn': lsn(f[0]), 'ins': int(f[1]), 'upd': int(f[2]), 'del': int(f[3]), 'dead': int(f[4]),
-            'vacuums': int(f[5]), 'bytes': int(f[6]), 'blks': int(f[7]), 'xacts': int(f[8])}
+            'vacuums': int(f[5]), 'bytes': int(f[6]), 'blks': int(f[7]), 'xacts': int(f[8]),
+            'all_writes': int(f[9]) if len(f) > 9 else None, 'all_dead': int(f[10]) if len(f) > 10 else None,
+            'cron_writes': int(f[11]) if len(f) > 11 else None, 'net_writes': int(f[12]) if len(f) > 12 else None,
+            'http_calls': int(f[13]) if len(f) > 13 else None, 'cron_rows': int(f[14]) if len(f) > 14 else None}
 
 def pct(xs, p):
     if not xs: return None
@@ -42,6 +45,11 @@ for d in sorted(glob.glob(os.path.join(root, '*_x*'))):
         elif 'pgque.ack(' in ql: key = 'ack'
         elif 'pgque.nack(' in ql: key = 'nack'
         elif 'call bench.consume' in ql: key = 'consumer_poll'
+        elif 'bench.dispatch_' in ql: key = 'dispatch'
+        elif 'bench.health_' in ql: key = 'health'
+        elif 'bench.cleanup_' in ql: key = 'cleanup'
+        elif 'ticker_loop' in ql or 'pgque.ticker(' in ql: key = 'ticker'
+        elif 'pgque.maint' in ql: key = 'maint'
         if key and key not in stmt:
             stmt[key] = {'calls': calls, 'mean_ms': round(mean, 3), 'max_ms': round(mx, 1), 'total_s': round(total / 1000, 2)}
     lat = []
@@ -53,6 +61,9 @@ for d in sorted(glob.glob(os.path.join(root, '*_x*'))):
     bl = [int(b[1] or 0) for b in backlog if len(b) > 1]
     dead = [int(b[2] or 0) for b in backlog if len(b) > 2]
     polls = [float(b) - float(a) for a, b in (l.split() for l in open(os.path.join(d, 'consumer_polls')))] if os.path.exists(os.path.join(d, 'consumer_polls')) else []
+    # pg_cron writes job_run_details from its background worker, which table stats miss:
+    # count runs instead (1 INSERT + 4 UPDATE statements per run, as seen in prod pg_stat_statements).
+    cron_log = (s1['cron_rows'] - s0['cron_rows']) * 5 if s1.get('cron_rows') is not None else None
     tw = (s1['ins'] - s0['ins']) + (s1['upd'] - s0['upd']) + (s1['del'] - s0['del'])
     wal = s1['lsn'] - s0['lsn']
     runs.append({
@@ -65,11 +76,17 @@ for d in sorted(glob.glob(os.path.join(root, '*_x*'))):
         'consumer_poll_s_avg': round(statistics.mean(polls), 3) if polls else None,
         'consumer_poll_s_max': round(max(polls), 3) if polls else None,
         'backlog_max': max(bl) if bl else None, 'statements': stmt,
+        'pipeline_writes_per_msg': round((s1['all_writes'] - s0['all_writes'] - (s1['cron_writes'] - s0['cron_writes']) + cron_log) / max(sends, 1), 2) if s1['all_writes'] is not None else None,
+        'cron_log_writes': cron_log,
+        'pg_net_writes': s1['net_writes'] - s0['net_writes'] if s1['net_writes'] is not None else None,
+        'worker_calls': s1['http_calls'] - s0['http_calls'] if s1['http_calls'] is not None else None,
+        'all_dead_end': s1['all_dead'],
     })
 
 json.dump(runs, open(os.path.join(root, 'summary.json'), 'w'), indent=2)
 cols = [('run', 'run'), ('messages', 'msgs'), ('cpu_ms_per_1k_msgs', 'DB CPU ms / 1k msgs'), ('wal_bytes_per_msg', 'WAL B / msg'),
-        ('tuple_writes_per_msg', 'tuple writes / msg'), ('dead_tuples_max', 'max dead tuples'), ('vacuums', 'vacuums'),
+        ('tuple_writes_per_msg', 'engine writes / msg'), ('pipeline_writes_per_msg', 'all DB writes / msg'),
+        ('cron_log_writes', 'pg_cron log writes'), ('worker_calls', 'Worker calls'), ('dead_tuples_max', 'max dead tuples'), ('vacuums', 'vacuums'),
         ('engine_bytes_end', 'engine size end (B)'), ('produce_latency_ms_p50', 'send p50 ms'), ('produce_latency_ms_p99', 'send p99 ms'),
         ('consumer_poll_s_avg', 'poll avg s'), ('consumer_poll_s_max', 'poll max s'), ('backlog_max', 'max backlog')]
 print('| ' + ' | '.join(c[1] for c in cols) + ' |')

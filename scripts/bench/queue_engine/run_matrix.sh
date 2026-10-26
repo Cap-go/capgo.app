@@ -8,4 +8,4 @@ for load in 1 10 50 100; do
 done
 for sys in pgmq pgque; do "$H/bench.sh" $sys 50 300 longtx; done
 TICK_MS=1000 "$H/bench.sh" pgque 50 300 longtx
-python3 "$H/summarize.py"
+python3 "$H/summarize.py" "${BENCH_OUT:-$H/runs}"

@@ -84,3 +84,95 @@ begin
     end loop;
   end loop;
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- Surrounding pipeline. Both engines get the same jobs at prod cadence so the
+-- comparison covers the whole queue system, not only send/read/ack.
+-- ---------------------------------------------------------------------------
+
+-- Dispatcher: process_function_queue, run by process_all_cron_tasks every 10 s.
+-- Today: count(*) of q_<name> (including messages still invisible after a
+-- failure), then one pg_net request per batch_size, capped at 10.
+create function bench.dispatch_pgmq() returns integer language plpgsql as $$
+declare r record; n bigint; calls int := 0; k int;
+begin
+  for r in select * from bench.queues order by name loop
+    execute format('select count(*) from pgmq.%I', 'q_' || r.name) into n;
+    if n > 0 then
+      for k in 1..least(ceil(n / r.batch::float8)::int, 10) loop
+        perform net.http_post(url := 'http://127.0.0.1:9/functions/v1/triggers/queue_consumer/sync',
+          body := jsonb_build_object('queue_name', r.name, 'batch_size', r.batch),
+          headers := '{"Content-Type": "application/json"}'::jsonb, timeout_milliseconds := 1000);
+        calls := calls + 1;
+      end loop;
+    end if;
+  end loop;
+  return calls;
+end $$;
+
+-- pgque: only ticked, unconsumed events count. One Worker call drains whole
+-- batches up to the 10k subrequest budget.
+create function bench.dispatch_pgque() returns integer language plpgsql as $$
+declare r record; n bigint; calls int := 0; k int;
+begin
+  for r in select * from bench.queues order by name loop
+    select coalesce(max(pending_events), 0) into n from pgque.get_consumer_info(r.name, 'capgo');
+    if n > 0 then
+      for k in 1..least(ceil(n / 10000.0)::int, 10) loop
+        perform net.http_post(url := 'http://127.0.0.1:9/functions/v1/triggers/queue_consumer/sync',
+          body := jsonb_build_object('queue_name', r.name),
+          headers := '{"Content-Type": "application/json"}'::jsonb, timeout_milliseconds := 1000);
+        calls := calls + 1;
+      end loop;
+    end if;
+  end loop;
+  return calls;
+end $$;
+
+-- Health: the queries /queue_health runs for every queue (prod calls each one
+-- about every 24 s).
+create function bench.health_pgmq() returns void language plpgsql as $$
+declare q text; x record;
+begin
+  for q in select queue_name from pgmq.list_queues() order by queue_name loop
+    perform to_regclass('pgmq.q_' || q) is not null, to_regclass('pgmq.a_' || q) is not null;
+    execute format($f$
+      select count(*)::bigint, count(*) filter (where read_ct = 0)::bigint,
+        count(*) filter (where read_ct = 0 and vt <= now() and enqueued_at < now() - interval '300 seconds')::bigint,
+        count(*) filter (where read_ct > 5)::bigint, max(read_ct)::bigint,
+        extract(epoch from (now() - min(enqueued_at) filter (where vt <= now())))::numeric
+      from pgmq.%I $f$, 'q_' || q) into x;
+    execute format($f$
+      select count(*)::bigint, count(*) filter (where archived_at < now() - interval '86400 seconds')::bigint,
+        count(*) filter (where archived_at >= now() - interval '3600 seconds')::bigint,
+        extract(epoch from (now() - min(archived_at)))::numeric
+      from pgmq.%I $f$, 'a_' || q) into x;
+  end loop;
+end $$;
+
+create function bench.health_pgque() returns void language plpgsql as $$
+begin
+  perform * from pgque.get_queue_info();
+  perform * from pgque.get_consumer_info();
+  perform ev_queue, count(*), min(ev_retry_after) from pgque.retry_queue group by 1;
+  perform dl_queue_id, count(*), min(dl_time) from pgque.dead_letter group by 1;
+end $$;
+
+-- Hourly cleanup: cleanup_queue_messages (archive older than 2 days, poison
+-- read_ct > 5) vs pgque dead-letter purge. pgque.maint() covers rotation.
+create function bench.cleanup_pgmq() returns void language plpgsql as $$
+declare q text;
+begin
+  for q in select queue_name from pgmq.list_queues() order by queue_name loop
+    execute format('delete from pgmq.%I where ctid in (select ctid from pgmq.%I where archived_at < now() - interval ''2 days'' limit 5000)', 'a_' || q, 'a_' || q);
+    execute format('delete from pgmq.%I where ctid in (select ctid from pgmq.%I where read_ct > 5 limit 5000)', 'q_' || q, 'q_' || q);
+  end loop;
+end $$;
+
+create function bench.cleanup_pgque() returns void language plpgsql as $$
+declare q text;
+begin
+  for q in select queue_name from pgque.queue order by queue_name loop
+    perform pgque.dlq_purge(q, interval '2 days');
+  end loop;
+end $$;

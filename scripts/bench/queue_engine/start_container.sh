@@ -13,7 +13,7 @@ docker run -d --name "$CONTAINER" --cpus=4 --memory=8g --shm-size=1g -p 55432:54
   -c shared_buffers=2GB -c max_connections=200 -c autovacuum_naptime=60 >/dev/null
 until psql "$DB_URL" -Atc 'select 1' >/dev/null 2>&1; do sleep 2; done
 P() { psql "$DB_URL" -v ON_ERROR_STOP=1 -q "$@"; }
-P -c "create extension if not exists pgmq" -c "create extension if not exists pg_stat_statements" -c "create extension if not exists pg_cron"
+P -c "create extension if not exists pgmq" -c "create extension if not exists pg_stat_statements" -c "create extension if not exists pg_cron" -c "create extension if not exists pg_net"
 (cd "$PGQUE_DIR" && psql "$DB_URL" -v ON_ERROR_STOP=1 -q --single-transaction -f sql/pgque.sql >/dev/null)
 P -c "alter system set pg_stat_statements.track = 'all'" -c "select pg_reload_conf()" >/dev/null
 P -f "$H/setup.sql"
