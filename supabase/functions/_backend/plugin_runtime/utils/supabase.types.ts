@@ -3852,11 +3852,16 @@ export type Database = {
       }
       delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
       delta_gc_finish: {
-        Args: { p_app_id: string; p_error?: string; p_list_cursor: string }
+        Args: {
+          p_app_id: string
+          p_error?: string
+          p_list_cursor: string
+          p_page_done?: boolean
+        }
         Returns: undefined
       }
       delta_gc_finish_orphan_prefix: {
-        Args: { p_list_cursor: string; p_prefix: string }
+        Args: { p_list_cursor: string; p_page_done?: boolean; p_prefix: string }
         Returns: undefined
       }
       delta_gc_lock_key: { Args: { p_app_id: string }; Returns: number }

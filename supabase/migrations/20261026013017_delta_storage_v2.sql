@@ -558,7 +558,9 @@ ALTER FUNCTION public.delta_gc_end_delete(text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_end_delete(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_end_delete(text) TO service_role;
 
-CREATE FUNCTION public.delta_gc_finish(p_app_id text, p_list_cursor text, p_error text DEFAULT NULL)
+-- p_page_done = false: the run budget ended inside the page; list it again
+-- from p_list_cursor (null = first page) without advancing the pass.
+CREATE FUNCTION public.delta_gc_finish(p_app_id text, p_list_cursor text, p_error text DEFAULT NULL, p_page_done boolean DEFAULT true)
 RETURNS void
 LANGUAGE sql
 SECURITY DEFINER
@@ -570,18 +572,18 @@ AS $$
       -- weekly for aborted uploads; an error restarts the pass later.
       list_org = CASE
         WHEN p_error IS NOT NULL THEN NULL
-        WHEN p_list_cursor IS NOT NULL THEN list_org
+        WHEN NOT p_page_done OR p_list_cursor IS NOT NULL THEN list_org
         ELSE pending_orgs[1]
       END,
       pending_orgs = CASE
         WHEN p_error IS NOT NULL THEN NULL
-        WHEN p_list_cursor IS NOT NULL THEN pending_orgs
+        WHEN NOT p_page_done OR p_list_cursor IS NOT NULL THEN pending_orgs
         WHEN COALESCE(pg_catalog.cardinality(pending_orgs), 0) > 1 THEN pending_orgs[2:]
         ELSE NULL
       END,
       next_run_at = CASE
         WHEN p_error IS NOT NULL THEN now() + interval '1 hour'
-        WHEN p_list_cursor IS NOT NULL THEN now()
+        WHEN NOT p_page_done OR p_list_cursor IS NOT NULL THEN now()
         WHEN COALESCE(pg_catalog.cardinality(pending_orgs), 0) > 0 THEN now()
         ELSE now() + interval '7 days'
       END,
@@ -590,9 +592,9 @@ AS $$
       last_error = p_error
   WHERE app_id = p_app_id
 $$;
-ALTER FUNCTION public.delta_gc_finish(text, text, text) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_finish(text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_finish(text, text, text) TO service_role;
+ALTER FUNCTION public.delta_gc_finish(text, text, text, boolean) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_finish(text, text, text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_finish(text, text, text, boolean) TO service_role;
 
 -- App deletion only removes the current owner's prefix (on_app_delete), and
 -- the cascade drops delta_files, which is how GC finds former owners'
@@ -676,20 +678,22 @@ ALTER FUNCTION public.delta_gc_claim_orphan_prefixes(integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) TO service_role;
 
-CREATE FUNCTION public.delta_gc_finish_orphan_prefix(p_prefix text, p_list_cursor text)
+-- The task is removed only after the last page was fully processed.
+CREATE FUNCTION public.delta_gc_finish_orphan_prefix(p_prefix text, p_list_cursor text, p_page_done boolean DEFAULT true)
 RETURNS void
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  DELETE FROM public.delta_gc_orphan_prefixes WHERE prefix = p_prefix AND p_list_cursor IS NULL;
+  DELETE FROM public.delta_gc_orphan_prefixes
+  WHERE prefix = p_prefix AND p_page_done AND p_list_cursor IS NULL;
   UPDATE public.delta_gc_orphan_prefixes
   SET list_cursor = p_list_cursor, claimed_until = NULL
-  WHERE prefix = p_prefix AND p_list_cursor IS NOT NULL;
+  WHERE prefix = p_prefix AND NOT (p_page_done AND p_list_cursor IS NULL);
 $$;
-ALTER FUNCTION public.delta_gc_finish_orphan_prefix(text, text) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text) TO service_role;
+ALTER FUNCTION public.delta_gc_finish_orphan_prefix(text, text, boolean) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text, boolean) TO service_role;
 
 -- Moves one version's legacy manifest rows into delta_files/version_files.
 -- Shares the per-version lock with manifest persistence and cleanup.

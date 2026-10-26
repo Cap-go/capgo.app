@@ -295,6 +295,23 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('keeps cleanup progress when a page is cut short', async () => {
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await client.query(`INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org) VALUES ('orgs/x/apps/partial/', 'partial', 'x')`)
+      await client.query(`SELECT public.delta_gc_finish_orphan_prefix('orgs/x/apps/partial/', NULL, false)`)
+      const kept = await client.query(`SELECT list_cursor, claimed_until FROM public.delta_gc_orphan_prefixes WHERE prefix = 'orgs/x/apps/partial/'`)
+      expect(kept.rows).toEqual([{ list_cursor: null, claimed_until: null }])
+      await client.query(`SELECT public.delta_gc_finish_orphan_prefix('orgs/x/apps/partial/', NULL, true)`)
+      const gone = await client.query(`SELECT 1 FROM public.delta_gc_orphan_prefixes WHERE prefix = 'orgs/x/apps/partial/'`)
+      expect(gone.rows).toEqual([])
+
+      await client.query(`UPDATE public.delta_gc_state SET list_org = 'org-a', pending_orgs = ARRAY['org-b'], list_cursor = NULL WHERE app_id = $1`, [APP_ID])
+      await client.query('SELECT public.delta_gc_finish($1, NULL, NULL, false)', [APP_ID])
+      const state = await client.query(`SELECT list_org, pending_orgs, next_run_at <= now() AS soon FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
+      expect(state.rows[0]).toEqual({ list_org: 'org-a', pending_orgs: ['org-b'], soon: true })
+    })
+  })
+
   it('caps the delete lease at 2 seconds', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])

@@ -162,6 +162,25 @@ describe('delta storage GC worker', () => {
     expect(finish).toContain('more')
   })
 
+  it('keeps an orphan prefix task when a delete of its page fails', async () => {
+    const orphanPrefix = 'orgs/former-org/apps/com.example.gone/'
+    mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${orphanPrefix}delta/a.js`, lastModified: new Date() }], nextToken: null })
+    mocks.deleteObjectKey.mockResolvedValue(false)
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      if (sqlText(query).includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [{ prefix: orphanPrefix, list_cursor: null }] }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+
+    const dialect = new PgDialect()
+    const finish = mocks.execute.mock.calls
+      .map(([query]) => dialect.sqlToQuery(query))
+      .find(query => query.sql.includes('delta_gc_finish_orphan_prefix'))
+    expect(finish?.params).toEqual([orphanPrefix, null, false])
+  })
+
   it('never deletes when the database refuses the lease', async () => {
     mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: new Date(Date.now() - 2 * DAY) }], nextToken: null })
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {

@@ -117,8 +117,9 @@ async function collectAppPage(c: Context, db: Database, app: ClaimedApp, deadlin
   }
 
   // A page cut short by the run budget is listed again from the same token.
-  const nextCursor = processed >= candidates.length ? nextToken : app.list_cursor
-  return { listed: objects.length, candidates: candidates.length, deleted, nextCursor }
+  const pageDone = processed >= candidates.length
+  const nextCursor = pageDone ? nextToken : app.list_cursor
+  return { listed: objects.length, candidates: candidates.length, deleted, nextCursor, pageDone }
 }
 
 type OrphanPrefix = Record<string, unknown> & { prefix: string, list_cursor: string | null }
@@ -137,10 +138,12 @@ async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix,
     if (await s3.deleteObjectKey(c, object.key))
       deleted++
   })
-  // A page cut short by the run budget is listed again from the same token.
-  const nextCursor = started >= objects.length ? nextToken : orphan.list_cursor
-  await db.execute(sql`SELECT public.delta_gc_finish_orphan_prefix(${orphan.prefix}, ${nextCursor})`)
-  return { listed: objects.length, deleted }
+  // A page cut short by the run budget is listed again from the same token;
+  // the task is only removed once its last page was fully processed.
+  const pageDone = started >= objects.length && deleted === objects.length
+  const nextCursor = pageDone ? nextToken : orphan.list_cursor
+  await db.execute(sql`SELECT public.delta_gc_finish_orphan_prefix(${orphan.prefix}, ${nextCursor}, ${pageDone})`)
+  return { listed: objects.length, deleted, pageDone }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -157,7 +160,7 @@ app.post('/', middlewareAPISecret, async (c) => {
         break
       try {
         const page = await collectAppPage(c, db, claimedApp, deadline)
-        await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${page.nextCursor}, NULL)`)
+        await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${page.nextCursor}, NULL, ${page.pageDone})`)
         cloudlog({ requestId: c.get('requestId'), message: 'delta gc page done', appId: claimedApp.app_id, ...page })
       }
       catch (error) {
