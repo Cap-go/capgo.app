@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { getManifestStorageCandidateKeys } from '../utils/manifest_encoding.ts'
+import { encodeManifestPathSegments, getManifestStorageCandidateKeys } from '../utils/manifest_encoding.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { s3 } from '../utils/s3.ts'
 
@@ -111,14 +111,18 @@ async function forEachBounded<T>(items: T[], concurrency: number, shouldStart: (
 }
 
 /**
- * Other spellings of each key that /files/read resolves to the same object
- * (leading-dot segments as "." or "%2E", encoded or decoded names). A key is
- * only deleted when none of its spellings is referenced.
+ * Stored paths that /files/read can resolve to this physical key: its own
+ * spellings (leading-dot segments as "." or "%2E", encoded or decoded names)
+ * and the reverse direction, a percent-encoded stored path whose decoded
+ * candidate is this key (".../image%402x.png" served from ".../image@2x.png").
+ * A key is only deleted when none of these is referenced.
  */
 export function storageAliases(keys: string[]) {
   const aliases: Record<string, string[]> = {}
   for (const key of keys) {
-    const others = getManifestStorageCandidateKeys(key).filter(candidate => candidate !== key)
+    const encoded = encodeManifestPathSegments(key)
+    const spellings = new Set([...getManifestStorageCandidateKeys(key), encoded, ...getManifestStorageCandidateKeys(encoded)])
+    const others = [...spellings].filter(candidate => candidate !== key && getManifestStorageCandidateKeys(candidate).includes(key))
     if (others.length > 0)
       aliases[key] = others
   }

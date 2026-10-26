@@ -33,7 +33,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => 
   middlewareAPISecret: async (_c: unknown, next: () => Promise<void>) => next(),
 }))
 
-const { app, DELTA_GC_BUDGET_MS, DELTA_GC_STORAGE_CONCURRENCY, DELTA_GC_DELETE_START_WINDOW_MS, DELTA_GC_STORAGE_TIMEOUT_MS, DELTA_GC_DELETE_TIMEOUT_MS, DELTA_GC_LEASE_MS, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
+const { app, storageAliases, DELTA_GC_BUDGET_MS, DELTA_GC_STORAGE_CONCURRENCY, DELTA_GC_DELETE_START_WINDOW_MS, DELTA_GC_STORAGE_TIMEOUT_MS, DELTA_GC_DELETE_TIMEOUT_MS, DELTA_GC_LEASE_MS, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
 
 const DAY = 24 * 60 * 60 * 1000
 const prefix = deltaPrefix('org-1', 'com.example.gc')
@@ -163,6 +163,15 @@ describe('delta storage GC worker', () => {
     // Two pages done, two re-claimed apps handed back without listing.
     expect(finishes).toHaveLength(4)
     expect(finishes.filter(text => text.includes('false'))).toHaveLength(2)
+  })
+
+  it('lists every stored spelling that resolves to a listed key', () => {
+    const base = `${prefix}${'a'.repeat(64)}_`
+    const aliases = storageAliases([`${base}image@2x.png`, `${base}.htaccess`, `${base}main.js`])
+    // A manifest may store the encoded spelling of a decoded physical key.
+    expect(aliases[`${base}image@2x.png`]).toEqual([`${base}image%402x.png`])
+    expect(aliases[`${base}.htaccess`]).toEqual([`${base}%2Ehtaccess`])
+    expect(aliases[`${base}main.js`]).toBeUndefined()
   })
 
   it('binds each path array as one Postgres parameter', async () => {
