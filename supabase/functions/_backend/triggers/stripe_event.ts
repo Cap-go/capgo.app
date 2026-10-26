@@ -10,7 +10,7 @@ import { Hono } from 'hono/tiny'
 import { stripeAmountToMajorUnits } from '../../shared/stripe-amount.ts'
 import { isBentoConfigured, syncBentoSubscriberTags, trackBentoEvent } from '../utils/bento.ts'
 import { purgeOnPremCacheForOrg, purgePlanCacheForOrg } from '../utils/cloudflare_cache_purge.ts'
-import { handleAutoTopUpPaymentIntent } from '../utils/credit_auto_top_up.ts'
+import { handleAutoTopUpInvoicePaid, handleAutoTopUpPaymentIntent } from '../utils/credit_auto_top_up.ts'
 import { getFallbackCreditProductId } from '../utils/credits.ts'
 import { BRES, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
@@ -1705,6 +1705,8 @@ async function handleInvoiceStripeEvent(
   stripeData: StripeData,
   customer: StripeInfoRow,
 ) {
+  if (await handleAutoTopUpInvoicePaid(c, stripeEvent, org.id))
+    return c.json(BRES)
   await recoverOpenAIFirstPaymentFromInvoice(c, org, stripeEvent, customer)
   if (stripeEvent.type === 'invoice.upcoming')
     return invoiceUpcoming(c, org, stripeEvent, stripeData)

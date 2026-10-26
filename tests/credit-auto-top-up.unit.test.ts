@@ -1,6 +1,6 @@
 import type Stripe from 'stripe'
 import { describe, expect, it, vi } from 'vitest'
-import { AUTO_TOP_UP_KIND, normalizeAutoTopUpMonthlyLimit, payAutoTopUpInvoice, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
+import { AUTO_TOP_UP_KIND, handleAutoTopUpInvoicePaid, normalizeAutoTopUpMonthlyLimit, payAutoTopUpInvoice, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
 describe('credit auto top-up decision', () => {
   const base = { enabled: true, availableCredits: 0, threshold: 10, lastAttemptAt: null as string | null }
@@ -105,5 +105,19 @@ describe('credit auto top-up invoice', () => {
     const stripe = fakeStripe('declined')
     await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
     expect(stripe.invoices.voidInvoice).toHaveBeenCalledWith('in_1')
+  })
+})
+
+describe('credit auto top-up invoice webhook', () => {
+  const context = { get: () => 'request-id' } as any
+  const event = (invoice: Record<string, unknown>) => ({ type: 'invoice.paid', data: { object: { id: 'in_1', status: 'paid', ...invoice } } }) as unknown as Stripe.Event
+
+  it('leaves other invoices to the regular invoice handlers', async () => {
+    await expect(handleAutoTopUpInvoicePaid(context, event({ metadata: {}, amount_paid: 0 }), 'org_1')).resolves.toBe(false)
+  })
+
+  it('leaves card-paid auto top-up invoices to the PaymentIntent webhook', async () => {
+    const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 2500 })
+    await expect(handleAutoTopUpInvoicePaid(context, invoice, 'org_1')).resolves.toBe(true)
   })
 })

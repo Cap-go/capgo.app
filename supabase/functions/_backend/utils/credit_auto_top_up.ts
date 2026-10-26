@@ -505,3 +505,30 @@ export async function handleAutoTopUpPaymentIntent(c: Context, event: Stripe.Eve
   await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntent.id)
   return true
 }
+
+// An auto top-up invoice fully covered by the customer's Stripe balance has no PaymentIntent,
+// so payment_intent.succeeded never fires: grant from the paid invoice, keyed by its id.
+export async function handleAutoTopUpInvoicePaid(c: Context, event: Stripe.Event, orgId: string): Promise<boolean> {
+  if (event.type !== 'invoice.paid' && event.type !== 'invoice.updated')
+    return false
+
+  const invoice = event.data.object
+  if (invoice.metadata?.kind !== AUTO_TOP_UP_KIND)
+    return false
+  // Invoices charged to a card are granted from their PaymentIntent.
+  if (invoice.status !== 'paid' || invoice.amount_paid !== 0 || !invoice.id)
+    return true
+
+  const metadataOrgId = invoice.metadata.orgId
+  if (metadataOrgId && metadataOrgId !== orgId) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_org_mismatch', orgId, metadataOrgId, invoiceId: invoice.id })
+    return true
+  }
+
+  const quantity = Math.floor(Number(invoice.metadata.intendedQuantity ?? 0))
+  if (quantity < MIN_AUTO_TOP_UP_THRESHOLD)
+    return true
+
+  await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, invoice.id)
+  return true
+}
