@@ -303,6 +303,13 @@ describe('delta storage v2 GC guards', () => {
       await client.query('UPDATE public.app_versions SET deleted = false, deleted_at = NULL WHERE id = $1', [versionId])
       const restored = await client.query<{ manifest_count: number }>('SELECT manifest_count FROM public.app_versions WHERE id = $1', [versionId])
       expect(restored.rows[0].manifest_count).toBe(1)
+      // Its file was never sized (deleted versions queue no lookups): restoring queues one.
+      const queued = await client.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM pgmq.q_on_manifest_create
+         WHERE message->'payload'->>'table' = 'delta_files' AND message->'payload'->'record'->>'s3_path' = $1`,
+        [path],
+      )
+      expect(queued.rows[0].count).toBe(1)
       const after = await client.query<{ count: number }>('SELECT manifest_bundle_count AS count FROM public.apps WHERE app_id = $1', [APP_ID])
       expect(Number(after.rows[0].count)).toBe(Number(before.rows[0].count) + 1)
     })

@@ -371,6 +371,26 @@ BEGIN
     SET manifest_bundle_count = manifest_bundle_count + 1, updated_at = now()
     WHERE app_id = NEW.app_id;
   END IF;
+  -- Deleted versions queue no size lookups when converted: a restored one
+  -- queues them for its files that are still unsized.
+  PERFORM pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
+    'function_name', 'on_manifest_create',
+    'function_type', 'cloudflare',
+    'payload', pg_catalog.jsonb_build_object(
+      'old_record', NULL,
+      'record', pg_catalog.jsonb_build_object('id', df.id, 'app_id', df.app_id, 's3_path', df.s3_path, 'file_size', df.file_size, 'entry_key', pg_catalog.encode(df.entry_key, 'hex')),
+      'type', 'INSERT',
+      'table', 'delta_files',
+      'schema', 'public'
+    )
+  ))
+  FROM public.delta_files AS df
+  WHERE df.file_size = 0
+    AND df.id IN (
+      SELECT pg_catalog.unnest(vf.file_ids)
+      FROM public.version_files AS vf
+      WHERE vf.app_version_id = NEW.id
+    );
   RETURN NEW;
 END;
 $$;
