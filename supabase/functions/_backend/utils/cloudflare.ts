@@ -9,6 +9,7 @@ import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDe
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
+import { legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, NOT_LEGACY_DOWNLOAD_FAIL_CF, subtractLegacyDownloadFails, summarizeLegacyCheckFailures, sumLegacyDownloadFails } from './legacyDownloadFail.ts'
 import { getEnv } from './utils.ts'
 import { buildVersionCompareSql } from './versionCompare.ts'
 
@@ -709,6 +710,123 @@ export function buildVersionUsageChannelFilterCF(channel?: VersionUsageChannel |
   return `AND ${match}`
 }
 
+const DAY_BUCKET_CF = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
+
+/**
+ * app_log failure rows carry the channel in blob8 (name) and blob9 (id). Rows
+ * written before that have neither and stay out of a channel view.
+ */
+export function buildAppLogFailureChannelFilterCF(channel?: VersionUsageChannel | string | null): string {
+  if (!channel)
+    return ''
+  const channelId = typeof channel === 'object' && channel.id ? escapeSqlString(String(channel.id)) : ''
+  const channelName = escapeSqlString(typeof channel === 'string' ? channel : (channel.name ?? ''))
+  if (channelId && channelName)
+    return `AND (blob9 = '${channelId}' OR (blob9 = '' AND blob8 = '${channelName}'))`
+  if (channelId)
+    return `AND blob9 = '${channelId}'`
+  if (channelName)
+    return `AND blob8 = '${channelName}'`
+  return ''
+}
+
+export interface LegacyDownloadFailQuery {
+  appId: string
+  start: string | Date
+  end: string | Date
+  /** Analytics Engine expression of the bucket, matching the version_usage query it corrects. */
+  bucket: string
+  channel?: VersionUsageChannel | string | null
+  versionName?: string
+}
+
+/**
+ * Legacy download_fail per bucket and version (see legacyDownloadFail.ts) that
+ * version_usage still counted as fails. Never throws: without it, a read keeps
+ * the recorded counts.
+ */
+export async function readLegacyDownloadFailsCF(c: Context, query: LegacyDownloadFailQuery): Promise<Map<string, number>> {
+  if (!c.env.APP_LOG)
+    return new Map()
+  const versionFilter = query.versionName === undefined ? '' : `AND blob3 = '${escapeSqlString(query.versionName)}'`
+  const sql = `SELECT
+  ${query.bucket} AS bucket,
+  blob3 AS version_name,
+  blob7 AS plugin_version,
+  sum(_sample_interval) AS count
+FROM app_log
+WHERE
+  index1 = '${escapeSqlString(query.appId)}'
+  AND blob2 = 'download_fail'
+  AND blob7 != ''
+  AND blob10 = ''
+  AND timestamp >= toDateTime('${formatDateCF(query.start)}')
+  AND timestamp < toDateTime('${formatDateCF(query.end)}')
+  ${versionFilter}
+  ${buildAppLogFailureChannelFilterCF(query.channel)}
+GROUP BY bucket, version_name, plugin_version`
+  try {
+    return sumLegacyDownloadFails(await runQueryToCFA(c, sql))
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading legacy download_fail', error: serializeError(e), query: sql })
+    return new Map()
+  }
+}
+
+export interface LegacyCheckFailuresQuery {
+  appId: string
+  start: string | Date
+  end: string | Date
+  channel?: VersionUsageChannel | string | null
+  versionNames?: string[]
+}
+
+export function buildLegacyCheckFailuresQueryCF(query: LegacyCheckFailuresQuery) {
+  const versionFilter = query.versionNames?.length
+    ? `AND blob3 IN (${query.versionNames.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
+    : ''
+  // /stats only resolves the channel of failures it counts, so legacy logs
+  // recorded since then carry none. Resolving it for them would add a lookup
+  // per event on the plugin hot path, so a channel view also takes the
+  // bundle's unattributed logs: bundles are rarely shared across channels,
+  // and this only sizes a notice.
+  const channelMatch = buildAppLogFailureChannelFilterCF(query.channel).replace(/^AND /, '')
+  const channelFilter = channelMatch ? `AND (${channelMatch} OR (blob8 = '' AND blob9 = ''))` : ''
+  return `SELECT
+  blob3 AS version_name,
+  blob7 AS plugin_version,
+  sum(_sample_interval) AS count
+FROM app_log
+WHERE
+  index1 = '${escapeSqlString(query.appId)}'
+  AND blob2 = 'download_fail'
+  AND ${legacyDownloadFailPluginSqlCF('blob7')}
+  AND timestamp >= toDateTime('${formatDateCF(query.start)}')
+  AND timestamp < toDateTime('${formatDateCF(query.end)}')
+  ${versionFilter}
+  ${channelFilter}
+GROUP BY version_name, plugin_version`
+}
+
+/**
+ * Every legacy download_fail per bundle, flagged or not, for the dashboard
+ * notice that tells users to update the plugin. Never throws: without it, the
+ * notice is not shown.
+ */
+export async function readLegacyCheckFailuresCF(c: Context, query: LegacyCheckFailuresQuery) {
+  if (!c.env.APP_LOG)
+    return summarizeLegacyCheckFailures([])
+  const sql = buildLegacyCheckFailuresQueryCF(query)
+  try {
+    return summarizeLegacyCheckFailures(await runQueryToCFA(c, sql))
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading legacy check failures', error: serializeError(e), query: sql })
+    return summarizeLegacyCheckFailures([])
+  }
+}
+
 export async function readStatsVersionCF(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: VersionUsageChannelFilterOptions = {}): Promise<VersionUsage[]> {
   if (!c.env.VERSION_USAGE)
     return []
@@ -717,7 +835,7 @@ export async function readStatsVersionCF(c: Context, app_id: string, period_star
   const query = `SELECT
   blob1 as app_id,
   blob2 as version_name,
-  formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d') AS date,
+  ${DAY_BUCKET_CF} AS date,
   sum(if(blob3 = 'get', _sample_interval, 0)) AS get,
   sum(if(blob3 = 'fail', _sample_interval, 0)) AS fail,
   sum(if(blob3 = 'install', _sample_interval, 0)) AS install,
@@ -733,7 +851,11 @@ ORDER BY date`
 
   cloudlog({ requestId: c.get('requestId'), message: 'readStatsVersionCF query', query })
   try {
-    return await runQueryToCFA<VersionUsage>(c, query)
+    const [usage, legacyFails] = await Promise.all([
+      runQueryToCFA<VersionUsage>(c, query),
+      readLegacyDownloadFailsCF(c, { appId: app_id, start: period_start, end: period_end, bucket: DAY_BUCKET_CF, channel }),
+    ])
+    return subtractLegacyDownloadFails(usage, row => legacyDownloadFailKey(row.date, row.version_name), legacyFails)
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading version usage', error: serializeError(e), query })
@@ -2223,25 +2345,27 @@ export async function getPublicLiveUpdateMetricsCF(c: Context, referenceDate = n
   start.setUTCDate(start.getUTCDate() - 30)
   const window = `timestamp >= toDateTime('${formatDateCF(start)}') AND timestamp < toDateTime('${formatDateCF(end)}')`
   const failureActions = PUBLIC_FAILURE_ACTIONS.map(action => `'${action}'`).join(', ')
+  // download_fail of older plugins may be a failed update check, not a failed update.
+  const isFailure = `(blob2 IN (${failureActions}) AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF})`
   const day = `formatDateTime(toStartOfInterval(timestamp, INTERVAL '1' DAY), '%Y-%m-%d')`
   // Device-day outcomes: one success/fail per device per day. Fail-then-set same day counts as success only.
   const zipFailActions = PUBLIC_ZIP_FAIL_ACTIONS.map(action => `'${action}'`).join(', ')
   const deltaFailActions = PUBLIC_DELTA_FAIL_ACTIONS.map(action => `'${action}'`).join(', ')
-  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id`
+  const outcomeBase = `SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(${isFailure}, 1, 0)) AS failed, argMax(blob5, timestamp) AS platform, argMax(blob6, timestamp) AS country, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND (blob2 = 'set' OR ${isFailure}) GROUP BY date, app_id, device_id`
   const outcomesQuery = `SELECT date, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures, sum(if(succeeded = 1 AND failed = 0, 1, 0)) AS first_tries FROM (${outcomeBase}) GROUP BY date`
-  const firstDayQuery = `SELECT sum(first_day_successes) AS first_day_successes, sum(first_day_failures) AS first_day_failures, sum(total_successes) AS total_successes FROM (SELECT app_id, version_name, argMin(successes, date) AS first_day_successes, argMin(failures, date) AS first_day_failures, sum(successes) AS total_successes FROM (SELECT date, app_id, version_name, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob3 AS version_name, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(blob2 IN (${failureActions}), 1, 0)) AS failed FROM app_log WHERE ${window} AND blob3 != '' AND (blob2 = 'set' OR blob2 IN (${failureActions})) GROUP BY date, app_id, device_id, version_name) GROUP BY date, app_id, version_name) GROUP BY app_id, version_name)`
+  const firstDayQuery = `SELECT sum(first_day_successes) AS first_day_successes, sum(first_day_failures) AS first_day_failures, sum(total_successes) AS total_successes FROM (SELECT app_id, version_name, argMin(successes, date) AS first_day_successes, argMin(failures, date) AS first_day_failures, sum(successes) AS total_successes FROM (SELECT date, app_id, version_name, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob3 AS version_name, max(if(blob2 = 'set', 1, 0)) AS succeeded, max(if(${isFailure}, 1, 0)) AS failed FROM app_log WHERE ${window} AND blob3 != '' AND (blob2 = 'set' OR ${isFailure}) GROUP BY date, app_id, device_id, version_name) GROUP BY date, app_id, version_name) GROUP BY app_id, version_name)`
   const rollbackQuery = `SELECT sum(has_reset) AS rollbacks, sum(if(has_set + has_reset > 0, 1, 0)) AS outcomes FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'reset', 1, 0)) AS has_reset, max(if(blob2 = 'set', 1, 0)) AS has_set FROM app_log WHERE ${window} AND blob2 IN ('set', 'reset') GROUP BY date, app_id, device_id)`
-  const packageQuery = `SELECT sum(if(zip_ok = 1, 1, 0)) AS zip_successes, sum(if(zip_ok = 0 AND zip_fail = 1, 1, 0)) AS zip_failures, sum(if(delta_ok = 1, 1, 0)) AS delta_successes, sum(if(delta_ok = 0 AND delta_fail = 1, 1, 0)) AS delta_failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'download_zip_complete', 1, 0)) AS zip_ok, max(if(blob2 IN (${zipFailActions}), 1, 0)) AS zip_fail, max(if(blob2 = 'download_manifest_complete', 1, 0)) AS delta_ok, max(if(blob2 IN (${deltaFailActions}), 1, 0)) AS delta_fail FROM app_log WHERE ${window} AND blob2 IN ('download_zip_complete', 'download_manifest_complete', ${zipFailActions}, ${deltaFailActions}) GROUP BY date, app_id, device_id)`
-  const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, action, app_id, device_id) GROUP BY action`
+  const packageQuery = `SELECT sum(if(zip_ok = 1, 1, 0)) AS zip_successes, sum(if(zip_ok = 0 AND zip_fail = 1, 1, 0)) AS zip_failures, sum(if(delta_ok = 1, 1, 0)) AS delta_successes, sum(if(delta_ok = 0 AND delta_fail = 1, 1, 0)) AS delta_failures FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, max(if(blob2 = 'download_zip_complete', 1, 0)) AS zip_ok, max(if(blob2 IN (${zipFailActions}) AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF}, 1, 0)) AS zip_fail, max(if(blob2 = 'download_manifest_complete', 1, 0)) AS delta_ok, max(if(blob2 IN (${deltaFailActions}), 1, 0)) AS delta_fail FROM app_log WHERE ${window} AND blob2 IN ('download_zip_complete', 'download_manifest_complete', ${zipFailActions}, ${deltaFailActions}) GROUP BY date, app_id, device_id)`
+  const failuresQuery = `SELECT action, count() AS devices FROM (SELECT ${day} AS date, blob2 AS action, index1 AS app_id, blob1 AS device_id FROM app_log WHERE ${window} AND ${isFailure} GROUP BY date, action, app_id, device_id) GROUP BY action`
   const platformsShareQuery = `SELECT platform, count() AS devices FROM (SELECT double1 AS platform, index1 AS app_id, blob1 AS device_id FROM device_usage WHERE ${window} AND double1 IN (0.0, 1.0, 2.0) GROUP BY platform, app_id, device_id) GROUP BY platform`
   const platformsOutcomeQuery = `SELECT platform AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE platform IN ('ios', 'android', 'electron') GROUP BY platform`
-  const platformsFailureQuery = `SELECT platform AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob5, timestamp) AS platform FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, app_id, device_id, action) WHERE platform IN ('ios', 'android', 'electron') GROUP BY platform, action`
+  const platformsFailureQuery = `SELECT platform AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob5, timestamp) AS platform FROM app_log WHERE ${window} AND ${isFailure} GROUP BY date, app_id, device_id, action) WHERE platform IN ('ios', 'android', 'electron') GROUP BY platform, action`
   const countriesShareQuery = `SELECT country AS key, count() AS devices FROM (SELECT index1 AS app_id, blob1 AS device_id, argMax(blob10, timestamp) AS country FROM device_info WHERE ${window} AND blob10 != '' GROUP BY app_id, device_id) WHERE country != '' GROUP BY country`
   const countriesOutcomeQuery = `SELECT country AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE country != '' GROUP BY country`
-  const countriesFailureQuery = `SELECT country AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob6, timestamp) AS country FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, app_id, device_id, action) WHERE country != '' GROUP BY country, action`
+  const countriesFailureQuery = `SELECT country AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob6, timestamp) AS country FROM app_log WHERE ${window} AND ${isFailure} GROUP BY date, app_id, device_id, action) WHERE country != '' GROUP BY country, action`
   const versionsShareQuery = `SELECT version AS key, count() AS devices FROM (SELECT index1 AS app_id, blob1 AS device_id, argMax(blob3, timestamp) AS version FROM device_info WHERE ${window} AND blob3 != '' GROUP BY app_id, device_id) WHERE version != '' GROUP BY version`
   const versionsOutcomeQuery = `SELECT plugin_version AS key, sum(succeeded) AS successes, sum(if(succeeded = 0, failed, 0)) AS failures FROM (${outcomeBase}) WHERE plugin_version != '' GROUP BY plugin_version`
-  const versionsFailureQuery = `SELECT plugin_version AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND blob2 IN (${failureActions}) GROUP BY date, app_id, device_id, action) WHERE plugin_version != '' GROUP BY plugin_version, action`
+  const versionsFailureQuery = `SELECT plugin_version AS key, action, count() AS devices FROM (SELECT ${day} AS date, index1 AS app_id, blob1 AS device_id, blob2 AS action, argMax(blob7, timestamp) AS plugin_version FROM app_log WHERE ${window} AND ${isFailure} GROUP BY date, app_id, device_id, action) WHERE plugin_version != '' GROUP BY plugin_version, action`
 
   try {
     const [
