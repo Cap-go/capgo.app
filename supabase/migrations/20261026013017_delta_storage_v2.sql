@@ -918,6 +918,27 @@ CREATE TRIGGER delta_gc_record_orphan_prefixes
 BEFORE DELETE ON public.apps
 FOR EACH ROW EXECUTE FUNCTION public.delta_gc_record_orphan_prefixes();
 
+-- An app id created in, or transferred into, an organization owns that
+-- prefix again: its stale cleanup task is retired.
+CREATE FUNCTION public.delta_gc_retire_orphan_prefixes()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  DELETE FROM public.delta_gc_orphan_prefixes
+  WHERE app_id = NEW.app_id AND org = NEW.owner_org::text;
+  RETURN NULL;
+END;
+$$;
+ALTER FUNCTION public.delta_gc_retire_orphan_prefixes() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_retire_orphan_prefixes() FROM PUBLIC;
+
+CREATE TRIGGER delta_gc_retire_orphan_prefixes
+AFTER INSERT OR UPDATE OF owner_org ON public.apps
+FOR EACH ROW EXECUTE FUNCTION public.delta_gc_retire_orphan_prefixes();
+
 -- Claims former-owner prefixes of deleted apps. A prefix whose app id exists
 -- again under that organization is dropped: its objects belong to that app.
 CREATE FUNCTION public.delta_gc_claim_orphan_prefixes(p_limit integer DEFAULT 2)
@@ -1004,9 +1025,17 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  -- The prefix also holds bundle zips: a kept version of a recreated (and
+  -- maybe transferred) app with this id may still point at one.
   SELECT COALESCE(pg_catalog.array_agg(DISTINCT p.path), '{}'::text[]) INTO v_paths
   FROM pg_catalog.unnest(public.delta_gc_deletable_paths(p_paths, p_aliases)) AS p (path)
-  WHERE pg_catalog.starts_with(p.path, p_prefix);
+  WHERE pg_catalog.starts_with(p.path, p_prefix)
+    AND NOT EXISTS (
+      SELECT 1 FROM public.app_versions AS av
+      WHERE av.app_id = v_orphan.app_id
+        AND av.r2_path = p.path
+        AND public.delta_version_keeps_files(av.deleted, av.deleted_at, av.updated_at)
+    );
   -- Retry the page once earlier unsettled deletes are repaired: the task is
   -- dropped after its last page, so nothing may be skipped here.
   IF EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = ANY (v_paths)) THEN

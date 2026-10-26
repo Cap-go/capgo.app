@@ -621,6 +621,26 @@ describe('delta storage v2 legacy guards', () => {
       expect(recreated.rows[0].paths).toBeNull()
       const gone = await client.query('SELECT 1 FROM public.delta_gc_orphan_prefixes WHERE prefix = $1', [own])
       expect(gone.rows).toEqual([])
+
+      // A bundle zip still used by a kept version of this app id stays. A
+      // transferred app keeps its zip in the former owner's prefix, which the
+      // canonical-path guard rejects on insert, so it is bypassed here.
+      const zip = `${orphan}1.0.0.zip`
+      await client.query('SET LOCAL session_replication_role = replica')
+      await client.query(
+        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, checksum, r2_path)
+         VALUES ($1, $2, $3, $4, 'r2', 'c', $5)`,
+        [APP_ID, `zip-${randomUUID().slice(0, 8)}`, ORG_ID, USER_ID, zip],
+      )
+      await client.query('SET LOCAL session_replication_role = origin')
+      const zipBegin = await client.query<{ paths: string[] | null }>('SELECT public.delta_gc_begin_orphan_delete($1, $2::text[], 1000) AS paths', [orphan, [zip]])
+      expect(zipBegin.rows[0].paths).toEqual([])
+
+      // Moving the app id into an organization retires that organization's task.
+      await client.query('INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org) VALUES ($1, $2, $3)', [own, APP_ID, ORG_ID])
+      await client.query('UPDATE public.apps SET owner_org = owner_org WHERE app_id = $1', [APP_ID])
+      const retired = await client.query('SELECT 1 FROM public.delta_gc_orphan_prefixes WHERE prefix = $1', [own])
+      expect(retired.rows).toEqual([])
     })
   })
 
