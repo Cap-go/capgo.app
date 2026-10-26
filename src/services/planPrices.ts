@@ -50,11 +50,14 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
   // True only once the billing currency is known: a failed lookup keeps checkout disabled,
   // since the server would force the customer's pinned currency over the card shown.
   const ready = ref(false)
+  // The lookup settled without prices: the page offers a retry instead of a silent dead end.
+  const failed = ref(false)
   const storedCurrency = ref(readStoredCurrency())
 
-  watch(orgId, async (id) => {
+  async function load(id: string | undefined) {
     data.value = null
     ready.value = false
+    failed.value = false
     if (!id)
       return
     const { data: response, error } = await invokeCapgoApi<PlanPricesResponse>(`private/plan_prices?orgId=${encodeURIComponent(id)}`, { method: 'GET' })
@@ -62,7 +65,14 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
       return
     data.value = !error && response ? response : null
     ready.value = !!data.value
-  }, { immediate: true })
+    failed.value = !data.value
+  }
+
+  watch(orgId, load, { immediate: true })
+
+  function reload() {
+    return load(orgId.value)
+  }
 
   const currencies = computed(() => data.value?.currencies ?? [])
   const lockedCurrency = computed(() => data.value?.lockedCurrency ?? null)
@@ -89,5 +99,5 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     return data.value && currency.value ? getPlanAmounts(data.value.prices, productId, currency.value) : null
   }
 
-  return { amountsFor, currencies, currency, lockedCurrency, lockedCurrencyUnavailable, ready, setCurrency }
+  return { amountsFor, currencies, currency, failed, lockedCurrency, lockedCurrencyUnavailable, ready, reload, setCurrency }
 }

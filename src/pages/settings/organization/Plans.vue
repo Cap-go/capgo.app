@@ -173,7 +173,7 @@ const enterpriseQuote = computed(() => {
 })
 
 // Real Stripe amounts per currency (price currency_options); USD from the plans table until they load.
-const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, setCurrency } = usePlanPrices(billingOrgId)
+const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, failed: pricesFailed, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, reload: reloadPrices, setCurrency } = usePlanPrices(billingOrgId)
 
 function planAmounts(plan: Database['public']['Tables']['plans']['Row']) {
   const stripeAmounts = amountsFor(plan.stripe_id)
@@ -676,6 +676,12 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
               </option>
             </select>
           </label>
+          <p v-if="pricesFailed" data-test="plans-prices-failed" class="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+            {{ t('plans-prices-load-failed') }}
+            <button type="button" class="d-btn d-btn-xs" @click="reloadPrices()">
+              {{ t('retry') }}
+            </button>
+          </p>
           <p v-if="lockedCurrency" data-test="plans-currency-locked" class="text-xs text-gray-500 dark:text-gray-400">
             {{ t(lockedCurrencyUnavailable ? 'plans-currency-unavailable' : 'plans-currency-locked', { currency: lockedCurrency.toUpperCase() }) }}
           </p>

@@ -12,6 +12,8 @@ import { supabaseClient } from '../utils/supabase.ts'
 
 const PLAN_PRICES_CACHE_PATH = '/private/plan_prices'
 const PLAN_PRICES_TTL_SECONDS = 60 * 60
+// A partial catalog is kept only briefly, under its own key, so an outage does not hit Stripe on every page view.
+const PLAN_PRICES_DEGRADED_TTL_SECONDS = 60
 const DEFAULT_CURRENCY = 'usd'
 
 const EURO_COUNTRIES = new Set(['AD', 'AT', 'BE', 'BG', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MC', 'ME', 'MT', 'NL', 'PT', 'SI', 'SK', 'SM', 'VA', 'XK'])
@@ -86,13 +88,14 @@ async function loadPlanPrices(c: Context, authorization: string, billingAccount:
 async function getPlanPrices(c: Context, authorization: string, billingAccount: BillingAccount) {
   const cache = new CacheHelper(c)
   const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount })
+  const degradedKey = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, degraded: '1' })
   const cached = await cache.matchJson<PlanPriceAmounts>(key, { timeoutMs: 200 })
+    ?? await cache.matchJson<PlanPriceAmounts>(degradedKey, { timeoutMs: 200 })
   if (cached)
     return cached
   const { prices, complete } = await loadPlanPrices(c, authorization, billingAccount)
-  // Never cache a partial catalog: the next request retries the failed plans.
-  if (complete)
-    await cache.putJson(key, prices, PLAN_PRICES_TTL_SECONDS, { timeoutMs: 200 })
+  // Never write a partial catalog to the main key: it expires within a minute and the failed plans are retried.
+  await cache.putJson(complete ? key : degradedKey, prices, complete ? PLAN_PRICES_TTL_SECONDS : PLAN_PRICES_DEGRADED_TTL_SECONDS, { timeoutMs: 200 })
   return prices
 }
 
