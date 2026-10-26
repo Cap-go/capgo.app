@@ -1,5 +1,6 @@
 import type Stripe from 'stripe'
 import { describe, expect, it, vi } from 'vitest'
+import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
 import { AUTO_TOP_UP_KIND, handleAutoTopUpInvoicePaid, normalizeAutoTopUpMonthlyLimit, payAutoTopUpInvoice, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
 describe('credit auto top-up decision', () => {
@@ -110,7 +111,12 @@ describe('credit auto top-up invoice', () => {
 
 describe('credit auto top-up invoice webhook', () => {
   const context = { get: () => 'request-id' } as any
-  const event = (invoice: Record<string, unknown>) => ({ type: 'invoice.paid', data: { object: { id: 'in_1', status: 'paid', ...invoice } } }) as unknown as Stripe.Event
+  const event = (invoice: Record<string, unknown>) => ({ type: 'invoice.updated', created: 1_711_925_200, data: { object: { id: 'in_1', object: 'invoice', customer: 'cus_1', status: 'paid', ...invoice } } }) as unknown as Stripe.Event
+
+  it('routes the paid auto top-up invoice to its customer through the webhook extraction', () => {
+    const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 0 })
+    expect(extractDataEvent(context, invoice).data.customer_id).toBe('cus_1')
+  })
 
   it('leaves other invoices to the regular invoice handlers', async () => {
     await expect(handleAutoTopUpInvoicePaid(context, event({ metadata: {}, amount_paid: 0 }), 'org_1')).resolves.toBe(false)

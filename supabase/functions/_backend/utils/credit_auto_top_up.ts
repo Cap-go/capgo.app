@@ -508,8 +508,9 @@ export async function handleAutoTopUpPaymentIntent(c: Context, event: Stripe.Eve
 
 // An auto top-up invoice fully covered by the customer's Stripe balance has no PaymentIntent,
 // so payment_intent.succeeded never fires: grant from the paid invoice, keyed by its id.
+// invoice.updated is the invoice event the webhook routes (it fires when the invoice becomes paid).
 export async function handleAutoTopUpInvoicePaid(c: Context, event: Stripe.Event, orgId: string): Promise<boolean> {
-  if (event.type !== 'invoice.paid' && event.type !== 'invoice.updated')
+  if (event.type !== 'invoice.updated')
     return false
 
   const invoice = event.data.object
