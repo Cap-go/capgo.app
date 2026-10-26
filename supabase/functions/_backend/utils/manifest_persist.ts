@@ -90,10 +90,11 @@ async function persistDeltaStorageRows(
       SELECT count(*) FROM queued`)
   }
 
-  const config = await tx.execute<{ legacy_manifest_writes: boolean }>(sql`
-    SELECT legacy_manifest_writes FROM public.delta_storage_config WHERE id
+  // Vault switch CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES (default on).
+  const config = await tx.execute<{ legacy: boolean }>(sql`
+    SELECT public.delta_storage_legacy_manifest_writes() AS legacy
   `)
-  if (config.rows[0]?.legacy_manifest_writes !== false) {
+  if (config.rows[0]?.legacy !== false) {
     await tx.execute(sql`INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
       SELECT ${record.id}::bigint, entry.file_name, entry.s3_path, entry.file_hash, COALESCE(entry.file_size, 0)
       FROM jsonb_to_recordset(${rowsJson}::jsonb) AS entry(file_name text, s3_path text, file_hash text, file_size bigint)`)

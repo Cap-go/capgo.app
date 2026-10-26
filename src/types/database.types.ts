@@ -1522,26 +1522,20 @@ export type Database = {
           },
         ]
       }
-      delta_storage_config: {
+      delta_storage_state: {
         Row: {
           convert_cursor: number
-          gc_enabled: boolean
           id: boolean
-          legacy_manifest_writes: boolean
           updated_at: string
         }
         Insert: {
           convert_cursor?: number
-          gc_enabled?: boolean
           id?: boolean
-          legacy_manifest_writes?: boolean
           updated_at?: string
         }
         Update: {
           convert_cursor?: number
-          gc_enabled?: boolean
           id?: boolean
-          legacy_manifest_writes?: boolean
           updated_at?: string
         }
         Relationships: []
@@ -4334,6 +4328,12 @@ export type Database = {
         Returns: string[]
       }
       delta_path_key: { Args: { p_s3_path: string }; Returns: string }
+      delta_storage_gc_enabled: { Args: never; Returns: boolean }
+      delta_storage_legacy_manifest_writes: { Args: never; Returns: boolean }
+      delta_storage_setting: {
+        Args: { p_default: boolean; p_name: string }
+        Returns: boolean
+      }
       delta_version_has_entry: {
         Args: { p_file_hash: string; p_s3_path: string; p_version_id: number }
         Returns: boolean

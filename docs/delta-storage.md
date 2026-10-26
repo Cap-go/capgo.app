@@ -13,7 +13,7 @@ reservations and leases).
 | `delta_files` | one per unique `(s3_path, file_name, file_hash)` | path, hash, size. Deduplicated across versions through `entry_key`. |
 | `version_files` | one per version | `file_ids bigint[]`: the ordered `delta_files` ids of the version. Written once, never rewritten. |
 | `version_manifest` (view) | per version entry | Console, CLI, download links and preview read one version through RLS. |
-| `delta_storage_config` | one | rollout switches, converter cursor. Primary only. |
+| `delta_storage_state` | one | converter cursor. Primary only. The rollout switches are Vault secrets. |
 | `delta_gc_state` | one per app | GC schedule, listing cursor, delete lease. Primary only. |
 
 An upload writes one `version_files` row plus only the files the app never
@@ -76,19 +76,19 @@ upload, so one rule covers concurrent uploads and GC:
 2. Deploy. The migration creates the tables, adds them to
    `capgo_google_eu_2_pub`, seeds `delta_gc_state` and drops the unused
    `idx_manifest_file_hash` / `idx_manifest_file_name`. Uploads write both the
-   new tables and legacy rows (`legacy_manifest_writes = true`).
+   new tables and legacy rows (Vault `CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES` absent = on).
 3. On the subscriber:
    `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);`
    Wait until `delta_files` / `version_files` row counts match the primary.
 4. Switch to the new tables only:
-   `UPDATE public.delta_storage_config SET legacy_manifest_writes = false, updated_at = now() WHERE id;`
+   `SELECT vault.create_secret('false', 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES');`
    The `convert_legacy_manifest` cron then moves legacy rows (20 versions every
    10 seconds) and deletes them. Onboarding demo rows (`demo/` paths) stay
    legacy because `onboarding_demo_data` tracks their ids.
 5. Check the R2 lifecycle rules: `deleted-after-7-days/` expires after 7 days
    (already used by bundle zips), and incomplete multipart uploads under
    `orgs/` are aborted after 1 day.
-6. Enable GC: `UPDATE public.delta_storage_config SET gc_enabled = true WHERE id;`
+6. Enable GC: `SELECT vault.create_secret('true', 'CAPGO_DELTA_STORAGE_GC_ENABLED');`
    Apps that still have legacy rows are postponed until converted.
 7. Decommission the inventory: delete the `capgo-r2-inventory-prod` worker, its
    queues (`capgo-r2-inventory-prod`, `-repair`, `-cleanup` and their DLQs), the

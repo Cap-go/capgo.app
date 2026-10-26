@@ -45,16 +45,26 @@ async function versionFiles(versionId: number) {
   return result.rows.map(row => row.s3_path)
 }
 
-// Global switches stay untouched for parallel test files: each case changes them
-// inside its own transaction and rolls back.
+const SWITCHES = {
+  gc_enabled: 'CAPGO_DELTA_STORAGE_GC_ENABLED',
+  legacy_manifest_writes: 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES',
+} as const
+
+async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof SWITCHES, value: boolean) {
+  await client.query('DELETE FROM vault.secrets WHERE name = $1', [SWITCHES[name]])
+  await client.query('SELECT vault.create_secret($1, $2)', [String(value), SWITCHES[name]])
+}
+
+// The Vault switches stay untouched for parallel test files: each case sets
+// them inside its own transaction and rolls back.
 async function withConfig<T>(settings: { gc_enabled?: boolean, legacy_manifest_writes?: boolean }, run: (client: PoolClient) => Promise<T>) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    await client.query(
-      'UPDATE public.delta_storage_config SET gc_enabled = COALESCE($1, gc_enabled), legacy_manifest_writes = COALESCE($2, legacy_manifest_writes) WHERE id',
-      [settings.gc_enabled ?? null, settings.legacy_manifest_writes ?? null],
-    )
+    for (const name of Object.keys(SWITCHES) as Array<keyof typeof SWITCHES>) {
+      if (settings[name] !== undefined)
+        await setSwitch(client, name, settings[name])
+    }
     return await run(client)
   }
   finally {
@@ -105,7 +115,7 @@ describe('delta storage v2 conversion', () => {
     })
 
     await withConfig({ legacy_manifest_writes: false }, async (client) => {
-      await client.query('UPDATE public.delta_storage_config SET convert_cursor = $1 - 1 WHERE id', [versionId])
+      await client.query('UPDATE public.delta_storage_state SET convert_cursor = $1 - 1 WHERE id', [versionId])
       const result = await client.query('SELECT public.convert_legacy_manifest_batch(1, 2000) AS converted')
       expect(result.rows[0].converted).toBe(1)
       const rows = await client.query('SELECT count(*)::int AS count FROM public.manifest WHERE app_version_id = $1', [versionId])
@@ -170,7 +180,7 @@ describe('delta storage v2 GC guards', () => {
       await insertVersion(uploader, { storageProvider: 'r2-direct' })
 
       await collector.query('BEGIN')
-      await collector.query('UPDATE public.delta_storage_config SET gc_enabled = true WHERE id')
+      await setSwitch(collector, 'gc_enabled', true)
       const decision = collector.query<{ paths: string[] }>('SELECT public.delta_gc_begin_delete($1, $2::text[], 1000) AS paths', [APP_ID, [deltaPath('race.js')]])
       // The collector waits on the per-app lock until the upload commits, then sees it.
       await new Promise(resolve => setTimeout(resolve, 300))
