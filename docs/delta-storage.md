@@ -45,6 +45,8 @@ legacy `manifest` rows. The response format is unchanged.
   are skipped, the rest is copied to `deleted-after-7-days/` and deleted.
   A pass lists the current owner's prefix and every former owner's prefix
   found in the app's `delta_files` paths (app transfers do not move objects).
+  Seen prefixes are kept in `delta_gc_state.known_orgs`; a page with a failed
+  delete is listed again.
   Deleting an app records those former-owner prefixes first
   (`delta_gc_orphan_prefixes`); GC then deletes them page by page.
   `on_app_delete` already removes the current owner's prefix.

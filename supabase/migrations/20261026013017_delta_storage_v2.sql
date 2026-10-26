@@ -250,6 +250,9 @@ CREATE TABLE public.delta_gc_state (
   -- walks the current owner plus each organization found in delta_files.
   list_org text,
   pending_orgs text[],
+  -- Every organization prefix seen so far: kept after its delta_files rows
+  -- are gone so leftover objects stay reachable.
+  known_orgs text[] NOT NULL DEFAULT '{}',
   list_cursor text,
   last_run_at timestamptz,
   last_error text
@@ -462,6 +465,8 @@ BEGIN
         SELECT apps.owner_org::text AS org
         FROM public.apps WHERE apps.app_id = checked.app_id
         UNION
+        SELECT pg_catalog.unnest(s.known_orgs)
+        UNION
         SELECT pg_catalog.split_part(df.s3_path, '/', 2)
         FROM public.delta_files AS df
         WHERE df.app_id = checked.app_id AND df.s3_path LIKE 'orgs/%'
@@ -478,7 +483,8 @@ BEGIN
     -- A crashed run is retried after 15 minutes; legacy apps wait for the converter.
     SET next_run_at = now() + CASE WHEN checked.has_legacy_rows THEN interval '1 day' ELSE interval '15 minutes' END,
         list_org = CASE WHEN pass_orgs.app_id IS NULL THEN s.list_org ELSE pass_orgs.orgs[1] END,
-        pending_orgs = CASE WHEN pass_orgs.app_id IS NULL THEN s.pending_orgs ELSE pass_orgs.orgs[2:] END
+        pending_orgs = CASE WHEN pass_orgs.app_id IS NULL THEN s.pending_orgs ELSE pass_orgs.orgs[2:] END,
+        known_orgs = CASE WHEN pass_orgs.app_id IS NULL THEN s.known_orgs ELSE pass_orgs.orgs END
     FROM checked
     LEFT JOIN pass_orgs ON pass_orgs.app_id = checked.app_id
     WHERE s.app_id = checked.app_id
@@ -626,6 +632,10 @@ BEGIN
     SELECT pg_catalog.split_part(df.s3_path, '/', 2) AS org
     FROM public.delta_files AS df
     WHERE df.app_id = OLD.app_id AND df.s3_path LIKE 'orgs/%'
+    UNION
+    SELECT pg_catalog.unnest(state.known_orgs)
+    FROM public.delta_gc_state AS state
+    WHERE state.app_id = OLD.app_id
   ) AS orgs
   WHERE orgs.org <> '' AND orgs.org <> OLD.owner_org::text
   ON CONFLICT (prefix) DO NOTHING;

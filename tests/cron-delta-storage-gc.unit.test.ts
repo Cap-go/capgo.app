@@ -162,6 +162,29 @@ describe('delta storage GC worker', () => {
     expect(finish).toContain('more')
   })
 
+  it('lists a page again when an allowed delete fails', async () => {
+    const old = new Date(Date.now() - 2 * DAY)
+    mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: old }], nextToken: null })
+    mocks.deleteObjectKey.mockResolvedValue(false)
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
+      if (text.includes('delta_gc_claim'))
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'token' }] }
+      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+        return { rows: [{ paths: [`${prefix}a.js`] }] }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+
+    const finish = mocks.execute.mock.calls
+      .map(([query]) => new PgDialect().sqlToQuery(query))
+      .find(query => query.sql.includes('delta_gc_finish('))
+    expect(finish?.params).toEqual(['com.example.gc', 'token', false])
+  })
+
   it('keeps an orphan prefix task when a delete of its page fails', async () => {
     const orphanPrefix = 'orgs/former-org/apps/com.example.gone/'
     mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${orphanPrefix}delta/a.js`, lastModified: new Date() }], nextToken: null })

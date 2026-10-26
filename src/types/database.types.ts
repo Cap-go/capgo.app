@@ -1517,6 +1517,7 @@ export type Database = {
       delta_gc_state: {
         Row: {
           app_id: string
+          known_orgs: string[]
           last_error: string | null
           last_run_at: string | null
           lease_until: string | null
@@ -1527,6 +1528,7 @@ export type Database = {
         }
         Insert: {
           app_id: string
+          known_orgs?: string[]
           last_error?: string | null
           last_run_at?: string | null
           lease_until?: string | null
@@ -1537,6 +1539,7 @@ export type Database = {
         }
         Update: {
           app_id?: string
+          known_orgs?: string[]
           last_error?: string | null
           last_run_at?: string | null
           lease_until?: string | null

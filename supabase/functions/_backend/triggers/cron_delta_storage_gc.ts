@@ -72,7 +72,11 @@ async function unreferencedPaths(db: Database, paths: string[]) {
   return result.rows[0]?.paths ?? []
 }
 
-/** Copies, then deletes inside one lease. Returns the number of deleted objects. */
+/**
+ * Copies, then deletes inside one lease. `complete` is false when an allowed
+ * delete failed or never started: its delta_files row is already gone, so the
+ * page must be listed again rather than skipped.
+ */
 async function trashBatch(c: Context, db: Database, appId: string, paths: string[], deadline: number) {
   const copied: string[] = []
   await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (path) => {
@@ -80,7 +84,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
       copied.push(path)
   })
   if (copied.length === 0)
-    return 0
+    return { deleted: 0, complete: true }
 
   // Measured before the call: the database lease starts no earlier than this.
   const leaseStartedAt = Date.now()
@@ -89,7 +93,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
   `)
   const allowed = begin.rows[0]?.paths ?? []
   if (allowed.length === 0)
-    return 0
+    return { deleted: 0, complete: true }
   const startWindowEnd = leaseStartedAt + DELTA_GC_DELETE_START_WINDOW_MS
   let deleted = 0
   try {
@@ -103,7 +107,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
   }
   if (deleted < allowed.length)
     cloudlog({ requestId: c.get('requestId'), message: 'delta gc deletes left for the next pass', appId, allowed: allowed.length, deleted })
-  return deleted
+  return { deleted, complete: deleted === allowed.length }
 }
 
 async function collectAppPage(c: Context, db: Database, app: ClaimedApp, deadline: number) {
@@ -111,13 +115,17 @@ async function collectAppPage(c: Context, db: Database, app: ClaimedApp, deadlin
   const candidates = await unreferencedPaths(db, selectAgedKeys(objects, Date.now()))
   let deleted = 0
   let processed = 0
+  let allDeleted = true
   while (processed < candidates.length && Date.now() < deadline) {
-    deleted += await trashBatch(c, db, app.app_id, candidates.slice(processed, processed + DELTA_GC_DELETE_BATCH), deadline)
+    const batch = await trashBatch(c, db, app.app_id, candidates.slice(processed, processed + DELTA_GC_DELETE_BATCH), deadline)
+    deleted += batch.deleted
+    allDeleted &&= batch.complete
     processed += DELTA_GC_DELETE_BATCH
   }
 
-  // A page cut short by the run budget is listed again from the same token.
-  const pageDone = processed >= candidates.length
+  // A page cut short by the run budget, or with an allowed delete that did not
+  // happen, is listed again from the same token.
+  const pageDone = processed >= candidates.length && allDeleted
   const nextCursor = pageDone ? nextToken : app.list_cursor
   return { listed: objects.length, candidates: candidates.length, deleted, nextCursor, pageDone }
 }

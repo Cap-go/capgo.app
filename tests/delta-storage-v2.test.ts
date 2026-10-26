@@ -271,6 +271,19 @@ describe('delta storage v2 legacy guards', () => {
         await client.query('SELECT public.delta_gc_finish($1, NULL, NULL)', [APP_ID])
       }
       expect(seen).toEqual([formerOrg, ORG_ID].sort())
+
+      // The former owner stays known after its last delta_files row is gone.
+      await client.query('DELETE FROM public.delta_files WHERE app_id = $1 AND s3_path LIKE $2', [APP_ID, `orgs/${formerOrg}/%`])
+      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() - interval '1 minute' WHERE app_id = $1`, [APP_ID])
+      const again: string[] = []
+      for (let pass = 0; pass < 3; pass++) {
+        const claimed = await client.query<{ list_org: string }>('SELECT list_org FROM public.delta_gc_claim(5)')
+        if (claimed.rows.length === 0)
+          break
+        again.push(claimed.rows[0].list_org)
+        await client.query('SELECT public.delta_gc_finish($1, NULL, NULL)', [APP_ID])
+      }
+      expect(again).toEqual([formerOrg, ORG_ID].sort())
       const state = await client.query(`SELECT list_org, next_run_at > now() + interval '6 days' AS weekly FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
       expect(state.rows[0]).toEqual({ list_org: null, weekly: true })
     })
