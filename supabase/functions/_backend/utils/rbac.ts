@@ -304,7 +304,7 @@ export async function getDeniedChannelIdsForPermission(
     pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(
-      sql`SELECT candidates.id
+      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT candidates.id
         FROM (
           SELECT DISTINCT ch.id, ch.owner_org, ch.app_id
           FROM public.channel_permission_overrides o
