@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { quickError } from '../utils/hono.ts'
@@ -5,8 +6,8 @@ import { getClientIP } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
 
 // The console never talks to Supabase Auth directly: its auth client sends the
-// same GoTrue requests here and this route relays them with the project's anon
-// key. Only the user-facing endpoints are reachable; admin and generate-link
+// same GoTrue requests here and this route relays them with anon-level
+// credentials (see setAuthHeaders). Only the user-facing endpoints are reachable; admin and generate-link
 // endpoints are not, so this is never more than what the browser could already do.
 const ALLOWED_PATHS = [
   /^token$/,
@@ -25,6 +26,9 @@ const ALLOWED_PATHS = [
 ]
 
 const MAX_BODY_BYTES = 64 * 1024
+// A signed session or anon token. Anything else (no header, `Bearer sb_...`) makes
+// the Supabase gateway substitute the role of the apikey header.
+const JWT_BEARER = /^Bearer [\w-]+\.[\w-]+\.[\w-]+$/
 const MOUNT = '/console/auth/'
 
 // Browser headers worth relaying; everything else (cookies, host, origin) stays here.
@@ -46,6 +50,43 @@ export function consoleAuthPath(requestPath: string): string | null {
   return ALLOWED_PATHS.some(pattern => pattern.test(path)) ? path : null
 }
 
+// Supabase Auth keys rate limits, CAPTCHA verification and audit logging on the
+// caller address, so every console user would otherwise share this worker's
+// egress IPs and one client could exhaust the auth limits for all of them.
+// Hosted Supabase only honours Sb-Forwarded-For on requests made with a secret
+// API key (and IP forwarding enabled under Authentication > Rate Limits).
+// A secret apikey alone resolves to service_role, which also skips GoTrue's
+// CAPTCHA check, so Authorization must always carry a signed non-admin token:
+// the user's session, or the project's anon JWT for signed-out requests.
+// Without SUPABASE_ANON_JWT or a Cloudflare client address, keep relaying with
+// the publishable key exactly as the browser would.
+function setAuthHeaders(c: Context<MiddlewareKeyVariables>, headers: Headers) {
+  const anonKey = getEnv(c, 'SUPABASE_ANON_KEY')
+  const sessionHeader = c.req.header('authorization') ?? ''
+  const session = JWT_BEARER.test(sessionHeader) ? sessionHeader : null
+  const secretKey = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
+  const anonJwt = getEnv(c, 'SUPABASE_ANON_JWT')
+  // Only Cloudflare's own header: it cannot be set by the client, x-forwarded-for can.
+  const cfClientIp = c.req.header('cf-connecting-ip')
+
+  if (cfClientIp && secretKey.startsWith('sb_secret_') && JWT_BEARER.test(`Bearer ${anonJwt}`)) {
+    headers.set('apikey', secretKey)
+    headers.set('authorization', session ?? `Bearer ${anonJwt}`)
+    headers.set('x-forwarded-for', cfClientIp)
+    headers.set('sb-forwarded-for', cfClientIp)
+    return
+  }
+
+  headers.set('apikey', anonKey)
+  // A user session when there is one; the anon key is what the SDK sends otherwise.
+  headers.set('authorization', sessionHeader || `Bearer ${anonKey}`)
+  const clientIp = getClientIP(c)
+  if (clientIp !== 'unknown') {
+    headers.set('x-forwarded-for', clientIp)
+    headers.set('sb-forwarded-for', clientIp)
+  }
+}
+
 // Mounted under the console data app, which already applies CORS.
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -54,7 +95,6 @@ app.all('/*', async (c) => {
   if (!path)
     return quickError(404, 'unsupported_auth_endpoint', 'Unsupported auth endpoint')
 
-  const anonKey = getEnv(c, 'SUPABASE_ANON_KEY')
   const upstream = new URL(`${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`)
   upstream.search = new URL(c.req.url).search
 
@@ -64,18 +104,7 @@ app.all('/*', async (c) => {
     if (value)
       headers.set(name, value)
   }
-  headers.set('apikey', anonKey)
-  // A user session when there is one; the anon key is what the SDK sends otherwise.
-  headers.set('authorization', c.req.header('authorization') ?? `Bearer ${anonKey}`)
-  // Supabase Auth keys rate limits, CAPTCHA verification and audit logging on the
-  // caller address. Hand it the browser's address, not ours, through both the
-  // header GoTrue has always read and the one it trusts behind proxies when
-  // GOTRUE_SECURITY_SB_FORWARDED_FOR_ENABLED is on.
-  const clientIp = getClientIP(c)
-  if (clientIp !== 'unknown') {
-    headers.set('x-forwarded-for', clientIp)
-    headers.set('sb-forwarded-for', clientIp)
-  }
+  setAuthHeaders(c, headers)
 
   let body: ArrayBuffer | undefined
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
