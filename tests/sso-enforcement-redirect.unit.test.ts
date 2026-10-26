@@ -73,6 +73,17 @@ describe('sso enforcement redirect handling', () => {
     mockSignOut.mockResolvedValue({ error: null })
   })
 
+  it('checks persisted Apple sessions when an organization requires SSO', async () => {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'apple-session', user: { id: 'apple-user', email: 'apple@example.com', app_metadata: { provider: 'apple' } } } } })
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ allowed: false }) } as Response)
+    const guard = await getGuard()
+    const next = vi.fn()
+    await guard({ path: '/dashboard' }, {}, next)
+    expect(fetch).toHaveBeenCalled()
+    expect(mockSignOut).toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith('/login?sso_required=true')
+  })
+
   it('redirects to a technical error when the enforcement endpoint returns a non-ok response', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: false,

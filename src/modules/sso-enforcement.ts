@@ -64,7 +64,8 @@ export const install: UserModule = ({ router }) => {
       return next()
 
     const provider = session.user.app_metadata?.provider
-    if (provider && provider !== 'email')
+    // Sessions created before Apple sign-in was removed still need SSO enforcement.
+    if (provider && provider !== 'email' && provider !== 'apple')
       return next()
 
     const userId = session.user.id
