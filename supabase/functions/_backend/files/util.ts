@@ -71,6 +71,36 @@ export function encodeR2KeyForUploadLocation(r2Key: string): string {
   return r2Key.split('/').map(segment => encodeURIComponent(segment)).join('/')
 }
 
+const ENCODED_DOT_RE = /%2e/gi
+
+function isDotPathSegment(segment: string): boolean {
+  // `%2e` is treated as `.` by URL parsers, so encoded dot segments count too.
+  const normalized = segment.replace(ENCODED_DOT_RE, '.')
+  return normalized === '.' || normalized === '..'
+}
+
+/**
+ * True when an attachment storage key cannot be reinterpreted as another key:
+ * no empty, `.` or `..` segments (plain or percent-encoded), no encoded
+ * separators, no backslashes and no NUL bytes.
+ */
+export function isSafeAttachmentKey(key: string): boolean {
+  if (!key || key.startsWith('/') || key.includes('\\') || key.includes('\0') || /%(?:2f|5c)/i.test(key))
+    return false
+
+  return key.split('/').every(segment => segment !== '' && !isDotPathSegment(segment))
+}
+
+/** Decode the attachment key carried by an upload URL path suffix, or null when it is malformed. */
+export function decodeUploadLocationKey(encodedKey: string): string | null {
+  try {
+    return encodedKey.split('/').map(segment => decodeURIComponent(segment)).join('/')
+  }
+  catch {
+    return null
+  }
+}
+
 export function getAttachmentReadCandidateKeys(decodedKey: string, rawRouteKey: string | null | undefined): string[] {
   const candidates = [decodedKey]
   if (rawRouteKey && rawRouteKey !== decodedKey) {
@@ -94,7 +124,7 @@ export function parseAppScopedAttachmentPath(fileId: unknown): AppScopedAttachme
     return null
   }
 
-  if (!owner_org || apps !== 'apps' || !app_id || suffix.length === 0 || suffix.some(part => part.length === 0)) {
+  if (!owner_org || apps !== 'apps' || !app_id || suffix.length === 0 || !isSafeAttachmentKey(fileId)) {
     return { kind: 'invalid_scoped' }
   }
 
