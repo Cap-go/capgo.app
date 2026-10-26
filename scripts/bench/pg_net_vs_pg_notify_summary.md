@@ -32,13 +32,15 @@ reconnecting are lost. pg_net keeps them in `net.http_request_queue`.
   4 CPU / 4 GB container.
 - Relay: Bun + `pg`, `LISTEN` → `fetch` POST, 1 CPU / 256 MB container.
 - Sink: Bun HTTP server on the same Docker network (no host NAT).
-- pgbench, 20 000 transactions per run, same body and headers as
-  `process_function_queue`.
+- Load: pgbench in its own 2 CPU container, 20 000 transactions per run, same
+  body and headers as `process_function_queue`.
   - `enqueue_only`: one `SELECT net.http_post(...)` / `SELECT pg_notify(...)`.
   - `update_plus_enqueue`: `BEGIN; UPDATE` a row; enqueue; `COMMIT` (the
     trigger shape of the cache purge wake).
 - Database CPU is the whole db container cgroup (includes the pg_net worker
-  and the relay's backend). Baseline is the same transaction with no enqueue.
+  and the relay's backend, not pgbench). Baseline is the same transaction with
+  no enqueue.
+- Delivery time runs from the first enqueue until the sink has every request.
 
 ## Results
 
@@ -46,52 +48,52 @@ reconnecting are lost. pg_net keeps them in `net.http_request_queue`.
 
 | Clients | Variant | TPS | Avg latency | DB CPU / tx |
 | ---: | --- | ---: | ---: | ---: |
-| 1 | baseline | 5 432 | 0.18 ms | 0.109 ms |
-| 1 | pg_net | 3 576 | 0.28 ms | 0.287 ms |
-| 1 | pg_notify | 4 404 | 0.23 ms | 0.160 ms |
-| 16 | baseline | 27 727 | 0.58 ms | 0.134 ms |
-| 16 | pg_net | 26 137 | 0.61 ms | 0.251 ms |
-| 16 | **pg_notify** | **8 315** | **1.92 ms** | 0.206 ms |
-| 64 | baseline | 30 354 | 2.11 ms | 0.137 ms |
-| 64 | pg_net | 24 550 | 2.61 ms | 0.256 ms |
-| 64 | **pg_notify** | **8 167** | **7.84 ms** | 0.229 ms |
+| 1 | baseline | 4 999 | 0.20 ms | 0.077 ms |
+| 1 | pg_net | 3 685 | 0.27 ms | 0.251 ms |
+| 1 | pg_notify | 4 315 | 0.23 ms | 0.116 ms |
+| 16 | baseline | 29 426 | 0.54 ms | 0.096 ms |
+| 16 | pg_net | 33 245 | 0.48 ms | 0.209 ms |
+| 16 | **pg_notify** | **7 317** | **2.19 ms** | 0.169 ms |
+| 64 | baseline | 45 829 | 1.40 ms | 0.094 ms |
+| 64 | pg_net | 28 683 | 2.23 ms | 0.257 ms |
+| 64 | **pg_notify** | **8 055** | **7.95 ms** | 0.166 ms |
 
-With concurrent writers, `pg_notify` cuts write throughput by about 3× and
-triples commit latency. During the 64-client run, 61 of 64 backends waited on
-`Lock:object`: one `AccessExclusiveLock` on `pg_database` object 0. That is
-the single, database-wide lock NOTIFY takes in `PreCommit_Notify`, and it stays
-held through the commit's WAL flush. So every transaction that notifies commits
-one at a time. pg_net only inserts a row into an unlogged table and has no
-global lock.
+With concurrent writers, `pg_notify` cuts write throughput by 3.5–4.5× compared
+with pg_net and raises commit latency by the same factor. During a 64-client
+run, 61 of 64 backends waited on `Lock:object`: one `AccessExclusiveLock` on
+`pg_database` object 0. That is the single, database-wide lock NOTIFY takes in
+`PreCommit_Notify`, and it stays held through the commit's WAL flush. So every
+transaction that notifies commits one at a time. pg_net only inserts a row
+into an unlogged table and has no global lock.
 
 ### Enqueue alone (`enqueue_only`)
 
 | Clients | Variant | TPS | Avg latency | DB CPU / tx |
 | ---: | --- | ---: | ---: | ---: |
-| 1 | pg_net | 8 986 | 0.111 ms | 0.200 ms |
-| 1 | pg_notify | 19 948 | 0.050 ms | 0.060 ms |
-| 16 | pg_net | 83 284 | 0.192 ms | 0.140 ms |
-| 16 | pg_notify | 35 663 | 0.449 ms | 0.068 ms |
-| 64 | pg_net | 64 575 | 0.991 ms | 0.161 ms |
-| 64 | pg_notify | 41 096 | 1.557 ms | 0.069 ms |
+| 1 | pg_net | 8 997 | 0.111 ms | 0.195 ms |
+| 1 | pg_notify | 19 842 | 0.050 ms | 0.046 ms |
+| 16 | pg_net | 112 077 | 0.143 ms | 0.142 ms |
+| 16 | pg_notify | 42 162 | 0.379 ms | 0.050 ms |
+| 64 | pg_net | 78 170 | 0.819 ms | 0.172 ms |
+| 64 | pg_notify | 24 842 | 2.576 ms | 0.091 ms |
 
 ### Resources and delivery
 
 | | pg_net | pg_notify + relay |
 | --- | --- | --- |
-| DB CPU above baseline, per request | 0.12–0.18 ms | 0.04–0.09 ms |
-| Worker CPU | pg_net worker ≈ 0.055 ms / request (1.1 s per 20k) | relay backend ≈ 0.01–0.02 ms / request in Postgres, relay process ≈ 0.025–0.065 ms / request outside it |
-| Memory | pg_net worker ≈ 10 MB anon, inside Postgres | relay ≈ 40 MB (separate host) + one backend |
-| WAL on the write path | +9 to +16 B / tx (the queue table is unlogged) | +0 to +2 B / tx |
-| Table growth | ≈ 0.5 KB / request in `net._http_response` (10 MB per 20k), truncated hourly by `cleanup_net_http_response` | none |
-| Delivery of a 20k burst | ≈ 100 s: about 200 req/s, `pg_net.batch_size` (200) per worker loop | < 1 s |
-| Delivery of a 5k burst, 50 ms endpoint | 25.6 s | 0.9 s |
+| DB CPU above baseline, per request | 0.11–0.18 ms | 0.03–0.07 ms |
+| Worker CPU | pg_net worker ≈ 0.06–0.07 ms / request (1.2–1.5 s per 20k) | relay backend ≈ 0.01–0.02 ms / request in Postgres, relay process ≈ 0.025–0.07 ms / request outside it |
+| Memory | pg_net worker ≈ 10 MB anon, inside Postgres | relay ≈ 42 MB (separate host) + one backend |
+| WAL on the write path | +12 to +16 B / tx (the queue table is unlogged) | +0 to +5 B / tx |
+| Table growth | ≈ 0.5–0.8 KB / request in `net._http_response` (10–16 MB per 20k), truncated hourly by `cleanup_net_http_response` | none |
+| 20k burst, first enqueue → all delivered | ≈ 101–103 s: about 200 req/s, `pg_net.batch_size` (200) per worker loop | 0.6–4.7 s (as fast as pgbench enqueues; ≤ 24 ms after the last commit) |
+| 5k burst, 50 ms endpoint | 25.6–26.7 s | 1.1–1.2 s |
 | Relay down | requests wait in the queue | notifications lost |
 
 ## Production impact
 
 At production volume (a few wakes per second at peak, ≤ 10 per queue per 10 s
-tick), the CPU saving is about 0.1 ms per request. At 10 requests/s that is
+tick), the CPU saving is about 0.1 ms per request (0.08–0.14 ms). At 10 requests/s that is
 ≈ 1 ms of CPU per second, about 0.1 % of one core. Memory saved inside
 Postgres: ≈ 10 MB (the pg_net worker). `net._http_response` bloat is already
 handled by the hourly truncate.
@@ -99,7 +101,7 @@ handled by the hourly truncate.
 In exchange, `pg_notify` would:
 
 - serialize commits of every write that fires the `/updates` cache purge
-  trigger (≈ 3× lower throughput, ≈ 3× higher commit latency under
+  trigger (3.5–4.5× lower throughput and higher commit latency under
   concurrency);
 - need a new always-on service, its deploy and monitoring, and a direct
   session connection to the primary;

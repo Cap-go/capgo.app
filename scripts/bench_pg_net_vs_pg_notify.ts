@@ -9,10 +9,11 @@
 //   - relay: a Bun process that LISTENs and forwards each payload as an HTTP
 //            POST (1 CPU, 256 MB). pg_notify cannot send HTTP itself, so a
 //            production switch needs this always-on process.
-// For each variant it runs pgbench inside the db container and reports caller
-// latency, TPS, WAL per transaction, database CPU (db container cgroup), pg_net
-// worker CPU / memory, relay CPU / memory, net.* table growth and the time to
-// deliver the whole burst (BENCH_SINK_DELAY_MS adds endpoint latency). Containers are removed at the end
+//   - load:  pgbench in its own container (2 CPU), so the load generator's CPU
+//            is not counted as database CPU
+// For each variant it reports caller latency, TPS, WAL per transaction, database CPU (db container cgroup), pg_net
+// worker CPU / memory, relay CPU / memory, net.* table growth and the time
+// from the first enqueue until the sink received the whole burst (BENCH_SINK_DELAY_MS adds endpoint latency). Containers are removed at the end
 // (BENCH_KEEP=1 keeps them).
 
 import { spawn } from 'node:child_process'
@@ -26,6 +27,7 @@ const NETWORK = 'pgnet-bench'
 const DB = 'pgnet-bench-db'
 const SINK = 'pgnet-bench-sink'
 const RELAY = 'pgnet-bench-relay'
+const LOAD = 'pgnet-bench-load'
 const DB_PORT = Number(process.env.BENCH_DB_PORT ?? 55439)
 const SINK_PORT = Number(process.env.BENCH_SINK_PORT ?? 18080)
 const HOST_PG_URL = `postgres://supabase_admin:postgres@127.0.0.1:${DB_PORT}/postgres`
@@ -148,11 +150,12 @@ async function sinkCount() {
   return ((await res.json()) as { count: number }).count
 }
 
+/** Resolves with the performance.now() at which the sink had every request. */
 async function waitDelivered(target: number, timeoutMs = 300_000) {
   const start = performance.now()
   while (performance.now() - start < timeoutMs) {
     if (await sinkCount() >= target)
-      return Math.round(performance.now() - start)
+      return performance.now()
     await Bun.sleep(5)
   }
   return Number.NaN
@@ -176,7 +179,7 @@ async function waitForDb() {
 }
 
 async function removeContainers() {
-  await sh('docker', ['rm', '-f', RELAY, SINK, DB])
+  await sh('docker', ['rm', '-f', LOAD, RELAY, SINK, DB])
   await sh('docker', ['network', 'rm', NETWORK])
 }
 
@@ -188,6 +191,7 @@ async function startContainers() {
   await bun(SINK, 'sink', ['--cpus=2', '-p', `${SINK_PORT}:8080`, '-e', `BENCH_SINK_DELAY_MS=${SINK_DELAY_MS}`])
   await waitForDb()
   await bun(RELAY, 'relay', ['--cpus=1', '--memory=256m'])
+  await docker(['run', '-d', '--name', LOAD, '--network', NETWORK, '--cpus=2', '-e', 'PGPASSWORD=postgres', '--entrypoint', 'sleep', IMAGE, 'infinity'])
 }
 
 interface Result {
@@ -199,7 +203,10 @@ interface Result {
   latencyAvgMs: number
   walBytesPerTx: number
   dbCpuMsPerTx: number
-  drainMs: number
+  /** First enqueue -> sink received every request. */
+  deliveredMs: number
+  /** pgbench end -> sink received every request. */
+  drainAfterEnqueueMs: number
   delivered: number
   pgNetWorkerCpuMs?: number
   pgNetWorkerAnonKb?: number
@@ -242,15 +249,17 @@ async function main() {
         await fetch(`http://127.0.0.1:${SINK_PORT}/reset`)
         await Bun.sleep(500)
 
-        await exec(DB, ['sh', '-c', 'cat > /tmp/bench.sql'], pgbenchScript(variant, workload))
+        await exec(LOAD, ['sh', '-c', 'cat > /tmp/bench.sql'], pgbenchScript(variant, workload))
         const walStart = (await db.query(`SELECT pg_current_wal_insert_lsn() AS lsn`)).rows[0].lsn
         const dbStart = await cgroup(DB)
         const relayStart = await cgroup(RELAY)
         const workerStart = await proc(workerPid)
         const relayBackendStart = await proc(relayBackendPid)
 
-        const out = await exec(DB, ['pgbench', '-n', '-U', 'supabase_admin', '-h', '127.0.0.1', '-d', 'postgres', '-c', String(clients), '-j', String(Math.min(clients, 4)), '-t', String(perClient), '-M', 'prepared', '-f', '/tmp/bench.sql'])
-        const drainMs = variant === 'baseline' ? 0 : await waitDelivered(tx)
+        const enqueueStart = performance.now()
+        const out = await exec(LOAD, ['pgbench', '-n', '-U', 'supabase_admin', '-h', DB, '-d', 'postgres', '-c', String(clients), '-j', String(Math.min(clients, 4)), '-t', String(perClient), '-M', 'prepared', '-f', '/tmp/bench.sql'])
+        const enqueueEnd = performance.now()
+        const deliveredAt = variant === 'baseline' ? enqueueEnd : await waitDelivered(tx)
         // pg_net writes each response row after the request; let it settle.
         await Bun.sleep(1000)
 
@@ -272,7 +281,8 @@ async function main() {
           // Includes the pg_net worker and the relay's backend: all of it is
           // database CPU.
           dbCpuMsPerTx: Number(((dbEnd.cpuMs - dbStart.cpuMs) / tx).toFixed(4)),
-          drainMs,
+          deliveredMs: Math.round(deliveredAt - enqueueStart),
+          drainAfterEnqueueMs: Math.round(deliveredAt - enqueueEnd),
           delivered: await sinkCount(),
         }
         if (variant === 'pg_net') {
