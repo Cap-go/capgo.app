@@ -10,8 +10,8 @@ import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
 import SsoRoleMappingDialog from '~/components/organizations/SsoRoleMappingDialog.vue'
 import Spinner from '~/components/Spinner.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
 
@@ -56,7 +56,7 @@ const props = defineProps<{
 const SHARE_DIALOG_ID = 'sso-share-provider'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 const organizationStore = useOrganizationStore()
 
@@ -132,7 +132,7 @@ const pendingVerificationProvider = computed(() => {
 })
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  const { data: currentSession } = await supabase.auth.getSession()
+  const { data: currentSession } = await capgo.auth.getSession()
   if (!currentSession.session)
     throw new Error('Not authenticated')
 
@@ -141,7 +141,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     'authorization': `Bearer ${currentSession.session.access_token}`,
   }
 }
-// Backend errors carry a human readable `message` (e.g. why Supabase Auth could
+// Backend errors carry a human readable `message` (e.g. why the auth provider could
 // not load the IdP metadata); show it instead of the bare error code.
 async function readApiError(response: Response, fallback: string): Promise<string> {
   const errorData = await response.json().catch(() => ({})) as { error?: string, message?: string }

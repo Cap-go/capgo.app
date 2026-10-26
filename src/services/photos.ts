@@ -5,10 +5,10 @@ import { setErrors } from '@formkit/core'
 import mime from 'mime'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { useConsole } from './console'
 import { createSignedImageUrl } from './storage'
-import { useSupabase } from './supabase'
 
-const supabase = useSupabase()
+const capgo = useConsole()
 const SIGNED_IMAGE_STORAGE_PATH_REGEX = /\/storage\/v1\/object\/(?:public\/|sign\/)?images\/(.+)$/
 const LEADING_SLASHES_REGEX = /^\/+/
 const IMAGES_PREFIX_REGEX = /^images\//
@@ -61,7 +61,7 @@ async function uploadPhotoShared(
   isLoading: Ref<boolean>,
   callback: (success: boolean, storagePath: string, signedUrl: string) => Promise<void>,
 ) {
-  const { error } = await supabase.storage
+  const { error } = await capgo.storage
     .from('images')
     .upload(storagePath, base64ToArrayBuffer(data), {
       contentType,
@@ -94,7 +94,7 @@ async function uploadPhotoUser(formId: string, data: string, fileName: string, c
     }
 
     let previousImagePath = ''
-    const { data: currentUser, error: currentUserError } = await supabase
+    const { data: currentUser, error: currentUserError } = await capgo
       .from('users')
       .select('image_url')
       .eq('id', safeUserId)
@@ -104,7 +104,7 @@ async function uploadPhotoUser(formId: string, data: string, fileName: string, c
     else
       previousImagePath = normalizeImageStoragePath(currentUser?.image_url)
 
-    const { data: usr, error: dbError } = await supabase
+    const { data: usr, error: dbError } = await capgo
       .from('users')
       .update({ image_url: storagePath })
       .eq('id', safeUserId)
@@ -114,7 +114,7 @@ async function uploadPhotoUser(formId: string, data: string, fileName: string, c
     if (!usr || dbError) {
       setErrors(formId, [wentWrong], {})
       console.error('upload error', dbError)
-      const { error: cleanupUploadError } = await supabase
+      const { error: cleanupUploadError } = await capgo
         .storage
         .from('images')
         .remove([storagePath])
@@ -124,7 +124,7 @@ async function uploadPhotoUser(formId: string, data: string, fileName: string, c
     }
 
     if (previousImagePath && previousImagePath !== storagePath) {
-      const { error: deletePreviousImageError } = await supabase
+      const { error: deletePreviousImageError } = await capgo
         .storage
         .from('images')
         .remove([previousImagePath])
@@ -155,7 +155,7 @@ async function uploadPhotoOrg(formId: string, data: string, fileName: string, co
       return
     }
 
-    const { data: usr, error: dbError } = await supabase
+    const { data: usr, error: dbError } = await capgo
       .from('orgs')
       .update({ logo: storagePath })
       .eq('id', safeGid)
@@ -185,7 +185,7 @@ export async function uploadOrgLogoFile(orgId: string, file: Blob, fileName?: st
   const targetFileName = fileName ?? `${Date.now()}.${extension}`
   const storagePath = `org/${safeOrgId}/logo/${targetFileName}`
 
-  const { error: uploadError } = await supabase.storage
+  const { error: uploadError } = await capgo.storage
     .from('images')
     .upload(storagePath, file, {
       contentType: file.type || undefined,
@@ -195,7 +195,7 @@ export async function uploadOrgLogoFile(orgId: string, file: Blob, fileName?: st
   if (uploadError)
     throw uploadError
 
-  const { data: updatedOrg, error: updateError } = await supabase
+  const { data: updatedOrg, error: updateError } = await capgo
     .from('orgs')
     .update({ logo: storagePath })
     .eq('id', safeOrgId)
@@ -203,7 +203,7 @@ export async function uploadOrgLogoFile(orgId: string, file: Blob, fileName?: st
     .single()
 
   if (updateError || !updatedOrg) {
-    const { error: cleanupError } = await supabase.storage
+    const { error: cleanupError } = await capgo.storage
       .from('images')
       .remove([storagePath])
     if (cleanupError)

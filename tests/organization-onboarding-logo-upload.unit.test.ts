@@ -22,10 +22,10 @@ vi.mock('~/services/formatLocale', () => ({ formatNumberValue: (value: number) =
 vi.mock('~/services/onboardingAppCreate', () => ({ createOnboardingAppFromDraft: vi.fn() }))
 vi.mock('~/services/photos', () => ({ uploadOrgLogoFile: mocks.uploadOrgLogoFile }))
 vi.mock('~/services/posthog', () => ({ pushEvent: vi.fn() }))
-vi.mock('~/services/supabase', () => ({
-  getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app' }),
+vi.mock('~/services/console', () => ({
+  getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
   isLocal: () => false,
-  useSupabase: () => ({}),
+  useConsole: () => ({}),
 }))
 vi.mock('~/stores/display', () => ({ useDisplayStore: () => ({ NavTitle: '', defaultBack: '' }) }))
 vi.mock('~/stores/main', () => ({

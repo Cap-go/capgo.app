@@ -1,5 +1,5 @@
-import type { Json } from '~/types/supabase.types'
-import { useSupabase } from '~/services/supabase'
+import type { Json } from '~/types/database.types'
+import { useConsole } from '~/services/console'
 import { USER_ONBOARDING_INTENTS, USER_ONBOARDING_PROGRESS_FIELDS } from '~/utils/userOnboardingProgress'
 
 const onboardingWriteChains = new Map<string, Promise<void>>()
@@ -67,7 +67,7 @@ export async function replaceUserOnboardingIfUnchanged(
   expectedOnboarding: Json,
   onboarding: Json,
 ) {
-  return useSupabase()
+  return useConsole()
     .from('users')
     .update({ onboarding })
     .eq('id', userId)
@@ -90,7 +90,7 @@ export async function replaceUserOnboardingWithRetry(
   retryError?: (error: unknown) => boolean,
 ): Promise<ReplaceUserOnboardingWithRetryResult> {
   let currentOnboarding = initialOnboarding
-  const supabase = useSupabase()
+  const capgo = useConsole()
 
   for (let attempt = 0; attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS; attempt++) {
     if (!shouldContinue(currentOnboarding))
@@ -107,7 +107,7 @@ export async function replaceUserOnboardingWithRetry(
     if (data)
       return { status: 'persisted', onboarding: data.onboarding }
 
-    const { data: latest, error: latestError } = await supabase.from('users').select('onboarding').eq('id', userId).maybeSingle()
+    const { data: latest, error: latestError } = await capgo.from('users').select('onboarding').eq('id', userId).maybeSingle()
     if (latestError || !latest)
       return { status: 'error', error: latestError ?? new Error('onboarding_write_missing_user') }
 

@@ -1,4 +1,4 @@
-import type { Session } from '@supabase/supabase-js'
+import type { Session } from '~/services/consoleClient'
 import { ref } from 'vue'
 import { provisionSsoUser } from '~/services/ssoProvisioning'
 

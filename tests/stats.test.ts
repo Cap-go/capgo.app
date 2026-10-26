@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types.ts'
+import type { Database } from '../src/types/database.types.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 
@@ -583,7 +583,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
       const overrideChannelName = `beta-${shortId}`
       await resetAndSeedAppData(appId)
       await resetAndSeedAppDataStats(appId)
-      const supabase = getSupabaseClient()
+      const capgo = getSupabaseClient()
 
       try {
         const baseData = getBaseData(appId) as StatsPayload
@@ -595,7 +595,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         const version = await createAppVersions(baseData.version_build, appId)
         baseData.version_name = version.name
 
-        const { data: channel, error: channelError } = await supabase
+        const { data: channel, error: channelError } = await capgo
           .from('channels')
           .insert({
             app_id: appId,
@@ -609,7 +609,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         expect(channelError).toBeNull()
         expect(channel).toBeTruthy()
 
-        await supabase
+        await capgo
           .from('channel_devices')
           .insert({
             app_id: appId,
@@ -619,7 +619,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           })
           .throwOnError()
 
-        await supabase
+        await capgo
           .from('apps')
           .update({ channel_device_count: 1 })
           .eq('app_id', appId)
@@ -629,7 +629,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         expect(response.status).toBe(200)
         expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
 
-        const { data: usage, error: usageError } = await supabase
+        const { data: usage, error: usageError } = await capgo
           .from('version_usage')
           .select('channel_id, channel_name')
           .eq('app_id', appId)
@@ -654,7 +654,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
       const spoofedChannelName = `private-${shortId}`
       await resetAndSeedAppData(appId)
       await resetAndSeedAppDataStats(appId)
-      const supabase = getSupabaseClient()
+      const capgo = getSupabaseClient()
 
       try {
         const baseData = getBaseData(appId) as StatsPayload
@@ -666,7 +666,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         const version = await createAppVersions(baseData.version_build, appId)
         baseData.version_name = version.name
 
-        const { error: channelError } = await supabase
+        const { error: channelError } = await capgo
           .from('channels')
           .insert({
             app_id: appId,
@@ -681,7 +681,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         expect(response.status).toBe(200)
         expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
 
-        const { data: usage, error: usageError } = await supabase
+        const { data: usage, error: usageError } = await capgo
           .from('version_usage')
           .select('channel_name')
           .eq('app_id', appId)
@@ -913,7 +913,7 @@ describe('rollout trigger metadata', () => {
     const appId = `${APP_NAME}.rollout.failcohort.${shortId}`
     await resetAndSeedAppData(appId)
     await resetAndSeedAppDataStats(appId)
-    const supabase = getSupabaseClient()
+    const capgo = getSupabaseClient()
 
     try {
       const version = await createAppVersions(`1.0.0-failcohort-${shortId}.1`, appId)
@@ -938,7 +938,7 @@ describe('rollout trigger metadata', () => {
         expect(responseData).toEqual({ status: 'ok' })
       }
 
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('version_usage')
         .select('action')
         .eq('app_id', appId)

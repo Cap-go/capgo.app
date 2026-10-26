@@ -42,7 +42,9 @@ import { readBuilderOnlyInitAssignment, tryBuilderOnlyInit } from './builder-set
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { selectOnboardingChannel } from './channel-selection'
 import { assertNoWindowsCommandLineBreaks, createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, spawnCommand as spawn, spawnCommandSync as spawnSync, waitForCommandResult } from './command-execution'
+import { printInitCompletionNotice } from './completion-notice'
 import { reportInitOnboardingStep } from './onboarding-report'
+import { enableInitOtaChecklist } from './ota-checklist'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
@@ -5464,7 +5466,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   flushDeferredCommandInvocation(options.apikey)
   activeInitTelemetry?.setAuth('', options.apikey)
 
-  const handoffBuilderOnlySetup = (targetAppId: string | undefined, projectDir = initialCwd) => tryBuilderOnlyInit(targetAppId, options, {
+  const handoffBuilderOnlySetup = (targetAppId: string | undefined, projectDir = initialCwd, knownBuilderOnly = false) => tryBuilderOnlyInit(targetAppId, options, {
+    knownBuilderOnly,
     warn: pLog.warn,
     beforeLaunch: async () => {
       await finishActiveCliReplay()
@@ -5726,7 +5729,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   if (appId)
     globalAppId = appId
   activeInitTelemetry?.setScope(appId)
-  if (pendingOnboardingSelection.builderOnly && await handoffBuilderOnlySetup(appId, selectedProjectDir))
+  if (pendingOnboardingSelection.builderOnly && await handoffBuilderOnlySetup(appId, selectedProjectDir, true))
     return
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
   selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
@@ -5763,8 +5766,13 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       activeInitTelemetry?.setScope(appId)
       if (await handoffBuilderOnlySetup(appId, selectedProjectDir))
         return
-      markStepDone(1)
     }
+
+    // Match the OTA flow actually entered, including the existing fallback when
+    // optional assignment detection fails. Positive Builder handoffs return above.
+    await enableInitOtaChecklist(appId, options, undefined, pLog.warn)
+    if (stepToSkip < 1)
+      markStepDone(1)
 
     if (stepToSkip < 2) {
       renderCurrentStep(2)
@@ -5904,5 +5912,6 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const didChooseSkills = await maybeInstallCapgoSkills()
   await maybeStarCapgoRepo(didChooseSkills).catch(error => pLog.warn(`Cannot offer GitHub support actions: ${formatError(error)}`))
   pOutro(`Bye 👋`)
+  await printInitCompletionNotice(appId, client, localConfig.hostWeb, options)
   return await exitAfterFinishingReplay('completed', 0)
 }

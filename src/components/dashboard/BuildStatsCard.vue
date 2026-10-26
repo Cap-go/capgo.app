@@ -14,7 +14,7 @@ import {
   emptyBuildSeries,
   fetchAllRows,
 } from '~/services/buildCharts'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps({
   appId: { type: String, default: '' },
@@ -28,7 +28,7 @@ const props = defineProps({
 const emit = defineEmits<{ 'update:loading': [value: boolean] }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 interface BuildRow { created_at: string | null, platform: string | null, status: string | null }
 interface BuildStatsResult { dataBySeries: BuildSeriesData, total: number, evolution: number }
@@ -36,7 +36,7 @@ interface BuildStatsResult { dataBySeries: BuildSeriesData, total: number, evolu
 const { isLoading, result } = useBuildCardStats<BuildStatsResult>(props, emit, {
   empty: () => ({ dataBySeries: emptyBuildSeries(), total: 0, evolution: 0 }),
   load: async (window) => {
-    const rows = await fetchAllRows<BuildRow>((from, to) => supabase
+    const rows = await fetchAllRows<BuildRow>((from, to) => capgo
       .from('build_requests')
       .select('created_at, platform, status')
       .eq(props.orgId ? 'owner_org' : 'app_id', props.orgId || props.appId)

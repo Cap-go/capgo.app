@@ -12,9 +12,9 @@ import { toast } from 'vue-sonner'
 import IconBolt from '~icons/heroicons/bolt'
 import BillingModal from '~/components/billing/BillingModal.vue'
 import { getCapgoApiErrorName } from '~/services/capgoApi'
+import { getLocalConfig } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
 import { formatStripeAmount, startTrialPlanNow } from '~/services/stripe'
-import { getLocalConfig } from '~/services/supabase'
 
 const props = defineProps<{
   orgId: string
@@ -43,7 +43,7 @@ const price = computed(() => formatStripeAmount(props.plan.amount, props.plan.cu
 const cardLabel = computed(() => `${props.card.brand.charAt(0).toUpperCase()}${props.card.brand.slice(1)} •••• ${props.card.last4}`)
 
 function track(event: string) {
-  pushEvent(event, config.supaHost, {
+  pushEvent(event, config.apiHost, {
     org_id: startOrgId,
     source: props.source,
     plan: props.plan.planName,

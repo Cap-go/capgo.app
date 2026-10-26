@@ -34,7 +34,7 @@ vi.mock('@capgo/capacitor-notifications', () => ({
   },
 }))
 vi.mock('~/services/capgoApi', () => ({ invokeCapgoApi: mocks.invokeCapgoApi }))
-vi.mock('~/services/supabase', () => ({ defaultApiHost: 'https://api.capgo.app' }))
+vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.app' }))
 
 const { registerNativeNotifications, resolveUpdateInstallMode, setupNativeNotifications, unregisterNativeNotifications } = await import('../src/services/nativeNotifications.ts')
 

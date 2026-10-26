@@ -1,6 +1,5 @@
 {
   "lockfileVersion": 1,
-  "configVersion": 1,
   "workspaces": {
     "": {
       "name": "capgo-app",
@@ -114,7 +113,6 @@
         "@capgo/capacitor-social-login": "^8.5.18",
         "@capgo/capacitor-speech-recognition": "^8.3.2",
         "@capgo/capacitor-speech-synthesis": "^8.0.22",
-        "@capgo/capacitor-supabase": "^8.2.3",
         "@capgo/capacitor-textinteraction": "^8.0.40",
         "@capgo/capacitor-transitions": "^8.2.4",
         "@capgo/capacitor-updater": "8.53.0",
@@ -246,7 +244,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.91.0",
+      "version": "8.95.1",
       "bin": {
         "capgo": "dist/index.js",
       },
@@ -666,8 +664,6 @@
     "@capgo/capacitor-speech-recognition": ["@capgo/capacitor-speech-recognition@8.3.2", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-o91dTZy3gmqPO+nyujoCUezGTvv2Tozm1HDAfvaUZcHsQgs6KjhnO0qV9FIvuazyhdk6dOlqRyEQza0n5fUZxQ=="],
 
     "@capgo/capacitor-speech-synthesis": ["@capgo/capacitor-speech-synthesis@8.0.22", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-TYvVyHgSerHXYWnAy882EDhGapHS6OHhlhrvz3gH6G21Hi9Pdcfj63odQa2lWJPh2N086zhdKRp/dytPZLrwzQ=="],
-
-    "@capgo/capacitor-supabase": ["@capgo/capacitor-supabase@8.2.3", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-M4Yxty07BTvlaDI5Rj8W8H1QQyvYNMSg9gF7DEnVQhu9uKMFHfsbnwWB0qHyUBJUghwBhGmE4oHhtm6WTY7WAA=="],
 
     "@capgo/capacitor-textinteraction": ["@capgo/capacitor-textinteraction@8.0.40", "", { "peerDependencies": { "@capacitor/core": ">=8.0.0" } }, "sha512-ihrBtum9JJqDWRsroEnvRp9PV6yA9h6QrNJ36t5q0+YRGcJo9vId84JiTP5F2Nqft1MdQtOQsz8zDiZ+1jm0Hg=="],
 

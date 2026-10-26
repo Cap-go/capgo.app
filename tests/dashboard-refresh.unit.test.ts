@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  useSupabase: vi.fn(),
+  useConsole: vi.fn(),
 }))
 
-vi.mock('~/services/supabase', () => ({
-  useSupabase: mocks.useSupabase,
+vi.mock('~/services/console', () => ({
+  useConsole: mocks.useConsole,
 }))
 
 describe('dashboard refresh helpers', () => {
@@ -18,7 +18,7 @@ describe('dashboard refresh helpers', () => {
       error: null,
     })
     const rpc = vi.fn().mockReturnValue({ single })
-    mocks.useSupabase.mockReturnValue({ rpc } as any)
+    mocks.useConsole.mockReturnValue({ rpc } as any)
     const { fetchOrgChartRefreshState } = await import('../src/services/dashboardRefresh.ts')
 
     await expect(fetchOrgChartRefreshState('org-id')).resolves.toEqual({

@@ -4,7 +4,7 @@ import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconX from '~icons/lucide/x'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
@@ -24,7 +24,7 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
@@ -61,7 +61,7 @@ function isActive(appId: string) {
 }
 
 async function persistDismiss(app: OrganizationApp) {
-  const { data, error } = await supabase.rpc('dismiss_getting_started', {
+  const { data, error } = await capgo.rpc('dismiss_getting_started', {
     p_app_id: app.app_id,
   })
   const current = organizationStore.getAppByAppId(app.app_id)?.onboarding ?? app.onboarding ?? {}
@@ -75,7 +75,7 @@ async function persistDismiss(app: OrganizationApp) {
     app.app_id,
     withGettingStartedDismissed(current, parseAppOnboardingLedger(data).getting_started_dismissed_at ?? undefined),
   )
-  const { data: row, error: needError } = await supabase
+  const { data: row, error: needError } = await capgo
     .from('apps')
     .select('need_onboarding')
     .eq('app_id', app.app_id)

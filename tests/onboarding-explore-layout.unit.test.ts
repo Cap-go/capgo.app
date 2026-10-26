@@ -13,8 +13,8 @@ const state = vi.hoisted(() => ({
 }))
 
 vi.mock('vue-router', () => ({ useRoute: () => state.route }))
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => ({ from: state.from }),
+vi.mock('~/services/console', () => ({
+  useConsole: () => ({ from: state.from }),
 }))
 vi.mock('~/stores/main', () => ({ useMainStore: () => ({ user: { id: 'example-user' } }) }))
 vi.mock('~/stores/organization', () => ({

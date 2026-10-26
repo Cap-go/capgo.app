@@ -7,17 +7,17 @@ import AppOnboardingBuilderChecklist from '../../src/components/dashboard/AppOnb
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
 import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
-import BuilderIntroduction from '../../src/components/dashboard/BuilderIntroduction.vue'
 import ChannelIntroduction from '../../src/components/dashboard/ChannelIntroduction.vue'
 import GettingStartedNav from '../../src/components/dashboard/GettingStartedNav.vue'
 import OnboardingExploreBanner from '../../src/components/dashboard/OnboardingExploreBanner.vue'
 import OnboardingExploreReminder from '../../src/components/dashboard/OnboardingExploreReminder.vue'
 import DialogV2 from '../../src/components/DialogV2.vue'
+import BuildTable from '../../src/components/tables/BuildTable.vue'
 import { i18n } from '../../src/modules/i18n'
 import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { BUILDER_STEP_IDS } from '../../src/services/builderOnboardingChecklist'
-import { useSupabase } from '../../src/services/supabase'
+import { useConsole } from '../../src/services/console'
 import { useMainStore } from '../../src/stores/main'
 import { useOrganizationStore } from '../../src/stores/organization'
 import { ONBOARDING_SETUP_HANDOFF_STATE_KEY } from '../../src/utils/onboardingRedirect'
@@ -157,7 +157,7 @@ function previewOnboarding() {
 }
 
 // This isolated component fixture never sends requests to production.
-window.fetch = async (input, init) => {
+const fixtureFetch: typeof fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin)
   const method = init?.method?.toUpperCase() ?? 'GET'
   if (url.pathname.endsWith('/users') && method === 'PATCH')
@@ -212,6 +212,8 @@ window.fetch = async (input, init) => {
     return new Response(JSON.stringify(previewOnboarding()), { headers: { 'Content-Type': 'application/json' } })
   }
   if (url.pathname.endsWith(`/app/${previewAppId}/onboarding/builder`)) {
+    if (method === 'GET')
+      return new Response(JSON.stringify({ canEnable: true }), { headers: { 'Content-Type': 'application/json' } })
     state.builderActivationRequests.push({ method: init?.method, appId: previewAppId })
     if (state.builderActivationDelayMs)
       await new Promise(resolve => setTimeout(resolve, state.builderActivationDelayMs))
@@ -221,6 +223,8 @@ window.fetch = async (input, init) => {
     state.outcome = 'in_progress'
     return new Response(JSON.stringify({ onboarding: previewOnboarding() }), { headers: { 'Content-Type': 'application/json' } })
   }
+  if (url.pathname.endsWith('/build_requests'))
+    return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json', 'Content-Range': '*/0' } })
   if (url.pathname.includes('/rpc/')) {
     return new Response(JSON.stringify(state.channelPermissions), { headers: { 'Content-Type': 'application/json' } })
   }
@@ -274,8 +278,46 @@ window.fetch = async (input, init) => {
   })
 }
 
+// Console data queries arrive as recorded builder chains; translate them back to
+// the PostgREST-style fixture requests above.
+window.fetch = async (input, init) => {
+  const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin)
+  if (!url.pathname.endsWith('/private/console/query'))
+    return fixtureFetch(input, init)
+  const query = JSON.parse(String(init?.body))
+  const fixtureURL = new URL(`/${query.kind === 'rpc' ? 'rpc/' : ''}${query.name}`, location.origin)
+  let method = query.kind === 'rpc' ? 'POST' : 'GET'
+  let body = query.kind === 'rpc' ? JSON.stringify(query.args[0]) : undefined
+  const headers = new Headers(init?.headers)
+  for (const { method: operation, args } of query.operations) {
+    if (['eq', 'neq', 'is'].includes(operation)) {
+      fixtureURL.searchParams.set(args[0], `${operation}.${args[1]}`)
+    }
+    else if (operation === 'limit') {
+      fixtureURL.searchParams.set('limit', String(args[0]))
+    }
+    else if (['single', 'maybeSingle'].includes(operation)) {
+      headers.set('Accept', 'application/vnd.pgrst.object+json')
+    }
+    else if (['insert', 'update', 'delete'].includes(operation)) {
+      method = operation === 'insert' ? 'POST' : operation === 'update' ? 'PATCH' : 'DELETE'
+      body = args[0] ? JSON.stringify(args[0]) : undefined
+    }
+  }
+  const response = await fixtureFetch(fixtureURL.href, { ...init, headers, method, body })
+  let data = await response.json().catch(() => null)
+  if (Array.isArray(data) && query.operations.some((op: { method: string }) => ['single', 'maybeSingle'].includes(op.method)))
+    data = data[0] ?? null
+  return new Response(JSON.stringify({
+    data: response.ok ? data : null,
+    error: response.ok ? null : data,
+    status: response.status,
+    count: null,
+  }), { headers: { 'Content-Type': 'application/json' } })
+}
+
 // Supply a fixture-only session. All fetch calls above are intercepted.
-useSupabase().auth.getSession = async () => ({ data: { session: { access_token: 'fixture-token' } as any }, error: null })
+useConsole().auth.getSession = async () => ({ data: { session: { access_token: 'fixture-token' } as any }, error: null })
 
 const app = createApp(defineComponent({
   setup() {
@@ -337,7 +379,7 @@ Object.defineProperty(useMainStore(pinia), 'user', { value: { id: '00000000-0000
 Object.defineProperty(useMainStore(pinia), 'auth', { value: { id: '00000000-0000-4000-8000-000000000001' } })
 useMainStore(pinia).awaitInitialLoad = async () => true
 const organization = useOrganizationStore(pinia)
-const previewOrganization = { gid: '00000000-0000-4000-8000-000000000002', name: 'Preview organization' }
+const previewOrganization = { gid: '00000000-0000-4000-8000-000000000002', name: 'Preview organization', ...(builderIntroView ? { paying: true } : {}) }
 const selectedOrganization = ref(params.get('wrongOrg') === '1' ? { gid: '00000000-0000-4000-8000-000000000099' } : previewOrganization)
 preview.selectedOrgId.value = selectedOrganization.value.gid
 Object.defineProperty(organization, 'currentOrganization', { get: () => selectedOrganization.value })
@@ -349,6 +391,14 @@ organization.setCurrentOrganization = (orgId) => {
 }
 organization.awaitInitialLoad = async () => true
 organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }] : []
+if (builderIntroView) {
+  const builderApp = ref({ app_id: previewAppId, owner_org: previewOrganization.gid, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() })
+  organization.getAppByAppId = appId => appId === previewAppId ? builderApp.value as any : undefined
+  organization.updateAppOnboarding = (appId, onboarding) => {
+    if (appId === previewAppId && onboarding)
+      builderApp.value.onboarding = onboarding as ReturnType<typeof previewOnboarding>
+  }
+}
 app.use(i18n)
 const router = createRouter({
   history: createWebHistory(),
@@ -362,7 +412,7 @@ const router = createRouter({
           },
         }) },
         // A resume id renders the setup UI the way Getting started embeds it.
-        { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => builderIntroView ? h(BuilderIntroduction, { appId: previewAppId, entitlement: 'plan' }) : h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined }) }) },
+        { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => builderIntroView ? h(BuildTable, { appId: previewAppId }) : h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined }) }) },
       ]
     : [{ path: '/:pathMatch(.*)*', component: { render: () => null } }],
 })

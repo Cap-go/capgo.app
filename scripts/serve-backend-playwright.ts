@@ -121,23 +121,27 @@ async function ensureSupabaseStarted() {
 
 async function waitForFunctionsReady(timeoutMs: number) {
   const apiUrl = getSupabaseStatus()?.API_URL || `http://127.0.0.1:${supabaseConfig.ports.api}`
-  const targetUrl = `${apiUrl}/functions/v1/ok`
+  // The console's first paint now goes through the `private` function
+  // (/private/console/query), so warm it too instead of only the `ok` probe.
+  const targetUrls = [`${apiUrl}/functions/v1/ok`, `${apiUrl}/functions/v1/private/config`]
   const startedAt = Date.now()
 
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(targetUrl)
-      if (response.ok)
-        return
+  for (const targetUrl of targetUrls) {
+    let ready = false
+    while (!ready && Date.now() - startedAt < timeoutMs) {
+      try {
+        const response = await fetch(targetUrl)
+        ready = response.ok
+      }
+      catch {
+        // Keep polling until the edge runtime serves requests again.
+      }
+      if (!ready)
+        await sleep(1000)
     }
-    catch {
-      // Keep polling until the edge runtime serves requests again.
-    }
-
-    await sleep(1000)
+    if (!ready)
+      throw new Error(`Timed out waiting for Supabase functions at ${targetUrl}`)
   }
-
-  throw new Error(`Timed out waiting for Supabase functions at ${targetUrl}`)
 }
 
 async function stopChildProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals = 'SIGTERM') {

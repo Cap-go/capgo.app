@@ -34,6 +34,9 @@ globalThis.fetch = async (input, init) => {
       setup.paths = ['ota']
     if (scenario === 'partial')
       progress.checkErrors = ['add_channel']
+    // Like the backend, billing is only returned when the CLI asks for it.
+    if (scenario === 'trial' && JSON.parse(init.body).includeBilling === true)
+      progress.billing = { status: 'available', orgId: 'todo-org', trialEndsAt: '2099-01-01T12:00:00Z', isPaying: false, hasCredits: false }
     return Response.json(progress)
   }
   return Response.json({ status: 'ok' })

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { FormKit } from '@formkit/vue'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -11,9 +10,10 @@ import iconEmail from '~icons/heroicons/envelope?raw'
 import iconName from '~icons/heroicons/user?raw'
 import OrgCustomDomain from '~/components/OrgCustomDomain.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { checkPermissions } from '~/services/permissions'
 import { pickPhoto, takePhoto } from '~/services/photos'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -23,7 +23,7 @@ const { t } = useI18n()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
-const supabase = useSupabase()
+const capgo = useConsole()
 const isLoading = ref(true)
 const dialogRef = ref()
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -46,7 +46,7 @@ async function loadSupportChannel(orgId: string | undefined) {
   if (!orgId)
     return
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('orgs')
     .select('support_channel_type, support_channel_url')
     .eq('id', orgId)
@@ -176,7 +176,7 @@ async function saveChanges(form: { orgName: string, email: string }) {
   isLoading.value = true
 
   // Update name
-  const { error } = await supabase
+  const { error } = await capgo
     .from('orgs')
     .update({
       name: form.orgName,

@@ -45,11 +45,12 @@ export async function tryBuilderOnlyInit(
     warn?: (message: string) => void
     beforeLaunch?: () => Promise<void>
     launch?: (options: OnboardingBuilderOptions) => Promise<void>
+    knownBuilderOnly?: boolean
   } = {},
 ): Promise<boolean> {
   if (!appId)
     return false
-  const checklist = await readBuilderOnlyInitAssignment(appId, options, dependencies.request, dependencies.warn)
+  const checklist = dependencies.knownBuilderOnly || await readBuilderOnlyInitAssignment(appId, options, dependencies.request, dependencies.warn)
   if (!checklist)
     return false
   await dependencies.beforeLaunch?.()

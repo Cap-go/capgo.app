@@ -3489,6 +3489,10 @@ export type Database = {
             Args: { p_binding_id: string; p_error_code: string }
             Returns: undefined
           }
+      assert_console_daily_window: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: undefined
+      }
       assert_effective_super_admin_group_member_removal: {
         Args: { p_group_id: string; p_user_id: string }
         Returns: undefined
@@ -3887,6 +3891,14 @@ export type Database = {
         Args: { apikey: string; appid: string; name_version: string }
         Returns: number
       }
+      get_bundle_upload_daily_counts: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: {
+          app_id: string
+          day_index: number
+          uploads: number
+        }[]
+      }
       get_channel_current_bundle_rbac: {
         Args: { p_app_id: string; p_channel_id: number }
         Returns: {
@@ -3910,6 +3922,16 @@ export type Database = {
           monthly: number
           total: number
           yearly: number
+        }[]
+      }
+      get_deploy_daily_counts: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: {
+          app_id: string
+          channel_id: number
+          channel_name: string
+          day_index: number
+          deploys: number
         }[]
       }
       get_org_credits_used_in_period: {

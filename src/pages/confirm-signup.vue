@@ -5,6 +5,8 @@ import { useRoute } from 'vue-router'
 import IconLoader from '~icons/lucide/loader-2'
 import IconTriangleAlert from '~icons/lucide/triangle-alert'
 import { authGhostButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
+import { defaultApiHost } from '~/services/console'
+import { resolveConsoleApiBase } from '~/services/consoleAuth'
 import { replaceDocument } from '~/services/documentNavigation'
 import { openSupport } from '~/services/support'
 import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
@@ -21,6 +23,7 @@ onMounted(() => {
     const confirmationUrl = resolveConfirmationUrl(route.query, {
       allowedHosts: allowedConfirmationHosts,
       allowLocalDev: import.meta.env.DEV,
+      apiHost: resolveConsoleApiBase(defaultApiHost),
     })
     if (!confirmationUrl) {
       isRedirecting.value = false
@@ -41,7 +44,7 @@ onMounted(() => {
     card-width-class="max-w-md"
     card-kicker="Secure redirect"
     card-title="Email confirmation"
-    card-description="We only forward confirmation links to approved Capgo and Supabase hosts."
+    card-description="We only forward confirmation links to approved Capgo hosts."
   >
     <div class="space-y-5 text-center">
       <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl border border-slate-200/80 bg-slate-50/85 shadow-[0_20px_40px_-32px_rgba(15,23,42,0.45)] dark:border-slate-700/80 dark:bg-slate-900/80">

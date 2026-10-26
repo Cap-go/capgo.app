@@ -1,5 +1,4 @@
 import type { LocationQuery } from 'vue-router'
-import configs from '../../configs.json'
 import { isLocalDevHost } from './sanitize'
 
 function hasControlCharacters(path: string): boolean {
@@ -88,9 +87,15 @@ export function isAllowedConfirmationUrl(urlValue: string, options: {
   return options.allowedHosts.includes(url.hostname)
 }
 
+/** Auth email links verify through the Capgo API, which relays them to the auth provider. */
+export const AUTH_VERIFY_PATH = '/auth/v1/verify'
+export const CONSOLE_AUTH_VERIFY_PATH = '/private/console/auth/verify'
+
 export function resolveConfirmationUrl(query: LocationQuery, options: {
   allowedHosts: string[]
   allowLocalDev?: boolean
+  /** Capgo API base; verification links are rewritten onto it. */
+  apiHost?: string
 }): string | null {
   const confirmationUrl = query.confirmation_url
   if (typeof confirmationUrl !== 'string' || !confirmationUrl)
@@ -99,11 +104,21 @@ export function resolveConfirmationUrl(query: LocationQuery, options: {
   try {
     // Vue Router already decodes query values. Only decode legacy URLs whose scheme is still encoded.
     const decodedUrl = /^https?%3A/i.test(confirmationUrl) ? decodeURIComponent(confirmationUrl) : confirmationUrl
-    if (!isAllowedConfirmationUrl(decodedUrl, options))
+    let url = new URL(decodedUrl)
+    const isVerifyLink = url.pathname === AUTH_VERIFY_PATH || url.pathname === CONSOLE_AUTH_VERIFY_PATH
+    if (isVerifyLink && options.apiHost) {
+      // Whatever host the email named, the token is only ever verified by our
+      // own auth provider through the API; its redirect allow-list does the rest.
+      // String concatenation on purpose: the API base may carry a path prefix (local /functions/v1).
+      const relayed = new URL(`${options.apiHost.replace(/\/$/, '')}${CONSOLE_AUTH_VERIFY_PATH}`)
+      relayed.search = url.search
+      url = relayed
+    }
+    else if (!isAllowedConfirmationUrl(url.href, options)) {
       return null
+    }
 
-    const url = new URL(decodedUrl)
-    if (url.pathname === '/auth/v1/verify' && url.searchParams.has('token')) {
+    if (isVerifyLink && url.searchParams.has('token')) {
       // Some email links place these parameters outside the nested confirmation URL.
       for (const parameter of ['type', 'redirect_to'] as const) {
         const value = query[parameter]
@@ -122,11 +137,12 @@ export function getAllowedConfirmationHosts() {
   const hosts = new Set<string>()
 
   addConfiguredHost(hosts, import.meta.env.VITE_APP_URL)
-  addConfiguredHost(hosts, import.meta.env.VITE_SUPABASE_URL)
+  addConfiguredHost(hosts, import.meta.env.VITE_API_HOST)
 
+  // Production fallbacks only; the repo config file stays out of the bundle (it carries backend keys).
   if (hosts.size === 0) {
-    addConfiguredHost(hosts, configs.base_domain?.prod)
-    addConfiguredHost(hosts, configs.supa_url?.prod)
+    addConfiguredHost(hosts, 'console.capgo.app')
+    addConfiguredHost(hosts, 'api.capgo.app')
   }
 
   return [...hosts]

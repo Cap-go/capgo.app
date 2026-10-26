@@ -6,13 +6,13 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { integerLikeSchema, numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
+import { BUNDLE_SUMMARY_COLUMNS } from '../../../shared/bundle-columns.ts'
 import { fetchLimit, isValidAppId } from '../../utils/utils.ts'
+
+export { BUNDLE_SUMMARY_COLUMNS }
 
 // PostgREST caps a response at max_rows (1000): never ask for a larger page.
 export const BUNDLE_LIST_MAX_LIMIT = 1000
-
-// Every app_versions column except the large `manifest` and `native_packages` arrays.
-export const BUNDLE_SUMMARY_COLUMNS = 'id, created_at, app_id, name, updated_at, deleted, deleted_at, external_url, checksum, session_key, storage_provider, min_update_version, owner_org, user_id, r2_path, link, comment, manifest_count, key_id, cli_version, created_by_apikey_rbac_id'
 
 export const getBundleQuerySchema = z.object({
   app_id: z.string().optional(),
