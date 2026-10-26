@@ -283,14 +283,15 @@ export function usageProvenStepIds(onboarding: unknown): AppOnboardingStepId[] {
   return ids
 }
 
-// Stored checklist state OR usage-proven steps; skipped steps stay skipped.
+// Stored checklist state OR usage-proven steps; skipped steps stay skipped,
+// except add_channel which is required for live updates.
 export function withUsageProvenSteps(checklist: AppOnboardingState, onboarding: unknown): AppOnboardingState {
   const proven = usageProvenStepIds(onboarding)
   if (!proven.length)
     return checklist
   const steps = { ...checklist.steps }
   for (const id of proven) {
-    if (steps[id]?.status !== 'done' && steps[id]?.status !== 'skipped')
+    if (steps[id]?.status !== 'done' && (id === 'add_channel' || steps[id]?.status !== 'skipped'))
       steps[id] = { ...steps[id], status: 'done' }
   }
   return { ...checklist, steps }

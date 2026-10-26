@@ -209,7 +209,7 @@ describe('app onboarding progress ledger', () => {
   })
 
   it.concurrent('marks steps proven by real usage as done', () => {
-    const pending = parseAppOnboarding({ setup: { todo_list_version: 4, ota_todo_list_version: '1', steps: { ota: { add_channel: { status: 'skipped' } } } } })
+    const pending = parseAppOnboarding({ setup: { todo_list_version: 4, ota_todo_list_version: '1', steps: { ota: { add_channel: { status: 'skipped' }, add_code: { status: 'skipped' } } } } })
     expect(usageProvenStepIds({})).toEqual([])
     expect(withUsageProvenSteps(pending, {})).toBe(pending)
 
@@ -219,8 +219,9 @@ describe('app onboarding progress ledger', () => {
     expect(devicesOnly.steps.upload_bundle?.status).toBe('pending')
 
     const live = withUsageProvenSteps(pending, { features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z' } } })
-    expect(Object.entries(live.steps).filter(([, step]) => step?.status !== 'done').map(([id]) => id)).toEqual(['add_channel'])
-    expect(live.steps.add_channel?.status).toBe('skipped')
+    // Skipped steps stay skipped, except the required channel step.
+    expect(Object.entries(live.steps).filter(([, step]) => step?.status !== 'done').map(([id]) => id)).toEqual(['add_code'])
+    expect(live.steps.add_channel?.status).toBe('done')
   })
 
   it.concurrent('uses v3 checklist steps for the nav, completed by real usage', () => {
