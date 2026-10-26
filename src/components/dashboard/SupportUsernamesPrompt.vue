@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
+import { billingModalOpen } from '~/services/billingModalState'
 import { useConsole } from '~/services/console'
 import {
   dismissSupportUsernamesPromptForever,
@@ -70,7 +71,7 @@ function syncDiscordFromUser() {
 }
 
 function canOpenPrompt() {
-  if (isOnboarding.value || blockedPath.value || dialogStore.showDialog || isOpen.value)
+  if (isOnboarding.value || blockedPath.value || dialogStore.showDialog || billingModalOpen.value || isOpen.value)
     return false
   return shouldShowSupportUsernamesPrompt(main.user)
 }
@@ -156,7 +157,7 @@ async function saveAndClose() {
 }
 
 watch(
-  () => [main.user?.id, main.user?.discord_username, main.user?.github_username, route.path, dialogStore.showDialog, isOnboarding.value] as const,
+  () => [main.user?.id, main.user?.discord_username, main.user?.github_username, route.path, dialogStore.showDialog, billingModalOpen.value, isOnboarding.value] as const,
   () => {
     if (isOnboarding.value || !shouldShowSupportUsernamesPrompt(main.user) || blockedPath.value) {
       if (showTimer)
@@ -169,6 +170,12 @@ watch(
   },
   { immediate: true },
 )
+
+// Billing dialogs (e.g. the trial "add a card" prompt) take priority over this prompt.
+watch(billingModalOpen, (open) => {
+  if (open)
+    closePrompt()
+})
 
 onMounted(() => {
   syncDiscordFromUser()
