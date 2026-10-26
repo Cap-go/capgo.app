@@ -138,11 +138,17 @@ export async function listImageFolder(c: Context, prefix: string, options: { lim
   return entries
 }
 
-/** Delete every image object under a folder, recursively. Returns how many were removed. */
-export async function removeImageFolder(c: Context, prefix: string) {
+/**
+ * Delete every image object under a folder, recursively. Returns how many were
+ * removed. With a `deadline` (epoch ms) it stops starting deletes once that has
+ * passed, leaving the rest of the folder for a later call.
+ */
+export async function removeImageFolder(c: Context, prefix: string, options: { deadline?: number } = {}) {
   const client = imageClient(c)
   let deleted = 0
   for await (const object of client.listObjects({ prefix: folderKey(prefix) })) {
+    if (options.deadline !== undefined && Date.now() >= options.deadline)
+      break
     try {
       await client.deleteObject(object.key)
       deleted++

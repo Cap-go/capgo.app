@@ -122,12 +122,13 @@ async function cleanUserFolder(
   stats: CleanupStats,
   userId: string,
   user: { image_url: string | null } | undefined,
+  deadline: number,
 ) {
   try {
     // Deleted user: remove everything. Existing user: remove avatar files not
     // referenced by users.image_url.
     if (!user) {
-      const deleted = await removeImageFolder(c, userId)
+      const deleted = await removeImageFolder(c, userId, { deadline })
       if (deleted > 0) {
         stats.deletedUserImages += deleted
         cloudlog({ requestId: c.get('requestId'), message: 'deleted orphaned user images', count: deleted, userId })
@@ -171,7 +172,8 @@ async function cleanOrgFolder(
   try {
     // If org doesn't exist, delete all its images
     if (!org) {
-      const deleted = await removeImageFolder(c, `org/${orgId}`)
+      // Stop at the budget; the next run lists the folder again and finishes.
+      const deleted = await removeImageFolder(c, `org/${orgId}`, { deadline })
       if (deleted > 0) {
         stats.deletedOrgImages += deleted
         cloudlog({ requestId: c.get('requestId'), message: 'deleted orphaned org images', orgId, count: deleted })
@@ -222,7 +224,7 @@ async function cleanOrgFolder(
       if (existingAppIds.has(appId))
         continue
       try {
-        const deleted = await removeImageFolder(c, `org/${orgId}/${appId}`)
+        const deleted = await removeImageFolder(c, `org/${orgId}/${appId}`, { deadline })
         if (deleted > 0) {
           stats.deletedOrgImages += deleted
           cloudlog({ requestId: c.get('requestId'), message: 'deleted orphaned app images', appId, orgId })
@@ -258,7 +260,7 @@ async function cleanUserImages(c: Context<MiddlewareKeyVariables>, supabase: Sup
 
   stats.userFoldersProcessed = await runWithDeadline(
     userIds,
-    userId => cleanUserFolder(c, stats, userId, usersById.get(userId)),
+    userId => cleanUserFolder(c, stats, userId, usersById.get(userId), deadline),
     { concurrency: CLEANUP_CONCURRENCY, deadline },
   )
 }

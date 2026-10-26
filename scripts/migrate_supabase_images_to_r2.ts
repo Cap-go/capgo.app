@@ -1,7 +1,12 @@
 /*
- * Copy every object of the Supabase Storage `images` bucket (avatars, org logos,
- * app icons) into R2 under `images/<same path>`. Run once when the backend
- * switches image storage to R2; re-running only copies what R2 is missing.
+ * Move every object of the Supabase Storage `images` bucket (avatars, org logos,
+ * app icons) into R2 under `images/<same path>`, deleting each Supabase copy
+ * once it is in R2. Run once when the backend switches image storage to R2;
+ * re-running only moves what is still left in Supabase.
+ *
+ * The backend no longer deletes from the Supabase bucket, so copies left there
+ * would outlive account, org and app deletion: only keep them (--keep-source)
+ * for a trial run, then run again without it.
  *
  * Dry run:
  *   bun run admin:migrate-supabase-images-to-r2
@@ -13,7 +18,7 @@
  *   --prefix=org/<uuid>     only copy one folder
  *   --concurrency=8
  *   --overwrite             replace objects that already exist in R2
- *   --delete-source         remove each Supabase object once it is in R2
+ *   --keep-source           copy only; leave the Supabase objects in place
  *   --env-file=./internal/cloudflare/.env.preprod
  */
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -57,7 +62,7 @@ async function main() {
   const args = process.argv.slice(2)
   const apply = args.includes('--apply')
   const overwrite = args.includes('--overwrite')
-  const deleteSource = args.includes('--delete-source')
+  const deleteSource = !args.includes('--keep-source')
   const prefix = (getArgValue(args, '--prefix') ?? '').replace(/^\/+|\/+$/g, '')
   const concurrency = parsePositiveInteger(getArgValue(args, '--concurrency'), '--concurrency', DEFAULT_CONCURRENCY)
   const envFile = getArgValue(args, '--env-file') ?? DEFAULT_ENV_FILE
@@ -72,6 +77,8 @@ async function main() {
 
   const paths = await listAllObjects(supabase, prefix)
   console.log(`Found ${paths.length} Supabase image objects`)
+  if (!deleteSource)
+    console.warn('--keep-source: Supabase copies stay and will not be removed by account, org or app deletion. Run again without it.')
 
   let copied = 0
   let skipped = 0

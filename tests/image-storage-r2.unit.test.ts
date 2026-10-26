@@ -146,6 +146,26 @@ describe('R2 image storage', () => {
     expect(mocks.client.listObjects).toHaveBeenCalledWith({ prefix: `images/${USER_ID}/` })
   })
 
+  it('stops removing a folder once the deadline has passed', async () => {
+    mocks.client.listObjects.mockReturnValue(yieldAll([
+      { type: 'Object', key: `images/org/${ORG_ID}/a.png` },
+      { type: 'Object', key: `images/org/${ORG_ID}/b.png` },
+      { type: 'Object', key: `images/org/${ORG_ID}/c.png` },
+    ]))
+    let now = 1_000
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    mocks.client.deleteObject.mockImplementation(async () => {
+      now += 600
+    })
+    try {
+      await expect(storage.removeImageFolder(context(), `org/${ORG_ID}`, { deadline: 2_000 })).resolves.toBe(2)
+      expect(mocks.client.deleteObject).toHaveBeenCalledTimes(2)
+    }
+    finally {
+      spy.mockRestore()
+    }
+  })
+
   it('presigns GET URLs on the images/ key, capped at seven days', async () => {
     mocks.client.getPresignedUrl.mockResolvedValue('https://r2.example/signed')
     await expect(storage.presignImageUrl(context(), 'org/x/logo/a.png', 10 * 24 * 3600)).resolves.toBe('https://r2.example/signed')
