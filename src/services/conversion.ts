@@ -57,14 +57,28 @@ export interface ChecksumInfo {
  * Algorithm selection in CLI:
  * - SHA-256: Used with V2 encryption OR v6+, v7+, v8+
  * - CRC32: Used with v5 without V2 encryption
+ *
+ * Encrypted bundles store the RSA-encrypted digest (hex for V3, base64 for V2),
+ * so its length says nothing about the algorithm. The CLI always hashes
+ * encrypted bundles with SHA-256, so pass `encrypted` when the bundle has a
+ * session key.
  */
-export function getChecksumInfo(checksum: string | null | undefined): ChecksumInfo {
+export function getChecksumInfo(checksum: string | null | undefined, encrypted = false): ChecksumInfo {
   if (!checksum) {
     return {
       type: 'unknown',
       label: 'Unknown',
       minPluginVersion: '-',
       features: [],
+    }
+  }
+
+  if (encrypted) {
+    return {
+      type: 'sha256',
+      label: 'SHA-256 (encrypted)',
+      minPluginVersion: 'v5 + encryption, v6, v7, v8',
+      features: ['integrity-verification', 'corruption-detection', 'security'],
     }
   }
 
