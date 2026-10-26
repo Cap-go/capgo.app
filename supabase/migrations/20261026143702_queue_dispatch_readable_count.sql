@@ -1,7 +1,7 @@
 -- Count only messages a consumer can read now. Messages still inside their
 -- visibility timeout are being processed by an earlier call, so counting them
 -- made the dispatcher fire up to 10 consumer calls that read nothing.
--- pgmq queue tables index vt, so this filter stays an index range scan.
+-- pgmq queue tables index vt, so the bound cutoff keeps this an index range scan.
 CREATE OR REPLACE FUNCTION public.process_function_queue(
     "queue_name" text, "batch_size" integer DEFAULT 950
 ) RETURNS void
@@ -17,11 +17,14 @@ DECLARE
   onboarding_queue boolean := queue_name = 'cron_onboarding_refresh_apps';
   awaited_queue boolean := queue_name = 'cron_onboarding_refresh_apps';
 BEGIN
+  -- Bind the cutoff as a parameter: clock_timestamp() is volatile, so inline
+  -- it would be re-evaluated per row and could not bound the vt index scan.
   EXECUTE pg_catalog.format(
-    'SELECT count(*) FROM pgmq.%I WHERE vt <= pg_catalog.clock_timestamp()',
+    'SELECT count(*) FROM pgmq.%I WHERE vt <= $1',
     'q_' || queue_name
   )
-  INTO queue_size;
+  INTO queue_size
+  USING pg_catalog.clock_timestamp();
 
   IF queue_size > 0 THEN
     IF onboarding_queue THEN
