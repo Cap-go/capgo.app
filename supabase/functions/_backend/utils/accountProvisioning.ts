@@ -34,12 +34,11 @@ export interface ProfileInput {
   opt_for_newsletters?: boolean
 }
 
-// All sign-up paths insert the real profile so on_user_create runs exactly once.
-// Optional newsletter consent must never be inferred from social authentication.
-export function provisionUserProfile(c: Context, profile: ProfileInput, preserveExisting = false) {
+// Insert the real profile so on_user_create runs exactly once.
+export function provisionUserProfile(c: Context, profile: ProfileInput) {
   return supabaseAdmin(c).from('users').upsert({
     ...profile,
     enable_notifications: true,
     opt_for_newsletters: profile.opt_for_newsletters ?? false,
-  }, { onConflict: 'id', ...(preserveExisting ? { ignoreDuplicates: true } : {}) })
+  }, { onConflict: 'id' })
 }

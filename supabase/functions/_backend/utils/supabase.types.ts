@@ -5449,6 +5449,14 @@ export type Database = {
         Args: { p_invite_id: number; p_inviter_id?: string; p_kind: string }
         Returns: string
       }
+      rbac_caller_can_check_user_permission: {
+        Args: {
+          p_org_id: string
+          p_skip_password_policy?: boolean
+          p_target_user_id: string
+        }
+        Returns: boolean
+      }
       rbac_check_permission: {
         Args: {
           p_app_id?: string

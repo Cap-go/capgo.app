@@ -38,7 +38,6 @@ app.get('/', async (c) => {
     supaKey: getEnv(c, 'SUPABASE_ANON_KEY'),
     stripeEnabled: isStripeConfigured(c),
     // Deprecated response-shape compatibility for released clients; current UI uses build-time flags.
-    nativeAppleLoginEnabled: false,
     minCliVersion: MIN_CLI_VERSION,
     minCliVersionReason: MIN_CLI_VERSION_REASON,
     // finalize_bundle_upload was removed; keep false so released CLIs use the version-update path.
