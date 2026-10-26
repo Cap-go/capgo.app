@@ -1,7 +1,7 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TableColumn } from '~/components/comp_def'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { DialogV2Button, DialogV2Options } from '~/stores/dialogv2'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { invokeCapgoApi } from '~/services/capgoApi'
 
 interface ApiKeyLoadScope {
@@ -32,7 +32,7 @@ export function shareInFlightApiKeyLoad(
 }
 
 export async function createDefaultApiKey(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   name: string,
   options: {
     orgId?: string | null
@@ -44,7 +44,7 @@ export async function createDefaultApiKey(
   let appUuid: string | null = null
 
   if (options.appId) {
-    const { data: app, error } = await supabase
+    const { data: app, error } = await capgo
       .from('apps')
       .select('id, owner_org')
       .eq('app_id', options.appId)
@@ -93,7 +93,7 @@ export async function createDefaultApiKey(
       ]
 
   return invokeCapgoApi('apikey', {
-    client: supabase,
+    client: capgo,
     method: 'POST',
     body: {
       name,
@@ -104,7 +104,7 @@ export async function createDefaultApiKey(
 }
 
 export async function createAiApiKey(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   name: string,
   options: {
     /** Organizations used for admin bindings or to validate each selected app's owner. */
@@ -150,7 +150,7 @@ export async function createAiApiKey(
   const globalPermissions = role === 'admin' && options.allowOrgCreate ? ['org.create'] : undefined
 
   return invokeCapgoApi('apikey', {
-    client: supabase,
+    client: capgo,
     method: 'POST',
     body: {
       name,
@@ -162,7 +162,7 @@ export async function createAiApiKey(
 }
 
 export async function findUsablePlainApiKey(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   userId: string,
   orgId?: string | null,
   appId?: string | null,
@@ -171,7 +171,7 @@ export async function findUsablePlainApiKey(
   const isLiveKey = (expiresAt: string | null) => !expiresAt || new Date(expiresAt).getTime() > Date.now()
   let appUuid: string | null = null
 
-  let query = supabase
+  let query = capgo
     .from('apikeys')
     .select('key, expires_at, rbac_id, created_at')
     .eq('user_id', userId)
@@ -191,7 +191,7 @@ export async function findUsablePlainApiKey(
     return liveKeys[0].key ?? null
 
   if (appId) {
-    const { data: app, error: appError } = await supabase
+    const { data: app, error: appError } = await capgo
       .from('apps')
       .select('id, owner_org')
       .eq('app_id', appId)
@@ -210,7 +210,7 @@ export async function findUsablePlainApiKey(
   if (!rbacIds.length)
     return null
 
-  const { data: bindings, error: bindingsError } = await supabase
+  const { data: bindings, error: bindingsError } = await capgo
     .from('role_bindings')
     .select('principal_id, scope_type, app_id, roles(name)')
     .eq('principal_type', 'apikey')
@@ -367,7 +367,7 @@ export async function confirmApiKeyDeletion(
 ): Promise<boolean> {
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')}?`,
+    description: t('alert-delete-api-key-confirm'),
     buttons: [
       createDialogButton(t('button-cancel'), 'cancel'),
       createDialogButton(t('button-delete'), 'danger'),
@@ -384,7 +384,7 @@ export async function confirmApiKeyRegeneration(
 ): Promise<boolean> {
   dialogStore.openDialog({
     title: t('alert-confirm-regenerate'),
-    description: `${t('alert-not-reverse-message')}. ${t('alert-regenerate-key')}?`,
+    description: t('alert-regenerate-key-confirm'),
     buttons: [
       createDialogButton(t('button-cancel'), 'cancel'),
       createDialogButton(t('button-regenerate'), 'primary'),

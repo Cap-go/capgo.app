@@ -15,8 +15,8 @@ import { gsap } from 'gsap'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { getLocalConfig } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
 import { sanitizeHtml } from '~/utils/sanitize'
 
 const props = defineProps<{
@@ -63,7 +63,7 @@ function getSlides(): HTMLElement[] {
 }
 
 function track(event: string, props_: Record<string, string | number | boolean | null> = {}) {
-  pushEvent(event, config.supaHost, { embedded: props.embedded, ...props_ })
+  pushEvent(event, config.apiHost, { embedded: props.embedded, ...props_ })
 }
 
 function drawCheck(s: HTMLElement) {
@@ -734,10 +734,14 @@ onUnmounted(() => {
           <button type="button" class="bp-ghost" :disabled="isFirst" @click="prev">
             ← {{ t('builder-promo-back') }}
           </button>
-          <button v-if="!isLast" type="button" class="bp-next" @click="next">
-            {{ t('builder-promo-next') }} →
-          </button>
-          <span v-else />
+          <div class="bp-actions">
+            <button v-if="embedded && startAction === 'emit' && !isLast" type="button" class="bp-ghost bp-start" :disabled="starting" :aria-busy="starting || undefined" @click="startBuild">
+              {{ t('builder-intro-start-first-build') }}
+            </button>
+            <button v-if="!isLast" type="button" class="bp-next" @click="next">
+              {{ t('builder-promo-next') }} →
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -961,10 +965,24 @@ onUnmounted(() => {
 
 .bp-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 14px 18px;
   border-top: 1px solid var(--bp-border);
+}
+.bp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 100%;
+  margin-left: auto;
+}
+.bp-start {
+  max-width: 100%;
 }
 .bp-ghost {
   background: transparent;

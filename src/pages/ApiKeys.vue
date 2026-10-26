@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { FormKit } from '@formkit/vue'
 import { VueDatePicker } from '@vuepic/vue-datepicker'
 import { useDark, useNow } from '@vueuse/core'
@@ -31,10 +31,10 @@ import {
 } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -108,7 +108,7 @@ const hasInitialScopeFilterInUrl = new URLSearchParams(window.location.search).h
 const defaultScopeFilterKey = ref<string | null>(null)
 const scopePicker = ref<ScopePickerState | null>(null)
 const scopePickerQuery = ref('')
-const supabase = useSupabase()
+const capgo = useConsole()
 const keys = ref<ApiKeyRow[]>([])
 const hasLoadedKeys = ref(false)
 const now = useNow({ interval: 60_000 })
@@ -596,7 +596,7 @@ async function fetchOrgAndAppNames() {
   if (uncachedOrgIds.length > 0) {
     const orgPromises = uncachedOrgIds.map(async (orgId) => {
       try {
-        const { data, error } = await supabase
+        const { data, error } = await capgo
           .from('orgs')
           .select('id, name')
           .eq('id', orgId)
@@ -619,7 +619,7 @@ async function fetchOrgAndAppNames() {
 
   if (uncachedAppIds.length > 0) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('apps')
         .select('id, app_id, name')
         .in('id', uncachedAppIds)
@@ -961,7 +961,7 @@ async function copyCliLoginCommand() {
 }
 
 async function fetchRoles() {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('roles')
     .select('id, name, scope_type, description, priority_rank')
     .eq('is_assignable', true)
@@ -986,7 +986,7 @@ async function fetchAllBindings() {
     return
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('role_bindings')
     .select('id, principal_type, principal_id, scope_type, org_id, app_id, role_id, roles(name)')
     .eq('principal_type', 'apikey')
@@ -1016,7 +1016,7 @@ async function loadAllApps() {
       availableApps.value = []
       return
     }
-    const { data: apps, error } = await supabase
+    const { data: apps, error } = await capgo
       .from('apps')
       .select('id, app_id, name, owner_org')
       .in('owner_org', orgIds)
@@ -1098,7 +1098,7 @@ async function createApiKey() {
   }
 
   try {
-    const { data: claimsData } = await supabase.auth.getClaims()
+    const { data: claimsData } = await capgo.auth.getClaims()
     const userId = claimsData?.claims?.sub
 
     if (!userId) {
@@ -1365,7 +1365,7 @@ async function regenrateKey(apikey: Database['public']['Tables']['apikeys']['Row
   if (!await confirmApiKeyRegeneration(dialogStore, t))
     return
 
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   const userId = claimsData?.claims?.sub
 
   if (!userId) {
@@ -1408,7 +1408,7 @@ async function deleteKey(key: Database['public']['Tables']['apikeys']['Row']) {
   if (!await confirmApiKeyDeletion(dialogStore, t))
     return
 
-  const { error } = await supabase
+  const { error } = await capgo
     .from('apikeys')
     .delete()
     .eq('id', key.id)
@@ -1538,7 +1538,7 @@ async function loadApiKeyChannelPermissionApps(key: Database['public']['Tables']
 
     const directAppIds = Array.from(directAppRoleById.keys())
     if (directAppIds.length > 0) {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('apps')
         .select('id, app_id, name, owner_org')
         .in('id', directAppIds)
@@ -1549,7 +1549,7 @@ async function loadApiKeyChannelPermissionApps(key: Database['public']['Tables']
     }
 
     if (adminOrgIds.length > 0) {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('apps')
         .select('id, app_id, name, owner_org')
         .in('owner_org', adminOrgIds)
@@ -1645,7 +1645,7 @@ async function copyKey(apikey: ApiKeyRow) {
   // List endpoint omits the raw key; load it on demand for plain keys only.
   let key = apikey.key
   if (!key) {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apikeys')
       .select('key')
       .eq('id', apikey.id)

@@ -190,11 +190,11 @@ vi.mock('~/services/websiteAuthCookie', () => ({
   setWebsitePaidUserCookie: (isPaidUser: boolean) => getContext().mockSetWebsitePaidUserCookie(isPaidUser),
 }))
 
-vi.mock('~/services/supabase', () => ({
-  getLocalConfig: () => ({ supaHost: 'https://supabase.capgo.test' }),
+vi.mock('~/services/console', () => ({
+  getLocalConfig: () => ({ apiHost: 'https://supabase.capgo.test' }),
   getPlans: () => getContext().mockGetPlans(),
   isPlatformAdmin: () => getContext().mockIsPlatformAdmin(),
-  useSupabase: () => {
+  useConsole: () => {
     const context = getContext()
 
     return {

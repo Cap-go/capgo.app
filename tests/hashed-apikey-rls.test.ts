@@ -9,7 +9,7 @@ import type { PoolClient } from 'pg'
  * IMPORTANT: This test uses a completely isolated user (USER_ID_RLS) with its own
  * org and API key to prevent interference with other tests that create/delete API keys.
  */
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
@@ -944,7 +944,7 @@ describe('find_apikey_by_value() function', () => {
   })
 })
 
-describe('rls policies with hashed api keys (via supabase sdk)', () => {
+describe('rls policies with hashed api keys (via capgo sdk)', () => {
   let hashedKey: { id: number, key: string, key_hash: string }
 
   beforeAll(async () => {
@@ -956,7 +956,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
   })
 
   it('can query apps table with hashed API key via SDK', async () => {
-    const supabase = createClient(
+    const capgo = createClient(
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_ANON_KEY!,
       {
@@ -966,7 +966,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
       },
     )
 
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select('app_id, name')
       .limit(5)
@@ -976,7 +976,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
   })
 
   it('can query channels table with hashed API key via SDK', async () => {
-    const supabase = createClient(
+    const capgo = createClient(
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_ANON_KEY!,
       {
@@ -986,7 +986,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
       },
     )
 
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select('id, name, app_id')
       .limit(5)
@@ -996,7 +996,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
   })
 
   it('can call get_orgs_v7 RPC with hashed API key', async () => {
-    const supabase = createClient(
+    const capgo = createClient(
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_ANON_KEY!,
       {
@@ -1006,7 +1006,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
       },
     )
 
-    const { data, error } = await supabase.rpc('get_orgs_v7')
+    const { data, error } = await capgo.rpc('get_orgs_v7')
 
     expect(error).toBeNull()
     expect(Array.isArray(data)).toBe(true)
@@ -1019,9 +1019,9 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
     })
 
     try {
-      const supabase = createCapgkeyClient(unprivilegedKey.key)
+      const capgo = createCapgkeyClient(unprivilegedKey.key)
 
-      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
+      const { data, error } = await capgo.rpc('regenerate_hashed_apikey', {
         p_apikey_id: unprivilegedKey.id,
       })
 
@@ -1056,9 +1056,9 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
       })
       createdKeyIds.push(unprivilegedKey.id)
 
-      const supabase = createCapgkeyClient(unprivilegedKey.key)
+      const capgo = createCapgkeyClient(unprivilegedKey.key)
 
-      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
+      const { data, error } = await capgo.rpc('regenerate_hashed_apikey', {
         p_apikey_id: siblingKey.id,
       })
 
@@ -1107,8 +1107,8 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
       )
       await client.query('COMMIT')
 
-      const supabase = createCapgkeyClient(keyToRotate.key)
-      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
+      const capgo = createCapgkeyClient(keyToRotate.key)
+      const { data, error } = await capgo.rpc('regenerate_hashed_apikey', {
         p_apikey_id: keyToRotate.id,
       })
 
@@ -1220,9 +1220,9 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
     })
 
     try {
-      const supabase = createCapgkeyClient(keyToRotate.key)
+      const capgo = createCapgkeyClient(keyToRotate.key)
 
-      const { data, error } = await supabase.rpc('regenerate_hashed_apikey', {
+      const { data, error } = await capgo.rpc('regenerate_hashed_apikey', {
         p_apikey_id: keyToRotate.id,
       })
 
@@ -1245,7 +1245,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
   })
 
   it('cannot access data with invalid API key', async () => {
-    const supabase = createClient(
+    const capgo = createClient(
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_ANON_KEY!,
       {
@@ -1255,7 +1255,7 @@ describe('rls policies with hashed api keys (via supabase sdk)', () => {
       },
     )
 
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select('app_id, name')
       .limit(5)

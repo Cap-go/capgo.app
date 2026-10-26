@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { BundlePickerRow } from '~/services/bundleColumns'
+import type { Database } from '~/types/database.types'
 import { FormKit } from '@formkit/vue'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
@@ -15,10 +16,11 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { checkCompatibilityNativePackages, defaultApiHost, isCompatible, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { checkCompatibilityNativePackages, defaultApiHost, isCompatible, useSupabase } from '~/services/supabase'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -65,7 +67,7 @@ type EditableChannelKey = 'allow_dev'
   | 'version'
 
 // Bundle link dialog state
-const bundleLinkVersions = ref<Database['public']['Tables']['app_versions']['Row'][]>([])
+const bundleLinkVersions = ref<BundlePickerRow[]>([])
 const bundleLinkSearchVal = ref('')
 const bundleLinkSearchMode = ref(false)
 const bundleLinkMode = ref<'stable' | 'rollout'>('stable')
@@ -90,7 +92,7 @@ const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
 const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
@@ -275,7 +277,7 @@ async function getChannel(force = false) {
   }
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select(`
           id,
@@ -352,7 +354,7 @@ async function getChannel(force = false) {
 async function getDefaultUploadChannel() {
   if (!packageId.value)
     return
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('apps')
     .select('default_upload_channel')
     .eq('app_id', packageId.value)
@@ -392,7 +394,7 @@ async function saveChannelChanges(update: ChannelUpdate) {
   }
 
   try {
-    const { error } = await supabase
+    const { error } = await capgo
       .from('channels')
       .update(update)
       .eq('id', id.value)
@@ -417,7 +419,7 @@ async function saveChannelChange<K extends EditableChannelKey>(key: K, val: Chan
 }
 
 async function notificationAuthHeaders() {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await capgo.auth.getSession()
   const token = data.session?.access_token
   if (!token)
     throw new Error(t('not-authenticated'))
@@ -545,6 +547,24 @@ const showSearchAndActions = computed(() => {
   return !bundleLinkSearchMode.value
 })
 
+/** Load native_packages for a picker row only when the user links that bundle. */
+async function loadBundleNativePackagesForLink(bundle: BundlePickerRow) {
+  // Picker rows stay light (no native_packages). Load them only when linking so
+  // compatibility still sees real deps instead of an empty array.
+  const { data, error } = await capgo
+    .from('app_versions')
+    .select('id, app_id, name, native_packages')
+    .eq('app_id', bundle.app_id)
+    .eq('id', bundle.id)
+    .single()
+  if (error || !data) {
+    console.error(error)
+    toast.error(t('error-fetching-versions'))
+    return null
+  }
+  return data
+}
+
 /**
  * Check a bundle's native packages against a channel and ask the user to accept a mismatch.
  * Returns false when the user cancels.
@@ -599,13 +619,16 @@ async function confirmBundleCompatibleWithChannel(
   return true
 }
 
-async function handleVersionLink(appVersion: Database['public']['Tables']['app_versions']['Row']) {
+async function handleVersionLink(picked: BundlePickerRow) {
   if (!channel.value)
     return
   // Close the bundle picker once a bundle is chosen; the compatibility, rollout and
   // notification prompts below open their own dialogs when needed.
   if (dialogStore.showDialog && dialogStore.dialogOptions?.title === t('bundle-management'))
     await dialogStore.closeDialog()
+  const appVersion = await loadBundleNativePackagesForLink(picked)
+  if (!appVersion)
+    return
   if (!(await confirmBundleCompatibleWithChannel(appVersion, channel.value.name, channel.value.version?.id)))
     return
   if (bundleLinkMode.value === 'rollout') {
@@ -656,7 +679,7 @@ async function loadPromoteTargets() {
     return
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('channels')
     .select('id, name, public, rollout_version, rollout_enabled, version:app_versions!channels_version_fkey(name)')
     .eq('app_id', source.app_id)
@@ -755,7 +778,7 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     return
   }
 
-  const { data: appVersion, error: versionError } = await supabase
+  const { data: appVersion, error: versionError } = await capgo
     .from('app_versions')
     .select('id, app_id, name, native_packages')
     .eq('id', source.version.id)
@@ -766,7 +789,7 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
     return
   }
 
-  const { data: targetRow, error: targetError } = await supabase
+  const { data: targetRow, error: targetError } = await capgo
     .from('channels')
     .select('version')
     .eq('id', target.id)
@@ -780,7 +803,7 @@ async function promoteBundleToChannel(target: PromoteTargetChannel) {
   if (!(await confirmBundleCompatibleWithChannel(appVersion, target.name, targetVersionId)))
     return
 
-  const { data: updated, error } = await supabase
+  const { data: updated, error } = await capgo
     .from('channels')
     .update({ version: appVersion.id })
     .eq('id', target.id)
@@ -919,9 +942,9 @@ async function openSelectVersion(startInSearch = false) {
   if (!channel.value)
     return
 
-  // Fetch versions when dialog opens
-  const { data, error } = await supabase.from('app_versions')
-    .select('*')
+  // Fetch versions when dialog opens — light columns only (no manifest / native_packages).
+  const { data, error } = await capgo.from('app_versions')
+    .select(BUNDLE_PICKER_COLUMNS)
     .eq('app_id', channel.value.app_id)
     .eq('deleted', false)
     .neq('id', channel.value.version.id)
@@ -1109,8 +1132,8 @@ async function refreshFilteredVersions() {
     return
 
   if (bundleLinkSearchVal.value && bundleLinkSearchVal.value.trim()) {
-    const { data, error } = await supabase.from('app_versions')
-      .select('*')
+    const { data, error } = await capgo.from('app_versions')
+      .select(BUNDLE_PICKER_COLUMNS)
       .eq('app_id', channel.value.app_id)
       .eq('deleted', false)
       .neq('id', channel.value.version.id)
@@ -1124,8 +1147,8 @@ async function refreshFilteredVersions() {
     bundleLinkVersions.value = data ?? []
   }
   else {
-    const { data, error } = await supabase.from('app_versions')
-      .select('*')
+    const { data, error } = await capgo.from('app_versions')
+      .select(BUNDLE_PICKER_COLUMNS)
       .eq('app_id', channel.value.app_id)
       .eq('deleted', false)
       .neq('id', channel.value.version.id)
@@ -1267,7 +1290,7 @@ async function onSelectAutoUpdate(value: Database['public']['Enums']['disable_up
       toast.error(t('metadata-min-ver-not-set'))
   }
 
-  const { error } = await supabase
+  const { error } = await capgo
     .from('channels')
     .update({ disable_auto_update: value })
     .eq('id', id.value)
@@ -2286,7 +2309,7 @@ async function copyCurlCommand() {
               :key="version.id"
               type="button"
               class="block w-full p-3 text-left border border-gray-300 rounded-lg cursor-pointer dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
-              @click="handleVersionLink(version as any)"
+              @click="handleVersionLink(version)"
             >
               <span class="flex items-center justify-between">
                 <span class="block">

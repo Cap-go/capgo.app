@@ -8,6 +8,54 @@ import { getEnv } from './utils.ts'
 
 const claimsClients = new Map<string, ReturnType<typeof createClient<Database>>>()
 
+// HS256 sessions make getClaims() call the auth server (getUser) on every request.
+// Reuse a successful verification briefly so a console page does not pay that
+// round trip per query. Failures are not cached, and a hit never outlives exp.
+const CLAIMS_CACHE_TTL_MS = 30_000
+const CLAIMS_CACHE_MAX = 200
+
+interface CachedClaims {
+  claims: JWTClaims
+  expiresAt: number
+}
+
+const verifiedClaims = new Map<string, CachedClaims>()
+
+function claimsCacheExpiry(claims: JWTClaims, now: number): number | null {
+  const ttlAt = now + CLAIMS_CACHE_TTL_MS
+  if (typeof claims.exp !== 'number')
+    return ttlAt
+  const expAt = claims.exp * 1000
+  if (expAt <= now)
+    return null
+  return Math.min(ttlAt, expAt)
+}
+
+function readCachedClaims(token: string, now: number): JWTClaims | null {
+  const cached = verifiedClaims.get(token)
+  if (!cached)
+    return null
+  if (cached.expiresAt <= now) {
+    verifiedClaims.delete(token)
+    return null
+  }
+  verifiedClaims.delete(token)
+  verifiedClaims.set(token, cached)
+  return { ...cached.claims }
+}
+
+function storeCachedClaims(token: string, claims: JWTClaims, now: number) {
+  const expiresAt = claimsCacheExpiry(claims, now)
+  if (expiresAt === null)
+    return
+  if (verifiedClaims.size >= CLAIMS_CACHE_MAX && !verifiedClaims.has(token)) {
+    const oldest = verifiedClaims.keys().next().value
+    if (oldest !== undefined)
+      verifiedClaims.delete(oldest)
+  }
+  verifiedClaims.set(token, { claims: { ...claims }, expiresAt })
+}
+
 function getClaimsClient(supabaseUrl: string, supabaseAnonKey: string) {
   const cacheKey = `${supabaseUrl}|${supabaseAnonKey.substring(0, 8)}`
   const cached = claimsClients.get(cacheKey)
@@ -33,6 +81,12 @@ function getClaimsClient(supabaseUrl: string, supabaseAnonKey: string) {
 export async function getClaimsFromJWT(c: Context, jwt: string): Promise<JWTClaims | null> {
   try {
     const token = jwt.startsWith('Bearer ') ? jwt.slice(7) : jwt
+    if (!token)
+      return null
+    const cached = readCachedClaims(token, Date.now())
+    if (cached)
+      return cached
+
     const supabaseUrl = getEnv(c, 'SUPABASE_URL').replace(/\/$/, '')
     const supabaseAnonKey = getEnv(c, 'SUPABASE_ANON_KEY')
 
@@ -42,7 +96,9 @@ export async function getClaimsFromJWT(c: Context, jwt: string): Promise<JWTClai
       return null
     }
 
-    return data.claims as JWTClaims
+    const claims = data.claims as JWTClaims
+    storeCachedClaims(token, claims, Date.now())
+    return { ...claims }
   }
   catch {
     return null

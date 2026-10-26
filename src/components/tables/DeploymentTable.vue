@@ -6,10 +6,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { getTimeWindowPageRange } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
   deviceId?: string
@@ -35,7 +35,7 @@ function getActiveOrder(columns: TableColumn[]) {
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const search = ref('')
 const elements = ref<Element[]>([])
 const isLoading = ref(false)
@@ -59,7 +59,7 @@ const paginatedRange = computed(() => {
 async function getData() {
   isLoading.value = true
   try {
-    const { data: currentSession } = await supabase.auth.getSession()!
+    const { data: currentSession } = await capgo.auth.getSession()!
     if (!currentSession.session)
       return
     const currentJwt = currentSession.session.access_token
@@ -179,7 +179,7 @@ async function openOneVersion(one: Element) {
     const loadingToastId = toast.loading(t('loading-version'))
     const versionName = one.version_name
 
-    const { data: versionRecord, error } = await supabase
+    const { data: versionRecord, error } = await capgo
       .from('app_versions')
       .select('id')
       .eq('app_id', props.appId)

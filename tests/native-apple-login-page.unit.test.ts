@@ -34,11 +34,11 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('vue-sonner', () => ({ toast: { error: mocks.error, warning: mocks.warning, success: vi.fn() } }))
 vi.mock('~/services/nativeAppleLogin', () => ({ isNativeAppleLoginAvailable: () => mocks.available, signInWithApple: mocks.signIn }))
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   defaultApiHost: 'https://api.example.test',
   hashEmail: async () => 'hashed-email',
   autoAuth: vi.fn(),
-  useSupabase: () => ({
+  useConsole: () => ({
     rpc: mocks.rpc,
     auth: {
       getClaims: mocks.getClaims,

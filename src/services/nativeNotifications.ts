@@ -3,7 +3,7 @@ import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import { CapgoNotifications } from '@capgo/capacitor-notifications'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost } from '~/services/supabase'
+import { defaultApiHost } from '~/services/console'
 
 interface SelfProofResponse {
   appId: string

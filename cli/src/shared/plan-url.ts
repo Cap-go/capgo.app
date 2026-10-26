@@ -12,3 +12,10 @@ export function normalizePlansUrl(candidate: unknown, fallback: string): string 
   }
   return fallback
 }
+
+/** Console plans link that also opens the trial "add a card" prompt for its `oid` org. */
+export function withTrialCardPrompt(plansUrl: string): string {
+  const url = new URL(plansUrl)
+  url.searchParams.set('trial_card', '1')
+  return url.href
+}

@@ -5,7 +5,7 @@ import { trimTrailingSlashes } from '../utils'
 import { setupDebug, setupError } from './setup-diagnostics'
 
 export const SETUP_PROGRESS_TIMEOUT_MS = 15_000
-export async function readSetupProgress(prepared: Omit<PreparedOnboardingCheck, 'attemptId'>, cancellation?: AbortSignal): Promise<AppTodoProgress | undefined> {
+export async function readSetupProgress(prepared: Pick<PreparedOnboardingCheck, 'apiHost' | 'apikey'> & { project: { appId: string } }, cancellation?: AbortSignal): Promise<AppTodoProgress | undefined> {
   const started = Date.now()
   setupDebug('progress request started', { budget_ms: SETUP_PROGRESS_TIMEOUT_MS, include_billing: true })
   const controller = new AbortController()

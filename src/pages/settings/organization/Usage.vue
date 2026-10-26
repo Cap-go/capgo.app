@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watchEffect } from 'vue'
@@ -8,12 +8,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import CreditsCta from '~/components/CreditsCta.vue'
 import PageLoader from '~/components/PageLoader.vue'
+import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/console'
 import { bytesToGb } from '~/services/conversion'
 import { formatLocalDate, formatLocalDateTime, formatUtcDateTimeAsLocal } from '~/services/date'
 import { formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { calculateCreditCost, getCreditPricingSteps, getCurrentPlanNameOrg, getPlans, getPlanUsagePercent, getTotalStorage, getUsageCreditDeductions } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
@@ -101,12 +101,12 @@ async function getUsage(orgId: string) {
   }
   detailPlanUsage = roundUsagePercents(detailPlanUsage)
 
-  const creditDeductions = await getUsageCreditDeductions(orgId)
-
   const nowEndOfDay = dayjs().endOf('day')
   const billingStart = organizationStore.currentOrganization?.subscription_start
     ? dayjs(organizationStore.currentOrganization.subscription_start).startOf('day')
     : null
+
+  const creditDeductions = await getUsageCreditDeductions(orgId, billingStart?.toISOString())
   const billingEndRaw = organizationStore.currentOrganization?.subscription_end
     ? dayjs(organizationStore.currentOrganization.subscription_end).endOf('day')
     : null

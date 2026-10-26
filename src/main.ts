@@ -6,16 +6,17 @@ import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from 'vue-router/auto-routes'
 import { prepareAppleOAuthLanding } from '~/services/appleOAuth'
+import { getLocalConfig } from '~/services/console'
 import { installDeepLinkHandler } from '~/services/deepLinks'
 import { isDocumentNavigationPending, replaceDocument } from '~/services/documentNavigation'
 import { getNativeExternalPurchaseRedirect, isNativeAppStoreContext, isNativeExternalPurchaseRestrictedPath } from '~/services/nativeCompliance'
 import { posthogLoader } from '~/services/posthog'
 import { captureConsoleAttributionFromLocation } from '~/services/signupAttribution'
 import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
-import { getLocalConfig } from '~/services/supabase'
 import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 import App from './App.vue'
-import { getRemoteConfig } from './services/supabase'
+import { defaultApiHost, getRemoteConfig } from './services/console'
+import { resolveConsoleApiBase } from './services/consoleAuth'
 import '@fontsource-variable/inter'
 // your custom styles here
 import './styles/style.css'
@@ -283,6 +284,7 @@ router.beforeEach((to, from, next) => {
       const confirmationUrl = resolveConfirmationUrl(to.query, {
         allowedHosts: getAllowedConfirmationHosts(),
         allowLocalDev: import.meta.env.DEV,
+        apiHost: resolveConsoleApiBase(defaultApiHost),
       })
       if (confirmationUrl) {
         replaceDocument(confirmationUrl)
@@ -308,7 +310,7 @@ router.beforeEach((to, from, next) => {
 })
 
 const config = getLocalConfig()
-posthogLoader(config.supaHost)
+posthogLoader(config.apiHost)
 captureConsoleAttributionFromLocation()
 
 // install all modules under `modules/`

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
+import type { BundleSummaryRow } from '~/services/bundleColumns'
 import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
 import { computedAsync, useEventBus } from '@vueuse/core'
 import { computed, h, ref, watch } from 'vue'
@@ -13,12 +14,13 @@ import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
 import BundleChannelsPopover from '~/components/tables/BundleChannelsPopover.vue'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { fetchLinkedChannelsForVersion, formatBundleListChannels, formatLinkedChannel, mergeBundleListChannels, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
+import { useConsole } from '~/services/console'
 import { formatBytes } from '~/services/conversion'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 
@@ -26,7 +28,7 @@ const props = defineProps<{
   appId: string
 }>()
 
-type Element = Database['public']['Tables']['app_versions']['Row'] & Database['public']['Tables']['app_versions_meta']['Row']
+type Element = BundleSummaryRow & Database['public']['Tables']['app_versions_meta']['Row']
 
 const canDeleteBundle = computedAsync(async () => {
   if (!props.appId)
@@ -38,7 +40,7 @@ const isMobile = Capacitor.isNativePlatform()
 const offset = 10
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
-const supabase = useSupabase()
+const capgo = useConsole()
 const router = useRouter()
 const bundleUploadedEvent = useEventBus<string>('bundle-uploaded')
 const total = ref(0)
@@ -102,16 +104,14 @@ async function showDeleteConfirmationDialog(name: string, isPlural = false, askF
   let message: string
 
   if (isPlural) {
-    message = `${t('alert-not-reverse-message')} ${t('alert-delete-message-plural')} ${t('bundles').toLowerCase()}?`
+    message = t('alert-delete-bundles-confirm')
   }
   else if (askForMethod) {
-    message = `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name} ${t('you-cannot-reuse')}.`
+    message = t('alert-delete-named-no-reuse-confirm', { name })
   }
   else {
-    const baseMessage = `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name}?`
-    const unsafeWarning = isPlural
-      ? t('you-are-deleting-unsafely-plural')
-      : t('you-are-deleting-unsafely')
+    const baseMessage = t('alert-delete-named-confirm', { name })
+    const unsafeWarning = t('you-are-deleting-unsafely')
     const formattedWarning = unsafeWarning
       .replace('$1', '<b><u>')
       .replace('$2', '</u></b>')
@@ -188,8 +188,8 @@ function showChannelUnlinkPermissionError(deniedChannels: ChannelPromotionTarget
   }))
 }
 
-async function enhanceVersionElems(dataVersions: Database['public']['Tables']['app_versions']['Row'][]) {
-  const { data: dataVersionsMeta } = await supabase
+async function enhanceVersionElems(dataVersions: BundleSummaryRow[]) {
+  const { data: dataVersionsMeta } = await capgo
     .from('app_versions_meta')
     .select()
     .in('id', dataVersions.map(({ id }) => id))
@@ -207,7 +207,7 @@ async function getData() {
 
     // If search term might be a channel name, find versions linked to channels with that name
     if (search.value) {
-      const { data: channels } = await supabase
+      const { data: channels } = await capgo
         .from('channels')
         .select('id, version')
         .eq('app_id', props.appId)
@@ -218,9 +218,11 @@ async function getData() {
       }
     }
 
-    let req = supabase
+    // Same light projection as GET /bundle?fields=summary — never pull manifest /
+    // native_packages for the list page (those arrays can be megabytes per row).
+    let req = capgo
       .from('app_versions')
-      .select('*', { count: 'exact' })
+      .select(BUNDLE_SUMMARY_COLUMNS, { count: 'exact' })
       .eq('app_id', props.appId)
       .neq('storage_provider', 'revert_to_builtin')
       .range(currentVersionsNumber.value, currentVersionsNumber.value + offset - 1)
@@ -269,12 +271,12 @@ async function fetchChannelsForVersions(versions: Element[]) {
     return
 
   const [stableResult, rolloutResult] = await Promise.all([
-    supabase
+    capgo
       .from('channels')
       .select('name, version, rollout_version, id')
       .eq('app_id', props.appId)
       .in('version', versionIds),
-    supabase
+    capgo
       .from('channels')
       .select('name, version, rollout_version, id')
       .eq('app_id', props.appId)
@@ -368,12 +370,12 @@ async function deleteOne(one: Element) {
     }
 
     const { error: delAppError } = await (didCancelRes === 'normal'
-      ? supabase
+      ? capgo
           .from('app_versions')
           .update({ deleted: true })
           .eq('app_id', one.app_id)
           .eq('id', one.id)
-      : supabase
+      : capgo
           .from('app_versions')
           .delete()
           .eq('app_id', one.app_id)
@@ -552,12 +554,12 @@ async function massDelete() {
   }
 
   const { error: delAppError } = await (didCancelRes === 'normal'
-    ? supabase
+    ? capgo
         .from('app_versions')
         .update({ deleted: true })
         .eq('app_id', props.appId)
         .in('id', (selectedElements.value as any).map((val: Element) => val.id))
-    : supabase
+    : capgo
         .from('app_versions')
         .delete()
         .eq('app_id', props.appId)
@@ -590,7 +592,7 @@ async function openOne(one: Element) {
 
 async function updateOverallBundlesCount() {
   try {
-    const { count } = await supabase
+    const { count } = await capgo
       .from('app_versions')
       .select('id', { count: 'exact', head: true })
       .eq('app_id', props.appId)

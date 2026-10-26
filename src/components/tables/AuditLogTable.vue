@@ -14,8 +14,8 @@ import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -51,7 +51,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 
@@ -336,9 +336,11 @@ async function fetchAuditLogs() {
   try {
     await loadMembers()
 
-    let query = supabase
+    // Estimated: exact up to PostgREST's row cap, planner estimate beyond it, so a
+    // large organization's audit trail is never counted row by row per page.
+    let query = capgo
       .from('audit_logs')
-      .select('*', { count: 'exact' })
+      .select('*', { count: 'estimated' })
       .eq('org_id', props.orgId)
       .order('created_at', { ascending: false })
 

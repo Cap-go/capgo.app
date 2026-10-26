@@ -2,14 +2,14 @@ import type { MaybeRefOrGetter, Ref } from 'vue'
 import { ref, toValue } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 
 export function useNativeObserveStats<T>(
   appId: MaybeRefOrGetter<string>,
   params: () => Record<string, unknown>,
   logContext: string,
 ) {
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const { t } = useI18n()
   const stats = ref<T | null>(null) as Ref<T | null>
   const statsLoading = ref(false)
@@ -23,7 +23,7 @@ export function useNativeObserveStats<T>(
     const requestId = ++latestRequest
     statsLoading.value = true
     try {
-      const { data: sessionData } = await supabase.auth.getSession()
+      const { data: sessionData } = await capgo.auth.getSession()
       if (!sessionData.session) {
         if (requestId === latestRequest)
           toast.error(t('not-authenticated'))

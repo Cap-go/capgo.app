@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Tab, TableColumn } from '~/components/comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
@@ -14,8 +14,8 @@ import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSearch from '~icons/lucide/search'
 import IconSend from '~icons/lucide/send'
 import IconZap from '~icons/lucide/zap'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 interface NotificationProviderConfig {
@@ -74,7 +74,7 @@ type NotificationTab = 'dashboard' | 'broadcasts' | 'api'
 
 const { t } = useI18n()
 const route = useRoute()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 
 const id = ref('')
@@ -280,7 +280,7 @@ const campaignColumns = ref<TableColumn[]>([
 let activeRefreshId = 0
 
 async function authHeaders() {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await capgo.auth.getSession()
   const token = data.session?.access_token
   if (!token)
     throw new Error(t('not-authenticated'))
@@ -341,7 +341,7 @@ function shortKey(value: string) {
 }
 
 async function loadAppInfo(appId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('apps')
     .select()
     .eq('app_id', appId)
