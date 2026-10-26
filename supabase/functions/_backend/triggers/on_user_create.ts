@@ -49,7 +49,7 @@ app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c
   cloudlog({ requestId: c.get('requestId'), message: 'createCustomer stripe' })
   await syncUserPreferenceTags(c, normalizeBentoEmail(record.email), record)
   await syncBentoFirstOrgOnUserCreate(c, record)
-  // The offer lives in server-only app metadata (set by /auth/register and the Apple flow).
+  // The offer lives in server-only app metadata (set by /auth/register).
   // Skip when Bento is off so the plans lookup can never fail provisioning for nothing.
   if (isBentoConfigured(c) && isDirectOfferMetadata(authUser.app_metadata)) {
     // Direct-offer (paid ads) signups: tag offer=direct so lifecycle emails can

@@ -312,7 +312,6 @@
     "@capgo/capacitor-shake": "^8.0.44",
     "@capgo/capacitor-sheets": "^8.1.0",
     "@capgo/capacitor-sim": "^8.0.39",
-    "@capgo/capacitor-social-login": "^8.5.18",
     "@capgo/capacitor-speech-recognition": "^8.3.2",
     "@capgo/capacitor-speech-synthesis": "^8.0.22",
     "@capgo/capacitor-textinteraction": "^8.0.40",
