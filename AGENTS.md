@@ -1031,18 +1031,27 @@ introduces a new screen that should be part of the visual diff set.
 
 ## Database Replication
 
-Our main database is hosted on Supabase. We use custom replica hosted in
-Planetscale.
+Our main database is hosted on Supabase. Read replicas are hosted on Google
+Cloud SQL (not PlanetScale). PlanetScale only hosts the standalone R2 inventory
+database (`capgo/capgo-r2-inventory`, see `docs/r2-inventory-operations.md`),
+which is not a read replica of the main database.
 
-We have 5 read replicas for our main database to ensure high availability and
-low latency for read operations. These replicas are synchronized with the
-primary database using logical replication. We have one replica by continent:
+Supabase logically replicates to a single Google Cloud SQL subscriber (`eu-2`,
+managed by the scripts in `read_replicate/`). Google Cloud SQL then replicates
+that subscriber to the regional read replicas, so replica reconciliation always
+targets only the subscriber. The plugin workers bind one Hyperdrive per
+regional replica (`HYPERDRIVE_CAPGO_READ_*` in
+`cloudflare_workers/plugin/wrangler.jsonc`):
 
-- North America (Ohio)
-- Europe (Frankfurt)
-- Asia (Seoul)
-- Australia (Sydney)
-- South America (Sao Paulo)
+- North America (`NA`)
+- Europe (`EU`)
+- South America (`SA`)
+- Oceania (`OC`)
+- Asia - Japan (`AS_JAPAN`, Tokyo)
+- Asia - India (`AS_INDIA`, Mumbai)
+- Hong Kong (`HK`, asia-east2)
+- Africa (`AF`, africa-south1)
+- Middle East (`ME`, me-central1)
 
 Applications are configured to read from the nearest replica based on the user's
 location. This repartition is done by Cloudflare snippets at
@@ -1053,7 +1062,7 @@ location. This repartition is done by Cloudflare snippets at
 When backend code uses the plugin read-path (`/updates`, `/stats`, `/channel_self`), it must only query what exists in the read replicas.
 
 - Logical replication replicates **table data**, not derived objects like **views** and **SQL functions**.
-- Treat the read replica (what you see in PlanetScale) as the source of truth for what is queryable from plugin endpoints.
+- Treat the read replica (what you see in Google Cloud SQL) as the source of truth for what is queryable from plugin endpoints.
 - Do **not** query credits ledger tables/views from the replica (e.g. `usage_credit_*` / `usage_credit_balances`). If plugin logic needs a “has credits” signal, **materialize it into a replicated column/table** (example: an org-level boolean flag that is refreshed by primary-side jobs).
 - `/updates`, `/stats`, and `/channel_self` are extremely hot paths and can be called hundreds of times per second.
 - Those endpoints must not call the primary Supabase/Postgres database in-request or through `backgroundTask()` side effects unless there is no other practical option.
