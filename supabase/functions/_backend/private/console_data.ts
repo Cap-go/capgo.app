@@ -6,10 +6,11 @@ import { z } from 'zod'
 import { CONSOLE_RPCS, CONSOLE_TABLES } from '../utils/console_query_allowlist.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { canAccessImagePath } from '../utils/image_access.ts'
+import { createImageReadToken, downloadImage, imageExists, removeImages, uploadImage, verifyImageReadToken } from '../utils/image_storage.ts'
+import { cloudlogErr } from '../utils/logging.ts'
 import { runConsoleQuery } from './console_query_run.ts'
 import { getStorageAllowedOrigins, normalizeImagePath } from '../utils/storage.ts'
-import { getEnv } from '../utils/utils.ts'
 import { app as consoleAuthProxy } from './console_auth_proxy.ts'
 
 // The console records PostgREST builder calls and runs them here as the caller's
@@ -74,6 +75,12 @@ app.post('/query', async (c) => {
   return c.json(await runConsoleQuery(c, request, { role: 'anon' }))
 })
 
+// Images live in R2. The storage bucket RLS that used to guard them is
+// enforced by canAccessImagePath; responses keep the supabase-js storage shape.
+function storageError(message: string, statusCode: string) {
+  return { data: null, error: { message, statusCode, error: message } }
+}
+
 app.post('/images/upload', middlewareAuth, async (c) => {
   const parsedPath = imagePathSchema.safeParse(c.req.header('x-image-path'))
   if (!parsedPath.success)
@@ -82,16 +89,25 @@ app.post('/images/upload', middlewareAuth, async (c) => {
   // Refuse declared oversize uploads before buffering; the byte check below covers undeclared ones.
   if (Number(c.req.header('content-length') ?? 0) > MAX_IMAGE_BYTES)
     return quickError(413, 'image_too_large', 'Image must be smaller than 50 MB')
+  if (!await canAccessImagePath(c, path, 'write'))
+    return c.json(storageError('new row violates row-level security policy', '403'))
   const file = await c.req.arrayBuffer()
   // Same ceiling the storage bucket applied before uploads went through the API.
   if (file.byteLength > MAX_IMAGE_BYTES)
     return quickError(413, 'image_too_large', 'Image must be smaller than 50 MB')
-  const client = supabaseClient(c, c.get('authorization')!)
-  const result = await client.storage.from('images').upload(path, file, {
-    contentType: c.req.header('content-type') ?? 'application/octet-stream',
-    upsert: c.req.header('x-image-upsert') === 'true',
-  })
-  return c.json(result)
+  try {
+    const result = await uploadImage(c, path, new Uint8Array(file), {
+      contentType: c.req.header('content-type') ?? 'application/octet-stream',
+      upsert: c.req.header('x-image-upsert') === 'true',
+    })
+    if (result === 'conflict')
+      return c.json(storageError('The resource already exists', '409'))
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'console image upload failed', path, error })
+    return c.json(storageError('Image upload failed', '500'))
+  }
+  return c.json({ data: { path, fullPath: `images/${path}` }, error: null })
 })
 
 app.post('/images/sign', middlewareAuth, async (c) => {
@@ -107,39 +123,48 @@ app.post('/images/sign', middlewareAuth, async (c) => {
       return quickError(400, 'invalid_path', 'Image URL is not from Capgo storage')
     path = key.data
   }
-  const result = await supabaseClient(c, c.get('authorization')!).storage.from('images').createSignedUrl(path, body.data.expiresIn)
-  if (result.error || !result.data)
-    return c.json(result)
-  const token = new URL(result.data.signedUrl).searchParams.get('token')
+  if (!await canAccessImagePath(c, path, 'read'))
+    return c.json(storageError('Object not found', '404'))
+  // Storage refused to sign missing objects; callers rely on that to show a placeholder.
+  let exists: boolean
+  try {
+    exists = await imageExists(c, path)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'console image sign lookup failed', path, error })
+    return quickError(502, 'image_sign_failed', 'Unable to sign image')
+  }
+  if (!exists)
+    return c.json(storageError('Object not found', '404'))
+  const token = await createImageReadToken(c, path, body.data.expiresIn)
   if (!token)
     return quickError(502, 'image_sign_failed', 'Unable to sign image')
-  // Serve the image through this API so the browser never loads Supabase storage directly.
+  // Serve the image through this API so the browser never loads the bucket directly.
   const signedUrl = new URL(c.req.url)
   signedUrl.pathname = signedUrl.pathname.replace(/\/images\/sign\/?$/, '/images/read')
   signedUrl.search = ''
   signedUrl.searchParams.set('path', path)
   signedUrl.searchParams.set('token', token)
-  return c.json({ ...result, data: { signedUrl: signedUrl.href } })
+  return c.json({ data: { signedUrl: signedUrl.href }, error: null })
 })
 
-// The signed capability was issued with the caller's RLS; image elements do not send bearer headers.
+// The signed capability was issued after the read check; image elements do not send bearer headers.
 app.get('/images/read', async (c) => {
   const query = z.object({ path: imagePathSchema, token: z.string().min(1).max(4096) }).safeParse(c.req.query())
   if (!query.success)
     return quickError(400, 'invalid_image', 'Invalid image request')
-  const path = query.data.path.split('/').map(encodeURIComponent).join('/')
-  const upstream = new URL(`/storage/v1/object/sign/images/${path}`, getEnv(c, 'SUPABASE_URL'))
-  upstream.searchParams.set('token', query.data.token)
-  // Workers supports manual redirects; reject non-2xx responses without following them.
-  const response = await fetch(upstream, { redirect: 'manual', signal: AbortSignal.timeout(10000) })
-  if (!response.ok) {
-    let status = 403
-    if (response.status >= 500)
-      status = 502
-    else if (response.status === 404)
-      status = 404
-    return quickError(status, 'image_unavailable', 'Image is unavailable')
+  if (!await verifyImageReadToken(c, query.data.path, query.data.token))
+    return quickError(403, 'image_unavailable', 'Image is unavailable')
+  let response: Response | null
+  try {
+    response = await downloadImage(c, query.data.path)
   }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'console image read failed', path: query.data.path, error })
+    return quickError(502, 'image_unavailable', 'Image is unavailable')
+  }
+  if (!response)
+    return quickError(404, 'image_unavailable', 'Image is unavailable')
   return new Response(response.body as unknown as ReadableStream, {
     headers: {
       'Content-Type': response.headers.get('content-type') ?? 'application/octet-stream',
@@ -151,11 +176,23 @@ app.get('/images/read', async (c) => {
 })
 
 app.post('/images/remove', middlewareAuth, async (c) => {
-  const body = z.object({ paths: z.array(z.string().min(1).max(1024)).min(1).max(20) }).safeParse(await parseBody(c))
+  const body = z.object({ paths: z.array(imagePathSchema).min(1).max(20) }).safeParse(await parseBody(c))
   if (!body.success)
     return quickError(400, 'invalid_body', 'Invalid image request')
-  const result = await supabaseClient(c, c.get('authorization')!).storage.from('images').remove(body.data.paths)
-  return c.json(result)
+  // Like storage RLS, paths the caller may not delete are skipped, not reported.
+  const removable: string[] = []
+  for (const path of body.data.paths) {
+    if (await canAccessImagePath(c, path, 'delete'))
+      removable.push(path)
+  }
+  try {
+    await removeImages(c, removable)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'console image remove failed', paths: removable, error })
+    return c.json(storageError('Image delete failed', '500'))
+  }
+  return c.json({ data: removable.map(name => ({ name })), error: null })
 })
 
 // Server-sent CLI activity for one organization, replacing the Supabase realtime

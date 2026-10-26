@@ -3,11 +3,11 @@ import { getStaleOrgLogoPaths, runWithDeadline } from '../supabase/functions/_ba
 
 describe('getStaleOrgLogoPaths', () => {
   it.concurrent.each([
-    ['keeps the linked org logo file and skips folders', 'org/org-123/logo/current.png', [{ id: '1', name: 'current.png' }, { id: '2', name: 'older.png' }, { id: null, name: 'nested-folder' }], ['older.png']],
-    ['treats signed logo URLs as the linked file path', 'https://sb.capgo.app/storage/v1/object/sign/images/org/org-123/logo/facebook.com.png?token=abc', [{ id: '1', name: 'facebook.com.png' }, { id: '2', name: 'fallback.png' }], ['fallback.png']],
-    ['decodes signed logo URLs before comparing file names', 'https://sb.capgo.app/storage/v1/object/sign/images/org/org-123/logo/company%20logo.png?token=abc', [{ id: '1', name: 'company logo.png' }, { id: '2', name: 'fallback.png' }], ['fallback.png']],
-    ['treats raw logo paths with a leading /images prefix as the linked file path', '/images/org/org-123/logo/current.png', [{ id: '1', name: 'current.png' }, { id: '2', name: 'older.png' }], ['older.png']],
-    ['deletes all org logo files when no linked logo remains', null, [{ id: '1', name: 'first.png' }, { id: '2', name: 'second.png' }], ['first.png', 'second.png']],
+    ['keeps the linked org logo file and skips folders', 'org/org-123/logo/current.png', [{ name: 'current.png', isFolder: false }, { name: 'older.png', isFolder: false }, { name: 'nested-folder', isFolder: true }], ['older.png']],
+    ['treats signed logo URLs as the linked file path', 'https://sb.capgo.app/storage/v1/object/sign/images/org/org-123/logo/facebook.com.png?token=abc', [{ name: 'facebook.com.png', isFolder: false }, { name: 'fallback.png', isFolder: false }], ['fallback.png']],
+    ['decodes signed logo URLs before comparing file names', 'https://sb.capgo.app/storage/v1/object/sign/images/org/org-123/logo/company%20logo.png?token=abc', [{ name: 'company logo.png', isFolder: false }, { name: 'fallback.png', isFolder: false }], ['fallback.png']],
+    ['treats raw logo paths with a leading /images prefix as the linked file path', '/images/org/org-123/logo/current.png', [{ name: 'current.png', isFolder: false }, { name: 'older.png', isFolder: false }], ['older.png']],
+    ['deletes all org logo files when no linked logo remains', null, [{ name: 'first.png', isFolder: false }, { name: 'second.png', isFolder: false }], ['first.png', 'second.png']],
   ] as const)('%s', (_name, linkedLogo, files, stale) => {
     expect(getStaleOrgLogoPaths('org-123', [...files], linkedLogo)).toEqual(stale.map(name => `org/org-123/logo/${name}`))
   })

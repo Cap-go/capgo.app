@@ -7,6 +7,7 @@ import { buildAppCreatorEventDetails } from '../utils/app_creator.ts'
 import { createIfNotExistStoreInfo } from '../utils/cloudflare.ts'
 import { purgeOnPremCache } from '../utils/cloudflare_cache_purge.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { cleanStoredImageMetadata } from '../utils/image.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../utils/org_onboarding_intent.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
@@ -153,6 +154,11 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
 
   // Purge on-prem cache for this app to clear any stale responses
   await backgroundTask(c, purgeOnPremCache(c, record.app_id))
+  if (record.icon_url && record.owner_org) {
+    // Moves an icon a pre-8.90.1 CLI wrote to Supabase Storage into R2, then strips metadata.
+    await backgroundTask(c, cleanStoredImageMetadata(c, record.icon_url, { orgId: record.owner_org, appId: record.app_id })
+      .catch(error => cloudlog({ requestId: c.get('requestId'), message: 'app icon import failed', error, app_id: record.app_id })))
+  }
   // Skip onboarding emails for demo apps
   if (!isDemo && !isPendingOnboarding) {
     await backgroundTask(c, createIfNotExistStoreInfo(c, {
