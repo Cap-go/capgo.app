@@ -133,6 +133,36 @@ describe('analytics engine write volume', () => {
     }))
   })
 
+  it('flags a failure log that was not counted as a version fail in blob10', async () => {
+    const { sendStatsAndDevice } = await import('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts')
+    const { DEFAULT_DEVICE_DATA_COLLECTION } = await import('../supabase/functions/_backend/plugin_runtime/utils/deviceDataCollection.ts')
+    const writeDataPoint = vi.fn()
+    await sendStatsAndDevice(
+      createContext({ APP_LOG: { writeDataPoint } }),
+      {
+        app_id: 'com.example.app',
+        device_id: 'device-1',
+        version_name: '1.0.0',
+        platform: 'ios',
+        plugin_version: '8.51.16',
+        os_version: '18.0',
+        version_build: '2.0.0',
+        custom_id: '',
+        is_prod: true,
+        is_emulator: false,
+        install_source: 'app_store',
+        country_code: 'US',
+      } as any,
+      [{ action: 'download_fail', uncountedFailure: true }, { action: 'update_fail' }],
+      true,
+      { ...DEFAULT_DEVICE_DATA_COLLECTION, country: false },
+    )
+    expect(writeDataPoint.mock.calls.map(([point]) => point.blobs)).toEqual([
+      ['device-1', 'download_fail', '1.0.0', '', 'ios', '', '8.51.16', '', '', '1'],
+      ['device-1', 'update_fail', '1.0.0', '', 'ios', '', '8.51.16', '', ''],
+    ])
+  })
+
   it('omits DEVICE_INFO blobs for disabled collection fields', async () => {
     const { trackDevicesCF } = await import('../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts')
     const { applyDeviceDataCollectionToDevice, DEFAULT_DEVICE_DATA_COLLECTION } = await import('../supabase/functions/_backend/plugin_runtime/utils/deviceDataCollection.ts')

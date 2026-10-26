@@ -4,11 +4,12 @@ import type { VersionUsageChannel } from '../utils/types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, runQueryToCFA } from '../utils/cloudflare.ts'
+import { buildAppLogFailureChannelFilterCF, buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, readLegacyDownloadFailsCF, runQueryToCFA } from '../utils/cloudflare.ts'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
+import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, subtractLegacyDownloadFails } from '../utils/legacyDownloadFail.ts'
 import { checkPermission, getDeniedChannelIdsForPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -284,12 +285,16 @@ function computeRollout(
   }
 }
 
+function seriesBucketCF(bucketMinutes: number) {
+  return `toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '${bucketMinutes}' MINUTE))`
+}
+
 function buildSeriesQueryCF(appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel?: VersionUsageChannel) {
   // Older `get` rows carry no channel; keep them so a channel view does not lose
   // them while they age out (the release window is at most 72h).
   const channelFilter = buildVersionUsageChannelFilterCF(channel, { includeUnattributedGets: true })
   return `SELECT
-  toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '${bucketMinutes}' MINUTE)) AS bucket,
+  ${seriesBucketCF(bucketMinutes)} AS bucket,
   sum(if(blob3 = 'get', _sample_interval, 0)) AS get,
   sum(if(blob3 = 'install', _sample_interval, 0)) AS install,
   sum(if(blob3 = 'fail', _sample_interval, 0)) AS fail
@@ -304,20 +309,6 @@ GROUP BY bucket
 ORDER BY bucket`
 }
 
-// app_log failure rows carry the channel in blob8 (name) and blob9 (id). Rows
-// written before that have neither and stay out of a channel view.
-function buildFailureChannelFilterCF(channel: VersionUsageChannel) {
-  const channelId = channel.id ? escapeSqlString(String(channel.id)) : ''
-  const channelName = channel.name ? escapeSqlString(channel.name) : ''
-  if (channelId && channelName)
-    return `AND (blob9 = '${channelId}' OR (blob9 = '' AND blob8 = '${channelName}'))`
-  if (channelId)
-    return `AND blob9 = '${channelId}'`
-  if (channelName)
-    return `AND blob8 = '${channelName}'`
-  return ''
-}
-
 function buildFailuresQueryCF(appId: string, versionName: string, startMs: number, endMs: number, channel: VersionUsageChannel) {
   return `SELECT
   blob2 AS action,
@@ -327,9 +318,10 @@ WHERE
   index1 = '${escapeSqlString(appId)}'
   AND blob3 = '${escapeSqlString(versionName)}'
   AND blob2 LIKE '%fail%'
+  AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF}
   AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
   AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
-  ${buildFailureChannelFilterCF(channel)}
+  ${buildAppLogFailureChannelFilterCF(channel)}
 GROUP BY action
 ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`
@@ -343,7 +335,8 @@ LIMIT ${MAX_FAILURE_ACTIONS}`
 // (Analytics Engine precision): a set in the same second as the first failure
 // counts as recovered.
 const NO_FAILURE_TS = 4102444800 // 2100-01-01, sentinel for "no failure"
-// Bundle failures are every `*_fail` action plus these, as in the public metrics.
+// Bundle failures are every `*_fail` action plus these, as in the public metrics,
+// without download_fail of plugins that also send it for a failed update check.
 const EXTRA_FAILURE_ACTIONS: string[] = PUBLIC_FAILURE_ACTIONS.filter(action => !action.endsWith('_fail'))
 const EXTRA_FAILURE_ACTIONS_CF = EXTRA_FAILURE_ACTIONS.map(action => `'${escapeSqlString(action)}'`).join(', ')
 
@@ -362,7 +355,7 @@ FROM (
     AND blob3 = '${escapeSqlString(versionName)}'
     AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
     AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
-    AND (blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN (${EXTRA_FAILURE_ACTIONS_CF})) ${buildFailureChannelFilterCF(channel)}))
+    AND (blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN (${EXTRA_FAILURE_ACTIONS_CF})) AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF} ${buildAppLogFailureChannelFilterCF(channel)}))
   GROUP BY device_id
 )
 WHERE first_fail < ${NO_FAILURE_TS}`
@@ -409,10 +402,18 @@ function toFailedDevices(rows: RawFailedDevicesRow[] | null): ReleaseLiveFailedD
 }
 
 async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
-  const [seriesRows, failureRows, failedDeviceRows] = await Promise.all([
+  const [rawSeriesRows, legacyFails, failureRows, failedDeviceRows] = await Promise.all([
     c.env.VERSION_USAGE
       ? runQueryToCFA<RawBucketRow>(c, buildSeriesQueryCF(appId, versionName, startMs, endMs, bucketMinutes, channel))
       : Promise.resolve([] as RawBucketRow[]),
+    readLegacyDownloadFailsCF(c, {
+      appId,
+      start: new Date(startMs),
+      end: new Date(endMs),
+      bucket: seriesBucketCF(bucketMinutes),
+      channel,
+      versionName,
+    }),
     c.env.APP_LOG
       ? runQueryToCFA<RawFailureRow>(c, buildFailuresQueryCF(appId, versionName, startMs, endMs, channel))
           .catch((error) => {
@@ -429,6 +430,7 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
           })
       : Promise.resolve(null),
   ])
+  const seriesRows = subtractLegacyDownloadFails(rawSeriesRows, row => legacyDownloadFailKey(Number(row.bucket), versionName), legacyFails)
   return { seriesRows, failureRows, failedDevices: toFailedDevices(failedDeviceRows) }
 }
 

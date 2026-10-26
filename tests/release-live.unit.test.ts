@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { releaseLiveTestUtils } from '../supabase/functions/_backend/private/release_live.ts'
 import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
+import { NOT_LEGACY_DOWNLOAD_FAIL_CF } from '../supabase/functions/_backend/utils/legacyDownloadFail.ts'
 
 describe('release live helpers', () => {
   it.concurrent('picks the smallest bucket that keeps the series bounded', () => {
@@ -87,6 +88,7 @@ describe('release live helpers', () => {
     const failures = releaseLiveTestUtils.buildFailuresQueryCF('com.demo.app', '1.0.0', start, end, { id: 7, name: 'prod\'uction' })
     expect(failures).toContain('blob3 = \'1.0.0\'')
     expect(failures).toContain('LIKE \'%fail%\'')
+    expect(failures).toContain(`AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF}`)
     expect(failures).toContain('AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))')
   })
 
@@ -106,7 +108,8 @@ describe('release live helpers', () => {
     expect(query).toContain('sum(if(last_set >= first_fail, 0, 1)) AS stuck')
     expect(query).toContain('WHERE first_fail < 4102444800')
     // Only failures are channel scoped: set logs carry no channel.
-    expect(query).toContain('(blob2 = \'set\' OR ((blob2 LIKE \'%_fail\' OR blob2 IN (\'insufficient_disk_space\', \'cannotGetBundle\', \'blocked_by_server_url\', \'backend_refusal\')) AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))))')
+    // download_fail of plugins that also send it for a failed update check is no failure.
+    expect(query).toContain(`(blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN ('insufficient_disk_space', 'cannotGetBundle', 'blocked_by_server_url', 'backend_refusal')) AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF} AND (blob9 = '7' OR (blob9 = '' AND blob8 = 'prod''uction'))))`)
 
     // The Postgres fallback must keep the same rules.
     const sb = releaseLiveTestUtils.FAILED_DEVICES_QUERY_SB

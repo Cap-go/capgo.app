@@ -218,7 +218,7 @@ const zipSizeLabel = computed(() => {
 })
 
 const checksumInfo = computed(() => {
-  return getChecksumInfo(version.value?.checksum)
+  return getChecksumInfo(version.value?.checksum, !!version.value?.session_key)
 })
 
 // add check compatibility here
