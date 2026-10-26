@@ -1,8 +1,12 @@
+import { tryParse } from '@std/semver'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import snippet from '../cloudflare_workers/snippet/index.js'
 import { PROVIDER_INFRA_ASNS } from '../supabase/functions/_backend/plugin_runtime/utils/providerAsns.ts'
 import { decodeSnippetEdgeStat } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
+import { fixSemver } from '../supabase/functions/_backend/plugin_runtime/utils/utils.ts'
+
+const PLAIN_SEMVER_RE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/
 
 const APP_ID = 'com.edge.app'
 const DEVICE_ID = '00000000-0000-4000-8000-000000000001'
@@ -281,6 +285,55 @@ describe('cloudflare snippet edge answers', () => {
     expect(fetchMock).toHaveBeenCalledTimes(6)
     await snippet.fetch(buildRequest('/stats', [statsEvent({ version_build: '2.1' })]))
     expect(fetchMock).toHaveBeenCalledTimes(6)
+  })
+
+  it('answers /stats native versions only when the worker parses them', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'X-Capgo-Edge-Fill': statsFill } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await snippet.fetch(buildRequest('/stats', [statsEvent()]))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // parsePluginBody: plain x.y.z, or @std/semver tryParse(fixSemver(version)).
+    const workerParses = (version: string) => PLAIN_SEMVER_RE.test(version) || tryParse(fixSemver(version)) !== undefined
+    const versions = [
+      '0.9.315-native.0.0.1',
+      '0.9.314-native.93140001',
+      '1.2.3+ota.8016.ios',
+      '1.2.3-beta.1+build.5',
+      'v1.2.3',
+      '2.1',
+      '1-rc',
+      'V1.2.3',
+      '1.2.3-a..b',
+      '1.2.3+a+b',
+      '1.2.3--x',
+      '1.0-beta.1',
+      '1.2.3-01',
+      '1.2.3-',
+      '1.2.3+',
+      '1.2.3_4',
+      '01.2.3',
+      ' 1.2.3',
+      '1.2.3.4',
+      '9007199254740993.0.0',
+      `1.2.3-${'a'.repeat(260)}`,
+    ]
+    let forwarded = 1
+    for (const version_build of versions) {
+      const response = await snippet.fetch(buildRequest('/stats', [statsEvent({ version_build })]))
+      const answered = response.headers.get('X-Capgo-Edge') === 'answer'
+      if (!answered)
+        forwarded++
+      expect(fetchMock).toHaveBeenCalledTimes(forwarded)
+      // Never answer a version the worker rejects with semver_error.
+      if (answered)
+        expect(workerParses(version_build), version_build).toBe(true)
+    }
+    // The prerelease and build tags of real plugins are answered.
+    for (const version_build of versions.slice(0, 6)) {
+      const response = await snippet.fetch(buildRequest('/stats', [statsEvent({ version_build })]))
+      expect(response.headers.get('X-Capgo-Edge'), version_build).toBe('answer')
+    }
   })
 
   it('answers /stats of an app it learned nothing about, outside the learning share', async () => {
