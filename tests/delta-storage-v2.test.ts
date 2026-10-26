@@ -49,6 +49,17 @@ async function recordUnsettled(client: Pick<PoolClient, 'query'>, paths: string[
   )
 }
 
+async function versionFilesOf(client: Pick<PoolClient, 'query'>, versionId: number) {
+  const result = await client.query<{ s3_path: string }>(
+    `SELECT df.s3_path FROM public.version_files vf
+     CROSS JOIN LATERAL unnest(vf.file_ids) WITH ORDINALITY AS entry(file_id, ord)
+     INNER JOIN public.delta_files df ON df.id = entry.file_id
+     WHERE vf.app_version_id = $1 ORDER BY entry.ord`,
+    [versionId],
+  )
+  return result.rows.map(row => row.s3_path)
+}
+
 async function versionFiles(versionId: number) {
   const result = await pool.query<{ s3_path: string }>(
     `SELECT df.s3_path
@@ -207,11 +218,19 @@ describe('delta storage v2 published CLI compatibility', () => {
         [`compat-${id.slice(0, 8)}`, APP_ID, ORG_ID, USER_ID, onChannel],
       )
 
-      // The converter leaves the channel's current version alone.
+      // The converter fills the new tables for the channel's current version
+      // (GC sees its paths) and keeps its legacy rows.
       await client.query('UPDATE public.delta_storage_state SET convert_cursor = $1 - 1 WHERE id', [onChannel])
       await client.query('SELECT public.convert_legacy_manifest_batch(1, 2000)')
       const kept = await client.query('SELECT file_name FROM public.manifest WHERE app_version_id = $1', [onChannel])
       expect(kept.rows.map(row => row.file_name)).toEqual(['kept.js'])
+      expect(await versionFilesOf(client, onChannel)).toEqual([deltaPath('kept.js')])
+      const blocked = await client.query(
+        `SELECT EXISTS (SELECT 1 FROM public.manifest m WHERE m.app_version_id = $1)
+           AND NOT EXISTS (SELECT 1 FROM public.version_files WHERE app_version_id = $1) AS unconverted`,
+        [onChannel],
+      )
+      expect(blocked.rows[0].unconverted).toBe(false)
 
       // Moving the channel to a converted version gives it legacy rows again.
       await client.query('UPDATE public.channels SET version = $1 WHERE app_id = $2', [converted, APP_ID])

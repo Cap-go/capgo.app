@@ -1015,7 +1015,9 @@ GRANT EXECUTE ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text, boole
 -- Moves one version's legacy manifest rows into delta_files/version_files.
 -- Shares the per-version lock with manifest persistence and cleanup.
 -- Onboarding demo rows stay legacy: onboarding_demo_data tracks their ids.
-CREATE FUNCTION public.convert_version_manifest_rows(p_version_id bigint)
+-- p_keep_legacy: fill the new tables but keep the legacy rows (a channel's
+-- current version, read by published CLIs).
+CREATE FUNCTION public.convert_version_manifest_rows(p_version_id bigint, p_keep_legacy boolean DEFAULT false)
 RETURNS integer
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1127,14 +1129,17 @@ BEGIN
     END IF;
   END IF;
 
+  IF p_keep_legacy THEN
+    RETURN 0;
+  END IF;
   DELETE FROM public.manifest AS m WHERE m.app_version_id = p_version_id;
   GET DIAGNOSTICS v_removed = ROW_COUNT;
   RETURN v_removed;
 END;
 $$;
-ALTER FUNCTION public.convert_version_manifest_rows(bigint) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.convert_version_manifest_rows(bigint) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.convert_version_manifest_rows(bigint) TO service_role;
+ALTER FUNCTION public.convert_version_manifest_rows(bigint, boolean) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.convert_version_manifest_rows(bigint, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.convert_version_manifest_rows(bigint, boolean) TO service_role;
 
 -- Bounded, resumable backfill. Runs only after legacy writes are switched off,
 -- because read replicas need the new tables before legacy rows disappear.
@@ -1178,12 +1183,14 @@ BEGIN
       CONTINUE;
     END IF;
 
-    -- Published CLIs read public.manifest of a channel's current version.
+    -- Published CLIs read public.manifest of a channel's current version:
+    -- it gets version_files too (so GC can see its paths) but keeps its rows.
     -- The per-version lock orders this check with the channel mirror trigger.
     PERFORM pg_catalog.pg_advisory_xact_lock(v_version_id);
-    IF NOT EXISTS (SELECT 1 FROM public.channels AS ch WHERE ch.version = v_version_id) THEN
-      PERFORM public.convert_version_manifest_rows(v_version_id);
-    END IF;
+    PERFORM public.convert_version_manifest_rows(
+      v_version_id,
+      EXISTS (SELECT 1 FROM public.channels AS ch WHERE ch.version = v_version_id)
+    );
     v_cursor := v_version_id;
     v_converted := v_converted + 1;
     v_version_id := NULL;

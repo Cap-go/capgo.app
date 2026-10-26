@@ -3796,7 +3796,7 @@ export type Database = {
         Returns: number
       }
       convert_version_manifest_rows: {
-        Args: { p_version_id: number }
+        Args: { p_keep_legacy?: boolean; p_version_id: number }
         Returns: number
       }
       count_active_users: { Args: { app_ids: string[] }; Returns: number }
