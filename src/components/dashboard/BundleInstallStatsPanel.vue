@@ -70,6 +70,7 @@ const effectiveStats = computed(() => props.forceDemo ? demoStats.value : stats.
 const bundles = computed(() => effectiveStats.value?.bundles ?? [])
 // Failed update checks from old updater plugins, already left out of the
 // failure counts: say so, and how to get exact data.
+const legacyNoticeId = `${useId()}-legacy-notice`
 const legacyCheckFailures = computed(() => {
   const value = effectiveStats.value?.legacy_check_failures
   if (!value || value.excluded <= 0)
@@ -392,14 +393,24 @@ watch(
           <h3 class="text-base font-semibold truncate text-slate-950 dark:text-white">
             {{ activeDenseView === 'table' ? t('bundle-install-stats-title') : t('bundle-install-chart-timing-title') }}
           </h3>
-          <IconInfo
-            v-if="legacyCheckFailures"
-            class="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400"
-            :title="legacyCheckFailures"
-            :aria-label="legacyCheckFailures"
-            role="img"
-            data-testid="bundle-install-legacy-plugin"
-          />
+          <span v-if="legacyCheckFailures" class="relative flex group shrink-0" data-testid="bundle-install-legacy-plugin">
+            <!-- A focusable trigger so keyboard users can read the notice, not only mouse users. -->
+            <button
+              type="button"
+              class="flex rounded text-blue-600 dark:text-blue-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              :aria-label="t('release-live-legacy-plugin-title')"
+              :aria-describedby="legacyNoticeId"
+            >
+              <IconInfo class="w-4 h-4" aria-hidden="true" />
+            </button>
+            <span
+              :id="legacyNoticeId"
+              role="tooltip"
+              class="absolute right-0 z-20 hidden p-3 mt-2 text-xs font-normal bg-white border rounded-lg shadow-lg top-full w-72 border-blue-200 text-slate-600 group-hover:block group-focus-within:block dark:border-blue-800 dark:bg-slate-800 dark:text-slate-300"
+            >
+              {{ legacyCheckFailures }}
+            </span>
+          </span>
           <span
             v-if="forceDemo"
             class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
