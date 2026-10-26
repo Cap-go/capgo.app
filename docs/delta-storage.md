@@ -45,6 +45,9 @@ legacy `manifest` rows. The response format is unchanged.
   are skipped, the rest is copied to `deleted-after-7-days/` and deleted.
   A pass lists the current owner's prefix and every former owner's prefix
   found in the app's `delta_files` paths (app transfers do not move objects).
+  Deleting an app records those former-owner prefixes first
+  (`delta_gc_orphan_prefixes`); GC then deletes them page by page.
+  `on_app_delete` already removes the current owner's prefix.
 - The R2 lifecycle rule on `deleted-after-7-days/` purges the trash, so a bad
   delete stays recoverable for 7 more days by copying the object back.
 

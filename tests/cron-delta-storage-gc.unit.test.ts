@@ -63,6 +63,8 @@ describe('delta storage GC worker', () => {
     const calls: string[] = []
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
       if (text.includes('delta_gc_claim')) {
         calls.push('claim')
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
@@ -119,6 +121,8 @@ describe('delta storage GC worker', () => {
     mocks.listObjectPage.mockResolvedValue({ objects: keys.map(key => ({ key, lastModified: old })), nextToken: null })
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
       if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
@@ -139,10 +143,31 @@ describe('delta storage GC worker', () => {
     }
   })
 
+  it('deletes a page of a deleted app former-owner prefix and keeps the cursor', async () => {
+    const orphanPrefix = 'orgs/former-org/apps/com.example.gone/'
+    mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${orphanPrefix}delta/a.js`, lastModified: new Date() }], nextToken: 'more' })
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [{ prefix: orphanPrefix, list_cursor: null }] }
+      return { rows: [] }
+    })
+
+    const response = await app.request('/', { method: 'POST' })
+
+    expect(response.status).toBe(200)
+    expect(mocks.listObjectPage).toHaveBeenCalledWith(expect.anything(), orphanPrefix, null, 1000)
+    expect(mocks.deleteObjectKey).toHaveBeenCalledWith(expect.anything(), `${orphanPrefix}delta/a.js`)
+    const finish = mocks.execute.mock.calls.map(([query]) => sqlText(query)).find(text => text.includes('delta_gc_finish_orphan_prefix'))
+    expect(finish).toContain('more')
+  })
+
   it('never deletes when the database refuses the lease', async () => {
     mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: new Date(Date.now() - 2 * DAY) }], nextToken: null })
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'token' }] }
       if (text.includes('delta_gc_unreferenced_paths'))
@@ -166,6 +191,8 @@ describe('delta storage GC worker', () => {
     const queries: string[] = []
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
       queries.push(text)
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
@@ -186,6 +213,8 @@ describe('delta storage GC worker', () => {
   it('restarts the listing after a storage error', async () => {
     mocks.listObjectPage.mockRejectedValue(new Error('list failed'))
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      if (sqlText(query).includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
       if (sqlText(query).includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'stale' }] }
       return { rows: [] }

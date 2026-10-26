@@ -1433,6 +1433,33 @@ export type Database = {
           },
         ]
       }
+      delta_gc_orphan_prefixes: {
+        Row: {
+          app_id: string
+          claimed_until: string | null
+          created_at: string
+          list_cursor: string | null
+          org: string
+          prefix: string
+        }
+        Insert: {
+          app_id: string
+          claimed_until?: string | null
+          created_at?: string
+          list_cursor?: string | null
+          org: string
+          prefix: string
+        }
+        Update: {
+          app_id?: string
+          claimed_until?: string | null
+          created_at?: string
+          list_cursor?: string | null
+          org?: string
+          prefix?: string
+        }
+        Relationships: []
+      }
       delta_gc_state: {
         Row: {
           app_id: string
@@ -3816,9 +3843,20 @@ export type Database = {
           list_org: string
         }[]
       }
+      delta_gc_claim_orphan_prefixes: {
+        Args: { p_limit?: number }
+        Returns: {
+          list_cursor: string
+          prefix: string
+        }[]
+      }
       delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
       delta_gc_finish: {
         Args: { p_app_id: string; p_error?: string; p_list_cursor: string }
+        Returns: undefined
+      }
+      delta_gc_finish_orphan_prefix: {
+        Args: { p_list_cursor: string; p_prefix: string }
         Returns: undefined
       }
       delta_gc_lock_key: { Args: { p_app_id: string }; Returns: number }

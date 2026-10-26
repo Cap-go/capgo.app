@@ -594,6 +594,103 @@ ALTER FUNCTION public.delta_gc_finish(text, text, text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_finish(text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_finish(text, text, text) TO service_role;
 
+-- App deletion only removes the current owner's prefix (on_app_delete), and
+-- the cascade drops delta_files, which is how GC finds former owners'
+-- prefixes. Record those prefixes first; GC drains them afterwards.
+CREATE TABLE public.delta_gc_orphan_prefixes (
+  prefix text PRIMARY KEY,
+  app_id character varying NOT NULL,
+  org text NOT NULL,
+  list_cursor text,
+  claimed_until timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.delta_gc_orphan_prefixes OWNER TO postgres;
+ALTER TABLE public.delta_gc_orphan_prefixes ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.delta_gc_orphan_prefixes FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE public.delta_gc_orphan_prefixes TO service_role;
+CREATE POLICY "Deny all direct access" ON public.delta_gc_orphan_prefixes AS RESTRICTIVE USING (false) WITH CHECK (false);
+
+CREATE FUNCTION public.delta_gc_record_orphan_prefixes()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org)
+  SELECT DISTINCT 'orgs/' || orgs.org || '/apps/' || OLD.app_id || '/', OLD.app_id, orgs.org
+  FROM (
+    SELECT pg_catalog.split_part(df.s3_path, '/', 2) AS org
+    FROM public.delta_files AS df
+    WHERE df.app_id = OLD.app_id AND df.s3_path LIKE 'orgs/%'
+  ) AS orgs
+  WHERE orgs.org <> '' AND orgs.org <> OLD.owner_org::text
+  ON CONFLICT (prefix) DO NOTHING;
+  RETURN OLD;
+END;
+$$;
+ALTER FUNCTION public.delta_gc_record_orphan_prefixes() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_record_orphan_prefixes() FROM PUBLIC;
+
+CREATE TRIGGER delta_gc_record_orphan_prefixes
+BEFORE DELETE ON public.apps
+FOR EACH ROW EXECUTE FUNCTION public.delta_gc_record_orphan_prefixes();
+
+-- Claims former-owner prefixes of deleted apps. A prefix whose app id exists
+-- again under that organization is dropped: its objects belong to that app.
+CREATE FUNCTION public.delta_gc_claim_orphan_prefixes(p_limit integer DEFAULT 2)
+RETURNS TABLE (prefix text, list_cursor text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF NOT public.delta_storage_gc_enabled() THEN
+    RETURN;
+  END IF;
+
+  DELETE FROM public.delta_gc_orphan_prefixes AS o
+  WHERE EXISTS (
+    SELECT 1 FROM public.apps AS a
+    WHERE a.app_id = o.app_id AND a.owner_org::text = o.org
+  );
+
+  RETURN QUERY
+  WITH due AS (
+    SELECT o.prefix
+    FROM public.delta_gc_orphan_prefixes AS o
+    WHERE o.claimed_until IS NULL OR o.claimed_until < now()
+    ORDER BY o.created_at
+    LIMIT GREATEST(COALESCE(p_limit, 2), 1)
+    FOR UPDATE SKIP LOCKED
+  )
+  UPDATE public.delta_gc_orphan_prefixes AS o
+  SET claimed_until = now() + interval '15 minutes'
+  FROM due
+  WHERE o.prefix = due.prefix
+  RETURNING o.prefix, o.list_cursor;
+END;
+$$;
+ALTER FUNCTION public.delta_gc_claim_orphan_prefixes(integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) TO service_role;
+
+CREATE FUNCTION public.delta_gc_finish_orphan_prefix(p_prefix text, p_list_cursor text)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  DELETE FROM public.delta_gc_orphan_prefixes WHERE prefix = p_prefix AND p_list_cursor IS NULL;
+  UPDATE public.delta_gc_orphan_prefixes
+  SET list_cursor = p_list_cursor, claimed_until = NULL
+  WHERE prefix = p_prefix AND p_list_cursor IS NOT NULL;
+$$;
+ALTER FUNCTION public.delta_gc_finish_orphan_prefix(text, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_finish_orphan_prefix(text, text) TO service_role;
+
 -- Moves one version's legacy manifest rows into delta_files/version_files.
 -- Shares the per-version lock with manifest persistence and cleanup.
 -- Onboarding demo rows stay legacy: onboarding_demo_data tracks their ids.

@@ -276,6 +276,25 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('records former-owner prefixes when an app is deleted and drops re-created ones', async () => {
+    const formerOrg = '00000000-0000-4000-8000-0000000000bb'
+    const goneApp = `com.delta.storage.gone.${id}`
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await client.query(`INSERT INTO public.apps (app_id, owner_org, name, icon_url) VALUES ($1, $2, 'gone', '')`, [goneApp, ORG_ID])
+      await client.query(
+        `INSERT INTO public.delta_files (app_id, s3_path, file_name, file_hash, path_key, entry_key)
+         VALUES ($1, $2::text, 'old.js', 'h', public.delta_path_key($2::text), public.delta_entry_key($2::text, 'old.js', 'h'))`,
+        [goneApp, `orgs/${formerOrg}/apps/${goneApp}/delta/old.js`],
+      )
+      await client.query('DELETE FROM public.apps WHERE app_id = $1', [goneApp])
+      const claimed = await client.query<{ prefix: string }>('SELECT prefix FROM public.delta_gc_claim_orphan_prefixes(50)')
+      expect(claimed.rows.map(row => row.prefix)).toContain(`orgs/${formerOrg}/apps/${goneApp}/`)
+      await client.query('SELECT public.delta_gc_finish_orphan_prefix($1, NULL)', [`orgs/${formerOrg}/apps/${goneApp}/`])
+      const left = await client.query('SELECT count(*)::int AS count FROM public.delta_gc_orphan_prefixes WHERE app_id = $1', [goneApp])
+      expect(left.rows[0].count).toBe(0)
+    })
+  })
+
   it('caps the delete lease at 2 seconds', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])

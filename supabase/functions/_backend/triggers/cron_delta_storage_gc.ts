@@ -121,6 +121,28 @@ async function collectAppPage(c: Context, db: Database, app: ClaimedApp, deadlin
   return { listed: objects.length, candidates: candidates.length, deleted, nextCursor }
 }
 
+type OrphanPrefix = Record<string, unknown> & { prefix: string, list_cursor: string | null }
+
+/**
+ * Former-owner prefixes of deleted apps: nothing can reference them any more
+ * (the app is gone, like on_app_delete's own prefix delete), so a listed page
+ * is deleted directly, one bounded page per run.
+ */
+async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix, deadline: number) {
+  const { objects, nextToken } = await s3.listObjectPage(c, orphan.prefix, orphan.list_cursor, DELTA_GC_LIST_PAGE_SIZE)
+  let deleted = 0
+  let started = 0
+  await forEachBounded(objects, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (object) => {
+    started++
+    if (await s3.deleteObjectKey(c, object.key))
+      deleted++
+  })
+  // A page cut short by the run budget is listed again from the same token.
+  const nextCursor = started >= objects.length ? nextToken : orphan.list_cursor
+  await db.execute(sql`SELECT public.delta_gc_finish_orphan_prefix(${orphan.prefix}, ${nextCursor})`)
+  return { listed: objects.length, deleted }
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
@@ -142,6 +164,21 @@ app.post('/', middlewareAPISecret, async (c) => {
         cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc app failed', appId: claimedApp.app_id, error })
         // Restart the listing on the next pass: continuation tokens are not durable.
         await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, NULL, ${error instanceof Error ? error.message : 'unknown error'})`)
+      }
+    }
+    if (Date.now() < deadline) {
+      const orphans = await db.execute<OrphanPrefix>(sql`SELECT * FROM public.delta_gc_claim_orphan_prefixes(2)`)
+      for (const orphan of orphans.rows) {
+        if (Date.now() >= deadline)
+          break
+        try {
+          const page = await drainOrphanPrefix(c, db, orphan, deadline)
+          cloudlog({ requestId: c.get('requestId'), message: 'delta gc orphan prefix page done', prefix: orphan.prefix, ...page })
+        }
+        catch (error) {
+          // The claim expires and the prefix is retried by a later run.
+          cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc orphan prefix failed', prefix: orphan.prefix, error })
+        }
       }
     }
     cloudlog({ requestId: c.get('requestId'), message: 'delta gc run done', apps: claimed.rows.length, durationMs: Date.now() - startedAt })
