@@ -1,11 +1,8 @@
-<script lang="ts">
-// Shared across instances so a nested billing modal does not re-enable the app early.
-</script>
-
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconX from '~icons/heroicons/x-mark'
+import { setBillingModalOpen } from '~/services/billingModalState'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -28,8 +25,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   close: []
 }>()
-
-let openModalCount = 0
 
 const { t } = useI18n()
 const titleId = useId()
@@ -63,19 +58,9 @@ function onWindowKeydown(event: KeyboardEvent) {
     requestClose()
 }
 
-// Make the app behind the dialog inert instead of using showModal(): the browser top layer
-// would cover Stripe's 3DS challenge and toasts, which are appended outside this dialog.
-function setAppInert(inert: boolean) {
-  const app = document.getElementById('app')
-  if (!app)
-    return
-  openModalCount = Math.max(0, openModalCount + (inert ? 1 : -1))
-  app.inert = openModalCount > 0
-}
-
 onMounted(async () => {
   previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  setAppInert(true)
+  setBillingModalOpen(true)
   window.addEventListener('keydown', onWindowKeydown)
   await nextTick()
   box.value?.focus()
@@ -83,7 +68,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown)
-  setAppInert(false)
+  setBillingModalOpen(false)
   // Return focus to the control that opened the dialog.
   previouslyFocused?.focus?.()
 })
