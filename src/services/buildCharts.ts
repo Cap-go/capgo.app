@@ -86,9 +86,9 @@ export function dayIndexInWindow(date: Date, windowStart: Date): number {
   return Math.floor((date.getTime() - windowStart.getTime()) / DAY_IN_MS)
 }
 
-// Paginate a Supabase range query so apps above the configured max_rows cap are
+// Paginate a range query so apps above the configured max_rows cap are
 // not silently undercounted. `runRange` must apply `.range(from, to)` and return
-// the supabase result.
+// the capgo result.
 export async function fetchAllRows<T>(runRange: (from: number, to: number) => PromiseLike<{ data: T[] | null, error: unknown }>): Promise<T[]> {
   const PAGE_SIZE = 1000
   const rows: T[] = []

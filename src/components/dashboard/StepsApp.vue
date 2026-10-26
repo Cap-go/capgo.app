@@ -9,8 +9,8 @@ import IconLoader from '~icons/lucide/loader-2'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { defaultApiHost, getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -30,7 +30,7 @@ const appId = ref<string>()
 const realtimeListener = ref(false)
 const pollTimer = ref<number | null>(null)
 const initialCount = ref<number | null>(null)
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -44,7 +44,7 @@ interface Step {
 
 const config = getLocalConfig()
 
-const localCommand = isLocal(config.supaHost) ? ` --api-host ${defaultApiHost}` : ``
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ``
 const apiKey = ref<string | null>(null)
 // keep NPX for better support of our customers env, everyone has npx but not everyone has bunx, and bunx has some issues with pnpm
 const commandTemplate = `npx @capgo/cli@latest i [APIKEY]${localCommand}`
@@ -227,14 +227,14 @@ async function copyToast(allowed: boolean, _id: string, text?: string) {
 }
 
 async function addNewApiKey() {
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   const userId = claimsData?.claims?.sub
 
   if (!userId) {
     console.log('Not logged in, cannot regenerate API key')
     return null
   }
-  const { data, error } = await createDefaultApiKey(supabase, t('api-key'), {
+  const { data, error } = await createDefaultApiKey(capgo, t('api-key'), {
     orgId: organizationStore.currentOrganization?.gid,
     appId: appId.value,
   })
@@ -250,7 +250,7 @@ async function getKey(retry = true): Promise<void> {
   if (!main?.user?.id)
     return
 
-  const existingKey = await findUsablePlainApiKey(supabase, main.user.id, organizationStore.currentOrganization?.gid, appId.value)
+  const existingKey = await findUsablePlainApiKey(capgo, main.user.id, organizationStore.currentOrganization?.gid, appId.value)
   if (existingKey) {
     apiKey.value = existingKey
   }
@@ -265,7 +265,7 @@ async function getAppsCount(): Promise<number> {
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId)
     return 0
-  const { count, error } = await supabase
+  const { count, error } = await capgo
     .from('apps')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)
@@ -279,7 +279,7 @@ async function getLatestAppId(): Promise<string | undefined> {
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId)
     return undefined
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('apps')
     .select('app_id, created_at')
     .eq('owner_org', orgId)

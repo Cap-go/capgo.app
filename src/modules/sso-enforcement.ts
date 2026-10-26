@@ -1,5 +1,5 @@
 import type { UserModule } from '~/types'
-import { defaultApiHost, getSpoofedAdminJwt, useSupabase } from '~/services/supabase'
+import { defaultApiHost, getSpoofedAdminJwt, useConsole } from '~/services/console'
 
 interface SsoEnforcementResponse {
   allowed: boolean
@@ -57,8 +57,8 @@ export const install: UserModule = ({ router }) => {
     if (isPublicRoute(to.path))
       return next()
 
-    const supabase = useSupabase()
-    const { data: { session } } = await supabase.auth.getSession()
+    const capgo = useConsole()
+    const { data: { session } } = await capgo.auth.getSession()
 
     if (!session)
       return next()
@@ -95,14 +95,14 @@ export const install: UserModule = ({ router }) => {
       if (!response.ok) {
         console.error('SSO enforcement check returned error status:', response.status)
         clearSsoEnforcementCache()
-        await supabase.auth.signOut()
+        await capgo.auth.signOut()
         return next('/login?sso_error=enforcement_check_failed')
       }
 
       const data: SsoEnforcementResponse = await response.json()
       if (!data.allowed) {
         clearSsoEnforcementCache()
-        await supabase.auth.signOut()
+        await capgo.auth.signOut()
         return next('/login?sso_required=true')
       }
 
@@ -113,7 +113,7 @@ export const install: UserModule = ({ router }) => {
       // Fail closed: if enforcement check is unreachable, sign user out for safety
       console.error('SSO enforcement check failed, signing out for security:', e)
       clearSsoEnforcementCache()
-      await supabase.auth.signOut()
+      await capgo.auth.signOut()
       return next('/login?sso_error=enforcement_check_failed')
     }
 

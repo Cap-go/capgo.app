@@ -30,6 +30,24 @@ const MAX_SUBREQUESTS = 5
 // worker secret SNIPPET_EDGE_ANSWER only stops new fills; the setter script
 // purges the stored ones.
 const EDGE_ANSWERS_ENABLED = true
+// /stats needs no learned fill: the replay runs the full handler (plan,
+// on-prem, provider networks, LIMITED_APPS, unknown actions), so the device
+// answer is all the worker would add. Requests without a fill still reach the
+// worker at STATS_LEARN_BPS, so it can teach the answers that change what
+// the device does: on-prem / plan-upgrade 429s (the plugin backs off on
+// Retry-After) and the provider networks the worker must check itself.
+// Installs and failures always reach the worker: rollout auto-pause sums
+// their version usage, and the replay delivers at least once.
+// false: back to fill-only answers (sampled devices).
+const STATS_ANSWER_ALL = true
+// Basis points of devices per minute (FNV bucket of app, device and minute,
+// so every device takes its turn).
+const STATS_LEARN_BPS = 500
+const STATS_ACTION_RE = /^\w{1,64}$/
+// PROVIDER_INFRA_ASNS (plugin_runtime/utils/providerAsns.ts): without a fill
+// the snippet does not know whether the app blocks them, so their /stats keep
+// reaching the worker, which answers them 429 when it does.
+const PROVIDER_ASNS = new Set([15169, 16591, 19527, 36040, 36492, 43515, 139070, 396982, 714, 6185])
 const EDGE_FILL_HEADER = 'X-Capgo-Edge-Fill'
 const EDGE_IP_LIMIT_HEADER = 'X-Capgo-Edge-Ip-Limit'
 const EDGE_STAT_HEADER = 'X-Capgo-Edge-Stat'
@@ -50,6 +68,14 @@ const MAX_EDGE_STAT_HEADER_BYTES = 8000
 const APP_ID_RE = /^[a-z0-9]+(?:\.[\w-]+)+$/i
 const DEVICE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const PLAIN_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+// @std/semver FULL_REGEXP, piece by piece: core numbers kept below
+// MAX_SAFE_INTEGER (its parse rejects larger ones), no surrounding whitespace
+// (it trims) and a lowercase v prefix only.
+const SEMVER_PARTS_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+(.+))?$/
+const SEMVER_CORE_NUMBER_RE = /^(?:0|[1-9]\d{0,14})$/
+const SEMVER_PRERELEASE_ID_RE = /^(?:0|[1-9]\d*|\d*[a-zA-Z-][\da-zA-Z-]*)$/
+const SEMVER_BUILD_ID_RE = /^[\da-zA-Z-]+$/
+const MAX_SEMVER_LENGTH = 256
 const DEVICE_PLATFORMS = new Set(['ios', 'android', 'electron'])
 
 function createBudget() {
@@ -61,14 +87,17 @@ function canSpend(budget, count = 1, reserve = 0) {
   return budget.used + count + reserve <= MAX_SUBREQUESTS
 }
 
-/** `failClosed`: a lookup error reads as a hit, for entries that block an answer. */
-async function cacheMatch(budget, key, failClosed = false) {
+/**
+ * `onError`: what a lookup error reads as (a miss by default); `true` for
+ * entries that block an answer, null where a miss would allow one.
+ */
+async function cacheMatch(budget, key, onError = undefined) {
   budget.used++
   try {
     return await caches.default.match(key)
   }
   catch {
-    return failClosed ? true : undefined
+    return onError
   }
 }
 
@@ -488,16 +517,42 @@ function isValidStatsMetadata(metadata) {
   return entries.length <= 30 && entries.every(([key, value]) => key.length <= 64 && typeof value === 'string' && value.length <= 2048)
 }
 
-/** parsePluginBody rejects a native version it cannot read as semver; anything but plain x.y.z goes to the worker. */
+/**
+ * parsePluginBody rejects a native version @std/semver cannot parse after
+ * fixSemver; prerelease and build tags (1.2.3-native.4+ota.5) are valid.
+ */
 function isAnswerableStatsVersionBuild(versionBuild) {
-  return versionBuild === undefined || versionBuild === '' || (typeof versionBuild === 'string' && PLAIN_SEMVER_RE.test(fixSemver(versionBuild)))
+  if (versionBuild === undefined || versionBuild === '')
+    return true
+  if (typeof versionBuild !== 'string')
+    return false
+  const version = fixSemver(versionBuild)
+  return version.length <= MAX_SEMVER_LENGTH && isSemver(version)
+}
+
+function isSemver(version) {
+  const parts = SEMVER_PARTS_RE.exec(version)
+  if (!parts)
+    return false
+  // Absent tags read as '': SEMVER_PARTS_RE never captures an empty one.
+  const [, major, minor, patch, prerelease = '', build = ''] = parts
+  return [major, minor, patch].every(part => SEMVER_CORE_NUMBER_RE.test(part))
+    && (!prerelease || prerelease.split('.').every(id => SEMVER_PRERELEASE_ID_RE.test(id)))
+    && (!build || build.split('.').every(id => SEMVER_BUILD_ID_RE.test(id)))
 }
 
 /**
- * The stats request schema and an action the worker lists in its fill. The
- * worker never lists installs or failures: rollout auto-pause compares those
- * two live, so they always reach the worker.
+ * The stats request schema and an answerable action, never an install or a
+ * failure. With `actions` (a fill answer) only the actions the worker lists;
+ * without (STATS_ANSWER_ALL) any other action: the replay rejects the actions
+ * it does not know.
  */
+function isAnswerableStatsAction(action, actions) {
+  if (typeof action !== 'string' || action === 'set' || action.endsWith('_fail'))
+    return false
+  return actions ? actions.includes(action) : STATS_ACTION_RE.test(action)
+}
+
 function isAnswerableStatsEvent(event, appId, actions) {
   return isPlainObject(event)
     && event.app_id === appId
@@ -506,7 +561,7 @@ function isAnswerableStatsEvent(event, appId, actions) {
     && typeof event.version_name === 'string'
     && typeof event.version_os === 'string'
     && typeof event.is_emulator === 'boolean' && typeof event.is_prod === 'boolean'
-    && typeof event.action === 'string' && event.action !== 'set' && !event.action.endsWith('_fail') && actions.includes(event.action)
+    && isAnswerableStatsAction(event.action, actions)
     && ['defaultChannel', 'channel', 'old_version_name', 'version_code', 'plugin_version'].every(key => isOptionalString(event[key]))
     && isAnswerableStatsVersionBuild(event.version_build)
     && isOptionalString(event.install_source, 64)
@@ -521,10 +576,21 @@ function isAnswerableStatsEvent(event, appId, actions) {
  * go to the worker.
  */
 function isProviderNetwork(request, fill) {
-  if (!isPlainObject(fill) || fill.pa === undefined)
-    return false
   const asn = request.cf?.asn
+  // No fill (STATS_ANSWER_ALL): any provider network could be blocked.
+  if (!isPlainObject(fill))
+    return typeof asn !== 'number' || PROVIDER_ASNS.has(asn)
+  if (fill.pa === undefined)
+    return false
   return typeof asn !== 'number' || !Array.isArray(fill.pa) || fill.pa.includes(asn)
+}
+
+/** The devices of this minute whose /stats teach the worker's answers. */
+function isStatsLearnSample(appId, body) {
+  const deviceId = (Array.isArray(body) ? body[0] : body)?.device_id
+  if (typeof deviceId !== 'string')
+    return true
+  return edgeBucket(appId, `${deviceId.toLowerCase()}:${Math.floor(Date.now() / 60_000)}`) < STATS_LEARN_BPS
 }
 
 function isLiveEdgeFill(fill, appId, deviceId) {
@@ -584,9 +650,15 @@ async function tryEdgeAnswer(budget, request, url, endpoint, appId, body, rawBod
 
   if (endpoint === 'stats') {
     const events = Array.isArray(body) ? body : [body]
-    if (events.length === 0 || !isLiveEdgeFill(fill, appId, events[0]?.device_id) || !Array.isArray(fill.actions))
+    if (events.length === 0)
       return null
-    if (!events.every(event => isAnswerableStatsEvent(event, appId, fill.actions)))
+    let actions
+    if (!STATS_ANSWER_ALL) {
+      if (!isLiveEdgeFill(fill, appId, events[0]?.device_id) || !Array.isArray(fill.actions))
+        return null
+      actions = fill.actions
+    }
+    if (!events.every(event => isAnswerableStatsEvent(event, appId, actions)))
       return null
     const statHeader = edgeStatHeader({ e: 'stats', b: rawBody })
     if (!statHeader)
@@ -700,7 +772,8 @@ export default {
       edgeKey = variant === null ? null : getEdgeCacheKey(hostname, appId, endpoint, method, variant)
 
       if (edgeKey) {
-        const cached = await cacheMatch(budget, edgeKey)
+        // null: the lookup failed, which must not read as nothing learned.
+        const cached = await cacheMatch(budget, edgeKey, null)
         if (cached) {
           if (cached.headers.get(EDGE_KIND_HEADER) !== 'answers') {
             console.log(`Edge cache HIT (${cached.headers.get(EDGE_KIND_HEADER)}) for ${appId}/${endpoint}/${method}`)
@@ -719,6 +792,13 @@ export default {
             if (answer)
               return answer
           }
+        }
+        // Nothing learned for this app here yet: answer /stats anyway, except
+        // the share left to the worker to learn from.
+        else if (cached === undefined && STATS_ANSWER_ALL && endpoint === 'stats' && method === 'POST' && !isStatsLearnSample(appId, body)) {
+          const answer = await tryEdgeAnswer(budget, request, url, endpoint, appId, body, new TextDecoder().decode(requestBody), {})
+          if (answer)
+            return answer
         }
       }
     }

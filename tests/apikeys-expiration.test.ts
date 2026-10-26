@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
@@ -52,8 +52,8 @@ async function seedPlainApiKey(name: string, expiresAt: string | null, orgId = B
   if (!data.key)
     throw new Error(`Failed to seed API key ${name}`)
 
-  const supabase = getSupabaseClient()
-  const { data: memberships, error: membershipsError } = await supabase
+  const capgo = getSupabaseClient()
+  const { data: memberships, error: membershipsError } = await capgo
     .from('org_users')
     .select('org_id')
     .eq('user_id', USER_ID_APIKEY_EXPIRATION)
@@ -63,7 +63,7 @@ async function seedPlainApiKey(name: string, expiresAt: string | null, orgId = B
 
   const extraOrgIds = [...new Set((memberships ?? []).map(row => row.org_id).filter((membershipOrgId): membershipOrgId is string => !!membershipOrgId && membershipOrgId !== orgId))]
   if (extraOrgIds.length > 0) {
-    const { data: orgPolicies, error: orgPoliciesError } = await supabase
+    const { data: orgPolicies, error: orgPoliciesError } = await capgo
       .from('orgs')
       .select('id, require_apikey_expiration, max_apikey_expiration_days')
       .in('id', extraOrgIds)
@@ -86,7 +86,7 @@ async function seedPlainApiKey(name: string, expiresAt: string | null, orgId = B
     if (compatibleExtraOrgIds.length === 0)
       return { id: data.id, key: data.key, expires_at: data.expires_at }
 
-    const { data: role, error: roleError } = await supabase
+    const { data: role, error: roleError } = await capgo
       .from('roles')
       .select('id')
       .eq('name', 'org_admin')
@@ -95,7 +95,7 @@ async function seedPlainApiKey(name: string, expiresAt: string | null, orgId = B
     if (roleError || !role)
       throw roleError ?? new Error('Unable to resolve org_admin role')
 
-    const { error: bindingError } = await supabase.from('role_bindings').insert(compatibleExtraOrgIds.map(extraOrgId => ({
+    const { error: bindingError } = await capgo.from('role_bindings').insert(compatibleExtraOrgIds.map(extraOrgId => ({
       principal_type: 'apikey' as const,
       principal_id: data.rbac_id,
       role_id: role.id,
@@ -169,8 +169,8 @@ function createApiKeySupabaseClient(apikey: string) {
 }
 
 async function expectApiKeyCanReadBaseOrg(apikey: string) {
-  const supabase = createApiKeySupabaseClient(apikey)
-  const { data, error } = await supabase
+  const capgo = createApiKeySupabaseClient(apikey)
+  const { data, error } = await capgo
     .from('orgs')
     .select('id')
     .eq('id', BASE_ORG_ID)
@@ -181,8 +181,8 @@ async function expectApiKeyCanReadBaseOrg(apikey: string) {
 }
 
 async function expectApiKeyCannotReadBaseOrg(apikey: string) {
-  const supabase = createApiKeySupabaseClient(apikey)
-  const { data, error } = await supabase
+  const capgo = createApiKeySupabaseClient(apikey)
+  const { data, error } = await capgo
     .from('orgs')
     .select('id')
     .eq('id', BASE_ORG_ID)
@@ -643,8 +643,8 @@ describe('organization API key expiration policy', () => {
   })
 
   it('reject direct apikey inserts that bypass the server creation path', async () => {
-    const supabase = createAuthenticatedSupabaseClient(authHeaders)
-    const { data, error } = await supabase
+    const capgo = createAuthenticatedSupabaseClient(authHeaders)
+    const { data, error } = await capgo
       .from('apikeys')
       .insert({
         user_id: USER_ID_APIKEY_EXPIRATION,
@@ -763,8 +763,8 @@ describe('[PUT] /organization with API key policy', () => {
   })
 
   it('rejects direct Supabase writes with invalid max expiration days', async () => {
-    const supabase = createAuthenticatedSupabaseClient(authHeaders)
-    const { error } = await supabase
+    const capgo = createAuthenticatedSupabaseClient(authHeaders)
+    const { error } = await capgo
       .from('orgs')
       .update({ max_apikey_expiration_days: -1 })
       .eq('id', updateOrgId)

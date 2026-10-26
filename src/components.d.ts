@@ -20,6 +20,7 @@ declare module 'vue' {
     AppleSignInButton: typeof import('./components/auth/AppleSignInButton.vue')['default']
     AppNotFoundModal: typeof import('./components/AppNotFoundModal.vue')['default']
     AppOnboardingAiButton: typeof import('./components/dashboard/AppOnboardingAiButton.vue')['default']
+    AppOnboardingBuilderAiSetup: typeof import('./components/dashboard/AppOnboardingBuilderAiSetup.vue')['default']
     AppOnboardingBuilderChecklist: typeof import('./components/dashboard/AppOnboardingBuilderChecklist.vue')['default']
     AppOnboardingCliSteps: typeof import('./components/dashboard/AppOnboardingCliSteps.vue')['default']
     AppOnboardingDualChecklist: typeof import('./components/dashboard/AppOnboardingDualChecklist.vue')['default']

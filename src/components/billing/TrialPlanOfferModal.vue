@@ -13,10 +13,10 @@ import { toast } from 'vue-sonner'
 import IconCalendar from '~icons/heroicons/calendar-days'
 import BillingModal from '~/components/billing/BillingModal.vue'
 import TrialPlanPicker from '~/components/billing/TrialPlanPicker.vue'
+import { getLocalConfig } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { pushEvent } from '~/services/posthog'
 import { formatStripeAmount, getTrialPlan, scheduleTrialPlan } from '~/services/stripe'
-import { getLocalConfig } from '~/services/supabase'
 
 const props = defineProps<{
   orgId: string
@@ -52,7 +52,7 @@ const date = computed(() => plan.value ? formatLocalDate(plan.value.startsAt) : 
 const showPicker = computed(() => plans.value.length > 1)
 
 function track(event: string) {
-  pushEvent(event, config.supaHost, {
+  pushEvent(event, config.apiHost, {
     org_id: offerOrgId,
     source: props.source,
     plan: selectedPlanName.value,

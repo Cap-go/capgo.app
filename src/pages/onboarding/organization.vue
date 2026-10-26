@@ -20,11 +20,11 @@ import BillingRegionChoice from '~/components/dashboard/BillingRegionChoice.vue'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
 import OrganizationOnboardingInvite from '~/components/dashboard/OrganizationOnboardingInvite.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -51,7 +51,7 @@ interface UserCountStop {
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
@@ -368,7 +368,7 @@ async function saveSupportUsernames() {
   if (nextDiscordUsername === (main.user.discord_username || null))
     return
 
-  const { data: user, error } = await supabase
+  const { data: user, error } = await capgo
     .from('users')
     .update({
       discord_username: nextDiscordUsername,
@@ -595,7 +595,7 @@ async function finishOnboarding() {
     isSubmitting.value = true
     try {
       const { app, appIdFeedback } = await createOnboardingAppFromDraft(
-        supabase,
+        capgo,
         orgId,
         draft,
         activeOrgName.value,

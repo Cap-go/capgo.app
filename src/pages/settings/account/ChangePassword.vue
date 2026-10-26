@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { setErrors } from '@formkit/core'
 import { FormKit, FormKitMessages } from '@formkit/vue'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
 import iconPassword from '~icons/heroicons/key?raw'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -20,7 +20,7 @@ const isLoading = ref(false)
 const isVerifying = ref(false)
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const mainStore = useMainStore()
 const mfaCode = ref('')
@@ -28,7 +28,7 @@ const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 const { t } = useI18n()
-const SUPABASE_MAX_PASSWORD_LENGTH = 72
+const AUTH_MAX_PASSWORD_LENGTH = 72
 
 function resetCaptcha() {
   safeResetTurnstile(captchaComponent.value)
@@ -48,7 +48,7 @@ const passwordPolicy = computed(() => {
   if (org?.password_policy_config?.enabled) {
     return {
       ...org.password_policy_config,
-      min_length: Math.min(org.password_policy_config.min_length, SUPABASE_MAX_PASSWORD_LENGTH),
+      min_length: Math.min(org.password_policy_config.min_length, AUTH_MAX_PASSWORD_LENGTH),
     }
   }
   // Default policy
@@ -157,7 +157,7 @@ async function verifyPassword(form: { current_password: string }) {
 }
 
 async function runMfaChallenge() {
-  const { data: mfaFactors, error: mfaError } = await supabase.auth.mfa.listFactors()
+  const { data: mfaFactors, error: mfaError } = await capgo.auth.mfa.listFactors()
   if (mfaError) {
     setErrors('change-pass', [mfaError.message], {})
     toast.error(mfaError.message)
@@ -172,7 +172,7 @@ async function runMfaChallenge() {
     return false
   }
 
-  const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: factor.id })
+  const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: factor.id })
   if (errorChallenge) {
     setErrors('change-pass', [errorChallenge.message], {})
     toast.error(errorChallenge.message)
@@ -190,7 +190,7 @@ async function runMfaChallenge() {
         text: t('button-confirm'),
         role: 'primary',
         handler: async () => {
-          const { data: _verify, error: errorVerify } = await supabase.auth.mfa.verify({
+          const { data: _verify, error: errorVerify } = await capgo.auth.mfa.verify({
             factorId: factor.id,
             challengeId: challenge.id,
             code: mfaCode.value.replaceAll(' ', ''),
@@ -208,7 +208,7 @@ async function runMfaChallenge() {
 }
 
 async function ensureMfaIfNeeded() {
-  const aal = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  const aal = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
   const { currentLevel, nextLevel } = aal.data!
   if (nextLevel !== currentLevel)
     return await runMfaChallenge()
@@ -223,7 +223,7 @@ async function refreshSessionWithCurrentPassword(currentPassword: string) {
     return false
   }
 
-  const { error: signInError } = await supabase.auth.signInWithPassword({
+  const { error: signInError } = await capgo.auth.signInWithPassword({
     email: user.email,
     password: currentPassword,
     options: turnstileToken.value
@@ -252,7 +252,7 @@ function reportPasswordUpdateError(message: string) {
 }
 
 async function updatePasswordWithCurrent(password: string, currentPassword: string) {
-  return supabase.auth.updateUser({
+  return capgo.auth.updateUser({
     password,
     current_password: currentPassword,
   })
@@ -304,7 +304,7 @@ async function submit(form: { current_password: string, password: string, passwo
     }
 
     // Best-effort: password already changed; do not treat other-session sign-out as failure.
-    const { error: signOutError } = await supabase.auth.signOut({ scope: 'others' })
+    const { error: signOutError } = await capgo.auth.signOut({ scope: 'others' })
     if (signOutError)
       console.error('Failed to sign out other sessions after password change', signOutError)
 

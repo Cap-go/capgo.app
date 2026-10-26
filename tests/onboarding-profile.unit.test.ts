@@ -1,4 +1,4 @@
-import type { Json } from '../src/types/supabase.types'
+import type { Json } from '../src/types/database.types'
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, shallowReactive } from 'vue'
@@ -13,10 +13,10 @@ vi.mock('~/stores/main', () => ({ useMainStore: () => state }))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('vue-sonner', () => ({ toast: { error: mocks.toast } }))
 vi.mock('~/services/posthog', () => ({ setUser: mocks.setUser }))
-vi.mock('~/services/supabase', () => ({
-  getLocalConfig: () => ({ supaHost: 'https://example.supabase.co' }),
+vi.mock('~/services/console', () => ({
+  getLocalConfig: () => ({ apiHost: 'https://example.supabase.co' }),
   isLocal: () => false,
-  useSupabase: () => ({ from: () => ({
+  useConsole: () => ({ from: () => ({
     update: (payload: { onboarding?: Json }) => {
       mocks.update(payload)
       return { eq: () => ({

@@ -45,7 +45,7 @@ describe('onboarding channel animation analytics', () => {
       onboardingAttemptId: '00000000-0000-4000-8000-000000000001',
       onboardingRunId: 'ir_00000000-0000-4000-8000-000000000002',
       onboardingVersion: () => NEW_CHANNEL_ANALYTICS_VERSION,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     progress.viewStep('channel')
     const regular = createOnboardingChannelAnimationTracker({
@@ -98,7 +98,7 @@ describe('onboarding channel animation analytics', () => {
       resumed: false,
       onboardingAttemptId: '00000000-0000-4000-8000-000000000001',
       onboardingRunId: 'ir_00000000-0000-4000-8000-000000000002',
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     progress.viewStep('details')
     progress.completeStep('details', { nextStep: 'channel' })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Json } from '~/types/supabase.types'
+import type { Json } from '~/types/database.types'
 import type { AiOnboardingGoal, OnboardingSetupMode } from '~/utils/onboardingSetupMode'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'

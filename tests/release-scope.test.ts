@@ -109,7 +109,7 @@ describe('release scope matching', () => {
     const run = gitStub({
       'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
       'rev-list --reverse capgo-12.0.0..auto-sync-head': 'auto-sync-head',
-      'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/supabase.types.ts',
+      'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/database.types.ts',
       'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',
       'log -1 --format=%b auto-sync-head': '',
     })
@@ -126,7 +126,7 @@ describe('release scope matching', () => {
       'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
       'rev-list --reverse capgo-12.0.0..auto-sync-head': 'feature-head\nauto-sync-head',
       'show --format= --name-only feature-head': 'src/pages/index.vue',
-      'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/supabase.types.ts',
+      'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/database.types.ts',
       'log -1 --format=%s feature-head': 'feat: pending console change',
       'log -1 --format=%b feature-head': '',
       'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',

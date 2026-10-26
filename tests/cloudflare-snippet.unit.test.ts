@@ -1,6 +1,12 @@
+import { tryParse } from '@std/semver'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import snippet from '../cloudflare_workers/snippet/index.js'
+import { PROVIDER_INFRA_ASNS } from '../supabase/functions/_backend/plugin_runtime/utils/providerAsns.ts'
 import { decodeSnippetEdgeStat } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
+import { updatesEdgeCacheBucket } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
+import { fixSemver } from '../supabase/functions/_backend/plugin_runtime/utils/utils.ts'
+
+const PLAIN_SEMVER_RE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/
 
 const APP_ID = 'com.edge.app'
 const DEVICE_ID = '00000000-0000-4000-8000-000000000001'
@@ -57,6 +63,24 @@ function noNewWithFill(fill = updatesFill) {
   return new Response(JSON.stringify(NO_NEW_BODY), { status: 200, headers: { 'Content-Type': 'application/json', 'X-Capgo-Edge-Fill': fill } })
 }
 
+/** The snippet's /stats learning sample: FNV bucket of app, device and minute under 500 bps. */
+function isLearnSample(deviceId: string, minute: number) {
+  return updatesEdgeCacheBucket(APP_ID, `${deviceId}:${minute}`) < 500
+}
+
+/** A time (ms) in the first minute that matches. */
+function minuteWhere(predicate: (minute: number) => boolean) {
+  for (let minute = 29_700_000; ; minute++) {
+    if (predicate(minute))
+      return minute * 60_000
+  }
+}
+
+/** Both test devices teach the worker: /stats without a fill reach it. */
+const LEARN_TIME = minuteWhere(minute => isLearnSample(DEVICE_ID, minute) && isLearnSample(OTHER_DEVICE_ID, minute))
+/** Neither does: /stats without a fill are answered at the edge. */
+const ANSWER_TIME = minuteWhere(minute => !isLearnSample(DEVICE_ID, minute) && !isLearnSample(OTHER_DEVICE_ID, minute))
+
 function buildCache() {
   const store = new Map<string, Response>()
   const keyOf = (key: RequestInfo | URL) => key instanceof Request ? key.url : String(key)
@@ -81,11 +105,16 @@ describe('cloudflare snippet edge answers', () => {
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
+    // /stats without a fill: the test devices are in the learning sample, so
+    // the fill tests below reach the worker first.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(LEARN_TIME)
     cache = buildCache()
     vi.stubGlobal('caches', { default: cache })
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -223,7 +252,7 @@ describe('cloudflare snippet edge answers', () => {
     expect(fetchMock).toHaveBeenCalledTimes(5)
   })
 
-  it('answers /stats batches of known actions and keeps installs and failures live', async () => {
+  it('answers /stats batches once learned, keeping installs and failures live', async () => {
     const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const events = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as unknown[]
       return new Response(JSON.stringify({ status: 'ok', results: events.map((_, index) => ({ status: 'ok', index })) }), {
@@ -242,14 +271,163 @@ describe('cloudflare snippet edge answers', () => {
     expect(await answered.json()).toEqual({ status: 'ok', results: [{ status: 'ok', index: 0 }, { status: 'ok', index: 1 }] })
     expect(decodeSnippetEdgeStat(answered.headers.get('X-Capgo-Edge-Stat')!)).toEqual({ e: 'stats', b: JSON.stringify(batch) })
 
-    // Installs, failures, actions the worker does not list and native versions it would reject go to the worker.
+    // Actions the fill does not list are replayed (the handler rejects unknown
+    // ones). Installs, failures (also inside a batch), native versions the
+    // worker would reject and actions that are not a word go to the worker.
+    const unknown = await snippet.fetch(buildRequest('/stats', [statsEvent({ action: 'unknown_action' })]))
+    expect(unknown.headers.get('X-Capgo-Edge')).toBe('answer')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     await snippet.fetch(buildRequest('/stats', [statsEvent({ action: 'set' })]))
     await snippet.fetch(buildRequest('/stats', [statsEvent({ action: 'download_fail' })]))
-    await snippet.fetch(buildRequest('/stats', [statsEvent({ action: 'unknown_action' })]))
+    await snippet.fetch(buildRequest('/stats', [statsEvent(), statsEvent({ action: 'update_fail' })]))
     await snippet.fetch(buildRequest('/stats', [statsEvent({ version_build: 'bad-version' })]))
-    expect(fetchMock).toHaveBeenCalledTimes(5)
+    await snippet.fetch(buildRequest('/stats', [statsEvent({ action: 'not an action' })]))
+    expect(fetchMock).toHaveBeenCalledTimes(6)
     await snippet.fetch(buildRequest('/stats', [statsEvent({ version_build: '2.1' })]))
-    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+  })
+
+  it('answers /stats native versions only when the worker parses them', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'X-Capgo-Edge-Fill': statsFill } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await snippet.fetch(buildRequest('/stats', [statsEvent()]))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // parsePluginBody: plain x.y.z, or @std/semver tryParse(fixSemver(version)).
+    const workerParses = (version: string) => PLAIN_SEMVER_RE.test(version) || tryParse(fixSemver(version)) !== undefined
+    const versions = [
+      '0.9.315-native.0.0.1',
+      '0.9.314-native.93140001',
+      '1.2.3+ota.8016.ios',
+      '1.2.3-beta.1+build.5',
+      'v1.2.3',
+      '2.1',
+      '1-rc',
+      'V1.2.3',
+      '1.2.3-a..b',
+      '1.2.3+a+b',
+      '1.2.3--x',
+      '1.0-beta.1',
+      '1.2.3-01',
+      '1.2.3-',
+      '1.2.3+',
+      '1.2.3_4',
+      '01.2.3',
+      ' 1.2.3',
+      '1.2.3.4',
+      '9007199254740993.0.0',
+      `1.2.3-${'a'.repeat(260)}`,
+    ]
+    let forwarded = 1
+    for (const version_build of versions) {
+      const response = await snippet.fetch(buildRequest('/stats', [statsEvent({ version_build })]))
+      const answered = response.headers.get('X-Capgo-Edge') === 'answer'
+      if (!answered)
+        forwarded++
+      expect(fetchMock).toHaveBeenCalledTimes(forwarded)
+      // Never answer a version the worker rejects with semver_error.
+      if (answered)
+        expect(workerParses(version_build), version_build).toBe(true)
+    }
+    // The prerelease and build tags of real plugins are answered.
+    for (const version_build of versions.slice(0, 6)) {
+      const response = await snippet.fetch(buildRequest('/stats', [statsEvent({ version_build })]))
+      expect(response.headers.get('X-Capgo-Edge'), version_build).toBe('answer')
+    }
+  })
+
+  it('answers /stats of an app it learned nothing about, outside the learning share', async () => {
+    vi.setSystemTime(ANSWER_TIME)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const single = statsEvent({ action: 'app_launch_ready' })
+    const answered = await snippet.fetch(buildRequest('/stats', single))
+    expect(answered.status).toBe(200)
+    expect(answered.headers.get('X-Capgo-Edge')).toBe('answer')
+    expect(await answered.json()).toEqual({ status: 'ok' })
+    expect(decodeSnippetEdgeStat(answered.headers.get('X-Capgo-Edge-Stat')!)).toEqual({ e: 'stats', b: JSON.stringify(single) })
+
+    const batch = [statsEvent({ action: 'app_moved_to_background' }), statsEvent({ device_id: OTHER_DEVICE_ID })]
+    const answeredBatch = await snippet.fetch(buildRequest('/stats', batch))
+    expect(await answeredBatch.json()).toEqual({ status: 'ok', results: [{ status: 'ok', index: 0 }, { status: 'ok', index: 1 }] })
+    expect(fetchMock).not.toHaveBeenCalled()
+    // One lookup each, nothing stored.
+    expect(cache.match).toHaveBeenCalledTimes(2)
+    expect(cache.put).not.toHaveBeenCalled()
+
+    // Not answerable: installs and failures, browsers, other app ids in a
+    // batch, bad schema, empty batches.
+    await snippet.fetch(buildRequest('/stats', statsEvent({ action: 'set' })))
+    await snippet.fetch(buildRequest('/stats', statsEvent({ action: 'download_fail' })))
+    await snippet.fetch(buildRequest('/stats', statsEvent(), { Origin: 'https://example.com' }))
+    await snippet.fetch(buildRequest('/stats', [statsEvent(), statsEvent({ app_id: 'com.other.app' })]))
+    await snippet.fetch(buildRequest('/stats', statsEvent({ device_id: 'not-a-uuid' })))
+    await snippet.fetch(buildRequest('/stats', []))
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+  })
+
+  it('sends /stats of provider networks to the worker while nothing is learned', async () => {
+    vi.setSystemTime(ANSWER_TIME)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'provider_infrastructure_request_blocked' }), { status: 429 }))
+    vi.stubGlobal('fetch', fetchMock)
+    // Every PROVIDER_INFRA_ASNS network, and a request of unknown network.
+    for (const asn of PROVIDER_INFRA_ASNS)
+      expect((await snippet.fetch(buildRequest('/stats', statsEvent(), {}, { asn }))).status).toBe(429)
+    const unknownNetwork = new Request('https://plugin.capgo.app/stats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(statsEvent()) })
+    Object.defineProperty(unknownNetwork, 'cf', { value: { colo: 'CDG' } })
+    await snippet.fetch(unknownNetwork)
+    expect(fetchMock).toHaveBeenCalledTimes(PROVIDER_INFRA_ASNS.length + 1)
+    // A blocked answer teaches nothing: the next one still goes to the worker.
+    await snippet.fetch(buildRequest('/stats', statsEvent(), {}, { asn: PROVIDER_INFRA_ASNS[0] }))
+    expect(fetchMock).toHaveBeenCalledTimes(PROVIDER_INFRA_ASNS.length + 2)
+    const answered = await snippet.fetch(buildRequest('/stats', statsEvent()))
+    expect(answered.headers.get('X-Capgo-Edge')).toBe('answer')
+  })
+
+  it('sends the learning share of /stats without a fill to the worker', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await snippet.fetch(buildRequest('/stats', statsEvent()))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // A batch follows its first event: answered when only a later device is sampled...
+    vi.setSystemTime(minuteWhere(minute => !isLearnSample(DEVICE_ID, minute) && isLearnSample(OTHER_DEVICE_ID, minute)))
+    const answered = await snippet.fetch(buildRequest('/stats', [statsEvent(), statsEvent({ device_id: OTHER_DEVICE_ID })]))
+    expect(answered.headers.get('X-Capgo-Edge')).toBe('answer')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // ...and sent to the worker when its first device is.
+    await snippet.fetch(buildRequest('/stats', [statsEvent({ device_id: OTHER_DEVICE_ID }), statsEvent()]))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // About 5% of devices per minute.
+    const sampled = Array.from({ length: 4000 }, (_, i) => isLearnSample(`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, 29_700_000)).filter(Boolean).length
+    expect(sampled).toBeGreaterThan(120)
+    expect(sampled).toBeLessThan(280)
+  })
+
+  it('sends /stats to the worker when the app entry lookup fails', async () => {
+    vi.setSystemTime(ANSWER_TIME)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    cache.match.mockRejectedValueOnce(new Error('cache unavailable'))
+    const response = await snippet.fetch(buildRequest('/stats', statsEvent()))
+    expect(response.headers.get('X-Capgo-Edge')).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps serving a learned on-prem /stats 429 instead of answering it', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'on_premise_app', message: 'On-premise app detected', isOnprem: true }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json', 'Retry-After': '600', 'Cache-Control': 'public, max-age=600' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await snippet.fetch(buildRequest('/stats', statsEvent()))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    vi.setSystemTime(ANSWER_TIME)
+    const cached = await snippet.fetch(buildRequest('/stats', statsEvent()))
+    expect(cached.status).toBe(429)
+    expect(cached.headers.get('X-Capgo-Edge-Stat')).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('answers a single /stats event with the worker body', async () => {

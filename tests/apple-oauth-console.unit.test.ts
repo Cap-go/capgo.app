@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ConsoleClient } from '../src/services/consoleClient'
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { captureAppleOAuthCallback, completeAppleOAuth, consumeAppleOAuthLandingError, hasPendingAppleOAuth, prepareAppleOAuthLanding } from '../src/services/appleOAuth'
 
-vi.mock('~/services/supabase', () => ({ defaultApiHost: 'https://api.example.com' }))
+vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.example.com' }))
 const key = 'capgo.apple-oauth.v1'
 const state = 's'.repeat(43)
 const code = 'c'.repeat(43)
@@ -14,7 +14,7 @@ const exchange = vi.fn()
 const user = { id: 'example-user', email: 'apple-user@example.com', factors: [{ status: 'verified', factor_type: 'totp' }] }
 const session = { access_token: 'access-token', refresh_token: 'refresh-token' }
 const setSession = vi.fn()
-const client = { auth: { setSession } } as unknown as SupabaseClient
+const client = { auth: { setSession } } as unknown as ConsoleClient
 beforeEach(() => {
   vi.clearAllMocks()
   consumeAppleOAuthLandingError()
@@ -43,7 +43,7 @@ describe('console-owned Apple OAuth completion', () => {
     const capture = bootstrap.indexOf('prepareAppleOAuthLanding()')
     expect(capture).toBeGreaterThan(0)
     expect(capture).toBeLessThan(bootstrap.indexOf('createRouter({'))
-    expect(capture).toBeLessThan(bootstrap.indexOf('posthogLoader(config.supaHost)'))
+    expect(capture).toBeLessThan(bootstrap.indexOf('posthogLoader(config.apiHost)'))
   })
   it('strips invalid landing callbacks and defers a generic error to the login page', () => {
     vi.stubGlobal('location', { href: `https://console.capgo.app/login#apple_code=${code}&state=foreign` })

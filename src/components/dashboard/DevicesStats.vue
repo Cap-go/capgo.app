@@ -15,6 +15,7 @@ import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
+import { useConsole } from '~/services/console'
 import { formatUtcDateParam, generateChartDayLabels, getChartDateRange, getLastNUtcDaysRange, normalizeToUtcStartOfDay } from '~/services/date'
 import { DEFAULT_DEVICE_DATA_COLLECTION } from '~/services/deviceDataCollection'
 import { formatNumberValue } from '~/services/formatLocale'
@@ -25,7 +26,6 @@ import {
   generateDemoPreviousNativeActiveSummary,
   normalizeNativeActiveDevicesSummary,
 } from '~/services/nativeDeviceStats'
-import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
@@ -141,7 +141,7 @@ const { t } = useI18n()
 const route = useRoute('/app/[app]')
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const rawChartData = ref<ChartApiData | null>(null)
 const rawThirtyDayChartData = ref<ChartApiData | null>(null)
 
@@ -174,7 +174,7 @@ async function navigateToBundle(versionName: string) {
   }
 
   // Query the database to get the bundle ID from version name
-  const { data } = await supabase
+  const { data } = await capgo
     .from('app_versions')
     .select('id')
     .eq('app_id', activeAppId.value)
@@ -837,7 +837,7 @@ async function loadThirtyDaySummary(forceRefetch = false, loadToken?: number, lo
   const summaryToken = ++thirtyDaySummaryRequestToken
   isFetchingThirtyDaySummary.value = true
   try {
-    const data = await useChartData(supabase, expectedAppId, startDate, endDate, 'native', { forceRefetch })
+    const data = await useChartData(capgo, expectedAppId, startDate, endDate, 'native', { forceRefetch })
     if (loadToken !== undefined && loadToken !== requestToken)
       return
     if (expectedAppId !== activeAppId.value)
@@ -933,7 +933,7 @@ async function loadData(forceRefetch = false) {
   currentRange.value = { startDate, endDate }
 
   try {
-    const data = await useChartData(supabase, requestedAppId, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle', { forceRefetch })
+    const data = await useChartData(capgo, requestedAppId, startDate, endDate, props.usageKind === 'native' ? 'native' : 'bundle', { forceRefetch })
 
     if (currentToken !== requestToken || requestedAppId !== activeAppId.value)
       return
