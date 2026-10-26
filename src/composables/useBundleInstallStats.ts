@@ -10,7 +10,6 @@ export interface BundleInstallStatsItem {
   version_name: string
   install: number
   fail: number
-  excluded_check_failures?: number
   success_rate: number | null
   timing: {
     samples: number

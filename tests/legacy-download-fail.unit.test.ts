@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { countsAsBundleFailure as countsAsBundleFailurePlugin, isLegacyDownloadFailPlugin as isLegacyPlugin } from '../supabase/functions/_backend/plugin_runtime/utils/legacyDownloadFail.ts'
-import { countsAsBundleFailure, isLegacyDownloadFailPlugin, legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, subtractLegacyDownloadFails, summarizeLegacyCheckFailures, sumLegacyDownloadFails, toLegacyCheckFailures, UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION } from '../supabase/functions/_backend/utils/legacyDownloadFail.ts'
+import { countsAsBundleFailure, isLegacyDownloadFailPlugin, legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, mergeLegacyCheckFailures, subtractLegacyDownloadFails, sumLegacyDownloadFails, summarizeLegacyCheckFailures, UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION } from '../supabase/functions/_backend/utils/legacyDownloadFail.ts'
 import { formatLegacyPluginVersions } from '../src/composables/useReleaseLive.ts'
 import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
 import { buildLegacyCheckFailuresQueryCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
@@ -81,15 +81,18 @@ describe('legacy download_fail correction', () => {
       { version_name: '8016', plugin_version: '8.51.16', count: '450' },
       { version_name: '8016', plugin_version: '8.9.0', count: 5 },
       { version_name: '8016', plugin_version: '8.53.0', count: 20 },
-      { version_name: '8015', plugin_version: '8.51.16', count: 9 },
-      { version_name: '8015', plugin_version: '6.40.0', count: 0 },
+      { version_name: '8015', plugin_version: '6.40.0', count: 9 },
+      { version_name: '8015', plugin_version: '8.51.16', count: 0 },
     ])
-    expect(summary.byVersion).toEqual(new Map([['8016', 455], ['8015', 9]]))
-    expect(summary.pluginVersions).toEqual(['8.9.0', '8.51.16'])
+    expect(summary).toEqual([
+      { version_name: '8016', excluded: 455, plugin_versions: ['8.9.0', '8.51.16'] },
+      { version_name: '8015', excluded: 9, plugin_versions: ['6.40.0'] },
+    ])
 
-    expect(toLegacyCheckFailures(0, ['8.51.16'])).toBeNull()
-    expect(toLegacyCheckFailures(4, [])).toBeNull()
-    expect(toLegacyCheckFailures(4, ['8.51.16'])).toEqual({ excluded: 4, plugin_versions: ['8.51.16'], fixed_in: UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION })
+    expect(mergeLegacyCheckFailures([])).toBeNull()
+    // Only the given bundles' plugin versions.
+    expect(mergeLegacyCheckFailures(summary.filter(bundle => bundle.version_name === '8015'))).toEqual({ excluded: 9, plugin_versions: ['6.40.0'], fixed_in: UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION })
+    expect(mergeLegacyCheckFailures(summary)).toEqual({ excluded: 464, plugin_versions: ['6.40.0', '8.9.0', '8.51.16'], fixed_in: UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION })
   })
 
   it.concurrent('lists the newest plugin versions in the notice', () => {

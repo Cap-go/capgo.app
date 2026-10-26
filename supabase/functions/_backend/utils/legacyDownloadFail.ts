@@ -105,29 +105,48 @@ export interface LegacyCheckFailureLogRow {
   count: string | number
 }
 
-/** Legacy download_fail count per bundle, and the plugin versions that sent them. */
-export function summarizeLegacyCheckFailures(rows: LegacyCheckFailureLogRow[]) {
-  const byVersion = new Map<string, number>()
-  const pluginVersions = new Set<string>()
-  for (const row of rows) {
-    if (!isLegacyDownloadFailPlugin(row.plugin_version))
-      continue
-    const count = Number(row.count)
-    if (!Number.isFinite(count) || count <= 0)
-      continue
-    byVersion.set(row.version_name, (byVersion.get(row.version_name) ?? 0) + Math.round(count))
-    pluginVersions.add(row.plugin_version.trim())
-  }
-  const sorted = [...pluginVersions].sort((a, b) => {
+/** Legacy download_fail reports of one bundle and the plugin versions that sent them. */
+export interface BundleLegacyCheckFailures {
+  version_name: string
+  excluded: number
+  plugin_versions: string[]
+}
+
+function sortPluginVersions(pluginVersions: Iterable<string>) {
+  return [...new Set(pluginVersions)].sort((a, b) => {
     const left = tryParse(a)
     const right = tryParse(b)
     return left && right ? compare(left, right) : a.localeCompare(b)
   })
-  return { byVersion, pluginVersions: sorted }
 }
 
-export function toLegacyCheckFailures(excluded: number, pluginVersions: string[]): LegacyCheckFailures | null {
-  if (excluded <= 0 || pluginVersions.length === 0)
+/** Legacy download_fail per bundle, from logs grouped by bundle and plugin version. */
+export function summarizeLegacyCheckFailures(rows: LegacyCheckFailureLogRow[]): BundleLegacyCheckFailures[] {
+  const byVersion = new Map<string, { excluded: number, pluginVersions: Set<string> }>()
+  for (const row of rows) {
+    if (!row.version_name || !isLegacyDownloadFailPlugin(row.plugin_version))
+      continue
+    const count = Number(row.count)
+    if (!Number.isFinite(count) || count <= 0)
+      continue
+    const entry = byVersion.get(row.version_name) ?? { excluded: 0, pluginVersions: new Set<string>() }
+    entry.excluded += Math.round(count)
+    entry.pluginVersions.add(row.plugin_version.trim())
+    byVersion.set(row.version_name, entry)
+  }
+  return [...byVersion.entries()]
+    .map(([version_name, entry]) => ({ version_name, excluded: entry.excluded, plugin_versions: sortPluginVersions(entry.pluginVersions) }))
+    .sort((a, b) => b.excluded - a.excluded || a.version_name.localeCompare(b.version_name))
+}
+
+/** Notice for the given bundles: their reports and only their plugin versions. */
+export function mergeLegacyCheckFailures(bundles: BundleLegacyCheckFailures[]): LegacyCheckFailures | null {
+  const excluded = bundles.reduce((sum, bundle) => sum + bundle.excluded, 0)
+  if (excluded <= 0)
     return null
-  return { excluded, plugin_versions: pluginVersions, fixed_in: UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION }
+  return {
+    excluded,
+    plugin_versions: sortPluginVersions(bundles.flatMap(bundle => bundle.plugin_versions)),
+    fixed_in: UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION,
+  }
 }

@@ -10,7 +10,7 @@ import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
-import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, subtractLegacyDownloadFails, toLegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
+import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, mergeLegacyCheckFailures, subtractLegacyDownloadFails } from '../utils/legacyDownloadFail.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -446,7 +446,7 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
     seriesRows,
     failureRows,
     failedDevices: toFailedDevices(failedDeviceRows),
-    legacyCheckFailures: toLegacyCheckFailures(legacyCheckFailures.byVersion.get(versionName) ?? 0, legacyCheckFailures.pluginVersions),
+    legacyCheckFailures: mergeLegacyCheckFailures(legacyCheckFailures.filter(bundle => bundle.version_name === versionName)),
   }
 }
 
