@@ -13,25 +13,21 @@ import IconsResolver from 'unplugin-icons/resolver'
 import Icons from 'unplugin-icons/vite'
 import Components from 'unplugin-vue-components/vite'
 import VueMacros from 'unplugin-vue-macros/vite'
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import devtoolsJson from 'vite-plugin-devtools-json'
 import EnvironmentPlugin from 'vite-plugin-environment'
 import VueDevTools from 'vite-plugin-vue-devtools'
 import Layouts from 'vite-plugin-vue-layouts'
 import { VueRouterAutoImports } from 'vue-router/unplugin'
 import VueRouter from 'vue-router/vite'
-import keys from './configs.json'
 import pack from './package.json'
 import { branch, getRightKey } from './scripts/utils.mjs'
 import 'vitest/config'
 
-const PROD_SUPABASE_PROXY_PATH = '/__supabase/'
-const useProdSupabaseProxy = process.env.CAPGO_PROD_SUPABASE_PROXY === 'true'
-
-type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key' | 'supa_anon' | 'supa_url'
+type FrontendConfigKey = 'api_domain' | 'base_domain' | 'captcha_key'
 
 function getFrontendKey(key: FrontendConfigKey): string {
-  return useProdSupabaseProxy ? keys[key].prod : getRightKey(key)
+  return getRightKey(key)
 }
 
 function getUrl(key: 'api_domain' | 'base_domain' = 'base_domain'): string {
@@ -155,9 +151,6 @@ readdirSync('./messages/')
 const frontendEnvironmentVariables: Record<string, string> = {
   locales: locales.join(','),
   VITE_APP_VERSION: pack.version,
-  VITE_SUPABASE_ANON_KEY: getFrontendKey('supa_anon'),
-  VITE_SUPABASE_PROXY_PATH: useProdSupabaseProxy ? PROD_SUPABASE_PROXY_PATH : '',
-  VITE_SUPABASE_URL: getFrontendKey('supa_url'),
   VITE_APP_URL: getUrl(),
   VITE_API_HOST: getUrl('api_domain'),
   VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
@@ -169,26 +162,7 @@ const frontendEnvironmentVariables: Record<string, string> = {
 }
 
 function frontendEnvironmentPlugin(): Plugin {
-  if (!useProdSupabaseProxy)
-    return EnvironmentPlugin(frontendEnvironmentVariables, { defineOn: 'import.meta.env' })
-
-  return {
-    name: 'capgo-prod-supabase-environment',
-    config(_, { mode }) {
-      const localBuildEnv = loadEnv(mode, process.cwd(), 'VITE_')
-      const buildVariables = {
-        ...frontendEnvironmentVariables,
-        VITE_NATIVE_APPLE_LOGIN_ENABLED: localBuildEnv.VITE_NATIVE_APPLE_LOGIN_ENABLED ?? 'false',
-        VITE_WEB_APPLE_LOGIN_ENABLED: localBuildEnv.VITE_WEB_APPLE_LOGIN_ENABLED ?? 'false',
-      }
-      return {
-        define: Object.fromEntries(
-          Object.entries(buildVariables)
-            .map(([key, value]) => [`import.meta.env.${key}`, JSON.stringify(value)]),
-        ),
-      }
-    },
-  }
+  return EnvironmentPlugin(frontendEnvironmentVariables, { defineOn: 'import.meta.env' })
 }
 
 export default defineConfig({
@@ -212,21 +186,19 @@ export default defineConfig({
             path.resolve(__dirname, 'playwright/fixtures/email-verification.html'),
           ]
         : undefined,
-      output: {
-        codeSplitting: {
-          // The Supabase SDK is shared by almost every page; keep it in its own
-          // long-lived chunk instead of inflating whichever app module imports it first.
-          groups: [
-            {
-              name: 'supabase',
-              test: /node_modules[\\/](@supabase|iceberg-js)[\\/]/,
-            },
-          ],
-        },
-      },
     },
   },
   plugins: [
+    {
+      name: 'console-api-only',
+      apply: 'build',
+      generateBundle() {
+        for (const id of this.getModuleIds()) {
+          if (/node_modules[\\/].*@supabase[+\\/]/.test(id))
+            this.error(`The console must use the Capgo API instead of a Supabase SDK (imported via ${id})`)
+        }
+      },
+    },
     wellKnownPasswordManagerPlugin(),
     envFaviconPlugin(),
     tailwindcss(),
@@ -299,23 +271,9 @@ export default defineConfig({
   ],
 
   server: {
-    host: useProdSupabaseProxy ? '127.0.0.1' : undefined,
     fs: {
       strict: true,
     },
-    proxy: useProdSupabaseProxy
-      ? {
-          [PROD_SUPABASE_PROXY_PATH.slice(0, -1)]: {
-            target: keys.supa_url.prod,
-            changeOrigin: true,
-            headers: {
-              origin: new URL(keys.supa_url.prod).origin,
-            },
-            rewrite: requestPath => requestPath.replace(/^\/__supabase/, ''),
-            ws: true,
-          },
-        }
-      : undefined,
   },
 
   optimizeDeps: {

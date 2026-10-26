@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
 import { computed, h, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, useOrganizationStore } from '~/stores/organization'
 
@@ -33,7 +33,7 @@ const emit = defineEmits([
 ])
 const { t } = useI18n()
 const isMobile = Capacitor.isNativePlatform()
-const supabase = useSupabase()
+const capgo = useConsole()
 const router = useRouter()
 const internalSearch = ref(props.search || '')
 const internalCurrentPage = ref(props.currentPage || 1)
@@ -84,7 +84,7 @@ async function loadAppRoles() {
 
   appRoleLoaded.value = false
   try {
-    const { data, error } = await supabase.rpc('get_org_user_access_rbac', {
+    const { data, error } = await capgo.rpc('get_org_user_access_rbac', {
       p_user_id: userId,
       p_org_id: orgId,
     })
@@ -225,7 +225,7 @@ function openPackage(app: Database['public']['Tables']['apps']['Row']) {
 async function openOneVersion(app: Database['public']['Tables']['apps']['Row']) {
   if (!app.last_version)
     return
-  const { data: versionData } = await supabase
+  const { data: versionData } = await capgo
     .from('app_versions')
     .select('id')
     .eq('app_id', app.app_id)

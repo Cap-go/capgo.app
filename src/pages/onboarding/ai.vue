@@ -14,8 +14,8 @@ import AppOnboardingPageFrame from '~/components/dashboard/AppOnboardingPageFram
 import { developmentEnvironmentOptions } from '~/components/dashboard/onboardingDevelopmentEnvironmentOptions'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import { buildAiOnboardingPrompt } from '~/services/cliAiPrompt'
+import { useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { useSupabase } from '~/services/supabase'
 import { replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -32,7 +32,7 @@ const MASKED_KEY = 'capgo_••••••••••••••••'
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
@@ -92,13 +92,13 @@ const promptPreview = computed(() => apiKey.value ? promptFor(revealKey.value ? 
 async function ensureApiKey(userId: string, orgId: string) {
   // Always hand out the dedicated key: the backend recognizes the agent's first CLI/MCP
   // events by this key name to tick off live progress on this page.
-  const existing = await findUsablePlainApiKey(supabase, userId, orgId, null, { name: AI_ONBOARDING_API_KEY_NAME })
+  const existing = await findUsablePlainApiKey(capgo, userId, orgId, null, { name: AI_ONBOARDING_API_KEY_NAME })
   if (existing)
     return existing
-  const { data, error } = await createDefaultApiKey(supabase, AI_ONBOARDING_API_KEY_NAME, { orgId })
+  const { data, error } = await createDefaultApiKey(capgo, AI_ONBOARDING_API_KEY_NAME, { orgId })
   if (error)
     throw error
-  return typeof data?.key === 'string' ? data.key : await findUsablePlainApiKey(supabase, userId, orgId, null, { name: AI_ONBOARDING_API_KEY_NAME })
+  return typeof data?.key === 'string' ? data.key : await findUsablePlainApiKey(capgo, userId, orgId, null, { name: AI_ONBOARDING_API_KEY_NAME })
 }
 
 async function loadApiKey() {
@@ -135,7 +135,7 @@ async function copyPrompt() {
 }
 
 async function refreshAgentProgress(userId: string) {
-  const { data, error } = await supabase.from('users').select('onboarding').eq('id', userId).maybeSingle()
+  const { data, error } = await capgo.from('users').select('onboarding').eq('id', userId).maybeSingle()
   if (disposed || error || !data)
     return
   const next = readAiAgentProgress(data.onboarding)
@@ -155,7 +155,7 @@ async function checkForApp() {
   if (disposed || !orgId || detectedApp.value || document.visibilityState === 'hidden')
     return
   const [{ data, error }] = await Promise.all([
-    supabase
+    capgo
       .from('apps')
       .select('app_id, name')
       .eq('owner_org', orgId)

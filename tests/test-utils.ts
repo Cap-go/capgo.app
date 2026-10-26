@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PoolClient } from 'pg'
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
@@ -475,7 +475,7 @@ async function signInAndBuildAuthHeaders(email: string, password: string): Promi
     throw new Error('SUPABASE_URL or SUPABASE_ANON_KEY is missing for auth headers')
   }
 
-  const supabase = createClient<Database>(supabaseBaseUrl, supabaseAnonKey, {
+  const capgo = createClient<Database>(supabaseBaseUrl, supabaseAnonKey, {
     auth: {
       persistSession: false,
     },
@@ -485,7 +485,7 @@ async function signInAndBuildAuthHeaders(email: string, password: string): Promi
   // miss under shard load, not a credential failure. Retry like fetchTestRequest.
   let lastError: unknown = new Error('Unable to obtain JWT for tests')
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await capgo.auth.signInWithPassword({
       email,
       password,
     })
@@ -817,7 +817,7 @@ export async function resetAndSeedAppData(appId: string, options?: SeedAppOption
 
   const seedPromise = (async () => {
     try {
-      const supabase = getSupabaseClient()
+      const capgo = getSupabaseClient()
       const rpcParams: Record<string, unknown> = { p_app_id: appId }
       if (options?.orgId)
         rpcParams.p_org_id = options.orgId
@@ -830,7 +830,7 @@ export async function resetAndSeedAppData(appId: string, options?: SeedAppOption
       if (options?.planProductId)
         rpcParams.p_plan_product_id = options.planProductId
 
-      const { error } = await supabase.rpc('reset_and_seed_app_data' as any, rpcParams)
+      const { error } = await capgo.rpc('reset_and_seed_app_data' as any, rpcParams)
       if (error)
         throw error
 
@@ -906,14 +906,14 @@ export async function batchResetAndSeedApps(appIds: string[]): Promise<void> {
   }
 }
 
-export async function seedTestData(supabase: SupabaseClient, appId: string) {
-  const { error } = await supabase.rpc('seed_test_data', { p_app_id: appId })
+export async function seedTestData(capgo: SupabaseClient, appId: string) {
+  const { error } = await capgo.rpc('seed_test_data', { p_app_id: appId })
   if (error)
     throw error
 }
 
-export async function createDemoApp(supabase: SupabaseClient, appId: string) {
-  const { error } = await supabase.from('apps').insert({ id: appId })
+export async function createDemoApp(capgo: SupabaseClient, appId: string) {
+  const { error } = await capgo.from('apps').insert({ id: appId })
   if (error)
     throw error
 }
@@ -922,8 +922,8 @@ export function generateUniqueAppId(testName: string): string {
   return `com.demo.${testName.toLowerCase().replace(/\s/g, '_')}_${Date.now()}`
 }
 
-export async function cleanupDemoApp(supabase: SupabaseClient, appId: string) {
-  const { error } = await supabase.from('apps').delete().eq('id', appId)
+export async function cleanupDemoApp(capgo: SupabaseClient, appId: string) {
+  const { error } = await capgo.from('apps').delete().eq('id', appId)
   if (error)
     throw error
 }

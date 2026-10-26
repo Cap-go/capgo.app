@@ -12,7 +12,11 @@ import { getEnv, isListedLimitedApp } from './utils.ts'
  * so they never invoke, and never bill, a worker:
  * - /updates when the device already runs the bundle its channel serves
  *   (`no_new_version_available`)
- * - /stats when the app is a cloud app with a valid plan
+ * - /stats of any app (snippet STATS_ANSWER_ALL): the replay runs the full
+ *   handler, so plan, on-prem, provider network and LIMITED_APPS checks
+ *   still apply. A share of the requests without a fill keeps reaching the
+ *   worker, so on-prem / plan-upgrade 429s and the provider networks of a
+ *   stats fill are still learned.
  *
  * The worker teaches the snippet. An answer the snippet may repeat carries
  * `X-Capgo-Edge-Fill`; the snippet stores it in the cache of its own data
@@ -28,7 +32,8 @@ import { getEnv, isListedLimitedApp } from './utils.ts'
  * Switch: worker secret `SNIPPET_EDGE_ANSWER` (off | on | N% of devices,
  * unset = SNIPPET_EDGE_ANSWER_DEFAULT_SHARE). Keep it off until the Logpush
  * -> R2 -> queue pipeline runs, otherwise the stats of answered requests are
- * lost. The secret only stops new fills:
+ * lost. The secret does not stop the /stats answers of STATS_ANSWER_ALL
+ * (the snippet constants do), and it only stops new fills:
  * `bun run snippet-edge-answer:set` also purges SNIPPET_EDGE_ANSWERS_TAG, and
  * so must a LIMITED_APPS change (`bun run snippet-edge-answer:purge`).
  */

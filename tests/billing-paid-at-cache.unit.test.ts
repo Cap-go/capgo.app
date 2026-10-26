@@ -6,10 +6,10 @@ const mocks = vi.hoisted(() => {
   const eq = vi.fn(() => ({ maybeSingle }))
   const select = vi.fn(() => ({ eq }))
   const from = vi.fn(() => ({ select }))
-  return { from, maybeSingle, useSupabase: vi.fn(() => ({ from })) }
+  return { from, maybeSingle, useConsole: vi.fn(() => ({ from })) }
 })
 
-vi.mock('../src/services/supabase', () => ({ useSupabase: mocks.useSupabase }))
+vi.mock('../src/services/console', () => ({ useConsole: mocks.useConsole }))
 
 describe('billing paid-at cache', () => {
   beforeEach(() => {

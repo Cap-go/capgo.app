@@ -903,13 +903,76 @@ Also applies to dialog/Teleport content, admin filters, and hidden utility input
 (e.g. file pickers): they still need `aria-label` or an associated label.
 
 
+## Console Data Access
+
+- **Never call Supabase from the console or the CLI.** Only the backend
+  (`supabase/functions/_backend`, `cloudflare_workers`) holds a Supabase URL or
+  key. The console and the CLI talk to the Capgo API only. No `@supabase/*`
+  import, `sb.capgo.app`/`*.supabase.co` host, anon key, or `/rest/v1`,
+  `/auth/v1`, `/storage/v1` URL may appear under `src/`; the word "Supabase"
+  must not appear there either. `tests/console-no-supabase.unit.test.ts` and
+  the `console-api-only` Vite build plugin enforce this (the only allowed
+  exception is `src/utils/safeRedirect.ts`, which names the legacy
+  `/auth/v1/verify` path to rewrite email links onto the API relay).
+- `useConsole()` (`src/services/console.ts`) returns the console client
+  (`src/services/consoleClient.ts`). Its `from`/`rpc`, storage, realtime and
+  `functions.invoke` calls go to `/private/console/*`
+  (`supabase/functions/_backend/private/console_data.ts`). Table and RPC calls
+  are compiled to SQL and run through Drizzle on the primary database as the
+  caller's Postgres role with `row_security` on, so RLS still applies.
+  Authenticated queries set the verified JWT claims. The pre-login
+  `is_not_deleted` probe runs as `anon` with no claims.
+  Storage still uses the Supabase storage API. Do not point these queries at a
+  read replica: RLS helpers such as `auth.uid()` are not replicated.
+- Auth goes through `/private/console/auth/*`
+  (`supabase/functions/_backend/private/console_auth_proxy.ts`), a relay to
+  the auth provider's user-facing endpoints only (never admin). The console auth
+  client (`src/services/consoleAuth.ts`) keeps the session in localStorage under
+  `capgo.console.auth` and mirrors the previous SDK surface (`getSession`,
+  `signInWithPassword`, `mfa.*`, `onAuthStateChange`, ...).
+- The relay forwards the browser address in `X-Forwarded-For` and
+  `Sb-Forwarded-For`, so the auth provider's per-IP rate limits, CAPTCHA checks
+  and audit log keep working. Do not drop those headers.
+- Any new table or RPC used from `src/` must be added to
+  `supabase/functions/_backend/utils/console_query_allowlist.ts`;
+  `tests/console-query-allowlist.unit.test.ts` enforces this.
+- Generated database types live in `src/types/database.types.ts` (copied to
+  the backend by `scripts/getTypes.mjs`).
+
+## Console Query Performance
+
+Every console query now pays a round trip through the Capgo API, and every row
+it returns is serialized twice. Keep each one bounded and cheap:
+
+- **Bound every list.** Use `.range()` or `.limit()`; a read that returns a
+  table's history (audit logs, deploys, ledger, devices) must page in the
+  database, not in the browser. PostgREST also truncates silently at
+  `max_rows` (1000), so an unbounded read is wrong as well as slow.
+- **Scope and filter in the database.** Filter by app, channel or bundle (JSON
+  paths like `.eq('old_record->>version', ...)` work) instead of loading rows to
+  filter client-side.
+- **Aggregate in the database.** Charts and counters get a `SECURITY INVOKER`
+  SQL function returning buckets (see `get_bundle_upload_daily_counts`), not
+  raw rows bucketed in the browser.
+- **`count: 'estimated'` and `count: 'planned'` are exact** on this console path.
+  They run `count(*)` on the primary, the same as `count: 'exact'`, so they do
+  not make an unbounded table cheaper. Page audit logs, deploy history, and the
+  ledger, or skip the count. Exact counts stay fine for per-app sets.
+- **Resolve id lists on the server.** Never download ids only to post them back
+  (see the device `overrides`/`overrideChannelId` filters).
+- **Wrap function calls in RLS policies** in a scalar subquery,
+  `(SELECT public.fn())`, so Postgres evaluates them once per statement instead
+  of once per row. `supabase/tests/88_test_console_query_performance.sql`
+  guards `verify_mfa()`.
+- **No sequential awaits in loops** for independent queries; use `Promise.all`.
+
 ## Auth Redirect Guardrails
 
 - We intentionally route auth email links through `/confirm-signup` to avoid
   mailbox link prefetchers triggering Supabase verification/recovery links.
-- `confirm-signup.vue` only allows redirects to the console host and the
-  Supabase host; if you change `VITE_APP_URL` or `VITE_SUPABASE_URL`, update
-  both allow-lists accordingly.
+- `confirm-signup.vue` rewrites `/auth/v1/verify` links onto the Capgo API
+  relay (`/private/console/auth/verify`) and otherwise only allows redirects to
+  the console host and the API host (`VITE_APP_URL`, `VITE_API_HOST`).
 
 ## Frontend Testing
 

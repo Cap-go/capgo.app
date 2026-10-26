@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconSettings from '~icons/lucide/settings'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 interface ChannelPreview {
@@ -16,7 +16,7 @@ const route = useRoute('/app/[app].channel.[channel].preview')
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
@@ -59,7 +59,7 @@ async function getChannel() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select(`
         id,
@@ -98,7 +98,7 @@ async function getChannel() {
 
 async function getApp() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select()
       .eq('app_id', packageId.value)

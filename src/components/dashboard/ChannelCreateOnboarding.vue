@@ -12,8 +12,8 @@ import IconServer from '~icons/lucide/server'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconUsers from '~icons/lucide/users-round'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -35,7 +35,7 @@ interface SavedChannel {
 const CHANNEL_NAME_PATTERN = /^[\w.-]+$/
 const suggestedNames = ['production', 'beta', 'development'] as const
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const channelName = ref('')
@@ -119,7 +119,7 @@ function handleSelfAssignChange() {
 }
 
 async function loadExistingChannel() {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('channels')
     .select('name, public, allow_device_self_set')
     .eq('app_id', props.appId)
@@ -235,7 +235,7 @@ async function createChannel() {
   isSubmitting.value = true
   let failurePhase: NonNullable<OnboardingChannelEventProperties['failure_phase']> = 'existing_channel_lookup'
   try {
-    const { data: existingChannel, error: existingError } = await supabase
+    const { data: existingChannel, error: existingError } = await capgo
       .from('channels')
       .select('name, public, allow_device_self_set')
       .eq('app_id', props.appId)
@@ -271,7 +271,7 @@ async function createChannel() {
     }
 
     failurePhase = 'channel_insert'
-    const { error } = await supabase
+    const { error } = await capgo
       .from('channels')
       .insert({
         name: normalizedName,

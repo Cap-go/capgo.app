@@ -37,6 +37,7 @@ const config = antfu(
       'public',
       'supabase/functions/_script',
       '**/supabase.types*',
+      '**/database.types*',
       'supabase/functions/_backend/scripts/*',
       'CHANGELOG.md',
       'src/services/posthog.ts',

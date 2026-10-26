@@ -1,5 +1,5 @@
-import type { Database } from '~/types/supabase.types'
-import { useSupabase } from '~/services/supabase'
+import type { Database } from '~/types/database.types'
+import { useConsole } from '~/services/console'
 
 export interface LinkedChannel {
   id: number
@@ -37,15 +37,15 @@ function mergeLinkedChannels(stableChannels: LinkedChannel[] = [], rolloutChanne
 }
 
 export async function fetchLinkedChannelsForVersion(appId: string, versionId: number) {
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const select = 'id, name, version, rollout_version, version_info:app_versions!channels_version_fkey(name), rollout_version_info:app_versions!channels_rollout_version_fkey(name)'
   const [stableResult, rolloutResult] = await Promise.all([
-    supabase
+    capgo
       .from('channels')
       .select(select)
       .eq('app_id', appId)
       .eq('version', versionId),
-    supabase
+    capgo
       .from('channels')
       .select(select)
       .eq('app_id', appId)
@@ -67,7 +67,7 @@ export async function unlinkLinkedChannels(unlink: LinkedChannel[]) {
   if (unlink.length === 0)
     return null
 
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const results = await Promise.all(unlink.map(async (channel) => {
     const update: Database['public']['Tables']['channels']['Update'] = {}
     if (channel.stable_linked)
@@ -79,7 +79,7 @@ export async function unlinkLinkedChannels(unlink: LinkedChannel[]) {
       update.rollout_paused_at = null
       update.rollout_pause_reason = null
     }
-    return await supabase
+    return await capgo
       .from('channels')
       .update(update)
       .eq('id', channel.id)

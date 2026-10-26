@@ -12,7 +12,7 @@ import LogAsDialogField from '~/components/LogAsDialogField.vue'
 import { useEdgeSwipeBack } from '~/composables/useEdgeSwipeBack'
 import { isNativeChromeEnabled, useNativeChrome } from '~/composables/useNativeChrome'
 import { useRealtimeCLIFeed } from '~/composables/useRealtimeCLIFeed'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
@@ -31,7 +31,7 @@ function toggleSidebarCollapse() {
 
 const pendingOnboardingAppId = ref('')
 const route = useRoute()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const main = useMainStore()
 let onboardingLookupRun = 0
@@ -57,7 +57,7 @@ async function refreshPendingOnboardingApp() {
   const routeAppId = 'app' in route.params && typeof route.params.app === 'string' ? route.params.app : null
   const candidateAppId = routeAppId ?? getOnboardingResumeAppId(main.user?.id ?? main.auth?.id)
 
-  const { data, error } = await supabase.from('apps')
+  const { data, error } = await capgo.from('apps')
     .select('app_id, need_onboarding, onboarding')
     .eq('owner_org', singleOrganization.gid)
     .limit(2)

@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -174,8 +174,8 @@ describe('tests CLI channel commands', () => {
       const channelName = generateChannelName()
       await createChannel(channelName, APPNAME)
 
-      const supabase = getSupabaseClient()
-      const { data: app, error: appError } = await supabase
+      const capgo = getSupabaseClient()
+      const { data: app, error: appError } = await capgo
         .from('apps')
         .select('id')
         .eq('app_id', APPNAME)
@@ -183,7 +183,7 @@ describe('tests CLI channel commands', () => {
       expect(appError).toBeNull()
       expect(app?.id).toBeTruthy()
 
-      const { data: channel, error: channelError } = await supabase
+      const { data: channel, error: channelError } = await capgo
         .from('channels')
         .select('id, rbac_id, version ( name )')
         .eq('name', channelName)
@@ -192,7 +192,7 @@ describe('tests CLI channel commands', () => {
       expect(channelError).toBeNull()
       expect(channel?.rbac_id).toBeTruthy()
       expect(channel?.version?.name).toBeTruthy()
-      const { data: channelReaderRole, error: roleError } = await supabase
+      const { data: channelReaderRole, error: roleError } = await capgo
         .from('roles')
         .select('id')
         .eq('name', 'channel_reader')
@@ -211,7 +211,7 @@ describe('tests CLI channel commands', () => {
       const resolvedKey = apiKey.key ?? key
 
       try {
-        const { error: bindingError } = await supabase
+        const { error: bindingError } = await capgo
           .from('role_bindings')
           .insert({
             principal_type: 'apikey',
@@ -227,7 +227,7 @@ describe('tests CLI channel commands', () => {
           })
         expect(bindingError).toBeNull()
 
-        const { data: directAllowed, error: directError } = await supabase.rpc('rbac_check_permission_direct' as any, {
+        const { data: directAllowed, error: directError } = await capgo.rpc('rbac_check_permission_direct' as any, {
           p_permission_key: 'channel.read',
           p_user_id: apiKey.user_id,
           p_org_id: seedOptions.orgId,
@@ -243,8 +243,8 @@ describe('tests CLI channel commands', () => {
         expect(result.data).toBe(channel?.version?.name)
       }
       finally {
-        await supabase.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
-        await supabase.from('apikeys').delete().eq('id', apiKey.id)
+        await capgo.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
+        await capgo.from('apikeys').delete().eq('id', apiKey.id)
       }
     })
 
@@ -264,8 +264,8 @@ describe('tests CLI channel commands', () => {
         })
         .throwOnError()
 
-      const supabase = getSupabaseClient()
-      const { data: app, error: appError } = await supabase
+      const capgo = getSupabaseClient()
+      const { data: app, error: appError } = await capgo
         .from('apps')
         .select('id')
         .eq('app_id', APPNAME)
@@ -273,7 +273,7 @@ describe('tests CLI channel commands', () => {
       expect(appError).toBeNull()
       expect(app?.id).toBeTruthy()
 
-      const { data: channel, error: channelError } = await supabase
+      const { data: channel, error: channelError } = await capgo
         .from('channels')
         .select('id, rbac_id')
         .eq('name', channelName)
@@ -282,7 +282,7 @@ describe('tests CLI channel commands', () => {
       expect(channelError).toBeNull()
       expect(channel?.rbac_id).toBeTruthy()
 
-      const { data: channelAdminRole, error: roleError } = await supabase
+      const { data: channelAdminRole, error: roleError } = await capgo
         .from('roles')
         .select('id')
         .eq('name', 'channel_admin')
@@ -301,7 +301,7 @@ describe('tests CLI channel commands', () => {
       const resolvedKey = apiKey.key ?? key
 
       try {
-        const { error: bindingError } = await supabase
+        const { error: bindingError } = await capgo
           .from('role_bindings')
           .insert({
             principal_type: 'apikey',
@@ -317,7 +317,7 @@ describe('tests CLI channel commands', () => {
           })
         expect(bindingError).toBeNull()
 
-        const { data: directAllowed, error: directError } = await supabase.rpc('rbac_check_permission_direct' as any, {
+        const { data: directAllowed, error: directError } = await capgo.rpc('rbac_check_permission_direct' as any, {
           p_permission_key: 'channel.update_settings',
           p_user_id: apiKey.user_id,
           p_org_id: seedOptions.orgId,
@@ -332,8 +332,8 @@ describe('tests CLI channel commands', () => {
         expect(result.success, result.error).toBe(true)
       }
       finally {
-        await supabase.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
-        await supabase.from('apikeys').delete().eq('id', apiKey.id)
+        await capgo.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
+        await capgo.from('apikeys').delete().eq('id', apiKey.id)
       }
     })
 
@@ -364,8 +364,8 @@ describe('tests CLI channel commands', () => {
       const resolvedKey = apiKey.key ?? ''
 
       try {
-        const supabase = getSupabaseClient()
-        const { data: channel, error: channelError } = await supabase
+        const capgo = getSupabaseClient()
+        const { data: channel, error: channelError } = await capgo
           .from('channels')
           .select('id')
           .eq('name', channelName)
@@ -374,7 +374,7 @@ describe('tests CLI channel commands', () => {
         expect(channelError).toBeNull()
         expect(channel?.id).toBeTruthy()
 
-        const { data: canPromote, error: promoteError } = await supabase.rpc('rbac_check_permission_direct' as any, {
+        const { data: canPromote, error: promoteError } = await capgo.rpc('rbac_check_permission_direct' as any, {
           p_permission_key: 'channel.promote_bundle',
           p_user_id: apiKey.user_id,
           p_org_id: seedOptions.orgId,
@@ -385,7 +385,7 @@ describe('tests CLI channel commands', () => {
         expect(promoteError).toBeNull()
         expect(canPromote).toBe(true)
 
-        const { data: canUpdateSettings, error: settingsError } = await supabase.rpc('rbac_check_permission_direct' as any, {
+        const { data: canUpdateSettings, error: settingsError } = await capgo.rpc('rbac_check_permission_direct' as any, {
           p_permission_key: 'channel.update_settings',
           p_user_id: apiKey.user_id,
           p_org_id: seedOptions.orgId,
@@ -789,8 +789,8 @@ describe('tests CLI channel commands', () => {
       const channelName = generateChannelName()
       await createChannel(channelName, APPNAME)
 
-      const supabase = getSupabaseClient()
-      const { data: app, error: appError } = await supabase
+      const capgo = getSupabaseClient()
+      const { data: app, error: appError } = await capgo
         .from('apps')
         .select('id')
         .eq('app_id', APPNAME)
@@ -798,7 +798,7 @@ describe('tests CLI channel commands', () => {
       expect(appError).toBeNull()
       expect(app?.id).toBeTruthy()
 
-      const { data: channel, error: channelError } = await supabase
+      const { data: channel, error: channelError } = await capgo
         .from('channels')
         .select('id, rbac_id')
         .eq('name', channelName)
@@ -808,7 +808,7 @@ describe('tests CLI channel commands', () => {
       expect(channel?.rbac_id).toBeTruthy()
 
       const deviceId = randomUUID()
-      await supabase
+      await capgo
         .from('channel_devices')
         .insert({
           channel_id: channel!.id,
@@ -818,7 +818,7 @@ describe('tests CLI channel commands', () => {
         })
         .throwOnError()
 
-      const { data: channelAdminRole, error: roleError } = await supabase
+      const { data: channelAdminRole, error: roleError } = await capgo
         .from('roles')
         .select('id')
         .eq('name', 'channel_admin')
@@ -837,7 +837,7 @@ describe('tests CLI channel commands', () => {
       const resolvedKey = apiKey.key ?? key
 
       try {
-        const { error: bindingError } = await supabase
+        const { error: bindingError } = await capgo
           .from('role_bindings')
           .insert({
             principal_type: 'apikey',
@@ -853,7 +853,7 @@ describe('tests CLI channel commands', () => {
           })
         expect(bindingError).toBeNull()
 
-        const { data: directAllowed, error: directError } = await supabase.rpc('rbac_check_permission_direct' as any, {
+        const { data: directAllowed, error: directError } = await capgo.rpc('rbac_check_permission_direct' as any, {
           p_permission_key: 'channel.delete',
           p_user_id: apiKey.user_id,
           p_org_id: seedOptions.orgId,
@@ -867,7 +867,7 @@ describe('tests CLI channel commands', () => {
         const result = await createTestSDK(resolvedKey).deleteChannel(channelName, APPNAME, false)
         expect(result.success, result.error).toBe(true)
 
-        const { data: channelAfter, error: deletedChannelError } = await supabase
+        const { data: channelAfter, error: deletedChannelError } = await capgo
           .from('channels')
           .select('id')
           .eq('id', channel!.id)
@@ -875,15 +875,15 @@ describe('tests CLI channel commands', () => {
         expect(deletedChannelError).toBeDefined()
         expect(channelAfter).toBeNull()
 
-        const { data: devicesAfter } = await supabase
+        const { data: devicesAfter } = await capgo
           .from('channel_devices')
           .select('id')
           .eq('channel_id', channel!.id)
         expect(devicesAfter).toHaveLength(0)
       }
       finally {
-        await supabase.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
-        await supabase.from('apikeys').delete().eq('id', apiKey.id)
+        await capgo.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
+        await capgo.from('apikeys').delete().eq('id', apiKey.id)
       }
     })
 
@@ -910,12 +910,12 @@ describe('tests CLI channel commands', () => {
       await createChannel(targetChannelName, APPNAME)
       await createChannel(siblingChannelName, APPNAME)
 
-      const supabase = getSupabaseClient()
+      const capgo = getSupabaseClient()
       const [{ data: app, error: appError }, { data: target, error: targetError }, { data: sibling, error: siblingError }, { data: channelAdminRole, error: roleError }] = await Promise.all([
-        supabase.from('apps').select('id').eq('app_id', APPNAME).single(),
-        supabase.from('channels').select('id, rbac_id, version').eq('app_id', APPNAME).eq('name', targetChannelName).single(),
-        supabase.from('channels').select('id, rbac_id').eq('app_id', APPNAME).eq('name', siblingChannelName).single(),
-        supabase.from('roles').select('id').eq('name', 'channel_admin').eq('scope_type', 'channel').single(),
+        capgo.from('apps').select('id').eq('app_id', APPNAME).single(),
+        capgo.from('channels').select('id, rbac_id, version').eq('app_id', APPNAME).eq('name', targetChannelName).single(),
+        capgo.from('channels').select('id, rbac_id').eq('app_id', APPNAME).eq('name', siblingChannelName).single(),
+        capgo.from('roles').select('id').eq('name', 'channel_admin').eq('scope_type', 'channel').single(),
       ])
       expect(appError).toBeNull()
       expect(targetError).toBeNull()
@@ -935,7 +935,7 @@ describe('tests CLI channel commands', () => {
       const resolvedKey = apiKey.key ?? key
 
       try {
-        const { error: bindingError } = await supabase
+        const { error: bindingError } = await capgo
           .from('role_bindings')
           .insert({
             principal_type: 'apikey',
@@ -989,7 +989,7 @@ describe('tests CLI channel commands', () => {
           .eq('id', sibling!.id)
         expect(siblingUpdateError).toBeNull()
 
-        const { data: siblingAfterDirectUpdate, error: siblingAfterDirectUpdateError } = await supabase
+        const { data: siblingAfterDirectUpdate, error: siblingAfterDirectUpdateError } = await capgo
           .from('channels')
           .select('allow_emulator')
           .eq('id', sibling!.id)
@@ -997,7 +997,7 @@ describe('tests CLI channel commands', () => {
         expect(siblingAfterDirectUpdateError).toBeNull()
         expect(siblingAfterDirectUpdate?.allow_emulator).toBe(false)
 
-        const { data: targetAfterDirectUpdate, error: targetAfterDirectUpdateError } = await supabase
+        const { data: targetAfterDirectUpdate, error: targetAfterDirectUpdateError } = await capgo
           .from('channels')
           .select('public, allow_emulator')
           .eq('id', target!.id)
@@ -1019,7 +1019,7 @@ describe('tests CLI channel commands', () => {
         })
         expect(postResponse.status).toBe(200)
 
-        const { data: targetAfterPost, error: targetAfterPostError } = await supabase
+        const { data: targetAfterPost, error: targetAfterPostError } = await capgo
           .from('channels')
           .select('version, public')
           .eq('id', target!.id)
@@ -1036,7 +1036,7 @@ describe('tests CLI channel commands', () => {
         })
         expect(deleteResponse.status).toBe(200)
 
-        const { data: targetAfterDelete, error: targetAfterDeleteError } = await supabase
+        const { data: targetAfterDelete, error: targetAfterDeleteError } = await capgo
           .from('channels')
           .select('id')
           .eq('id', target!.id)
@@ -1045,8 +1045,8 @@ describe('tests CLI channel commands', () => {
         expect(targetAfterDelete).toBeNull()
       }
       finally {
-        await supabase.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
-        await supabase.from('apikeys').delete().eq('id', apiKey.id)
+        await capgo.from('role_bindings').delete().eq('principal_id', apiKey.rbac_id)
+        await capgo.from('apikeys').delete().eq('id', apiKey.id)
       }
     })
   })

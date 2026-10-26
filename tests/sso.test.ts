@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
@@ -1995,8 +1995,8 @@ describe('[POST] /private/sso/provision-user', () => {
       )
 
       const ssoAuthHeaders = await getAuthHeadersForCredentials(email, password)
-      const supabase = getSupabaseClient()
-      const { data: existingPublicUser, error: existingPublicUserError } = await supabase
+      const capgo = getSupabaseClient()
+      const { data: existingPublicUser, error: existingPublicUserError } = await capgo
         .from('users')
         .select('id')
         .eq('id', createdUser.user.id)
@@ -2005,7 +2005,7 @@ describe('[POST] /private/sso/provision-user', () => {
       expect(existingPublicUserError).toBeNull()
 
       if (existingPublicUser) {
-        const { error: deletePublicUserError } = await supabase
+        const { error: deletePublicUserError } = await capgo
           .from('users')
           .delete()
           .eq('id', createdUser.user.id)
@@ -2013,7 +2013,7 @@ describe('[POST] /private/sso/provision-user', () => {
         expect(deletePublicUserError).toBeNull()
       }
 
-      const { data: missingPublicUser, error: missingPublicUserError } = await supabase
+      const { data: missingPublicUser, error: missingPublicUserError } = await capgo
         .from('users')
         .select('id')
         .eq('id', createdUser.user.id)
@@ -2212,6 +2212,13 @@ describe('sSO role mapping', () => {
       expect(await orgRole()).toEqual(['org_member'])
       expect(await appRole()).toEqual(['app_developer'])
       expect(await inGroup()).toBe(false)
+
+      // The console locks what the mapping rewrites on login: the SSO member,
+      // the mapped app and the mapped group. The org owner (no SSO identity)
+      // stays editable.
+      const managedResponse = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${managedOrgId}/managed`), { headers: authHeaders })
+      expect(managedResponse.status).toBe(200)
+      expect(await managedResponse.json()).toEqual({ users: { [userId]: { app_ids: [appUuid], group_ids: [groupId] } } })
 
       // Removing the app from the mapping revokes the SSO-granted binding right
       // away, since the app is no longer re-evaluated on login. The provider is

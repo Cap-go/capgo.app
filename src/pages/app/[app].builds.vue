@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
@@ -7,7 +7,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import BuildChartControls from '~/components/dashboard/BuildChartControls.vue'
 import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 const { t } = useI18n()
@@ -15,7 +15,7 @@ const id = ref('')
 const route = useRoute('/app/[app].builds')
 const lastPath = ref('')
 const isLoading = ref(false)
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const showingBuildSteps = ref(false)
@@ -33,7 +33,7 @@ const chartsRefreshing = computed(() => statsLoading.value || timeLoading.value)
 
 async function loadAppInfo() {
   try {
-    const { data: dataApp } = await supabase
+    const { data: dataApp } = await capgo
       .from('apps')
       .select()
       .eq('app_id', id.value)

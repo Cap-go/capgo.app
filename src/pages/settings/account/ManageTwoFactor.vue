@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import VueTurnstile from 'vue-turnstile'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import {
   getEmailOtpSendErrorMessage,
@@ -12,14 +13,13 @@ import {
   sendEmailOtpVerification,
   verifyEmailOtp,
 } from '~/services/emailOtp'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
@@ -130,7 +130,7 @@ async function sendOtpVerification() {
   otpSending.value = true
   otpSendError.value = ''
   const { error } = await sendEmailOtpVerification(
-    supabase,
+    capgo,
     otpEmail.value,
     savedCaptchaToken.value || undefined,
     'setup_2fa',
@@ -174,7 +174,7 @@ async function verifyOtpForMfa() {
     return
 
   otpVerificationLoading.value = true
-  const { data, error: verifyError } = await verifyEmailOtp(supabase, token)
+  const { data, error: verifyError } = await verifyEmailOtp(capgo, token)
   otpVerificationLoading.value = false
 
   if (verifyError || !data?.verified_at) {
@@ -188,7 +188,7 @@ async function verifyOtpForMfa() {
 }
 
 async function enrollTotp() {
-  const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp' })
+  const { data, error } = await capgo.auth.mfa.enroll({ factorType: 'totp' })
   if (error) {
     toast.error(t('mfa-fail'))
     console.error(error)
@@ -216,7 +216,7 @@ async function verifyAndEnable() {
 
   mfaVerifying.value = true
 
-  const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
+  const { data: challenge, error: challengeError } = await capgo.auth.mfa.challenge({
     factorId: enrolledFactorId.value,
   })
 
@@ -227,7 +227,7 @@ async function verifyAndEnable() {
     return
   }
 
-  const { error: verifyError } = await supabase.auth.mfa.verify({
+  const { error: verifyError } = await capgo.auth.mfa.verify({
     factorId: enrolledFactorId.value,
     challengeId: challenge.id,
     code,
@@ -250,7 +250,7 @@ async function verifyAndEnable() {
 async function disableMfa() {
   dialogStore.openDialog({
     title: t('alert-2fa-disable'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-disable-2fa-message')}?`,
+    description: t('alert-disable-2fa-confirm'),
     buttons: [
       { text: t('button-cancel'), role: 'cancel' },
       { text: t('disable'), role: 'danger', id: 'confirm-button' },
@@ -267,7 +267,7 @@ async function disableMfa() {
     return
   }
 
-  const { error: unregisterError } = await supabase.auth.mfa.unenroll({ factorId })
+  const { error: unregisterError } = await capgo.auth.mfa.unenroll({ factorId })
   if (unregisterError) {
     toast.error(t('mfa-fail'))
     console.error('Cannot unregister MFA', unregisterError)
@@ -304,14 +304,14 @@ function resetWizard() {
 async function cleanupUnverifiedFactors(factors: { id: string, status: string }[]) {
   const unverified = factors.filter(f => f.status === 'unverified')
   if (unverified.length > 0) {
-    await Promise.all(unverified.map(f => supabase.auth.mfa.unenroll({ factorId: f.id })))
+    await Promise.all(unverified.map(f => capgo.auth.mfa.unenroll({ factorId: f.id })))
   }
 }
 
 async function loadOtpVerificationStatus() {
   if (!main.auth?.id)
     return false
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('user_security')
     .select('email_otp_verified_at')
     .eq('user_id', main.auth.id)
@@ -326,7 +326,7 @@ async function loadOtpVerificationStatus() {
 
 onMounted(async () => {
   const [{ data: mfaFactors, error }, otpValid] = await Promise.all([
-    supabase.auth.mfa.listFactors(),
+    capgo.auth.mfa.listFactors(),
     loadOtpVerificationStatus(),
   ])
 
@@ -362,7 +362,7 @@ onMounted(async () => {
 onBeforeUnmount(async () => {
   clearOtpSendCooldownTimer()
   if (enrolledFactorId.value && !mfaEnabled.value) {
-    await supabase.auth.mfa.unenroll({ factorId: enrolledFactorId.value })
+    await capgo.auth.mfa.unenroll({ factorId: enrolledFactorId.value })
   }
 })
 </script>
