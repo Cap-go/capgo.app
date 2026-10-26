@@ -53,6 +53,23 @@ legacy `manifest` rows. The response format is unchanged.
 - The R2 lifecycle rule on `deleted-after-7-days/` purges the trash, so a bad
   delete stays recoverable for 7 more days by copying the object back.
 
+### Throughput and platform limits
+
+One run per minute, 9 s of work. Apps are claimed in groups of 5 until the
+budget is spent, one listing page each, so apps with an empty or small prefix
+cost one list call and a run covers many apps. R2 calls run 6 at a time: a
+Worker keeps at most 6 outbound connections waiting and queues the rest, so
+higher concurrency would only push deletes past their abort deadline. Copies and
+deletes are a few hundred objects per run (several hundred thousand per day),
+well under the 10,000 subrequests a Worker invocation may make. R2 has no
+request-rate limit on these calls besides 1 write per second per key, and
+every key is copied or deleted once per run. The `capgo` bucket held about
+9.7 million objects (2.1 TB) at rollout, so a first full drain takes days to a
+few weeks; to speed it up, schedule the `delta_storage_gc` queue task more often
+(runs claim apps with `SKIP LOCKED` and may overlap).
+Pages skipped because the app had an upload in progress are retried by the
+next weekly pass.
+
 ### Concurrency
 
 Every CLI creates its `app_versions` row before any file existence check or

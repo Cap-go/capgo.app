@@ -11,7 +11,8 @@ import { s3 } from '../utils/s3.ts'
 /**
  * Delta storage GC: reclaims R2 delta objects no kept version references.
  *
- * Per claimed app, one listing page (<= 1,000 keys) per run:
+ * Per claimed app, one listing page (<= 1,000 keys); apps are claimed in
+ * groups until the run budget is spent:
  *  1. skip objects younger than a day (uploads in flight, aborted sessions);
  *  2. drop paths still referenced (live versions, versions deleted < 7 days,
  *     in-progress uploads);
@@ -29,7 +30,11 @@ import { s3 } from '../utils/s3.ts'
 export const DELTA_GC_APPS_PER_RUN = 5
 export const DELTA_GC_LIST_PAGE_SIZE = 1_000
 export const DELTA_GC_MIN_OBJECT_AGE_MS = 24 * 60 * 60 * 1000
-export const DELTA_GC_DELETE_BATCH = 100
+// Workers keep at most 6 outbound connections waiting at once and queue the
+// rest, so more concurrency only delays requests. A batch of 30 deletes at 6 in
+// flight starts within the start window.
+export const DELTA_GC_STORAGE_CONCURRENCY = 6
+export const DELTA_GC_DELETE_BATCH = 30
 export const DELTA_GC_LEASE_MS = 2_000
 export const DELTA_GC_DELETE_START_WINDOW_MS = 400
 export const DELTA_GC_DELETE_TIMEOUT_MS = 800
@@ -38,9 +43,6 @@ export const DELTA_GC_DELETE_TIMEOUT_MS = 800
 // about budget + DELTA_GC_STORAGE_TIMEOUT_MS plus one progress write.
 export const DELTA_GC_BUDGET_MS = 9_000
 export const DELTA_GC_STORAGE_TIMEOUT_MS = 2_000
-const DELTA_GC_COPY_CONCURRENCY = 25
-// One batch starts all of its deletes at once inside the start window.
-const DELTA_GC_DELETE_CONCURRENCY = DELTA_GC_DELETE_BATCH
 
 type Database = ReturnType<typeof getDrizzleClient>
 
@@ -121,8 +123,8 @@ async function unreferencedPaths(db: Database, paths: string[]) {
 async function trashBatch(c: Context, db: Database, appId: string, paths: string[], run: GcRun) {
   const copied: string[] = []
   // A timed-out copy keeps running in the background: stop the whole run so
-  // outstanding copies never exceed DELTA_GC_COPY_CONCURRENCY.
-  await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => canStart(run), async (path) => {
+  // outstanding copies never exceed DELTA_GC_STORAGE_CONCURRENCY.
+  await forEachBounded(paths, DELTA_GC_STORAGE_CONCURRENCY, () => canStart(run), async (path) => {
     const result = await withTimeout(s3.copyObjectToTrash(c, path).then(ok => ok ? 'copied' as const : 'failed' as const), DELTA_GC_STORAGE_TIMEOUT_MS, 'timeout' as const)
     if (result === 'copied')
       copied.push(path)
@@ -145,7 +147,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
   const startWindowEnd = leaseStartedAt + DELTA_GC_DELETE_START_WINDOW_MS
   let deleted = 0
   const unsettled: string[] = []
-  await forEachBounded(allowed, DELTA_GC_DELETE_CONCURRENCY, () => Date.now() < startWindowEnd, async (path) => {
+  await forEachBounded(allowed, DELTA_GC_STORAGE_CONCURRENCY, () => Date.now() < startWindowEnd, async (path) => {
     if (await s3.deleteObjectKey(c, path, DELTA_GC_DELETE_TIMEOUT_MS))
       deleted++
     else
@@ -225,7 +227,7 @@ async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix,
   const { objects, nextToken } = await withDeadline(s3.listObjectPage(c, orphan.prefix, orphan.list_cursor, DELTA_GC_LIST_PAGE_SIZE), DELTA_GC_STORAGE_TIMEOUT_MS, 'R2 listing')
   let deleted = 0
   let started = 0
-  await forEachBounded(objects, DELTA_GC_COPY_CONCURRENCY, () => canStart(run), async (object) => {
+  await forEachBounded(objects, DELTA_GC_STORAGE_CONCURRENCY, () => canStart(run), async (object) => {
     started++
     if (await s3.deleteObjectKey(c, object.key, DELTA_GC_STORAGE_TIMEOUT_MS))
       deleted++
@@ -248,19 +250,35 @@ app.post('/', middlewareAPISecret, async (c) => {
     const db = getDrizzleClient(pool)
     if (canStart(run))
       await repairUnsettledDeletes(c, db, run)
-    const claimed = await db.execute<ClaimedApp>(sql`SELECT * FROM public.delta_gc_claim(${DELTA_GC_APPS_PER_RUN})`)
-    for (const claimedApp of claimed.rows) {
-      if (!canStart(run))
+    // Most apps list an empty or small prefix, so one run covers many apps;
+    // each app gets at most one page per run.
+    const seen = new Set<string>()
+    let claimedApps = 0
+    while (canStart(run)) {
+      const claimed = await db.execute<ClaimedApp>(sql`SELECT * FROM public.delta_gc_claim(${DELTA_GC_APPS_PER_RUN})`)
+      const fresh = claimed.rows.filter(row => !seen.has(row.app_id))
+      // Apps already paged in this run continue on the next run.
+      for (const again of claimed.rows.filter(row => seen.has(row.app_id)))
+        await db.execute(sql`SELECT public.delta_gc_finish(${again.app_id}, ${again.list_cursor}, NULL, false)`)
+      if (fresh.length === 0)
         break
-      try {
-        const page = await collectAppPage(c, db, claimedApp, run)
-        await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${page.nextCursor}, NULL, ${page.pageDone})`)
-        cloudlog({ requestId: c.get('requestId'), message: 'delta gc page done', appId: claimedApp.app_id, ...page })
-      }
-      catch (error) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc app failed', appId: claimedApp.app_id, error })
-        // Restart the listing on the next pass: continuation tokens are not durable.
-        await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, NULL, ${error instanceof Error ? error.message : 'unknown error'})`)
+      claimedApps += fresh.length
+      for (const claimedApp of fresh) {
+        seen.add(claimedApp.app_id)
+        if (!canStart(run)) {
+          await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${claimedApp.list_cursor}, NULL, false)`)
+          continue
+        }
+        try {
+          const page = await collectAppPage(c, db, claimedApp, run)
+          await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, ${page.nextCursor}, NULL, ${page.pageDone})`)
+          cloudlog({ requestId: c.get('requestId'), message: 'delta gc page done', appId: claimedApp.app_id, ...page })
+        }
+        catch (error) {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'delta gc app failed', appId: claimedApp.app_id, error })
+          // Restart the listing on the next pass: continuation tokens are not durable.
+          await db.execute(sql`SELECT public.delta_gc_finish(${claimedApp.app_id}, NULL, ${error instanceof Error ? error.message : 'unknown error'})`)
+        }
       }
     }
     if (canStart(run)) {
@@ -278,7 +296,7 @@ app.post('/', middlewareAPISecret, async (c) => {
         }
       }
     }
-    cloudlog({ requestId: c.get('requestId'), message: 'delta gc run done', apps: claimed.rows.length, durationMs: Date.now() - startedAt })
+    cloudlog({ requestId: c.get('requestId'), message: 'delta gc run done', apps: claimedApps, durationMs: Date.now() - startedAt })
     return c.json(BRES)
   }
   finally {

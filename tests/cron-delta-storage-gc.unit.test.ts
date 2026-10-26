@@ -33,7 +33,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => 
   middlewareAPISecret: async (_c: unknown, next: () => Promise<void>) => next(),
 }))
 
-const { app, DELTA_GC_BUDGET_MS, DELTA_GC_DELETE_START_WINDOW_MS, DELTA_GC_STORAGE_TIMEOUT_MS, DELTA_GC_DELETE_TIMEOUT_MS, DELTA_GC_LEASE_MS, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
+const { app, DELTA_GC_BUDGET_MS, DELTA_GC_STORAGE_CONCURRENCY, DELTA_GC_DELETE_START_WINDOW_MS, DELTA_GC_STORAGE_TIMEOUT_MS, DELTA_GC_DELETE_TIMEOUT_MS, DELTA_GC_LEASE_MS, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
 
 const DAY = 24 * 60 * 60 * 1000
 const prefix = deltaPrefix('org-1', 'com.example.gc')
@@ -76,7 +76,8 @@ describe('delta storage GC worker', () => {
         return { rows: [] }
       if (text.includes('delta_gc_claim')) {
         calls.push('claim')
-        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
+        // The claim moved the app's next run, so the next claim finds nothing due.
+        return { rows: calls.filter(call => call === 'claim').length === 1 ? [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] : [] }
       }
       if (text.includes('delta_gc_unreferenced_paths')) {
         calls.push('unreferenced')
@@ -119,9 +120,44 @@ describe('delta storage GC worker', () => {
       'delete:a_main.js',
       'end',
       'finish',
+      'claim',
     ])
     const finish = mocks.execute.mock.calls.map(([query]) => sqlText(query)).find(text => text.includes('delta_gc_finish'))
     expect(finish).toContain('next-page')
+  })
+
+  it('claims apps until the budget and pages each app once per run', async () => {
+    mocks.listObjectPage.mockResolvedValue({ objects: [], nextToken: 'more' })
+    let claims = 0
+    const finishes: string[] = []
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes') || text.includes('delta_gc_claim_unsettled'))
+        return { rows: [] }
+      if (text.includes('delta_gc_claim')) {
+        claims++
+        // Second group: one new app and one already paged (its next page is due now).
+        if (claims === 1)
+          return { rows: [{ app_id: 'app.one', list_org: 'org-1', list_cursor: null }] }
+        if (claims === 2)
+          return { rows: [{ app_id: 'app.one', list_org: 'org-1', list_cursor: 'more' }, { app_id: 'app.two', list_org: 'org-1', list_cursor: null }] }
+        return { rows: [{ app_id: 'app.two', list_org: 'org-1', list_cursor: 'more' }] }
+      }
+      if (text.includes('delta_gc_unreferenced_paths'))
+        return { rows: [{ paths: [] }] }
+      if (text.includes('delta_gc_finish'))
+        finishes.push(text)
+      return { rows: [] }
+    })
+
+    const response = await app.request('/', { method: 'POST' })
+
+    expect(response.status).toBe(200)
+    expect(claims).toBe(3)
+    expect(mocks.listObjectPage).toHaveBeenCalledTimes(2)
+    // Two pages done, two re-claimed apps handed back without listing.
+    expect(finishes).toHaveLength(4)
+    expect(finishes.filter(text => text.includes('false'))).toHaveLength(2)
   })
 
   it('binds each path array as one Postgres parameter', async () => {
@@ -380,7 +416,7 @@ describe('delta storage GC worker', () => {
 
       // One concurrency window was started; nothing after the first timeout:
       // no second batch, no second app, no orphan prefix.
-      expect(mocks.copyObjectToTrash).toHaveBeenCalledTimes(25)
+      expect(mocks.copyObjectToTrash).toHaveBeenCalledTimes(DELTA_GC_STORAGE_CONCURRENCY)
       expect(mocks.listObjectPage).toHaveBeenCalledOnce()
       expect(mocks.deleteObjectKey).not.toHaveBeenCalled()
     }
