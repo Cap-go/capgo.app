@@ -60,23 +60,31 @@ describe('credit auto top-up invoice', () => {
     automaticTax: true,
   }
 
-  function fakeStripe(payResult: 'paid' | 'declined') {
+  // paid: card charged. declined: pay throws. unpaid: pay returns an open invoice.
+  // covered: the customer balance pays it at finalize. item_error: adding the line fails.
+  function fakeStripe(mode: 'paid' | 'declined' | 'unpaid' | 'covered' | 'item_error') {
     const state: { status: string } = { status: 'draft' }
-    const payments = { data: [{ payment: { type: 'payment_intent', payment_intent: 'pi_1' } }] }
+    const payments = { data: mode === 'covered' ? [] : [{ payment: { type: 'payment_intent', payment_intent: 'pi_1' } }] }
     const stripe = {
       invoices: {
         create: vi.fn(async () => ({ id: 'in_1', status: 'draft' })),
-        finalizeInvoice: vi.fn(async () => Object.assign(state, { status: 'open', id: 'in_1', payments })),
+        finalizeInvoice: vi.fn(async () => Object.assign(state, { status: mode === 'covered' ? 'paid' : 'open', id: 'in_1', payments })),
         pay: vi.fn(async () => {
-          if (payResult === 'declined')
+          if (mode === 'declined')
             throw new Error('card_declined')
-          return Object.assign(state, { status: 'paid' })
+          return Object.assign(state, { status: mode === 'unpaid' ? 'open' : 'paid' })
         }),
         retrieve: vi.fn(async () => ({ id: 'in_1', ...state })),
         voidInvoice: vi.fn(async () => Object.assign(state, { status: 'void' })),
         del: vi.fn(async () => ({ id: 'in_1', deleted: true })),
       },
-      invoiceItems: { create: vi.fn(async () => ({ id: 'ii_1' })) },
+      invoiceItems: {
+        create: vi.fn(async () => {
+          if (mode === 'item_error')
+            throw new Error('invalid_price')
+          return { id: 'ii_1' }
+        }),
+      },
       paymentIntents: { update: vi.fn(async () => ({ id: 'pi_1' })) },
     } as unknown as Stripe
     return stripe as any
@@ -106,6 +114,26 @@ describe('credit auto top-up invoice', () => {
     const stripe = fakeStripe('declined')
     await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
     expect(stripe.invoices.voidInvoice).toHaveBeenCalledWith('in_1')
+  })
+
+  it('voids the invoice when the payment does not settle', async () => {
+    const stripe = fakeStripe('unpaid')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
+    expect(stripe.invoices.voidInvoice).toHaveBeenCalledWith('in_1')
+  })
+
+  it('returns the invoice id when the customer balance pays it at finalize', async () => {
+    const stripe = fakeStripe('covered')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBe('in_1')
+    expect(stripe.invoices.pay).not.toHaveBeenCalled()
+    expect(stripe.paymentIntents.update).not.toHaveBeenCalled()
+  })
+
+  it('deletes the draft when building the invoice fails', async () => {
+    const stripe = fakeStripe('item_error')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
+    expect(stripe.invoices.del).toHaveBeenCalledWith('in_1')
+    expect(stripe.invoices.finalizeInvoice).not.toHaveBeenCalled()
   })
 })
 
