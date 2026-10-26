@@ -79,7 +79,7 @@ describe('delta storage GC worker', () => {
         // The claim moved the app's next run, so the next claim finds nothing due.
         return { rows: calls.filter(call => call === 'claim').length === 1 ? [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] : [] }
       }
-      if (text.includes('delta_gc_unreferenced_paths')) {
+      if (text.includes('delta_gc_deletable_paths')) {
         calls.push('unreferenced')
         return { rows: [{ paths: [`${prefix}a_main.js`, `${prefix}b_index.html`] }] }
       }
@@ -148,7 +148,7 @@ describe('delta storage GC worker', () => {
           return { rows: [{ app_id: 'app.one', list_org: 'org-1', list_cursor: 'more' }, { app_id: 'app.two', list_org: 'org-1', list_cursor: null }] }
         return { rows: [{ app_id: 'app.two', list_org: 'org-1', list_cursor: 'more' }] }
       }
-      if (text.includes('delta_gc_unreferenced_paths'))
+      if (text.includes('delta_gc_deletable_paths'))
         return { rows: [{ paths: [] }] }
       if (text.includes('delta_gc_finish'))
         finishes.push(text)
@@ -175,7 +175,7 @@ describe('delta storage GC worker', () => {
         return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
-      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+      if (text.includes('delta_gc_deletable_paths') || text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: keys }] }
       return { rows: [] }
     })
@@ -185,7 +185,7 @@ describe('delta storage GC worker', () => {
     const dialect = new PgDialect()
     const rendered = mocks.execute.mock.calls
       .map(([query]) => dialect.sqlToQuery(query))
-      .filter(query => query.sql.includes('delta_gc_unreferenced_paths') || query.sql.includes('delta_gc_begin_delete'))
+      .filter(query => query.sql.includes('delta_gc_deletable_paths') || query.sql.includes('delta_gc_begin_delete'))
     expect(rendered).toHaveLength(2)
     for (const query of rendered) {
       expect(query.sql).toMatch(/\$\d+::text\[\]/)
@@ -262,7 +262,7 @@ describe('delta storage GC worker', () => {
         return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'token' }] }
-      if (text.includes('delta_gc_unreferenced_paths'))
+      if (text.includes('delta_gc_deletable_paths'))
         return { rows: [{ paths: keys }] }
       if (text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: [`${prefix}a.js`] }] }
@@ -287,7 +287,7 @@ describe('delta storage GC worker', () => {
         return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'token' }] }
-      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+      if (text.includes('delta_gc_deletable_paths') || text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: [`${prefix}a.js`] }] }
       return { rows: [] }
     })
@@ -329,7 +329,7 @@ describe('delta storage GC worker', () => {
         return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
-      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+      if (text.includes('delta_gc_deletable_paths') || text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: [`${prefix}a.js`] }] }
       return { rows: [] }
     })
@@ -344,7 +344,13 @@ describe('delta storage GC worker', () => {
     vi.clearAllMocks()
     mocks.unsettled = [{ path: `${prefix}a.js`, referenced: true }, { path: `${prefix}b.js`, referenced: false }]
     mocks.restoreFromTrashIfMissing.mockResolvedValue('restored')
-    mocks.execute.mockResolvedValue({ rows: [] })
+    // b.js and its other spellings are unreferenced.
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_deletable_paths'))
+        return { rows: [{ paths: [`${prefix}b.js`] }] }
+      return { rows: [] }
+    })
     await app.request('/', { method: 'POST' })
 
     expect(mocks.restoreFromTrashIfMissing).toHaveBeenCalledOnce()
@@ -368,7 +374,7 @@ describe('delta storage GC worker', () => {
         return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
-      if (text.includes('delta_gc_unreferenced_paths'))
+      if (text.includes('delta_gc_deletable_paths'))
         return { rows: [{ paths: keys }] }
       if (text.includes('delta_gc_begin_delete')) {
         const params = new PgDialect().sqlToQuery(query as never).params
@@ -393,7 +399,7 @@ describe('delta storage GC worker', () => {
         return { rows: [] }
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'token' }] }
-      if (text.includes('delta_gc_unreferenced_paths'))
+      if (text.includes('delta_gc_deletable_paths'))
         return { rows: [{ paths: [`${prefix}a.js`] }] }
       if (text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: [] }] }
@@ -419,7 +425,7 @@ describe('delta storage GC worker', () => {
       queries.push(text)
       if (text.includes('delta_gc_claim'))
         return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
-      if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
+      if (text.includes('delta_gc_deletable_paths') || text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: [`${prefix}a.js`] }] }
       return { rows: [] }
     })
@@ -448,7 +454,7 @@ describe('delta storage GC worker', () => {
           return { rows: [{ prefix: 'orgs/former/apps/gone/', list_cursor: null }] }
         if (text.includes('delta_gc_claim'))
           return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }, { app_id: 'com.example.other', list_org: 'org-1', list_cursor: null }] }
-        if (text.includes('delta_gc_unreferenced_paths'))
+        if (text.includes('delta_gc_deletable_paths'))
           return { rows: [{ paths: keys }] }
         return { rows: [] }
       })

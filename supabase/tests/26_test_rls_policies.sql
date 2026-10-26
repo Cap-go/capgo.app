@@ -201,8 +201,8 @@ SELECT
               AND tablename = 'manifest'
               AND indexname IN ('idx_manifest_file_hash', 'idx_manifest_file_name')
         ),
-        0::bigint,
-        'manifest should not keep the unread file_hash/file_name indexes'
+        2::bigint,
+        'manifest should retain the supported single-column indexes'
     );
 
 -- Test orgs policies

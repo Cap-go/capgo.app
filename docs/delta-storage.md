@@ -38,7 +38,14 @@ legacy `manifest` rows. The response format is unchanged.
 - Deleting a version keeps its `version_files` row. Legacy rows of the version
   are moved into the new tables (`convert_version_manifest_rows`).
 - Restore within 7 days: clear `deleted` / `deleted_at` (and restore the bundle
-  zip from `deleted-after-7-days/` if needed). The delta files are still there.
+  zip from `deleted-after-7-days/` if needed). The delta files are still there,
+  and `delta_restore_version_manifest_count` gives back `manifest_count` and
+  `apps.manifest_bundle_count`, which `/updates` checks before reading files.
+  A version whose list only lived in the inline `app_versions.manifest` is
+  converted too, so its files are kept for the same 7 days.
+- Objects are matched under every spelling `/files/read` accepts for one key
+  (a leading-dot segment as `.` or `%2E`, encoded or decoded names): an object
+  is only deleted when none of its spellings is referenced.
 - `triggers/cron_delta_storage_gc` reclaims R2 objects per app, one listing page
   per run: objects younger than a day are skipped, paths still referenced by a
   live version, a version deleted less than 7 days ago or an in-progress upload
@@ -98,7 +105,8 @@ upload, so one rule covers concurrent uploads and GC:
   Known limitation: until the next check, a late DELETE can leave a reused key
   missing, so a download of that file can fail. The last check, 1 day after the
   delete, assumes that R2 does not apply an aborted DELETE later than that.
-- The `delta_gc_wait_for_lease` trigger (`BEFORE INSERT ON app_versions`) takes
+- The `delta_gc_wait_for_lease` trigger (`BEFORE INSERT ON app_versions`, and
+  `BEFORE UPDATE` of an `r2-direct` row for a resumed upload's upsert) takes
   the shared side of that lock and waits out an active lease (at most 2 s,
   below the 3 s statement timeout published CLIs run under through PostgREST).
   An upload therefore either makes GC skip the app or starts after the batch.
@@ -121,9 +129,10 @@ upload, so one rule covers concurrent uploads and GC:
    `capgo_planetscale_r2_pub`: the retired `capgo-r2-inventory-prod` worker
    deletes delta objects without a `manifest` row and only runs while that
    publication is healthy, so it stops before any legacy row is converted.
-   Check its logs show the cleanup health failing. It then creates the tables, adds them to
-   `capgo_google_eu_2_pub`, seeds `delta_gc_state` and drops the unused
-   `idx_manifest_file_hash` / `idx_manifest_file_name`. Uploads write both the
+   Check its logs show the cleanup health failing. It then creates the tables,
+   adds them to `capgo_google_eu_2_pub` and seeds `delta_gc_state`. The
+   migration sets a 5 s `lock_timeout`; a release that cannot get its locks
+   fails and can be retried. Uploads write both the
    new tables and legacy rows (Vault `CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES` absent = on).
 3. On the subscriber:
    `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);`
@@ -141,6 +150,10 @@ upload, so one rule covers concurrent uploads and GC:
    published CLIs (8.42.x and later until they moved to `private/cli/manifest`)
    read `manifest` of that version for the AI version bump. The converter
    revisits these rows and removes them once the channel moved on.
+   Optionally drop the unread manifest indexes outside the release, one at a
+   time (no long `ACCESS EXCLUSIVE` lock on the 14 GB table):
+   `DROP INDEX CONCURRENTLY IF EXISTS public.idx_manifest_file_hash;` then
+   `DROP INDEX CONCURRENTLY IF EXISTS public.idx_manifest_file_name;`
 5. Check the R2 lifecycle rules: `deleted-after-7-days/` expires after 7 days
    (already used by bundle zips), and incomplete multipart uploads under
    `orgs/` are aborted after 1 day.

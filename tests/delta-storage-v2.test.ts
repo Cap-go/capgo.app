@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildManifestSizeLookupQuery, normalizeManifestSizeFiles } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { storageAliases } from '../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts'
 import { ORG_ID, POSTGRES_URL, resetAndSeedAppData, resetAppData, USER_ID } from './test-utils.ts'
 
 const id = randomUUID()
@@ -236,6 +237,56 @@ describe('delta storage v2 GC guards', () => {
       [[deltaPath('live.js'), deltaPath('recent.js'), deltaPath('old.js'), deltaPath('orphan.js')]],
     )
     expect(result.rows[0].paths.sort()).toEqual([deltaPath('old.js'), deltaPath('orphan.js')].sort())
+  })
+
+  it('keeps an object referenced under another spelling of its key', async () => {
+    await withConfig({}, async (client) => {
+      const sha = 'a'.repeat(64)
+      const stored = deltaPath(`${sha}_.htaccess`)
+      const listed = deltaPath(`${sha}_%2Ehtaccess`)
+      const versionId = await insertVersion(client)
+      await client.query(
+        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, '.htaccess', 'h', $2, 1)`,
+        [versionId, stored],
+      )
+      await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
+
+      const aliases = storageAliases([listed])
+      expect(aliases[listed]).toContain(stored)
+      const plain = await client.query<{ paths: string[] }>('SELECT public.delta_gc_deletable_paths($1::text[]) AS paths', [[listed]])
+      expect(plain.rows[0].paths).toEqual([listed])
+      const aware = await client.query<{ paths: string[] }>('SELECT public.delta_gc_deletable_paths($1::text[], $2::jsonb) AS paths', [[listed], JSON.stringify(aliases)])
+      expect(aware.rows[0].paths).toEqual([])
+    })
+  })
+
+  it('converts an inline-only manifest of a deleted version and restores its counters', async () => {
+    await withConfig({}, async (client) => {
+      const path = deltaPath('inline-restore.js')
+      const [{ id }] = (await client.query<{ id: string }>(
+        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, deleted, deleted_at, checksum, manifest)
+         VALUES ($1, $2, $3, $4, 'r2', true, now() - interval '1 day', 'c', ARRAY[ROW('inline-restore.js', $5, 'h')::public.manifest_entry])
+         RETURNING id`,
+        [APP_ID, `inline-restore-${randomUUID().slice(0, 8)}`, ORG_ID, USER_ID, path],
+      )).rows
+      const versionId = Number(id)
+      await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
+      const files = await client.query<{ s3_path: string }>(
+        `SELECT df.s3_path FROM public.version_files vf CROSS JOIN LATERAL unnest(vf.file_ids) AS f(id)
+         INNER JOIN public.delta_files df ON df.id = f.id WHERE vf.app_version_id = $1`,
+        [versionId],
+      )
+      expect(files.rows.map(row => row.s3_path)).toEqual([path])
+      const kept = await client.query<{ paths: string[] }>('SELECT public.delta_gc_unreferenced_paths($1::text[]) AS paths', [[path]])
+      expect(kept.rows[0].paths).toEqual([])
+
+      const before = await client.query<{ count: number }>('SELECT manifest_bundle_count AS count FROM public.apps WHERE app_id = $1', [APP_ID])
+      await client.query('UPDATE public.app_versions SET deleted = false, deleted_at = NULL WHERE id = $1', [versionId])
+      const restored = await client.query<{ manifest_count: number }>('SELECT manifest_count FROM public.app_versions WHERE id = $1', [versionId])
+      expect(restored.rows[0].manifest_count).toBe(1)
+      const after = await client.query<{ count: number }>('SELECT manifest_bundle_count AS count FROM public.apps WHERE app_id = $1', [APP_ID])
+      expect(Number(after.rows[0].count)).toBe(Number(before.rows[0].count) + 1)
+    })
   })
 
   it('never opens a delete lease while GC is disabled or an upload is in progress', async () => {

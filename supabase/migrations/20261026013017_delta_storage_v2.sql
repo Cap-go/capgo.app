@@ -35,6 +35,11 @@
 --   CAPGO_DELTA_STORAGE_GC_ENABLED (default false): enables R2 delta object GC.
 -- public.delta_storage_state only keeps the converter cursor.
 
+-- The new triggers on app_versions and apps wait for running writes: fail the
+-- release fast instead of queueing bundle traffic behind a long transaction.
+-- Session-level so it applies whether or not migrations run in a transaction.
+SET lock_timeout = '5s';
+
 -- The retired R2 inventory worker deletes delta objects that have no
 -- public.manifest row and only runs while manifest is published to its
 -- PlanetScale copy. Unpublish it first: the worker's health check then fails
@@ -337,6 +342,47 @@ CREATE TRIGGER delta_gc_wait_for_lease
 BEFORE INSERT ON public.app_versions
 FOR EACH ROW EXECUTE FUNCTION public.delta_gc_wait_for_lease();
 
+-- A resumed upload upserts its existing r2-direct row (an UPDATE) before it
+-- checks which files exist: it waits out a delete batch the same way.
+CREATE TRIGGER delta_gc_wait_for_lease_on_update
+BEFORE UPDATE ON public.app_versions
+FOR EACH ROW
+WHEN (NEW.storage_provider = 'r2-direct')
+EXECUTE FUNCTION public.delta_gc_wait_for_lease();
+
+-- Restoring a deleted version inside the 7-day window: its version_files row
+-- and R2 objects are still there; give back the counters /updates and the
+-- preview read before loading a manifest.
+CREATE FUNCTION public.delta_restore_version_manifest_count()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  SELECT pg_catalog.cardinality(vf.file_ids) INTO v_count
+  FROM public.version_files AS vf
+  WHERE vf.app_version_id = NEW.id;
+  IF COALESCE(v_count, 0) > 0 AND COALESCE(NEW.manifest_count, 0) = 0 THEN
+    NEW.manifest_count := v_count;
+    UPDATE public.apps
+    SET manifest_bundle_count = manifest_bundle_count + 1, updated_at = now()
+    WHERE app_id = NEW.app_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.delta_restore_version_manifest_count() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_restore_version_manifest_count() FROM PUBLIC;
+
+CREATE TRIGGER delta_restore_version_manifest_count
+BEFORE UPDATE OF deleted ON public.app_versions
+FOR EACH ROW
+WHEN (OLD.deleted AND NOT NEW.deleted)
+EXECUTE FUNCTION public.delta_restore_version_manifest_count();
+
 -- Deleted versions keep their files for 7 days; schedule a pass after that.
 CREATE FUNCTION public.delta_gc_schedule_after_delete()
 RETURNS trigger
@@ -535,9 +581,38 @@ ALTER FUNCTION public.delta_gc_claim(integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_claim(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_claim(integer) TO service_role;
 
+-- One R2 object can be stored under several spellings of its path (a
+-- leading-dot segment as "." or "%2E", percent-encoded or decoded names);
+-- /files/read serves any of them. p_aliases maps a listed key to its other
+-- spellings (getManifestStorageCandidateKeys). A key is deletable only when
+-- the key and every alias are unreferenced.
+CREATE FUNCTION public.delta_gc_deletable_paths(p_paths text[], p_aliases jsonb DEFAULT '{}'::jsonb)
+RETURNS text[]
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+  WITH keyed AS (
+    SELECT DISTINCT p.path,
+      ARRAY[p.path] || ARRAY(
+        SELECT pg_catalog.jsonb_array_elements_text(COALESCE(p_aliases -> p.path, '[]'::jsonb))
+      ) AS names
+    FROM pg_catalog.unnest(p_paths) AS p (path)
+  ),
+  unreferenced AS (
+    SELECT public.delta_gc_unreferenced_paths(ARRAY(SELECT pg_catalog.unnest(keyed.names) FROM keyed)) AS paths
+  )
+  SELECT COALESCE(pg_catalog.array_agg(keyed.path), '{}'::text[])
+  FROM keyed, unreferenced
+  WHERE keyed.names <@ unreferenced.paths
+$$;
+ALTER FUNCTION public.delta_gc_deletable_paths(text[], jsonb) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_deletable_paths(text[], jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_deletable_paths(text[], jsonb) TO service_role;
+
 -- The only step that permits R2 deletes. Returns the paths the caller may
 -- delete before the returned lease expires, or an empty array.
-CREATE FUNCTION public.delta_gc_begin_delete(p_app_id text, p_paths text[], p_lease_ms integer DEFAULT 2000)
+CREATE FUNCTION public.delta_gc_begin_delete(p_app_id text, p_paths text[], p_lease_ms integer DEFAULT 2000, p_aliases jsonb DEFAULT '{}'::jsonb)
 RETURNS text[]
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -545,6 +620,7 @@ SET search_path = ''
 AS $$
 DECLARE
   v_paths text[];
+  v_names text[];
 BEGIN
   IF NOT public.delta_storage_gc_enabled() THEN
     RETURN '{}'::text[];
@@ -561,14 +637,19 @@ BEGIN
     RETURN '{}'::text[];
   END IF;
 
-  v_paths := public.delta_gc_unreferenced_paths(p_paths);
+  v_paths := public.delta_gc_deletable_paths(p_paths, p_aliases);
   IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
     RETURN '{}'::text[];
   END IF;
+  -- Rows of every spelling of a deleted object go with it.
+  v_names := v_paths || ARRAY(
+    SELECT pg_catalog.jsonb_array_elements_text(COALESCE(p_aliases -> p.path, '[]'::jsonb))
+    FROM pg_catalog.unnest(v_paths) AS p (path)
+  );
 
   DELETE FROM public.delta_files AS df
-  WHERE df.path_key = ANY (ARRAY(SELECT public.delta_path_key(p) FROM pg_catalog.unnest(v_paths) AS p))
-    AND df.s3_path = ANY (v_paths)
+  WHERE df.path_key = ANY (ARRAY(SELECT public.delta_path_key(p) FROM pg_catalog.unnest(v_names) AS p))
+    AND df.s3_path = ANY (v_names)
     AND NOT EXISTS (
       SELECT 1
       FROM public.version_files AS vf
@@ -591,9 +672,9 @@ BEGIN
   RETURN v_paths;
 END;
 $$;
-ALTER FUNCTION public.delta_gc_begin_delete(text, text[], integer) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_begin_delete(text, text[], integer) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_begin_delete(text, text[], integer) TO service_role;
+ALTER FUNCTION public.delta_gc_begin_delete(text, text[], integer, jsonb) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_begin_delete(text, text[], integer, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_begin_delete(text, text[], integer, jsonb) TO service_role;
 
 -- Releases the lease once every delete of the batch settled.
 CREATE FUNCTION public.delta_gc_end_delete(p_app_id text)
@@ -845,7 +926,7 @@ GRANT EXECUTE ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) TO serv
 -- the app id may be recreated, and its first app_versions insert waits on
 -- this lease (delta_gc_wait_for_lease). Returns the paths that may be
 -- deleted, or NULL when the prefix cannot be drained now.
-CREATE FUNCTION public.delta_gc_begin_orphan_delete(p_prefix text, p_paths text[], p_lease_ms integer DEFAULT 2000)
+CREATE FUNCTION public.delta_gc_begin_orphan_delete(p_prefix text, p_paths text[], p_lease_ms integer DEFAULT 2000, p_aliases jsonb DEFAULT '{}'::jsonb)
 RETURNS text[]
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -882,7 +963,7 @@ BEGIN
   END IF;
 
   SELECT COALESCE(pg_catalog.array_agg(DISTINCT p.path), '{}'::text[]) INTO v_paths
-  FROM pg_catalog.unnest(public.delta_gc_unreferenced_paths(p_paths)) AS p (path)
+  FROM pg_catalog.unnest(public.delta_gc_deletable_paths(p_paths, p_aliases)) AS p (path)
   WHERE pg_catalog.starts_with(p.path, p_prefix);
   IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
     RETURN '{}'::text[];
@@ -898,9 +979,9 @@ BEGIN
   RETURN v_paths;
 END;
 $$;
-ALTER FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) TO service_role;
+ALTER FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer, jsonb) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer, jsonb) TO service_role;
 
 CREATE FUNCTION public.delta_gc_end_orphan_delete(p_prefix text)
 RETURNS void
@@ -984,6 +1065,35 @@ BEGIN
       ON df.entry_key = public.delta_entry_key(m.s3_path, m.file_name, m.file_hash)
     WHERE m.app_version_id = p_version_id
     HAVING pg_catalog.count(*) > 0;
+
+    -- A version whose list only lives in the inline app_versions.manifest
+    -- (never moved to legacy rows): keep its references in the new tables
+    -- too, so a deleted version still protects its files for 7 days.
+    IF NOT EXISTS (SELECT 1 FROM public.version_files AS vf WHERE vf.app_version_id = p_version_id) THEN
+      INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
+      SELECT DISTINCT ON (keyed.entry_key)
+        v_app_id, keyed.s3_path, keyed.file_name, keyed.file_hash, 0, keyed.path_key, keyed.entry_key
+      FROM (
+        SELECT entry.s3_path::text AS s3_path, entry.file_name::text AS file_name, entry.file_hash::text AS file_hash,
+          public.delta_path_key(entry.s3_path::text) AS path_key,
+          public.delta_entry_key(entry.s3_path::text, entry.file_name::text, entry.file_hash::text) AS entry_key
+        FROM public.app_versions AS av
+        CROSS JOIN LATERAL pg_catalog.unnest(av.manifest) AS entry (file_name, s3_path, file_hash)
+        WHERE av.id = p_version_id
+          AND entry.s3_path IS NOT NULL AND entry.file_name IS NOT NULL AND entry.file_hash IS NOT NULL
+      ) AS keyed
+      ORDER BY keyed.entry_key
+      ON CONFLICT (entry_key) DO NOTHING;
+
+      INSERT INTO public.version_files (app_version_id, file_ids)
+      SELECT p_version_id, pg_catalog.array_agg(df.id ORDER BY entry.ord)
+      FROM public.app_versions AS av
+      CROSS JOIN LATERAL pg_catalog.unnest(av.manifest) WITH ORDINALITY AS entry (file_name, s3_path, file_hash, ord)
+      INNER JOIN public.delta_files AS df
+        ON df.entry_key = public.delta_entry_key(entry.s3_path::text, entry.file_name::text, entry.file_hash::text)
+      WHERE av.id = p_version_id
+      HAVING pg_catalog.count(*) > 0;
+    END IF;
 
     -- Unsized legacy rows: their queued lookups target manifest ids that are
     -- about to disappear. A live version queues every unsized file it
@@ -1393,14 +1503,6 @@ VALUES
   ('delta_storage_gc_queue', 'Process delta storage R2 garbage collection', 'function_queue', '["cron_delta_storage_gc"]', NULL, 1, true)
 ON CONFLICT (name) DO NOTHING;
 
--- Nothing reads these manifest indexes; they only add WAL to every replica.
--- Fail fast instead of queueing manifest traffic behind a long reader; the
--- release can be retried.
--- Session-level so it applies whether or not migrations run in a transaction.
-SET lock_timeout = '5s';
-DROP INDEX IF EXISTS public.idx_manifest_file_hash;
-DROP INDEX IF EXISTS public.idx_manifest_file_name;
-RESET lock_timeout;
 
 -- Remove the R2 inventory system. Its authoritative copy lived in a separate
 -- PlanetScale database; the Supabase copies and receipt summaries are unused.
@@ -1411,3 +1513,5 @@ DROP FUNCTION IF EXISTS public.r2_objects_before_write();
 DROP FUNCTION IF EXISTS public.r2_inventory_checkpoints_before_write();
 DROP TYPE IF EXISTS public.r2_object_state;
 DROP TABLE IF EXISTS public.manifest_per_version;
+
+RESET lock_timeout;

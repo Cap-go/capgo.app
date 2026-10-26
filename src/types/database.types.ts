@@ -4370,11 +4370,21 @@ export type Database = {
         Returns: string
       }
       delta_gc_begin_delete: {
-        Args: { p_app_id: string; p_lease_ms?: number; p_paths: string[] }
+        Args: {
+          p_aliases?: Json
+          p_app_id: string
+          p_lease_ms?: number
+          p_paths: string[]
+        }
         Returns: string[]
       }
       delta_gc_begin_orphan_delete: {
-        Args: { p_lease_ms?: number; p_paths: string[]; p_prefix: string }
+        Args: {
+          p_aliases?: Json
+          p_lease_ms?: number
+          p_paths: string[]
+          p_prefix: string
+        }
         Returns: string[]
       }
       delta_gc_claim: {
@@ -4402,6 +4412,10 @@ export type Database = {
       delta_gc_confirm_deleted: {
         Args: { p_paths: string[] }
         Returns: undefined
+      }
+      delta_gc_deletable_paths: {
+        Args: { p_aliases?: Json; p_paths: string[] }
+        Returns: string[]
       }
       delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
       delta_gc_end_orphan_delete: {

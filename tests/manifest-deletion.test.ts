@@ -66,8 +66,9 @@ async function state(id: number) {
 beforeAll(async () => {
   await admin.query(`CREATE DATABASE ${dbName}`)
   await pool.query(`CREATE TABLE public.apps (app_id text PRIMARY KEY, manifest_bundle_count bigint NOT NULL DEFAULT 0, updated_at timestamptz);
+    CREATE TYPE public.manifest_entry AS (file_name character varying, s3_path character varying, file_hash character varying);
     CREATE TABLE public.app_versions (id bigint PRIMARY KEY, app_id text REFERENCES public.apps, deleted boolean DEFAULT false, storage_provider text NOT NULL DEFAULT 'r2-direct', created_at timestamptz DEFAULT now(),
-      deleted_at timestamptz, manifest_count bigint NOT NULL DEFAULT 0, manifest jsonb, updated_at timestamptz);
+      deleted_at timestamptz, manifest_count bigint NOT NULL DEFAULT 0, manifest public.manifest_entry[], updated_at timestamptz);
     CREATE TABLE public.manifest (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, app_version_id bigint REFERENCES public.app_versions ON DELETE CASCADE,
       file_name text, file_hash text, s3_path text, file_size bigint);
     CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest (app_version_id, file_hash) INCLUDE (file_size);
@@ -170,7 +171,7 @@ describe('manifest deletion Postgres effects', () => {
 
   it('clears a JSON-only legacy manifest without decrementing an uncounted bundle', async () => {
     await seedVersion(1, 0)
-    await pool.query(`UPDATE public.app_versions SET manifest = '[{"file_name":"legacy"}]' WHERE id = 1`)
+    await pool.query(`UPDATE public.app_versions SET manifest = ARRAY[ROW('legacy', NULL, NULL)::public.manifest_entry] WHERE id = 1`)
     await onVersionUpdateTestUtils.deleteManifest(c, record(1))
     expect(await state(1)).toMatchObject({ manifest: null, manifest_count: '0', manifest_bundle_count: '0' })
   })
@@ -184,7 +185,7 @@ describe('manifest deletion Postgres effects', () => {
     await seedVersion(2, 0)
     await seedVersion(3, 1, true, 0)
     await pool.query('UPDATE public.apps SET manifest_bundle_count = 2')
-    await pool.query(`UPDATE public.app_versions SET manifest = '[{"file_name":"legacy"}]' WHERE id = 2`)
+    await pool.query(`UPDATE public.app_versions SET manifest = ARRAY[ROW('legacy', NULL, NULL)::public.manifest_entry] WHERE id = 2`)
     expect((await pool.query('SELECT public.sweep_deleted_version_manifests(100) AS count')).rows[0].count).toBe('2')
     const client = await pool.connect()
     try {
@@ -195,7 +196,7 @@ describe('manifest deletion Postgres effects', () => {
     }
     expect((await pool.query('SELECT public.sweep_deleted_version_manifests(100) AS count')).rows[0].count).toBe('3')
     expect(await state(1)).toMatchObject({ manifest_count: '2', manifest_bundle_count: '2' })
-    expect(await state(2)).toMatchObject({ manifest: [{ file_name: 'legacy' }] })
+    expect(await state(2)).toMatchObject({ manifest: '{"(legacy,,)"}' })
     await onVersionUpdateTestUtils.deleteManifest(c, record(1))
     await onVersionUpdateTestUtils.deleteManifest(c, record(2))
     await onVersionUpdateTestUtils.deleteManifest(c, record(3))
