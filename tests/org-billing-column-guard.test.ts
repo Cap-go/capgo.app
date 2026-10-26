@@ -215,7 +215,7 @@ describe('org customer_id guard', () => {
   it.each([
     ['auto_top_up_enabled', { auto_top_up_enabled: true }],
     ['auto_top_up_threshold', { auto_top_up_threshold: 5000 }],
-    ['auto_top_up_monthly_limit', { auto_top_up_monthly_limit: 0, auto_top_up_threshold: 20 }],
+    ['auto_top_up_monthly_limit', { auto_top_up_monthly_limit: 100 }],
     ['auto_top_up_last_attempt_at', { auto_top_up_last_attempt_at: '2000-01-01T00:00:00Z' }],
     ['has_usage_credits', { has_usage_credits: true }],
   ])('blocks org_admin from changing %s via PostgREST', async (_column, body) => {
