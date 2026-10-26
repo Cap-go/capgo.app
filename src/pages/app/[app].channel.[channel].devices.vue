@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OrganizationRole } from '~/stores/organization'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { FormKit } from '@formkit/vue'
 import { ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -11,7 +11,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -29,11 +29,12 @@ const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
-const deviceIds = ref<string[]>([])
+// Whether any device is forced to this channel; the table pages them through the API.
+const hasDevices = ref(false)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
 const deviceIdInput = ref('')
 const role = ref<OrganizationRole | null>(null)
@@ -120,7 +121,7 @@ async function customDeviceOverwritePart4(
 }
 
 async function setChannelDeviceOverride(deviceId: string) {
-  const { data: currentSession } = await supabase.auth.getSession()!
+  const { data: currentSession } = await capgo.auth.getSession()!
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt)
     throw new Error('Missing session')
@@ -184,15 +185,18 @@ async function getDeviceIds() {
   if (!channel.value)
     return
   try {
-    const { data: dataDevices } = await supabase
+    const { count, error } = await capgo
       .from('channel_devices')
-      .select('device_id')
+      .select('device_id', { count: 'exact', head: true })
       .eq('channel_id', id.value)
       .eq('app_id', channel.value.app_id)
-    if (dataDevices && dataDevices.length)
-      deviceIds.value = dataDevices.map(d => d.device_id)
-    else
-      deviceIds.value = []
+    // A failed check must not pretend the channel has no forced devices.
+    if (error) {
+      console.error('Cannot check forced devices', error)
+      toast.error(t('something-went-wrong-try-again-later'))
+      return
+    }
+    hasDevices.value = (count ?? 0) > 0
   }
   catch (error) {
     console.error(error)
@@ -213,7 +217,7 @@ async function getChannel() {
   }
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select(`
           id,
@@ -294,7 +298,7 @@ watchEffect(async () => {
     <div v-else-if="channel">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
-          <DeviceTable v-if="deviceIds.length > 0" :app-id="channel.version.app_id" :ids="deviceIds" :channel="channel" :device-data-collection="deviceDataCollection" show-add-button @add-device="AddDevice" />
+          <DeviceTable v-if="hasDevices" :app-id="channel.version.app_id" :override-channel-id="channel.id" :channel="channel" :device-data-collection="deviceDataCollection" show-add-button @add-device="AddDevice" />
           <template v-else-if="!dialogStore.showDialog">
             <div class="flex min-h-96 items-center justify-center px-6 py-10 text-center">
               <div class="flex max-w-2xl flex-col items-center">

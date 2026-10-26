@@ -1,4 +1,4 @@
-import type { Json } from '~/types/supabase.types'
+import type { Json } from '~/types/database.types'
 import { parseUserOnboardingProgress } from '~/utils/userOnboardingProgress'
 
 /**

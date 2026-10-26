@@ -21,7 +21,7 @@ import chatGptLogoWhite from '~/assets/assistant/chatgpt-logo-white.svg'
 import { AssistantKeyError, createAssistantKey, loadAssistantKey, saveAssistantKey } from '~/services/assistant'
 import { AssistantUpstreamError, runAssistant } from '~/services/assistantAgent'
 import { beginChatGptSignIn, CHATGPT_MANAGE_USAGE_URL, CHATGPT_REDIRECT_URI, ChatGptAuthError, completeChatGptSignIn, getChatGptAccessToken, loadChatGptCredentials, signOutChatGpt } from '~/services/chatgptAuth'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { tokenizeAssistantText } from '~/utils/assistantText'
@@ -42,7 +42,7 @@ interface ChatEntry extends AssistantTurn {
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
@@ -178,7 +178,7 @@ async function connect() {
     // The Capgo API key lets the assistant run MCP tools on the user's orgs.
     if (!apikey.value) {
       await organizationStore.awaitInitialLoad()
-      apikey.value = await createAssistantKey(supabase, userId.value, organizationStore.organizations)
+      apikey.value = await createAssistantKey(capgo, userId.value, organizationStore.organizations)
       saveAssistantKey(userId.value, apikey.value)
     }
     if (!credentials.value) {

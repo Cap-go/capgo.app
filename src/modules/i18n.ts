@@ -2,7 +2,7 @@ import type { Locale } from 'vue-i18n'
 import type { UserModule } from '~/types'
 import { createI18n } from 'vue-i18n'
 import sourceMessages from '../../messages/en.json'
-import { defaultApiHost } from '../services/supabase'
+import { defaultApiHost } from '../services/console'
 
 const FALLBACK_LOCALE = 'en' as const
 const LANGUAGE_STORAGE_KEY = 'lang'

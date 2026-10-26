@@ -2,11 +2,18 @@ import { Buffer } from 'node:buffer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  createClient: vi.fn(),
+  createConsoleAuthClient: vi.fn(),
+  createConsoleClient: vi.fn(),
 }))
 
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: mocks.createClient,
+// The spoof flow refreshes the admin session with a throwaway auth client and
+// installs it through the shared console client.
+vi.mock('~/services/consoleAuth', () => ({
+  createConsoleAuthClient: mocks.createConsoleAuthClient,
+  resolveConsoleApiBase: (value: string) => value,
+}))
+vi.mock('~/services/consoleClient', () => ({
+  createConsoleClient: mocks.createConsoleClient,
 }))
 
 function createJwt(exp: number) {
@@ -27,8 +34,9 @@ describe('spoof session storage', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
-    mocks.createClient.mockReset()
-    vi.stubEnv('VITE_SUPABASE_URL', 'https://test.supabase.co')
+    mocks.createConsoleAuthClient.mockReset()
+    mocks.createConsoleClient.mockReset()
+    vi.stubEnv('VITE_API_HOST', 'https://api.example.com')
     stubLocalStorage()
   })
 
@@ -39,11 +47,10 @@ describe('spoof session storage', () => {
   it('clears stale spoof storage without touching the active session when unspoof cannot restore admin', async () => {
     const refreshSession = vi.fn().mockResolvedValue({ data: { session: null }, error: new Error('invalid refresh token') })
     const setSession = vi.fn()
-    mocks.createClient
-      .mockReturnValueOnce({ auth: { refreshSession } })
-      .mockReturnValueOnce({ auth: { setSession } })
+    mocks.createConsoleAuthClient.mockReturnValue({ refreshSession })
+    mocks.createConsoleClient.mockReturnValue({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'stale-refresh-token')
     expect(isSpoofed()).toBe(true)
@@ -66,11 +73,10 @@ describe('spoof session storage', () => {
       error: null,
     })
     const setSession = vi.fn().mockResolvedValue({ data: { session: {} }, error: null })
-    mocks.createClient
-      .mockReturnValueOnce({ auth: { refreshSession } })
-      .mockReturnValueOnce({ auth: { setSession } })
+    mocks.createConsoleAuthClient.mockReturnValue({ refreshSession })
+    mocks.createConsoleClient.mockReturnValue({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'admin-refresh-token')
     expect(isSpoofed()).toBe(true)
@@ -91,9 +97,10 @@ describe('spoof session storage', () => {
   it('restores a valid stored admin session even when its refresh token is stale', async () => {
     const refreshSession = vi.fn()
     const setSession = vi.fn().mockResolvedValue({ data: { session: {} }, error: null })
-    mocks.createClient.mockReturnValueOnce({ auth: { refreshSession, setSession } })
+    mocks.createConsoleAuthClient.mockReturnValue({ refreshSession })
+    mocks.createConsoleClient.mockReturnValue({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
     const validJwt = createJwt(Math.floor(Date.now() / 1000) + 300)
 
     saveSpoof(validJwt, 'stale-refresh-token')
@@ -110,9 +117,9 @@ describe('spoof session storage', () => {
 
   it('keeps spoof recovery storage when restoring the admin session fails', async () => {
     const setSession = vi.fn().mockResolvedValue({ data: { session: null }, error: new Error('session write failed') })
-    mocks.createClient.mockReturnValueOnce({ auth: { setSession } })
+    mocks.createConsoleClient.mockReturnValue({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(Math.floor(Date.now() / 1000) + 300), 'admin-refresh-token')
 
@@ -123,9 +130,9 @@ describe('spoof session storage', () => {
 
   it('keeps spoof recovery storage when restoring the admin session throws', async () => {
     const setSession = vi.fn().mockRejectedValue(new Error('session write failed'))
-    mocks.createClient.mockReturnValueOnce({ auth: { setSession } })
+    mocks.createConsoleClient.mockReturnValue({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(Math.floor(Date.now() / 1000) + 300), 'admin-refresh-token')
 
@@ -145,11 +152,10 @@ describe('spoof session storage', () => {
       error: null,
     })
     const setSession = vi.fn().mockRejectedValue(new Error('session write failed'))
-    mocks.createClient
-      .mockReturnValueOnce({ auth: { refreshSession } })
-      .mockReturnValueOnce({ auth: { setSession } })
+    mocks.createConsoleAuthClient.mockReturnValue({ refreshSession })
+    mocks.createConsoleClient.mockReturnValue({ auth: { setSession } })
 
-    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/supabase.ts')
+    const { isSpoofed, saveSpoof, unspoofUser } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'stale-refresh-token')
 
@@ -169,9 +175,9 @@ describe('spoof session storage', () => {
 
   it('clears expired spoof storage when the stored admin jwt cannot be refreshed', async () => {
     const refreshSession = vi.fn().mockResolvedValue({ data: { session: null }, error: new Error('invalid refresh token') })
-    mocks.createClient.mockReturnValueOnce({ auth: { refreshSession } })
+    mocks.createConsoleAuthClient.mockReturnValue({ refreshSession })
 
-    const { getSpoofedAdminJwt, isSpoofed, saveSpoof } = await import('../src/services/supabase.ts')
+    const { getSpoofedAdminJwt, isSpoofed, saveSpoof } = await import('../src/services/console.ts')
 
     saveSpoof(createJwt(1), 'stale-refresh-token')
 

@@ -70,6 +70,7 @@ export type Bindings = {
   ENV_NAME?: string
   NOTIFICATION_QUEUE?: Queue
   AUTH_EMAIL?: SendEmail
+  CONSOLE_EVENTS?: DurableObjectNamespace
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace
   PLUGIN_NOTIFICATION_QUEUE?: KVNamespace

@@ -6,13 +6,13 @@ const {
   getLocalConfigMock,
   sendEventMock,
 } = vi.hoisted(() => ({
-  getLocalConfigMock: vi.fn(() => ({ supaHost: 'https://sb.capgo.app' })),
+  getLocalConfigMock: vi.fn(() => ({ apiHost: 'https://api.capgo.app' })),
   sendEventMock: vi.fn(async (_payload: unknown) => null),
 }))
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   getLocalConfig: getLocalConfigMock,
-  isLocal: (supaHost: string) => supaHost !== 'https://sb.capgo.app',
+  isLocal: (apiHost: string) => apiHost !== 'https://api.capgo.app',
 }))
 
 vi.mock('~/services/tracking', () => ({
@@ -30,12 +30,12 @@ function createTracker() {
     flow: 'pre_org',
     resumed: false,
     steps: ['intent', 'setup'],
-    supaHost: 'https://supabase.capgo.test',
+    apiHost: 'https://supabase.capgo.test',
   })
 }
 
 beforeEach(() => {
-  getLocalConfigMock.mockReturnValue({ supaHost: 'https://sb.capgo.app' })
+  getLocalConfigMock.mockReturnValue({ apiHost: 'https://api.capgo.app' })
   vi.stubGlobal('posthog', {
     get_property: (property: string) => property === '$window_id' ? 'window-id' : 'device-id',
     get_session_id: () => 'session-id',
@@ -91,7 +91,7 @@ describe('onboarding backend tracking', () => {
   })
 
   it('does not dispatch onboarding analytics outside the production Supabase host', () => {
-    getLocalConfigMock.mockReturnValue({ supaHost: 'http://127.0.0.1:54321' })
+    getLocalConfigMock.mockReturnValue({ apiHost: 'http://127.0.0.1:54321' })
     const tracker = createTracker()
 
     tracker.viewStep('intent')

@@ -4,9 +4,14 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { defaultAgents } from 'agent-cli-detector'
 import { formatAppTodoList, getAppTodoSteps, readAppTodoProgress, waitForTodoBackgroundChecks } from '../src/app/todo.ts'
 import { getAppOnboardingStepIds, parseAppOnboarding } from '../../supabase/functions/_backend/utils/appOnboarding.ts'
 import messages from '../../messages/en.json'
+
+process.env.TZ = 'UTC'
+for (const definition of defaultAgents)
+  for (const signal of definition.env ?? []) delete process.env[signal.name]
 
 const appId = 'com.example.todo'
 const options = { apikey: 'test-todo-key' }
@@ -97,6 +102,11 @@ assert.match(allDone, /7\/7 completed \(7 done, 0 skipped, 0 pending\)/)
 assert.doesNotMatch(allDone, /Next step:/)
 const v2Output = formatAppTodoList(appId, { onboarding: { setup: { todo_list_version: 2, steps: {} } } })
 assert.doesNotMatch(v2Output, /Next step:|Done when:/, 'v2 keeps the checklist without v3 guidance')
+const trial = { endsAt: Date.parse('2026-01-15T12:00:00Z'), plansUrl: 'https://console.example.com/settings/organization/plans?oid=todo-org' }
+const trialOutput = formatAppTodoList(appId, progress, { trial })
+assert.ok(trialOutput.includes('[ ] Pending: Deliver an update to a device\n[ ] Pending: Add a payment method before Jan 15, 2026 so live updates keep reaching devices after the free trial (no charge before then): https://console.example.com/settings/organization/plans?trial_card=1\n\nNext step: Create a channel'), trialOutput)
+assert.equal(trialOutput.replace(/\n\[ \] Pending: Add a payment method[^\n]+/, ''), output, 'the trial item is the only addition')
+assert.doesNotMatch(output, /payment method|trial_card/, 'the checklist has no trial item unless an agent asks for one')
 
 for (const [id, action, completion] of [
   ['login_cli_mcp', 'Run a Capgo CLI command', 'Capgo records that CLI or MCP activity'],
@@ -132,8 +142,15 @@ try {
   }
   globalThis.fetch = async () => Response.json({ status: 'ok' })
   await assert.rejects(() => readAppTodoProgress(appId, { apikey: options.apikey, apiHost }), /invalid progress response/)
+  process.env.CODEX_THREAD_ID = 'fixture-agent-thread'
+  globalThis.fetch = async (_input, init) => {
+    assert.deepEqual(JSON.parse(init.body), { appId, N: 0, initial: true, includeBilling: true }, 'agents request the trial billing snapshot')
+    return Response.json(progress)
+  }
+  assert.deepEqual(await readAppTodoProgress(appId, { apikey: options.apikey, apiHost }), progress)
 }
 finally {
+  delete process.env.CODEX_THREAD_ID
   globalThis.fetch = originalFetch
 }
 

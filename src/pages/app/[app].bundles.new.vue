@@ -3,13 +3,13 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import StepsBundle from '~/components/dashboard/StepsBundle.vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
 const route = useRoute('/app/[app].bundles.new')
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -33,7 +33,7 @@ async function fetchBundlesCount() {
     bundlesCount.value = 0
     return
   }
-  const { count } = await supabase
+  const { count } = await capgo
     .from('app_versions')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)

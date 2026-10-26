@@ -109,12 +109,29 @@ function inferUiRole(text, key) {
   return 'UI sentence'
 }
 
+// Roles the heuristics above can't infer. Keep them here so regenerating doesn't drop them.
+const ROLE_OVERRIDES = {
+  'app-access-inherited': 'app access summary in the members table for org admins, {role} is the app role name',
+  'load-older': 'button label that loads older audit log entries',
+  'search': 'search input label or placeholder',
+  'skip': 'button label to skip an optional step',
+  'user-not-found': 'error message',
+}
+
+function roleFor(key, text) {
+  // RoleCapabilitiesHint splits these on ";" (a "|" would be read as a vue-i18n plural separator).
+  if (/^role-cap-.+-(?:can|cannot)$/.test(key))
+    return 'list of short capability items separated by semicolons (;). Keep each item short and keep the ; separators between items'
+  return ROLE_OVERRIDES[key] ?? inferUiRole(text, key)
+}
+
 function topicFromKey(key) {
   return key.replace(/-/g, ' ')
 }
 
 function namespaceHint(key) {
   const prefixes = [
+    ['role-cap-', 'role capability tooltip in the Capgo web console'],
     ['2fa-', 'organization/account two-factor authentication'],
     ['admin-', 'platform admin dashboard'],
     ['api-key', 'API key management'],
@@ -140,7 +157,7 @@ function namespaceHint(key) {
 }
 
 function keyFallbackContext(key, text) {
-  const role = inferUiRole(text, key)
+  const role = roleFor(key, text)
   const area = namespaceHint(key)
   return `Used in ${area}. Role: ${role} about "${topicFromKey(key)}". Translate for UI; keep Capgo product names, code, and placeholders unchanged.`
 }
@@ -153,7 +170,7 @@ for (const key of keys) {
   if (filesForKey && filesForKey.size > 0) {
     withUsage += 1
     const areas = [...new Set([...filesForKey].map(areaFromPath).sort())].slice(0, 5)
-    const role = inferUiRole(text, key)
+    const role = roleFor(key, text)
     contexts[key] = `Used in Capgo web console areas: ${areas.join(', ')}. Role: ${role}. Translate for UI; keep Capgo product names, code, and placeholders unchanged.`
   }
   else {

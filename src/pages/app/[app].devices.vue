@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import { useConsole } from '~/services/console'
 import { parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 const { t } = useI18n()
@@ -13,14 +13,14 @@ const id = ref('')
 const route = useRoute('/app/[app].devices')
 const lastPath = ref('')
 const isLoading = ref(false)
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(app.value as unknown))
 
 async function loadAppInfo() {
   try {
-    const { data: dataApp } = await supabase
+    const { data: dataApp } = await capgo
       .from('apps')
       .select()
       .eq('app_id', id.value)

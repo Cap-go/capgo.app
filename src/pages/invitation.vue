@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import VueTurnstile from 'vue-turnstile'
@@ -10,7 +10,7 @@ import IconX from '~icons/lucide/x'
 import { authGhostButtonClass, authInsetCardClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
@@ -77,12 +77,12 @@ const organizationInitials = computed(() => {
 })
 
 onMounted(async () => {
-  const supabase = useSupabase()
+  const capgo = useConsole()
   // Sign out any existing session before the form is usable so a later
   // sign-out cannot wipe the session established after invite accept.
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   if (claimsData?.claims?.sub)
-    await supabase.auth.signOut()
+    await capgo.auth.signOut()
 
   if (route.query.invite_magic_string) {
     inviteMagicString.value = route.query.invite_magic_string as string
@@ -129,7 +129,7 @@ async function submitForm() {
     // Show loading indicator
     isLoading.value = true
 
-    // Call the backend API to accept the invitation using Supabase Functions
+    // Call the backend API to accept the invitation
     const { data, error } = await invokeCapgoApi('private/accept_invitation', {
       allowAnonymous: true,
       body: {
@@ -146,8 +146,8 @@ async function submitForm() {
     }
 
     if (data?.access_token && data?.refresh_token) {
-      const supabase = useSupabase()
-      const { error: sessionError } = await supabase.auth.setSession({
+      const capgo = useConsole()
+      const { error: sessionError } = await capgo.auth.setSession({
         access_token: data.access_token,
         refresh_token: data.refresh_token,
       })

@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { authGhostButtonClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
 import { validateRedirectPath } from '~/utils/safeRedirect'
@@ -13,7 +13,7 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const main = useMainStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 async function handleLogout() {
   await main.logout()
@@ -40,7 +40,7 @@ async function handleRestore() {
   isRestoring.value = true
 
   try {
-    const { error: restoreError } = await supabase.rpc('restore_deleted_account')
+    const { error: restoreError } = await capgo.rpc('restore_deleted_account')
     if (restoreError) {
       console.error('Error restoring deleted account:', restoreError)
       if (restoreError.message?.includes('reauth_required')) {
@@ -70,7 +70,7 @@ async function handleRestore() {
 onMounted(async () => {
   try {
     if (main.auth?.id) {
-      const { data: removalDateStr, error: dateError } = await supabase
+      const { data: removalDateStr, error: dateError } = await capgo
         .rpc('get_account_removal_date')
 
       if (dateError) {

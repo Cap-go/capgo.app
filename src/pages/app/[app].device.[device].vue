@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { greaterThan, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
@@ -14,9 +14,9 @@ import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatDistanceToNow } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
@@ -28,7 +28,7 @@ const displayStore = useDisplayStore()
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute('/app/[app].device.[device]')
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<string>()
 const isLoading = ref(true)
@@ -58,7 +58,7 @@ onClickOutside(channelDropdown, () => closeChannelDropdown())
 
 async function getChannels() {
   try {
-    const { data } = await supabase
+    const { data } = await capgo
       .from('channels')
       .select(`
         id,
@@ -79,7 +79,7 @@ async function getChannels() {
 
 async function getChannelOverride() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channel_devices')
       .select(`
         device_id,
@@ -112,7 +112,7 @@ async function getChannelOverride() {
 
 async function getVersionInfo() {
   if (device.value?.version && !device.value?.version_name) {
-    const { data: dataVersion } = await supabase
+    const { data: dataVersion } = await capgo
       .from('app_versions')
       .select(`
           name
@@ -124,7 +124,7 @@ async function getVersionInfo() {
       device.value.version_name = dataVersion.name
   }
   if (!device.value?.version && device.value?.version_name) {
-    const { data: dataVersion } = await supabase
+    const { data: dataVersion } = await capgo
       .from('app_versions')
       .select(`
           id
@@ -153,7 +153,7 @@ async function getDevice() {
   }
 
   try {
-    const { data: currentSession } = await supabase.auth.getSession()!
+    const { data: currentSession } = await capgo.auth.getSession()!
     if (!currentSession.session)
       return
     const currentJwt = currentSession.session.access_token
@@ -224,7 +224,7 @@ async function loadData() {
 }
 
 async function upsertDevChannel(device: string, channelId: number) {
-  const { data: currentSession } = await supabase.auth.getSession()!
+  const { data: currentSession } = await capgo.auth.getSession()!
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt)
     throw new Error('Missing session')
@@ -246,7 +246,7 @@ async function upsertDevChannel(device: string, channelId: number) {
 }
 
 async function delDevChannel(device: string) {
-  const { data: currentSession } = await supabase.auth.getSession()!
+  const { data: currentSession } = await capgo.auth.getSession()!
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt)
     throw new Error('Missing session')
