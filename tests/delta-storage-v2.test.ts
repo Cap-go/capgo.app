@@ -249,6 +249,33 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('lists every former owner prefix of a transferred app in one pass', async () => {
+    const formerOrg = '00000000-0000-4000-8000-0000000000aa'
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
+      await client.query(`DELETE FROM public.app_versions WHERE app_id = $1 AND manifest IS NOT NULL`, [APP_ID])
+      await client.query(
+        `INSERT INTO public.delta_files (app_id, s3_path, file_name, file_hash, path_key, entry_key)
+         VALUES ($1, $2::text, 'old.js', 'h', public.delta_path_key($2::text), public.delta_entry_key($2::text, 'old.js', 'h'))`,
+        [APP_ID, `orgs/${formerOrg}/apps/${APP_ID}/delta/old.js`],
+      )
+      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() + interval '1 day'`)
+      await client.query(`UPDATE public.delta_gc_state SET next_run_at = now() - interval '1 minute', list_org = NULL, pending_orgs = NULL, list_cursor = NULL WHERE app_id = $1`, [APP_ID])
+
+      const seen: string[] = []
+      for (let pass = 0; pass < 3; pass++) {
+        const claimed = await client.query<{ list_org: string }>('SELECT list_org FROM public.delta_gc_claim(5)')
+        if (claimed.rows.length === 0)
+          break
+        seen.push(claimed.rows[0].list_org)
+        await client.query('SELECT public.delta_gc_finish($1, NULL, NULL)', [APP_ID])
+      }
+      expect(seen).toEqual([formerOrg, ORG_ID].sort())
+      const state = await client.query(`SELECT list_org, next_run_at > now() + interval '6 days' AS weekly FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
+      expect(state.rows[0]).toEqual({ list_org: null, weekly: true })
+    })
+  })
+
   it('caps the delete lease at 2 seconds', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])

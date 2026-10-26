@@ -43,6 +43,8 @@ legacy `manifest` rows. The response format is unchanged.
   per run: objects younger than a day are skipped, paths still referenced by a
   live version, a version deleted less than 7 days ago or an in-progress upload
   are skipped, the rest is copied to `deleted-after-7-days/` and deleted.
+  A pass lists the current owner's prefix and every former owner's prefix
+  found in the app's `delta_files` paths (app transfers do not move objects).
 - The R2 lifecycle rule on `deleted-after-7-days/` purges the trash, so a bad
   delete stays recoverable for 7 more days by copying the object back.
 
@@ -86,6 +88,9 @@ upload, so one rule covers concurrent uploads and GC:
    Wait until `delta_files` / `version_files` row counts match the primary.
 4. Switch to the new tables only:
    `SELECT vault.create_secret('false', 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES');`
+   Secret names are unique: if it already exists, run
+   `SELECT vault.update_secret(id, 'false') FROM vault.secrets WHERE name = 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES';`
+   instead (same pattern for the GC switch below).
    The `convert_legacy_manifest` cron then moves legacy rows (20 versions every
    10 seconds) and deletes them. Onboarding demo rows (`demo/` paths) stay
    legacy because `onboarding_demo_data` tracks their ids.

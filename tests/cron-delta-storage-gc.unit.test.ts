@@ -65,7 +65,7 @@ describe('delta storage GC worker', () => {
       const text = sqlText(query)
       if (text.includes('delta_gc_claim')) {
         calls.push('claim')
-        return { rows: [{ app_id: 'com.example.gc', owner_org: 'org-1', list_cursor: null }] }
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
       }
       if (text.includes('delta_gc_unreferenced_paths')) {
         calls.push('unreferenced')
@@ -120,7 +120,7 @@ describe('delta storage GC worker', () => {
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       const text = sqlText(query)
       if (text.includes('delta_gc_claim'))
-        return { rows: [{ app_id: 'com.example.gc', owner_org: 'org-1', list_cursor: null }] }
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
       if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: keys }] }
       return { rows: [] }
@@ -144,7 +144,7 @@ describe('delta storage GC worker', () => {
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       const text = sqlText(query)
       if (text.includes('delta_gc_claim'))
-        return { rows: [{ app_id: 'com.example.gc', owner_org: 'org-1', list_cursor: 'token' }] }
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'token' }] }
       if (text.includes('delta_gc_unreferenced_paths'))
         return { rows: [{ paths: [`${prefix}a.js`] }] }
       if (text.includes('delta_gc_begin_delete'))
@@ -168,7 +168,7 @@ describe('delta storage GC worker', () => {
       const text = sqlText(query)
       queries.push(text)
       if (text.includes('delta_gc_claim'))
-        return { rows: [{ app_id: 'com.example.gc', owner_org: 'org-1', list_cursor: null }] }
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
       if (text.includes('delta_gc_unreferenced_paths') || text.includes('delta_gc_begin_delete'))
         return { rows: [{ paths: [`${prefix}a.js`] }] }
       return { rows: [] }
@@ -187,7 +187,7 @@ describe('delta storage GC worker', () => {
     mocks.listObjectPage.mockRejectedValue(new Error('list failed'))
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
       if (sqlText(query).includes('delta_gc_claim'))
-        return { rows: [{ app_id: 'com.example.gc', owner_org: 'org-1', list_cursor: 'stale' }] }
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: 'stale' }] }
       return { rows: [] }
     })
 

@@ -41,7 +41,8 @@ const DELTA_GC_DELETE_CONCURRENCY = DELTA_GC_DELETE_BATCH
 
 type Database = ReturnType<typeof getDrizzleClient>
 
-type ClaimedApp = Record<string, unknown> & { app_id: string, owner_org: string, list_cursor: string | null }
+// list_org: the organization prefix this pass is listing (current or former owner).
+type ClaimedApp = Record<string, unknown> & { app_id: string, list_org: string, list_cursor: string | null }
 
 export function deltaPrefix(ownerOrg: string, appId: string) {
   return `orgs/${ownerOrg}/apps/${appId}/delta/`
@@ -106,7 +107,7 @@ async function trashBatch(c: Context, db: Database, appId: string, paths: string
 }
 
 async function collectAppPage(c: Context, db: Database, app: ClaimedApp, deadline: number) {
-  const { objects, nextToken } = await s3.listObjectPage(c, deltaPrefix(app.owner_org, app.app_id), app.list_cursor, DELTA_GC_LIST_PAGE_SIZE)
+  const { objects, nextToken } = await s3.listObjectPage(c, deltaPrefix(app.list_org, app.app_id), app.list_cursor, DELTA_GC_LIST_PAGE_SIZE)
   const candidates = await unreferencedPaths(db, selectAgedKeys(objects, Date.now()))
   let deleted = 0
   let processed = 0

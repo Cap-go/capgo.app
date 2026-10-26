@@ -245,6 +245,11 @@ CREATE TABLE public.delta_gc_state (
   app_id character varying PRIMARY KEY REFERENCES public.apps (app_id) ON DELETE CASCADE,
   next_run_at timestamptz NOT NULL DEFAULT now(),
   lease_until timestamptz,
+  -- Organization prefix being listed. Transferred apps keep files under every
+  -- former owner's prefix (transfer_app does not move objects), so one pass
+  -- walks the current owner plus each organization found in delta_files.
+  list_org text,
+  pending_orgs text[],
   list_cursor text,
   last_run_at timestamptz,
   last_error text
@@ -414,7 +419,7 @@ GRANT EXECUTE ON FUNCTION public.delta_gc_unreferenced_paths(text[]) TO service_
 -- Claims due apps. Apps with unconverted legacy manifest rows are postponed:
 -- legacy rows have no s3_path index, so GC cannot prove a path unreferenced.
 CREATE FUNCTION public.delta_gc_claim(p_limit integer DEFAULT 5)
-RETURNS TABLE (app_id character varying, owner_org uuid, list_cursor text)
+RETURNS TABLE (app_id character varying, list_org text, list_cursor text)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
@@ -450,18 +455,38 @@ BEGIN
     ) AS has_legacy_rows
     FROM due
   ),
+  -- Organizations to list, computed once at the start of each pass.
+  pass_orgs AS MATERIALIZED (
+    SELECT checked.app_id, ARRAY(
+      SELECT org FROM (
+        SELECT apps.owner_org::text AS org
+        FROM public.apps WHERE apps.app_id = checked.app_id
+        UNION
+        SELECT pg_catalog.split_part(df.s3_path, '/', 2)
+        FROM public.delta_files AS df
+        WHERE df.app_id = checked.app_id AND df.s3_path LIKE 'orgs/%'
+      ) AS orgs
+      WHERE org <> ''
+      ORDER BY org
+    ) AS orgs
+    FROM checked
+    INNER JOIN public.delta_gc_state AS s ON s.app_id = checked.app_id
+    WHERE NOT checked.has_legacy_rows AND s.list_org IS NULL
+  ),
   claimed AS (
     UPDATE public.delta_gc_state AS s
     -- A crashed run is retried after 15 minutes; legacy apps wait for the converter.
-    SET next_run_at = now() + CASE WHEN checked.has_legacy_rows THEN interval '1 day' ELSE interval '15 minutes' END
+    SET next_run_at = now() + CASE WHEN checked.has_legacy_rows THEN interval '1 day' ELSE interval '15 minutes' END,
+        list_org = CASE WHEN pass_orgs.app_id IS NULL THEN s.list_org ELSE pass_orgs.orgs[1] END,
+        pending_orgs = CASE WHEN pass_orgs.app_id IS NULL THEN s.pending_orgs ELSE pass_orgs.orgs[2:] END
     FROM checked
+    LEFT JOIN pass_orgs ON pass_orgs.app_id = checked.app_id
     WHERE s.app_id = checked.app_id
-    RETURNING s.app_id, s.list_cursor, checked.has_legacy_rows
+    RETURNING s.app_id, s.list_org, s.list_cursor, checked.has_legacy_rows
   )
-  SELECT claimed.app_id, apps.owner_org, claimed.list_cursor
+  SELECT claimed.app_id, claimed.list_org, claimed.list_cursor
   FROM claimed
-  INNER JOIN public.apps ON apps.app_id = claimed.app_id
-  WHERE NOT claimed.has_legacy_rows;
+  WHERE NOT claimed.has_legacy_rows AND claimed.list_org IS NOT NULL;
 END;
 $$;
 ALTER FUNCTION public.delta_gc_claim(integer) OWNER TO postgres;
@@ -540,11 +565,24 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
   UPDATE public.delta_gc_state
-  SET list_cursor = p_list_cursor,
-      -- More pages: continue soon. Complete pass: rescan weekly for aborted uploads.
+  SET list_cursor = CASE WHEN p_error IS NULL THEN p_list_cursor END,
+      -- Next page, then next organization prefix; a finished pass rescans
+      -- weekly for aborted uploads; an error restarts the pass later.
+      list_org = CASE
+        WHEN p_error IS NOT NULL THEN NULL
+        WHEN p_list_cursor IS NOT NULL THEN list_org
+        ELSE pending_orgs[1]
+      END,
+      pending_orgs = CASE
+        WHEN p_error IS NOT NULL THEN NULL
+        WHEN p_list_cursor IS NOT NULL THEN pending_orgs
+        WHEN COALESCE(pg_catalog.cardinality(pending_orgs), 0) > 1 THEN pending_orgs[2:]
+        ELSE NULL
+      END,
       next_run_at = CASE
         WHEN p_error IS NOT NULL THEN now() + interval '1 hour'
         WHEN p_list_cursor IS NOT NULL THEN now()
+        WHEN COALESCE(pg_catalog.cardinality(pending_orgs), 0) > 0 THEN now()
         ELSE now() + interval '7 days'
       END,
       lease_until = NULL,

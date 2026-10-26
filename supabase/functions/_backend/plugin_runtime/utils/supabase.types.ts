@@ -1440,7 +1440,9 @@ export type Database = {
           last_run_at: string | null
           lease_until: string | null
           list_cursor: string | null
+          list_org: string | null
           next_run_at: string
+          pending_orgs: string[] | null
         }
         Insert: {
           app_id: string
@@ -1448,7 +1450,9 @@ export type Database = {
           last_run_at?: string | null
           lease_until?: string | null
           list_cursor?: string | null
+          list_org?: string | null
           next_run_at?: string
+          pending_orgs?: string[] | null
         }
         Update: {
           app_id?: string
@@ -1456,7 +1460,9 @@ export type Database = {
           last_run_at?: string | null
           lease_until?: string | null
           list_cursor?: string | null
+          list_org?: string | null
           next_run_at?: string
+          pending_orgs?: string[] | null
         }
         Relationships: [
           {
@@ -3807,7 +3813,7 @@ export type Database = {
         Returns: {
           app_id: string
           list_cursor: string
-          owner_org: string
+          list_org: string
         }[]
       }
       delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
