@@ -252,4 +252,13 @@ describe('release live helpers', () => {
     // A denied public channel is no longer picked as the default.
     expect(releaseLiveTestUtils.pickDefaultChannel(filtered)?.id).toBe(20)
   })
+
+  it.concurrent('orders per-channel deploy history newest first across the app', () => {
+    const sorted = releaseLiveTestUtils.sortDeploymentsNewestFirst([
+      { bundle_id: 1, version_name: '1.0.0', channel_id: 10, channel_name: 'beta', deployed_at: '2026-09-29T09:00:00.000Z' },
+      { bundle_id: 2, version_name: '1.1.0', channel_id: 10, channel_name: 'beta', deployed_at: '2026-09-29T08:00:00.000Z' },
+      { bundle_id: 3, version_name: '1.2.0', channel_id: 20, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' },
+    ])
+    expect(sorted.map(row => row.bundle_id)).toEqual([3, 1, 2])
+  })
 })

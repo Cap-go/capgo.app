@@ -35,7 +35,10 @@ const MAX_BUCKETS = 90
 const BUCKET_MINUTES_OPTIONS = [1, 5, 15, 30, 60] as const
 const MAX_FAILURE_ACTIONS = 8
 const RECENT_DEPLOYMENTS_LIMIT = 10
-const DEPLOY_HISTORY_LIMIT = 100
+// Deploy history is capped per channel, not per app, so busy channels (or
+// channels a caller cannot read, which are dropped per request after the
+// shared cache) never push another channel's history out of the window.
+const DEPLOY_HISTORY_PER_CHANNEL_LIMIT = 25
 const INTERNAL_VERSION_NAMES = new Set(['builtin', 'unknown'])
 
 interface ReleaseLiveRequest {
@@ -545,32 +548,31 @@ function cacheBucket(ttlSeconds: number, nowMs = Date.now()) {
   return String(Math.floor(nowMs / (ttlSeconds * 1000)))
 }
 
+// Deployments are read per channel; callers expect the newest first across
+// the whole app (default channel and version lookups scan in this order).
+function sortDeploymentsNewestFirst(deployments: ResolvedRelease[]): ResolvedRelease[] {
+  return [...deployments].sort((a, b) => Date.parse(b.deployed_at) - Date.parse(a.deployed_at))
+}
+
 // Candidates are identical for every user allowed to read the app, so they are
 // read with the admin client (after checkPermission) and shared through the cache.
 async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: string): Promise<ReleaseCandidates> {
   const cache = new CacheHelper(c)
-  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, v: '3', bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
+  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, v: '4', bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
   const cached = await cache.matchJson<ReleaseCandidates>(cacheKey)
   if (cached)
     return cached
 
-  const supabase = supabaseAdmin(c)
-  const [{ data: channelRows, error: channelError }, { data: deployRows, error: deployError }] = await Promise.all([
-    supabase
-      .from('channels')
-      .select('id, name, public, rollout_enabled, rollout_percentage_bps, rollout_paused_at, rollout_pause_reason, version:app_versions!channels_version_fkey(id, name, created_at), rollout_version_info:app_versions!channels_rollout_version_fkey(id, name, created_at)')
-      .eq('app_id', appId)
-      .order('name', { ascending: true })
-      .order('id', { ascending: true }),
-    supabase
-      .from('deploy_history')
-      .select('deployed_at, channel_id, channels(name), app_versions(id, name)')
-      .eq('app_id', appId)
-      .order('deployed_at', { ascending: false })
-      .limit(DEPLOY_HISTORY_LIMIT),
-  ])
-  if (channelError || deployError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', channelError, deployError })
+  const { data: channelRows, error: channelError } = await supabaseAdmin(c)
+    .from('channels')
+    .select('id, name, public, rollout_enabled, rollout_percentage_bps, rollout_paused_at, rollout_pause_reason, version:app_versions!channels_version_fkey(id, name, created_at), rollout_version_info:app_versions!channels_rollout_version_fkey(id, name, created_at), deploy_history(deployed_at, app_versions(id, name))')
+    .eq('app_id', appId)
+    .order('name', { ascending: true })
+    .order('id', { ascending: true })
+    .order('deployed_at', { referencedTable: 'deploy_history', ascending: false })
+    .limit(DEPLOY_HISTORY_PER_CHANNEL_LIMIT, { referencedTable: 'deploy_history' })
+  if (channelError) {
+    cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', channelError })
     throw simpleError('fetch_error', 'Failed to fetch deployment history')
   }
 
@@ -603,19 +605,21 @@ async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: 
     return { id: row.id, name: row.name, public: row.public, current, rollout } satisfies CandidateChannel
   })
 
-  const deployments = (deployRows ?? []).flatMap((row) => {
-    const version = one(row.app_versions as Relation<{ id: number, name: string }>)
-    const channel = one(row.channels as Relation<{ name: string }>)
-    if (!version?.name || !row.deployed_at)
-      return []
-    return [{
-      bundle_id: version.id,
-      version_name: version.name,
-      channel_id: row.channel_id,
-      channel_name: channel?.name ?? null,
-      deployed_at: row.deployed_at,
-    } satisfies ResolvedRelease]
-  })
+  const deployments = sortDeploymentsNewestFirst((channelRows ?? []).flatMap((row) => {
+    const history = (row.deploy_history ?? []) as Array<{ deployed_at: string | null, app_versions: Relation<{ id: number, name: string }> }>
+    return history.flatMap((entry) => {
+      const version = one(entry.app_versions)
+      if (!version?.name || !entry.deployed_at)
+        return []
+      return [{
+        bundle_id: version.id,
+        version_name: version.name,
+        channel_id: row.id,
+        channel_name: row.name,
+        deployed_at: entry.deployed_at,
+      } satisfies ResolvedRelease]
+    })
+  }))
 
   const candidates: ReleaseCandidates = { channels, deployments }
   await cache.putJson(cacheKey, candidates, CANDIDATES_CACHE_TTL_SECONDS)
@@ -904,6 +908,7 @@ app.post('/', middlewareAuth, async (c) => {
 })
 
 export const releaseLiveTestUtils = {
+  sortDeploymentsNewestFirst,
   withoutDeniedHistory,
   pickDefaultChannel,
   pickChannel,
