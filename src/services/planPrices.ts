@@ -10,6 +10,8 @@ const STORAGE_KEY = 'capgo_plan_currency'
 type PlanPriceAmounts = Record<string, { month: Record<string, number>, year: Record<string, number> }>
 
 interface PlanPricesResponse {
+  // False when some Stripe prices failed to load on the server.
+  complete: boolean
   // Currencies sold on every plan and interval (only the locked one for a billed customer).
   currencies: string[]
   currency: string | null
@@ -74,8 +76,9 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     if (orgId.value !== id)
       return
     data.value = !error && response ? response : null
-    ready.value = !!data.value
-    failed.value = !data.value
+    // A partial catalog is treated like a failed lookup: retry, checkout stays disabled.
+    ready.value = !!data.value && data.value.complete !== false
+    failed.value = !ready.value
   }
 
   watch(orgId, load, { immediate: true })

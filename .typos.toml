@@ -9,6 +9,8 @@ extend-ignore-re = [
   "[A-Za-z0-9+/]{40,}={0,2}",
   # Ignore hex strings
   "0x[0-9a-fA-F]+",
+  # Ignore Stripe object IDs (price_..., prod_..., acct_...)
+  "\\b(price|prod|acct|cus|sub|cs|pi|in)_[A-Za-z0-9]+",
   # Preserve the existing files.ts no-DB-read warning wording.
   "This had beed designed that way and access to file going to be delete is non imporant compared to availability of file download, so we are not doing any check in DB or R2 before serving the file, if file is missing in R2 it will be 404 and that is expected and we want to avoid any potential bottlenecks\\.",
   "File access security is not a matter here and will NERVER BE\\.",
@@ -53,6 +55,9 @@ extend-exclude = [
   # prescan manifest-typo test fixtures intentionally misspell tags (activty/aplication/servce)
   "cli/test/prescan/checks-android-manifest.test.ts",
   "cli/test/prescan/manifest.test.ts",
+
+  # ISO 3166 country code table (BA, FO, PN... are country codes, not typos)
+  "supabase/functions/_backend/utils/country_currency.ts",
 
   # Mobile platforms
   "ios/",

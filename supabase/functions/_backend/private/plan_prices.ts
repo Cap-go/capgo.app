@@ -104,13 +104,15 @@ async function getPlanPrices(c: Context, authorization: string, billingAccount: 
   const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, version })
   const degradedKey = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, version, degraded: '1' })
   const cached = await cache.matchJson<PlanPriceAmounts>(key, { timeoutMs: 200 })
-    ?? await cache.matchJson<PlanPriceAmounts>(degradedKey, { timeoutMs: 200 })
   if (cached)
-    return cached
+    return { prices: cached, complete: true }
+  const degraded = await cache.matchJson<PlanPriceAmounts>(degradedKey, { timeoutMs: 200 })
+  if (degraded)
+    return { prices: degraded, complete: false }
   const { prices, complete } = await loadPlanPrices(c, plans, billingAccount)
   // Never write a partial catalog to the main key: it expires within a minute and the failed plans are retried.
   await cache.putJson(complete ? key : degradedKey, prices, complete ? PLAN_PRICES_TTL_SECONDS : PLAN_PRICES_DEGRADED_TTL_SECONDS, { timeoutMs: 200 })
-  return prices
+  return { prices, complete }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -137,10 +139,10 @@ app.get('/', middlewareAuth, async (c) => {
 
   const billingAccount = org.customer_id ? await getBillingAccountForCustomer(c, org.customer_id) : 'ee'
   if (!isStripeConfiguredForAccount(c, billingAccount))
-    return c.json({ currencies: [], currency: null, lockedCurrency: null, prices: {} })
+    return c.json({ complete: true, currencies: [], currency: null, lockedCurrency: null, prices: {} })
 
   // Fail closed: an unknown customer currency must not unlock currencies checkout would reject.
-  const [prices, lockedCurrency] = await Promise.all([
+  const [{ prices, complete }, lockedCurrency] = await Promise.all([
     getPlanPrices(c, authorization, billingAccount),
     org.customer_id ? getStripeCustomerCurrency(c, org.customer_id, billingAccount) : null,
   ])
@@ -152,6 +154,8 @@ app.get('/', middlewareAuth, async (c) => {
     ? common.filter(currency => currency === lockedCurrency)
     : common.filter(currency => isCurrencyAllowedForCountry(currency, country))
   return c.json({
+    // False when some Stripe prices failed to load: the page offers a retry and keeps checkout disabled.
+    complete,
     currencies,
     // Null means no currency is sold on every plan: the page shows the stored USD prices.
     currency: pickCurrency(currencies, lockedCurrency, country),
