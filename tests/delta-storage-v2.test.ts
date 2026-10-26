@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildManifestSizeLookupQuery, normalizeManifestSizeFiles } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
-import { storageAliases } from '../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts'
 import { ORG_ID, POSTGRES_URL, resetAndSeedAppData, resetAppData, USER_ID } from './test-utils.ts'
 
 const id = randomUUID()
@@ -258,24 +257,27 @@ describe('delta storage v2 GC guards', () => {
     expect(result.rows[0].paths.sort()).toEqual([deltaPath('old.js'), deltaPath('orphan.js')].sort())
   })
 
-  it('keeps an object referenced under another spelling of its key', async () => {
+  it('keeps an object referenced under any spelling /files/read accepts', async () => {
     await withConfig({}, async (client) => {
       const sha = 'a'.repeat(64)
-      const stored = deltaPath(`${sha}_.htaccess`)
-      const listed = deltaPath(`${sha}_%2Ehtaccess`)
       const versionId = await insertVersion(client)
-      await client.query(
-        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, '.htaccess', 'h', $2, 1)`,
-        [versionId, stored],
-      )
+      // Stored spellings: decoded dotfile, encoded "@", partially encoded name.
+      const stored = [`${sha}_.htaccess`, `${sha}_image%402x.png`, `${sha}_a%20b@c.js`]
+      for (const name of stored) {
+        await client.query(
+          `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, $2::text, 'h', $3, 1)`,
+          [versionId, name, deltaPath(name)],
+        )
+      }
       await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
 
-      const aliases = storageAliases([listed])
-      expect(aliases[listed]).toContain(stored)
-      const plain = await client.query<{ paths: string[] }>('SELECT public.delta_gc_deletable_paths($1::text[]) AS paths', [[listed]])
-      expect(plain.rows[0].paths).toEqual([listed])
-      const aware = await client.query<{ paths: string[] }>('SELECT public.delta_gc_deletable_paths($1::text[], $2::jsonb) AS paths', [[listed], JSON.stringify(aliases)])
-      expect(aware.rows[0].paths).toEqual([])
+      // Physical keys listed by GC in other spellings of the same objects.
+      const listed = [`${sha}_%2Ehtaccess`, `${sha}_%2ehtaccess`, `${sha}_image@2x.png`, `${sha}_a b%40c.js`].map(deltaPath)
+      const result = await client.query<{ paths: string[] }>('SELECT public.delta_gc_unreferenced_paths($1::text[]) AS paths', [[...listed, deltaPath(`${sha}_other.js`)]])
+      expect(result.rows[0].paths).toEqual([deltaPath(`${sha}_other.js`)])
+      // Invalid escapes still resolve the dotfile spelling.
+      const invalid = await client.query<{ path: string }>(`SELECT public.delta_canonical_path('a/%2Ehtaccess%ZZ%C3') AS path`)
+      expect(invalid.rows[0].path).toBe('a/.htaccess%ZZ%C3')
     })
   })
 

@@ -193,6 +193,42 @@ ALTER FUNCTION public.delta_entry_key(text, text, text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_entry_key(text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_entry_key(text, text, text) TO service_role;
 
+-- One R2 object can be stored under several spellings of its path: a
+-- leading-dot segment as "." or "%2E"/"%2e", percent-encoded or decoded
+-- names, partially encoded ones. /files/read resolves them to the same key,
+-- and every spelling it accepts decodes to the same text, so references are
+-- matched on the fully percent-decoded path.
+CREATE FUNCTION public.delta_canonical_path(p_s3_path text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = ''
+AS $$
+BEGIN
+  IF p_s3_path IS NULL OR pg_catalog.strpos(p_s3_path, '%') = 0 THEN
+    RETURN p_s3_path;
+  END IF;
+  RETURN pg_catalog.convert_from(
+    (
+      SELECT pg_catalog.string_agg(
+        CASE WHEN part.m[1] IS NOT NULL THEN pg_catalog.decode(part.m[1], 'hex') ELSE pg_catalog.convert_to(part.m[2], 'UTF8') END,
+        ''::bytea ORDER BY part.ord
+      )
+      FROM pg_catalog.regexp_matches(p_s3_path, '%([0-9A-Fa-f]{2})|([^%]+|%)', 'g') WITH ORDINALITY AS part (m, ord)
+    ),
+    'UTF8'
+  );
+EXCEPTION WHEN others THEN
+  -- Not valid UTF-8 once decoded: only the dotfile escape is still resolved.
+  RETURN pg_catalog.regexp_replace(p_s3_path, '%2[Ee]', '.', 'g');
+END;
+$$;
+ALTER FUNCTION public.delta_canonical_path(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_canonical_path(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_canonical_path(text) TO service_role;
+
+-- Same key for every spelling of one object (delta_canonical_path).
 CREATE FUNCTION public.delta_path_key(p_s3_path text)
 RETURNS bytea
 LANGUAGE sql
@@ -200,7 +236,7 @@ IMMUTABLE
 PARALLEL SAFE
 SET search_path = ''
 AS $$
-  SELECT pg_catalog.sha256(pg_catalog.convert_to(p_s3_path, 'UTF8'))
+  SELECT pg_catalog.sha256(pg_catalog.convert_to(public.delta_canonical_path(p_s3_path), 'UTF8'))
 $$;
 ALTER FUNCTION public.delta_path_key(text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_path_key(text) FROM PUBLIC;
@@ -496,7 +532,6 @@ AS $$
     INNER JOIN public.version_files AS vf ON vf.file_ids @> ARRAY[df.id]
     INNER JOIN public.app_versions AS av ON av.id = vf.app_version_id
     WHERE df.path_key = public.delta_path_key(p.path)
-      AND df.s3_path = p.path
       AND public.delta_version_keeps_files(av.deleted, av.deleted_at, av.updated_at)
   )
 $$;
@@ -601,39 +636,10 @@ ALTER FUNCTION public.delta_gc_claim(integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_gc_claim(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_gc_claim(integer) TO service_role;
 
--- One R2 object can be stored under several spellings of its path (a
--- leading-dot segment as "." or "%2E", percent-encoded or decoded names);
--- /files/read serves any of them. p_aliases maps a listed key to its other
--- spellings (getManifestStorageCandidateKeys). A key is deletable only when
--- the key and every alias are unreferenced.
-CREATE FUNCTION public.delta_gc_deletable_paths(p_paths text[], p_aliases jsonb DEFAULT '{}'::jsonb)
-RETURNS text[]
-LANGUAGE sql
-STABLE
-SET search_path = ''
-AS $$
-  WITH keyed AS (
-    SELECT DISTINCT p.path,
-      ARRAY[p.path] || ARRAY(
-        SELECT pg_catalog.jsonb_array_elements_text(COALESCE(p_aliases -> p.path, '[]'::jsonb))
-      ) AS names
-    FROM pg_catalog.unnest(p_paths) AS p (path)
-  ),
-  unreferenced AS (
-    SELECT public.delta_gc_unreferenced_paths(ARRAY(SELECT pg_catalog.unnest(keyed.names) FROM keyed)) AS paths
-  )
-  SELECT COALESCE(pg_catalog.array_agg(keyed.path), '{}'::text[])
-  FROM keyed, unreferenced
-  WHERE keyed.names <@ unreferenced.paths
-$$;
-ALTER FUNCTION public.delta_gc_deletable_paths(text[], jsonb) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_deletable_paths(text[], jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_deletable_paths(text[], jsonb) TO service_role;
-
 -- The only step that permits R2 deletes. Returns the paths the caller may
 -- delete before the returned lease expires, an empty array, or NULL when an
 -- earlier lease is still active (retry the page later).
-CREATE FUNCTION public.delta_gc_begin_delete(p_app_id text, p_paths text[], p_lease_ms integer DEFAULT 2000, p_aliases jsonb DEFAULT '{}'::jsonb)
+CREATE FUNCTION public.delta_gc_begin_delete(p_app_id text, p_paths text[], p_lease_ms integer DEFAULT 2000)
 RETURNS text[]
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -641,7 +647,6 @@ SET search_path = ''
 AS $$
 DECLARE
   v_paths text[];
-  v_names text[];
 BEGIN
   IF NOT public.delta_storage_gc_enabled() THEN
     RETURN '{}'::text[];
@@ -667,7 +672,7 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  v_paths := public.delta_gc_deletable_paths(p_paths, p_aliases);
+  v_paths := public.delta_gc_unreferenced_paths(p_paths);
   -- A path with an unsettled earlier delete waits for the repair check
   -- (confirming a new delete would erase that record): retry the page later.
   IF EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = ANY (v_paths)) THEN
@@ -676,15 +681,9 @@ BEGIN
   IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
     RETURN '{}'::text[];
   END IF;
-  -- Rows of every spelling of a deleted object go with it.
-  v_names := v_paths || ARRAY(
-    SELECT pg_catalog.jsonb_array_elements_text(COALESCE(p_aliases -> p.path, '[]'::jsonb))
-    FROM pg_catalog.unnest(v_paths) AS p (path)
-  );
-
+  -- Rows of every spelling of a deleted object go with it (same path_key).
   DELETE FROM public.delta_files AS df
-  WHERE df.path_key = ANY (ARRAY(SELECT public.delta_path_key(p) FROM pg_catalog.unnest(v_names) AS p))
-    AND df.s3_path = ANY (v_names)
+  WHERE df.path_key = ANY (ARRAY(SELECT public.delta_path_key(p) FROM pg_catalog.unnest(v_paths) AS p))
     AND NOT EXISTS (
       SELECT 1
       FROM public.version_files AS vf
@@ -707,9 +706,9 @@ BEGIN
   RETURN v_paths;
 END;
 $$;
-ALTER FUNCTION public.delta_gc_begin_delete(text, text[], integer, jsonb) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_begin_delete(text, text[], integer, jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_begin_delete(text, text[], integer, jsonb) TO service_role;
+ALTER FUNCTION public.delta_gc_begin_delete(text, text[], integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_begin_delete(text, text[], integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_begin_delete(text, text[], integer) TO service_role;
 
 -- Releases the lease once every delete of the batch settled.
 CREATE FUNCTION public.delta_gc_end_delete(p_app_id text)
@@ -993,7 +992,7 @@ GRANT EXECUTE ON FUNCTION public.delta_gc_claim_orphan_prefixes(integer) TO serv
 -- the app id may be recreated, and its first app_versions insert waits on
 -- this lease (delta_gc_wait_for_lease). Returns the paths that may be
 -- deleted, or NULL when the prefix cannot be drained now.
-CREATE FUNCTION public.delta_gc_begin_orphan_delete(p_prefix text, p_paths text[], p_lease_ms integer DEFAULT 2000, p_aliases jsonb DEFAULT '{}'::jsonb)
+CREATE FUNCTION public.delta_gc_begin_orphan_delete(p_prefix text, p_paths text[], p_lease_ms integer DEFAULT 2000)
 RETURNS text[]
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1040,7 +1039,7 @@ BEGIN
   -- The prefix also holds bundle zips: a kept version of a recreated (and
   -- maybe transferred) app with this id may still point at one.
   SELECT COALESCE(pg_catalog.array_agg(DISTINCT p.path), '{}'::text[]) INTO v_paths
-  FROM pg_catalog.unnest(public.delta_gc_deletable_paths(p_paths, p_aliases)) AS p (path)
+  FROM pg_catalog.unnest(public.delta_gc_unreferenced_paths(p_paths)) AS p (path)
   WHERE pg_catalog.starts_with(p.path, p_prefix)
     AND NOT EXISTS (
       SELECT 1 FROM public.app_versions AS av
@@ -1067,9 +1066,9 @@ BEGIN
   RETURN v_paths;
 END;
 $$;
-ALTER FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer, jsonb) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer, jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer, jsonb) TO service_role;
+ALTER FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delta_gc_begin_orphan_delete(text, text[], integer) TO service_role;
 
 CREATE FUNCTION public.delta_gc_end_orphan_delete(p_prefix text)
 RETURNS void

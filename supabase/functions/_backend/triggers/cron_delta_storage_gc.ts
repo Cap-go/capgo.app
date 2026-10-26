@@ -6,7 +6,6 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { encodeManifestPathSegments, getManifestStorageCandidateKeys } from '../utils/manifest_encoding.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { s3 } from '../utils/s3.ts'
 
@@ -110,31 +109,12 @@ async function forEachBounded<T>(items: T[], concurrency: number, shouldStart: (
   await Promise.all(runners)
 }
 
-/**
- * Stored paths that /files/read can resolve to this physical key: its own
- * spellings (leading-dot segments as "." or "%2E", encoded or decoded names)
- * and the reverse direction, a percent-encoded stored path whose decoded
- * candidate is this key (".../image%402x.png" served from ".../image@2x.png").
- * A key is only deleted when none of these is referenced.
- */
-export function storageAliases(keys: string[]) {
-  const aliases: Record<string, string[]> = {}
-  for (const key of keys) {
-    const encoded = encodeManifestPathSegments(key)
-    const spellings = new Set([...getManifestStorageCandidateKeys(key), encoded, ...getManifestStorageCandidateKeys(encoded)])
-    const others = [...spellings].filter(candidate => candidate !== key && getManifestStorageCandidateKeys(candidate).includes(key))
-    if (others.length > 0)
-      aliases[key] = others
-  }
-  return aliases
-}
-
-async function deletablePaths(db: Database, paths: string[]) {
+// Every spelling /files/read resolves to one object shares its path_key
+// (delta_canonical_path), so a key is unreferenced only when none is used.
+async function unreferencedPaths(db: Database, paths: string[]) {
   if (paths.length === 0)
     return []
-  const result = await db.execute<{ paths: string[] }>(sql`
-    SELECT public.delta_gc_deletable_paths(${sql.param(paths)}::text[], ${JSON.stringify(storageAliases(paths))}::jsonb) AS paths
-  `)
+  const result = await db.execute<{ paths: string[] }>(sql`SELECT public.delta_gc_unreferenced_paths(${sql.param(paths)}::text[]) AS paths`)
   return result.rows[0]?.paths ?? []
 }
 
@@ -147,7 +127,7 @@ interface DeleteTarget {
 
 function appTarget(appId: string): DeleteTarget {
   return {
-    begin: paths => sql`SELECT public.delta_gc_begin_delete(${appId}, ${sql.param(paths)}::text[], ${DELTA_GC_LEASE_MS}, ${JSON.stringify(storageAliases(paths))}::jsonb) AS paths`,
+    begin: paths => sql`SELECT public.delta_gc_begin_delete(${appId}, ${sql.param(paths)}::text[], ${DELTA_GC_LEASE_MS}) AS paths`,
     end: sql`SELECT public.delta_gc_end_delete(${appId})`,
     label: appId,
   }
@@ -155,7 +135,7 @@ function appTarget(appId: string): DeleteTarget {
 
 function orphanTarget(prefix: string): DeleteTarget {
   return {
-    begin: paths => sql`SELECT public.delta_gc_begin_orphan_delete(${prefix}, ${sql.param(paths)}::text[], ${DELTA_GC_LEASE_MS}, ${JSON.stringify(storageAliases(paths))}::jsonb) AS paths`,
+    begin: paths => sql`SELECT public.delta_gc_begin_orphan_delete(${prefix}, ${sql.param(paths)}::text[], ${DELTA_GC_LEASE_MS}) AS paths`,
     end: sql`SELECT public.delta_gc_end_orphan_delete(${prefix})`,
     label: prefix,
   }
@@ -212,7 +192,7 @@ async function trashBatch(c: Context, db: Database, target: DeleteTarget, paths:
 
 async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: GcRun) {
   const { objects, nextToken } = await withDeadline(s3.listObjectPage(c, deltaPrefix(app.list_org, app.app_id), app.list_cursor, DELTA_GC_LIST_PAGE_SIZE), DELTA_GC_STORAGE_TIMEOUT_MS, 'R2 listing')
-  const candidates = await deletablePaths(db, selectAgedKeys(objects, Date.now()))
+  const candidates = await unreferencedPaths(db, selectAgedKeys(objects, Date.now()))
   let deleted = 0
   let processed = 0
   let allDeleted = true
@@ -247,9 +227,7 @@ async function repairUnsettledDeletes(c: Context, db: Database, run: GcRun) {
   for (const item of due.rows) {
     if (!canStart(run))
       break
-    // Reused under another spelling of the same object counts as referenced.
-    const referenced = item.referenced || (await deletablePaths(db, [item.path])).length === 0
-    const outcome = referenced
+    const outcome = item.referenced
       ? await withTimeout(s3.restoreFromTrashIfMissing(c, item.path), DELTA_GC_STORAGE_TIMEOUT_MS, 'timeout' as const)
       : 'unreferenced'
     if (outcome === 'timeout')

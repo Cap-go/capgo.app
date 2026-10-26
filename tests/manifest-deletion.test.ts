@@ -93,7 +93,7 @@ beforeAll(async () => {
   await pool.query(await readFile(new URL('../supabase/migrations/20261014101115_retain_manifest_delta_objects.sql', import.meta.url), 'utf8'))
   // Real delta storage helpers: cleanup moves legacy rows into version_files.
   const deltaStorage = await readFile(new URL('../supabase/migrations/20261026013017_delta_storage_v2.sql', import.meta.url), 'utf8')
-  for (const name of ['delta_entry_key', 'delta_path_key', 'delta_gc_lock_key', 'convert_version_manifest_rows']) {
+  for (const name of ['delta_entry_key', 'delta_canonical_path', 'delta_path_key', 'delta_gc_lock_key', 'convert_version_manifest_rows']) {
     const definition = deltaStorage.match(new RegExp(`CREATE FUNCTION public\\.${name}\\([\\s\\S]*?\\n\\$\\$;\\n`))?.[0]
     if (!definition)
       throw new Error(`Missing ${name} in delta storage migration`)
