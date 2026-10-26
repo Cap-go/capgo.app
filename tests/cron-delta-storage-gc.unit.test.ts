@@ -248,6 +248,35 @@ describe('delta storage GC worker', () => {
     expect(settled).toHaveLength(2)
   })
 
+  it('stops an app page after an unconfirmed delete so no later batch releases the lease', async () => {
+    const old = new Date(Date.now() - 2 * DAY)
+    const keys = Array.from({ length: 150 }, (_, index) => `${prefix}f${index}.js`)
+    mocks.listObjectPage.mockResolvedValue({ objects: keys.map(key => ({ key, lastModified: old })), nextToken: null })
+    mocks.deleteObjectKey.mockImplementation(async (_c: unknown, key: string) => key !== `${prefix}f0.js`)
+    const begins: unknown[] = []
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [] }
+      if (text.includes('delta_gc_claim'))
+        return { rows: [{ app_id: 'com.example.gc', list_org: 'org-1', list_cursor: null }] }
+      if (text.includes('delta_gc_unreferenced_paths'))
+        return { rows: [{ paths: keys }] }
+      if (text.includes('delta_gc_begin_delete')) {
+        const params = new PgDialect().sqlToQuery(query as never).params
+        begins.push(params)
+        return { rows: [{ paths: params[1] }] }
+      }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+
+    expect(begins).toHaveLength(1)
+    const texts = mocks.execute.mock.calls.map(([query]) => sqlText(query))
+    expect(texts.some(text => text.includes('delta_gc_end_delete'))).toBe(false)
+  })
+
   it('never deletes when the database refuses the lease', async () => {
     mocks.listObjectPage.mockResolvedValue({ objects: [{ key: `${prefix}a.js`, lastModified: new Date(Date.now() - 2 * DAY) }], nextToken: null })
     mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {

@@ -172,6 +172,10 @@ async function collectAppPage(c: Context, db: Database, app: ClaimedApp, run: Gc
     deleted += batch.deleted
     allDeleted &&= batch.complete
     processed += DELTA_GC_DELETE_BATCH
+    // An unconfirmed delete keeps the app lease to its end; a later batch
+    // must not release it (delta_gc_end_delete), so stop this app's page.
+    if (!batch.complete)
+      break
   }
 
   // A page cut short by the run budget, or with an allowed delete that did not
