@@ -16,9 +16,11 @@ const mocks = vi.hoisted(() => ({
     getPresignedUrl: vi.fn(),
     listObjects: vi.fn(),
     listObjectsGrouped: vi.fn(),
+    statObject: vi.fn(),
   },
   supabaseStorage: {
     download: vi.fn(),
+    list: vi.fn(),
     remove: vi.fn(),
   },
 }))
@@ -186,22 +188,55 @@ describe('image tokens', () => {
 })
 
 describe('legacy Supabase image import', () => {
-  it('moves a legacy Supabase object into R2 and removes the Supabase copy', async () => {
+  const ICON = `org/${ORG_ID}/com.app/icon`
+  const notFound = () => Object.assign(new Error('missing'), { statusCode: 404 })
+
+  function legacyEntry(updatedAt: string) {
+    mocks.supabaseStorage.list.mockResolvedValue({ data: [{ id: 'obj-1', name: 'icon', updated_at: updatedAt }], error: null })
+  }
+
+  beforeEach(() => {
     mocks.supabaseStorage.download.mockResolvedValue({ data: new Blob([new Uint8Array([9, 9])], { type: 'image/png' }), error: null })
     mocks.supabaseStorage.remove.mockResolvedValue({ data: [], error: null })
+  })
 
-    await expect(storage.importLegacySupabaseImage(context(), `org/${ORG_ID}/com.app/icon`)).resolves.toBe(true)
-    expect(mocks.client.getPresignedUrl).toHaveBeenCalledWith('PUT', `images/org/${ORG_ID}/com.app/icon`, expect.anything())
+  it('moves a fresh legacy upload into R2 and removes the Supabase copy', async () => {
+    legacyEntry('2026-10-26T12:00:00Z')
+    mocks.client.statObject.mockRejectedValue(notFound())
+
+    await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(true)
+    expect(mocks.supabaseStorage.list).toHaveBeenCalledWith(`org/${ORG_ID}/com.app`, { search: 'icon', limit: 100 })
+    expect(mocks.client.getPresignedUrl).toHaveBeenCalledWith('PUT', `images/${ICON}`, expect.anything())
     expect(fetchMock).toHaveBeenCalledWith('https://r2.example/put', expect.objectContaining({
       body: new Uint8Array([9, 9]),
       headers: expect.objectContaining({ 'Content-Type': 'image/png' }),
     }))
-    expect(mocks.supabaseStorage.remove).toHaveBeenCalledWith([`org/${ORG_ID}/com.app/icon`])
+    expect(mocks.supabaseStorage.remove).toHaveBeenCalledWith([ICON])
+  })
+
+  it('overwrites R2 when an old CLI re-uploaded the icon after it', async () => {
+    legacyEntry('2026-10-26T12:00:00Z')
+    mocks.client.statObject.mockResolvedValue({ lastModified: new Date('2026-10-26T11:00:00Z') })
+
+    await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(true)
+    expect(fetchMock).toHaveBeenCalled()
+  })
+
+  it('drops a stale migration leftover instead of overwriting a newer R2 upload', async () => {
+    legacyEntry('2026-10-01T00:00:00Z')
+    mocks.client.statObject.mockResolvedValue({ lastModified: new Date('2026-10-26T12:00:00Z') })
+
+    await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(false)
+    expect(mocks.supabaseStorage.download).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mocks.supabaseStorage.remove).toHaveBeenCalledWith([ICON])
   })
 
   it('does nothing when Supabase has no such object', async () => {
-    mocks.supabaseStorage.download.mockResolvedValue({ data: null, error: { message: 'Object not found' } })
-    await expect(storage.importLegacySupabaseImage(context(), `org/${ORG_ID}/com.app/icon`)).resolves.toBe(false)
+    mocks.supabaseStorage.list.mockResolvedValue({ data: [{ id: null, name: 'icon' }], error: null })
+    await expect(storage.importLegacySupabaseImage(context(), ICON)).resolves.toBe(false)
+    expect(mocks.supabaseStorage.download).not.toHaveBeenCalled()
+    expect(mocks.supabaseStorage.remove).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })

@@ -206,11 +206,8 @@ app.post('/images/remove', middlewareAuth, async (c) => {
   if (!body.success)
     return quickError(400, 'invalid_body', 'Invalid image request')
   // Like storage RLS, paths the caller may not delete are skipped, not reported.
-  const removable: string[] = []
-  for (const path of body.data.paths) {
-    if (await canAccessImagePath(c, path, 'delete'))
-      removable.push(path)
-  }
+  const allowed = await Promise.all(body.data.paths.map(path => canAccessImagePath(c, path, 'delete')))
+  const removable = body.data.paths.filter((_, index) => allowed[index])
   try {
     await removeImages(c, removable)
   }

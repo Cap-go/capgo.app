@@ -30,12 +30,22 @@ function imageClient(c: Context) {
   return initS3(c, { serverSide: true })
 }
 
+function trimSlashes(value: string, { start = true, end = false } = {}) {
+  let from = 0
+  let to = value.length
+  while (start && from < to && value[from] === '/')
+    from++
+  while (end && to > from && value[to - 1] === '/')
+    to--
+  return value.slice(from, to)
+}
+
 export function imageObjectKey(path: string) {
-  return `${IMAGE_KEY_PREFIX}${path.replace(/^\/+/, '')}`
+  return `${IMAGE_KEY_PREFIX}${trimSlashes(path)}`
 }
 
 function folderKey(prefix: string) {
-  const trimmed = prefix.replace(/^\/+/, '').replace(/\/+$/, '')
+  const trimmed = trimSlashes(prefix, { end: true })
   return trimmed ? `${IMAGE_KEY_PREFIX}${trimmed}/` : IMAGE_KEY_PREFIX
 }
 
@@ -46,7 +56,7 @@ function isNotFound(error: unknown) {
   return candidate.statusCode === 404 || candidate.status === 404 || candidate.code === 'NoSuchKey'
 }
 
-export async function imageExists(c: Context, path: string) {
+export function imageExists(c: Context, path: string): Promise<boolean> {
   return imageClient(c).exists(imageObjectKey(path))
 }
 
@@ -103,15 +113,10 @@ export async function downloadImage(c: Context, path: string): Promise<Response 
 /** Delete image objects; a missing object is not an error. */
 export async function removeImages(c: Context, paths: string[]) {
   const client = imageClient(c)
-  for (const path of paths) {
-    try {
-      await client.deleteObject(imageObjectKey(path))
-    }
-    catch (error) {
-      if (!isNotFound(error))
-        throw error
-    }
-  }
+  await Promise.all(paths.map(path => client.deleteObject(imageObjectKey(path)).catch((error: unknown) => {
+    if (!isNotFound(error))
+      throw error
+  })))
 }
 
 /** List one folder level, like Supabase Storage `list()`: files and sub-folders. */
@@ -151,7 +156,7 @@ export async function removeImageFolder(c: Context, prefix: string) {
 }
 
 /** Presigned R2 GET URL for an image object path. Callers must check ownership first. */
-export async function presignImageUrl(c: Context, path: string, expirySeconds = IMAGE_SIGNED_URL_TTL_SECONDS) {
+export function presignImageUrl(c: Context, path: string, expirySeconds = IMAGE_SIGNED_URL_TTL_SECONDS): Promise<string> {
   return initS3(c).getPresignedUrl('GET', imageObjectKey(path), {
     expirySeconds: Math.min(expirySeconds, IMAGE_SIGNED_URL_TTL_SECONDS),
   })
@@ -214,26 +219,59 @@ export async function verifyImageToken(c: Context, token: string): Promise<strin
   return await crypto.subtle.verify('HMAC', key, signature, imageTokenPayload(userId, expiresAt)) ? userId : null
 }
 
+/** Last-modified time of an image object, or null when it does not exist. */
+export async function getImageLastModified(c: Context, path: string): Promise<Date | null> {
+  try {
+    return (await imageClient(c).statObject(imageObjectKey(path))).lastModified
+  }
+  catch (error) {
+    if (isNotFound(error))
+      return null
+    throw error
+  }
+}
+
 /**
  * CLI releases before 8.90.1 still upload icons straight to the Supabase
  * Storage `images` bucket. When a row is written with such a path, move that
- * legacy object into R2 (overwriting: `app set --icon` re-uploads the same
- * path) and drop the Supabase copy, so every read, sign and delete keeps going
- * through R2 only. Returns whether a legacy object was moved.
+ * legacy object into R2 and drop the Supabase copy, so every read, sign and
+ * delete keeps going through R2 only. Returns whether a legacy object was moved.
+ *
+ * Only a Supabase copy newer than the R2 object is moved (`app set --icon`
+ * re-uploads the same path). An older one is a leftover of the one-off
+ * migration and is dropped, so it never overwrites a newer R2 upload.
  */
 export async function importLegacySupabaseImage(c: Context, path: string): Promise<boolean> {
   const requestId = c.get('requestId')
   const storage = supabaseAdmin(c).storage.from('images')
-  const { data: blob, error } = await storage.download(path)
-  if (error || !blob) {
-    cloudlog({ requestId, message: 'No legacy Supabase image to import', path, error: error ? serializeError(error) : undefined })
+  const slash = path.lastIndexOf('/')
+  const folder = path.slice(0, slash)
+  const name = path.slice(slash + 1)
+  const { data: entries, error: listError } = await storage.list(folder, { search: name, limit: 100 })
+  if (listError) {
+    cloudlogErr({ requestId, message: 'Cannot look up legacy Supabase image', path, error: listError })
     return false
   }
+  const legacy = entries?.find(entry => entry.id !== null && entry.name === name)
+  if (!legacy)
+    return false
 
-  await uploadImage(c, path, new Uint8Array(await blob.arrayBuffer()), { contentType: blob.type || undefined, upsert: true })
+  const legacyModifiedAt = Date.parse(legacy.updated_at ?? legacy.created_at ?? '')
+  const r2ModifiedAt = await getImageLastModified(c, path)
+  const legacyIsNewer = !r2ModifiedAt || (Number.isFinite(legacyModifiedAt) && legacyModifiedAt > r2ModifiedAt.getTime())
+
+  if (legacyIsNewer) {
+    const { data: blob, error } = await storage.download(path)
+    if (error || !blob) {
+      cloudlogErr({ requestId, message: 'Cannot download legacy Supabase image', path, error: error ? serializeError(error) : undefined })
+      return false
+    }
+    await uploadImage(c, path, new Uint8Array(await blob.arrayBuffer()), { contentType: blob.type || undefined, upsert: true })
+  }
+
   const { error: removeError } = await storage.remove([path])
   if (removeError)
-    cloudlogErr({ requestId, message: 'Imported legacy image but could not remove the Supabase copy', path, error: removeError })
-  cloudlog({ requestId, message: 'Imported legacy Supabase image into R2', path })
-  return true
+    cloudlogErr({ requestId, message: 'Could not remove the legacy Supabase image', path, error: removeError })
+  cloudlog({ requestId, message: legacyIsNewer ? 'Imported legacy Supabase image into R2' : 'Dropped stale legacy Supabase image older than R2', path })
+  return legacyIsNewer
 }
