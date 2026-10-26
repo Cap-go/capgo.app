@@ -1,8 +1,8 @@
-import type { SupabaseClient, User } from '@supabase/supabase-js'
+import type { ConsoleClient, User } from '~/services/consoleClient'
 import { Capacitor } from '@capacitor/core'
 import { base64url } from 'jose'
 import { parseSignupAttributionRecord } from '../../supabase/functions/shared/signup-attribution'
-import { defaultApiHost } from './supabase'
+import { defaultApiHost } from './console'
 
 const storageKey = 'capgo.apple-oauth.v1'
 const metadataKeys = ['registration_device_type', 'registration_os', 'registration_browser', 'registration_variant', 'registration_experiment', 'registration_experiment_variant']
@@ -106,7 +106,7 @@ export function hasPendingAppleOAuth() {
   return !!pendingCompletion?.code && Date.now() - pendingCompletion.created < 600_000
 }
 
-export async function completeAppleOAuth(supabase: SupabaseClient, captchaToken?: string) {
+export async function completeAppleOAuth(capgo: ConsoleClient, captchaToken?: string) {
   const attempt = pendingCompletion
   pendingCompletion = null
   if (!attempt?.code)
@@ -124,7 +124,7 @@ export async function completeAppleOAuth(supabase: SupabaseClient, captchaToken?
   }
   if (!response.ok || !result.user || !result.session)
     throw new Error('Apple authentication failed')
-  const { data, error } = await supabase.auth.setSession(result.session)
+  const { data, error } = await capgo.auth.setSession(result.session)
   if (error || !data.user)
     throw error || new Error('Apple session could not be installed')
   if (attempt.websiteState && location.origin === 'https://console.capgo.app' && window.opener) {

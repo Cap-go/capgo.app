@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { BundleSummaryRow } from '~/services/bundleColumns'
+import type { Database } from '~/types/database.types'
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatBytes } from '~/services/conversion'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 type ManifestEntry = Database['public']['Tables']['manifest']['Row']
@@ -30,12 +32,12 @@ const route = useRoute('/app/[app].bundle.[bundle].manifest')
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
 const tableLoading = ref(false)
-const version = ref<Database['public']['Tables']['app_versions']['Row']>()
+const version = ref<BundleSummaryRow>()
 const manifestEntries = ref<ManifestEntry[]>([])
 const selectedCompareVersion = ref<VersionRow | null>(null)
 const compareManifestEntries = ref<ManifestEntry[]>([])
@@ -192,7 +194,7 @@ async function fetchManifestEntries(versionId: number) {
   const allEntries: ManifestEntry[] = []
   let offset = 0
   while (true) {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('manifest')
       .select('id, file_name, file_hash, file_size, s3_path, app_version_id')
       .eq('app_version_id', versionId)
@@ -267,9 +269,9 @@ async function getVersion() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('app_versions')
-      .select()
+      .select(BUNDLE_SUMMARY_COLUMNS)
       .eq('app_id', packageId.value)
       .eq('id', id.value)
       .single()
@@ -279,11 +281,11 @@ async function getVersion() {
       return
     }
 
-    version.value = data
+    version.value = data as BundleSummaryRow
 
-    if (version.value?.name)
+    if (version.value.name)
       displayStore.setBundleName(String(version.value.id), version.value.name)
-    displayStore.NavTitle = version.value?.name ?? t('bundle')
+    displayStore.NavTitle = version.value.name ?? t('bundle')
   }
   catch (error) {
     console.error(error)
@@ -392,9 +394,7 @@ watch(
     if (requestId !== pageLoadRequestId.value)
       return
     loading.value = false
-    const loadedVersion = version.value as Database['public']['Tables']['app_versions']['Row'] | undefined
-    if (!loadedVersion?.name)
-      displayStore.NavTitle = t('bundle')
+    // getVersion already sets NavTitle from the summary row (or 'bundle' on miss).
     displayStore.defaultBack = `/app/${packageId.value}/bundles`
   },
   { immediate: true },

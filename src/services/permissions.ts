@@ -17,8 +17,8 @@
  *   const canPromote = await checkPermissions('channel.promote_bundle', { channelId: 123 })
  */
 
-import type { Database } from '~/types/supabase.types'
-import { useSupabase } from '~/services/supabase'
+import type { Database } from '~/types/database.types'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 
 /**
@@ -95,7 +95,7 @@ export async function hasPermission(
   scope: PermissionScope,
 ): Promise<boolean> {
   const mainStore = useMainStore()
-  const supabase = useSupabase()
+  const capgo = useConsole()
 
   // Get current user ID
   const userId = mainStore.user?.id
@@ -105,7 +105,7 @@ export async function hasPermission(
   }
 
   try {
-    const { data, error } = await supabase.rpc('rbac_check_permission', {
+    const { data, error } = await capgo.rpc('rbac_check_permission', {
       p_permission_key: permission,
       p_org_id: scope.orgId ?? undefined,
       p_app_id: scope.appId ?? undefined,
@@ -206,7 +206,7 @@ export async function userHasPermission(
   userId: string,
   scope: PermissionScope,
 ): Promise<boolean> {
-  const supabase = useSupabase()
+  const capgo = useConsole()
 
   if (!userId || !scope.orgId)
     return false
@@ -214,7 +214,7 @@ export async function userHasPermission(
   try {
     // p_app_id / p_channel_id are nullable in SQL for org-scoped checks, but the
     // generated types mark them required; pass null explicitly for an org-only check.
-    const { data, error } = await supabase.rpc('rbac_check_permission_direct', {
+    const { data, error } = await capgo.rpc('rbac_check_permission_direct', {
       p_permission_key: permission,
       p_user_id: userId,
       p_org_id: scope.orgId,

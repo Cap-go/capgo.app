@@ -87,10 +87,10 @@ interface PostHogEventLike {
 }
 
 // Local dev-server hosts. The capture gate in posthog.ts skips analytics only
-// when the Supabase host is local, so a developer running the frontend against
-// remote or preprod Supabase still sends events. Their transient compile and
+// when the API host is local, so a developer running the frontend against
+// the remote or preprod API still sends events. Their transient compile and
 // hot-reload errors then open production error-tracking issues. Match the page
-// host to drop those events regardless of the Supabase host.
+// host to drop those events regardless of the API host.
 const LOCAL_DEV_HOST_PATTERNS = [
   /^localhost$/i,
   /^127\.0\.0\.1$/,

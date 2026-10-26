@@ -9,9 +9,9 @@ import IconPlus from '~icons/lucide/plus'
 import IconSearch from '~icons/lucide/search'
 import IconSettings from '~icons/lucide/settings'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import { useConsole } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { resolveImagePath } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
@@ -30,7 +30,7 @@ const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
 const dialogStore = useDialogV2Store()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const dropdown = useTemplateRef<HTMLDetailsElement>('dropdown')
 const menu = useTemplateRef<HTMLElement>('orgSwitcherMenu')
@@ -205,7 +205,7 @@ async function handleOrganizationInvitation(org: OrganizationInvitationTarget) {
         role: 'primary',
         id: 'confirm-button',
         handler: async () => {
-          const { data, error } = await supabase.rpc('accept_invitation_to_org', {
+          const { data, error } = await capgo.rpc('accept_invitation_to_org', {
             org_id: org.gid,
           })
 
@@ -239,7 +239,7 @@ async function handleOrganizationInvitation(org: OrganizationInvitationTarget) {
           if (userId === undefined)
             return
 
-          const { error } = await supabase
+          const { error } = await capgo
             .from('org_users')
             .delete()
             .eq('org_id', org.gid)

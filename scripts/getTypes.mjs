@@ -66,13 +66,13 @@ export async function generateTypes(dependencies = {}) {
   } = dependencies
   const args = ['supabase', 'gen', 'types', 'typescript', ...await resolveTarget()]
   const { stdout, stderr } = await execute('bunx', args)
-  await write('src/types/supabase.types.ts', stdout)
+  await write('src/types/database.types.ts', stdout)
   if (stderr)
     console.error(stderr)
   else
     console.log('Type generated ✅')
 
-  await copy('src/types/supabase.types.ts', 'supabase/functions/_backend/utils/supabase.types.ts')
+  await copy('src/types/database.types.ts', 'supabase/functions/_backend/utils/supabase.types.ts')
   console.log('Copy done ✅')
 }
 

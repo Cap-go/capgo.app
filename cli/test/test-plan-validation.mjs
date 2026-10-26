@@ -8,7 +8,7 @@ import process from 'node:process'
 import { defaultAgents } from 'agent-cli-detector'
 import { setNoticeOutputOptions } from '../src/onboarding/setup-notice-policy.ts'
 import { wasTrialNoticeShown } from '../src/onboarding/trial-notice-state.ts'
-import { checkPlanValid, checkPlanValidUpload, runCliPreflight } from '../src/api/preflight.ts'
+import { checkPlanValid, checkPlanValidUpload, printAgentUploadTrialNote, runCliPreflight } from '../src/api/preflight.ts'
 import * as utils from '../src/utils.ts'
 
 console.log('🧪 Testing plan validation through the backend preflight...\n')
@@ -114,6 +114,7 @@ await test('GitHub Actions publishes the existing preflight trial warning to bot
     assert(summary.includes('### WARNING'), summary)
     assert(summary.includes('Trial expires in 3 days, upgrade here:'), summary)
     assert(summary.includes('/settings/organization/plans?oid=org-id'), summary)
+    assert(!summary.includes('trial_card'), 'human trial reminders keep the plain plans link')
     assert(wasTrialNoticeShown('org-id'), 'preflight prevents a duplicate background plan prompt')
   }
   finally {
@@ -173,6 +174,53 @@ await test('preflight trial reminders honor every machine-output guard in GitHub
     else process.env.GITHUB_STEP_SUMMARY = previous.summary
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+async function captureStdout(fn) {
+  const write = process.stdout.write
+  let output = ''
+  try {
+    process.stdout.write = chunk => { output += chunk; return true }
+    await fn()
+    return output
+  }
+  finally {
+    process.stdout.write = write
+  }
+}
+
+async function asAgent(fn) {
+  const previous = { github: process.env.GITHUB_ACTIONS, claude: process.env.CLAUDECODE }
+  try {
+    process.env.GITHUB_ACTIONS = 'false'
+    process.env.CLAUDECODE = '1'
+    return await fn()
+  }
+  finally {
+    if (previous.claude === undefined) delete process.env.CLAUDECODE
+    else process.env.CLAUDECODE = previous.claude
+    if (previous.github === undefined) delete process.env.GITHUB_ACTIONS
+    else process.env.GITHUB_ACTIONS = previous.github
+  }
+}
+
+await test('agents get no start-of-command trial box, and the end notice is not marked as shown', async () => {
+  fetchHandler = () => Response.json({ ...okBody, org_id: 'agent-trial-org', trial_days_left: 3 })
+  const output = await asAgent(() => captureStdout(() => checkPlanValidUpload(makeClient(), 'org-id', 'com.example.app')))
+  assertEquals(output, '')
+  assert(!wasTrialNoticeShown('agent-trial-org'), 'the end-of-command notice must still show the trial to agents')
+})
+
+await test('the post-upload trial note tells agents, not humans, to add a payment method before the trial ends', async () => {
+  const result = { ...okBody, trialDaysLeft: 3 }
+  const output = await asAgent(() => captureStdout(() => printAgentUploadTrialNote(result)))
+  const date = new Date(Date.now() + 3 * 86_400_000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const link = output.match(/: (\S+)\n$/)?.[1]
+  assertEquals(output, `\nAdd a payment method before ${date} to keep delivering updates like this one: the free trial ends then, and devices stop receiving live updates until a plan is active. No charge before ${date}: ${link}\n`)
+  assert(link.endsWith('/settings/organization/plans?trial_card=1'), link)
+  for (const value of [null, { ...result, trialDaysLeft: null }])
+    assertEquals(await asAgent(() => captureStdout(() => printAgentUploadTrialNote(value))), '')
+  assertEquals(await captureStdout(() => printAgentUploadTrialNote(result)), '', 'humans saw the trial warning before the upload')
 })
 
 await test('billing limit maps to plan upgrade copy', async () => {

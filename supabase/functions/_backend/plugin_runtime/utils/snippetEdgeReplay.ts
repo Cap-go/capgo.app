@@ -33,7 +33,7 @@ const MAX_BYTES_PER_SEND = 240_000
 const REPLAY_CONCURRENCY = 8
 /** Replays of a record that failed (5xx or a throw), including the first one. */
 export const MAX_REPLAY_ATTEMPTS = 3
-/** Analytics Engine points one replayed event can write: APP_LOG, DEVICE_USAGE, DEVICE_INFO, VERSION_USAGE. */
+/** Analytics Engine points one replayed event can write: APP_LOG (twice with customIdBlocked), DEVICE_USAGE, DEVICE_INFO. Installs and failures are never replayed. */
 const POINTS_PER_EVENT = 4
 
 export interface SnippetEdgeStatRecord {
@@ -45,6 +45,8 @@ export interface SnippetEdgeStatRecord {
   n?: string
   ip?: string
   country?: string
+  /** Device network, so the replay skips the provider IP lookup like a live request. */
+  asn?: number
   /** Unix ms of the snippet answer. */
   t?: number
 }
@@ -110,6 +112,8 @@ export function parseLogpushLine(line: string, stats?: LogpushReadStats): Snippe
       record.ip = row.ClientIP
     if (typeof row.ClientCountry === 'string' && row.ClientCountry)
       record.country = row.ClientCountry.toUpperCase()
+    if (typeof row.ClientASN === 'number' && row.ClientASN > 0)
+      record.asn = row.ClientASN
     // timestamp_format unixnano: ms precision survives the float parse.
     const startNs = Number(row.EdgeStartTimestamp)
     if (Number.isFinite(startNs) && startNs > 0)
@@ -248,8 +252,8 @@ export function buildReplayRequest(record: SnippetEdgeStatRecord) {
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (record.ip)
     headers.set('cf-connecting-ip', record.ip)
-  // Stats read the device country from request.cf: workerd takes it from the init.
-  const cf = { country: record.country }
+  // Stats read the device country and network from request.cf: workerd takes it from the init.
+  const cf = { country: record.country, asn: record.asn }
   const request = new Request(`https://plugin.capgo.app/${record.e}`, {
     method: 'POST',
     headers,

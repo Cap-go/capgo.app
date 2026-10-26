@@ -176,27 +176,39 @@ function routeToObject(route: Route, payload: unknown, status = 200) {
 }
 
 function mockRestTable(page: Page) {
-  return Promise.all([
-    page.route('**/rest/v1/rpc/is_not_deleted*', async (route) => {
-      if (route.request().method() === 'POST') {
-        await routeToObject(route, true)
-        return
+  return page.route('**/private/console/query', async (route) => {
+    const query = route.request().postDataJSON()
+    let data: unknown
+    if (query.kind === 'rpc' && query.name === 'is_not_deleted') {
+      data = true
+    }
+    else if (query.kind === 'table' && query.name === 'app_versions') {
+      const url = new URL('https://fixture.example/app_versions')
+      let accept = ''
+      for (const { method, args } of query.operations) {
+        if (['eq', 'neq', 'ilike', 'is'].includes(method))
+          url.searchParams.set(args[0], `${method}.${args[1]}`)
+        else if (method === 'not')
+          url.searchParams.set(args[0], `not.${args[1]}.${args[2]}`)
+        else if (method === 'in')
+          url.searchParams.set(args[0], `in.(${args[1].join(',')})`)
+        else if (method === 'order')
+          url.searchParams.set('order', `${args[0]}.${args[1]?.ascending === false ? 'desc' : 'asc'}`)
+        else if (method === 'limit')
+          url.searchParams.set('limit', String(args[0]))
+        else if (['single', 'maybeSingle'].includes(method))
+          accept = 'application/vnd.pgrst.object+json'
       }
-
-      await route.abort()
-    }),
-    page.route('**/rest/v1/app_versions*', async (route) => {
-      const accept = route.request().headers().accept ?? ''
-      const response = filterAppVersions(route.request().url(), accept)
-      await routeToObject(route, response)
-    }),
-    page.route('**/rest/v1/channels*', async (route) => {
-      await routeToObject(route, [])
-    }),
-    page.route('**/rest/v1/deploy_history*', async (route) => {
-      await routeToObject(route, [])
-    }),
-  ])
+      data = filterAppVersions(url.href, accept)
+    }
+    else if (query.kind === 'table' && ['channels', 'deploy_history'].includes(query.name)) {
+      data = []
+    }
+    else {
+      return route.fallback()
+    }
+    return routeToObject(route, { data, error: null, count: null, status: 200 })
+  })
 }
 
 test('captures same-version native checksum diff reasons in dependency diff table', async ({ page }) => {

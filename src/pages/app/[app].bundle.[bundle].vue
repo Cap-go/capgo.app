@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import type { BundleSummaryWithNativePackages } from '~/services/bundleColumns'
 import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
 import { FormKit } from '@formkit/vue'
 import { parse } from '@std/semver'
@@ -17,13 +18,14 @@ import IconTrash from '~icons/heroicons/trash'
 import IconSearch from '~icons/ic/round-search?raw'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { checkCompatibilityNativePackages, isCompatible, useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { checkCompatibilityNativePackages, isCompatible, useSupabase } from '~/services/supabase'
 import { openVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -35,11 +37,11 @@ const router = useRouter()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
 const main = useMainStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>()
 const loading = ref(true)
-const version = ref<Database['public']['Tables']['app_versions']['Row']>()
+const version = ref<BundleSummaryWithNativePackages>()
 const channels = ref<(Database['public']['Tables']['channels']['Row'])[]>([])
 const channel = ref<(Database['public']['Tables']['channels']['Row'])>()
 const version_meta = ref<Database['public']['Tables']['app_versions_meta']['Row']>()
@@ -167,7 +169,7 @@ async function getChannels() {
     return
   channel.value = undefined
   const appId = version.value.app_id
-  const { data: dataChannel, error: channelsError } = await supabase
+  const { data: dataChannel, error: channelsError } = await capgo
     .from('channels')
     .select()
     .eq('app_id', appId)
@@ -237,7 +239,7 @@ async function setChannel(channel: Database['public']['Tables']['channels']['Row
     throw new Error('No permission to update channel version')
   }
 
-  return supabase
+  return capgo
     .from('channels')
     .update({
       version: id,
@@ -481,7 +483,7 @@ async function saveBundleMetadata() {
     return false
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .update({
       link: normalizeOptionalMetadata(metadataLink.value),
@@ -537,13 +539,13 @@ async function getVersion() {
   if (!id.value)
     return
   try {
-    const { data } = await supabase
+    const { data } = await capgo
       .from('app_versions')
-      .select()
+      .select(`${BUNDLE_SUMMARY_COLUMNS}, native_packages`)
       .eq('app_id', packageId.value)
       .eq('id', id.value)
       .single()
-    const { data: dataVersionsMeta } = await supabase
+    const { data: dataVersionsMeta } = await capgo
       .from('app_versions_meta')
       .select()
       .eq('id', id.value)
@@ -596,7 +598,7 @@ async function saveCustomId(input: string) {
   }
 
   if (input.length === 0) {
-    const { error: errorNull } = await supabase
+    const { error: errorNull } = await capgo
       .from('app_versions')
       .update({
         min_update_version: null,
@@ -617,7 +619,7 @@ async function saveCustomId(input: string) {
     return
   }
 
-  const { error } = await supabase
+  const { error } = await capgo
     .from('app_versions')
     .update({
       min_update_version: input,
@@ -683,8 +685,8 @@ async function didCancel(name: string, askForMethod = true): Promise<boolean | '
   }
 
   const description = askForMethod
-    ? `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name} ${t('you-cannot-reuse')}.`
-    : `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name}?`
+    ? t('alert-delete-named-no-reuse-confirm', { name })
+    : t('alert-delete-named-confirm', { name })
 
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
@@ -793,12 +795,12 @@ async function deleteBundle() {
 
     // Perform deletion (soft or hard)
     const deleteQuery = didCancelRes === 'normal'
-      ? supabase
+      ? capgo
           .from('app_versions')
           .update({ deleted: true })
           .eq('id', version.value.id)
           .eq('app_id', version.value.app_id)
-      : supabase
+      : capgo
           .from('app_versions')
           .delete()
           .eq('id', version.value.id)

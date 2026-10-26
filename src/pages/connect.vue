@@ -11,14 +11,14 @@ import IconKey from '~icons/heroicons/key'
 import IconLock from '~icons/heroicons/lock-closed'
 import ConnectAppPicker from '~/components/connect/ConnectAppPicker.vue'
 import { createAiApiKey } from '~/services/apikeys'
+import { useConsole } from '~/services/console'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { isAdminRole, useOrganizationStore } from '~/stores/organization'
 
 type Role = 'admin' | 'member'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 
 const tokenName = ref(t('connect-token-name-default'))
@@ -100,7 +100,7 @@ async function loadApps(orgIds: string[]): Promise<void> {
   }
   isLoadingApps.value = true
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select('id, app_id, name, owner_org, icon_url')
       .in('owner_org', orgIds)
@@ -191,7 +191,7 @@ async function generate(): Promise<void> {
           .map(([id, appRole]) => ({ uuid: id, orgId: appById.get(id)!.ownerOrg, role: appRole }))
       : undefined
 
-    const { data, error } = await createAiApiKey(supabase, tokenName.value.trim() || t('connect-token-name-default'), {
+    const { data, error } = await createAiApiKey(capgo, tokenName.value.trim() || t('connect-token-name-default'), {
       orgIds: [...selectedOrgIds.value],
       role: role.value,
       apps: chosenApps,

@@ -5,7 +5,7 @@
 // The frontend never computes a compatibility verdict and never writes here — it
 // only renders the snapshotted rows and offers the manual-accept RPC elsewhere.
 
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 
 type GeneratedCompatibilityEventRow = Database['public']['Tables']['compatibility_events']['Row']
 

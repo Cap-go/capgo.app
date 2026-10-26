@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../../src/types/supabase.types'
+import type { Database } from '../../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { getSupabaseClient, resetAndSeedAppData, resetAppData, USER_ID, USER_PASSWORD } from '../../tests/test-utils'
 import { expect, test } from '../support/commands'
@@ -29,7 +29,7 @@ interface StripePriceResponse {
 }
 
 test.describe('Subscription Checkout', () => {
-  let supabase: SupabaseClient<Database>
+  let capgo: SupabaseClient<Database>
 
   let orgId = ''
   let appId = ''
@@ -38,7 +38,7 @@ test.describe('Subscription Checkout', () => {
   let planStripeId = ''
 
   test.beforeAll(() => {
-    supabase = getSupabaseClient()
+    capgo = getSupabaseClient()
   })
 
   test.afterEach(async () => {
@@ -46,24 +46,24 @@ test.describe('Subscription Checkout', () => {
       await resetAppData(appId)
 
     if (orgId) {
-      const { error: orgUsersError } = await supabase.from('org_users').delete().eq('org_id', orgId)
+      const { error: orgUsersError } = await capgo.from('org_users').delete().eq('org_id', orgId)
       expect(orgUsersError).toBeNull()
-      const { error: orgError } = await supabase.from('orgs').delete().eq('id', orgId)
+      const { error: orgError } = await capgo.from('orgs').delete().eq('id', orgId)
       expect(orgError).toBeNull()
     }
 
     if (customerId) {
-      const { error: stripeInfoError } = await supabase.from('stripe_info').delete().eq('customer_id', customerId)
+      const { error: stripeInfoError } = await capgo.from('stripe_info').delete().eq('customer_id', customerId)
       expect(stripeInfoError).toBeNull()
     }
 
     if (currentPlanStripeId) {
-      const { error: currentPlanError } = await supabase.from('plans').delete().eq('stripe_id', currentPlanStripeId)
+      const { error: currentPlanError } = await capgo.from('plans').delete().eq('stripe_id', currentPlanStripeId)
       expect(currentPlanError).toBeNull()
     }
 
     if (planStripeId) {
-      const { error: planError } = await supabase.from('plans').delete().eq('stripe_id', planStripeId)
+      const { error: planError } = await capgo.from('plans').delete().eq('stripe_id', planStripeId)
       expect(planError).toBeNull()
     }
   })
@@ -133,7 +133,7 @@ test.describe('Subscription Checkout', () => {
       },
     })
 
-    const { error: currentPlanError } = await supabase.from('plans').insert({
+    const { error: currentPlanError } = await capgo.from('plans').insert({
       bandwidth: 1,
       build_time_unit: 60,
       credit_id: currentPlanProduct.id,
@@ -152,7 +152,7 @@ test.describe('Subscription Checkout', () => {
 
     expect(currentPlanError).toBeNull()
 
-    const { error: planError } = await supabase.from('plans').insert({
+    const { error: planError } = await capgo.from('plans').insert({
       bandwidth: 10,
       build_time_unit: 3600,
       credit_id: subscriptionProduct.id,

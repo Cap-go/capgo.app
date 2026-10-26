@@ -2,7 +2,7 @@ import type { McpToolInfo } from '../src/services/assistantAgent.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => false }, CapacitorHttp: {} }))
-vi.mock('~/services/supabase', () => ({ defaultApiHost: 'https://api.capgo.test' }))
+vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test' }))
 
 const { tokenizeAssistantText } = await import('../src/utils/assistantText.ts')
 const { parseChatGptCallback } = await import('../src/utils/chatgptCallback.ts')

@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { ref, watch } from 'vue'
+import { useConsole } from '~/services/console'
 import { isZeroLengthTrial, resolveBillingPaidAt } from '~/services/paymentRequired'
-import { useSupabase } from '~/services/supabase'
 
 const BILLING_PAID_AT_CACHE_TTL_MS = 5 * 60 * 1000
 const BILLING_PAID_AT_CACHE_MAX_ENTRIES = 100
@@ -12,7 +12,7 @@ type BillingHistoryResult = { paidAt: string | null, trialSkipped: boolean } | {
 const billingPaidAtInFlight = new Map<string, Promise<BillingHistoryResult>>()
 
 async function fetchBillingHistory(orgId: string): Promise<BillingHistoryResult> {
-  const { data, error } = await useSupabase()
+  const { data, error } = await useConsole()
     .from('orgs')
     .select('created_at, stripe_info(paid_at, trial_at)')
     .eq('id', orgId)

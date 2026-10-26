@@ -145,6 +145,19 @@ export function hasSupportedOtaTodoList(onboarding: Pick<AppOnboardingState, 'to
     || (onboarding.todo_list_version === 4 && onboarding.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION)
 }
 
+// A delivered update proves the app called notifyAppReady(), so add_code is done too.
+export function shouldInferAddCode(current: AppOnboardingState, hasTestUpdateEvidence = false): boolean {
+  return current.outcome !== 'completed'
+    && current.outcome !== 'skipped'
+    && hasSupportedOtaTodoList(current)
+    && current.steps.add_code?.status !== 'done'
+    && (current.steps.test_update?.status === 'done' || hasTestUpdateEvidence)
+}
+
+export function inferredAddCodeStep(at?: string): AppOnboardingStepState {
+  return { status: 'done', at, annotation: APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION, annotationType: 'note' }
+}
+
 export function isAppOnboardingSource(value: unknown): value is AppOnboardingSource {
   return typeof value === 'string' && SOURCE_SET.has(value)
 }
