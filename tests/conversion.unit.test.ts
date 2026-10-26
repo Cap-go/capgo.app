@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { formatBytes, toFixed } from '../src/services/conversion'
+import { formatBytes, getChecksumInfo, toFixed } from '../src/services/conversion'
 import { useMainStore } from '../src/stores/main'
 
 function setAccountFormatLocale(formatLocale: string) {
@@ -31,5 +31,15 @@ describe('conversion helpers', () => {
     expect(formatBytes(-1)).toBe('0 B')
     expect(formatBytes(Number.NaN)).toBe('0 B')
     expect(formatBytes(Number.POSITIVE_INFINITY)).toBe('0 B')
+  })
+
+  it('detects checksum type from plain digests and encrypted bundles', () => {
+    expect(getChecksumInfo('a'.repeat(64)).type).toBe('sha256')
+    expect(getChecksumInfo('a'.repeat(8)).type).toBe('crc32')
+    expect(getChecksumInfo(null).type).toBe('unknown')
+    // V3 encrypted checksum: RSA-2048 ciphertext as hex (512 chars)
+    expect(getChecksumInfo('a'.repeat(512)).type).toBe('unknown')
+    expect(getChecksumInfo('a'.repeat(512), true)).toMatchObject({ type: 'sha256', label: 'SHA-256 (encrypted)' })
+    expect(getChecksumInfo(null, true).type).toBe('unknown')
   })
 })
