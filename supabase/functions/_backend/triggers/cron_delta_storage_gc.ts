@@ -33,8 +33,11 @@ export const DELTA_GC_DELETE_BATCH = 100
 export const DELTA_GC_LEASE_MS = 2_000
 export const DELTA_GC_DELETE_START_WINDOW_MS = 400
 export const DELTA_GC_DELETE_TIMEOUT_MS = 800
-// The queue consumer aborts dispatches after 15 seconds; finish well before.
+// The queue consumer aborts dispatches after 15 seconds. New work starts only
+// before the budget and each storage call is bounded, so a run answers within
+// about budget + DELTA_GC_STORAGE_TIMEOUT_MS plus one progress write.
 export const DELTA_GC_BUDGET_MS = 9_000
+export const DELTA_GC_STORAGE_TIMEOUT_MS = 2_000
 const DELTA_GC_COPY_CONCURRENCY = 25
 // One batch starts all of its deletes at once inside the start window.
 const DELTA_GC_DELETE_CONCURRENCY = DELTA_GC_DELETE_BATCH
@@ -52,6 +55,20 @@ export function selectAgedKeys(objects: ListedObject[], now: number, minAgeMs = 
   return objects
     .filter(object => Number.isFinite(object.lastModified.getTime()) && now - object.lastModified.getTime() >= minAgeMs)
     .map(object => object.key)
+}
+
+// A copy that outlives the timeout is treated as not copied: copies are
+// idempotent, and an uncopied path is never authorized for deletion.
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([promise, new Promise<T>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs, fallback)
+    })])
+  }
+  finally {
+    clearTimeout(timer)
+  }
 }
 
 async function forEachBounded<T>(items: T[], concurrency: number, shouldStart: () => boolean, worker: (item: T) => Promise<void>) {
@@ -80,7 +97,7 @@ async function unreferencedPaths(db: Database, paths: string[]) {
 async function trashBatch(c: Context, db: Database, appId: string, paths: string[], deadline: number) {
   const copied: string[] = []
   await forEachBounded(paths, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (path) => {
-    if (await s3.copyObjectToTrash(c, path))
+    if (await withTimeout(s3.copyObjectToTrash(c, path), DELTA_GC_STORAGE_TIMEOUT_MS, false))
       copied.push(path)
   })
   if (copied.length === 0)
@@ -143,7 +160,7 @@ async function drainOrphanPrefix(c: Context, db: Database, orphan: OrphanPrefix,
   let started = 0
   await forEachBounded(objects, DELTA_GC_COPY_CONCURRENCY, () => Date.now() < deadline, async (object) => {
     started++
-    if (await s3.deleteObjectKey(c, object.key))
+    if (await s3.deleteObjectKey(c, object.key, DELTA_GC_STORAGE_TIMEOUT_MS))
       deleted++
   })
   // A page cut short by the run budget is listed again from the same token;

@@ -25,7 +25,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => 
   middlewareAPISecret: async (_c: unknown, next: () => Promise<void>) => next(),
 }))
 
-const { app, DELTA_GC_DELETE_START_WINDOW_MS, DELTA_GC_DELETE_TIMEOUT_MS, DELTA_GC_LEASE_MS, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
+const { app, DELTA_GC_BUDGET_MS, DELTA_GC_DELETE_START_WINDOW_MS, DELTA_GC_STORAGE_TIMEOUT_MS, DELTA_GC_DELETE_TIMEOUT_MS, DELTA_GC_LEASE_MS, deltaPrefix, selectAgedKeys } = await import('../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts')
 
 const DAY = 24 * 60 * 60 * 1000
 const prefix = deltaPrefix('org-1', 'com.example.gc')
@@ -157,7 +157,8 @@ describe('delta storage GC worker', () => {
 
     expect(response.status).toBe(200)
     expect(mocks.listObjectPage).toHaveBeenCalledWith(expect.anything(), orphanPrefix, null, 1000)
-    expect(mocks.deleteObjectKey).toHaveBeenCalledWith(expect.anything(), `${orphanPrefix}delta/a.js`)
+    expect(mocks.deleteObjectKey).toHaveBeenCalledWith(expect.anything(), `${orphanPrefix}delta/a.js`, DELTA_GC_STORAGE_TIMEOUT_MS)
+    expect(DELTA_GC_BUDGET_MS + DELTA_GC_STORAGE_TIMEOUT_MS).toBeLessThan(15_000 - 2_000)
     const finish = mocks.execute.mock.calls.map(([query]) => sqlText(query)).find(text => text.includes('delta_gc_finish_orphan_prefix'))
     expect(finish).toContain('more')
   })
