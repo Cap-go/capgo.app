@@ -667,13 +667,12 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  -- A path with an unsettled earlier delete waits for the repair check:
-  -- confirming a new delete would erase the record of the earlier one.
-  v_paths := ARRAY(
-    SELECT p.path
-    FROM pg_catalog.unnest(public.delta_gc_deletable_paths(p_paths, p_aliases)) AS p (path)
-    WHERE NOT EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = p.path)
-  );
+  v_paths := public.delta_gc_deletable_paths(p_paths, p_aliases);
+  -- A path with an unsettled earlier delete waits for the repair check
+  -- (confirming a new delete would erase that record): retry the page later.
+  IF EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = ANY (v_paths)) THEN
+    RETURN NULL;
+  END IF;
   IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
     RETURN '{}'::text[];
   END IF;
@@ -1007,8 +1006,12 @@ BEGIN
 
   SELECT COALESCE(pg_catalog.array_agg(DISTINCT p.path), '{}'::text[]) INTO v_paths
   FROM pg_catalog.unnest(public.delta_gc_deletable_paths(p_paths, p_aliases)) AS p (path)
-  WHERE pg_catalog.starts_with(p.path, p_prefix)
-    AND NOT EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = p.path);
+  WHERE pg_catalog.starts_with(p.path, p_prefix);
+  -- Retry the page once earlier unsettled deletes are repaired: the task is
+  -- dropped after its last page, so nothing may be skipped here.
+  IF EXISTS (SELECT 1 FROM public.delta_gc_unsettled_deletes AS u WHERE u.path = ANY (v_paths)) THEN
+    RETURN NULL;
+  END IF;
   IF COALESCE(pg_catalog.array_length(v_paths, 1), 0) = 0 THEN
     RETURN '{}'::text[];
   END IF;
