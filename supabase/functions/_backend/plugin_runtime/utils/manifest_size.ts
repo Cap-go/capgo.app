@@ -220,18 +220,19 @@ WHERE r.version_id IS NULL
   AND av.deleted = false
 GROUP BY r.file_hash, av.id`
 
+// Self-contained: this branch can follow the file-version branch after UNION ALL.
 const MANIFEST_SIZE_FALLBACK_NAME_BRANCH = `
-, named_version_rows AS MATERIALIZED (
+SELECT r.file_hash, m.version_id, MAX(m.file_size) AS file_size
+FROM requested r
+INNER JOIN (
   SELECT av.id AS version_id, rows.file_hash, rows.file_size
   FROM public.app_versions av
   CROSS JOIN LATERAL ${versionManifestSizeRowsSql('av.id')} AS rows
   WHERE av.app_id = $2
     AND av.name = $3
     AND av.deleted = false
-)
-SELECT r.file_hash, m.version_id, MAX(m.file_size) AS file_size
-FROM requested r
-INNER JOIN named_version_rows m ON m.file_hash = r.file_hash
+  OFFSET 0
+) m ON m.file_hash = r.file_hash
 WHERE r.version_id IS NULL
 GROUP BY r.file_hash, m.version_id`
 

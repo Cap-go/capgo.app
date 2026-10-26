@@ -33,7 +33,8 @@ export const DELTA_GC_DELETE_BATCH = 100
 export const DELTA_GC_LEASE_MS = 2_000
 export const DELTA_GC_DELETE_START_WINDOW_MS = 400
 export const DELTA_GC_DELETE_TIMEOUT_MS = 800
-export const DELTA_GC_BUDGET_MS = 25_000
+// The queue consumer aborts dispatches after 15 seconds; finish well before.
+export const DELTA_GC_BUDGET_MS = 9_000
 const DELTA_GC_COPY_CONCURRENCY = 25
 // One batch starts all of its deletes at once inside the start window.
 const DELTA_GC_DELETE_CONCURRENCY = DELTA_GC_DELETE_BATCH

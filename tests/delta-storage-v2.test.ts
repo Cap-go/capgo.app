@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { buildManifestSizeLookupQuery, normalizeManifestSizeFiles } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
 import { ORG_ID, POSTGRES_URL, resetAndSeedAppData, resetAppData, USER_ID } from './test-utils.ts'
 
 const id = randomUUID()
@@ -243,5 +244,25 @@ describe('delta storage v2 legacy guards', () => {
       const ended = await client.query('SELECT lease_until FROM public.delta_gc_state WHERE app_id = $1', [APP_ID])
       expect(ended.rows[0].lease_until).toBeNull()
     })
+  })
+})
+
+describe('delta storage v2 size lookups', () => {
+  it('runs a mixed per-version and name-fallback size lookup on converted versions', async () => {
+    const versionId = await insertVersion(pool)
+    await insertLegacyRows(versionId, ['size.js'])
+    await pool.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
+    const [{ name }] = (await pool.query<{ name: string }>('SELECT name FROM public.app_versions WHERE id = $1', [versionId])).rows
+
+    const files = normalizeManifestSizeFiles([
+      { file_name: 'size.js', file_hash: 'hash-size.js', download_url: `https://plugin.capgo.test/files/read/attachments/x/size.js?key=${versionId}` },
+      { file_name: 'other.js', file_hash: 'hash-other.js', download_url: 'https://plugin.capgo.test/files/read/attachments/x/other.js?key=999999999' },
+      { file_name: 'size.js', file_hash: 'hash-size.js' },
+    ])
+    const lookup = buildManifestSizeLookupQuery(APP_ID, name, undefined, files)
+    expect(lookup?.text).toContain('UNION ALL')
+    const result = await pool.query<{ file_hash: string, version_id: string, file_size: string }>(lookup!.text, lookup!.values)
+    expect(result.rows.map(row => [row.file_hash, Number(row.version_id), Number(row.file_size)]))
+      .toEqual([['hash-size.js', versionId, 10], ['hash-size.js', versionId, 10]])
   })
 })
