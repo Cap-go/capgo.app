@@ -1,15 +1,16 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { LegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import type { VersionUsageChannel } from '../utils/types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { buildAppLogFailureChannelFilterCF, buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, readLegacyDownloadFailsCF, runQueryToCFA } from '../utils/cloudflare.ts'
+import { buildAppLogFailureChannelFilterCF, buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, readLegacyCheckFailuresCF, readLegacyDownloadFailsCF, runQueryToCFA } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
-import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, subtractLegacyDownloadFails } from '../utils/legacyDownloadFail.ts'
+import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, subtractLegacyDownloadFails, toLegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts } from '../utils/stats.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -93,6 +94,9 @@ export interface ReleaseLiveResponse extends ReleaseLiveChannelContext {
   // recovered = installed it (set) after their first failure, stuck = not yet.
   // null when the breakdown could not be read.
   failed_devices: ReleaseLiveFailedDevices | null
+  // download_fail from plugins that also send it for a failed update check:
+  // never counted above, shown so users know why and update the plugin.
+  legacy_check_failures: LegacyCheckFailures | null
   series: ReleaseLiveBucket[]
   // Set when the release is the target of a progressive rollout on the
   // channel: the target only reaches a share of devices, so raw adoption
@@ -402,7 +406,7 @@ function toFailedDevices(rows: RawFailedDevicesRow[] | null): ReleaseLiveFailedD
 }
 
 async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
-  const [rawSeriesRows, legacyFails, failureRows, failedDeviceRows] = await Promise.all([
+  const [rawSeriesRows, legacyFails, legacyCheckFailures, failureRows, failedDeviceRows] = await Promise.all([
     c.env.VERSION_USAGE
       ? runQueryToCFA<RawBucketRow>(c, buildSeriesQueryCF(appId, versionName, startMs, endMs, bucketMinutes, channel))
       : Promise.resolve([] as RawBucketRow[]),
@@ -413,6 +417,13 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
       bucket: seriesBucketCF(bucketMinutes),
       channel,
       versionName,
+    }),
+    readLegacyCheckFailuresCF(c, {
+      appId,
+      start: new Date(startMs),
+      end: new Date(endMs),
+      channel,
+      versionNames: [versionName],
     }),
     c.env.APP_LOG
       ? runQueryToCFA<RawFailureRow>(c, buildFailuresQueryCF(appId, versionName, startMs, endMs, channel))
@@ -431,7 +442,12 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
       : Promise.resolve(null),
   ])
   const seriesRows = subtractLegacyDownloadFails(rawSeriesRows, row => legacyDownloadFailKey(Number(row.bucket), versionName), legacyFails)
-  return { seriesRows, failureRows, failedDevices: toFailedDevices(failedDeviceRows) }
+  return {
+    seriesRows,
+    failureRows,
+    failedDevices: toFailedDevices(failedDeviceRows),
+    legacyCheckFailures: toLegacyCheckFailures(legacyCheckFailures.byVersion.get(versionName) ?? 0, legacyCheckFailures.pluginVersions),
+  }
 }
 
 async function readActivitySB(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
@@ -489,7 +505,8 @@ LIMIT ${MAX_FAILURE_ACTIONS}`,
         return null
       }),
     ])
-    return { seriesRows: series.rows, failureRows: failures.rows, failedDevices: toFailedDevices(failedDevices?.rows ?? null) }
+    // public.stats has no plugin version: no notice without Analytics Engine.
+    return { seriesRows: series.rows, failureRows: failures.rows, failedDevices: toFailedDevices(failedDevices?.rows ?? null), legacyCheckFailures: null }
   }
   catch (error) {
     logPgError(c, 'release_live readActivitySB', error)
@@ -826,6 +843,7 @@ async function readReleaseLive(
       .map(row => ({ action: String(row.action), count: toCount(row.count) }))
       .filter(row => row.count > 0),
     failed_devices: activity.failedDevices,
+    legacy_check_failures: activity.legacyCheckFailures,
     series,
     rollout: rollout ? computeRollout(rollout, fallback, deviceCounts, fallbackTotals) : null,
     generated_at: now.toISOString(),

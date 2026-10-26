@@ -1,4 +1,4 @@
-import { tryParse } from '@std/semver'
+import { compare, tryParse } from '@std/semver'
 
 // The first two checks duplicate plugin_runtime/utils/legacyDownloadFail.ts (plugin_runtime stays isolated).
 // Updater plugins before 6.53.0, 7.53.0 and 8.53.0 report a failed update check
@@ -85,3 +85,49 @@ export function legacyDownloadFailPluginSqlCF(column: string): string {
 
 /** Analytics Engine app_log filter dropping download_fail that may be a failed update check. */
 export const NOT_LEGACY_DOWNLOAD_FAIL_CF = `NOT (blob2 = 'download_fail' AND ${legacyDownloadFailPluginSqlCF('blob7')})`
+
+// Dashboards say how many of these they ignored, so users on such a plugin know
+// why and update it. The count includes flagged logs: they are ignored too.
+export const UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION = '8.53.0'
+
+export interface LegacyCheckFailures {
+  // Legacy download_fail reports not counted as failed installs.
+  excluded: number
+  // Plugin versions that sent them, oldest first.
+  plugin_versions: string[]
+  // First plugin release that reports failed update checks apart.
+  fixed_in: string
+}
+
+export interface LegacyCheckFailureLogRow {
+  version_name: string
+  plugin_version: string
+  count: string | number
+}
+
+/** Legacy download_fail count per bundle, and the plugin versions that sent them. */
+export function summarizeLegacyCheckFailures(rows: LegacyCheckFailureLogRow[]) {
+  const byVersion = new Map<string, number>()
+  const pluginVersions = new Set<string>()
+  for (const row of rows) {
+    if (!isLegacyDownloadFailPlugin(row.plugin_version))
+      continue
+    const count = Number(row.count)
+    if (!Number.isFinite(count) || count <= 0)
+      continue
+    byVersion.set(row.version_name, (byVersion.get(row.version_name) ?? 0) + Math.round(count))
+    pluginVersions.add(row.plugin_version.trim())
+  }
+  const sorted = [...pluginVersions].sort((a, b) => {
+    const left = tryParse(a)
+    const right = tryParse(b)
+    return left && right ? compare(left, right) : a.localeCompare(b)
+  })
+  return { byVersion, pluginVersions: sorted }
+}
+
+export function toLegacyCheckFailures(excluded: number, pluginVersions: string[]): LegacyCheckFailures | null {
+  if (excluded <= 0 || pluginVersions.length === 0)
+    return null
+  return { excluded, plugin_versions: pluginVersions, fixed_in: UPDATE_CHECK_ERROR_MIN_PLUGIN_VERSION }
+}

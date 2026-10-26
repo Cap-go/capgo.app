@@ -1,15 +1,17 @@
 import type { Context } from 'hono'
 import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { LegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import type { VersionUsage, VersionUsageChannel } from '../utils/types.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
+import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readLegacyCheckFailuresCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { toLegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
@@ -71,6 +73,8 @@ export interface BundleInstallStatsItem {
   version_name: string
   install: number
   fail: number
+  // Legacy download_fail reports, never counted in fail.
+  excluded_check_failures: number
   success_rate: number | null
   timing: {
     samples: number
@@ -94,6 +98,9 @@ export interface BundleInstallStatsResponse {
     fail: number
     success_rate: number | null
   }
+  // download_fail from plugins that also send it for a failed update check:
+  // never counted above, shown so users know why and update the plugin.
+  legacy_check_failures: LegacyCheckFailures | null
 }
 
 interface InstallTimingSample {
@@ -293,6 +300,7 @@ function buildBundleInstallResponse(input: {
   successRows: BundleSuccessRow[]
   timingRows: Map<string, BundleTimingRow>
   versionFilter?: Set<string>
+  legacyCheckFailures?: { byVersion: Map<string, number>, pluginVersions: string[] }
 }): BundleInstallStatsResponse {
   const versionNames = new Set<string>()
   for (const row of input.successRows) {
@@ -316,6 +324,7 @@ function buildBundleInstallResponse(input: {
       version_name: versionName,
       install,
       fail,
+      excluded_check_failures: toCount(input.legacyCheckFailures?.byVersion.get(versionName)),
       success_rate: computeSuccessRate(install, fail),
       timing: {
         samples: toCount(timing?.samples),
@@ -335,6 +344,7 @@ function buildBundleInstallResponse(input: {
 
   const totalInstall = bundles.reduce((sum, bundle) => sum + bundle.install, 0)
   const totalFail = bundles.reduce((sum, bundle) => sum + bundle.fail, 0)
+  const totalExcluded = bundles.reduce((sum, bundle) => sum + bundle.excluded_check_failures, 0)
 
   const endDate = dayjs(input.end).utc().startOf('day')
   const startDate = dayjs(input.start).utc().startOf('day')
@@ -353,6 +363,7 @@ function buildBundleInstallResponse(input: {
       fail: totalFail,
       success_rate: computeSuccessRate(totalInstall, totalFail),
     },
+    legacy_check_failures: toLegacyCheckFailures(totalExcluded, input.legacyCheckFailures?.pluginVersions ?? []),
   }
 }
 
@@ -450,6 +461,7 @@ function filterResponseByVersionName(
   const bundles = response.bundles.filter(bundle => bundle.version_name === versionName)
   const totalInstall = bundles.reduce((sum, bundle) => sum + bundle.install, 0)
   const totalFail = bundles.reduce((sum, bundle) => sum + bundle.fail, 0)
+  const totalExcluded = bundles.reduce((sum, bundle) => sum + (bundle.excluded_check_failures ?? 0), 0)
   return {
     ...response,
     bundles,
@@ -458,6 +470,7 @@ function filterResponseByVersionName(
       fail: totalFail,
       success_rate: computeSuccessRate(totalInstall, totalFail),
     },
+    legacy_check_failures: toLegacyCheckFailures(totalExcluded, response.legacy_check_failures?.plugin_versions ?? []),
   }
 }
 
@@ -617,6 +630,13 @@ async function readBundleInstallStatsCF(
   // version names only.
   const queryStart = start.subtract(2, 'hour')
   const versionNames = versionFilter ? [...versionFilter] : undefined
+  const legacyCheckFailuresPromise = readLegacyCheckFailuresCF(c, {
+    appId,
+    start: start.toDate(),
+    end: endExclusive.toDate(),
+    channel,
+    versionNames,
+  })
   const events = await readInstallTimingEventsCFChunked(c, {
     appId,
     queryStart,
@@ -692,6 +712,7 @@ async function readBundleInstallStatsCF(
     successRows,
     timingRows,
     versionFilter,
+    legacyCheckFailures: await legacyCheckFailuresPromise,
   })
 }
 

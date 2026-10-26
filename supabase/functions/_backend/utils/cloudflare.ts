@@ -9,7 +9,7 @@ import { canSkipDeviceInfoWrite, DEVICE_INFO_REFRESH_TTL_SECONDS, toComparableDe
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { DEFAULT_LIMIT } from './types.ts'
-import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, subtractLegacyDownloadFails, sumLegacyDownloadFails } from './legacyDownloadFail.ts'
+import { legacyDownloadFailKey, legacyDownloadFailPluginSqlCF, NOT_LEGACY_DOWNLOAD_FAIL_CF, subtractLegacyDownloadFails, summarizeLegacyCheckFailures, sumLegacyDownloadFails } from './legacyDownloadFail.ts'
 import { getEnv } from './utils.ts'
 import { buildVersionCompareSql } from './versionCompare.ts'
 
@@ -771,6 +771,48 @@ GROUP BY bucket, version_name, plugin_version`
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading legacy download_fail', error: serializeError(e), query: sql })
     return new Map()
+  }
+}
+
+export interface LegacyCheckFailuresQuery {
+  appId: string
+  start: string | Date
+  end: string | Date
+  channel?: VersionUsageChannel | string | null
+  versionNames?: string[]
+}
+
+/**
+ * Every legacy download_fail per bundle, flagged or not, for the dashboard
+ * notice that tells users to update the plugin. Never throws: without it, the
+ * notice is not shown.
+ */
+export async function readLegacyCheckFailuresCF(c: Context, query: LegacyCheckFailuresQuery) {
+  if (!c.env.APP_LOG)
+    return summarizeLegacyCheckFailures([])
+  const versionFilter = query.versionNames?.length
+    ? `AND blob3 IN (${query.versionNames.map(name => `'${escapeSqlString(name)}'`).join(', ')})`
+    : ''
+  const sql = `SELECT
+  blob3 AS version_name,
+  blob7 AS plugin_version,
+  sum(_sample_interval) AS count
+FROM app_log
+WHERE
+  index1 = '${escapeSqlString(query.appId)}'
+  AND blob2 = 'download_fail'
+  AND ${legacyDownloadFailPluginSqlCF('blob7')}
+  AND timestamp >= toDateTime('${formatDateCF(query.start)}')
+  AND timestamp < toDateTime('${formatDateCF(query.end)}')
+  ${versionFilter}
+  ${buildAppLogFailureChannelFilterCF(query.channel)}
+GROUP BY version_name, plugin_version`
+  try {
+    return summarizeLegacyCheckFailures(await runQueryToCFA(c, sql))
+  }
+  catch (e) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading legacy check failures', error: serializeError(e), query: sql })
+    return summarizeLegacyCheckFailures([])
   }
 }
 
