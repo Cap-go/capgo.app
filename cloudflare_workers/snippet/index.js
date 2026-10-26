@@ -68,6 +68,10 @@ const MAX_EDGE_STAT_HEADER_BYTES = 8000
 const APP_ID_RE = /^[a-z0-9]+(?:\.[\w-]+)+$/i
 const DEVICE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const PLAIN_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+// @std/semver FULL_REGEXP, with the core numbers kept below MAX_SAFE_INTEGER
+// (its parse rejects larger ones) and no surrounding whitespace (it trims).
+const FULL_SEMVER_RE = /^v?(?:0|[1-9]\d{0,14})\.(?:0|[1-9]\d{0,14})\.(?:0|[1-9]\d{0,14})(?:-(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*))*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?$/i
+const MAX_SEMVER_LENGTH = 256
 const DEVICE_PLATFORMS = new Set(['ios', 'android', 'electron'])
 
 function createBudget() {
@@ -509,9 +513,17 @@ function isValidStatsMetadata(metadata) {
   return entries.length <= 30 && entries.every(([key, value]) => key.length <= 64 && typeof value === 'string' && value.length <= 2048)
 }
 
-/** parsePluginBody rejects a native version it cannot read as semver; anything but plain x.y.z goes to the worker. */
+/**
+ * parsePluginBody rejects a native version @std/semver cannot parse after
+ * fixSemver; prerelease and build tags (1.2.3-native.4+ota.5) are valid.
+ */
 function isAnswerableStatsVersionBuild(versionBuild) {
-  return versionBuild === undefined || versionBuild === '' || (typeof versionBuild === 'string' && PLAIN_SEMVER_RE.test(fixSemver(versionBuild)))
+  if (versionBuild === undefined || versionBuild === '')
+    return true
+  if (typeof versionBuild !== 'string')
+    return false
+  const version = fixSemver(versionBuild)
+  return version.length <= MAX_SEMVER_LENGTH && FULL_SEMVER_RE.test(version)
 }
 
 /**
