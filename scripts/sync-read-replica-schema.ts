@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { assertCloudSqlDataApiResponseSucceeded } from '../read_replicate/cloud_sql_data_api_response.ts'
-import { planReadReplicaSchemaSync } from '../read_replicate/schema_additive_sync.ts'
+import { ALLOWED_NEW_REPLICA_TABLES, planReadReplicaSchemaSync } from '../read_replicate/schema_additive_sync.ts'
 import {
   READ_REPLICA_SCHEMA_CATALOG_SQL,
   readReplicaSchemaCatalog,
@@ -64,7 +64,53 @@ const GOOGLE_READ_REPLICA: GoogleDataApiConfig = {
   instance: 'eu-2',
   database: 'postgres',
 }
+const READ_REPLICA_SUBSCRIPTION = 'capgo_google_eu_2_sub'
+// Fixed statements only: the release job never sends other SQL this way.
+export const READ_REPLICA_SUBSCRIBED_TABLES_SQL = `SELECT c.relname AS table_name FROM pg_catalog.pg_subscription_rel AS r JOIN pg_catalog.pg_subscription AS s ON s.oid = r.srsubid JOIN pg_catalog.pg_class AS c ON c.oid = r.srrelid JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE s.subname = '${READ_REPLICA_SUBSCRIPTION}' AND n.nspname = 'public'`
+// One statement per request runs outside a transaction block, which
+// REFRESH PUBLICATION requires. copy_data only copies newly added tables.
+export const READ_REPLICA_REFRESH_SUBSCRIPTION_SQL = `ALTER SUBSCRIPTION ${READ_REPLICA_SUBSCRIPTION} REFRESH PUBLICATION WITH (copy_data = true)`
+
+/** Replicated tables the subscription does not stream yet. */
+export function unsubscribedReplicaTables(subscribed: readonly string[]): string[] {
+  const known = new Set(subscribed)
+  return REPLICA_TABLES.filter(table => !known.has(table))
+}
+
+/**
+ * Runs after primary migrations: a table the migrations just added to the
+ * publication is only streamed once the subscription is refreshed. Tables
+ * the subscriber already streams are not copied again.
+ */
+async function refreshSubscription(): Promise<void> {
+  const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
+  const { project, instance, database } = GOOGLE_READ_REPLICA
+  const subscribed = async () => dataApiRows(
+    await executeGoogleSql(project, instance, database, READ_REPLICA_SUBSCRIBED_TABLES_SQL, deadline),
+  ).map(row => String(row.table_name))
+
+  const missing = unsubscribedReplicaTables(await subscribed())
+  if (!missing.length) {
+    console.log('Read-replica subscription already streams every replicated table.')
+    return
+  }
+  console.log(`Refreshing ${READ_REPLICA_SUBSCRIPTION} for: ${missing.join(', ')}`)
+  await executeGoogleSql(project, instance, database, READ_REPLICA_REFRESH_SUBSCRIPTION_SQL, deadline)
+
+  const stillMissing = unsubscribedReplicaTables(await subscribed())
+  if (stillMissing.length) {
+    throw new Error(
+      `Subscription ${READ_REPLICA_SUBSCRIPTION} still does not stream ${stillMissing.join(', ')}; check that the primary publication includes them.`,
+    )
+  }
+  console.log('Read-replica subscription refreshed; new tables copy their existing rows in the background.')
+}
+
 async function main(): Promise<void> {
+  if (process.argv.includes('--refresh-subscription')) {
+    await refreshSubscription()
+    return
+  }
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
   const dryRun = process.argv.includes('--dry-run')
   console.log(
@@ -143,6 +189,16 @@ function statementResolvesCompatibilityIssue(
   statement: ReadReplicaSchemaSyncStatement,
   issue: SchemaCompatibilityIssue,
 ): boolean {
+  // A created allowlisted table brings its columns, constraints, primary key
+  // index and identity sequence.
+  const created = statement.kind === 'table' ? ALLOWED_NEW_REPLICA_TABLES[statement.table] : undefined
+  if (created) {
+    return (issue.kind === 'table' && issue.object === statement.table)
+      || ((issue.kind === 'column' || issue.kind === 'constraint') && issue.object.startsWith(`${statement.table}.`))
+      || (issue.kind === 'index' && created.catalog.indexes.some(index => index.name === issue.object))
+      || (issue.kind === 'sequence' && created.catalog.sequences.some(sequence => sequence.name === issue.object))
+  }
+
   switch (issue.kind) {
     case 'column':
       return statement.kind === issue.kind
@@ -259,9 +315,15 @@ function assertGoogleReadReplicaSchemaStatement(
   switch (statement.kind) {
     case 'table':
       assertSelectedReplicaTable(statement)
-      throw new Error(
-        `Cloud SQL server-side import cannot create unsupported table ${statement.table}.`,
-      )
+      if (
+        statement.name !== statement.table
+        || statement.sql !== ALLOWED_NEW_REPLICA_TABLES[statement.table]?.sql
+      ) {
+        throw new Error(
+          `Cloud SQL server-side import cannot create unsupported table ${statement.table}.`,
+        )
+      }
+      return
     case 'column':
       assertSelectedReplicaTable(statement)
       assertColumnStatement(statement)

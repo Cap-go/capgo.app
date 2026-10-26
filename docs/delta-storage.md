@@ -121,10 +121,11 @@ upload, so one rule covers concurrent uploads and GC:
 
 ## Rollout
 
-1. **Before merge**, create the two tables on the Google subscriber. The release
-   job only adds columns to existing subscriber tables and stops on a missing
-   table, which guards this step. Apply the `delta_files` and `version_files`
-   blocks of `read_replicate/schema_replicate.sql` (table, identity, primary key).
+1. Nothing to do on the Google subscriber before merge. The release job
+   `read_replica_schema` creates `delta_files` and `version_files` there before
+   primary migrations; they are the only tables it may create
+   (`ALLOWED_NEW_REPLICA_TABLES` pins their exact SQL and catalog shape), and
+   any other missing table still stops the release.
 2. Deploy. The migration first removes `public.manifest` from
    `capgo_planetscale_r2_pub`: the retired `capgo-r2-inventory-prod` worker
    deletes delta objects without a `manifest` row and only runs while that
@@ -134,9 +135,13 @@ upload, so one rule covers concurrent uploads and GC:
    migration sets a 5 s `lock_timeout`; a release that cannot get its locks
    fails and can be retried. Uploads write both the
    new tables and legacy rows (Vault `CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES` absent = on).
-3. On the subscriber:
-   `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);`
-   Wait until `delta_files` / `version_files` row counts match the primary.
+3. After the migrations, the release job `read_replica_subscription` runs
+   `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true)`
+   when the subscription does not stream a replicated table yet, and checks
+   that it does afterwards. Deploys do not wait on it (plugin reads fall back
+   to legacy rows). If that job fails, run the same statement on the
+   subscriber. Wait until `delta_files` / `version_files` row counts match the
+   primary before step 4.
 4. Switch to the new tables only:
    `SELECT vault.create_secret('false', 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES');`
    Secret names are unique: if it already exists, run
