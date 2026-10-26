@@ -241,7 +241,9 @@ async function mockUpdaterInsights(page: Page) {
 // failures next to a healthy success rate.
 const releaseLiveInstalls = [340, 550, 660, 630, 650, 660, 570, 560, 560, 530, 480, 520, 490, 740, 660, 610, 540, 500, 460, 460, 410, 390, 365, 360, 335, 365, 305, 305, 238, 245, 190, 170, 148, 146, 98, 98, 104, 88, 106, 110, 98, 164, 205, 270, 318, 318, 330, 375, 455, 475, 465, 520, 190]
 
-async function mockReleaseLive(page: Page) {
+const legacyCheckFailures = { excluded: 48242, plugin_versions: ['8.48.0', '8.51.16'], fixed_in: '8.53.0' }
+
+async function mockReleaseLive(page: Page, legacy = false) {
   const bucketMs = 30 * 60_000
   const start = Date.parse('2026-10-01T13:30:00.000Z')
   const series = releaseLiveInstalls.map((install, index) => {
@@ -268,7 +270,20 @@ async function mockReleaseLive(page: Page) {
       channel: production,
       channels: [production, { id: 2, name: 'beta', is_default: false }],
       recent_deployments: [{ version_name: '10.33.2', channel_id: 1, channel_name: 'production', deployed_at: deployedAt }],
+      legacy_check_failures: legacy ? legacyCheckFailures : null,
       generated_at: new Date().toISOString(),
+    },
+  }))
+  if (!legacy)
+    return
+  const bundle = { version_name: '10.33.2', install, fail, success_rate: Math.round((install / (install + fail)) * 1000) / 10, timing: { samples: 0, p50_ms: null, p70_ms: null, p90_ms: null, p95_ms: null } }
+  await page.route('**/private/bundle_install_stats', route => route.fulfill({
+    json: {
+      period: { requested_days: 7, actual_days: 7, start: deployedAt, end: new Date(start + series.length * bucketMs).toISOString() },
+      bundles: [bundle],
+      totals: { install, fail, success_rate: bundle.success_rate },
+      legacy_check_failures: legacyCheckFailures,
+      legacy_check_failures_by_bundle: [{ version_name: '10.33.2', excluded: legacyCheckFailures.excluded, plugin_versions: legacyCheckFailures.plugin_versions }],
     },
   }))
 }
@@ -661,6 +676,19 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await mockReleaseLive(page)
       await page.goto('/app/com.demo.app/live')
       await page.getByText('10.33.2', { exact: true }).waitFor()
+    },
+  },
+  {
+    slug: 'app-dashboard-live-release-legacy-plugin',
+    path: '/app/com.demo.app/live',
+    auth: true,
+    prepare: async (page) => {
+      // Devices on plugins older than 8.53.0 get a notice about ignored update-check failures.
+      await mockReleaseLive(page, true)
+      await page.goto('/app/com.demo.app/live')
+      await page.getByText('10.33.2', { exact: true }).first().waitFor()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.locator('[data-testid="release-live-legacy-plugin"]').waitFor()
     },
   },
   {
