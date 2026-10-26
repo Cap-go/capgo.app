@@ -7,16 +7,19 @@ import { readFileSync, writeFileSync } from 'node:fs'
 
 const FILE = new URL('../messages/en.json', import.meta.url)
 
-// Capitalized words that are proper nouns: brands, products, plan names, dates.
+// Capitalized words that are proper nouns: brands, products, plan names, dates, languages.
 // All-caps (API, SSO, 2FA) and mixed-case (iOS, GitHub, WebView) words are always kept.
 const KEEP_WORDS = new Set([
   'Capgo', 'Capacitor', 'Android', 'Apple', 'Google', 'Discord', 'Slack', 'Stripe', 'Expo', 'Supabase',
   'Cloudflare', 'Ionic', 'Xcode', 'Fastlane', 'Cursor', 'Claude', 'Copilot', 'Windsurf', 'Neovim',
-  'Lovable', 'Bolt', 'Replit', 'Builder', 'Enterprise', 'Maker', 'Estonia', 'August', 'Tuesday',
+  'Lovable', 'Bolt', 'Replit', 'Builder', 'Enterprise', 'Maker', 'Estonia',
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+  'January', 'February', 'March', 'April', 'June', 'July', 'August', 'September', 'October', 'November', 'December',
+  'English', 'French', 'German', 'Spanish', 'Italian', 'Portuguese', 'Japanese', 'Chinese', 'Korean',
 ])
-// Multi-word names kept verbatim.
+// Multi-word names kept verbatim. Longer phrases first: the regex takes the first match.
 const KEEP_PHRASES = [
-  'App Store Connect', 'App Store', 'Play Store', 'Google Play', 'App ID', 'Live Updates', 'Standard Webhooks',
+  'Google Play Store', 'App Store Connect', 'App Store', 'Play Store', 'Google Play', 'App ID', 'Live Updates', 'Standard Webhooks',
   'Capgo Builder', 'Capgo Assistant', 'Capgo Cloud', 'Capgo Updater',
 ]
 // Values that are lists of names or intentionally capitalized.
@@ -33,10 +36,12 @@ const SKIP_KEYS = new Set([
 const MASK = new RegExp(`${KEEP_PHRASES.join('|')}|\\{[^}]*\\}|\`[^\`]*\`|<[^>]*>`, 'g')
 
 function isLabel(value) {
-  const words = value.replace(/\{[^}]*\}|`[^`]*`|<[^>]*>/g, '').match(/[A-Z][\w'.-]*/gi) ?? []
+  // Placeholders, code and HTML don't count as words. Not a sanitizer: output is only inspected.
+  const words = value.split(/\{[^}]*\}|`[^`]*`|<[^>]*>/).join(' ').match(/[A-Z][\w'.-]*/gi) ?? []
   const rest = words.slice(1)
   const caps = rest.filter(w => /^[A-Z]/.test(w))
-  return words.length >= 2 && words.length <= 10 && caps.length > 0 && caps.length >= rest.length / 2
+  // Sentences ("Click Save. Then Restart") are not labels.
+  return words.length >= 2 && words.length <= 10 && !/[.!?]\s/.test(value) && caps.length > 0 && caps.length >= rest.length / 2
 }
 
 export function sentenceCase(value) {
@@ -47,7 +52,7 @@ export function sentenceCase(value) {
       return `\0${masked.length - 1}\0`
     })
     .replace(/[\p{L}\d']+/gu, (word, offset, str) => {
-      if (!/^\p{Lu}[\p{Ll}']+$/u.test(word) || KEEP_WORDS.has(word))
+      if (!/^\p{Lu}[\p{Ll}']+$/u.test(word) || KEEP_WORDS.has(word.replace(/'s$/, '')))
         return word
       const before = str.slice(0, offset)
       // First word of the string or of a segment ("Warning: Bundles", "Bundle → Channel") stays capitalized.

@@ -1033,7 +1033,7 @@
   "channel": "Channel",
   "channel-actions": "Channel actions",
   "channel-allow-device-self-set": "Allow device self-assignment",
-  "channel-builtin": "Builtin",
+  "channel-builtin": "Built-in",
   "channel-bundle-linked": "This bundle is linked to one or more channels. ({channels}) Would you like to unlink it from those channels?",
   "channel-create": "Create channel",
   "channel-intro-kicker": "Your first channel",
