@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { FormKit } from '@formkit/vue'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/document-duplicate'
-import iconEmail from '~icons/heroicons/envelope?raw'
-import iconName from '~icons/heroicons/user?raw'
+import IconEmail from '~icons/heroicons/envelope'
+import IconName from '~icons/heroicons/user'
+import FormField from '~/components/forms/FormField.vue'
 import OrgCustomDomain from '~/components/OrgCustomDomain.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
@@ -17,6 +17,7 @@ import { pickPhoto, takePhoto } from '~/services/photos'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 import DeleteOrgDialog from './DeleteOrgDialog.vue'
 
 const { t } = useI18n()
@@ -74,6 +75,18 @@ watch(currentOrganization, (newOrg) => {
   }
   void loadSupportChannel(undefined)
 }, { immediate: true })
+
+// Form values, seeded from the organization and re-seeded when another organization is selected.
+const formOrgName = ref(orgName.value)
+const formEmail = ref(email.value)
+const formSubmitted = ref(false)
+watch(() => currentOrganization.value?.gid, () => {
+  formOrgName.value = currentOrganization.value?.name ?? orgName.value
+  formEmail.value = currentOrganization.value?.management_email ?? email.value
+  formSubmitted.value = false
+})
+const orgNameErrors = computed(() => validateField(formOrgName.value, [rules.required(t('organization-name'), { trim: true })]))
+const emailErrors = computed(() => validateField(formEmail.value, [rules.required(t('organization-email'), { trim: true })]))
 
 const canUpdateOrgSettings = computedAsync(async () => {
   if (!currentOrganization.value)
@@ -204,6 +217,13 @@ async function saveChanges(form: { orgName: string, email: string }) {
     toast.success(t('org-changes-saved'))
 }
 
+async function onSubmit() {
+  formSubmitted.value = true
+  if (orgNameErrors.value.length || emailErrors.value.length)
+    return
+  await saveChanges({ orgName: formOrgName.value, email: formEmail.value })
+}
+
 const acronym = computed(() => {
   let res = 'N/A'
   // use currentOrganization.value?.name first letter of 2 first words or first 2 letter of first word or N/A
@@ -264,7 +284,7 @@ async function copyOrganizationId() {
 <template>
   <div>
     <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-sm md:pb-0 max-h-fit grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-      <FormKit id="update-org" :key="currentOrganization?.gid ?? 'no-org'" type="form" :actions="false" @submit="saveChanges">
+      <form id="update-org" :key="currentOrganization?.gid ?? 'no-org'" novalidate @submit.prevent="onSubmit">
         <div class="p-6 space-y-6">
           <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
             {{ t('general-information') }}
@@ -301,28 +321,31 @@ async function copyOrganizationId() {
           </section>
           <div class="mt-5 space-y-4">
             <div class="w-full md:pr-[50%]">
-              <FormKit
+              <FormField
+                v-model="formOrgName"
                 type="text"
                 name="orgName"
                 autocomplete="given-name"
-                :prefix-icon="iconName"
+                :prefix-icon="IconName"
                 :disabled="!canUpdateOrgSettings"
-                :value="orgName"
-                validation="required:trim"
+                :errors="orgNameErrors"
+                :submitted="formSubmitted"
                 enterkeyhint="next"
                 autofocus
                 :label="t('organization-name')"
               />
             </div>
             <div class="w-full md:pr-[50%]">
-              <FormKit
+              <FormField
+                v-model="formEmail"
                 type="email"
                 name="email"
-                :prefix-icon="iconEmail"
+                :prefix-icon="IconEmail"
                 autocomplete="given-name"
                 :disabled="!canUpdateOrgSettings"
-                :value="email"
-                validation="required:trim" enterkeyhint="next"
+                :errors="emailErrors"
+                :submitted="formSubmitted"
+                enterkeyhint="next"
                 autofocus
                 :label="t('organization-email')"
               />
@@ -403,7 +426,7 @@ async function copyOrganizationId() {
             </div>
           </footer>
         </div>
-      </FormKit>
+      </form>
     </div>
     <DeleteOrgDialog
       ref="dialogRef"

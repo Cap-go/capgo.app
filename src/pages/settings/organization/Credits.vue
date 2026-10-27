@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { CreditMetricType, CreditPricingStep } from '~/services/creditPricing'
 import type { Database } from '~/types/database.types'
-import { FormKit } from '@formkit/vue'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -17,6 +16,7 @@ import CardFormModal from '~/components/billing/CardFormModal.vue'
 import EmbeddedCheckoutModal from '~/components/billing/EmbeddedCheckoutModal.vue'
 import TrialPlanOfferModal from '~/components/billing/TrialPlanOfferModal.vue'
 import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
+import FormField from '~/components/forms/FormField.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { getCreditPricingSteps, useConsole } from '~/services/console'
 import { creditPricingMetricOrder, formatCreditPricingPrice, formatCreditPricingTierLabel } from '~/services/creditPricing'
@@ -27,6 +27,7 @@ import { checkPermissions } from '~/services/permissions'
 import { completeCreditTopUp, getCreditAutoTopUp, saveCreditAutoTopUp, startCreditTopUp } from '~/services/stripe'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 interface UsageCreditLedgerRow {
@@ -101,9 +102,10 @@ const isCreditPricingOpen = ref(route.hash === CREDIT_PRICING_HASH)
 const DEFAULT_TOP_UP_QUANTITY = 100
 const QUICK_TOP_UP_OPTIONS = [50, 500, 5000] as const
 const CREDIT_TAX_MULTIPLIER = 1.2
-const topUpQuantityInput = ref(String(DEFAULT_TOP_UP_QUANTITY))
+// `type="number"` v-model yields numbers (or '' when empty), so keep both shapes.
+const topUpQuantityInput = ref<string | number>(String(DEFAULT_TOP_UP_QUANTITY))
 const topUpQuantity = computed(() => {
-  const parsed = Number.parseInt(topUpQuantityInput.value, 10)
+  const parsed = Number.parseInt(String(topUpQuantityInput.value), 10)
   if (Number.isNaN(parsed) || parsed <= 0)
     return null
   return parsed
@@ -113,7 +115,7 @@ const topUpQuantityUsd = computed(() => (topUpQuantity.value ?? 0) * creditUsdRa
 
 const MIN_AUTO_TOP_UP = 10
 const autoTopUpEnabled = ref(false)
-const autoTopUpThresholdInput = ref(String(MIN_AUTO_TOP_UP))
+const autoTopUpThresholdInput = ref<string | number>(String(MIN_AUTO_TOP_UP))
 const autoTopUpHasCard = ref(false)
 const isLoadingAutoTopUp = ref(false)
 const isSavingAutoTopUp = ref(false)
@@ -121,23 +123,35 @@ const autoTopUpLoadFailed = ref(false)
 let autoTopUpPersistQueue = Promise.resolve()
 let autoTopUpLoadSeq = 0
 let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
-const autoTopUpMonthlyLimitInput = ref('0')
+const autoTopUpMonthlyLimitInput = ref<string | number>('0')
 const autoTopUpMonthlyTotal = ref<number | null>(null)
 const confirmedAutoTopUpMonthlyLimit = ref(0)
 const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
 const autoTopUpThreshold = computed(() => {
-  const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
+  const parsed = Number.parseInt(String(autoTopUpThresholdInput.value), 10)
   if (Number.isNaN(parsed))
     return null
   return parsed
 })
 const isAutoTopUpThresholdValid = computed(() => autoTopUpThreshold.value !== null && autoTopUpThreshold.value >= MIN_AUTO_TOP_UP)
 const autoTopUpMonthlyLimit = computed(() => {
-  const parsed = Number.parseInt(autoTopUpMonthlyLimitInput.value, 10)
+  const parsed = Number.parseInt(String(autoTopUpMonthlyLimitInput.value), 10)
   if (Number.isNaN(parsed))
     return null
   return parsed
 })
+const topUpQuantityErrors = computed(() => validateField(topUpQuantityInput.value, [
+  rules.required(t('credits-top-up-quantity-label')),
+  rules.min(t('credits-top-up-quantity-label'), 1),
+]))
+const autoTopUpThresholdErrors = computed(() => validateField(autoTopUpThresholdInput.value, [
+  rules.required(t('credits-auto-top-up-threshold-label')),
+  rules.min(t('credits-auto-top-up-threshold-label'), MIN_AUTO_TOP_UP),
+]))
+const autoTopUpMonthlyLimitErrors = computed(() => validateField(autoTopUpMonthlyLimitInput.value, [
+  rules.required(t('credits-auto-top-up-monthly-limit-label')),
+  rules.min(t('credits-auto-top-up-monthly-limit-label'), 0),
+]))
 // 0 means no limit; otherwise the limit must allow at least one top-up.
 const isAutoTopUpMonthlyLimitValid = computed(() => {
   const limit = autoTopUpMonthlyLimit.value
@@ -957,7 +971,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <div class="flex w-full flex-col gap-3 sm:max-w-md">
               <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
                 <div class="relative w-full sm:flex-1">
-                  <FormKit
+                  <FormField
                     v-model="topUpQuantityInput"
                     type="number"
                     name="creditsTopUpQuantity"
@@ -967,17 +981,16 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                     step="1"
                     :placeholder="`${DEFAULT_TOP_UP_QUANTITY}`"
                     :label="t('credits-top-up-quantity-label')"
-                    validation="required|min:1"
+                    :errors="topUpQuantityErrors"
                     validation-visibility="live"
                     outer-class="w-full !mb-0"
                     label-class="text-xs font-semibold uppercase tracking-wide"
-                    help-class="hidden"
                     message-class="text-xs text-rose-200 mt-1"
                   >
                     <template #prefix>
                       $
                     </template>
-                  </FormKit>
+                  </FormField>
                 </div>
                 <div class="grid grid-cols-3 gap-2 sm:flex sm:shrink-0 sm:items-end">
                   <button
@@ -1058,7 +1071,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </button>
         </div>
         <div class="mt-6 max-w-md">
-          <FormKit
+          <FormField
             id="credits-auto-top-up-threshold"
             v-model="autoTopUpThresholdInput"
             type="number"
@@ -1068,7 +1081,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             min="10"
             step="1"
             :label="t('credits-auto-top-up-threshold-label')"
-            validation="required|min:10"
+            :errors="autoTopUpThresholdErrors"
             validation-visibility="live"
             outer-class="w-full !mb-0"
             :disabled="isAutoTopUpControlsDisabled"
@@ -1077,11 +1090,11 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <template #prefix>
               $
             </template>
-          </FormKit>
+          </FormField>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {{ t('credits-auto-top-up-min') }}
           </p>
-          <FormKit
+          <FormField
             id="credits-auto-top-up-monthly-limit"
             v-model="autoTopUpMonthlyLimitInput"
             type="number"
@@ -1091,7 +1104,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             min="0"
             step="1"
             :label="t('credits-auto-top-up-monthly-limit-label')"
-            validation="required|min:0"
+            :errors="autoTopUpMonthlyLimitErrors"
             validation-visibility="live"
             outer-class="w-full !mb-0 mt-4"
             :disabled="isAutoTopUpControlsDisabled"
@@ -1100,7 +1113,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <template #prefix>
               $
             </template>
-          </FormKit>
+          </FormField>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {{ t('credits-auto-top-up-monthly-limit-help') }}
           </p>

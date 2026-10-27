@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { BundlePickerRow } from '~/services/bundleColumns'
 import type { Database } from '~/types/database.types'
-import { FormKit } from '@formkit/vue'
 import { greaterOrEqual, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
 import { computed, nextTick, ref, watch, watchEffect } from 'vue'
@@ -11,15 +10,17 @@ import { toast } from 'vue-sonner'
 import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
 import IconInformation from '~icons/heroicons/information-circle'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import FormField from '~/components/forms/FormField.vue'
 import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
-import { checkCompatibilityNativePackages, defaultApiHost, isCompatible, useConsole } from '~/services/console'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatLocalDate } from '~/services/date'
+import { checkCompatibilityNativePackages, isCompatible } from '~/services/nativePackageCompatibility'
 import { checkPermissions } from '~/services/permissions'
 import { isInternalVersionName, withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
@@ -2276,14 +2277,13 @@ async function copyCurlCommand() {
 
         <!-- Search Input (only when in search mode) -->
         <div v-if="bundleLinkSearchMode" class="mb-6">
-          <FormKit
+          <FormField
             v-model="bundleLinkSearchVal"
             :prefix-icon="IconSearch"
             enterkeyhint="send"
             :placeholder="t('search-versions')"
-            :classes="{
-              outer: 'mb-0! w-full',
-            }"
+            :aria-label="t('search-versions')"
+            outer-class="mb-0! w-full"
           />
         </div>
 

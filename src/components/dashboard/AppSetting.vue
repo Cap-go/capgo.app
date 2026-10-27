@@ -3,17 +3,18 @@ import type { DeviceDataCollection } from '~/services/deviceDataCollection'
 import type { Database } from '~/types/database.types'
 import type { AppDeletionDetail, AppDeletionReason } from '~/utils/appDeletionFeedback'
 import { Camera } from '@capacitor/camera'
-import { FormKit, FormKitMessages } from '@formkit/vue'
 import { computedAsync } from '@vueuse/core'
 import mime from 'mime'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import ArrowDownTray from '~icons/heroicons/arrow-down-tray?raw'
-import ArrowUpTray from '~icons/heroicons/arrow-up-tray?raw'
+import ArrowDownTray from '~icons/heroicons/arrow-down-tray'
+import ArrowUpTray from '~icons/heroicons/arrow-up-tray'
 import Pencil from '~icons/heroicons/pencil-square'
-import transfer from '~icons/mingcute/transfer-horizontal-line?raw&width=36&height=36'
-import gearSix from '~icons/ph/gear-six?raw'
-import iconName from '~icons/ph/user?raw'
+import IconTransfer from '~icons/mingcute/transfer-horizontal-line'
+import IconGearSix from '~icons/ph/gear-six'
+import IconName from '~icons/ph/user'
+import FormCheckbox from '~/components/forms/FormCheckbox.vue'
+import FormField from '~/components/forms/FormField.vue'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
@@ -278,6 +279,64 @@ async function deleteApp() {
 const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(appRef.value as unknown))
 const deviceDataCollectedCount = computed(() => DEVICE_DATA_COLLECTION_KEYS.filter(key => deviceDataCollection.value[key]).length)
 const deviceDataCollectionOpen = ref(useRoute().hash === '#device-data-collection')
+
+// Form values. The fields only render while `!isFirstLoading && !isLoading`, so they are
+// re-seeded from the saved app every time the section shows again (e.g. after a submit).
+const appNameInput = ref('')
+const iosStoreUrlInput = ref('')
+const androidStoreUrlInput = ref('')
+const buildTimeoutMinutesInput = ref<number | string>(Math.trunc(DEFAULT_BUILD_TIMEOUT_SECONDS / 60))
+const exposeMetadataInput = ref(false)
+const allowPreviewInput = ref(false)
+const allowDeviceCustomIdInput = ref(false)
+const blockProviderInfraRequestsInput = ref(false)
+const collectInputs = reactive<DeviceDataCollection>(parseAppRowDeviceDataCollection(null))
+const isAppFormVisible = computed(() => !isFirstLoading.value && !isLoading.value)
+
+function seedAppForm() {
+  appNameInput.value = appRef.value?.name ?? ''
+  iosStoreUrlInput.value = appRef.value?.ios_store_url ?? ''
+  androidStoreUrlInput.value = appRef.value?.android_store_url ?? ''
+  buildTimeoutMinutesInput.value = buildTimeoutMinutes.value
+  exposeMetadataInput.value = appRef.value?.expose_metadata ?? false
+  allowPreviewInput.value = appRef.value?.allow_preview ?? false
+  allowDeviceCustomIdInput.value = appRef.value?.allow_device_custom_id ?? false
+  blockProviderInfraRequestsInput.value = appRef.value?.block_provider_infra_requests ?? false
+  Object.assign(collectInputs, deviceDataCollection.value)
+}
+watch(isAppFormVisible, (visible) => {
+  if (visible)
+    seedAppForm()
+}, { immediate: true })
+
+// Ignore empty or non-numeric edits so a cleared field never saves an invalid retention.
+function setCustomRetentionValue(value: string | number | null | undefined) {
+  const parsed = Number(value)
+  if (value === '' || value === null || value === undefined || !Number.isFinite(parsed))
+    return
+  customRetentionValue.value = Math.trunc(parsed)
+}
+
+async function onSubmit() {
+  await submit({
+    app_name: appNameInput.value,
+    ios_store_url: iosStoreUrlInput.value,
+    android_store_url: androidStoreUrlInput.value,
+    expose_metadata: exposeMetadataInput.value,
+    allow_preview: allowPreviewInput.value,
+    allow_device_custom_id: allowDeviceCustomIdInput.value,
+    block_provider_infra_requests: blockProviderInfraRequestsInput.value,
+    collect_country: collectInputs.country,
+    collect_platform: collectInputs.platform,
+    collect_os_version: collectInputs.os_version,
+    collect_plugin_version: collectInputs.plugin_version,
+    collect_version_build: collectInputs.version_build,
+    collect_is_emulator: collectInputs.is_emulator,
+    collect_is_prod: collectInputs.is_prod,
+    collect_install_source: collectInputs.install_source,
+    build_timeout_minutes: buildTimeoutMinutesInput.value,
+  })
+}
 
 async function submit(form: {
   app_name: string
@@ -1371,7 +1430,7 @@ async function transferAppOwnership() {
 
 <template>
   <div class="h-full pb-8 md:pb-0 max-h-fit grow">
-    <FormKit id="update-app" type="form" :actions="false" @submit="submit">
+    <form id="update-app" novalidate @submit.prevent="onSubmit">
       <!-- Panel body -->
       <div class="p-6 space-y-6">
         <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
@@ -1412,32 +1471,32 @@ async function transferAppOwnership() {
         <section v-if="!isFirstLoading && !isLoading">
           <div class="mt-5 space-y-4 sm:flex sm:items-center sm:space-y-0 sm:space-x-4">
             <div class="sm:w-1/2">
-              <FormKit
+              <FormField
                 type="text"
                 name="app_id"
-                :prefix-icon="iconName"
-                :value="appRef?.app_id ?? ''"
+                :prefix-icon="IconName"
+                :model-value="appRef?.app_id ?? ''"
                 :label="t('app-id')"
                 :disabled="true"
               />
-              <FormKit
+              <FormField
+                v-model="appNameInput"
                 type="text"
                 name="app_name"
-                :prefix-icon="iconName"
-                :value="appRef?.name ?? ''"
+                :prefix-icon="IconName"
                 :label="t('app-name')"
               />
-              <FormKit
+              <FormField
+                v-model="iosStoreUrlInput"
                 type="url"
                 name="ios_store_url"
-                :value="appRef?.ios_store_url ?? ''"
                 label="App Store link"
                 placeholder="https://apps.apple.com/..."
               />
-              <FormKit
+              <FormField
+                v-model="androidStoreUrlInput"
                 type="url"
                 name="android_store_url"
-                :value="appRef?.android_store_url ?? ''"
                 label="Google Play link"
                 placeholder="https://play.google.com/store/apps/details?id=..."
               />
@@ -1470,33 +1529,22 @@ async function transferAppOwnership() {
                 @keydown.enter.prevent="setDefaultChannel"
                 @keydown.space.prevent="setDefaultChannel"
               >
-                <FormKit
+                <FormField
                   type="text"
                   name="default_upload_channel"
-                  class="flex-1 min-w-0"
+                  outer-class="flex-1 min-w-0"
+                  input-class="cursor-pointer w-full truncate"
+                  readonly
                   :prefix-icon="ArrowUpTray"
-                  :value="appRef?.default_upload_channel ?? t('not-set')"
+                  :model-value="appRef?.default_upload_channel ?? t('not-set')"
                   :label="t('default-upload-channel')"
-                  :sections-schema="{
-                    suffix: {
-                      children: [
-                        '$slots.suffix',
-                      ],
-                    },
-                    input: {
-                      attrs: {
-                        readonly: true,
-                        class: 'cursor-pointer w-full truncate',
-                      },
-                    },
-                  }"
                 >
                   <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="setDefaultChannel">
-                      <Pencil width="24px" height="24px" />
+                    <button type="button" class="w-6 h-6 ml-auto mr-1" :aria-label="t('default-upload-channel')" @click.stop="setDefaultChannel">
+                      <Pencil width="24px" height="24px" aria-hidden="true" />
                     </button>
                   </template>
-                </FormKit>
+                </FormField>
               </div>
               <div
                 :key="`download-${forceDownloadBump}`"
@@ -1507,70 +1555,58 @@ async function transferAppOwnership() {
                 @keydown.enter.prevent="openDefaultDownloadChannelDialog"
                 @keydown.space.prevent="openDefaultDownloadChannelDialog"
               >
-                <FormKit
+                <FormField
                   type="text"
                   name="default_download_channel"
-                  class="flex-1 min-w-0"
+                  outer-class="flex-1 min-w-0"
+                  input-class="cursor-pointer w-full truncate"
+                  readonly
                   :prefix-icon="ArrowDownTray"
-                  :value="downloadChannelLabel"
+                  :model-value="downloadChannelLabel"
                   :label="t('default-download-channel')"
-                  :sections-schema="{
-                    suffix: {
-                      children: [
-                        '$slots.suffix',
-                      ],
-                    },
-                    help: {
-                      children: [
-                        '$slots.help',
-                      ],
-                    },
-                    input: {
-                      attrs: {
-                        readonly: true,
-                        class: 'cursor-pointer w-full truncate',
-                      },
-                    },
-                  }"
+                  :help="t('default-download-channel-help')"
                 >
                   <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" @click.stop="openDefaultDownloadChannelDialog">
-                      <Pencil width="24px" height="24px" />
+                    <button type="button" class="w-6 h-6 ml-auto mr-1" :aria-label="t('default-download-channel')" @click.stop="openDefaultDownloadChannelDialog">
+                      <Pencil width="24px" height="24px" aria-hidden="true" />
                     </button>
                   </template>
-                  <template #help>
-                    <span class="block text-xs text-slate-500 dark:text-slate-300">
-                      {{ t('default-download-channel-help') }}
-                    </span>
-                    <span
-                      v-if="downloadChannelWarning"
-                      class="block mt-1 text-xs font-medium text-amber-600 dark:text-amber-400"
-                    >
-                      {{ downloadChannelWarning }}
-                    </span>
-                  </template>
-                </FormKit>
+                </FormField>
               </div>
+              <p
+                v-if="downloadChannelWarning"
+                class="-mt-3 mb-4 text-xs font-medium text-amber-600 dark:text-amber-400"
+              >
+                {{ downloadChannelWarning }}
+              </p>
               <!-- Bundle Retention Setting -->
-              <FormKit
-                v-model="selectedRetentionPreset"
-                type="select"
-                name="retention_preset"
-                :prefix-icon="gearSix"
-                :label="t('retention-label')"
-                :options="retentionOptions"
-              />
+              <div class="mb-4">
+                <label for="app-retention-preset" class="inline-flex mb-1 text-sm font-bold text-neutral-700 dark:text-neutral-300">{{ t('retention-label') }}</label>
+                <div class="flex items-center w-full px-3 py-2 text-base border border-neutral-400 rounded-lg shadow bg-white dark:bg-transparent dark:border-neutral-500 focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
+                  <IconGearSix class="mr-2 -ml-1 w-[1em] h-[1em] shrink-0 text-neutral-600 dark:text-neutral-300" aria-hidden="true" />
+                  <select
+                    id="app-retention-preset"
+                    v-model="selectedRetentionPreset"
+                    name="retention_preset"
+                    class="w-full min-w-0 p-0 text-base bg-transparent border-none outline-hidden focus:ring-0 text-neutral-700 dark:text-neutral-300"
+                  >
+                    <option v-for="option in retentionOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </div>
+              </div>
               <div v-if="isCustomRetention">
-                <FormKit
-                  v-model="customRetentionValue"
+                <FormField
+                  :model-value="customRetentionValue"
                   type="number"
-                  number="integer"
                   name="custom_retention"
-                  :prefix-icon="gearSix"
+                  :prefix-icon="IconGearSix"
                   :label="t('retention-custom-value')"
                   :help="t('retention-custom-help')"
                   :min="0"
                   :max="63113903"
+                  @update:model-value="setCustomRetentionValue"
                 />
               </div>
               <p v-if="effectiveRetentionValue === 0" class="text-xs font-medium text-amber-600 dark:text-amber-400">
@@ -1579,42 +1615,37 @@ async function transferAppOwnership() {
               <p v-if="effectiveRetentionValue >= 63113904" class="text-xs font-medium text-blue-600 dark:text-blue-400">
                 {{ t('retention-never-info') }}
               </p>
-              <FormKit
+              <FormField
+                v-model="buildTimeoutMinutesInput"
                 type="number"
-                number="integer"
                 name="build_timeout_minutes"
-                :prefix-icon="gearSix"
-                :value="buildTimeoutMinutes"
+                :prefix-icon="IconGearSix"
                 :label="t('build-timeout-label')"
                 :help="t('build-timeout-help')"
                 :min="MIN_BUILD_TIMEOUT_MINUTES"
                 :max="MAX_BUILD_TIMEOUT_MINUTES"
               />
-              <FormKit
-                type="checkbox"
+              <FormCheckbox
+                v-model="exposeMetadataInput"
                 name="expose_metadata"
-                :value="appRef?.expose_metadata ?? false"
                 :label="t('expose-metadata')"
                 :help="t('expose-metadata-help')"
               />
-              <FormKit
-                type="checkbox"
+              <FormCheckbox
+                v-model="allowPreviewInput"
                 name="allow_preview"
-                :value="appRef?.allow_preview ?? false"
                 :label="t('allow-preview')"
                 :help="t('allow-preview-help')"
               />
-              <FormKit
-                type="checkbox"
+              <FormCheckbox
+                v-model="allowDeviceCustomIdInput"
                 name="allow_device_custom_id"
-                :value="appRef?.allow_device_custom_id ?? false"
                 :label="t('allow-device-custom-id')"
                 :help="t('allow-device-custom-id-help')"
               />
-              <FormKit
-                type="checkbox"
+              <FormCheckbox
+                v-model="blockProviderInfraRequestsInput"
                 name="block_provider_infra_requests"
-                :value="appRef?.block_provider_infra_requests ?? false"
                 :label="t('block-provider-infra-requests')"
                 :help="t('block-provider-infra-requests-help')"
               />
@@ -1644,104 +1675,80 @@ async function transferAppOwnership() {
                 <p class="mt-2 mb-3 text-sm text-neutral-700 dark:text-neutral-300">
                   {{ t('device-data-collection-help') }}
                 </p>
-                <FormKit
+                <FormCheckbox
                   id="collect-country"
-                  type="checkbox"
+                  v-model="collectInputs.country"
                   name="collect_country"
-                  :value="deviceDataCollection.country"
                   :label="t('collect-country')"
                   :help="t('collect-country-help')"
                 />
-                <FormKit
+                <FormCheckbox
                   id="collect-platform"
-                  type="checkbox"
+                  v-model="collectInputs.platform"
                   name="collect_platform"
-                  :value="deviceDataCollection.platform"
                   :label="t('collect-platform')"
                   :help="t('collect-platform-help')"
                 />
-                <FormKit
+                <FormCheckbox
                   id="collect-os-version"
-                  type="checkbox"
+                  v-model="collectInputs.os_version"
                   name="collect_os_version"
-                  :value="deviceDataCollection.os_version"
                   :label="t('collect-os-version')"
                   :help="t('collect-os-version-help')"
                 />
-                <FormKit
+                <FormCheckbox
                   id="collect-plugin-version"
-                  type="checkbox"
+                  v-model="collectInputs.plugin_version"
                   name="collect_plugin_version"
-                  :value="deviceDataCollection.plugin_version"
                   :label="t('collect-plugin-version')"
                   :help="t('collect-plugin-version-help')"
                 />
-                <FormKit
+                <FormCheckbox
                   id="collect-version-build"
-                  type="checkbox"
+                  v-model="collectInputs.version_build"
                   name="collect_version_build"
-                  :value="deviceDataCollection.version_build"
                   :label="t('collect-version-build')"
                   :help="t('collect-version-build-help')"
                 />
-                <FormKit
+                <FormCheckbox
                   id="collect-is-emulator"
-                  type="checkbox"
+                  v-model="collectInputs.is_emulator"
                   name="collect_is_emulator"
-                  :value="deviceDataCollection.is_emulator"
                   :label="t('collect-is-emulator')"
                   :help="t('collect-is-emulator-help')"
                 />
-                <FormKit
+                <FormCheckbox
                   id="collect-is-prod"
-                  type="checkbox"
+                  v-model="collectInputs.is_prod"
                   name="collect_is_prod"
-                  :value="deviceDataCollection.is_prod"
                   :label="t('collect-is-prod')"
                   :help="t('collect-is-prod-help')"
                 />
-                <FormKit
+                <FormCheckbox
                   id="collect-install-source"
-                  type="checkbox"
+                  v-model="collectInputs.install_source"
                   name="collect_install_source"
-                  :value="deviceDataCollection.install_source"
                   :label="t('collect-install-source')"
                   :help="t('collect-install-source-help')"
                 />
               </details>
-              <FormKit
-                type="button"
-                :label="t('transfer-app-ownership')"
-                :help="t('change-app-organisation-owner')"
-                :prefix-icon="transfer"
-                :sections-schema="{
-                  outer: {
-                    $el: 'div',
-                    attrs: {
-                      class: 'flex flex-col-reverse',
-                    },
-                  },
-                  help: {
-                    attrs: {
-                      class: 'block text-neutral-700 text-sm dark:text-neutral-300 mb-1',
-                    },
-                  },
-                  input: {
-                    attrs: {
-                      class: 'inline-flex items-center px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 dark:text-white border-slate-500 focus:ring-4 focus:outline-hidden focus:ring-blue-300 dark:focus:ring-blue-800 cursor-pointer',
-                    },
-                  },
-                  prefix: {
-                    attrs: {
-                      class: 'w-4 h-4 mr-2',
-                    },
-                  },
-                }"
-                @click="transferAppOwnership"
-              />
+              <div class="flex flex-col mb-4">
+                <p class="block mb-1 text-sm text-neutral-700 dark:text-neutral-300">
+                  {{ t('change-app-organisation-owner') }}
+                </p>
+                <div>
+                  <button
+                    type="button"
+                    class="inline-flex items-center px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 dark:text-white border-slate-500 focus:ring-4 focus:outline-hidden focus:ring-blue-300 dark:focus:ring-blue-800 cursor-pointer"
+                    @click="transferAppOwnership"
+                  >
+                    <IconTransfer class="w-4 h-4 mr-2" aria-hidden="true" />
+                    {{ t('transfer-app-ownership') }}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-          <FormKitMessages />
         </section>
       </div>
       <!-- Panel footer -->
@@ -1765,7 +1772,7 @@ async function transferAppOwnership() {
           </div>
         </div>
       </footer>
-    </FormKit>
+    </form>
 
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === APP_DELETE_DIALOG_ID && appRef" defer to="#dialog-v2-content">
       <AppDeleteDialogContent

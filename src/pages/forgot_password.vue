@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
-import iconEmail from '~icons/oui/email?raw'
-import iconPassword from '~icons/ph/key?raw'
+import IconEmail from '~icons/oui/email'
+import IconPassword from '~icons/ph/key'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
+import { rules, validateField } from '~/utils/formValidation'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -26,14 +26,23 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 
 const isLoading = ref(false)
 const isLoadingMain = ref(true)
-const initialEmail = ref('')
-const initialFormValue = computed(() => ({ email: initialEmail.value }))
+const email = ref('')
+const password = ref('')
+const passwordConfirm = ref('')
+const submitted = ref(false)
+const formErrors = ref<string[]>([])
+const emailErrors = computed(() => validateField(email.value, [rules.required(t('email'), { trim: true })]))
+const passwordErrors = computed(() => validateField(password.value, [rules.required(t('password')), rules.length(t('password'), 6)]))
+const passwordConfirmErrors = computed(() => validateField(passwordConfirm.value, [
+  rules.required(t('password-confirmatio')),
+  rules.confirm(t('password-confirmatio'), () => password.value),
+]))
 const cardDescription = computed(() => step.value === 1 ? t('enter-your-email-add') : t('enter-your-new-passw'))
 
 if (typeof history !== 'undefined') {
   const currentHistoryState = history.state as Record<string, unknown> | null
   if (typeof currentHistoryState?.resetEmail === 'string') {
-    initialEmail.value = currentHistoryState.resetEmail
+    email.value = currentHistoryState.resetEmail
     const nextHistoryState = { ...currentHistoryState }
     delete nextHistoryState.resetEmail
     history.replaceState(nextHistoryState, '')
@@ -53,7 +62,7 @@ function getRecoveryParams() {
 }
 
 function finishWithError(message: string, error?: unknown) {
-  setErrors('forgot-password', [message], {})
+  formErrors.value = [message]
   if (error)
     console.error('forgot password error', error)
   isLoading.value = false
@@ -67,7 +76,7 @@ async function step1(form: { email: string }) {
     if (error.message.includes('captcha')) {
       toast.error(t('captcha-fail'))
     }
-    setErrors('forgot-password', [error.message], {})
+    formErrors.value = [error.message]
     console.error('error reset', error)
   }
   else {
@@ -148,14 +157,14 @@ async function step2(form: { password: string, password_confirm: string }) {
   const { error: updateError } = await capgo.auth.updateUser({ password: form.password })
   isLoading.value = false
   if (updateError) {
-    setErrors('forgot-password', [updateError.message], {})
+    formErrors.value = [updateError.message]
     return
   }
   form.password = ''
   form.password_confirm = ''
   const { error: signOutError } = await capgo.auth.signOut({ scope: 'others' })
   if (signOutError) {
-    setErrors('forgot-password', [signOutError.message], {})
+    formErrors.value = [signOutError.message]
     return
   }
   toast.success(t('forgot-success'))
@@ -170,6 +179,17 @@ async function submit(form: { email: string, password: string, password_confirm:
   else if (step.value === 2) {
     await step2(form)
   }
+}
+
+function onSubmit() {
+  submitted.value = true
+  formErrors.value = []
+  const hasErrors = step.value === 1
+    ? emailErrors.value.length > 0
+    : step.value === 2 && (passwordErrors.value.length > 0 || passwordConfirmErrors.value.length > 0)
+  if (hasErrors)
+    return
+  return submit({ email: email.value, password: password.value, password_confirm: passwordConfirm.value })
 }
 
 watchEffect(() => {
@@ -196,49 +216,54 @@ watchEffect(() => {
       <CapgoLoader size="w-14 h-14" :label="t('loading')" class="my-auto" />
     </div>
 
-    <FormKit v-else id="forgot-password" type="form" :actions="false" :value="initialFormValue" @submit="submit">
+    <form v-else id="forgot-password" novalidate @submit.prevent="onSubmit">
       <div class="space-y-5 text-slate-500 dark:text-slate-300">
         <div v-if="step === 1">
-          <FormKit
+          <FormField
+            v-model="email"
             type="email"
             name="email"
             :label="t('email')"
             :disabled="isLoading"
-            :prefix-icon="iconEmail"
+            :prefix-icon="IconEmail"
             data-test="email"
             inputmode="email"
             autocomplete="email"
-            validation="required:trim"
+            :errors="emailErrors"
+            :submitted="submitted"
           />
         </div>
 
         <div v-if="step === 2">
-          <FormKit
+          <FormField
+            v-model="password"
             type="password"
             name="password"
-            :prefix-icon="iconPassword"
+            :prefix-icon="IconPassword"
             autocomplete="new-password"
             enterkeyhint="send"
             :disabled="isLoading"
             :label="t('password')"
             :help="t('6-characters-minimum')"
-            validation="required|length:6"
+            :errors="passwordErrors"
             validation-visibility="dirty"
+            :submitted="submitted"
           />
         </div>
 
         <div v-if="step === 2">
-          <FormKit
+          <FormField
+            v-model="passwordConfirm"
             type="password"
-            :prefix-icon="iconPassword"
+            :prefix-icon="IconPassword"
             name="password_confirm"
             autocomplete="new-password"
             :disabled="isLoading"
             :label="t('confirm-password')"
             :help="t('confirm-password')"
-            validation="required|confirm"
+            :errors="passwordConfirmErrors"
             validation-visibility="dirty"
-            :validation-label="t('password-confirmatio')"
+            :submitted="submitted"
           />
         </div>
 
@@ -246,7 +271,11 @@ watchEffect(() => {
           <VueTurnstile v-model="turnstileToken" size="flexible" :site-key="captchaKey" />
         </div>
 
-        <FormKitMessages />
+        <ul v-if="formErrors.length" role="alert" class="mb-1.5">
+          <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+            {{ error }}
+          </li>
+        </ul>
 
         <div>
           <button type="submit" data-test="submit" :disabled="isLoading" :aria-busy="isLoading ? 'true' : 'false'" :class="authPrimaryButtonClass">
@@ -271,7 +300,7 @@ watchEffect(() => {
           </router-link>
         </div>
       </div>
-    </FormKit>
+    </form>
 
     <template #footer>
       <section class="mt-6 flex flex-col items-center">

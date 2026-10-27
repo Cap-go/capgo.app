@@ -1,5 +1,5 @@
 import type { LocationQuery } from 'vue-router'
-import { isLocalDevHost } from './sanitize'
+import { isLocalDevHost } from './urlSafety'
 
 function hasControlCharacters(path: string): boolean {
   for (let i = 0; i < path.length; i++) {

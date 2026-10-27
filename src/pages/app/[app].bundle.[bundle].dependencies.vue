@@ -2,15 +2,15 @@
 import type { BundleSummaryWithNativePackages } from '~/services/bundleColumns'
 import type { IncompatibilityReason, NativePackage, PackageComparison, PackageStatus } from '~/services/bundleCompatibility'
 import type { Database } from '~/types/database.types'
-import { FormKit } from '@formkit/vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconExternalLink from '~icons/heroicons/arrow-top-right-on-square'
 import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import FormField from '~/components/forms/FormField.vue'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '~/services/bundleCompatibility'
 import { useConsole } from '~/services/console'
@@ -560,12 +560,13 @@ watch(bundleRouteKey, async (key) => {
 
               <div class="px-2 pb-2 relative">
                 <div class="px-2 py-3">
-                  <FormKit
+                  <FormField
                     v-model="search"
                     :prefix-icon="IconSearch"
                     :placeholder="t('search-by-name')"
+                    :aria-label="t('search-by-name')"
                     :disabled="tableLoading"
-                    :classes="{ outer: 'mb-0! w-full md:w-96' }"
+                    outer-class="mb-0! w-full md:w-96"
                   />
                 </div>
 

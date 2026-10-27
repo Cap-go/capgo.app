@@ -6,11 +6,10 @@ import type { DeviceDataCollection, DeviceDataCollectionKey } from '~/services/d
 import type { NativeActiveDevicesSummary, NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import type { Organization } from '~/stores/organization'
 import { useDark } from '@vueuse/core'
-import { CategoryScale, Chart, Filler, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
-import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { Line } from '~/components/dashboard/lazyCharts'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales } from '~/services/chartConfig'
 import { useChartData } from '~/services/chartDataService'
@@ -133,8 +132,6 @@ interface ChartApiData {
   previousPeriodActiveDevices?: NativeActiveDevicesSummary
   dailyPlatformActive?: NativeDailyPlatformActive
 }
-
-Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Filler)
 
 const isDark = useDark()
 const { t } = useI18n()

@@ -1,4 +1,11 @@
-@import 'tailwindcss';
+/* Only scan the console sources: automatic detection from the repo root also picked up
+   class-like strings from the backend, CLI, docs and tests and shipped them as CSS. */
+@import 'tailwindcss' source(none);
+@source '../../index.html';
+@source '../';
+@source '../../playwright/fixtures';
+/* Classes that only appear inside HTML translation strings in messages/en.json. */
+@source inline('text-blue-500 underline hover:text-blue-600');
 
 :root {
   --safe-area-top: env(safe-area-inset-top, 0px);

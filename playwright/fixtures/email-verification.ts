@@ -1,5 +1,4 @@
 import type { Session } from '../../src/services/consoleClient'
-import { defaultConfig, plugin } from '@formkit/vue'
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h } from 'vue'
 import { createRouter, createWebHistory, RouterView } from 'vue-router'
@@ -96,7 +95,6 @@ async function mountPreview() {
   })
   const app = createApp(defineComponent({ setup: () => () => [h(RouterView), h(Toaster)] }))
   app.use(createPinia())
-  app.use(plugin, defaultConfig())
   app.use(i18n)
   app.use(router)
   await router.isReady()

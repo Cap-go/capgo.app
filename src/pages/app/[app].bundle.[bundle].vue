@@ -4,7 +4,6 @@ import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
 import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { FormKit } from '@formkit/vue'
 import { parse } from '@std/semver'
 import { computedAsync } from '@vueuse/core'
 import { computed, ref, watch, watchEffect } from 'vue'
@@ -15,16 +14,18 @@ import IconArchiveBoxArrowDown from '~icons/heroicons/archive-box-arrow-down'
 import Settings from '~icons/heroicons/cog-8-tooth'
 import IconDocumentDuplicate from '~icons/heroicons/document-duplicate'
 import IconTrash from '~icons/heroicons/trash'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
+import FormField from '~/components/forms/FormField.vue'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
-import { checkCompatibilityNativePackages, isCompatible, useConsole } from '~/services/console'
+import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
+import { checkCompatibilityNativePackages, isCompatible } from '~/services/nativePackageCompatibility'
 import { checkPermissions } from '~/services/permissions'
 import { openVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -1192,14 +1193,13 @@ async function deleteBundle() {
 
         <!-- Search Input -->
         <div class="mb-6">
-          <FormKit
+          <FormField
             v-model="channelSearchVal"
             :prefix-icon="IconSearch"
             enterkeyhint="send"
             :placeholder="t('search-channels')"
-            :classes="{
-              outer: 'mb-0! w-full',
-            }"
+            :aria-label="t('search-channels')"
+            outer-class="mb-0! w-full"
           />
         </div>
 

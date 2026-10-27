@@ -714,7 +714,7 @@ test.describe('Registration', () => {
     await page.fill('[data-test="email"]', 'password-policy@example.com')
     await page.fill('[data-test="password"]', 'Password!')
     await page.click('[data-test="submit"]')
-    await expect(page.locator('.formkit-messages [data-message-type="validation"]')).toContainText(/number/i)
+    await expect(page.locator('[data-message-type="validation"]')).toContainText(/number/i)
     expect(requests).toBe(0)
     await expect(page).toHaveURL(/\/register\/?$/)
   })

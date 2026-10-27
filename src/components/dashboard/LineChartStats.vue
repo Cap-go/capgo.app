@@ -4,13 +4,12 @@ import type { AnnotationOptions } from '../../services/chartAnnotations'
 import type { TooltipClickHandler } from '../../services/chartTooltip'
 import { useDark } from '@vueuse/core'
 import { computed } from 'vue'
-import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { Bar, Line } from '~/components/dashboard/lazyCharts'
 import { useDashboardDailyChartCycle } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions, getSafeChartHue } from '~/services/chartTodayLine'
-import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentUtcMonth } from '~/services/date'
 import { inlineAnnotationPlugin } from '../../services/chartAnnotations'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
@@ -40,8 +39,6 @@ const props = defineProps({
     default: () => ({}),
   },
 })
-
-registerDashboardCharts()
 
 const isDark = useDark()
 const { t } = useI18n()

@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import VueTurnstile from 'vue-turnstile'
-import iconEmail from '~icons/oui/email?raw'
-import iconPassword from '~icons/ph/key?raw'
+import IconEmail from '~icons/oui/email'
+import IconPassword from '~icons/ph/key'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { getCapgoApiErrorCode } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { FunctionsHttpError } from '~/services/consoleClient'
 import { registerAccount } from '~/services/registration'
 import { openSupport } from '~/services/support'
+import { rules, validateField } from '~/utils/formValidation'
 
 const router = useRouter()
 const capgo = useConsole()
@@ -20,6 +20,20 @@ const { t } = useI18n()
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const isLoading = ref(false)
+const email = ref('')
+const password = ref('')
+const submitted = ref(false)
+const formErrors = ref<string[]>([])
+const emailErrors = computed(() => validateField(email.value, [rules.required(t('email'), { trim: true }), rules.email()]))
+const passwordErrors = computed(() => validateField(password.value, [
+  rules.required(t('password')),
+  rules.length(t('password'), 6),
+  rules.containsAlpha(t('password')),
+  rules.containsUppercase(t('password')),
+  rules.containsLowercase(t('password')),
+  rules.containsNumeric(t('password')),
+  rules.containsSymbol(t('password')),
+]))
 
 if (window.location.host === 'console.capgo.app') {
   // do not allow to register on webapp on production
@@ -45,7 +59,7 @@ async function submit(form: { password: string, email: string }) {
       if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string')
         message = body.message
     }
-    setErrors('register-account', [code === 'account_deleted' ? t('used-to-create') : message], {})
+    formErrors.value = [code === 'account_deleted' ? t('used-to-create') : message]
     // Re-enable only after the error is shown, so a quick second click cannot start another signup.
     isLoading.value = false
     return
@@ -64,6 +78,14 @@ async function submit(form: { password: string, email: string }) {
     window.location.assign('/dashboard')
   }
 }
+
+function onSubmit() {
+  submitted.value = true
+  formErrors.value = []
+  if (emailErrors.value.length || passwordErrors.value.length)
+    return
+  return submit({ email: email.value, password: password.value })
+}
 </script>
 
 <template>
@@ -72,43 +94,47 @@ async function submit(form: { password: string, email: string }) {
     :card-kicker="t('register-heading')"
     :card-title="t('create-a-free-account')"
   >
-    <FormKit id="register-account" type="form" :actions="false" @submit="submit">
+    <form id="register-account" novalidate @submit.prevent="onSubmit">
       <div class="grid gap-4 text-slate-500 dark:text-slate-300 md:grid-cols-2">
         <div class="md:col-span-2">
-          <FormKitMessages data-test="form-error" />
+          <ul v-if="formErrors.length" role="alert" data-test="form-error" class="mb-1.5">
+            <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+              {{ error }}
+            </li>
+          </ul>
         </div>
 
         <div class="md:col-span-2">
-          <FormKit
+          <FormField
+            v-model="email"
             type="email"
             name="email"
-            :prefix-icon="iconEmail"
+            :prefix-icon="IconEmail"
             autofocus
             autocomplete="email"
             inputmode="email"
             enterkeyhint="next"
-            validation="required:trim|email"
+            :errors="emailErrors"
+            :submitted="submitted"
             :label="t('email')"
             data-test="email"
-            :classes="{
-              outer: 'mb-0!',
-            }"
+            outer-class="mb-0!"
           />
         </div>
 
         <div class="md:col-span-2">
-          <FormKit
+          <FormField
+            v-model="password"
             type="password"
             name="password"
-            :prefix-icon="iconPassword"
+            :prefix-icon="IconPassword"
             autocomplete="new-password"
             :label="t('password')"
             data-test="password"
-            validation="required|length:6|contains_alpha|contains_uppercase|contains_lowercase|contains_numeric|contains_symbol"
+            :errors="passwordErrors"
             validation-visibility="dirty"
-            :classes="{
-              outer: 'mb-0!',
-            }"
+            :submitted="submitted"
+            outer-class="mb-0!"
           />
         </div>
 
@@ -143,7 +169,7 @@ async function submit(form: { password: string, email: string }) {
           </router-link>
         </div>
       </div>
-    </FormKit>
+    </form>
 
     <template #footer>
       <section class="mt-6 flex flex-col items-center">

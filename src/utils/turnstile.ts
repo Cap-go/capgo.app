@@ -1,4 +1,4 @@
-/** VueTurnstile instance ref shape — only reset() is needed for safe cleanup. */
+/** ~/components/VueTurnstile.vue instance ref shape — only reset() is needed for safe cleanup. */
 export type TurnstileComponentRef = { reset?: () => void } | null | undefined
 
 /**

@@ -2,7 +2,6 @@
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/database.types'
-import { FormKit } from '@formkit/vue'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, h, ref, watch } from 'vue'
@@ -12,6 +11,7 @@ import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
 import ChannelIntroduction from '~/components/dashboard/ChannelIntroduction.vue'
+import FormField from '~/components/forms/FormField.vue'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
@@ -481,10 +481,11 @@ watch(props, async () => {
     <!-- Teleport Content for Add Channel Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('channel-create')" defer to="#dialog-v2-content">
       <div class="space-y-4">
-        <FormKit
+        <FormField
           v-model="newChannelName"
           type="text"
           :placeholder="t('channel-name-placeholder')"
+          :aria-label="t('channel-name')"
         />
       </div>
     </Teleport>

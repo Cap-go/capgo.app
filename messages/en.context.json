@@ -4001,5 +4001,18 @@
   "native-builds": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-regional-discount": "Used in Capgo web console areas: pages/settings/organization. Role: UI badge. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-regional-discount-requirement": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "plans-regional-discount-requirement-generic": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "plans-regional-discount-requirement-generic": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "validation-required": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-email": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-length-min": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-length-max": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-length-between": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-min": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-uuid": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-confirm": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-contains-alpha": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-contains-uppercase": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-contains-lowercase": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-contains-numeric": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "validation-contains-symbol": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged."
 }

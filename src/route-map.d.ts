@@ -45,6 +45,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/agent/claim': RouteRecordInfo<
+      '/agent/claim',
+      '/agent/claim',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/ApiKeys': RouteRecordInfo<
       '/ApiKeys',
       '/apikeys',
@@ -608,6 +615,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/accountDisabled.vue': {
       routes:
         | '/accountDisabled'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/agent/claim.vue': {
+      routes:
+        | '/agent/claim'
       views:
         | never
       pathParamNames:

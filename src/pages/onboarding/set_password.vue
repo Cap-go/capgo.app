@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
-import { ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import iconPassword from '~icons/ph/key?raw'
+import IconPassword from '~icons/ph/key'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
+import FormField from '~/components/forms/FormField.vue'
 import { useConsole } from '~/services/console'
 import { openSupport } from '~/services/support'
+import { rules, validateField } from '~/utils/formValidation'
 
 const isLoading = ref(false)
 const capgo = useConsole()
@@ -17,6 +17,17 @@ const { t } = useI18n()
 
 const router = useRouter()
 const route = useRoute('/onboarding/set_password')
+
+const password = ref('')
+const passwordConfirm = ref('')
+const submitted = ref(false)
+const formErrors = ref<string[]>([])
+// The previous `contain_*` rule names were never recognized by the validator, so only length is enforced.
+const passwordErrors = computed(() => validateField(password.value, [rules.required(t('password')), rules.length(t('password'), 6)]))
+const passwordConfirmErrors = computed(() => validateField(passwordConfirm.value, [
+  rules.required(t('password-confirmatio')),
+  rules.confirm(t('password-confirmatio'), () => password.value),
+]))
 
 async function signInUser() {
   if (!route.hash) {
@@ -41,18 +52,27 @@ async function submit(form: { password: string }) {
   const { error: updateError } = await capgo.auth.updateUser({ password: form.password })
   isLoading.value = false
   if (updateError) {
-    setErrors('set-password', [updateError.message], {})
+    formErrors.value = [updateError.message]
     return
   }
 
   const { error: signOutError } = await capgo.auth.signOut({ scope: 'others' })
   if (signOutError) {
-    setErrors('set-password', [signOutError.message], {})
+    formErrors.value = [signOutError.message]
     return
   }
   toast.success(t('changed-password-suc'))
   router.replace('/dashboard')
 }
+
+function onSubmit() {
+  submitted.value = true
+  formErrors.value = []
+  if (passwordErrors.value.length || passwordConfirmErrors.value.length)
+    return
+  return submit({ password: password.value })
+}
+
 watchEffect(async () => {
   if (route && route.path === '/onboarding/set_password')
     await signInUser()
@@ -66,33 +86,40 @@ watchEffect(async () => {
     :card-title="t('password-heading')"
     :card-description="t('enter-your-new-passw')"
   >
-    <FormKit id="set-password" type="form" :actions="false" @submit="submit">
+    <form id="set-password" novalidate @submit.prevent="onSubmit">
       <div class="space-y-5 text-slate-500 dark:text-slate-300">
-        <FormKitMessages />
-        <FormKit
+        <ul v-if="formErrors.length" role="alert" class="mb-1.5">
+          <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+            {{ error }}
+          </li>
+        </ul>
+        <FormField
+          v-model="password"
           type="password"
           name="password"
-          :prefix-icon="iconPassword"
+          :prefix-icon="IconPassword"
           autocomplete="new-password"
           enterkeyhint="send"
           :disabled="isLoading"
           :label="t('password')"
           :help="t('6-characters-minimum')"
-          validation="required|length:6|contain_alphanumeric|contain_uppercase|contain_lowercase|contain_symbol"
+          :errors="passwordErrors"
           validation-visibility="dirty"
+          :submitted="submitted"
         />
 
-        <FormKit
+        <FormField
+          v-model="passwordConfirm"
           type="password"
           name="password_confirm"
-          :prefix-icon="iconPassword"
+          :prefix-icon="IconPassword"
           autocomplete="new-password"
           :disabled="isLoading"
           :label="t('confirm-password')"
           :help="t('confirm-password')"
-          validation="required|confirm"
+          :errors="passwordConfirmErrors"
           validation-visibility="dirty"
-          :validation-label="t('password-confirmatio')"
+          :submitted="submitted"
         />
 
         <div>
@@ -118,7 +145,7 @@ watchEffect(async () => {
           </router-link>
         </div>
       </div>
-    </FormKit>
+    </form>
 
     <template #footer>
       <section class="mt-6 flex flex-col items-center">
