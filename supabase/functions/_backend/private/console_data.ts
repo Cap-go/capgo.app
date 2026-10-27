@@ -26,6 +26,8 @@ const querySchema = z.object({
 })
 // Same ceiling the storage bucket applied before uploads went through the API.
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024
+// Raster formats only: never store caller-chosen types such as SVG or HTML as images.
+const ALLOWED_IMAGE_CONTENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'])
 const imagePathSchema = z.string().min(1).max(1024).refine(path => path.split('/').every(segment => segment !== '.' && segment !== '..'))
 
 /** A bearer user session (role authenticated with a subject); the anon or service key never qualifies. */
@@ -90,6 +92,9 @@ app.post('/images/upload', middlewareAuth, async (c) => {
   // Refuse declared oversize uploads before buffering; the byte check below covers undeclared ones.
   if (Number(c.req.header('content-length') ?? 0) > MAX_IMAGE_BYTES)
     return quickError(413, 'image_too_large', 'Image must be smaller than 50 MB')
+  const contentType = c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (!ALLOWED_IMAGE_CONTENT_TYPES.has(contentType))
+    return quickError(415, 'invalid_image_content_type', 'Image must be a PNG, JPEG, WebP, GIF or AVIF file')
   if (!await canAccessImagePath(c, path, 'write'))
     return c.json(storageError('new row violates row-level security policy', '403'))
   const file = await c.req.arrayBuffer()
@@ -98,7 +103,7 @@ app.post('/images/upload', middlewareAuth, async (c) => {
     return quickError(413, 'image_too_large', 'Image must be smaller than 50 MB')
   try {
     const result = await uploadImage(c, path, new Uint8Array(file), {
-      contentType: c.req.header('content-type') ?? 'application/octet-stream',
+      contentType,
       upsert: c.req.header('x-image-upsert') === 'true',
     })
     if (result === 'conflict')

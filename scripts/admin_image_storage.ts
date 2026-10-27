@@ -9,6 +9,7 @@ export const IMAGE_KEY_PREFIX = 'images/'
 export interface ImageStore {
   bucket: string
   exists: (path: string) => Promise<boolean>
+  lastModified: (path: string) => Promise<Date | null>
   download: (path: string) => Promise<Blob | null>
   upload: (path: string, data: Blob | Uint8Array | ArrayBuffer, options?: { contentType?: string, upsert?: boolean }) => Promise<'ok' | 'conflict'>
   copy: (fromPath: string, toPath: string) => Promise<void>
@@ -68,6 +69,16 @@ export function createImageStore(env: Record<string, string | undefined>): Image
   return {
     bucket,
     exists: path => client.exists(imageObjectKey(path)),
+    async lastModified(path) {
+      try {
+        return (await client.statObject(imageObjectKey(path))).lastModified
+      }
+      catch (error) {
+        if (isNotFound(error))
+          return null
+        throw error
+      }
+    },
     async download(path) {
       try {
         const response = await client.getObject(imageObjectKey(path))

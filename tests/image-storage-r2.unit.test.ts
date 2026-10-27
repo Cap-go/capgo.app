@@ -146,6 +146,11 @@ describe('R2 image storage', () => {
     expect(mocks.client.listObjects).toHaveBeenCalledWith({ prefix: `images/${USER_ID}/` })
   })
 
+  it.each(['', '/', '///'])('refuses to remove the whole images/ space (prefix %j)', async (prefix) => {
+    await expect(storage.removeImageFolder(context(), prefix)).rejects.toThrow('non-empty folder')
+    expect(mocks.client.listObjects).not.toHaveBeenCalled()
+  })
+
   it('stops removing a folder once the deadline has passed', async () => {
     mocks.client.listObjects.mockReturnValue(yieldAll([
       { type: 'Object', key: `images/org/${ORG_ID}/a.png` },

@@ -190,6 +190,25 @@ describe('console image proxy', () => {
     expect(conflict.error.statusCode).toBe('409')
   })
 
+  it.each(['image/svg+xml', 'text/html', 'application/octet-stream', ''])('rejects non-raster upload type %s with 415', async (contentType) => {
+    const response = await app.request('https://api.example.com/images/upload', {
+      method: 'POST',
+      headers: { 'x-image-path': 'caller/avatar.png', ...(contentType ? { 'content-type': contentType } : {}) },
+      body: 'bytes',
+    })
+    expect(response.status).toBe(415)
+    expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('stores the normalized raster type', async () => {
+    await app.request('https://api.example.com/images/upload', {
+      method: 'POST',
+      headers: { 'x-image-path': 'caller/avatar.webp', 'content-type': 'IMAGE/WEBP; charset=binary' },
+      body: 'bytes',
+    })
+    expect(mocks.upload).toHaveBeenCalledWith('caller/avatar.webp', expect.any(Uint8Array), { contentType: 'image/webp', upsert: false })
+  })
+
   it('removes only the paths the caller may delete', async () => {
     mocks.canAccess.mockImplementation(async (path: string) => path.startsWith('caller/'))
     const response = await app.request('https://api.example.com/images/remove', {

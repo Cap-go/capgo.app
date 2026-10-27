@@ -144,6 +144,9 @@ export async function listImageFolder(c: Context, prefix: string, options: { lim
  * passed, leaving the rest of the folder for a later call.
  */
 export async function removeImageFolder(c: Context, prefix: string, options: { deadline?: number } = {}) {
+  // An empty or slash-only prefix would target every image object.
+  if (!trimSlashes(prefix, { end: true }))
+    throw new Error('removeImageFolder requires a non-empty folder')
   const client = imageClient(c)
   let deleted = 0
   for await (const object of client.listObjects({ prefix: folderKey(prefix) })) {

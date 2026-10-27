@@ -312,8 +312,20 @@ async function listLegacyUsers(supabase: SupabaseClient, remaining: number | nul
   return rows
 }
 
-async function storageObjectExists(_supabase: SupabaseClient, path: string) {
-  return images.exists(path)
+async function storageObjectExists(supabase: SupabaseClient, path: string) {
+  if (await images.exists(path))
+    return true
+  // Images live in R2 now. One still only in Supabase was not migrated yet:
+  // fail the row instead of letting the caller clear its database pointer.
+  const { data, error } = await supabase.storage.from('images').createSignedUrl(path, 60)
+  if (error) {
+    if (/not found|404|Object not found|does not exist/i.test(error.message))
+      return false
+    throw error
+  }
+  if (data?.signedUrl)
+    throw new Error(`"${path}" exists only in Supabase Storage. Run admin:migrate-supabase-images-to-r2 first.`)
+  return false
 }
 
 async function copyObject(
