@@ -25,7 +25,7 @@ SELECT ok(
 
 SELECT ok(
     (
-        SELECT target::jsonb = '["cron_sync_sub"]'::jsonb AND batch_size = 10
+        SELECT target::jsonb = '["cron_sync_sub"]'::jsonb AND batch_size = 100
         FROM public.cron_tasks
         WHERE name = 'per_minute_queues'
     ),
