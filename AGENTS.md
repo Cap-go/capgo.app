@@ -233,6 +233,16 @@ backfill code, design for this scale:
   do not burn queue reads as a fake progress budget. `/queue_health` treats
   `read_ct > 5` as unhealthy (`stuck_high_read_ct`); `cleanup_queue_messages`
   deletes those poison rows.
+- **Queue wakeups (pg_net vs Durable Object):** pgmq stays the queue
+  everywhere. `process_function_queue` and `wake_updates_cache_purge` send
+  their HTTP wakeups through `public.http_dispatch_post`: by default (self-host,
+  local, CI) that is `net.http_post`. Targets listed in
+  `public.http_dispatch_targets` (a queue name, or `*`) go to the unlogged
+  `public.http_dispatch_outbox` instead, which the prod-only `QueueDispatcher`
+  Durable Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every
+  second via `POST /triggers/http_dispatch/claim` and sends. Roll a target
+  back by deleting its row. The dispatcher only sends to origins in
+  `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
   uses background work, prove the work can finish inside the runtime limits and
   that successful queue messages are deleted before visibility timeout expires.
