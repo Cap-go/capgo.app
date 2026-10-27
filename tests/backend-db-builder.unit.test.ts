@@ -234,6 +234,32 @@ describe('tooling database URL', () => {
     expect(() => resolveDatabaseUrl('https://project.supabase.co', 'postgresql://postgres:postgres@127.0.0.1:54322/postgres')).toThrow('Refusing to query the local database')
     expect(resolveDatabaseUrl('http://127.0.0.1:54321', 'postgresql://postgres:postgres@localhost:54322/postgres')).toBe('postgresql://postgres:postgres@127.0.0.1:54322/postgres')
   })
+
+  // Mutates process.env, so it runs alone.
+  it('requires an explicit database for a remote project, even with one in the environment', async () => {
+    const { resolveDatabaseUrl } = await import('../scripts/db-client.ts')
+    const previous = process.env.SUPABASE_DB_URL
+    process.env.SUPABASE_DB_URL = 'postgresql://u:p@db.bbbbbbbbbbbbbbbbbbbb.supabase.co:5432/postgres'
+    try {
+      expect(() => resolveDatabaseUrl('https://aaaaaaaaaaaaaaaaaaaa.supabase.co')).toThrow('No database URL for aaaaaaaaaaaaaaaaaaaa.supabase.co')
+    }
+    finally {
+      if (previous === undefined)
+        delete process.env.SUPABASE_DB_URL
+      else
+        process.env.SUPABASE_DB_URL = previous
+    }
+  })
+
+  it.concurrent('rejects a database from another project', async () => {
+    const { resolveDatabaseUrl } = await import('../scripts/db-client.ts')
+    const api = 'https://aaaaaaaaaaaaaaaaaaaa.supabase.co'
+    expect(() => resolveDatabaseUrl(api, 'postgresql://u:p@db.bbbbbbbbbbbbbbbbbbbb.supabase.co:5432/postgres')).toThrow('belongs to project bbbbbbbbbbbbbbbbbbbb, not aaaaaaaaaaaaaaaaaaaa')
+    expect(() => resolveDatabaseUrl(api, 'postgresql://postgres.bbbbbbbbbbbbbbbbbbbb:p@aws-0-eu-west-2.pooler.supabase.com:6543/postgres')).toThrow('belongs to project bbbbbbbbbbbbbbbbbbbb')
+    expect(resolveDatabaseUrl(api, 'postgresql://postgres.aaaaaaaaaaaaaaaaaaaa:p@aws-0-eu-west-2.pooler.supabase.com:6543/postgres')).toContain('postgres.aaaaaaaaaaaaaaaaaaaa')
+    // A custom domain carries no ref; the explicit URL is trusted as given.
+    expect(resolveDatabaseUrl('https://sb.example.com', 'postgresql://u:p@db.bbbbbbbbbbbbbbbbbbbb.supabase.co:5432/postgres')).toContain('db.bbbbbbbbbbbbbbbbbbbb')
+  })
 })
 
 describe('tooling client sessions', () => {
