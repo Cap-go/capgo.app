@@ -82,7 +82,19 @@ test.describe('AI agent alternatives to manual actions', () => {
     const prompt = await readClipboard(page)
     expect(prompt).toContain('{CAPGO_CLI_RUNNER} channel add {CHANNEL_NAME} com.demo.app')
     expect(prompt).toContain('Use the channel name "beta"')
-    // The agent creates the channel, so the dialog closes.
+    // The agent creates the channel, so the dialog closes and the list picks it up.
     await expect(card).toHaveCount(0)
+    const admin = localAdminClient()
+    const { data: app } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
+    const name = `agent-e2e-${Date.now()}`
+    const { data: user } = await admin.from('users').select('id').eq('email', 'test@capgo.app').single()
+    const { error } = await admin.from('channels').insert({ name, app_id: 'com.demo.app', owner_org: app!.owner_org, version: null, created_by: user!.id })
+    expect(error).toBeNull()
+    try {
+      await expect(page.getByText(name)).toBeVisible({ timeout: 20000 })
+    }
+    finally {
+      await admin.from('channels').delete().eq('app_id', 'com.demo.app').eq('name', name)
+    }
   })
 })

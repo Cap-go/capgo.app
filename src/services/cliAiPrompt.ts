@@ -796,7 +796,8 @@ export function buildAiAddAppPrompt(input: { apiKey: string, organization: { id:
   return [
     buildAuthenticationSection(input.apiKey, 'ai-onboarding'),
     AI_ONBOARDING_MCP_SECTION,
-    buildAiOnboardingContinueSection(input.organization, null, true),
+    // Adding an app starts with Live Updates, like the manual add-app wizard.
+    buildAiOnboardingContinueSection(input.organization, 'ota', true),
   ].join('\n\n')
 }
 

@@ -271,6 +271,9 @@ describe('AI agent task prompts', () => {
     expect(prompt).toContain('login capgo_test_secret')
     expect(prompt).toContain('npx install-mcp \'npx @capgo/cli@latest mcp\'')
     expect(prompt).toContain('I want to add a new app to it')
+    // Like the manual add-app wizard, it starts with Live Updates.
+    expect(prompt).toContain('start_capgo_live_update_onboarding')
+    expect(prompt).not.toContain('Help me decide')
     expect(prompt).not.toContain('It has no app yet')
   })
 

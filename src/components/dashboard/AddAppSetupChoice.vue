@@ -30,6 +30,9 @@ const assistantIcons = developmentEnvironmentOptions.find(option => option.value
 // Creation time of the newest app before the prompt was copied; only later apps count.
 let appCursor: string | null | undefined
 let pollTimer: ReturnType<typeof setInterval> | undefined
+// Bumped whenever waiting stops, so a pending start or check from before is dropped.
+let watchSession = 0
+let checking = false
 
 async function newestAppCreatedAt(orgId: string) {
   const { data, error } = await capgo
@@ -57,18 +60,20 @@ async function firstAppAfter(orgId: string, cursor: string | null) {
 }
 
 function stopPolling() {
+  watchSession += 1
   isWaiting.value = false
   if (pollTimer)
     clearInterval(pollTimer)
   pollTimer = undefined
 }
 
-async function checkForNewApp(orgId: string) {
-  if (document.visibilityState === 'hidden' || appCursor === undefined)
+async function checkForNewApp(orgId: string, session: number) {
+  if (document.visibilityState === 'hidden' || appCursor === undefined || checking)
     return
+  checking = true
   try {
     const appId = await firstAppAfter(orgId, appCursor)
-    if (!appId || !pollTimer)
+    if (!appId || session !== watchSession)
       return
     stopPolling()
     sendOnboardingEvent('add_app_ai_app_detected', { org_id: orgId, app_id: appId })
@@ -77,22 +82,31 @@ async function checkForNewApp(orgId: string) {
   catch (error) {
     console.warn('Cannot check for the app added by the AI agent', error)
   }
+  finally {
+    checking = false
+  }
 }
 
 // Once the prompt is copied, open the new app as soon as the agent registers it.
 async function watchForNewApp() {
   const orgId = organizationStore.currentOrganization?.gid
-  if (!orgId || pollTimer)
+  if (!orgId || isWaiting.value)
     return
+  const session = ++watchSession
+  isWaiting.value = true
   try {
     appCursor = await newestAppCreatedAt(orgId)
   }
   catch (error) {
     console.warn('Cannot list apps before the AI agent adds one', error)
+    if (session === watchSession)
+      isWaiting.value = false
     return
   }
-  pollTimer = setInterval(() => void checkForNewApp(orgId), APP_POLL_INTERVAL_MS)
-  isWaiting.value = true
+  // The user went back, chose manual or left while the cursor loaded.
+  if (session !== watchSession)
+    return
+  pollTimer = setInterval(() => void checkForNewApp(orgId, session), APP_POLL_INTERVAL_MS)
 }
 
 function choose(mode: 'ai' | 'manual') {

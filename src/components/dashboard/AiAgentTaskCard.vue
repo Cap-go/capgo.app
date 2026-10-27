@@ -38,43 +38,59 @@ const organizationStore = useOrganizationStore()
 const isCopying = ref(false)
 const copied = ref(false)
 
+// Reuses a key the user already owns for this scope. A new key for an app task is bound to
+// that app only (app_admin), so app administrators without organization rights can use it.
 async function loadApiKey(userId: string, orgId: string, appId: string | null) {
   return shareInFlightApiKeyLoad({ userId, orgId, appId }, async () => {
     const existing = await findUsablePlainApiKey(capgo, userId, orgId, appId)
     if (existing)
       return existing
-    const { data, error } = await createDefaultApiKey(capgo, t('api-key'), { orgId, appId })
+    const { data, error } = await createDefaultApiKey(capgo, t('api-key'), appId ? { appId } : { orgId })
     if (error)
       throw error
     return typeof data?.key === 'string' ? data.key : findUsablePlainApiKey(capgo, userId, orgId, appId)
   })
 }
 
-async function loadAppName(appId: string) {
-  const { data } = await capgo.from('apps').select('name').eq('app_id', appId).maybeSingle()
-  return data?.name ?? null
-}
-
 async function buildPrompt(): Promise<string | null> {
   const userId = main.user?.id ?? main.auth?.id
-  const org = organizationStore.currentOrganization
-  if (!userId || !org)
+  if (!userId)
     return null
-  const organization = { id: org.gid, name: org.name }
   if (props.task === 'add-app') {
+    const org = organizationStore.currentOrganization
+    if (!org)
+      return null
     const apiKey = await loadApiKey(userId, org.gid, null)
-    return apiKey ? buildAiAddAppPrompt({ apiKey, organization }) : null
+    return apiKey ? buildAiAddAppPrompt({ apiKey, organization: { id: org.gid, name: org.name } }) : null
   }
   const appId = props.appId
   if (!appId)
     return null
-  const [apiKey, name] = await Promise.all([loadApiKey(userId, org.gid, appId), loadAppName(appId)])
+  // App pages can show a different current organization: use the app's own.
+  const { data: app, error } = await capgo.from('apps').select('name, owner_org').eq('app_id', appId).maybeSingle()
+  if (error || !app?.owner_org)
+    return null
+  const orgId = app.owner_org
+  const organization = { id: orgId, name: organizationStore.organizations.find(org => org.gid === orgId)?.name ?? orgId }
+  const apiKey = await loadApiKey(userId, orgId, appId)
   if (!apiKey)
     return null
-  const app = { appId, name }
+  const appInfo = { appId, name: app.name }
   return props.task === 'upload-bundle'
-    ? buildAiUploadBundlePrompt({ apiKey, organization, app })
-    : buildAiCreateChannelPrompt({ apiKey, organization, app, channelName: props.channelName })
+    ? buildAiUploadBundlePrompt({ apiKey, organization, app: appInfo })
+    : buildAiCreateChannelPrompt({ apiKey, organization, app: appInfo, channelName: props.channelName })
+}
+
+/**
+ * Starts the clipboard write inside the click: browsers such as Safari reject writes that
+ * begin after the user gesture, and the prompt needs async key and app lookups first.
+ */
+async function writePromptToClipboard(prompt: Promise<string>) {
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': prompt.then(text => new Blob([text], { type: 'text/plain' })) })])
+    return
+  }
+  await navigator.clipboard.writeText(await prompt)
 }
 
 async function copyPrompt() {
@@ -82,24 +98,25 @@ async function copyPrompt() {
     return
   isCopying.value = true
   try {
-    let prompt: string | null = null
-    try {
-      prompt = await buildPrompt()
-    }
-    catch (error) {
+    let promptFailed = false
+    const prompt = buildPrompt().then((text) => {
+      if (!text)
+        throw new Error('AI agent prompt unavailable')
+      return text
+    })
+    prompt.catch((error) => {
+      promptFailed = true
       console.error('Cannot prepare AI agent prompt', error)
-    }
-    if (!prompt) {
-      toast.error(t('app-onboarding-toast-apikey-error'))
-      return
-    }
+    })
     try {
-      await navigator.clipboard.writeText(prompt)
+      await writePromptToClipboard(prompt)
     }
     catch (error) {
       // Never fall back to showing the prompt: it contains the API key.
-      console.error('Failed to copy AI agent prompt', error)
-      toast.error(t('ai-task-copy-failed'))
+      await prompt.catch(() => undefined)
+      if (!promptFailed)
+        console.error('Failed to copy AI agent prompt', error)
+      toast.error(promptFailed ? t('app-onboarding-toast-apikey-error') : t('ai-task-copy-failed'))
       return
     }
     copied.value = true
