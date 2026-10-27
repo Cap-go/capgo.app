@@ -109,10 +109,12 @@ async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<Tri
   const { data: plan } = await findPlanByProductId(c, info.product_id)
   if (!plan)
     return null
+  // Outside the try: a Stripe failure must be retried, not read as a missing trial plan.
+  const tier = await getTrialPriceTier(c, ctx)
   let priceId: string
   let productId: string
   try {
-    priceId = getTrialPlanPriceId(plan, ctx.billingAccount, await getTrialPriceTier(c, ctx))
+    priceId = getTrialPlanPriceId(plan, ctx.billingAccount, tier)
     productId = getPlanProductId(plan, ctx.billingAccount)
   }
   catch {
@@ -171,11 +173,13 @@ async function applyTrialPlanProduct(c: Context, ctx: InAppBillingContext, produ
   const { data: plan } = await findPlanByProductId(c, productId)
   if (!plan || !isSchedulableTrialPlanName(plan.name))
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')
+  // Outside the try: a Stripe failure must be retried, not reported as an invalid plan.
+  const tier = await getTrialPriceTier(c, ctx)
   let nextProductId: string
   let priceId: string
   try {
     nextProductId = getPlanProductId(plan, ctx.billingAccount)
-    priceId = getTrialPlanPriceId(plan, ctx.billingAccount, await getTrialPriceTier(c, ctx))
+    priceId = getTrialPlanPriceId(plan, ctx.billingAccount, tier)
   }
   catch {
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')

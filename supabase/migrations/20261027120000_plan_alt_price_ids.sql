@@ -426,8 +426,8 @@ $function$
 
 -- Solo
 UPDATE public.plans SET
-  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY['price_1KkINoGH46eYKnWwwEi97h1B', 'price_1UDRGPLr632EP5z4ufTRBBzf'])),
-  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY['price_1KjSNTGH46eYKnWwofmXyBZn', 'price_1UDRGULr632EP5z4OcZr5xpe'])),
+  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY[price_m_id, price_m_id_us])),
+  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY[price_y_id, price_y_id_us])),
   price_m_id = 'price_1UUwaeGH46eYKnWwikQlk8Y8',
   price_y_id = 'price_1UUwapGH46eYKnWwXVBNFJsM',
   price_m_id_us = 'price_1UUwcBLr632EP5z4vsqW3Tm3',
@@ -444,8 +444,8 @@ WHERE stripe_id = 'prod_LQIzwwVu6oMmAz'
 
 -- Maker
 UPDATE public.plans SET
-  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY['price_1KjSNPGH46eYKnWwVGG5HI5V', 'price_1UDRGQLr632EP5z4YI3A5cPV'])),
-  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY['price_1NsEbJGH46eYKnWwkOoCqT95', 'price_1UDRGSLr632EP5z45R9qxkU8'])),
+  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY[price_m_id, price_m_id_us])),
+  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY[price_y_id, price_y_id_us])),
   price_m_id = 'price_1UUwaHGH46eYKnWwLIx4RLTA',
   price_y_id = 'price_1UUwaSGH46eYKnWwciOD6FPL',
   price_m_id_us = 'price_1UUwbqLr632EP5z4uNWoVy9j',
@@ -456,8 +456,8 @@ WHERE stripe_id = 'prod_LQIzozukEwDZDM'
 
 -- Team
 UPDATE public.plans SET
-  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY['price_1KjSNKGH46eYKnWw32bhz1xX', 'price_1UDRGSLr632EP5z4n0Npf7P1'])),
-  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY['price_1KjSNKGH46eYKnWwx0pSkXE6', 'price_1UDRGSLr632EP5z4jYu6vC42'])),
+  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY[price_m_id, price_m_id_us])),
+  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY[price_y_id, price_y_id_us])),
   price_m_id = 'price_1UUwb1GH46eYKnWwkzg0rWnP',
   price_y_id = 'price_1UUwbDGH46eYKnWwQUX32Fzb',
   price_m_id_us = 'price_1UUwcXLr632EP5z4iew5VirD',
@@ -468,8 +468,8 @@ WHERE stripe_id = 'prod_LQIzm2NGzayzXi'
 
 -- Enterprise
 UPDATE public.plans SET
-  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY['price_1On9Z7GH46eYKnWws8CBfcHQ', 'price_1UDRGaLr632EP5z4D02F4rLu'])),
-  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY['price_1Sdu3rGH46eYKnWwK9x8sdK4', 'price_1UDRGcLr632EP5z4IxDyZuUK'])),
+  alt_price_m_ids = ARRAY(SELECT DISTINCT unnest(alt_price_m_ids || ARRAY[price_m_id, price_m_id_us])),
+  alt_price_y_ids = ARRAY(SELECT DISTINCT unnest(alt_price_y_ids || ARRAY[price_y_id, price_y_id_us])),
   price_m_id = 'price_1UUwZuGH46eYKnWwoBF1Wjo9',
   price_y_id = 'price_1UUwa6GH46eYKnWw95XJawmq',
   price_m_id_us = 'price_1UUwbULr632EP5z4Kn9Fe0Zj',

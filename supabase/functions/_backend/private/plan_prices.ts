@@ -7,7 +7,7 @@ import { CacheHelper } from '../utils/cache.ts'
 import { simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { currencyForCountry } from '../utils/country_currency.ts'
-import { FULL_PRICE_TIER, tierPricePercent } from '../utils/country_price_tier.ts'
+import { FULL_PRICE_TIER, priceTierForCountry, tierPricePercent } from '../utils/country_price_tier.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
@@ -184,7 +184,8 @@ app.get('/', middlewareAuth, async (c) => {
     // USD stays in: the page derives each currency's ratio from it (Enterprise extra MAU).
     prices: pickPriceCurrencies(prices, new Set([...currencies, DEFAULT_CURRENCY])),
     // Regional discount shown on the discounted plans; it requires a card and billing address from there.
-    discount: tier === FULL_PRICE_TIER ? null : { percent: tierDiscountPercent(tier), country },
+    // The country named is the one whose tier was granted (the IP, billing address or card country).
+    discount: tier === FULL_PRICE_TIER ? null : { percent: tierDiscountPercent(tier), country: [country, ...customerBilling.countries].find(code => !!code && priceTierForCountry(code) === tier) ?? null },
     regularPrices: full ? pickPriceCurrencies(getRegularPrices(prices, full.prices), new Set([...currencies, DEFAULT_CURRENCY])) : {},
   })
 })

@@ -371,7 +371,7 @@ watch([pendingPlanCheckout, pricesReady], async ([pending, ready]) => {
   pendingPlanCheckout.value = null
   const org = currentOrganization.value
   // Never start a checkout for another org than the one the link named.
-  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0)
+  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && !lockedCurrencyUnavailable.value && index >= 0)
     await openChangePlan(mainStore.plans[index], index)
 })
 
