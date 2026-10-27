@@ -120,6 +120,17 @@ async function main() {
     [version.rows[0].id, 'bench.js', 'bench/bench.js', 'bench-hash'],
   )
   const manifestId = manifest.rows[0].id
+  try {
+    await runBenchmark(sides, manifestId)
+  }
+  finally {
+    // Also after a failed preflight: leave no fixture row behind.
+    await pool.query('DELETE FROM public.manifest WHERE id = $1', [manifestId])
+    await pool.end()
+  }
+}
+
+async function runBenchmark(sides: Record<'service' | 'apikey' | 'jwt', { postgrest: unknown, runner: Builder }>, manifestId: number) {
 
   const plan: Array<[string, keyof typeof sides, Operation]> = [
     ...Object.entries(serviceOperations(manifestId)).map(([name, op]) => [name, 'service', op] as [string, keyof typeof sides, Operation]),
@@ -147,8 +158,6 @@ async function main() {
   console.log('| Operation | Path | p50 ms | p95 ms | p99 ms | req/s | errors |')
   console.log('|---|---|---|---|---|---|---|')
   console.log(rows.join('\n'))
-  await pool.query('DELETE FROM public.manifest WHERE id = $1', [manifestId])
-  await pool.end()
 }
 
 await main()

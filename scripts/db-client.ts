@@ -5,7 +5,7 @@ import type { PgQuerySession } from '../supabase/functions/_backend/utils/pg_que
 import { env } from 'node:process'
 import { createClient as createSdkClient } from '@supabase/supabase-js'
 import { decodeJwt } from 'jose'
-import { Pool } from 'pg'
+import { Client, Pool } from 'pg'
 import { createDbClient } from '../supabase/functions/_backend/utils/db.ts'
 import { runPgQuery } from '../supabase/functions/_backend/utils/pg_query.ts'
 import { parsePostgrestRequest, PostgrestHttpError, postgrestResponse } from '../supabase/functions/_backend/utils/postgrest_http.ts'
@@ -140,7 +140,25 @@ async function sessionFor(sdk: SupabaseClient<any>, key: string, headers: Record
   return { role: 'authenticated', claims: { ...claims, sub: claims.sub }, headers: requestHeaders }
 }
 
-export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuerySession, connectionString = resolveDatabaseUrl('http://127.0.0.1')): Promise<ConsoleQueryResult> {
+// Stop a running statement on its own backend. A separate short connection, so a
+// full pool cannot block the cancel behind the query it is cancelling.
+async function cancelBackend(connectionString: string, pid: number | undefined) {
+  if (!pid)
+    return
+  const canceller = new Client({ connectionString, application_name: 'capgo-db-client-cancel' })
+  try {
+    await canceller.connect()
+    await canceller.query('SELECT pg_catalog.pg_cancel_backend($1)', [pid])
+  }
+  catch {
+    // The statement may already have finished.
+  }
+  finally {
+    await canceller.end().catch(() => {})
+  }
+}
+
+export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuerySession, connectionString = resolveDatabaseUrl('http://127.0.0.1'), signal?: AbortSignal): Promise<ConsoleQueryResult> {
   let client: PoolClient
   try {
     client = await getPool(connectionString).connect()
@@ -150,7 +168,13 @@ export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuer
     return failure(503, 'PGRST000', error instanceof Error ? error.message : String(error))
   }
   let failed: Error | undefined
+  // An aborted caller cancels the statement, so the connection comes back when
+  // the database work stops instead of when a slow query finishes.
+  const onAbort = () => void cancelBackend(connectionString, (client as PoolClient & { processID?: number }).processID)
+  signal?.addEventListener('abort', onAbort, { once: true })
   try {
+    if (signal?.aborted)
+      return failure(499, 'PGRST000', 'Request aborted')
     return await runPgQuery(client, request, session)
   }
   catch (error) {
@@ -158,6 +182,7 @@ export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuer
     return failure(503, 'PGRST000', failed.message)
   }
   finally {
+    signal?.removeEventListener('abort', onAbort)
     client.release(failed)
   }
 }
@@ -212,7 +237,7 @@ export async function fetchPostgrest(input: string | URL, init: RequestInit = {}
   // Honor the caller's AbortSignal like fetch() did: a hanging probe fails at its own timeout.
   const signal = init.signal ?? undefined
   signal?.throwIfAborted()
-  const query = 'role' in session ? runTestQuery(parsed.request, session, resolveDatabaseUrl(url.origin)) : Promise.resolve(session)
+  const query = 'role' in session ? runTestQuery(parsed.request, session, resolveDatabaseUrl(url.origin), signal) : Promise.resolve(session)
   const result = signal
     ? await Promise.race([
         query,
