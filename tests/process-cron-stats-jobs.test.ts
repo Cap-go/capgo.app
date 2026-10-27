@@ -79,8 +79,20 @@ describe('cron_stat_app queue resilience', () => {
     )
     expect(parked?.parked).toBe(true)
 
+    const [before] = await executeSQL(
+      `SELECT stats_refresh_requested_at::text AS requested_at FROM public.app_stats_refresh_state WHERE app_id = $1`,
+      [appId],
+    )
+
     // Still inside the 5-minute request TTL the parked job just stamped.
     await executeSQL(`SELECT public.queue_cron_stat_app_for_app($1, $2)`, [appId, ORG_ID_CRON_QUEUE])
+
+    // Chart refresh RPCs report an app as queued only when this stamp advances.
+    const [after] = await executeSQL(
+      `SELECT stats_refresh_requested_at > $2::timestamp AS advanced FROM public.app_stats_refresh_state WHERE app_id = $1`,
+      [appId, before?.requested_at],
+    )
+    expect(after?.advanced).toBe(true)
 
     const rows = await executeSQL(
       `SELECT vt <= clock_timestamp() AS readable FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = $1`,

@@ -85,6 +85,8 @@ BEGIN
   -- staggered stats_jobs slot: make it readable now. This runs before the
   -- request TTL, which stats_jobs itself just stamped when it parked the job.
   -- Rows already read are in flight and keep their visibility timeout.
+  -- Stamp the request so chart refresh RPCs report the app as queued and the
+  -- dashboard waits for the promoted job; the stamp also restarts the TTL.
   IF p_delay_seconds <= 0 THEN
     UPDATE pgmq.q_cron_stat_app queued_job
     SET vt = pg_catalog.clock_timestamp()
@@ -92,6 +94,9 @@ BEGIN
       AND queued_job.read_ct = 0
       AND queued_job.vt > pg_catalog.clock_timestamp();
     IF FOUND THEN
+      UPDATE public.app_stats_refresh_state
+      SET stats_refresh_requested_at = v_now_utc
+      WHERE app_id = p_app_id;
       RETURN;
     END IF;
   END IF;
