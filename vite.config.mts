@@ -146,44 +146,55 @@ function envFaviconPlugin(): Plugin {
 // matched the URL: a second round of latency on every cold load. This emits a tiny classic script
 // (inline scripts are blocked by the CSP) that index.html fetches in parallel with the entry; it adds
 // modulepreload links for the page and layout chunks of the URL being opened.
+const pagesDir = path.resolve(__dirname, 'src/pages')
+const layoutsDir = path.resolve(__dirname, 'src/layouts')
+
+// `segments` are path parts where a leading ':' marks a parameter.
+function toRoutePattern(segments: string[]) {
+  const parts = segments.map(segment => segment.startsWith(':') ? '[^/]+' : segment.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))
+  return {
+    source: `^/${parts.join('/')}/?$`,
+    params: segments.filter(segment => segment.startsWith(':')).length,
+    path: `/${segments.join('/')}`,
+  }
+}
+
+function fileRoutePattern(file: string) {
+  const segments: string[] = []
+  for (const segment of path.relative(pagesDir, file).replace(/\.vue$/, '').split(/[\\/.]/)) {
+    if (segment === 'index')
+      continue
+    if (segment.startsWith('[...'))
+      return null
+    segments.push(segment.startsWith('[') ? `:${segment.slice(1, -1)}` : segment)
+  }
+  return toRoutePattern(segments)
+}
+
+/** Reads `key: value` lines from a page's `<route>` YAML block. */
+function routeBlockValue(file: string, key: string) {
+  const source = readFileSync(file, 'utf8')
+  const start = source.indexOf('<route')
+  const end = source.indexOf('</route>', start)
+  if (start === -1 || end === -1)
+    return undefined
+  for (const line of source.slice(start, end).split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith(`${key}:`))
+      return trimmed.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, '')
+  }
+  return undefined
+}
+
+function routeLayouts(file: string, routePath: string) {
+  if (isGuestRoutePath(routePath))
+    return ['naked']
+  const layout = routeBlockValue(file, 'layout') ?? 'default'
+  // The app and settings layouts render inside the default dashboard shell.
+  return layout === 'app' || layout === 'settings' ? [layout, 'default'] : [layout]
+}
+
 function routeChunkPreloadPlugin(): Plugin {
-  const pagesDir = path.resolve(__dirname, 'src/pages')
-  const layoutsDir = path.resolve(__dirname, 'src/layouts')
-
-  // `segments` are path parts where a leading ':' marks a parameter.
-  function toPattern(segments: string[]) {
-    const parts = segments.map(segment => segment.startsWith(':') ? '[^/]+' : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    return {
-      source: `^/${parts.join('/')}/?$`,
-      params: segments.filter(segment => segment.startsWith(':')).length,
-      path: `/${segments.join('/')}`,
-    }
-  }
-
-  function routePattern(file: string) {
-    const segments: string[] = []
-    for (const segment of path.relative(pagesDir, file).replace(/\.vue$/, '').split(/[\\/.]/)) {
-      if (segment === 'index')
-        continue
-      if (segment.startsWith('[...'))
-        return null
-      segments.push(segment.startsWith('[') ? `:${segment.slice(1, -1)}` : segment)
-    }
-    return toPattern(segments)
-  }
-
-  function customPath(file: string) {
-    return readFileSync(file, 'utf8').match(/<route[^>]*>[\s\S]*?\n\s*path:\s*['"]?([^'"\s]+)/)?.[1]
-  }
-
-  function layoutOf(file: string, routePath: string) {
-    if (isGuestRoutePath(routePath))
-      return ['naked']
-    const layout = readFileSync(file, 'utf8').match(/<route[^>]*>[\s\S]*?layout:\s*([\w-]+)/)?.[1] ?? 'default'
-    // The app and settings layouts render inside the default dashboard shell.
-    return layout === 'app' || layout === 'settings' ? [layout, 'default'] : [layout]
-  }
-
   return {
     name: 'capgo-route-chunk-preload',
     apply: 'build',
@@ -191,7 +202,7 @@ function routeChunkPreloadPlugin(): Plugin {
       order: 'post',
       handler(_outputOptions, bundle) {
         const html = bundle['index.html']
-        if (!html || html.type !== 'asset')
+        if (html?.type !== 'asset')
           return
         const chunks = Object.values(bundle).filter(item => item.type === 'chunk')
         const byModule = new Map(chunks.filter(chunk => chunk.facadeModuleId).map(chunk => [chunk.facadeModuleId!.split('?')[0], chunk]))
@@ -234,11 +245,11 @@ function routeChunkPreloadPlugin(): Plugin {
         for (const [moduleId, chunk] of byModule) {
           if (!moduleId.startsWith(pagesDir) || !moduleId.endsWith('.vue'))
             continue
-          const override = customPath(moduleId)
-          const pattern = override ? toPattern(override.split('/').filter(Boolean)) : routePattern(moduleId)
+          const override = routeBlockValue(moduleId, 'path')
+          const pattern = override ? toRoutePattern(override.split('/').filter(Boolean)) : fileRoutePattern(moduleId)
           if (!pattern)
             continue
-          const layouts = layoutOf(moduleId, pattern.path)
+          const layouts = routeLayouts(moduleId, pattern.path)
           const shared = new Set(layouts.flatMap(layoutFiles))
           routes.push({ pattern: pattern.source, params: pattern.params, layouts, files: closure([chunk.fileName]).map(fileIndex).filter(index => !shared.has(index)) })
         }

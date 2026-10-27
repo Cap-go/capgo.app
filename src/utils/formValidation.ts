@@ -11,9 +11,9 @@ function t(key: string, params: Record<string, unknown>) {
 }
 
 function text(value: unknown) {
-  if (value === null || value === undefined)
-    return ''
-  return String(value)
+  if (typeof value === 'string')
+    return value
+  return typeof value === 'number' || typeof value === 'boolean' ? String(value) : ''
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@][^\s.@]*(?:\.[^\s.@]+)+$/
@@ -24,8 +24,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 export const rules = {
   /** Fails on empty values; `trim` also rejects whitespace-only text. */
   required: (label: string, { trim = false } = {}): FieldRule => (value) => {
-    const value_ = text(value)
-    return (trim ? value_.trim() : value_).length > 0 ? null : t('validation-required', { label })
+    const content = trim ? text(value).trim() : text(value)
+    return content.length > 0 ? null : t('validation-required', { label })
   },
   email: (): FieldRule => value => (!text(value) || EMAIL_PATTERN.test(text(value).trim()) ? null : t('validation-email', {})),
   /** Character count between `min` and `max` (inclusive). Empty values pass; combine with `required`. */

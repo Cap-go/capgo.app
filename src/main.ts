@@ -161,8 +161,12 @@ getRemoteConfig()
 const app = createApp(App)
 installConsoleImageFallback()
 // The updater only does work inside the native shell; keep it out of the web entry chunk.
+async function notifyNativeAppReady() {
+  const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
+  await CapacitorUpdater.notifyAppReady()
+}
 if (Capacitor.isNativePlatform())
-  void import('@capgo/capacitor-updater').then(({ CapacitorUpdater }) => CapacitorUpdater.notifyAppReady())
+  void notifyNativeAppReady()
 console.log(`Capgo Version : "${import.meta.env.VITE_APP_VERSION}"`)
 // setup up pages with layouts
 const newRoutes = routes.map((route) => {

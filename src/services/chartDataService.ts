@@ -1,7 +1,7 @@
 import type { ConsoleClient } from '~/services/consoleClient'
 import colors from 'tailwindcss/colors'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { chartDataCache } from '~/services/chartDataCache'
+import { getCachedChartData, hasCachedChartData, setCachedChartData } from '~/services/chartDataCache'
 import { formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 
 const SKIP_COLOR = 10
@@ -41,8 +41,8 @@ export async function useChartData(
   const sessionKey = await getChartCacheSessionKey(capgo)
   const cacheKey = buildCacheKey(sessionKey, appId, from, to, kind)
 
-  if (!options?.forceRefetch && chartDataCache.has(cacheKey))
-    return chartDataCache.get(cacheKey)
+  if (!options?.forceRefetch && hasCachedChartData(cacheKey))
+    return getCachedChartData(cacheKey)
 
   // Clamp the 'to' date to today - we can't fetch data for future dates
   const clampedTo = clampToToday(to)
@@ -117,6 +117,6 @@ export async function useChartData(
     previousPeriodActiveDevices: chartDataFromApi.previousPeriodActiveDevices,
     dailyPlatformActive: chartDataFromApi.dailyPlatformActive,
   }
-  chartDataCache.set(cacheKey, finalData)
+  setCachedChartData(cacheKey, finalData)
   return finalData
 }

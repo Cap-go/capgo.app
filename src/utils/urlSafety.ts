@@ -34,7 +34,7 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
   if (isLocalDevHost(host))
     return true
 
-  const ipv4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  const ipv4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host)
   if (ipv4)
     return isPrivateIpv4(Number(ipv4[1]), Number(ipv4[2]))
 
