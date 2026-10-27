@@ -110,6 +110,13 @@ CREATE TABLE public.version_files (
 COMMENT ON TABLE public.version_files IS
   'One row per version with its ordered delta_files ids. Written once per upload and never rewritten.';
 
+-- Locked down from the start: default privileges would expose the copied rows
+-- through the API until delta_storage_v2 adds the read policies.
+ALTER TABLE public.delta_files ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.version_files ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.delta_files FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.version_files FROM PUBLIC, anon, authenticated;
+
 -- Keys are computed once per legacy row.
 CREATE TEMP TABLE delta_backfill ON COMMIT DROP AS
 SELECT
@@ -144,6 +151,38 @@ SELECT b.app_version_id, pg_catalog.array_agg(df.id ORDER BY b.id)
 FROM delta_backfill AS b
 INNER JOIN public.delta_files AS df ON df.entry_key = b.entry_key
 GROUP BY b.app_version_id;
+
+-- Versions whose list only lives in the inline app_versions.manifest (no
+-- legacy rows): same treatment, in list order.
+CREATE TEMP TABLE delta_backfill_inline ON COMMIT DROP AS
+SELECT
+  av.id AS app_version_id,
+  av.app_id,
+  entry.ord,
+  entry.s3_path::text AS s3_path,
+  entry.file_name::text AS file_name,
+  entry.file_hash::text AS file_hash,
+  public.delta_path_key(entry.s3_path::text) AS path_key,
+  public.delta_entry_key(entry.s3_path::text, entry.file_name::text, entry.file_hash::text) AS entry_key
+FROM public.app_versions AS av
+CROSS JOIN LATERAL pg_catalog.unnest(av.manifest) WITH ORDINALITY AS entry (file_name, s3_path, file_hash, ord)
+WHERE av.manifest IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM public.version_files AS vf WHERE vf.app_version_id = av.id)
+  AND entry.s3_path IS NOT NULL AND entry.file_name IS NOT NULL AND entry.file_hash IS NOT NULL;
+
+INSERT INTO public.delta_files (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
+SELECT DISTINCT ON (i.entry_key)
+  i.app_id, i.s3_path, i.file_name, i.file_hash, 0, i.path_key, i.entry_key
+FROM delta_backfill_inline AS i
+ORDER BY i.entry_key
+ON CONFLICT (entry_key) DO NOTHING;
+
+INSERT INTO public.version_files (app_version_id, file_ids)
+SELECT i.app_version_id, pg_catalog.array_agg(df.id ORDER BY i.ord)
+FROM delta_backfill_inline AS i
+INNER JOIN public.delta_files AS df ON df.entry_key = i.entry_key
+GROUP BY i.app_version_id
+ON CONFLICT (app_version_id) DO NOTHING;
 
 -- Reverse lookup for GC. Primary only: excluded from the read-replica catalog.
 CREATE INDEX version_files_file_ids_gin_idx ON public.version_files USING gin (file_ids);
