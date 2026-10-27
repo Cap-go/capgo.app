@@ -5,6 +5,7 @@ import { Hono } from 'hono/tiny'
 import { unsubscribeBento } from '../utils/bento.ts'
 import { normalizeBentoEmail, suppressAndUnsubscribeDeletedUserRecovery } from '../utils/bento_first_org.ts'
 import { BRES, middlewareAPISecret, quickError, triggerValidator } from '../utils/hono.ts'
+import { removeImageFolder } from '../utils/image_storage.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { cancelSubscription } from '../utils/stripe.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -320,35 +321,16 @@ function finishDeleteUserResponse(c: Context, bentoCleanupSucceeded: boolean, re
 
 async function deleteUserImages(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
   userId: string,
 ) {
   try {
-    const { data: files, error: listError } = await supabase
-      .storage
-      .from('images')
-      .list(userId)
-    if (listError) {
-      logFailure(c, 'user image listing failed', listError)
-      return false
-    }
-
-    if (files && files.length > 0) {
-      const filePaths = files.map(file => `${userId}/${file.name}`)
-      const { error: removeError } = await supabase
-        .storage
-        .from('images')
-        .remove(filePaths)
-      if (removeError) {
-        logFailure(c, 'user image deletion failed', removeError)
-        return false
-      }
-      cloudlog({ requestId: c.get('requestId'), message: 'deleted user images', count: files.length, user_id: userId })
-    }
+    const deleted = await removeImageFolder(c, userId)
+    if (deleted > 0)
+      cloudlog({ requestId: c.get('requestId'), message: 'deleted user images', count: deleted, user_id: userId })
     return true
   }
   catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error deleting user images', error, user_id: userId })
+    logFailure(c, 'user image deletion failed', error)
     return false
   }
 }
@@ -417,7 +399,7 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
   }
 
   const promises = buildCleanupPromises(c, orgs ?? null)
-  promises.push(deleteUserImages(c, supabase, record.id))
+  promises.push(deleteUserImages(c, record.id))
 
   let cleanupResults: unknown[]
   try {

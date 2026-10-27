@@ -34,6 +34,10 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
   }
 })
 
+vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({
+  removeImageFolder: vi.fn(async () => 0),
+}))
+
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
   cancelSubscription: cancelSubscriptionMock,
 }))
@@ -77,11 +81,6 @@ function configureSingleOrgCleanup() {
         return queryBuilder([{ customer_id: 'cus_deleted_user', id: orgId, management_email: null }])
       return queryBuilder()
     }),
-    storage: {
-      from: vi.fn(() => ({
-        list: vi.fn(async () => ({ data: [] })),
-      })),
-    },
   }
   supabaseAdminMock.mockReturnValue(client)
 }

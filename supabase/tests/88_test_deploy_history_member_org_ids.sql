@@ -12,6 +12,11 @@ SELECT tests.create_supabase_user(
     'deploy_history_unbound', 'deploy-history-unbound@test.local'
 );
 
+-- invite_user_to_org_rbac only matches users with a confirmed auth email.
+UPDATE auth.users
+SET email_confirmed_at = now()
+WHERE id = tests.get_supabase_uid('deploy_history_invitee');
+
 SELECT tests.authenticate_as_service_role();
 SET LOCAL ROLE service_role;
 SET LOCAL "request.jwt.claim.role" = 'service_role';
@@ -37,7 +42,7 @@ INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
 VALUES (
     tests.get_supabase_uid('deploy_history_unbound'),
     '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
-    public.rbac_role_org_member(),
+    public.rbac_role_org_admin(),
     false
 );
 
@@ -45,13 +50,14 @@ RESET ROLE;
 SELECT tests.clear_authentication();
 
 -- The org owner invites an existing user through the regular RBAC flow.
+-- org_admin carries channel.read_history, which deploy_history also requires.
 SELECT tests.authenticate_as('test_user');
 
 SELECT is(
     public.invite_user_to_org_rbac(
         'deploy-history-invitee@test.local',
         '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
-        public.rbac_role_org_member()
+        public.rbac_role_org_admin()
     )::text,
     'OK',
     'org owner invites an existing user'

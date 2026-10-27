@@ -1,8 +1,7 @@
 import type { Context } from 'hono'
-import { supabaseAdmin } from './supabase.ts'
+import { presignImageUrl } from './image_storage.ts'
 import { getEnv } from './utils.ts'
 
-const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7
 const STORAGE_URL_REGEX = /\/storage\/v1\/object(?:\/(?:public|sign))?\/images\/(.+)$/
 
 export interface ImagePathScope {
@@ -224,13 +223,10 @@ export async function createSignedImageUrl(
 }
 
 async function signImagesObjectKey(c: Context, normalized: string) {
-  const { data, error } = await supabaseAdmin(c)
-    .storage
-    .from('images')
-    .createSignedUrl(normalized, SIGNED_URL_TTL_SECONDS)
-
-  if (error || !data?.signedUrl)
+  try {
+    return await presignImageUrl(c, normalized)
+  }
+  catch {
     return null
-
-  return data.signedUrl
+  }
 }

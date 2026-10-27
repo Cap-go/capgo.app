@@ -12,6 +12,7 @@ import { getNativeExternalPurchaseRedirect, isNativeAppStoreContext, isNativeExt
 import { posthogLoader } from '~/services/posthog'
 import { captureConsoleAttributionFromLocation } from '~/services/signupAttribution'
 import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
+import { installConsoleImageFallback } from '~/services/storage'
 import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 import App from './App.vue'
 import { defaultApiHost, getRemoteConfig } from './services/console'
@@ -162,6 +163,7 @@ function isGuestRoutePath(path: string) {
 
 getRemoteConfig()
 const app = createApp(App)
+installConsoleImageFallback()
 CapacitorUpdater.notifyAppReady()
 console.log(`Capgo Version : "${import.meta.env.VITE_APP_VERSION}"`)
 // setup up pages with layouts

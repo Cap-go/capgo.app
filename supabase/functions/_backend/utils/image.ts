@@ -1,8 +1,8 @@
 import type { Context } from 'hono'
 import type { ImagePathScope } from './storage.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { downloadImage, importLegacySupabaseImage, uploadImage } from './image_storage.ts'
 import { assertAllowedImagePath, getStorageAllowedOrigins, normalizeImagePath } from './storage.ts'
-import { supabaseAdmin } from './supabase.ts'
 
 const JPEG_SIGNATURE = [0xFF, 0xD8]
 const PNG_SIGNATURE = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
@@ -188,16 +188,16 @@ export async function cleanStoredImageMetadata(
     return
   }
 
-  const supabase = supabaseAdmin(c)
-  const { data: fileBlob, error: downloadError } = await supabase.storage.from('images').download(normalizedPath)
+  // Pre-8.90.1 CLIs still write icons to Supabase Storage; move them into R2 first.
+  await importLegacySupabaseImage(c, normalizedPath)
 
-  if (downloadError || !fileBlob) {
-    if (downloadError)
-      cloudlogErr({ requestId, message: 'Failed to download image for metadata cleanup', path: normalizedPath, error: downloadError })
+  const response = await downloadImage(c, normalizedPath)
+  if (!response) {
+    cloudlog({ requestId, message: 'Image not found for metadata cleanup', path: normalizedPath })
     return
   }
 
-  const original = new Uint8Array(await fileBlob.arrayBuffer())
+  const original = new Uint8Array(await response.arrayBuffer())
   const sanitized = stripMetadataBytes(original)
 
   if (!sanitized) {
@@ -210,13 +210,14 @@ export async function cleanStoredImageMetadata(
     return
   }
 
-  const contentType = fileBlob.type || mimeFromFileBytes(original) || mimeFromFilePath(normalizedPath) || undefined
-  const { error: uploadError } = await supabase.storage.from('images').upload(normalizedPath, sanitized, {
-    upsert: true,
-    ...(contentType ? { contentType } : {}),
-  })
-
-  if (uploadError) {
+  const storedType = response.headers.get('content-type')
+  const contentType = (storedType && storedType !== 'application/octet-stream' ? storedType : null)
+    || mimeFromFileBytes(original) || mimeFromFilePath(normalizedPath) || undefined
+  try {
+    await uploadImage(c, normalizedPath, sanitized, { contentType, upsert: true })
+  }
+  catch (uploadError) {
+    cloudlogErr({ requestId, message: 'Failed to store sanitized image', path: normalizedPath, error: uploadError })
     throw uploadError
   }
 

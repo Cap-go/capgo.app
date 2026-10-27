@@ -1,7 +1,9 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
+import type { ImageFolderEntry } from '../utils/image_storage.ts'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
+import { listImageFolder, removeImageFolder, removeImages } from '../utils/image_storage.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
 
@@ -11,8 +13,13 @@ export const app = new Hono<MiddlewareKeyVariables>()
 // well before that and let the next daily run continue with the rest.
 const CLEANUP_BUDGET_MS = 10_000
 const CLEANUP_CONCURRENCY = 8
+// App folders of one org, inside the org-level concurrency above.
+const APP_FOLDER_CONCURRENCY = 2
 // Keeps PostgREST `in.(...)` filters well under URL length limits.
 const LOOKUP_CHUNK_SIZE = 100
+// Folders listed per run, as before; shuffling spreads work across runs.
+const LIST_LIMIT = 1000
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function normalizeImageStoragePath(path?: string | null) {
   if (!path)
@@ -36,16 +43,11 @@ function decodePathSegment(value: string) {
   }
 }
 
-interface StorageListEntry {
-  id: string | null
-  name: string
-}
-
-export function getStaleOrgLogoPaths(orgId: string, files: StorageListEntry[], linkedLogoPath?: string | null) {
+export function getStaleOrgLogoPaths(orgId: string, files: ImageFolderEntry[], linkedLogoPath?: string | null) {
   const normalizedLinkedLogoPath = normalizeImageStoragePath(linkedLogoPath)
 
   return files
-    .filter(file => file.id !== null)
+    .filter(file => !file.isFolder)
     .map(file => `org/${orgId}/logo/${file.name}`)
     .filter(path => path !== normalizedLinkedLogoPath)
 }
@@ -119,49 +121,38 @@ async function fetchExisting<Row>(
 
 async function cleanUserFolder(
   c: Context<MiddlewareKeyVariables>,
-  supabase: SupabaseAdmin,
   stats: CleanupStats,
   userId: string,
   user: { image_url: string | null } | undefined,
+  deadline: number,
 ) {
   try {
-    const { data: files, error: filesListError } = await supabase
-      .storage
-      .from('images')
-      .list(userId)
-
-    if (filesListError) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'error listing user images', error: filesListError, userId })
-      stats.errors++
+    // Deleted user: remove everything. Existing user: remove avatar files not
+    // referenced by users.image_url.
+    if (!user) {
+      const deleted = await removeImageFolder(c, userId, { deadline })
+      if (deleted > 0) {
+        stats.deletedUserImages += deleted
+        cloudlog({ requestId: c.get('requestId'), message: 'deleted orphaned user images', count: deleted, userId })
+      }
       return
     }
 
-    // Deleted user: remove everything. Existing user: remove avatar files not
-    // referenced by users.image_url.
-    const linkedImagePath = user ? normalizeImageStoragePath(user.image_url) : null
-    const filePaths = (files ?? [])
-      .filter(file => !user || file.id !== null)
+    const files = await listImageFolder(c, userId)
+    const linkedImagePath = normalizeImageStoragePath(user.image_url)
+    const filePaths = files
+      .filter(file => !file.isFolder)
       .map(file => `${userId}/${file.name}`)
       .filter(path => path !== linkedImagePath)
 
     if (filePaths.length === 0)
       return
 
-    const { error: removeError } = await supabase
-      .storage
-      .from('images')
-      .remove(filePaths)
-
-    if (removeError) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting user images', error: removeError, userId })
-      stats.errors++
-      return
-    }
-
+    await removeImages(c, filePaths)
     stats.deletedUserImages += filePaths.length
     cloudlog({
       requestId: c.get('requestId'),
-      message: user ? 'deleted stale user images not linked in profile' : 'deleted orphaned user images',
+      message: 'deleted stale user images not linked in profile',
       count: filePaths.length,
       userId,
     })
@@ -170,25 +161,6 @@ async function cleanUserFolder(
     cloudlogErr({ requestId: c.get('requestId'), message: 'error cleaning user images', error, userId })
     stats.errors++
   }
-}
-
-async function removeOrgFolderContents(supabase: SupabaseAdmin, prefix: string) {
-  const { data: files, error } = await supabase
-    .storage
-    .from('images')
-    .list(prefix)
-  if (error)
-    throw error
-  const filePaths = (files ?? []).map(file => `${prefix}/${file.name}`)
-  if (filePaths.length === 0)
-    return 0
-  const { error: removeError } = await supabase
-    .storage
-    .from('images')
-    .remove(filePaths)
-  if (removeError)
-    throw removeError
-  return filePaths.length
 }
 
 async function cleanOrgFolder(
@@ -200,34 +172,10 @@ async function cleanOrgFolder(
   deadline: number,
 ) {
   try {
-    const { data: entries, error: listError } = await supabase
-      .storage
-      .from('images')
-      .list(`org/${orgId}`)
-
-    if (listError) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'error listing org folder', error: listError, orgId })
-      stats.errors++
-      return
-    }
-
     // If org doesn't exist, delete all its images
     if (!org) {
-      let deleted = 0
-      for (const entry of entries ?? []) {
-        // Stop at the budget; the next run lists the folder again and finishes.
-        if (Date.now() >= deadline)
-          break
-        if (entry.id === null) {
-          deleted += await removeOrgFolderContents(supabase, `org/${orgId}/${entry.name}`)
-        }
-        else {
-          const { error } = await supabase.storage.from('images').remove([`org/${orgId}/${entry.name}`])
-          if (error)
-            throw error
-          deleted++
-        }
-      }
+      // Stop at the budget; the next run lists the folder again and finishes.
+      const deleted = await removeImageFolder(c, `org/${orgId}`, { deadline })
       if (deleted > 0) {
         stats.deletedOrgImages += deleted
         cloudlog({ requestId: c.get('requestId'), message: 'deleted orphaned org images', orgId, count: deleted })
@@ -235,42 +183,29 @@ async function cleanOrgFolder(
       return
     }
 
-    const subFolders = (entries ?? []).filter(entry => entry.id === null).map(entry => entry.name)
+    const entries = await listImageFolder(c, `org/${orgId}`)
+    const subFolders = entries.filter(entry => entry.isFolder).map(entry => entry.name)
 
     // The logo folder is organization-scoped, not app-scoped. Keep the current
     // org logo referenced in public.orgs.logo and only remove stale files.
     if (subFolders.includes('logo')) {
-      const { data: files, error: logoListError } = await supabase
-        .storage
-        .from('images')
-        .list(`org/${orgId}/logo`)
-
-      if (logoListError) {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'error listing org logo images', error: logoListError, orgId })
-        stats.errors++
-      }
-      else {
-        const staleLogoPaths = getStaleOrgLogoPaths(orgId, files ?? [], org.logo)
+      try {
+        const files = await listImageFolder(c, `org/${orgId}/logo`)
+        const staleLogoPaths = getStaleOrgLogoPaths(orgId, files, org.logo)
         if (staleLogoPaths.length > 0) {
-          const { error: removeLogoError } = await supabase
-            .storage
-            .from('images')
-            .remove(staleLogoPaths)
-
-          if (removeLogoError) {
-            cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting stale org logo images', error: removeLogoError, orgId })
-            stats.errors++
-          }
-          else {
-            stats.deletedOrgImages += staleLogoPaths.length
-            cloudlog({
-              requestId: c.get('requestId'),
-              message: 'deleted stale org logo images not linked in org',
-              count: staleLogoPaths.length,
-              orgId,
-            })
-          }
+          await removeImages(c, staleLogoPaths)
+          stats.deletedOrgImages += staleLogoPaths.length
+          cloudlog({
+            requestId: c.get('requestId'),
+            message: 'deleted stale org logo images not linked in org',
+            count: staleLogoPaths.length,
+            orgId,
+          })
         }
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'error cleaning stale org logo images', error, orgId })
+        stats.errors++
       }
     }
 
@@ -285,13 +220,10 @@ async function cleanOrgFolder(
       .in('app_id', ids))
     const existingAppIds = new Set(existingApps.map(row => row.app_id))
 
-    for (const appId of appIds) {
-      if (Date.now() >= deadline)
-        break
-      if (existingAppIds.has(appId))
-        continue
+    const orphanedAppIds = appIds.filter(appId => !existingAppIds.has(appId))
+    await runWithDeadline(orphanedAppIds, async (appId) => {
       try {
-        const deleted = await removeOrgFolderContents(supabase, `org/${orgId}/${appId}`)
+        const deleted = await removeImageFolder(c, `org/${orgId}/${appId}`, { deadline })
         if (deleted > 0) {
           stats.deletedOrgImages += deleted
           cloudlog({ requestId: c.get('requestId'), message: 'deleted orphaned app images', appId, orgId })
@@ -301,7 +233,7 @@ async function cleanOrgFolder(
         cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting orphaned app images', error, appId, orgId })
         stats.errors++
       }
-    }
+    }, { concurrency: APP_FOLDER_CONCURRENCY, deadline })
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'error processing org folder', error, orgId })
@@ -310,20 +242,11 @@ async function cleanOrgFolder(
 }
 
 async function cleanUserImages(c: Context<MiddlewareKeyVariables>, supabase: SupabaseAdmin, stats: CleanupStats, deadline: number) {
-  // List all top-level folders in the images bucket (these are user IDs)
-  const { data: topLevelFolders, error: listError } = await supabase
-    .storage
-    .from('images')
-    .list('', { limit: 1000 })
-
-  if (listError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'error listing top-level folders', error: listError })
-    stats.errors++
-    return
-  }
-
-  // Filter out the 'org' folder which contains app icons
-  const userIds = shuffle((topLevelFolders ?? []).filter(f => f.name !== 'org' && f.id === null).map(f => f.name))
+  // Top-level folders in image storage are user IDs, plus `org` (logos and icons)
+  // and `public` (shared assets).
+  const topLevelFolders = await listImageFolder(c, '', { limit: LIST_LIMIT })
+  // Only UUID folders are avatars; anything else (`org`, `public`, strays) is left alone.
+  const userIds = shuffle(topLevelFolders.filter(f => f.isFolder && UUID_REGEX.test(f.name)).map(f => f.name))
   stats.userFolders = userIds.length
   if (userIds.length === 0)
     return
@@ -336,26 +259,15 @@ async function cleanUserImages(c: Context<MiddlewareKeyVariables>, supabase: Sup
 
   stats.userFoldersProcessed = await runWithDeadline(
     userIds,
-    userId => cleanUserFolder(c, supabase, stats, userId, usersById.get(userId)),
+    userId => cleanUserFolder(c, stats, userId, usersById.get(userId), deadline),
     { concurrency: CLEANUP_CONCURRENCY, deadline },
   )
 }
 
 async function cleanOrgImages(c: Context<MiddlewareKeyVariables>, supabase: SupabaseAdmin, stats: CleanupStats, deadline: number) {
-  // List all folders under images/org/
-  const { data: orgFolders, error: orgListError } = await supabase
-    .storage
-    .from('images')
-    .list('org', { limit: 1000 })
-
-  if (orgListError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'error listing org folders', error: orgListError })
-    stats.errors++
-    return
-  }
-
-  // Skip files, only process directories
-  const orgIds = shuffle((orgFolders ?? []).filter(f => f.id === null).map(f => f.name))
+  // List all folders under images/org/ (one per organization)
+  const orgFolders = await listImageFolder(c, 'org', { limit: LIST_LIMIT })
+  const orgIds = shuffle(orgFolders.filter(f => f.isFolder && UUID_REGEX.test(f.name)).map(f => f.name))
   stats.orgFolders = orgIds.length
   if (orgIds.length === 0)
     return
@@ -373,7 +285,7 @@ async function cleanOrgImages(c: Context<MiddlewareKeyVariables>, supabase: Supa
   )
 }
 
-// This CRON job cleans up orphaned images from storage
+// This CRON job cleans up orphaned images from image storage (R2)
 // - User avatars stored at: images/{user_id}/*
 // - App icons stored at: images/org/{org_id}/{app_id}/icon
 // Images become orphaned when their associated user, org, or app is deleted
