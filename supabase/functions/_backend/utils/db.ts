@@ -272,10 +272,10 @@ function record(run: DbQueryRunner, kind: ConsoleQueryRequest['kind'], name: str
       if (typeof method !== 'string')
         return undefined
       if (method === 'then') {
-        // Like supabase-js, nothing runs until the chain is awaited, and every
-        // await sends it again, so a retry loop can re-await the same builder.
-        const execution = execute(run, request)
-        return execution.then.bind(execution)
+        // Like supabase-js, the request is sent when then() is called (each
+        // await), not when the property is read, and every await sends it
+        // again, so a retry loop can re-await the same builder.
+        return (onFulfilled?: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) => execute(run, request).then(onFulfilled, onRejected)
       }
       if (PASSTHROUGH.has(method))
         return () => builder

@@ -114,6 +114,9 @@ describe('backend builder client', () => {
     // A retry re-awaits the same builder; supabase-js sends the request again.
     await query
     expect(requests).toHaveLength(2)
+    // Reading `then` (promise detection) sends nothing.
+    expect(typeof query.then).toBe('function')
+    expect(requests).toHaveLength(2)
     expect(requests[0].operations[0]).toEqual({ method: 'insert', args: [{ app_id: 'a', date: '2026-01-02T03:04:05.000Z' }] })
     expect(String((db.from as any)('x')[Symbol.toStringTag])).toBe('undefined')
   })
