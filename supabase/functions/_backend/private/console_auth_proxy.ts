@@ -6,8 +6,8 @@ import { getClientIP } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
 
 // The console never talks to Supabase Auth directly: its auth client sends the
-// same GoTrue requests here and this route relays them with anon-level
-// credentials (see setAuthHeaders). Only the user-facing endpoints are reachable; admin and generate-link
+// same GoTrue requests here and this route relays them (see relayAuth for the
+// credentials). Only the user-facing endpoints are reachable; admin and generate-link
 // endpoints are not, so this is never more than what the browser could already do.
 const ALLOWED_PATHS = [
   /^token$/,
@@ -50,105 +50,99 @@ export function consoleAuthPath(requestPath: string): string | null {
   return ALLOWED_PATHS.some(pattern => pattern.test(path)) ? path : null
 }
 
+// GoTrue routes behind its CAPTCHA gate (internal/api/api.go, isIgnoreCaptchaRoute).
+const CAPTCHA_PATHS = new Set(['signup', 'recover', 'resend', 'otp', 'sso'])
+const CAPTCHA_FREE_GRANTS = new Set(['pkce', 'refresh_token', 'id_token'])
+const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
+
+export function requiresCaptcha(path: string, method: string, search: URLSearchParams) {
+  if (method !== 'POST')
+    return false
+  if (path === 'token')
+    return !CAPTCHA_FREE_GRANTS.has(search.get('grant_type') ?? '')
+  return CAPTCHA_PATHS.has(path)
+}
+
 // Supabase Auth keys rate limits, CAPTCHA verification and audit logging on the
 // caller address, so every console user would otherwise share this worker's
 // egress IPs and one client could exhaust the auth limits for all of them.
 // Hosted Supabase only honours Sb-Forwarded-For on requests made with a secret
 // API key (and IP forwarding enabled under Authentication > Rate Limits).
-// A secret apikey alone resolves to service_role, which also skips GoTrue's
-// CAPTCHA check, so Authorization must always carry a signed non-admin token:
-// the user's session, or a short-lived anon JWT minted here for signed-out
-// requests with SUPABASE_JWT_SIGNING_KEY, the private JWK of the project's
-// current signing key (imported into Supabase > JWT Signing Keys).
-// Without that key or a Cloudflare client address, keep relaying with the
-// publishable key exactly as the browser would.
-async function setAuthHeaders(c: Context<MiddlewareKeyVariables>, headers: Headers) {
+// Without a user session that key makes the request service_role, and GoTrue
+// skips its CAPTCHA for admin callers, so the relay verifies Turnstile itself
+// on those routes before relaying. Supabase's own CAPTCHA must stay enabled:
+// it still guards anyone calling Auth directly with the publishable key.
+interface RelayAuth {
+  headers: Record<string, string>
+  // Set when the relay itself must verify Turnstile before relaying.
+  captcha?: { secret: string, clientIp: string }
+}
+
+function relayAuth(c: Context<MiddlewareKeyVariables>): RelayAuth {
   const anonKey = getEnv(c, 'SUPABASE_ANON_KEY')
   const sessionHeader = c.req.header('authorization') ?? ''
-  const session = JWT_BEARER.test(sessionHeader) ? sessionHeader : null
   const secretKey = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
+  const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY') || getEnv(c, 'CLOUDFLARE_TURNSTILE_SECRET_KEY')
   // Only Cloudflare's own header: it cannot be set by the client, x-forwarded-for can.
   const cfClientIp = c.req.header('cf-connecting-ip')
 
-  if (cfClientIp && secretKey.startsWith('sb_secret_')) {
-    const authorization = session ?? await mintAnonBearer(getEnv(c, 'SUPABASE_JWT_SIGNING_KEY'))
-    if (authorization) {
-      headers.set('apikey', secretKey)
-      headers.set('authorization', authorization)
-      // Supabase answers 401 to secret-key requests carrying a browser User-Agent.
-      headers.set('user-agent', 'capgo-console-auth-relay')
-      headers.set('x-forwarded-for', cfClientIp)
-      headers.set('sb-forwarded-for', cfClientIp)
-      return
+  if (cfClientIp && secretKey.startsWith('sb_secret_') && captchaSecret) {
+    const session = JWT_BEARER.test(sessionHeader) ? sessionHeader : null
+    return {
+      headers: {
+        'apikey': secretKey,
+        // A user session keeps the caller identity (and GoTrue's own CAPTCHA);
+        // anything else is dropped so the gateway never sees a client-chosen bearer.
+        ...(session ? { authorization: session } : {}),
+        // Supabase answers 401 to secret-key requests carrying a browser User-Agent.
+        'user-agent': 'capgo-console-auth-relay',
+        'x-forwarded-for': cfClientIp,
+        'sb-forwarded-for': cfClientIp,
+      },
+      captcha: session ? undefined : { secret: captchaSecret, clientIp: cfClientIp },
     }
   }
 
-  headers.set('apikey', anonKey)
-  // A user session when there is one; the anon key is what the SDK sends otherwise.
-  headers.set('authorization', sessionHeader || `Bearer ${anonKey}`)
+  // Relay with the publishable key exactly as the browser would; GoTrue checks the CAPTCHA.
   const clientIp = getClientIP(c)
-  if (clientIp !== 'unknown') {
-    headers.set('x-forwarded-for', clientIp)
-    headers.set('sb-forwarded-for', clientIp)
+  return {
+    headers: {
+      'apikey': anonKey,
+      'authorization': sessionHeader || `Bearer ${anonKey}`,
+      ...(clientIp === 'unknown' ? {} : { 'x-forwarded-for': clientIp, 'sb-forwarded-for': clientIp }),
+    },
   }
 }
 
-const ANON_JWT_TTL_SECONDS = 120
-const ANON_JWT_REUSE_MARGIN_SECONDS = 30
-let signer: { jwkJson: string, kid: string, key: Promise<CryptoKey> } | null = null
-let cachedAnonBearer: { jwkJson: string, value: string, exp: number } | null = null
-
-function base64url(bytes: Uint8Array) {
-  let binary = ''
-  for (const byte of bytes)
-    binary += String.fromCharCode(byte)
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
-}
-
-function encodeSegment(value: object) {
-  return base64url(new TextEncoder().encode(JSON.stringify(value)))
-}
-
-function getSigner(jwkJson: string) {
-  if (signer?.jwkJson === jwkJson)
-    return signer
-  let jwk: JsonWebKey & { kid?: unknown }
+function captchaToken(body: ArrayBuffer | undefined): string {
   try {
-    jwk = JSON.parse(jwkJson)
+    const parsed = JSON.parse(new TextDecoder().decode(body))
+    const token = parsed?.gotrue_meta_security?.captcha_token
+    return typeof token === 'string' ? token.trim() : ''
   }
   catch {
-    return null
+    return ''
   }
-  if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.d || typeof jwk.kid !== 'string' || !jwk.kid)
-    return null
-  const key = crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y, d: jwk.d }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
-  signer = { jwkJson, kid: jwk.kid, key }
-  return signer
 }
 
-// ES256 `role: anon` token, the same claims Supabase puts in its own anon tokens.
-export async function mintAnonBearer(jwkJson: string): Promise<string | null> {
-  if (!jwkJson)
-    return null
-  const now = Math.floor(Date.now() / 1000)
-  if (cachedAnonBearer?.jwkJson === jwkJson && cachedAnonBearer.exp - now > ANON_JWT_REUSE_MARGIN_SECONDS)
-    return cachedAnonBearer.value
-  const current = getSigner(jwkJson)
-  if (!current)
-    return null
-  try {
-    const exp = now + ANON_JWT_TTL_SECONDS
-    const unsigned = `${encodeSegment({ alg: 'ES256', typ: 'JWT', kid: current.kid })}.${encodeSegment({ iss: 'supabase', role: 'anon', iat: now, exp })}`
-    // WebCrypto ECDSA signatures are raw r||s, which is what JWS ES256 expects.
-    const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, await current.key, new TextEncoder().encode(unsigned))
-    const value = `Bearer ${unsigned}.${base64url(new Uint8Array(signature))}`
-    cachedAnonBearer = { jwkJson, value, exp }
-    return value
-  }
-  catch {
-    signer = null
-    return null
-  }
+// Same response GoTrue gives, so the console's auth client surfaces it unchanged.
+function captchaFailed(reason: string) {
+  return Response.json(
+    { code: 400, error_code: 'captcha_failed', msg: `captcha protection: request disallowed (${reason})` },
+    { status: 400, headers: { 'x-sb-error-code': 'captcha_failed', 'cache-control': 'no-store' } },
+  )
+}
+
+async function verifyTurnstile(captcha: NonNullable<RelayAuth['captcha']>, token: string) {
+  const form = new FormData()
+  form.set('secret', captcha.secret)
+  form.set('response', token)
+  form.set('remoteip', captcha.clientIp)
+  const response = await fetch(TURNSTILE_VERIFY_URL, { method: 'POST', body: form })
+  if (!response.ok)
+    throw new Error(`turnstile siteverify returned ${response.status}`)
+  const result = await response.json() as { 'success'?: boolean, 'error-codes'?: string[] }
+  return { success: result.success === true, errorCodes: result['error-codes'] ?? [] }
 }
 
 // Mounted under the console data app, which already applies CORS.
@@ -168,7 +162,9 @@ app.all('/*', async (c) => {
     if (value)
       headers.set(name, value)
   }
-  await setAuthHeaders(c, headers)
+  const auth = relayAuth(c)
+  for (const [name, value] of Object.entries(auth.headers))
+    headers.set(name, value)
 
   let body: ArrayBuffer | undefined
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
@@ -178,6 +174,15 @@ app.all('/*', async (c) => {
     body = await c.req.arrayBuffer()
     if (body.byteLength > MAX_BODY_BYTES)
       return quickError(413, 'auth_request_too_large', 'Auth request too large')
+  }
+
+  if (auth.captcha && requiresCaptcha(path, c.req.method, upstream.searchParams)) {
+    const token = captchaToken(body)
+    if (!token)
+      return captchaFailed('no captcha_token found')
+    const result = await verifyTurnstile(auth.captcha, token)
+    if (!result.success)
+      return captchaFailed(result.errorCodes.join(', ') || 'invalid captcha_token')
   }
 
   const response = await fetch(upstream, { method: c.req.method, headers, body, redirect: 'manual' })
