@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
+import { consoleQueryFromResponse } from '../support/consoleQuery'
 
 function localAdminClient() {
   const { ports } = getSupabaseWorktreeConfig()
@@ -78,12 +79,16 @@ test.describe('AI agent alternatives to manual actions', () => {
     const card = page.locator('[data-test="ai-task-create-channel"]')
     await expect(card).toBeVisible()
     await page.locator('#dialog-v2-content input[type="text"]').fill('beta')
+    // After the copy the table counts channels once as its baseline; wait for it so the
+    // channel inserted below counts as the agent's.
+    const baseline = page.waitForResponse(response => consoleQueryFromResponse(response)?.name === 'channels')
     await card.locator('[data-test="ai-task-copy-prompt"]').click()
     const prompt = await readClipboard(page)
     expect(prompt).toContain('{CAPGO_CLI_RUNNER} channel add {CHANNEL_NAME} com.demo.app')
     expect(prompt).toContain('Use the channel name "beta"')
     // The agent creates the channel, so the dialog closes and the list picks it up.
     await expect(card).toHaveCount(0)
+    await baseline
     const admin = localAdminClient()
     const { data: app } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
     const name = `agent-e2e-${Date.now()}`
