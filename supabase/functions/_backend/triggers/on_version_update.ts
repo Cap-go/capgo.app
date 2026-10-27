@@ -6,7 +6,7 @@ import { isVersionDeleted, purgeFileReadCache } from '../files/file_read_cache.t
 import { isCanonicalAppVersionR2Path } from '../utils/app_version_r2_path.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { deleteVersionManifestBatch, MANIFEST_CLEANUP_BUDGET_MS, MANIFEST_CLEANUP_MAX_BATCHES } from '../utils/manifest_cleanup.ts'
+import { deleteVersionManifestBatch } from '../utils/manifest_cleanup.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { getPath, s3 } from '../utils/s3.ts'
 import { createStatsMeta } from '../utils/stats.ts'
@@ -289,26 +289,15 @@ async function updateIt(c: Context, record: Database['public']['Tables']['app_ve
 }
 
 /**
- * Release only this version's legacy manifest rows (moved to version_files).
- * Delta bytes stay in R2; delta storage GC reclaims them once no version kept
- * for the 7-day restore window references them. Committed progress survives
- * timeouts; the existing sweeper requeues unfinished work within the five-read
- * queue ceiling. Final counters commit with the last row deletion.
+ * Finalize the deleted version's manifest counters in one short transaction.
+ * Its version_files row and the delta bytes in R2 stay; delta storage GC
+ * reclaims them once no version kept for the 7-day restore window references
+ * them.
  */
 async function deleteManifest(c: Context, record: Database['public']['Tables']['app_versions']['Row']) {
-  const deadline = Date.now() + MANIFEST_CLEANUP_BUDGET_MS
   const pool = await getPgClient(c, false)
   try {
-    const database = getDrizzleClient(pool)
-    let deleted = 0
-    for (let batch = 0; batch < MANIFEST_CLEANUP_MAX_BATCHES && Date.now() < deadline; batch++) {
-      const progress = await deleteVersionManifestBatch(database, record.id)
-      deleted += progress.deleted
-      if (progress.complete)
-        return
-    }
-    cloudlog({ requestId: c.get('requestId'), message: 'manifest cleanup committed partial progress', id: record.id, deleted })
-    throw simpleError('manifest_cleanup_incomplete', 'Manifest cleanup budget exhausted', { id: record.id, deleted })
+    await deleteVersionManifestBatch(getDrizzleClient(pool), record.id)
   }
   finally {
     await closeClient(c, pool)

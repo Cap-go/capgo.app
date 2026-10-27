@@ -2,7 +2,7 @@ import type { ManifestEntry } from '../supabase/functions/_backend/utils/downloa
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { createAppVersions, executeSQL, getBaseData, getSupabaseClient, ORG_ID, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { createAppVersions, getBaseData, getSupabaseClient, ORG_ID, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint,   deleteVersionManifests,   insertManifestRows, } from './test-utils.ts'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
 
 const id = randomUUID()
@@ -27,17 +27,14 @@ interface UpdateRes {
 async function insertManifestEntries(appVersionId: number) {
   const supabase = getSupabaseClient()
   // First, delete any existing manifest entries for this version
-  await supabase.from('manifest').delete().eq('app_version_id', appVersionId)
-  // Insert the manifest entry
-  const { error } = await supabase.from('manifest').insert({
+  await deleteVersionManifests([appVersionId])
+  await insertManifestRows([{
     app_version_id: appVersionId,
     file_name: manifestData.file_name,
     s3_path: manifestData.s3_path,
     file_hash: manifestData.file_hash,
     file_size: 100,
-  })
-  if (error)
-    throw new Error(`Failed to insert manifest entry: ${error.message}`)
+  }])
 
   // Update the manifest_count on the version
   await supabase.from('app_versions').update({ manifest_count: 1 }).eq('id', appVersionId)
@@ -52,7 +49,7 @@ async function insertManifestEntries(appVersionId: number) {
 // Helper to remove manifest entries
 async function removeManifestEntries(appVersionId: number) {
   const supabase = getSupabaseClient()
-  await supabase.from('manifest').delete().eq('app_version_id', appVersionId)
+  await deleteVersionManifests([appVersionId])
   await supabase.from('app_versions').update({ manifest_count: 0 }).eq('id', appVersionId)
 }
 
@@ -174,9 +171,6 @@ describe('update manifest scenarios', () => {
     })
     createdVersionIds.push(version.id)
     await insertManifestEntries(version.id)
-    // Move the legacy rows into the new tables, as the converter does after the switch.
-    const [converted] = await executeSQL<{ removed: number }>('SELECT public.convert_version_manifest_rows($1) AS removed', [version.id])
-    expect(converted?.removed).toBe(1)
     await setProductionVersion(version.id)
 
     const baseData = getBaseData(APPNAME)

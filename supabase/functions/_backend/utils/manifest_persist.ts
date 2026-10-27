@@ -47,8 +47,7 @@ type PersistTransaction = Parameters<Parameters<ReturnType<typeof getDrizzleClie
 
 /**
  * Writes one version's entries: unique files go to delta_files (deduplicated
- * across versions), the ordered id list to version_files. While read replicas
- * are not yet subscribed to the new tables, legacy manifest rows are written too.
+ * across versions), the ordered id list to version_files.
  */
 async function persistDeltaStorageRows(
   tx: PersistTransaction,
@@ -88,23 +87,6 @@ async function persistDeltaStorageRows(
       WHERE df.file_size = 0
         AND df.id IN (SELECT pg_catalog.unnest(file_ids) FROM public.version_files WHERE app_version_id = ${record.id}))
       SELECT count(*) FROM queued`)
-  }
-
-  // Vault switch CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES (default on).
-  const config = await tx.execute<{ legacy: boolean }>(sql`
-    SELECT public.delta_storage_legacy_manifest_writes() AS legacy
-  `)
-  if (config.rows[0]?.legacy !== false) {
-    await tx.execute(sql`INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
-      SELECT ${record.id}::bigint, entry.file_name, entry.s3_path, entry.file_hash, COALESCE(entry.file_size, 0)
-      FROM jsonb_to_recordset(${rowsJson}::jsonb) AS entry(file_name text, s3_path text, file_hash text, file_size bigint)`)
-    // Replicas still serve these rows, so their sizes are filled as before.
-    if (!trustFileSizes) {
-      await tx.execute(sql`WITH queued AS MATERIALIZED (SELECT pgmq.send('on_manifest_create', pg_catalog.jsonb_build_object(
-        'function_name', 'on_manifest_create', 'function_type', 'cloudflare', 'payload', pg_catalog.jsonb_build_object('old_record', NULL,
-        'record', pg_catalog.to_jsonb(manifest), 'type', 'INSERT', 'table', 'manifest', 'schema', 'public'))) AS msg_id
-        FROM public.manifest WHERE app_version_id = ${record.id}) SELECT count(*) FROM queued`)
-    }
   }
 }
 
@@ -157,7 +139,6 @@ export async function persistVersionManifestEntries(
   let alreadyPresent = false
   try {
     alreadyPresent = await getDrizzleClient(pgPool).transaction(async (tx) => {
-      await tx.execute(sql`SELECT pg_catalog.set_config('capgo.manifest_queue_managed', 'on', true)`)
       // Shared side of the per-app delta GC lock: GC cannot decide to delete
       // while references are added, and sees this version as in progress.
       await tx.execute(sql`SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('delta_gc'), public.delta_gc_lock_key(${record.app_id}))`)
@@ -173,8 +154,7 @@ export async function persistVersionManifestEntries(
       if (!version.rows[0] || version.rows[0].deleted || version.rows[0].deleted_at)
         throw new Error('Deleted versions cannot receive manifest entries')
       const existing = await tx.execute<{ present: boolean }>(sql`
-        SELECT EXISTS (SELECT 1 FROM public.version_files WHERE app_version_id = ${record.id})
-          OR EXISTS (SELECT 1 FROM public.manifest WHERE app_version_id = ${record.id}) AS present
+        SELECT EXISTS (SELECT 1 FROM public.version_files WHERE app_version_id = ${record.id}) AS present
       `)
       const alreadyPresent = existing.rows[0]?.present === true
       // New references are only added while GC treats the upload as in progress.

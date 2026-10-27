@@ -133,7 +133,7 @@ SELECT
       FROM
         public.manifest
       WHERE
-        id = 910001
+        app_version_id = 910001
     ),
     1::bigint,
     'User should see manifest entries for their own app versions'
@@ -148,7 +148,7 @@ SELECT
       FROM
         public.manifest
       WHERE
-        id = 910002
+        app_version_id = 910002
     ),
     0::bigint,
     'User should not see manifest entries for app versions in other organizations'

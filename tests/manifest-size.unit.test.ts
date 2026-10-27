@@ -165,12 +165,12 @@ describe('manifest download size helpers', () => {
     expect(lookup?.text).toContain('allowed_versions')
     expect(lookup?.text).toContain('WHERE id = ids.version_id')
     expect(lookup?.text).toContain('OFFSET 0')
-    // New rows come from version_files/delta_files; unconverted versions fall back to legacy rows.
+    // Sizes come from version_files/delta_files only.
     expect(lookup?.text).toContain('version_file.app_version_id = av.id')
-    expect(lookup?.text).toContain('legacy.app_version_id = av.id')
+    expect(lookup?.text).not.toContain('public.manifest')
     expect(lookup?.text).toContain('m.file_hash = r.file_hash')
     expect(lookup?.text).toContain('SELECT DISTINCT file_hash, version_id')
-    // One lookup branch: the only UNION ALL is the per-version legacy fallback.
+    // One lookup branch.
     expect(lookup?.text).not.toContain('\nUNION ALL\n')
     expect(lookup?.text).not.toContain('$4::text IS NULL')
     expect(JSON.parse(lookup!.values[0])).toEqual([
@@ -219,7 +219,7 @@ describe('manifest download size helpers', () => {
     expect(lookup.text).toContain('OFFSET 0')
     expect(lookup.text).toContain('av.app_id = $2 AND av.deleted = false')
     expect(lookup.text).toContain('version_file.app_version_id = av.id')
-    expect(lookup.text).toContain('legacy.app_version_id = av.id')
+    expect(lookup.text).not.toContain('public.manifest')
     expect(lookup.values).toEqual([[42, 43], 'com.example.app'])
   })
 

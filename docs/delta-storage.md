@@ -13,8 +13,15 @@ reservations and leases).
 | `delta_files` | one per unique `(s3_path, file_name, file_hash)` | path, hash, size. Deduplicated across versions through `entry_key`. |
 | `version_files` | one per version | `file_ids bigint[]`: the ordered `delta_files` ids of the version. Written once, never rewritten. |
 | `version_manifest` (view) | per version entry | Console, CLI, download links and preview read one version through RLS. |
-| `delta_storage_state` | one | converter cursor. Primary only. The rollout switches are Vault secrets. |
+| `manifest` (view) | per version entry | Compatibility only: published CLIs read it (AI version bump). Users can only read it. |
 | `delta_gc_state` | one per app | GC schedule, listing cursor, delete lease. Primary only. |
+
+The `public.manifest` table is gone. The migration copied every row into the
+new tables and replaced the table by a view with the same columns (`id` is now
+the `delta_files` id). `INSTEAD OF` triggers keep the previous workers working
+while a deploy rolls out: an insert becomes a shared `delta_files` row appended
+to the version's list (and queues its size lookup if unsized), an update fills a
+missing size, and a delete is ignored (GC owns file removal).
 
 An upload writes one `version_files` row plus only the files the app never
 stored before, instead of one `manifest` row per file. `delta_files` and
@@ -29,20 +36,17 @@ through `bundle/upsert` or the PostgREST `app_versions` upsert,
 `set_manifest`. Only the server side changed: `request_manifest_upload` always
 returns the deterministic paths and never reserves anything.
 
-Plugin reads (`/updates`, `/updates/manifest_size`) prefer `version_files` when
-the version row and all of its `delta_files` rows are visible, and otherwise read
-legacy `manifest` rows. The response format is unchanged.
+Plugin reads (`/updates`, `/updates/manifest_size`) serve a version's list only
+when its `version_files` row and all of its `delta_files` rows are visible on
+the replica. The response format is unchanged.
 
 ## Deletion, restore and GC
 
-- Deleting a version keeps its `version_files` row. Legacy rows of the version
-  are moved into the new tables (`convert_version_manifest_rows`).
+- Deleting a version keeps its `version_files` row; only its counters change.
 - Restore within 7 days: clear `deleted` / `deleted_at` (and restore the bundle
   zip from `deleted-after-7-days/` if needed). The delta files are still there,
   and `delta_restore_version_manifest_count` gives back `manifest_count` and
   `apps.manifest_bundle_count`, which `/updates` checks before reading files.
-  A version whose list only lived in the inline `app_versions.manifest` is
-  converted too, so its files are kept for the same 7 days.
 - Objects are matched under every spelling `/files/read` accepts for one key
   (a leading-dot segment as `.` or `%2E`, encoded or decoded names): an object
   is only deleted when none of its spellings is referenced.
@@ -59,9 +63,9 @@ legacy `manifest` rows. The response format is unchanged.
   through the same copy, lock and lease (`delta_gc_begin_orphan_delete`), and
   drops a prefix whose app id exists again in that organization.
   `on_app_delete` already removes the current owner's prefix.
-- GC postpones an app while it has references GC cannot look up by path:
-  unconverted legacy `manifest` rows, or an inline `app_versions.manifest` on a
-  version that still keeps its files (live or deleted less than 7 days ago).
+- GC postpones an app while a version that keeps its files (live or deleted
+  less than 7 days ago) still has an inline `app_versions.manifest` without a
+  `version_files` row: GC cannot look those paths up.
 - The R2 lifecycle rule on `deleted-after-7-days/` purges the trash, so a bad
   delete stays recoverable for 7 more days by copying the object back.
 
@@ -121,67 +125,55 @@ upload, so one rule covers concurrent uploads and GC:
 
 ## Rollout
 
-1. Nothing to do on the Google subscriber before merge. The release job
-   `read_replica_schema` creates `delta_files` and `version_files` there before
-   primary migrations; they are the only tables it may create
-   (`ALLOWED_NEW_REPLICA_TABLES` pins their exact SQL and catalog shape), and
-   any other missing table still stops the release.
-2. Deploy. The migration first drops the PlanetScale replication of the old
-   inventory: the `capgo_planetscale_r2_pub` publication and the
-   `capgo_planetscale_r2_slot` slot (it terminates the slot's walsender, and
-   fails the release rather than leave a slot that would retain WAL). The
-   retired `capgo-r2-inventory-prod` worker deletes delta objects without a
-   `manifest` row and only runs while that replication is healthy, so it stops
-   before any legacy row is converted. Check its logs show the cleanup health
-   failing. It then creates the tables,
-   adds them to `capgo_google_eu_2_pub` and seeds `delta_gc_state`. The
-   migration sets a 5 s `lock_timeout`; a release that cannot get its locks
-   fails and can be retried. Uploads write both the
-   new tables and legacy rows (Vault `CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES` absent = on).
-3. After the migrations, the release job `read_replica_subscription` runs
-   `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true)`
-   when the subscription does not stream a replicated table yet, and checks
-   that it does afterwards. Deploys do not wait on it (plugin reads fall back
-   to legacy rows). If that job fails, run the same statement on the
-   subscriber. Wait until `delta_files` / `version_files` row counts match the
-   primary before step 4.
-4. Switch to the new tables only:
-   `SELECT vault.create_secret('false', 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES');`
-   Secret names are unique: if it already exists, run
-   `SELECT vault.update_secret(id, 'false') FROM vault.secrets WHERE name = 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES';`
-   instead (same pattern for the GC switch below).
-   The `convert_legacy_manifest` cron then moves legacy rows (20 versions every
-   10 seconds) and deletes them. Onboarding demo rows (`demo/` paths) stay
-   legacy because `onboarding_demo_data` tracks their ids. A channel's current
-   version keeps its legacy rows, and a version a channel starts pointing to
-   gets them from `version_files` (`delta_mirror_channel_version_manifest`):
-   published CLIs (8.42.x and later until they moved to `private/cli/manifest`)
-   read `manifest` of that version for the AI version bump. The converter
-   revisits these rows and removes them once the channel moved on.
-   Optionally drop the unread manifest indexes outside the release, one at a
-   time (no long `ACCESS EXCLUSIVE` lock on the 14 GB table):
-   `DROP INDEX CONCURRENTLY IF EXISTS public.idx_manifest_file_hash;` then
-   `DROP INDEX CONCURRENTLY IF EXISTS public.idx_manifest_file_name;`
-5. Check the R2 lifecycle rules: `deleted-after-7-days/` expires after 7 days
+Two migrations, one release:
+
+1. `delta_storage_backfill` creates `delta_files` and `version_files` and
+   copies every `public.manifest` row into them in one pass (minutes at
+   production scale). It only reads `app_versions` and `manifest`, so uploads
+   keep running.
+2. `delta_storage_v2` drops the PlanetScale replication of the old inventory
+   (`capgo_planetscale_r2_pub` and the `capgo_planetscale_r2_slot` slot; it
+   terminates the slot's walsender and fails rather than leave a slot that
+   would retain WAL), adds foreign keys as `NOT VALID` then validates them, adds
+   the GC tables, triggers and policies, then locks `manifest`, converts the
+   versions uploaded during step 1, drops the table and creates the
+   compatibility view. It runs under a 5 s `lock_timeout`; a release that
+   cannot get its locks fails and can be retried.
+
+Around the migrations, the release CI:
+
+- before them, creates `delta_files` and `version_files` on the Google
+  subscriber (`read_replica_schema`, `ALLOWED_NEW_REPLICA_TABLES`);
+- after them, refreshes `capgo_google_eu_2_sub` with `copy_data = true` and
+  waits until every replicated table finished its initial copy
+  (`read_replica_subscription`). The api, files and plugin workers deploy only
+  after that, so they never read a half-copied replica. Until then the previous
+  workers keep serving: they read the subscriber's now frozen `manifest` table
+  and write through the compatibility view on the primary.
+
+After the deploy:
+
+1. Check the retired inventory worker's logs show its cleanup health failing.
+2. Check the R2 lifecycle rules: `deleted-after-7-days/` expires after 7 days
    (already used by bundle zips), and incomplete multipart uploads under
    `orgs/` are aborted after 1 day.
-6. Enable GC: `SELECT vault.create_secret('true', 'CAPGO_DELTA_STORAGE_GC_ENABLED');`
-   Apps that still have legacy rows are postponed until converted.
-7. Decommission the inventory: delete the `capgo-r2-inventory-prod` worker, its
+3. Enable GC: `SELECT vault.create_secret('true', 'CAPGO_DELTA_STORAGE_GC_ENABLED');`
+   (if the secret exists: `SELECT vault.update_secret(id, 'true') FROM vault.secrets WHERE name = 'CAPGO_DELTA_STORAGE_GC_ENABLED';`).
+4. Decommission the inventory: delete the `capgo-r2-inventory-prod` worker, its
    queues (`capgo-r2-inventory-prod`, `-repair`, `-cleanup` and their DLQs), the
    `capgo` bucket notification rule, Hyperdrive `af73fa6a112b495f80e81718b153db76`
    and the PlanetScale `capgo-r2-inventory` database (its subscription only
-   retries and fails since step 2). The Supabase publication and slot were
-   already dropped by the migration, and the worker stopped deleting then.
-8. Once only demo rows remain in `public.manifest`, migrate the demo seeding to
-   the new tables and drop `public.manifest`, which frees its storage. Replace
-   it with a `manifest` view over `version_manifest` so published CLIs that
-   read `manifest` keep working, and drop the channel mirror trigger.
+   retries and fails since the migration).
+5. On the Google subscriber, drop the frozen `public.manifest` table once the
+   new workers serve (`DROP TABLE public.manifest;`); nothing reads it anymore.
+
+The 14 GB of the old table are freed by the drop itself.
 
 Legacy SQL guards that inspected `manifest` rows (`channel_update_package_mismatch`,
 `app_version_manifest_jsonb_unmigrated`, `null_migrated_app_version_manifests`)
-also see converted rows (`delta_version_has_entry`).
+read the new tables (`delta_version_has_entry`). Onboarding demo seeding writes
+demo entries (`demo/` paths) to the new tables; `reset_onboarding_demo_app_data`
+removes them with the demo versions.
 
-Monitoring: `SELECT count(*) FROM public.manifest` shrinks after step 4;
-`SELECT app_id, last_run_at, last_error FROM public.delta_gc_state WHERE last_error IS NOT NULL`
+Monitoring: `SELECT app_id, last_run_at, last_error FROM public.delta_gc_state WHERE last_error IS NOT NULL`
 lists failing GC passes; worker logs carry `delta gc page done` per app.

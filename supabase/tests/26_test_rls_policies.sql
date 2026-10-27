@@ -201,8 +201,8 @@ SELECT
               AND tablename = 'manifest'
               AND indexname IN ('idx_manifest_file_hash', 'idx_manifest_file_name')
         ),
-        2::bigint,
-        'manifest should retain the supported single-column indexes'
+        0::bigint,
+        'manifest is a view and has no indexes of its own'
     );
 
 -- Test orgs policies
@@ -493,38 +493,29 @@ SELECT
         'processed_stripe_events should have RLS enabled'
     );
 
--- Test manifest policies
+-- manifest is a compatibility view over delta_files/version_files: the
+-- policies live on those tables and users can only read the view.
 SELECT
     policies_are(
         'public',
-        'manifest',
+        'delta_files',
         ARRAY[
             'Allow select for auth, api keys (read+)',
-            'Prevent users from deleting manifest entries',
-            'Prevent users from inserting manifest entries',
-            'Prevent users from updating manifest entries'
+            'Prevent users from deleting delta files',
+            'Prevent users from inserting delta files',
+            'Prevent users from updating delta files'
         ],
-        'manifest should have correct policies'
+        'delta_files should have correct policies'
     );
 
 SELECT
     is(
-        (
-            SELECT count(*)
-            FROM pg_policies
-            WHERE
-                schemaname = 'public'
-                AND tablename = 'manifest'
-                AND policyname = 'Prevent users from updating manifest entries'
-                AND permissive = 'RESTRICTIVE'
-                AND cmd = 'UPDATE'
-                AND roles @> ARRAY['anon', 'authenticated']::name []
-                AND array_length(roles, 1) = 2
-                AND qual = 'false'
-                AND with_check = 'false'
-        ),
-        1::bigint,
-        'manifest update deny policy should match restrictive role shape'
+        has_table_privilege('authenticated', 'public.manifest', 'INSERT')
+        OR has_table_privilege('authenticated', 'public.manifest', 'UPDATE')
+        OR has_table_privilege('authenticated', 'public.manifest', 'DELETE')
+        OR has_table_privilege('anon', 'public.manifest', 'INSERT'),
+        false,
+        'users cannot write the manifest compatibility view'
     );
 
 -- Test deploy_history policies

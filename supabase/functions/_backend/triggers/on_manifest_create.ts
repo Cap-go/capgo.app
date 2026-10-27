@@ -42,58 +42,6 @@ async function getManifestSizeWithRetry(c: Context, s3Path: string): Promise<{ d
   return { attempts, diagnostics: result, lastError }
 }
 
-function shouldRetryManifestSizeLookup(size: number, currentFileSize: number | null | undefined): boolean {
-  return size <= 0 && !(currentFileSize && currentFileSize > 0)
-}
-
-async function shouldSkipManifestSizeRetry(c: Context, record: Database['public']['Tables']['manifest']['Row'], queue: QueueLogMetadata): Promise<boolean> {
-  if (!record.id)
-    return false
-
-  const { data: currentManifest, error: manifestError } = await supabaseAdmin(c)
-    .from('manifest')
-    .select('file_size, app_version_id')
-    .eq('id', record.id)
-    .maybeSingle()
-
-  if (manifestError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'error reading current manifest before retry', id: record.id, app_version_id: record.app_version_id, queue, error: manifestError })
-    return false
-  }
-
-  if (!currentManifest) {
-    cloudlog({ requestId: c.get('requestId'), message: 'manifest row already gone, skipping size retry', id: record.id, app_version_id: record.app_version_id, queue })
-    return true
-  }
-
-  if (currentManifest.file_size && currentManifest.file_size > 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'manifest row already sized, skipping stale queue retry', id: record.id, app_version_id: currentManifest.app_version_id, file_size: currentManifest.file_size, queue })
-    return true
-  }
-
-  const appVersionId = currentManifest.app_version_id ?? record.app_version_id
-  if (!appVersionId)
-    return false
-
-  const { data: appVersion, error: appVersionError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('deleted, deleted_at')
-    .eq('id', appVersionId)
-    .maybeSingle()
-
-  if (appVersionError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'error reading app version before manifest retry', id: record.id, app_version_id: appVersionId, queue, error: appVersionError })
-    return false
-  }
-
-  if (appVersion?.deleted || appVersion?.deleted_at) {
-    cloudlog({ requestId: c.get('requestId'), message: 'app version deleted, skipping manifest size retry', id: record.id, app_version_id: appVersionId, queue })
-    return true
-  }
-
-  return false
-}
-
 async function runManifestUpdateWithRetry(
   c: Context,
   operation: () => Promise<RetryableResult>,
@@ -133,41 +81,13 @@ async function runManifestUpdateWithRetry(
   }
 }
 
-export async function updateManifestSize(c: Context, record: Database['public']['Tables']['manifest']['Row'], queue = getQueueLogMetadata(c)) {
-  if (!record.s3_path) {
-    cloudlog({ requestId: c.get('requestId'), message: 'No s3 path', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, queue })
-    throw simpleError('no_s3_path', 'No s3 path', { record })
-  }
-
-  const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, record.s3_path)
-  const size = diagnostics?.size ?? 0
-  if (lastError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getSize failed after retries', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
-  }
-  if (shouldRetryManifestSizeLookup(size, record.file_size)) {
-    if (await shouldSkipManifestSizeRetry(c, record, queue))
-      return c.json(BRES)
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getSize returned 0 after retries', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, attempts, queue, storageDiagnostics: diagnostics })
-    // Return non-2xx so queue_consumer keeps the message and applies its 5-read retry budget.
-    throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, file_name: record.file_name, id: record.id, queue, s3_path: record.s3_path, storageDiagnostics: diagnostics }, lastError, { alert: false })
-  }
-  if (size <= 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'getSize returned 0, keeping existing file_size', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, file_size: record.file_size, attempts, queue, storageDiagnostics: diagnostics })
-    return c.json(BRES)
-  }
-
-  try {
-    await runManifestUpdateWithRetry(c, async () => await supabaseAdmin(c)
-      .from('manifest')
-      .update({ file_size: size })
-      .eq('id', record.id))
-    cloudlog({ requestId: c.get('requestId'), message: 'manifest file_size updated', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, size, attempts, queue, selectedCandidateKey: diagnostics?.selectedCandidateKey })
-  }
-  catch (updateError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error update manifest size', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, size, attempts, queue, error: updateError, storageDiagnostics: diagnostics })
-    throw simpleError('manifest_update_failed', 'Failed to update manifest file_size', { record, updateError })
-  }
-
+/**
+ * Size lookups queued for legacy public.manifest rows before the cutover:
+ * those ids no longer exist (public.manifest is now a view over delta_files),
+ * and the cutover queued delta_files lookups for every unsized file instead.
+ */
+export function skipLegacyManifestSize(c: Context, record: { id?: number | null }, queue = getQueueLogMetadata(c)) {
+  cloudlog({ requestId: c.get('requestId'), message: 'legacy manifest size lookup skipped', id: record.id, queue })
   return c.json(BRES)
 }
 
@@ -219,20 +139,11 @@ app.post('/', middlewareAPISecret, triggerValidator(['manifest', 'delta_files'],
   if (isDeltaFileRecord(webhookRecord))
     return updateDeltaFileSize(c, webhookRecord)
 
-  const record = webhookRecord as Database['public']['Tables']['manifest']['Row']
-
-  if (!record.app_version_id || !record.s3_path) {
-    cloudlog({ requestId: c.get('requestId'), message: 'no app_version_id or s3_path' })
-    throw simpleError('no_app_version_id_or_s3_path', 'no app_version_id or s3_path', { record })
-  }
-
-  return updateManifestSize(c, record)
+  return skipLegacyManifestSize(c, webhookRecord as { id?: number | null })
 })
 
 export const onManifestCreateTestUtils = {
   isRetryablePostgrestResult,
   runManifestUpdateWithRetry,
-  shouldRetryManifestSizeLookup,
-  shouldSkipManifestSizeRetry,
   sizeRetryAttempts: SIZE_RETRY_ATTEMPTS,
 }

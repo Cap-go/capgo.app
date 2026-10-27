@@ -1,4 +1,4 @@
-import { bigint, boolean, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, serial, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core'
+import { bigint, boolean, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core'
 
 // do_not_change
 
@@ -64,15 +64,6 @@ export const app_versions = pgTable('app_versions', {
   link: varchar('link'),
   comment: varchar('comment'),
   manifest_count: integer('manifest_count').notNull().default(0),
-})
-
-export const manifest = pgTable('manifest', {
-  id: serial('id').primaryKey().notNull(),
-  app_version_id: bigint('app_version_id', { mode: 'number' }).notNull().references(() => app_versions.id, { onDelete: 'cascade' }),
-  file_name: varchar('file_name').notNull(),
-  s3_path: varchar('s3_path').notNull(),
-  file_hash: varchar('file_hash').notNull(),
-  file_size: bigint('file_size', { mode: 'number' }).default(0),
 })
 
 export const channels = pgTable('channels', {
@@ -289,7 +280,6 @@ export const role_bindings = pgTable('role_bindings', {
 export const schema = {
   apps,
   app_versions,
-  manifest,
   channels,
   channel_devices,
   orgs,

@@ -176,13 +176,14 @@ jobs:
           bun scripts/sync-read-replica-schema.ts
 
   # Migrations may add tables to the Google publication; the subscriber only
-  # streams them once its subscription is refreshed. Deploys do not wait on
-  # this: plugin reads fall back to legacy rows until the copy is done.
+  # streams them once its subscription is refreshed. Workers that read the
+  # replica (api, files, plugins) deploy once the initial copy is finished;
+  # until then the previous workers keep serving.
   read_replica_subscription:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' && needs.read_replica_schema.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     name: Refresh production read-replica subscription
     permissions:
       contents: read
@@ -363,8 +364,8 @@ jobs:
           prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}
 
   deploy_api:
-    needs: [changes, supabase_deploy, read_replica_schema]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -437,8 +438,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_files:
-    needs: [changes, supabase_deploy, read_replica_schema]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -474,8 +475,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_plugin_regions:
-    needs: [changes, supabase_deploy, read_replica_schema]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

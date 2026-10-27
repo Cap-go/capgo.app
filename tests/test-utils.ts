@@ -1029,6 +1029,33 @@ export async function executeSQL<T = any>(query: string, params?: any[]): Promis
   return result.rows as T[]
 }
 
+interface ManifestSeedRow {
+  app_version_id: number
+  file_name: string
+  s3_path: string
+  file_hash: string
+  file_size?: number
+}
+
+// public.manifest is a compatibility view: inserts go through its INSTEAD OF
+// trigger into delta_files/version_files. Returns the delta_files ids.
+export async function insertManifestRows(rows: ManifestSeedRow[]) {
+  const inserted = await executeSQL<{ id: string, app_version_id: string }>(
+    `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+     SELECT r.app_version_id, r.file_name, r.s3_path, r.file_hash, r.file_size
+     FROM jsonb_to_recordset($1::jsonb) AS r(app_version_id bigint, file_name text, s3_path text, file_hash text, file_size bigint)
+     RETURNING id, app_version_id`,
+    [JSON.stringify(rows)],
+  )
+  return inserted.map(row => ({ id: Number(row.id), app_version_id: Number(row.app_version_id) }))
+}
+
+// Deletes through the view are no-ops (GC owns file removal); tests drop the
+// versions' file lists directly.
+export async function deleteVersionManifests(versionIds: number[]) {
+  await executeSQL('DELETE FROM public.version_files WHERE app_version_id = ANY($1::bigint[])', [versionIds])
+}
+
 export async function getCronPlanQueueCount(): Promise<number> {
   const result = await executeSQL('SELECT COUNT(*) as count FROM pgmq.q_cron_stat_org')
   return Number.parseInt(result[0]?.count || '0')

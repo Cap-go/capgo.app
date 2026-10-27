@@ -24,7 +24,6 @@ REPLICA_TABLES=(
   "channels"
   "channel_devices"
   "delta_files"
-  "manifest"
   "notifications"
   "onboarding_demo_data"
   "version_files"
@@ -44,7 +43,6 @@ REPLICA_PRIORITY_TABLES=(
 REPLICA_DEFERRED_TABLES=(
   "channel_devices"
   "delta_files"
-  "manifest"
   "version_files"
 )
 

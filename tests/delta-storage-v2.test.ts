@@ -33,10 +33,9 @@ async function insertLegacyRows(versionId: number, names: string[]) {
   )
 }
 
-// No in-progress upload and no unconverted legacy rows left by other cases.
+// No in-progress upload left by other cases.
 async function readyForDeletes(client: Pick<PoolClient, 'query'>) {
   await client.query(`UPDATE public.app_versions SET storage_provider = 'r2' WHERE app_id = $1 AND storage_provider = 'r2-direct'`, [APP_ID])
-  await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
 }
 
 // What delta_gc_begin_delete records before any R2 request is sent.
@@ -46,17 +45,6 @@ async function recordUnsettled(client: Pick<PoolClient, 'query'>, paths: string[
      ON CONFLICT (path) DO UPDATE SET recorded_at = now(), checks = 0`,
     [APP_ID, paths],
   )
-}
-
-async function versionFilesOf(client: Pick<PoolClient, 'query'>, versionId: number) {
-  const result = await client.query<{ s3_path: string }>(
-    `SELECT df.s3_path FROM public.version_files vf
-     CROSS JOIN LATERAL unnest(vf.file_ids) WITH ORDINALITY AS entry(file_id, ord)
-     INNER JOIN public.delta_files df ON df.id = entry.file_id
-     WHERE vf.app_version_id = $1 ORDER BY entry.ord`,
-    [versionId],
-  )
-  return result.rows.map(row => row.s3_path)
 }
 
 async function versionFiles(versionId: number) {
@@ -74,7 +62,6 @@ async function versionFiles(versionId: number) {
 
 const SWITCHES = {
   gc_enabled: 'CAPGO_DELTA_STORAGE_GC_ENABLED',
-  legacy_manifest_writes: 'CAPGO_DELTA_STORAGE_LEGACY_MANIFEST_WRITES',
 } as const
 
 async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof SWITCHES, value: boolean) {
@@ -84,7 +71,7 @@ async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof S
 
 // The Vault switches stay untouched for parallel test files: each case sets
 // them inside its own transaction and rolls back.
-async function withConfig<T>(settings: { gc_enabled?: boolean, legacy_manifest_writes?: boolean }, run: (client: PoolClient) => Promise<T>) {
+async function withConfig<T>(settings: { gc_enabled?: boolean }, run: (client: PoolClient) => Promise<T>) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -134,141 +121,29 @@ afterAll(async () => {
   await pool.end()
 })
 
-describe('delta storage v2 conversion', () => {
-  it('moves legacy rows into shared delta_files and one version_files row per version', async () => {
+describe('delta storage v2 compatibility view', () => {
+  it('stores rows written through the manifest compatibility view once per unique file', async () => {
     const first = await insertVersion(pool)
     const second = await insertVersion(pool)
     await insertLegacyRows(first, ['a.js', 'b.js'])
     await insertLegacyRows(second, ['b.js', 'c.js'])
 
-    for (const versionId of [first, second]) {
-      const converted = await pool.query<{ removed: number }>('SELECT public.convert_version_manifest_rows($1) AS removed', [versionId])
-      expect(converted.rows[0].removed).toBe(2)
-    }
-
     expect(await versionFiles(first)).toEqual([deltaPath('a.js'), deltaPath('b.js')])
     expect(await versionFiles(second)).toEqual([deltaPath('b.js'), deltaPath('c.js')])
     const files = await pool.query('SELECT count(*)::int AS count FROM public.delta_files WHERE app_id = $1 AND s3_path = ANY($2::text[])', [APP_ID, [deltaPath('a.js'), deltaPath('b.js'), deltaPath('c.js')]])
     expect(files.rows[0].count).toBe(3)
-    const legacy = await pool.query('SELECT count(*)::int AS count FROM public.manifest WHERE app_version_id = ANY($1::bigint[])', [[first, second]])
-    expect(legacy.rows[0].count).toBe(0)
+    // Published CLIs read the same entries back through the view.
+    const legacy = await pool.query('SELECT file_name FROM public.manifest WHERE app_version_id = $1 ORDER BY file_name', [first])
+    expect(legacy.rows.map(row => row.file_name)).toEqual(['a.js', 'b.js'])
+    // Deletes through the view are ignored: GC owns file removal.
+    await pool.query('DELETE FROM public.manifest WHERE app_version_id = $1', [first])
+    expect(await versionFiles(first)).toEqual([deltaPath('a.js'), deltaPath('b.js')])
 
     const view = await pool.query('SELECT file_name FROM public.version_manifest WHERE app_version_id = $1 ORDER BY id', [second])
     expect(view.rows.map(row => row.file_name)).toEqual(['b.js', 'c.js'])
   })
 
-  it('queues a size lookup for a live version sharing an unsized file with an earlier deleted conversion', async () => {
-    const deleted = await insertVersion(pool, { deleted: true, deletedAt: new Date().toISOString() })
-    const live = await insertVersion(pool)
-    const path = deltaPath('unsized.js')
-    for (const versionId of [deleted, live]) {
-      await pool.query(
-        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'unsized.js', 'hash-unsized', $2, 0)`,
-        [versionId, path],
-      )
-    }
-    const queued = async () => (await pool.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM pgmq.q_on_manifest_create
-       WHERE message->'payload'->>'table' = 'delta_files' AND message->'payload'->'record'->>'s3_path' = $1`,
-      [path],
-    )).rows[0].count
 
-    await pool.query('SELECT public.convert_version_manifest_rows($1)', [deleted])
-    expect(await queued()).toBe(0)
-    await pool.query('SELECT public.convert_version_manifest_rows($1)', [live])
-    expect(await queued()).toBe(1)
-  })
-
-  it('keeps legacy rows while legacy writes are on and converts after the switch', async () => {
-    const versionId = await insertVersion(pool)
-    await insertLegacyRows(versionId, ['batch.js'])
-
-    await withConfig({ legacy_manifest_writes: true }, async (client) => {
-      const result = await client.query('SELECT public.convert_legacy_manifest_batch(1000, 2000) AS converted')
-      expect(result.rows[0].converted).toBe(0)
-    })
-
-    await withConfig({ legacy_manifest_writes: false }, async (client) => {
-      await client.query('UPDATE public.delta_storage_state SET convert_cursor = $1 - 1 WHERE id', [versionId])
-      const result = await client.query('SELECT public.convert_legacy_manifest_batch(1, 2000) AS converted')
-      expect(result.rows[0].converted).toBe(1)
-      const rows = await client.query('SELECT count(*)::int AS count FROM public.manifest WHERE app_version_id = $1', [versionId])
-      expect(rows.rows[0].count).toBe(0)
-      const kept = await client.query('SELECT cardinality(file_ids) AS count FROM public.version_files WHERE app_version_id = $1', [versionId])
-      expect(kept.rows[0].count).toBe(1)
-    })
-  })
-})
-
-describe('delta storage v2 inline-only manifests', () => {
-  it('converts a live inline-only version so GC no longer postpones the app', async () => {
-    await withConfig({ legacy_manifest_writes: false }, async (client) => {
-      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
-      const path = deltaPath('inline-live.js')
-      const [{ id }] = (await client.query<{ id: string }>(
-        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, checksum, manifest)
-         VALUES ($1, $2, $3, $4, 'r2', 'c', ARRAY[ROW('inline-live.js', $5, 'h')::public.manifest_entry])
-         RETURNING id`,
-        [APP_ID, `inline-live-${randomUUID().slice(0, 8)}`, ORG_ID, USER_ID, path],
-      )).rows
-      const versionId = Number(id)
-      const before = await client.query<{ blocked: boolean }>('SELECT public.delta_app_has_unconverted_references($1) AS blocked', [APP_ID])
-      expect(before.rows[0].blocked).toBe(true)
-
-      // A demo version's rows stay legacy on purpose and fill the legacy
-      // scan's budget of one; the inline scan still runs with its own.
-      const demo = await insertVersion(client)
-      await client.query(
-        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'demo.js', 'demo', $2, 1)`,
-        [demo, `demo/${APP_ID}/inline-budget.js`],
-      )
-      await client.query('UPDATE public.delta_storage_state SET convert_cursor = $1 - 1, inline_cursor = $2 - 1 WHERE id', [demo, versionId])
-      await client.query('SELECT public.convert_legacy_manifest_batch(1, 2000)')
-
-      expect(await versionFilesOf(client, versionId)).toEqual([path])
-      const after = await client.query<{ blocked: boolean }>('SELECT public.delta_app_has_unconverted_references($1) AS blocked', [APP_ID])
-      expect(after.rows[0].blocked).toBe(false)
-    })
-  })
-})
-
-describe('delta storage v2 published CLI compatibility', () => {
-  it('keeps legacy rows of a channel version and mirrors them when a channel moves to a converted version', async () => {
-    await withConfig({ legacy_manifest_writes: false }, async (client) => {
-      const onChannel = await insertVersion(client)
-      const converted = await insertVersion(client)
-      for (const [versionId, name] of [[onChannel, 'kept.js'], [converted, 'mirrored.js']] as const) {
-        await client.query(
-          `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, $2::text, 'h-' || $2::text, $3, 5)`,
-          [versionId, name, deltaPath(name)],
-        )
-      }
-      await client.query('SELECT public.convert_version_manifest_rows($1)', [converted])
-      await client.query(
-        `INSERT INTO public.channels (name, app_id, owner_org, created_by, version, public) VALUES ($1, $2, $3, $4, $5, false)`,
-        [`compat-${id.slice(0, 8)}`, APP_ID, ORG_ID, USER_ID, onChannel],
-      )
-
-      // The converter fills the new tables for the channel's current version
-      // (GC sees its paths) and keeps its legacy rows.
-      await client.query('UPDATE public.delta_storage_state SET convert_cursor = $1 - 1 WHERE id', [onChannel])
-      await client.query('SELECT public.convert_legacy_manifest_batch(1, 2000)')
-      const kept = await client.query('SELECT file_name FROM public.manifest WHERE app_version_id = $1', [onChannel])
-      expect(kept.rows.map(row => row.file_name)).toEqual(['kept.js'])
-      expect(await versionFilesOf(client, onChannel)).toEqual([deltaPath('kept.js')])
-      const blocked = await client.query(
-        `SELECT EXISTS (SELECT 1 FROM public.manifest m WHERE m.app_version_id = $1)
-           AND NOT EXISTS (SELECT 1 FROM public.version_files WHERE app_version_id = $1) AS unconverted`,
-        [onChannel],
-      )
-      expect(blocked.rows[0].unconverted).toBe(false)
-
-      // Moving the channel to a converted version gives it legacy rows again.
-      await client.query('UPDATE public.channels SET version = $1 WHERE app_id = $2', [converted, APP_ID])
-      const mirrored = await client.query('SELECT file_name, file_hash, file_size::int AS file_size FROM public.manifest WHERE app_version_id = $1', [converted])
-      expect(mirrored.rows).toEqual([{ file_name: 'mirrored.js', file_hash: 'h-mirrored.js', file_size: 5 }])
-    })
-  })
 })
 
 describe('delta storage v2 GC guards', () => {
@@ -279,8 +154,6 @@ describe('delta storage v2 GC guards', () => {
     await insertLegacyRows(live, ['live.js'])
     await insertLegacyRows(recent, ['recent.js'])
     await insertLegacyRows(old, ['old.js', 'live.js'])
-    for (const versionId of [live, recent, old])
-      await pool.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
 
     const result = await pool.query<{ paths: string[] }>(
       'SELECT public.delta_gc_unreferenced_paths($1::text[]) AS paths',
@@ -301,7 +174,6 @@ describe('delta storage v2 GC guards', () => {
           [versionId, name, deltaPath(name)],
         )
       }
-      await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
 
       // Physical keys listed by GC in other spellings of the same objects.
       const listed = [`${sha}_%2Ehtaccess`, `${sha}_%2ehtaccess`, `${sha}_image@2x.png`, `${sha}_image%25402x.png`, `${sha}_a b%40c.js`].map(deltaPath)
@@ -313,31 +185,24 @@ describe('delta storage v2 GC guards', () => {
     })
   })
 
-  it('converts an inline-only manifest of a deleted version and restores its counters', async () => {
+  it('restores a deleted version\'s counters and queues its missing size lookups', async () => {
     await withConfig({}, async (client) => {
-      const path = deltaPath('inline-restore.js')
-      const [{ id }] = (await client.query<{ id: string }>(
-        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, deleted, deleted_at, checksum, manifest)
-         VALUES ($1, $2, $3, $4, 'r2', true, now() - interval '1 day', 'c', ARRAY[ROW('inline-restore.js', $5, 'h')::public.manifest_entry])
-         RETURNING id`,
-        [APP_ID, `inline-restore-${randomUUID().slice(0, 8)}`, ORG_ID, USER_ID, path],
-      )).rows
-      const versionId = Number(id)
-      await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
-      const files = await client.query<{ s3_path: string }>(
-        `SELECT df.s3_path FROM public.version_files vf CROSS JOIN LATERAL unnest(vf.file_ids) AS f(id)
-         INNER JOIN public.delta_files df ON df.id = f.id WHERE vf.app_version_id = $1`,
-        [versionId],
+      const path = deltaPath('restore-unsized.js')
+      const versionId = await insertVersion(client, { deleted: true, deletedAt: new Date(Date.now() - 86400_000).toISOString() })
+      await client.query(
+        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'restore-unsized.js', 'h', $2, 0)`,
+        [versionId, path],
       )
-      expect(files.rows.map(row => row.s3_path)).toEqual([path])
+      // A version deleted less than 7 days ago keeps its files.
       const kept = await client.query<{ paths: string[] }>('SELECT public.delta_gc_unreferenced_paths($1::text[]) AS paths', [[path]])
       expect(kept.rows[0].paths).toEqual([])
 
+      // Drop the lookup the insert queued, as if it had run while the file was missing.
+      await client.query(`DELETE FROM pgmq.q_on_manifest_create WHERE message->'payload'->'record'->>'s3_path' = $1`, [path])
       const before = await client.query<{ count: number }>('SELECT manifest_bundle_count AS count FROM public.apps WHERE app_id = $1', [APP_ID])
       await client.query('UPDATE public.app_versions SET deleted = false, deleted_at = NULL WHERE id = $1', [versionId])
       const restored = await client.query<{ manifest_count: number }>('SELECT manifest_count FROM public.app_versions WHERE id = $1', [versionId])
       expect(restored.rows[0].manifest_count).toBe(1)
-      // Its file was never sized (deleted versions queue no lookups): restoring queues one.
       const queued = await client.query<{ count: number }>(
         `SELECT count(*)::int AS count FROM pgmq.q_on_manifest_create
          WHERE message->'payload'->>'table' = 'delta_files' AND message->'payload'->'record'->>'s3_path' = $1`,
@@ -348,6 +213,7 @@ describe('delta storage v2 GC guards', () => {
       expect(Number(after.rows[0].count)).toBe(Number(before.rows[0].count) + 1)
     })
   })
+
 
   it('never opens a delete lease while GC is disabled or an upload is in progress', async () => {
     const orphan = deltaPath('lease-orphan.js')
@@ -417,7 +283,6 @@ describe('delta storage v2 legacy guards', () => {
   it('lets delta-only channels and jsonb clearing see converted versions', async () => {
     const versionId = await insertVersion(pool)
     await insertLegacyRows(versionId, ['guard.js'])
-    await pool.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
 
     const mismatch = await pool.query<{ reason: string | null }>(
       `SELECT public.channel_update_package_mismatch('delta'::public.channel_update_package, $1, 'production') AS reason`,
@@ -432,29 +297,16 @@ describe('delta storage v2 legacy guards', () => {
     expect(unmigrated.rows[0].unmigrated).toBe(false)
   })
 
-  it('does not postpone GC for apps whose only legacy rows are onboarding demo rows', async () => {
-    const versionId = await insertVersion(pool)
-    await pool.query(
-      `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'demo.js', 'demo', $2, 1)`,
-      [versionId, `demo/${APP_ID}/demo.js`],
-    )
-    await withConfig({ gc_enabled: true }, async (client) => {
-      // Convert this app's other legacy rows; demo versions are skipped by design.
-      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
-      expect((await claimOwnApp(client)).map(row => row.app_id)).toEqual([APP_ID])
-    })
-  })
 
   it('postpones GC for apps with a live inline jsonb manifest', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
-      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
       await client.query(
         `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, checksum, manifest)
          VALUES ($1, $2, $3, $4, 'r2', $5, ARRAY[ROW('inline.js', $6, 'hash')::public.manifest_entry])`,
         [APP_ID, `9.9.9-inline-${id.slice(0, 8)}`, ORG_ID, USER_ID, randomUUID().replaceAll('-', ''), deltaPath('inline.js')],
       )
       expect(await claimOwnApp(client)).toEqual([])
-      // Postponed for the converter instead of being listed.
+      // Postponed until the upload flow moves the inline list.
       const state = await client.query(`SELECT next_run_at > now() + interval '23 hours' AS postponed FROM public.delta_gc_state WHERE app_id = $1`, [APP_ID])
       expect(state.rows[0].postponed).toBe(true)
     })
@@ -463,7 +315,6 @@ describe('delta storage v2 legacy guards', () => {
   it('lists every former owner prefix of a transferred app in one pass', async () => {
     const formerOrg = '00000000-0000-4000-8000-0000000000aa'
     await withConfig({ gc_enabled: true }, async (client) => {
-      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
       await client.query(`DELETE FROM public.app_versions WHERE app_id = $1 AND manifest IS NOT NULL`, [APP_ID])
       await client.query(
         `INSERT INTO public.delta_files (app_id, s3_path, file_name, file_hash, path_key, entry_key)
@@ -491,7 +342,7 @@ describe('delta storage v2 legacy guards', () => {
          VALUES ($1, $2::text, 'old.js', 'h', public.delta_path_key($2::text), public.delta_entry_key($2::text, 'old.js', 'h'))`,
         [goneApp, `orgs/${formerOrg}/apps/${goneApp}/delta/old.js`],
       )
-      // An unconverted legacy row under a second former owner.
+      // A row written through the compatibility view under a second former owner.
       const legacyOrg = '00000000-0000-4000-8000-0000000000cc'
       const [{ id: goneVersion }] = (await client.query<{ id: string }>(
         `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, checksum)
@@ -548,7 +399,6 @@ describe('delta storage v2 legacy guards', () => {
         `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'again.js', 'h', $2, 1)`,
         [versionId, deltaPath('again.js')],
       )
-      await client.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
       await recordUnsettled(client, [deltaPath('again.js'), deltaPath('gone.js')])
       await client.query(`UPDATE public.delta_gc_unsettled_deletes SET recorded_at = now() - interval '2 minutes' WHERE app_id = $1`, [APP_ID])
       const claimed = await client.query<{ path: string, referenced: boolean }>('SELECT path, referenced FROM public.delta_gc_claim_unsettled(50) ORDER BY path')
@@ -705,7 +555,6 @@ describe('delta storage v2 size lookups', () => {
   it('runs a mixed per-version and name-fallback size lookup on converted versions', async () => {
     const versionId = await insertVersion(pool)
     await insertLegacyRows(versionId, ['size.js'])
-    await pool.query('SELECT public.convert_version_manifest_rows($1)', [versionId])
     const [{ name }] = (await pool.query<{ name: string }>('SELECT name FROM public.app_versions WHERE id = $1', [versionId])).rows
 
     const files = normalizeManifestSizeFiles([

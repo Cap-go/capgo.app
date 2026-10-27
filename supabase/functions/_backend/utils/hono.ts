@@ -198,8 +198,11 @@ export const honoFactory = createFactory<MiddlewareKeyVariables>()
 
 type TriggerOperation = 'DELETE' | 'INSERT' | 'UPDATE'
 
+// Views are accepted for messages queued before a table became a view.
+type TriggerRelation = keyof Database['public']['Tables'] | keyof Database['public']['Views']
+
 export function triggerValidator(
-  table: keyof Database['public']['Tables'] | readonly (keyof Database['public']['Tables'])[],
+  table: TriggerRelation | readonly TriggerRelation[],
   type: TriggerOperation | readonly TriggerOperation[],
 ) {
   const allowedTables: readonly string[] = typeof table === 'string' ? [table] : table

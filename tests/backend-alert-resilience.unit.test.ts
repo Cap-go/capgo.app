@@ -433,15 +433,6 @@ describe('backend alert resilience helpers', () => {
     expect(attempts).toBe(2)
   })
 
-  it.concurrent('marks missing manifest storage size as queue-retryable unless a trusted size already exists', async () => {
-    const { onManifestCreateTestUtils } = await import('../supabase/functions/_backend/triggers/on_manifest_create.ts')
-
-    expect(onManifestCreateTestUtils.shouldRetryManifestSizeLookup(0, 0)).toBe(true)
-    expect(onManifestCreateTestUtils.shouldRetryManifestSizeLookup(0, null)).toBe(true)
-    expect(onManifestCreateTestUtils.shouldRetryManifestSizeLookup(0, 128)).toBe(false)
-    expect(onManifestCreateTestUtils.shouldRetryManifestSizeLookup(128, 0)).toBe(false)
-  })
-
   it.concurrent('returns empty strings when env bindings are missing from the context', () => {
     const context = {
       req: {

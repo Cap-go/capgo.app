@@ -4,6 +4,7 @@ import { ALLOWED_NEW_REPLICA_TABLES, planReadReplicaSchemaSync } from '../read_r
 import { REPLICA_TABLES } from '../read_replicate/schema_catalog.ts'
 import {
   assertGoogleReadReplicaSchemaPlan,
+  copyingReplicaTables,
   preflightCompatibilityIssues,
   READ_REPLICA_REFRESH_SUBSCRIPTION_SQL,
   renderReadReplicaImportTransaction,
@@ -88,6 +89,14 @@ describe('read-replica subscription refresh', () => {
     const subscribed = REPLICA_TABLES.filter(table => !NEW_TABLES.includes(table))
     expect(unsubscribedReplicaTables(subscribed).sort()).toEqual(NEW_TABLES)
     expect(unsubscribedReplicaTables([...REPLICA_TABLES])).toEqual([])
+  })
+
+  it('waits until every replicated table finished its initial copy', () => {
+    const ready = REPLICA_TABLES.map(table => ({ table_name: table, state: 'r' }))
+    expect(copyingReplicaTables(ready)).toEqual([])
+    const copying = ready.map(row => row.table_name === 'delta_files' ? { ...row, state: 'd' } : row)
+    expect(copyingReplicaTables(copying)).toEqual(['delta_files'])
+    expect(copyingReplicaTables(ready.filter(row => row.table_name !== 'version_files'))).toEqual(['version_files'])
   })
 
   it('refreshes with copy_data so new tables get their existing rows', () => {

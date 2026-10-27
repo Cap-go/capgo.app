@@ -1091,66 +1091,6 @@
       "type": "timestamp with time zone"
     },
     {
-      "default": "nextval('manifest_id_seq'::regclass)",
-      "generated": "",
-      "identity": "",
-      "name": "id",
-      "notNull": true,
-      "position": 1,
-      "table": "manifest",
-      "type": "integer"
-    },
-    {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "app_version_id",
-      "notNull": true,
-      "position": 2,
-      "table": "manifest",
-      "type": "bigint"
-    },
-    {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "file_name",
-      "notNull": true,
-      "position": 3,
-      "table": "manifest",
-      "type": "character varying"
-    },
-    {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "s3_path",
-      "notNull": true,
-      "position": 4,
-      "table": "manifest",
-      "type": "character varying"
-    },
-    {
-      "default": null,
-      "generated": "",
-      "identity": "",
-      "name": "file_hash",
-      "notNull": true,
-      "position": 5,
-      "table": "manifest",
-      "type": "character varying"
-    },
-    {
-      "default": "0",
-      "generated": "",
-      "identity": "",
-      "name": "file_size",
-      "notNull": false,
-      "position": 6,
-      "table": "manifest",
-      "type": "bigint"
-    },
-    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -2140,13 +2080,6 @@
       "valid": true
     },
     {
-      "definition": "PRIMARY KEY (id)",
-      "name": "manifest_pkey",
-      "table": "manifest",
-      "type": "p",
-      "valid": true
-    },
-    {
       "definition": "PRIMARY KEY (owner_org, event, uniq_id)",
       "name": "notifications_pkey",
       "table": "notifications",
@@ -2618,27 +2551,6 @@
       "valid": true
     },
     {
-      "constraintOwned": false,
-      "definition": "CREATE INDEX idx_manifest_app_version_id_file_hash ON public.manifest USING btree (app_version_id, file_hash) INCLUDE (file_size)",
-      "name": "idx_manifest_app_version_id_file_hash",
-      "table": "manifest",
-      "valid": true
-    },
-    {
-      "constraintOwned": false,
-      "definition": "CREATE INDEX idx_manifest_file_hash ON public.manifest USING btree (file_hash)",
-      "name": "idx_manifest_file_hash",
-      "table": "manifest",
-      "valid": true
-    },
-    {
-      "constraintOwned": true,
-      "definition": "CREATE UNIQUE INDEX manifest_pkey ON public.manifest USING btree (id)",
-      "name": "manifest_pkey",
-      "table": "manifest",
-      "valid": true
-    },
-    {
       "constraintOwned": true,
       "definition": "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (owner_org, event, uniq_id)",
       "name": "notifications_pkey",
@@ -2874,18 +2786,6 @@
       "cache": "1",
       "cycle": false,
       "increment": "1",
-      "max": "2147483647",
-      "min": "1",
-      "name": "manifest_id_seq",
-      "ownedColumn": "id",
-      "ownedTable": "manifest",
-      "start": "1",
-      "type": "integer"
-    },
-    {
-      "cache": "1",
-      "cycle": false,
-      "increment": "1",
       "max": "9223372036854775807",
       "min": "1",
       "name": "org_users_id_seq",
@@ -2935,14 +2835,6 @@
       "kind": "r",
       "name": "delta_files",
       "reloptions": []
-    },
-    {
-      "kind": "r",
-      "name": "manifest",
-      "reloptions": [
-        "autovacuum_analyze_scale_factor=0.02",
-        "autovacuum_vacuum_scale_factor=0.05"
-      ]
     },
     {
       "kind": "r",

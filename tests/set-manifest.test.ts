@@ -106,13 +106,6 @@ describe('[POST] /private/set_manifest', () => {
     expect(rows?.every(row => row.file_size === 0)).toBe(true)
     expect(rows?.map(row => row.file_name)).toEqual(['index.html', 'main.js'])
 
-    const [queued] = await executeSQL<{ count: number }>(
-      `SELECT count(*)::integer AS count FROM pgmq.q_on_manifest_create
-       WHERE message->'payload'->'record'->>'app_version_id' = $1`,
-      [String(version.id)],
-    )
-    expect(queued?.count).toBe(2)
-
     const deltaRows = await executeSQL<{ file_name: string, file_size: string, queued: number }>(
       `SELECT df.file_name, df.file_size,
               (SELECT count(*)::integer FROM pgmq.q_on_manifest_create q
@@ -209,6 +202,7 @@ describe('[POST] /private/set_manifest', () => {
       body: JSON.stringify({ app_id: APP_ID, name, manifest: entries }),
     })
     expect(legacyResponse.status).toBe(200)
+    const sizesBefore = await executeSQL<{ file_size: string }>('SELECT file_size FROM public.manifest WHERE app_version_id = $1 ORDER BY file_name', [version.id])
 
     const manifest = await Promise.all(entries.map(async entry => ({
       ...entry,
@@ -222,8 +216,9 @@ describe('[POST] /private/set_manifest', () => {
     })
     expect(receiptRetry.status).toBe(200)
 
-    const legacyRows = await executeSQL<{ file_size: string }>('SELECT file_size FROM public.manifest WHERE app_version_id = $1', [version.id])
-    expect(legacyRows.map(row => Number(row.file_size))).toEqual([0, 0])
+    // The retry is a no-op: receipts are not applied to an already stored version.
+    const sizesAfter = await executeSQL<{ file_size: string }>('SELECT file_size FROM public.manifest WHERE app_version_id = $1 ORDER BY file_name', [version.id])
+    expect(sizesAfter).toEqual(sizesBefore)
     const [versionFiles] = await executeSQL<{ entries: number }>('SELECT cardinality(file_ids) AS entries FROM public.version_files WHERE app_version_id = $1', [version.id])
     expect(versionFiles?.entries).toBe(2)
   })

@@ -609,7 +609,7 @@ export async function updateWithPG(
   }
 
   const version = channelOverride?.version ?? channelData.version
-  let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+  let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Views']['manifest']['Row']>[]
   const updatePackage = resolveChannelUpdatePackage(
     channelData.channels.update_package,
     isOnBuiltinVersion(version_name, version_build),
@@ -916,7 +916,7 @@ export async function updateWithPG(
       deferredManifestPromise ?? Promise.resolve(null),
     ])
     if (needsDeferredManifest)
-      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Views']['manifest']['Row']>[]
     if (url) {
       // only count the size of the bundle if it's not external and zip for now
       signedURL = url

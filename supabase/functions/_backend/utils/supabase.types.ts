@@ -1582,27 +1582,6 @@ export type Database = {
         }
         Relationships: []
       }
-      delta_storage_state: {
-        Row: {
-          convert_cursor: number
-          id: boolean
-          inline_cursor: number
-          updated_at: string
-        }
-        Insert: {
-          convert_cursor?: number
-          id?: boolean
-          inline_cursor?: number
-          updated_at?: string
-        }
-        Update: {
-          convert_cursor?: number
-          id?: boolean
-          inline_cursor?: number
-          updated_at?: string
-        }
-        Relationships: []
-      }
       deploy_history: {
         Row: {
           app_id: string
@@ -1831,41 +1810,6 @@ export type Database = {
             columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "orgs"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      manifest: {
-        Row: {
-          app_version_id: number
-          file_hash: string
-          file_name: string
-          file_size: number | null
-          id: number
-          s3_path: string
-        }
-        Insert: {
-          app_version_id: number
-          file_hash: string
-          file_name: string
-          file_size?: number | null
-          id?: number
-          s3_path: string
-        }
-        Update: {
-          app_version_id?: number
-          file_hash?: string
-          file_name?: string
-          file_size?: number | null
-          id?: number
-          s3_path?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "manifest_app_version_id_fkey"
-            columns: ["app_version_id"]
-            isOneToOne: false
-            referencedRelation: "app_versions"
             referencedColumns: ["id"]
           },
         ]
@@ -3920,6 +3864,25 @@ export type Database = {
       }
     }
     Views: {
+      manifest: {
+        Row: {
+          app_version_id: number | null
+          file_hash: string | null
+          file_name: string | null
+          file_size: number | null
+          id: number | null
+          s3_path: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pg_buffercache: {
         Row: {
           bufferid: number | null
@@ -3982,7 +3945,15 @@ export type Database = {
           id: number | null
           s3_path: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
@@ -4292,17 +4263,9 @@ export type Database = {
       convert_bytes_to_gb: { Args: { bytes_value: number }; Returns: number }
       convert_bytes_to_mb: { Args: { bytes_value: number }; Returns: number }
       convert_gb_to_bytes: { Args: { gb: number }; Returns: number }
-      convert_legacy_manifest_batch: {
-        Args: { p_max_ms?: number; p_max_versions?: number }
-        Returns: number
-      }
       convert_mb_to_bytes: { Args: { gb: number }; Returns: number }
       convert_number_to_percent: {
         Args: { max_val: number; val: number }
-        Returns: number
-      }
-      convert_version_manifest_rows: {
-        Args: { p_keep_legacy?: boolean; p_version_id: number }
         Returns: number
       }
       count_active_users: { Args: { app_ids: string[] }; Returns: number }
@@ -4436,7 +4399,6 @@ export type Database = {
       }
       delta_path_key: { Args: { p_s3_path: string }; Returns: string }
       delta_storage_gc_enabled: { Args: never; Returns: boolean }
-      delta_storage_legacy_manifest_writes: { Args: never; Returns: boolean }
       delta_storage_setting: {
         Args: { p_default: boolean; p_name: string }
         Returns: boolean

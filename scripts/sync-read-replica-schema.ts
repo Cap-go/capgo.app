@@ -66,7 +66,7 @@ const GOOGLE_READ_REPLICA: GoogleDataApiConfig = {
 }
 const READ_REPLICA_SUBSCRIPTION = 'capgo_google_eu_2_sub'
 // Fixed statements only: the release job never sends other SQL this way.
-export const READ_REPLICA_SUBSCRIBED_TABLES_SQL = `SELECT c.relname AS table_name FROM pg_catalog.pg_subscription_rel AS r JOIN pg_catalog.pg_subscription AS s ON s.oid = r.srsubid JOIN pg_catalog.pg_class AS c ON c.oid = r.srrelid JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE s.subname = '${READ_REPLICA_SUBSCRIPTION}' AND n.nspname = 'public'`
+export const READ_REPLICA_SUBSCRIBED_TABLES_SQL = `SELECT c.relname AS table_name, r.srsubstate AS state FROM pg_catalog.pg_subscription_rel AS r JOIN pg_catalog.pg_subscription AS s ON s.oid = r.srsubid JOIN pg_catalog.pg_class AS c ON c.oid = r.srrelid JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE s.subname = '${READ_REPLICA_SUBSCRIPTION}' AND n.nspname = 'public'`
 // One statement per request runs outside a transaction block, which
 // REFRESH PUBLICATION requires. copy_data only copies newly added tables.
 export const READ_REPLICA_REFRESH_SUBSCRIPTION_SQL = `ALTER SUBSCRIPTION ${READ_REPLICA_SUBSCRIPTION} REFRESH PUBLICATION WITH (copy_data = true)`
@@ -76,6 +76,14 @@ export function unsubscribedReplicaTables(subscribed: readonly string[]): string
   const known = new Set(subscribed)
   return REPLICA_TABLES.filter(table => !known.has(table))
 }
+
+/** Replicated tables whose initial copy is not finished ('r' = ready). */
+export function copyingReplicaTables(rows: readonly { table_name: string, state: string }[]): string[] {
+  const ready = new Set(rows.filter(row => row.state === 'r').map(row => row.table_name))
+  return REPLICA_TABLES.filter(table => !ready.has(table))
+}
+
+const SUBSCRIPTION_COPY_POLL_MS = 15_000
 
 /**
  * Runs after primary migrations: a table the migrations just added to the
@@ -87,23 +95,32 @@ async function refreshSubscription(): Promise<void> {
   const { project, instance, database } = GOOGLE_READ_REPLICA
   const subscribed = async () => dataApiRows(
     await executeGoogleSql(project, instance, database, READ_REPLICA_SUBSCRIBED_TABLES_SQL, deadline),
-  ).map(row => String(row.table_name))
+  ).map(row => ({ table_name: String(row.table_name), state: String(row.state) }))
 
-  const missing = unsubscribedReplicaTables(await subscribed())
-  if (!missing.length) {
-    console.log('Read-replica subscription already streams every replicated table.')
-    return
+  const missing = unsubscribedReplicaTables((await subscribed()).map(row => row.table_name))
+  if (missing.length) {
+    console.log(`Refreshing ${READ_REPLICA_SUBSCRIPTION} for: ${missing.join(', ')}`)
+    await executeGoogleSql(project, instance, database, READ_REPLICA_REFRESH_SUBSCRIPTION_SQL, deadline)
   }
-  console.log(`Refreshing ${READ_REPLICA_SUBSCRIPTION} for: ${missing.join(', ')}`)
-  await executeGoogleSql(project, instance, database, READ_REPLICA_REFRESH_SUBSCRIPTION_SQL, deadline)
 
-  const stillMissing = unsubscribedReplicaTables(await subscribed())
-  if (stillMissing.length) {
-    throw new Error(
-      `Subscription ${READ_REPLICA_SUBSCRIPTION} still does not stream ${stillMissing.join(', ')}; check that the primary publication includes them.`,
-    )
+  // Workers that read the replica deploy after this job: wait for the copy.
+  for (;;) {
+    const rows = await subscribed()
+    const stillMissing = unsubscribedReplicaTables(rows.map(row => row.table_name))
+    if (stillMissing.length) {
+      throw new Error(
+        `Subscription ${READ_REPLICA_SUBSCRIPTION} still does not stream ${stillMissing.join(', ')}; check that the primary publication includes them.`,
+      )
+    }
+    const copying = copyingReplicaTables(rows)
+    if (!copying.length)
+      break
+    if (Date.now() + SUBSCRIPTION_COPY_POLL_MS > deadline)
+      throw new Error(`Read-replica initial copy still running for ${copying.join(', ')}`)
+    console.log(`Waiting for the read-replica initial copy of: ${copying.join(', ')}`)
+    await new Promise(resolve => setTimeout(resolve, SUBSCRIPTION_COPY_POLL_MS))
   }
-  console.log('Read-replica subscription refreshed; new tables copy their existing rows in the background.')
+  console.log('Read-replica subscription streams every replicated table.')
 }
 
 async function main(): Promise<void> {
