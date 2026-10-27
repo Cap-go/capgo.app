@@ -20,7 +20,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: vi.fn(async () => ({})),
 }))
 
-const { callerHoldsAllRolePermissions, checkPermission, checkPermissionPg } = await import('../supabase/functions/_backend/utils/rbac.ts')
+const { callerHoldsAllRolePermissions, checkPermission, checkPermissionPg, getDeniedChannelIdsForPermission } = await import('../supabase/functions/_backend/utils/rbac.ts')
 
 const USER_ID = '00000000-0000-0000-0000-000000000001'
 const apikeyAuth = { authType: 'apikey', userId: USER_ID, apikey: { key: 'capgo-key', rbac_id: 'rbac-1' } }
@@ -45,6 +45,7 @@ describe('permission checks bypass the Hyperdrive query cache', () => {
     ['checkPermission with a JWT', () => checkPermission(context(jwtAuth), 'app.read', { appId: 'com.example.app' })],
     ['checkPermissionPg with an RBAC API key', () => checkPermissionPg(context(apikeyAuth), 'app.read', { appId: 'com.example.app' }, { execute: executeMock }, USER_ID, 'capgo-key')],
     ['checkPermissionPg with a JWT', () => checkPermissionPg(context(jwtAuth), 'app.read', { appId: 'com.example.app' }, { execute: executeMock }, USER_ID)],
+    ['getDeniedChannelIdsForPermission', () => getDeniedChannelIdsForPermission(context(apikeyAuth), 'channel.read_history', 'com.example.app')],
     ['callerHoldsAllRolePermissions', () => callerHoldsAllRolePermissions({ execute: executeMock } as any, USER_ID, 'role-1', { orgId: USER_ID })],
   ])('%s', async (_label, run) => {
     await run()
