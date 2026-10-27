@@ -91,3 +91,14 @@ export async function enforceRegionalPrice(c: Context, stripe: Stripe, billingAc
   cloudlog({ requestId: c.get('requestId'), message: 'Regional price corrected to the buyer country', subscriptionId: subscription.id, soldTier, requiredTier, countries, priceId })
   return true
 }
+
+// A billing address or default card change can disqualify a discount: check every subscription of the customer.
+export async function enforceRegionalPriceForCustomer(c: Context, stripe: Stripe, billingAccount: BillingAccount, customerId: string): Promise<boolean> {
+  const subscriptions = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 })
+  let corrected = false
+  for (const subscription of subscriptions.data) {
+    if (await enforceRegionalPrice(c, stripe, billingAccount, subscription))
+      corrected = true
+  }
+  return corrected
+}

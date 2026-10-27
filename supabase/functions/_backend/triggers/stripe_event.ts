@@ -22,7 +22,7 @@ import { tierPricePercent } from '../utils/country_price_tier.ts'
 import { getPlanPriceInterval } from '../utils/plan_price_interval.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
-import { enforceRegionalPrice } from '../utils/regional_price.ts'
+import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
 import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
@@ -1553,6 +1553,9 @@ async function handleCustomerProfileStripeEvent(
       stripeEvent,
     )
     await syncBillingBentoTagsFromStoredStripeInfo(c, billingOrg, stripeData.data.customer_id)
+    // A new billing address or default card can disqualify a regional discount.
+    if (stripeEvent.type === 'customer.updated' && ['address', 'invoice_settings'].some(key => key in (stripeEvent.data.previous_attributes ?? {})))
+      await enforceRegionalPriceForCustomer(c, getStripe(c, getWebhookBillingAccount(c)), getWebhookBillingAccount(c), stripeData.data.customer_id)
   }
 
   if (stripeEvent.type === 'customer.created') {

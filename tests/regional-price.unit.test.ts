@@ -1,6 +1,6 @@
 import type Stripe from 'stripe'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { enforceRegionalPrice, getRequestPriceTier, paymentMethodCountry } from '../supabase/functions/_backend/utils/regional_price.ts'
+import { enforceRegionalPrice, enforceRegionalPriceForCustomer, getRequestPriceTier, paymentMethodCountry } from '../supabase/functions/_backend/utils/regional_price.ts'
 
 const findPlanByProductId = vi.hoisted(() => vi.fn())
 
@@ -40,7 +40,7 @@ function fakeStripe(cardCountry: string | null, addressCountry: string | null = 
   const stripe = {
     customers: { retrieve: vi.fn(async () => ({ id: 'cus_1', currency: 'eur', address: addressCountry ? { country: addressCountry } : null, invoice_settings: { default_payment_method: null } })) },
     paymentMethods: { retrieve: vi.fn(async () => ({ id: 'pm_1', card: cardCountry ? { country: cardCountry } : null, billing_details: { address: null } })) },
-    subscriptions: { update, retrieve },
+    subscriptions: { update, retrieve, list: vi.fn(async () => ({ data: [subscription(null, { id: 'sub_full' }), subscription('p50')] })) },
   } as unknown as Stripe
   return { stripe, update }
 }
@@ -87,6 +87,14 @@ describe('regional price guard', () => {
     const { stripe, update } = fakeStripe('DE', null, subscription('p50', { schedule: 'sub_sched_1' }))
     await expect(enforceRegionalPrice(context(), stripe, 'ee', subscription('p50'))).resolves.toBe(false)
     expect(update).not.toHaveBeenCalled()
+  })
+
+  it('rechecks the customer subscriptions when the billing details change', async () => {
+    const { stripe, update } = fakeStripe('IN', 'DE')
+    await expect(enforceRegionalPriceForCustomer(context(), stripe, 'ee', 'cus_1')).resolves.toBe(true)
+    expect(stripe.subscriptions.list).toHaveBeenCalledWith({ customer: 'cus_1', status: 'all', limit: 100 })
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update).toHaveBeenCalledWith('sub_1', expect.objectContaining({ items: [{ id: 'si_1', price: 'price_solo_m_p85' }] }))
   })
 
   it('decides on the live subscription when the event is stale', async () => {
