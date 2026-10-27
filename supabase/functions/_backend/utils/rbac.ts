@@ -111,7 +111,7 @@ function handlePermissionCheckError(
   permission: Permission,
   scope: PermissionScope,
   error: unknown,
-  source: 'checkPermission' | 'checkPermissionPg',
+  source: 'checkPermission' | 'checkPermissionPg' | 'checkPermissionInMemberOrgs',
 ): false {
   if (error instanceof HTTPException)
     throw error
@@ -272,6 +272,136 @@ export async function checkPermission(
     if (pgClient) {
       closeClient(c, pgClient)
     }
+  }
+}
+
+/**
+ * Whether the caller holds an org-scoped permission in ANY organization that
+ * `memberUserId` belongs to, evaluated in one query instead of one
+ * checkPermission round trip per organization.
+ */
+export async function checkPermissionInMemberOrgs(
+  c: Context<MiddlewareKeyVariables>,
+  permission: Permission,
+  memberUserId: string,
+): Promise<boolean> {
+  const auth = c.get('auth')
+  if (!auth?.userId)
+    return false
+
+  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+  const scope: PermissionScope = {}
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const result = await getDrizzleClient(pgClient).execute(
+      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT EXISTS (
+        SELECT 1
+        FROM public.org_users ou
+        WHERE ou.user_id = ${memberUserId}::uuid
+          AND public.rbac_check_permission_direct(
+            ${permission},
+            ${auth.userId}::uuid,
+            ou.org_id,
+            NULL::character varying,
+            NULL::bigint,
+            ${apikeyString}
+          )
+      ) AS allowed`,
+    )
+    return (result.rows[0] as any)?.allowed === true
+  }
+  catch (e) {
+    return handlePermissionCheckError(c, permission, scope, e, 'checkPermissionInMemberOrgs')
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+/**
+ * List the channels of an app where the caller is denied a channel-scoped permission.
+ *
+ * Use this when a route returns data for several channels at once (for example
+ * deploy history across an app) and must drop rows for channels the caller
+ * cannot see. The result is the effective permission, matching checkPermission()
+ * with a concrete channelId: the app-level grant is evaluated once, then
+ * channel overrides and channel-scoped role bindings are applied.
+ *
+ * A channel can only differ from the app-level result when it carries an
+ * override for the permission or a channel-scoped role binding, so only those
+ * channels are evaluated individually with rbac_check_permission_direct. When
+ * the app-level grant is missing (for example an app_preview key), every
+ * channel without such a grant is denied.
+ *
+ * Fails closed: infrastructure errors throw instead of returning an empty list.
+ */
+export async function getDeniedChannelIdsForPermission(
+  c: Context<MiddlewareKeyVariables>,
+  permission: Permission,
+  appId: string,
+): Promise<Set<number>> {
+  const auth = c.get('auth')
+  if (!auth?.userId)
+    return quickError(401, 'not_authenticated', 'Authentication required')
+
+  const { userId, apikey } = auth
+  const apikeyString = apikey?.key ?? c.get('capgkey') ?? null
+
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const drizzleClient = getDrizzleClient(pgClient)
+    const result = await drizzleClient.execute(
+      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT ch.id
+        FROM (
+          SELECT
+            a.app_id,
+            public.rbac_check_permission_direct(
+              ${permission},
+              ${userId}::uuid,
+              a.owner_org,
+              a.app_id,
+              NULL::bigint,
+              ${apikeyString}
+            ) AS allowed
+          FROM public.apps a
+          WHERE a.app_id = ${appId}
+          OFFSET 0
+        ) AS app_level
+        INNER JOIN public.channels ch ON ch.app_id = app_level.app_id
+        WHERE CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM public.channel_permission_overrides o
+            WHERE o.channel_id = ch.id
+              AND o.permission_key = ${permission}
+          ) OR EXISTS (
+            SELECT 1
+            FROM public.role_bindings rb
+            WHERE rb.scope_type = public.rbac_scope_channel()
+              AND rb.channel_id = ch.rbac_id
+          ) THEN NOT public.rbac_check_permission_direct(
+            ${permission},
+            ${userId}::uuid,
+            ch.owner_org,
+            ch.app_id,
+            ch.id,
+            ${apikeyString}
+          )
+          ELSE NOT app_level.allowed
+        END`,
+    )
+    return new Set((result.rows as Array<{ id: number | string }>).map(row => Number(row.id)))
+  }
+  catch (e) {
+    handlePermissionCheckError(c, permission, { appId }, e, 'checkPermission')
+    return quickError(403, 'permission_denied', `Permission denied: ${permission}`, { permission, appId })
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
   }
 }
 

@@ -36,7 +36,6 @@ import { app as publicStats } from '../_backend/private/public_stats.ts'
 import { app as release_live } from '../_backend/private/release_live.ts'
 import { app as replay } from '../_backend/private/replay.ts'
 import { app as request_manifest_upload } from '../_backend/private/request_manifest_upload.ts'
-import { app as revoke_apple_authorization } from '../_backend/private/revoke_apple_authorization.ts'
 import { app as role_bindings } from '../_backend/private/role_bindings.ts'
 import { app as roles } from '../_backend/private/roles.ts'
 import { app as set_manifest } from '../_backend/private/set_manifest.ts'
@@ -117,7 +116,6 @@ appGlobal.route('/accept_invitation', accept_invitation)
 appGlobal.route('/email_preferences', emailPreferences)
 appGlobal.route('/validate_password_compliance', validate_password_compliance)
 appGlobal.route('/verify_email_otp', verify_email_otp)
-appGlobal.route('/revoke_apple_authorization', revoke_apple_authorization)
 appGlobal.route('/website_preview', website_preview)
 appGlobal.route('/sso/check-domain', sso_check_domain)
 appGlobal.route('/sso/check-enforcement', sso_check_enforcement)

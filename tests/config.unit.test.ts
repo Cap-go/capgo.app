@@ -9,7 +9,6 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: conn
 
 beforeEach(() => {
   vi.clearAllMocks()
-  for (const key of ['APPLE_SIGN_IN_CLIENT_ID', 'APPLE_SIGN_IN_TEAM_ID', 'APPLE_SIGN_IN_KEY_ID', 'APPLE_SIGN_IN_PRIVATE_KEY']) vi.stubEnv(key, 'configured-example')
   vi.stubEnv('SUPABASE_URL', 'https://testproject.supabase.co')
   vi.stubEnv('SUPABASE_ANON_KEY', 'test-anon-key')
 })
@@ -32,22 +31,6 @@ describe('get /private/config', () => {
     expect(connect).not.toHaveBeenCalled()
   })
 
-  it('preserves the deprecated Apple response field as false without backend discovery', async () => {
-    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No provider readiness request expected'))
-    try {
-      const response = await app.request('http://local/', { method: 'GET' })
-
-      expect(response.status).toBe(200)
-      const body = await response.json() as Record<string, unknown>
-      expect(body).toHaveProperty('nativeAppleLoginEnabled', false)
-      expect(typeof body.nativeAppleLoginEnabled).toBe('boolean')
-      expect(connect).not.toHaveBeenCalled()
-      expect(fetch).not.toHaveBeenCalled()
-    }
-    finally {
-      fetch.mockRestore()
-    }
-  })
 
   it('forwards CLI usage to the admin RPC binding without blocking the response', async () => {
     const record = vi.fn().mockRejectedValue(new Error('admin ingest unavailable'))

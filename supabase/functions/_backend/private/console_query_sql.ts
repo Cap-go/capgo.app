@@ -303,6 +303,10 @@ interface EmbedLink {
   parentColumn: string
   childColumn: string
   fields: SelectField[]
+  /** `.order()` / `.limit()` / `.range()` with `referencedTable`: applied inside the embed. */
+  order?: string[]
+  limit?: number
+  offset?: number
 }
 
 interface SelectField {
@@ -710,6 +714,19 @@ function optionsOf(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function referencedTableOf(options: Record<string, unknown>): string | null {
+  const reference = options.referencedTable ?? options.foreignTable
+  return typeof reference === 'string' ? reference : null
+}
+
+// PostgREST names an embed by its alias or its table. Only top-level embeds.
+function embedFor(fields: SelectField[], reference: string): EmbedLink {
+  const field = fields.find(item => item.kind === 'embed' && item.embed && (item.embed.alias === reference || item.embed.childTable === reference))
+  if (!field?.embed)
+    fail('PGRST108', `'${reference}' is not an embedded resource in this request`)
+  return field.embed
+}
+
 function rejectEmbeddedModifier(options: Record<string, unknown>) {
   if (typeof options.foreignTable === 'string' || typeof options.referencedTable === 'string')
     fail('PGRST100', 'Filtering or ordering an embedded table this way is not supported')
@@ -758,9 +775,20 @@ function projectionSql(catalog: QueryCatalog, table: string, parentAlias: string
     const childStar = embed.fields.some(item => item.column === '*') || embed.fields.length === 0
     const childJson = projectionSql(catalog, embed.childTable, childAlias, childStar, embed.fields.filter(item => item.column !== '*'), sequence)
     const where = `${childAlias}.${quoteIdent(embed.childColumn)} = ${parentAlias}.${quoteIdent(embed.parentColumn)}`
-    const subquery = embed.toOne
-      ? `(SELECT ${childJson} FROM "public".${quoteIdent(embed.childTable)} AS ${childAlias} WHERE ${where})`
-      : `COALESCE((SELECT jsonb_agg(${childJson}) FROM "public".${quoteIdent(embed.childTable)} AS ${childAlias} WHERE ${where}), '[]'::jsonb)`
+    const paged = Boolean(embed.order?.length) || embed.limit !== undefined || (embed.offset ?? 0) > 0
+    let subquery: string
+    if (embed.toOne) {
+      subquery = `(SELECT ${childJson} FROM "public".${quoteIdent(embed.childTable)} AS ${childAlias} WHERE ${where})`
+    }
+    else if (paged) {
+      // Order and page the child rows, then aggregate in that order.
+      const order = embed.order?.length ? ` ORDER BY ${embed.order.join(', ')}` : ''
+      const page = `${embed.limit !== undefined ? ` LIMIT ${embed.limit}` : ''}${(embed.offset ?? 0) > 0 ? ` OFFSET ${embed.offset}` : ''}`
+      subquery = `COALESCE((SELECT jsonb_agg(${childAlias}_page.j ORDER BY ${childAlias}_page.n) FROM (SELECT ${childJson} AS j, row_number() OVER (${order.trim()}) AS n FROM "public".${quoteIdent(embed.childTable)} AS ${childAlias} WHERE ${where}${order}${page}) AS ${childAlias}_page), '[]'::jsonb)`
+    }
+    else {
+      subquery = `COALESCE((SELECT jsonb_agg(${childJson}) FROM "public".${quoteIdent(embed.childTable)} AS ${childAlias} WHERE ${where}), '[]'::jsonb)`
+    }
     pieces.push(`${sqlString(embed.alias)}, ${subquery}`)
   }
   if (star) {
@@ -897,21 +925,42 @@ function compileTable(catalog: QueryCatalog, request: ConsoleQueryRequest): Comp
     if (operation.method === 'limit') {
       if (typeof args[0] !== 'number' || !Number.isInteger(args[0]) || args[0] < 0)
         fail('PGRST100', 'Invalid limit')
-      limit = args[0]
+      const reference = referencedTableOf(optionsOf(args[1]))
+      if (reference)
+        embedFor(fields, reference).limit = args[0]
+      else
+        limit = args[0]
       continue
     }
     if (operation.method === 'range') {
       if (typeof args[0] !== 'number' || typeof args[1] !== 'number' || !Number.isInteger(args[0]) || !Number.isInteger(args[1]) || args[0] < 0 || args[1] < args[0])
         fail('PGRST100', 'Invalid range')
-      offset = args[0]
-      limit = args[1] - args[0] + 1
+      const reference = referencedTableOf(optionsOf(args[2]))
+      if (reference) {
+        const embed = embedFor(fields, reference)
+        embed.offset = args[0]
+        embed.limit = args[1] - args[0] + 1
+      }
+      else {
+        offset = args[0]
+        limit = args[1] - args[0] + 1
+      }
       continue
     }
     if (operation.method === 'order') {
       if (typeof args[0] !== 'string')
         fail('PGRST100', 'Invalid order')
       const options = optionsOf(args[1])
-      rejectEmbeddedModifier(options)
+      const reference = referencedTableOf(options)
+      if (reference) {
+        const embed = embedFor(fields, reference)
+        columnByName(tableColumns(catalog, embed.childTable), args[0])
+        const direction = options.ascending === false ? 'DESC' : 'ASC'
+        const nulls = options.nullsFirst === true ? ' NULLS FIRST' : options.nullsFirst === false ? ' NULLS LAST' : ''
+        // The embed's alias is assigned during projection; order on the child table's own columns.
+        embed.order = [...(embed.order ?? []), `${quoteIdent(args[0])} ${direction}${nulls}`]
+        continue
+      }
       orderSpecs.push({ column: args[0], options })
       continue
     }

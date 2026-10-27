@@ -299,9 +299,6 @@ project(':capgo-capacitor-shake').projectDir = new File('../node_modules/.bun/@c
 include ':capgo-capacitor-sim'
 project(':capgo-capacitor-sim').projectDir = new File('../node_modules/.bun/@capgo+capacitor-sim@8.0.39+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-sim/android')
 
-include ':capgo-capacitor-social-login'
-project(':capgo-capacitor-social-login').projectDir = new File('../node_modules/.bun/@capgo+capacitor-social-login@8.5.18+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-social-login/android')
-
 include ':capgo-capacitor-speech-recognition'
 project(':capgo-capacitor-speech-recognition').projectDir = new File('../node_modules/.bun/@capgo+capacitor-speech-recognition@8.3.2+8c735c3c6e2ff3c1/node_modules/@capgo/capacitor-speech-recognition/android')
 

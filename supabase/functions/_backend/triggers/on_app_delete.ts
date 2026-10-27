@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, triggerValidator } from '../utils/hono.ts'
+import { removeImageFolder } from '../utils/image_storage.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { s3 } from '../utils/s3.ts'
 import { supabaseAdmin } from '../utils/supabase.ts'
@@ -16,23 +17,13 @@ async function cleanupDeletedAppResources(
 ) {
   const startTime = Date.now()
 
-  // Delete app icon from storage
+  // Delete app icon from image storage
   // App icons are stored at: images/org/{org_id}/{app_id}/icon
   if (record.owner_org) {
     try {
-      const { data: files } = await supabaseAdmin(c)
-        .storage
-        .from('images')
-        .list(`org/${record.owner_org}/${record.app_id}`)
-
-      if (files && files.length > 0) {
-        const filePaths = files.map(file => `org/${record.owner_org}/${record.app_id}/${file.name}`)
-        await supabaseAdmin(c)
-          .storage
-          .from('images')
-          .remove(filePaths)
-        cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: files.length, app_id: record.app_id })
-      }
+      const deleted = await removeImageFolder(c, `org/${record.owner_org}/${record.app_id}`)
+      if (deleted > 0)
+        cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: deleted, app_id: record.app_id })
     }
     catch (error) {
       cloudlog({ requestId: c.get('requestId'), message: 'error deleting app images', error, app_id: record.app_id })

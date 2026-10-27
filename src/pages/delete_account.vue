@@ -9,11 +9,9 @@ import VueTurnstile from 'vue-turnstile'
 import iconEmail from '~icons/oui/email?raw'
 import iconPassword from '~icons/ph/key?raw'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
-import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { hideLoader } from '~/services/loader'
-import { isNativeAppleLoginAvailable, signInWithApple } from '~/services/nativeAppleLogin'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { safeResetTurnstile } from '~/utils/turnstile'
@@ -31,11 +29,6 @@ const confirmCaptchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(nu
 const { t } = useI18n()
 const router = useRouter()
 const isLoadingSession = ref(true)
-const isAppleAccount = ref(false)
-const pendingAppleCode = ref('')
-const pendingAppleUserId = ref('')
-const appleMfaFactorId = ref('')
-const appleMfaChallengeId = ref('')
 const isEmailVerified = ref(true)
 const isDeleteBlocked = computed(() => !isEmailVerified.value)
 
@@ -57,8 +50,6 @@ async function checkEmailVerification() {
     isLoadingSession.value = false
     return
   }
-  isAppleAccount.value = isNativeAppleLoginAvailable(true)
-    && sessionResult.session.user.identities?.some(identity => identity.provider === 'apple') === true
   isEmailVerified.value = !!sessionResult.session.user.email_confirmed_at
   isLoadingSession.value = false
 }
@@ -92,34 +83,28 @@ async function deleteAccount() {
           isLoading.value = true
 
           try {
-            if (isAppleAccount.value) {
-              if (!pendingAppleCode.value || !pendingAppleUserId.value)
-                return setErrors('delete-account', [t('invalid-auth')], {})
+            if (!pendingEmail.value || !pendingPassword.value) {
+              isLoading.value = false
+              return setErrors('delete-account', [t('invalid-auth')], {})
             }
-            else {
-              if (!pendingEmail.value || !pendingPassword.value) {
-                isLoading.value = false
-                return setErrors('delete-account', [t('invalid-auth')], {})
-              }
 
-              if (captchaKey.value && !confirmCaptchaToken.value) {
-                isLoading.value = false
-                return setErrors('delete-account', [t('captcha-required')], {})
-              }
+            if (captchaKey.value && !confirmCaptchaToken.value) {
+              isLoading.value = false
+              return setErrors('delete-account', [t('captcha-required')], {})
+            }
 
-              const { error: reauthError } = await capgo.auth.signInWithPassword({
-                email: pendingEmail.value,
-                password: pendingPassword.value,
-                options: captchaKey.value ? { captchaToken: confirmCaptchaToken.value } : undefined,
-              })
-              if (reauthError) {
-                confirmCaptchaToken.value = ''
-                safeResetTurnstile(confirmCaptchaComponent.value)
-                isLoading.value = false
-                if (reauthError.message.includes('captcha'))
-                  toast.error(t('captcha-fail'))
-                return setErrors('delete-account', [t('invalid-auth')], {})
-              }
+            const { error: reauthError } = await capgo.auth.signInWithPassword({
+              email: pendingEmail.value,
+              password: pendingPassword.value,
+              options: captchaKey.value ? { captchaToken: confirmCaptchaToken.value } : undefined,
+            })
+            if (reauthError) {
+              confirmCaptchaToken.value = ''
+              safeResetTurnstile(confirmCaptchaComponent.value)
+              isLoading.value = false
+              if (reauthError.message.includes('captcha'))
+                toast.error(t('captcha-fail'))
+              return setErrors('delete-account', [t('invalid-auth')], {})
             }
 
             const { data: claimsData, error: claimsError } = await capgo.auth.getClaims()
@@ -128,9 +113,6 @@ async function deleteAccount() {
               isLoading.value = false
               return setErrors('delete-account', [t('something-went-wrong-try-again-later')], {})
             }
-
-            if (isAppleAccount.value && userId !== pendingAppleUserId.value)
-              return setErrors('delete-account', [t('invalid-auth')], {})
 
             const { data: user } = await capgoClient
               .from('users')
@@ -146,17 +128,6 @@ async function deleteAccount() {
             if (!await ensureRecentEmailVerification(userId)) {
               isLoading.value = false
               return false
-            }
-
-            if (isAppleAccount.value) {
-              const { error: revokeError } = await invokeCapgoApi('private/revoke_apple_authorization', {
-                client: capgo,
-                body: { code: pendingAppleCode.value },
-              })
-              if (revokeError) {
-                const errorCode = await getCapgoApiErrorCode(revokeError)
-                return setErrors('delete-account', [t(errorCode === 'reauth_required' ? 'apple-delete-reauth-required' : 'apple-revoke-failed')], {})
-              }
             }
 
             // Delete user using RPC function
@@ -189,8 +160,6 @@ async function deleteAccount() {
           }
           finally {
             isLoading.value = false
-            pendingAppleCode.value = ''
-            pendingAppleUserId.value = ''
             pendingEmail.value = ''
             pendingPassword.value = ''
             confirmCaptchaToken.value = ''
@@ -209,120 +178,12 @@ async function deleteAccount() {
   })
   const dismissed = await dialogStore.onDialogDismiss()
   if (dismissed) {
-    pendingAppleCode.value = ''
-    pendingAppleUserId.value = ''
     pendingEmail.value = ''
     pendingPassword.value = ''
     confirmCaptchaToken.value = ''
     safeResetTurnstile(confirmCaptchaComponent.value)
   }
   return dismissed
-}
-
-async function prepareAppleDeletionMfa() {
-  const { data: assurance, error: assuranceError } = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
-  if (assuranceError)
-    throw assuranceError
-  if (assurance.currentLevel === 'aal1' && assurance.nextLevel === 'aal2') {
-    const { data: factors, error: factorsError } = await capgo.auth.mfa.listFactors()
-    if (factorsError)
-      throw factorsError
-    const factor = factors.all.find(factor => factor.status === 'verified')
-    if (!factor)
-      throw new Error('Missing MFA factor')
-    const { data: challenge, error: challengeError } = await capgo.auth.mfa.challenge({ factorId: factor.id })
-    if (challengeError)
-      throw challengeError
-    appleMfaFactorId.value = factor.id
-    appleMfaChallengeId.value = challenge.id
-    return true
-  }
-  return false
-}
-
-async function startAppleDeletion() {
-  if (isLoading.value || !isAppleAccount.value)
-    return
-  if (captchaKey.value && !turnstileToken.value) {
-    setErrors('delete-account', [t('captcha-required')], {})
-    return
-  }
-  isLoading.value = true
-  pendingAppleCode.value = ''
-  try {
-    const { data: claims, error: claimsError } = await capgo.auth.getClaims()
-    const userId = claims?.claims?.sub
-    if (claimsError || !userId)
-      throw new Error('Authentication required')
-    if (!await ensureRecentEmailVerification(userId))
-      return
-    const result = await signInWithApple(capgo, turnstileToken.value || undefined, { reauthenticate: true })
-    if (!result)
-      return
-    if (result.user.id !== userId) {
-      await capgo.auth.signOut({ scope: 'local' })
-      await router.replace('/login')
-      throw new Error('Apple account does not match the account being deleted')
-    }
-    if (!result.authorizationCode)
-      throw new Error('Missing Apple authorization code')
-    pendingAppleCode.value = result.authorizationCode
-    pendingAppleUserId.value = userId
-    if (await prepareAppleDeletionMfa())
-      return
-    isLoading.value = false
-    await deleteAccount()
-  }
-  catch {
-    pendingAppleCode.value = ''
-    toast.error(t('apple-login-failed'))
-  }
-  finally {
-    turnstileToken.value = ''
-    safeResetTurnstile(captchaComponent.value)
-    isLoading.value = false
-  }
-}
-
-function resetAppleDeletionAuthorization() {
-  appleMfaFactorId.value = ''
-  appleMfaChallengeId.value = ''
-  pendingAppleCode.value = ''
-  pendingAppleUserId.value = ''
-}
-
-async function verifyAppleDeletionMfa(form: { code: string }) {
-  if (isLoading.value)
-    return
-  isLoading.value = true
-  try {
-    const { error } = await capgo.auth.mfa.verify({
-      factorId: appleMfaFactorId.value,
-      challengeId: appleMfaChallengeId.value,
-      code: form.code.replaceAll(' ', ''),
-    })
-    if (error) {
-      if (error.code === 'mfa_verification_failed') {
-        toast.error(t('invalid-mfa-code'))
-      }
-      else {
-        resetAppleDeletionAuthorization()
-        toast.error(t('apple-login-failed'))
-      }
-      return
-    }
-    appleMfaFactorId.value = ''
-    appleMfaChallengeId.value = ''
-    isLoading.value = false
-    await deleteAccount()
-  }
-  catch {
-    resetAppleDeletionAuthorization()
-    toast.error(t('apple-login-failed'))
-  }
-  finally {
-    isLoading.value = false
-  }
 }
 
 async function submit(form: { email: string, password: string }) {
@@ -406,31 +267,6 @@ onMounted (() => {
       >
         {{ t('validate-email') }}
       </router-link>
-    </div>
-
-    <div v-else-if="isAppleAccount" class="space-y-5">
-      <p class="text-sm text-slate-600 dark:text-slate-300">
-        {{ t('apple-delete-account-hint') }}
-      </p>
-      <FormKit v-if="appleMfaFactorId" id="delete-account" type="form" :actions="false" @submit="verifyAppleDeletionMfa">
-        <FormKit
-          name="code"
-          type="text"
-          :label="t('2fa-code')"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          validation="required|length:6"
-          :disabled="isLoading"
-        />
-        <button type="submit" :disabled="isLoading" :class="authPrimaryButtonClass">
-          {{ t('verify') }}
-        </button>
-      </FormKit>
-      <FormKit v-else id="delete-account" type="form" :actions="false" @submit="startAppleDeletion">
-        <VueTurnstile v-if="captchaKey" ref="captchaComponent" v-model="turnstileToken" size="flexible" :site-key="captchaKey" />
-        <FormKitMessages />
-        <AppleSignInButton :disabled="isLoading" :loading="isLoading" @click="startAppleDeletion" />
-      </FormKit>
     </div>
 
     <FormKit v-else id="delete-account" type="form" :actions="false" @submit="submit">

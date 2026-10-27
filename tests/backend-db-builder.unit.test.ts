@@ -177,3 +177,32 @@ describe('PostgREST HTTP requests (released CLIs)', () => {
     expect(failed).toEqual({ status: 401, headers: {}, body: { code: '42501', details: null, hint: null, message: 'denied' } })
   })
 })
+
+describe('embedded order and limit (referencedTable)', () => {
+  const embedCatalog: QueryCatalog = {
+    columns: new Map([
+      ['channels', [column('id', 'int8'), column('name', 'text'), column('app_id', 'text')]],
+      ['deploy_history', [column('id', 'int8'), column('channel_id', 'int8'), column('deployed_at', 'timestamptz')]],
+    ]),
+    foreignKeys: [{ name: 'deploy_history_channel_id_fkey', sourceTable: 'deploy_history', sourceColumn: 'channel_id', targetTable: 'channels', targetColumn: 'id', unique: false }],
+    functions: [],
+  }
+
+  it('orders and limits the embedded rows, not the parent rows', () => {
+    const compiled = compileConsoleQuery(embedCatalog, table('channels', [
+      { method: 'select', args: ['id, deploy_history(deployed_at)'] },
+      { method: 'eq', args: ['app_id', 'com.demo'] },
+      { method: 'order', args: ['name', { ascending: true }] },
+      { method: 'order', args: ['deployed_at', { referencedTable: 'deploy_history', ascending: false }] },
+      { method: 'limit', args: [3, { referencedTable: 'deploy_history' }] },
+    ]))
+    const text = flat(compiled.text)
+    expect(text).toContain('row_number() OVER (ORDER BY "deployed_at" DESC)')
+    expect(text).toContain('ORDER BY "deployed_at" DESC LIMIT 3)')
+    expect(text).toContain('ORDER BY t."name" ASC LIMIT 1000')
+    expect(() => compileConsoleQuery(embedCatalog, table('channels', [
+      { method: 'select', args: ['id'] },
+      { method: 'limit', args: [3, { referencedTable: 'deploy_history' }] },
+    ]))).toThrow('is not an embedded resource')
+  })
+})

@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
+import { removeImageFolder } from '../../utils/image_storage.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { s3 } from '../../utils/s3.ts'
@@ -98,11 +99,18 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
   if (apikey.user_id)
     await removeSupabaseStorageFolder(c, 'apps', `${apikey.user_id}/${appId}`, appId, 'legacy user-scoped app storage')
 
-  // Delete app icon from storage before deleting the app
+  // Delete app icon from image storage (R2) before deleting the app
   // App icons are stored at: images/org/{org_id}/{app_id}/icon
-  // Note: Storage operations need admin access
-  if (app?.owner_org)
-    await removeSupabaseStorageFolder(c, 'images', `org/${app.owner_org}/${appId}`, appId, 'app images')
+  if (app?.owner_org) {
+    try {
+      const deleted = await removeImageFolder(c, `org/${app.owner_org}/${appId}`)
+      if (deleted > 0)
+        cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: deleted, app_id: appId })
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting app images', error, app_id: appId })
+    }
+  }
 
   // Admin client for internal stats tables that have restrictive RLS policies
   const admin = supabaseAdmin(c)
