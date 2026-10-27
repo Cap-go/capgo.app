@@ -239,8 +239,19 @@ function getStatusJson(supa: SupabaseCmd, workdir?: string): { ok: true, json: a
 /**
  * Map Supabase CLI status variables to the env vars used by the codebase/tests.
  */
+// With PostgREST disabled ([api] enabled = false) the CLI no longer prints
+// API_URL, but the gateway still serves Auth, Storage and Functions on the API
+// port. Storage's S3 endpoint lives on that same gateway.
+export function gatewayUrlFromStatus(status: Record<string, unknown>): string | undefined {
+  if (typeof status.API_URL === 'string' && status.API_URL)
+    return status.API_URL
+  if (typeof status.STORAGE_S3_URL === 'string' && status.STORAGE_S3_URL)
+    return new URL(status.STORAGE_S3_URL).origin
+  return undefined
+}
+
 function statusToEnv(status: any): Record<string, string> {
-  const apiUrl = status.API_URL as string | undefined
+  const apiUrl = gatewayUrlFromStatus(status)
   const dbUrl = status.DB_URL as string | undefined
   const anon = (status.ANON_KEY || status.PUBLISHABLE_KEY) as string | undefined
   const service = (status.SERVICE_ROLE_KEY || status.SECRET_KEY) as string | undefined
@@ -262,6 +273,10 @@ function statusToEnv(status: any): Record<string, string> {
   for (const [k, v] of Object.entries(status)) {
     if (typeof v === 'string')
       env[k] = v
+  }
+  if (apiUrl) {
+    env.API_URL ??= apiUrl
+    env.FUNCTIONS_URL ??= `${apiUrl}/functions/v1`
   }
   return env
 }

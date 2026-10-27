@@ -1,6 +1,6 @@
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ssoAttributeClaimKey } from '../supabase/functions/_backend/private/sso/role-mapping.ts'

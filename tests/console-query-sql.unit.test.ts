@@ -618,7 +618,7 @@ describe('console query sql', () => {
         severity: 'ERROR',
       }),
     })
-    expect(readSqlError(denied)).toEqual({ code: '42501', message: 'permission denied for table users' })
+    expect(readSqlError(denied)).toEqual({ code: '42501', message: 'permission denied for table users', details: null, hint: null })
 
     expect(readSqlError(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))).toBeNull()
     for (const code of ['08006', '53300', '57P01']) {
@@ -627,6 +627,8 @@ describe('console query sql', () => {
     expect(readSqlError(Object.assign(new Error('canceling statement due to statement timeout'), { name: 'DatabaseError', code: '57014', severity: 'ERROR' }))).toEqual({
       code: '57014',
       message: 'canceling statement due to statement timeout',
+      details: null,
+      hint: null,
     })
   })
 

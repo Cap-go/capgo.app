@@ -3,7 +3,8 @@ import { Hono } from 'hono/tiny'
 import { hasCliUsageIngest, resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
 import { MIN_CLI_VERSION, MIN_CLI_VERSION_REASON } from '../utils/cliMinVersion.ts'
 import { useCors } from '../utils/hono.ts'
-import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
+import { legacySupabaseHost } from './legacy_supabase.ts'
+import { backgroundTask, getEnv, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -33,7 +34,9 @@ app.get('/', async (c) => {
   }
 
   return c.json({
-    supaHost: existInEnv(c, 'SUPABASE_REPLICATE_URL') ? getEnv(c, 'SUPABASE_REPLICATE_URL') : getEnv(c, 'SUPABASE_URL'),
+    // Released CLIs (< 8.90.1) build a Supabase client from this host. It is the
+    // Capgo API's Supabase-compatible endpoint, not PostgREST (private/legacy_supabase.ts).
+    supaHost: legacySupabaseHost(c),
     supbaseId: getEnv(c, 'SUPABASE_URL')?.split('//')[1]?.split('.')[0]?.split(':')[0] ?? '',
     supaKey: getEnv(c, 'SUPABASE_ANON_KEY'),
     stripeEnabled: isStripeConfigured(c),

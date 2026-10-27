@@ -4,7 +4,7 @@
  *
  * Usage: bun scripts/audit_broken_default_downgrade.ts
  */
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'

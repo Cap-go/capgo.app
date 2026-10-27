@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import { load } from 'https://deno.land/std@0.224.0/dotenv/mod.ts'
 
 const accountId = 'THE ACCOUNT ID TO RESTORE'

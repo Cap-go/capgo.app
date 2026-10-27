@@ -124,12 +124,16 @@ export interface QueryFunction {
   returnsComposite: boolean
   /** Trailing input arguments that have SQL defaults. Callers may omit them. */
   defaultCount: number
+  /** Result columns of a composite set-returning function. PostgREST filters and orders on them. */
+  outColumns?: QueryColumn[]
 }
 
 export interface QueryCatalog {
   columns: Map<string, QueryColumn[]>
   foreignKeys: QueryForeignKey[]
   functions: QueryFunction[]
+  /** Primary key columns per table. PostgREST upserts on them when onConflict is omitted. */
+  primaryKeys?: Map<string, string[]>
 }
 
 export interface CatalogFunctionRow {
@@ -141,6 +145,7 @@ export interface CatalogFunctionRow {
   return_kind: string
   arg_types: unknown
   default_count?: unknown
+  out_columns?: Array<{ name: string, udt: string }> | null
 }
 
 // node-pg leaves name[] and "char"[] as text (`{varchar}`, `{i}`, `{}`).
@@ -234,6 +239,7 @@ export function functionFromCatalogRow(row: CatalogFunctionRow): QueryFunction |
     returnsSet,
     returnsComposite,
     defaultCount: defaultCountOf(row.default_count, argNames.length),
+    outColumns: Array.isArray(row.out_columns) ? row.out_columns.filter(column => column?.name).map(column => ({ name: column.name, udt: column.udt })) : undefined,
   }
 }
 
@@ -265,6 +271,7 @@ export interface ConsoleQueryFailure {
   message: string
   code: string
   details: string | null
+  hint?: string | null
 }
 
 export interface ConsoleQueryResult {
@@ -710,17 +717,26 @@ function rejectEmbeddedModifier(options: Record<string, unknown>) {
 
 function writeRows(value: unknown): Record<string, unknown>[] {
   const rows = Array.isArray(value) ? value : [value]
-  if (!rows.length || rows.some(row => !row || typeof row !== 'object' || Array.isArray(row)))
+  // An empty batch writes nothing. PostgREST answers it with no rows.
+  if (Array.isArray(value) && !value.length)
+    return []
+  if (rows.some(row => !row || typeof row !== 'object' || Array.isArray(row)))
     fail('PGRST100', 'Invalid write body')
-  const keys = Object.keys(rows[0] as Record<string, unknown>).sort((left, right) => left.localeCompare(right))
-  if (!keys.length)
+  if (rows.every(row => !Object.keys(row as Record<string, unknown>).length))
     fail('PGRST100', 'Invalid write body')
-  for (const row of rows) {
-    const rowKeys = Object.keys(row as Record<string, unknown>).sort((left, right) => left.localeCompare(right))
-    if (rowKeys.length !== keys.length || rowKeys.some((key, index) => key !== keys[index]))
-      fail('PGRST100', 'Write rows must have the same columns')
-  }
   return rows as Record<string, unknown>[]
+}
+
+// supabase-js sends ?columns= with the union of every row's keys, so rows may
+// differ. PostgREST fills a missing key with NULL, or with the column default
+// when the caller passed defaultToNull: false.
+function writeKeys(rows: Record<string, unknown>[]): string[] {
+  const keys = new Set<string>()
+  for (const row of rows) {
+    for (const key of Object.keys(row))
+      keys.add(key)
+  }
+  return [...keys]
 }
 
 function projectionSql(catalog: QueryCatalog, table: string, parentAlias: string, star: boolean, fields: SelectField[], sequence: { next: number }): string {
@@ -792,6 +808,15 @@ function valueSql(params: Params, udt: string, value: unknown, cast = castOf(udt
   return params.add(value, cast)
 }
 
+// A write value for a column whose type has no plain cast (composite, array of
+// composite, enum array...). PostgREST builds the row with json_populate_record
+// on the table type, so the JSON body converts the same way here.
+function writeValueSql(params: Params, table: string, column: QueryColumn, value: unknown): string {
+  if (value === null || value === undefined || CAST_BY_UDT[column.udt] || isJsonUdt(column.udt))
+    return valueSql(params, column.udt, value)
+  return `(pg_catalog.jsonb_populate_record(NULL::"public".${quoteIdent(table)}, pg_catalog.jsonb_build_object(${sqlString(column.name)}, ${params.add(JSON.stringify(value), 'jsonb')}))).${quoteIdent(column.name)}`
+}
+
 function conflictColumns(columns: QueryColumn[], value: unknown): string[] {
   if (typeof value !== 'string' || !value.trim())
     fail('PGRST100', 'Upsert requires onConflict')
@@ -820,6 +845,7 @@ function compileTable(catalog: QueryCatalog, request: ConsoleQueryRequest): Comp
   let rows: Record<string, unknown>[] | null = null
   let onConflict: string[] | null = null
   let ignoreDuplicates = false
+  let defaultToNull = true
   let star = true
   let fields: SelectField[] = []
 
@@ -853,6 +879,7 @@ function compileTable(catalog: QueryCatalog, request: ConsoleQueryRequest): Comp
       if (typeof options.onConflict === 'string')
         onConflict = conflictColumns(columns, options.onConflict)
       ignoreDuplicates = options.ignoreDuplicates === true
+      defaultToNull = options.defaultToNull !== false
       if (options.count === 'exact' || options.count === 'estimated' || options.count === 'planned')
         count = true
       if (options.head === true)
@@ -965,6 +992,19 @@ function compileTable(catalog: QueryCatalog, request: ConsoleQueryRequest): Comp
 
   if (!rows && verb !== 'delete')
     fail('PGRST100', 'Invalid write body')
+  if (rows && !rows.length && (verb === 'insert' || verb === 'upsert')) {
+    const empty = count || head ? 'SELECT NULL::jsonb AS row, 0::bigint AS total_count' : 'SELECT NULL::jsonb AS row WHERE false'
+    return { text: empty, values: [], cardinality, head, count: count || head, kind: 'table', returnsSet: false, minimal: selectText === null && !count && !head }
+  }
+  // PostgREST runs with pg-safeupdate: an UPDATE or DELETE needs a filter.
+  if ((verb === 'update' || verb === 'delete') && !where.length)
+    fail('21000', `${verb.toUpperCase()} requires a WHERE clause`)
+  if (verb === 'upsert' && !onConflict) {
+    const primaryKey = catalog.primaryKeys?.get(request.name)
+    if (!primaryKey?.length)
+      fail('PGRST100', 'Upsert requires onConflict')
+    onConflict = primaryKey
+  }
   // RETURNING applies SELECT RLS. A write that did not ask for rows, a count,
   // or a head must not do that, or an insert allowed by INSERT policy fails
   // when the caller cannot select the new row. That is PostgREST return=minimal.
@@ -979,18 +1019,23 @@ function compileTable(catalog: QueryCatalog, request: ConsoleQueryRequest): Comp
       if (!IDENTIFIER.test(key))
         fail('PGRST100', 'Invalid identifier')
       const column = columnByName(columns, key)
-      return `${quoteIdent(key)} = ${valueSql(params, column.udt, rows![0][key])}`
+      return `${quoteIdent(key)} = ${writeValueSql(params, request.name, column, rows![0][key])}`
     })
     writing = `UPDATE "public".${quoteIdent(request.name)} AS t SET ${assignments.join(', ')}${whereSql}${returning}`
   }
   else {
-    const keys = Object.keys(rows![0])
+    const keys = writeKeys(rows!)
     for (const key of keys) {
       if (!IDENTIFIER.test(key))
         fail('PGRST100', 'Invalid identifier')
       columnByName(columns, key)
     }
-    const tuples = rows!.map(row => `(${keys.map(key => valueSql(params, columnByName(columns, key).udt, row[key])).join(', ')})`)
+    const cell = (row: Record<string, unknown>, key: string) => {
+      if (!Object.prototype.hasOwnProperty.call(row, key))
+        return defaultToNull ? 'NULL' : 'DEFAULT'
+      return writeValueSql(params, request.name, columnByName(columns, key), row[key])
+    }
+    const tuples = rows!.map(row => `(${keys.map(key => cell(row, key)).join(', ')})`)
     let conflict = ''
     if (verb === 'upsert') {
       if (!onConflict)
@@ -1081,13 +1126,13 @@ function pageRange(args: unknown[]): { limit: number, offset: number } {
 
 // Limit the function output before jsonb_agg. A LIMIT on the aggregate query
 // only limits the one aggregated row, which drops the page the console asked for.
-function setReturningSql(call: string, composite: boolean, limit: number | null, offset: number): string {
+function setReturningSql(call: string, composite: boolean, limit: number | null, offset: number, where = '', order = ''): string {
   const aggregate = composite ? 'jsonb_agg(to_jsonb(q))' : 'jsonb_agg(to_jsonb(q.val))'
   // Same ceiling as table reads. PostgREST also stops at max-rows.
   const rowLimit = Math.min(limit ?? MAX_ROWS, MAX_ROWS)
   const page = ` LIMIT ${rowLimit}${offset > 0 ? ` OFFSET ${offset}` : ''}`
   const source = composite
-    ? `SELECT * FROM ${call} AS q${page}`
+    ? `SELECT * FROM ${call} AS q${where}${order}${page}`
     : `SELECT val FROM ${call} AS q(val)${page}`
   return `SELECT COALESCE((SELECT ${aggregate} FROM (${source}) AS q), '[]'::jsonb) AS data`
 }
@@ -1099,9 +1144,16 @@ function compileRpc(catalog: QueryCatalog, request: ConsoleQueryRequest): Compil
   let cardinality: CompiledConsoleQuery['cardinality'] = 'many'
   let limit: number | null = null
   let offset = 0
+  // Filters and order apply to the rows a composite set-returning function
+  // returns, as PostgREST treats them. They are resolved after the function is known.
+  const resultOperations: ConsoleQueryOperation[] = []
   for (const operation of request.operations) {
     if (operation.method === 'throwOnError')
       continue
+    if (operation.method === 'order' || operation.method === 'filter' || operation.method === 'not' || operation.method === 'match' || OPERATOR_ALIASES[operation.method]) {
+      resultOperations.push(operation)
+      continue
+    }
     if (operation.method === 'single') {
       cardinality = 'one'
       continue
@@ -1136,13 +1188,53 @@ function compileRpc(catalog: QueryCatalog, request: ConsoleQueryRequest): Compil
     callArgs.push(`${quoteIdent(name)} => ${valueSql(params, fn.argTypes[index], args[name], argumentCast(fn.argTypes[index]))}`)
   }
   const call = `public.${quoteIdent(fn.name)}(${callArgs.join(', ')})`
+  if (resultOperations.length && (!fn.returnsSet || !fn.returnsComposite || !fn.outColumns?.length))
+    fail('PGRST100', 'Unsupported RPC modifier')
+  const resultColumn = (name: unknown): QueryTarget => {
+    if (typeof name !== 'string' || !IDENTIFIER.test(name))
+      fail('PGRST100', 'Invalid identifier')
+    const column = fn.outColumns!.find(item => item.name === name)
+    if (!column)
+      fail('42703', `column '${name}' does not exist`)
+    return { expression: `q.${quoteIdent(name)}`, udt: column.udt }
+  }
+  const resultFilters: string[] = []
+  const resultOrder: string[] = []
+  for (const operation of resultOperations) {
+    const args = operation.args
+    if (operation.method === 'order') {
+      const options = optionsOf(args[1])
+      rejectEmbeddedModifier(options)
+      const direction = options.ascending === false ? 'DESC' : 'ASC'
+      const nulls = options.nullsFirst === true ? ' NULLS FIRST' : options.nullsFirst === false ? ' NULLS LAST' : ''
+      resultOrder.push(`${resultColumn(args[0]).expression} ${direction}${nulls}`)
+      continue
+    }
+    if (operation.method === 'match') {
+      for (const [column, value] of Object.entries(optionsOf(args[0])))
+        resultFilters.push(predicateSql(params, resultColumn(column), 'eq', value, false))
+      continue
+    }
+    if (operation.method === 'filter' || operation.method === 'not') {
+      if (typeof args[1] !== 'string')
+        fail('PGRST100', 'Invalid filter')
+      const operator = normalizeOperator(args[1])
+      const value = operator.operator === 'in' && typeof args[2] === 'string' ? parseFilterValue('in', args[2]) : args[2]
+      resultFilters.push(predicateSql(params, resultColumn(args[0]), operator.operator, value, operator.negate || operation.method === 'not'))
+      continue
+    }
+    rejectEmbeddedModifier(optionsOf(args[2]))
+    resultFilters.push(predicateSql(params, resultColumn(args[0]), OPERATOR_ALIASES[operation.method], args[1], false))
+  }
+  const resultWhere = resultFilters.length ? ` WHERE ${resultFilters.join(' AND ')}` : ''
+  const resultOrderSql = resultOrder.length ? ` ORDER BY ${resultOrder.join(', ')}` : ''
   if (!fn.returnsSet) {
     if (limit != null || offset > 0)
       fail('PGRST100', 'Unsupported RPC modifier')
     return { text: `SELECT to_jsonb(${call}) AS data`, values: params.values, cardinality, head: false, count: false, kind: 'rpc', returnsSet: false }
   }
   return {
-    text: setReturningSql(call, fn.returnsComposite, limit, offset),
+    text: setReturningSql(call, fn.returnsComposite, limit, offset, resultWhere, resultOrderSql),
     values: params.values,
     cardinality,
     head: false,

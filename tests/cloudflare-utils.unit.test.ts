@@ -1,12 +1,15 @@
 import type { Context } from 'hono'
-import { createClient } from '@supabase/supabase-js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildReadDevicesCFQuery as buildPluginReadDevicesCFQuery } from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
 import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { createDb } from '../supabase/functions/_backend/utils/db.ts'
 import { readDevicesSB } from '../supabase/functions/_backend/utils/supabase.ts'
 
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: vi.fn(),
+// readDevicesSB builds its query with supabaseAdmin(c).from(...), which is the
+// Drizzle builder from utils/db.ts. Capture the chain it records.
+vi.mock('../supabase/functions/_backend/utils/db.ts', () => ({
+  createDb: vi.fn(),
+  jwtSession: vi.fn(),
 }))
 
 function createReadDevicesQueryMock() {
@@ -41,7 +44,7 @@ function createContextMock() {
 }
 
 beforeEach(() => {
-  vi.mocked(createClient).mockReset()
+  vi.mocked(createDb).mockReset()
   vi.unstubAllGlobals()
 })
 
@@ -399,7 +402,7 @@ describe('countInstallSourcesCF', () => {
 describe('readDevicesSB', () => {
   it('applies default device_id cursor pagination when no order is provided', async () => {
     const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+    vi.mocked(createDb).mockReturnValue(client as unknown as ReturnType<typeof createDb>)
 
     await readDevicesSB(createContextMock() as unknown as Context, {
       app_id: 'com.example.app',
@@ -416,7 +419,7 @@ describe('readDevicesSB', () => {
 
   it('applies install source filters', async () => {
     const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+    vi.mocked(createDb).mockReturnValue(client as unknown as ReturnType<typeof createDb>)
 
     await readDevicesSB(createContextMock() as unknown as Context, {
       app_id: 'com.example.app',
@@ -429,7 +432,7 @@ describe('readDevicesSB', () => {
 
   it('applies platform and version_name filters together', async () => {
     const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+    vi.mocked(createDb).mockReturnValue(client as unknown as ReturnType<typeof createDb>)
 
     await readDevicesSB(createContextMock() as unknown as Context, {
       app_id: 'com.example.app',
@@ -444,7 +447,7 @@ describe('readDevicesSB', () => {
 
   it('applies default_channel filter', async () => {
     const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+    vi.mocked(createDb).mockReturnValue(client as unknown as ReturnType<typeof createDb>)
 
     await readDevicesSB(createContextMock() as unknown as Context, {
       app_id: 'com.example.app',
@@ -457,7 +460,7 @@ describe('readDevicesSB', () => {
 
   it('filters devices with updated_at greater than the provided timestamp', async () => {
     const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+    vi.mocked(createDb).mockReturnValue(client as unknown as ReturnType<typeof createDb>)
 
     await readDevicesSB(createContextMock() as unknown as Context, {
       app_id: 'com.example.app',
@@ -470,7 +473,7 @@ describe('readDevicesSB', () => {
 
   it('orders devices by updated_at when requested', async () => {
     const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+    vi.mocked(createDb).mockReturnValue(client as unknown as ReturnType<typeof createDb>)
 
     await readDevicesSB(createContextMock() as unknown as Context, {
       app_id: 'com.example.app',

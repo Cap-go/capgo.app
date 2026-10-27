@@ -4,7 +4,6 @@ import {
   APIKEY_TEST_ORG_SUPER_ADMIN,
   createDirectApiKeyWithBindings,
   executeSQL,
-  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getSupabaseClient,
@@ -18,6 +17,7 @@ import {
   USER_PASSWORD,
   USER_PASSWORD_NONMEMBER,
 } from './test-utils.ts'
+import { fetchPostgrest } from './db-client'
 
 const id = randomUUID()
 const APP_OWN = `com.demo.manifest-own.${id}`
@@ -138,7 +138,7 @@ async function fetchManifestRows(headers: Record<string, string>, appVersionId: 
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchTestRequest(getRestManifestUrl({
+  const response = await fetchPostgrest(getRestManifestUrl({
     select: 'id,file_name,file_hash,s3_path,app_version_id',
     app_version_id: `eq.${appVersionId}`,
   }), {
@@ -159,7 +159,7 @@ async function insertManifestRow(headers: Record<string, string>, row: Omit<Mani
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchTestRequest(getRestManifestUrl({
+  const response = await fetchPostgrest(getRestManifestUrl({
     select: 'id,file_name,file_hash,s3_path,app_version_id',
   }), {
     method: 'POST',
@@ -182,7 +182,7 @@ async function deleteManifestRow(headers: Record<string, string>, manifestId: nu
   if (!anonKey)
     throw new Error('SUPABASE_ANON_KEY is missing')
 
-  const response = await fetchTestRequest(getRestManifestUrl({
+  const response = await fetchPostgrest(getRestManifestUrl({
     select: 'id',
     id: `eq.${manifestId}`,
   }), {

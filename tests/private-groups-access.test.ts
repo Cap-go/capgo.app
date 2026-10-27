@@ -13,6 +13,7 @@ import {
   USER_ID_2,
   USER_PASSWORD,
 } from './test-utils.ts'
+import { fetchPostgrest } from './db-client'
 
 const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
 const fixtureId = randomUUID()
@@ -81,8 +82,8 @@ async function expectRankGuard(response: Response) {
 
 async function readGroupRows(headers: Record<string, string>) {
   const [groupsResponse, membersResponse] = await Promise.all([
-    fetch(`${SUPABASE_BASE_URL}/rest/v1/groups?id=eq.${groupId}&select=id`, { headers }),
-    fetch(`${SUPABASE_BASE_URL}/rest/v1/group_members?group_id=eq.${groupId}&select=user_id`, { headers }),
+    fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/groups?id=eq.${groupId}&select=id`, { headers }),
+    fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/group_members?group_id=eq.${groupId}&select=user_id`, { headers }),
   ])
   const [groupsBody, membersBody] = await Promise.all([
     groupsResponse.text(),

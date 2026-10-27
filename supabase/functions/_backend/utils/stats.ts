@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoDb } from './db.ts'
 import type { Context } from 'hono'
 import type { VersionUsageChannelFilterOptions } from './cloudflare.ts'
 import type { DeviceDataCollection } from './deviceDataCollection.ts'
@@ -193,7 +193,7 @@ export function readStatsVersion(c: Context, app_id: string, start_date: string,
   return readStatsVersionCF(c, app_id, start_date, end_date, channel, options)
 }
 
-export function readNativeVersionUsage(c: Context, app_id: string, start_date: string, end_date: string, supabase: SupabaseClient<Database>): Promise<NativeVersionUsage[]> {
+export function readNativeVersionUsage(c: Context, app_id: string, start_date: string, end_date: string, supabase: CapgoDb): Promise<NativeVersionUsage[]> {
   if (!c.env.DEVICE_USAGE)
     return readNativeVersionUsageSB(c, app_id, start_date, end_date, supabase)
   return readNativeVersionUsageCF(c, app_id, start_date, end_date)
@@ -204,7 +204,7 @@ export function readNativeActiveDevicesSummary(
   app_id: string,
   start_date: string,
   end_date: string,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<NativeActiveDevicesByPlatformRow[]> {
   if (!c.env.DEVICE_USAGE)
     return readNativeActiveDevicesSummarySB(c, app_id, start_date, end_date, supabase)
@@ -216,7 +216,7 @@ export function readNativeDailyPlatformActive(
   app_id: string,
   start_date: string,
   end_date: string,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<Array<{ date: string, platform: string, devices: number }>> {
   if (!c.env.DEVICE_USAGE)
     return readNativeDailyPlatformActiveSB(c, app_id, start_date, end_date, supabase)

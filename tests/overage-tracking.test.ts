@@ -1,6 +1,6 @@
 import type { Database } from '../src/types/database.types'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { ORG_ID_OVERAGE } from './test-utils'
 

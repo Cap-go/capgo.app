@@ -11,7 +11,7 @@
 
 import type { Database } from '../../supabase/functions/_backend/utils/supabase.types.ts'
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from '../db-client.ts'
 
 // Load environment from prod file
 const envFile = await Bun.file('./internal/cloudflare/.env.prod').text()

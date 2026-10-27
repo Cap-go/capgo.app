@@ -1,7 +1,7 @@
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import Stripe from 'stripe'
 
 export const DEFAULT_ENV_FILE = './internal/cloudflare/.env.prod'

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getEndpointUrl, getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, TEST_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'

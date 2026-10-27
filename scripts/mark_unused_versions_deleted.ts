@@ -7,7 +7,7 @@
  * Optional:
  *   --input=./tmp/unused_versions/unused_versions.json
  */
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'

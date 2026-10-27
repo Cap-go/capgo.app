@@ -59,6 +59,12 @@ fi
 
 SUPA_ENV="$(run_supabase_status_env || true)"
 SUPABASE_URL_FROM_STATUS="$(get_supabase_status_var 'API_URL')"
+if [ -z "${SUPABASE_URL_FROM_STATUS}" ]; then
+  # PostgREST is disabled, so status prints no API_URL. The gateway that serves
+  # Auth, Storage and Functions also serves Storage's S3 endpoint.
+  STORAGE_S3_URL_FROM_STATUS="$(get_supabase_status_var 'STORAGE_S3_URL')"
+  SUPABASE_URL_FROM_STATUS="${STORAGE_S3_URL_FROM_STATUS%/storage/v1/s3}"
+fi
 SUPABASE_DB_URL_FROM_STATUS="$(get_supabase_status_var 'DB_URL')"
 # Supabase CLI has historically emitted either SERVICE_ROLE_KEY/ANON_KEY or SECRET_KEY/PUBLISHABLE_KEY.
 SUPABASE_SERVICE_ROLE_KEY_FROM_STATUS="$(get_supabase_status_var 'SERVICE_ROLE_KEY|SECRET_KEY')"

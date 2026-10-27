@@ -1,5 +1,5 @@
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'

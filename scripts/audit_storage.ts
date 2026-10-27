@@ -7,7 +7,7 @@
  * Usage: bun scripts/audit_storage.ts
  */
 import { HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'

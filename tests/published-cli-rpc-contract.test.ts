@@ -13,7 +13,7 @@ import type { PublishedCliRpcCall } from '../scripts/published-cli-contract.ts'
 import type { Database } from '../src/types/database.types'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {

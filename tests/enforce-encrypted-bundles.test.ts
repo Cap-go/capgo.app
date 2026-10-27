@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { APIKEY_ENCRYPTED, APP_NAME_ENCRYPTED, createDirectApiKeyWithBindings, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, ORG_ID_ENCRYPTED, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID, USER_ID_2, USER_ID_ENCRYPTED, USER_PASSWORD } from './test-utils.ts'
+import { fetchPostgrest } from './db-client'
 
 // This test file uses ISOLATED test data seeded in seed.sql:
 // - USER_ID_ENCRYPTED: f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193
@@ -152,7 +153,7 @@ async function createStaleLegacySuperAdminFixture() {
 }
 
 async function callBundleCleanupRpc(functionName: 'count_non_compliant_bundles' | 'delete_non_compliant_bundles', orgId: string) {
-  return fetch(`${SUPABASE_BASE_URL}/rest/v1/rpc/${functionName}`, {
+  return fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/rpc/${functionName}`, {
     method: 'POST',
     headers: {
       ...authHeadersUser2,
@@ -569,7 +570,7 @@ describe('[Encrypted Bundles Enforcement]', () => {
         expect(insertError).toBeNull()
         expect(inserted?.session_key).toBe('encrypted-session-key-for-app-scoped-update')
 
-        const response = await fetch(`${SUPABASE_BASE_URL}/rest/v1/app_versions?id=eq.${inserted!.id}`, {
+        const response = await fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/app_versions?id=eq.${inserted!.id}`, {
           method: 'PATCH',
           headers: {
             'apikey': SUPABASE_ANON_KEY,

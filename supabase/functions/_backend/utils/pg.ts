@@ -33,6 +33,11 @@ export type PgQueryClient = PoolClient | Client
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
 
+/** True for a Hyperdrive `Client`: one connection, never `.end()`ed, not a Pool. */
+export function isHyperdrivePgClient(pg: PgClient): pg is Client {
+  return skipEndClients.has(pg)
+}
+
 export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
   if (skipEndClients.has(pg))
     return pg as Client
@@ -441,7 +446,7 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
  *
  * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
  */
-export async function getPgClient(c: Context, readOnly = false): Promise<PgClient> {
+export async function getPgClient(c: Context, readOnly = false, options?: { idleTimeoutMillis?: number }): Promise<PgClient> {
   const dbUrl = getDatabaseURL(c, readOnly)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
@@ -471,9 +476,11 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
     connectionString: dbUrl,
     max: isWorkerd ? 1 : 4,
     application_name: `${appName}-${dbName}`,
-    idleTimeoutMillis: 20000,
+    idleTimeoutMillis: options?.idleTimeoutMillis ?? 20000,
     connectionTimeoutMillis: 10000,
     maxLifetimeSeconds: 30 * 60,
+    // A request pool nobody ends (no Hono request around it) must not keep the runtime alive.
+    allowExitOnIdle: options?.idleTimeoutMillis !== undefined,
     options: readOnlyOptions,
   })
 
@@ -502,6 +509,46 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
   })
 
   return setPgAccessMode(pool, readOnly)
+}
+
+// One bounded pool per isolate and database for Deno / Node (Supabase edge
+// runtime, tests, scripts), shared by every request like PostgREST's own pool.
+// A pool per request multiplied connections under queue fan-out and ran the
+// database out of slots. Workers must not share I/O across requests; there
+// Hyperdrive is the shared pool (see getPgClient).
+// The edge runtime runs many isolates; each keeps its own pool. Idle
+// connections close quickly so isolates do not hold slots between bursts.
+const SHARED_POOL_MAX = 3
+const SHARED_POOL_IDLE_MS = 2000
+const sharedPools = new Map<string, Pool>()
+
+export function getSharedPgPool(c: Context): Pool {
+  const dbUrl = getDatabaseURL(c, false)
+  let pool = sharedPools.get(dbUrl)
+  if (pool)
+    return pool
+  const dbName = String(c.get('databaseSource') ?? 'unknown source')
+  const max = Number(existInEnv(c, 'DB_POOL_MAX') ? getEnv(c, 'DB_POOL_MAX') : SHARED_POOL_MAX)
+  const idle = Number(existInEnv(c, 'DB_POOL_IDLE_MS') ? getEnv(c, 'DB_POOL_IDLE_MS') : SHARED_POOL_IDLE_MS)
+  pool = new Pool({
+    connectionString: dbUrl,
+    max: Number.isInteger(max) && max > 0 ? max : SHARED_POOL_MAX,
+    application_name: `capgo-db-${dbName}`,
+    idleTimeoutMillis: Number.isInteger(idle) && idle > 0 ? idle : SHARED_POOL_IDLE_MS,
+    connectionTimeoutMillis: 10000,
+    maxLifetimeSeconds: 30 * 60,
+    allowExitOnIdle: true,
+  })
+  pool.on('error', (err: Error) => {
+    cloudlogErr({ message: 'Shared PG Pool Error', databaseSource: dbName, error: serializePostgresError(err) })
+  })
+  pool.on('connect', (client) => {
+    client.on('error', (err: Error) => {
+      cloudlogErr({ message: 'Shared PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
+    })
+  })
+  sharedPools.set(dbUrl, pool)
+  return pool
 }
 
 // Transactions must run on one checked-out connection: BEGIN/COMMIT issued on
