@@ -29,6 +29,8 @@ const { createApiKey } = await import('../supabase/functions/_backend/utils/supa
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
+const PRECHECK = 'SELECT EXISTS (SELECT 1 FROM public.apikeys WHERE user_id = $1::uuid) AS has_keys'
+
 function normalizedQuery(query: unknown) {
   return String(query).replace(/\s+/g, ' ').trim()
 }
@@ -45,6 +47,8 @@ describe('createApiKey account-deletion serialization', () => {
   it('locks the public profile and rolls back before API-key reads when deletion is scheduled', async () => {
     pgQueryMock.mockImplementation(async (query: unknown) => {
       const sql = normalizedQuery(query)
+      if (sql === PRECHECK)
+        return { rowCount: 1, rows: [{ has_keys: false }] }
       if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql.startsWith('SET LOCAL lock_timeout'))
         return { rowCount: null, rows: [] }
       if (sql.includes('SELECT id FROM public.users'))
@@ -58,13 +62,14 @@ describe('createApiKey account-deletion serialization', () => {
 
     const queries = pgQueryMock.mock.calls.map(([query]) => normalizedQuery(query))
     expect(queries).toEqual([
+      PRECHECK,
       'BEGIN',
       `SET LOCAL lock_timeout = '5s'`,
       'SELECT id FROM public.users WHERE id = $1::uuid FOR UPDATE',
       'SELECT EXISTS ( SELECT 1 FROM public.to_delete_accounts WHERE account_id = $1::uuid ) AS deletion_scheduled',
       'ROLLBACK',
     ])
-    expect(queries.some(query => query.includes('FROM public.apikeys'))).toBe(false)
+    expect(queries.slice(1).some(query => query.includes('FROM public.apikeys'))).toBe(false)
     expect(pgConnectMock).toHaveBeenCalledOnce()
     expect(pgReleaseMock).toHaveBeenCalledWith(true)
     expect(closeClientMock).toHaveBeenCalledOnce()
@@ -73,6 +78,8 @@ describe('createApiKey account-deletion serialization', () => {
   it('continues default-key provisioning only after the deletion guard is clear', async () => {
     pgQueryMock.mockImplementation(async (query: unknown) => {
       const sql = normalizedQuery(query)
+      if (sql === PRECHECK)
+        return { rowCount: 1, rows: [{ has_keys: false }] }
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql.startsWith('SET LOCAL lock_timeout'))
         return { rowCount: null, rows: [] }
       if (sql.includes('SELECT id FROM public.users'))
@@ -105,6 +112,8 @@ describe('createApiKey account-deletion serialization', () => {
     const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
     pgQueryMock.mockImplementation(async (query: unknown) => {
       const sql = normalizedQuery(query)
+      if (sql === PRECHECK)
+        return { rowCount: 1, rows: [{ has_keys: false }] }
       if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql.startsWith('SET LOCAL lock_timeout'))
         return { rowCount: null, rows: [] }
       if (sql.includes('SELECT id FROM public.users'))
@@ -115,11 +124,27 @@ describe('createApiKey account-deletion serialization', () => {
     await expect(createApiKey(context(), USER_ID)).rejects.toBe(lockTimeout)
 
     expect(pgQueryMock.mock.calls.map(([query]) => normalizedQuery(query))).toEqual([
+      PRECHECK,
       'BEGIN',
       `SET LOCAL lock_timeout = '5s'`,
       'SELECT id FROM public.users WHERE id = $1::uuid FOR UPDATE',
       'ROLLBACK',
     ])
+    expect(pgReleaseMock).toHaveBeenCalledWith(true)
+    expect(closeClientMock).toHaveBeenCalledOnce()
+  })
+
+  it('skips the user row lock when the user already has API keys', async () => {
+    pgQueryMock.mockImplementation(async (query: unknown) => {
+      const sql = normalizedQuery(query)
+      if (sql === PRECHECK)
+        return { rowCount: 1, rows: [{ has_keys: true }] }
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+
+    await createApiKey(context(), USER_ID)
+
+    expect(pgQueryMock.mock.calls.map(([query]) => normalizedQuery(query))).toEqual([PRECHECK])
     expect(pgReleaseMock).toHaveBeenCalledWith(true)
     expect(closeClientMock).toHaveBeenCalledOnce()
   })

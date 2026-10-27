@@ -1,8 +1,9 @@
 import type { Context } from 'hono'
+import type { AppOnboardingState } from './appOnboarding.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import { sql } from 'drizzle-orm'
 import { emitCommittedAppOnboardingHistory } from './app_onboarding_posthog.ts'
-import { hasSupportedOtaTodoList, pickAppOnboardingSource } from './appOnboarding.ts'
+import { hasSupportedOtaTodoList, parseAppOnboarding, pickAppOnboardingSource } from './appOnboarding.ts'
 import { tryCompletePendingAppOnboarding } from './appOnboardingCompletion.ts'
 import { persistAuthorizedOnboardingMutation } from './appOnboardingMutation.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
@@ -46,30 +47,33 @@ export async function markAppOnboardingLogin(
     // Discover candidates without holding locks, then mutate each app in its own
     // bounded transaction. A single multi-row FOR UPDATE previously kept the
     // Hyperdrive connection idle in transaction for 6-11s across permission work.
-    const candidates = await getDrizzleClient(pool, { logger: false }).execute<{ app_id: string }>(sql`
-      SELECT app_id
+    const candidates = await getDrizzleClient(pool, { logger: false }).execute<{ app_id: string, onboarding: unknown }>(sql`
+      SELECT app_id, onboarding
       FROM public.apps
       WHERE onboarding ->> 'created_by_user_id' = ${auth.userId}
         AND onboarding #>> '{setup,todo_list_version}' IN ('2', '3', '4')
         AND (onboarding #>> '{setup,todo_list_version}' <> '4'
           OR onboarding #>> '{setup,ota_todo_list_version}' = '1')
     `)
-    for (const app of candidates.rows) {
+    const buildPatch = ({ current, at }: { current: AppOnboardingState, at: string }) => {
+      // A v4 Builder-only app has no OTA login milestone to update.
+      if (current.todo_list_version === 4 && !hasSupportedOtaTodoList(current))
+        return null
+      if (current.steps.login_cli_mcp?.status === 'done'
+        && pickAppOnboardingSource(current.source, source) === current.source) {
+        return null
+      }
+      return { source, steps: { login_cli_mcp: { status: 'done' as const, at } } }
+    }
+    // Every CLI command and MCP tool call lands here. Skip apps that are
+    // already up to date before taking any lock or running permission checks.
+    const at = new Date().toISOString()
+    const pending = candidates.rows.filter(app => buildPatch({ current: parseAppOnboarding(app.onboarding), at }))
+    for (const app of pending) {
       const changed = await persistAuthorizedOnboardingMutation(c, app.app_id, {
         requestedSteps: ['ota.login_cli_mcp'],
         stepOverrides: { 'ota.login_cli_mcp': { permission: 'app.read', authType: 'apikey' } },
-        buildPatch: ({ current, allowedSteps, at }) => {
-          // A v4 Builder-only app has no OTA login milestone to update.
-          if ((current.todo_list_version === 4 && !hasSupportedOtaTodoList(current))
-            || !allowedSteps.has('ota.login_cli_mcp')) {
-            return null
-          }
-          if (current.steps.login_cli_mcp?.status === 'done'
-            && pickAppOnboardingSource(current.source, source) === current.source) {
-            return null
-          }
-          return { source, steps: { login_cli_mcp: { status: 'done', at } } }
-        },
+        buildPatch: ({ current, allowedSteps, at }) => allowedSteps.has('ota.login_cli_mcp') ? buildPatch({ current, at }) : null,
         afterPersist: tryCompletePendingAppOnboarding,
       }, pool)
       if (changed)
