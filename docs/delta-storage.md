@@ -128,9 +128,9 @@ upload, so one rule covers concurrent uploads and GC:
 Five migrations, one release, each its own short transaction so no slow work
 runs while `apps` or `app_versions` are locked:
 
-1. `delta_storage_backfill` creates `delta_files` and `version_files` and
-   copies every `public.manifest` row in one pass (minutes at production
-   scale). It only reads `app_versions` and `manifest`, so uploads keep running.
+1. `delta_storage_backfill` creates `delta_files` and `version_files`,
+   copies every `public.manifest` row in one pass and analyzes both tables.
+   It only reads `app_versions` and `manifest`, so uploads keep running.
 2. `delta_storage_v2` drops the PlanetScale replication of the old inventory
    (`capgo_planetscale_r2_pub` and the `capgo_planetscale_r2_slot` slot; it
    terminates the slot's walsender and fails rather than leave a slot that
@@ -143,6 +143,16 @@ runs while `apps` or `app_versions` are locked:
    during the backfill, validates the keys without blocking writes, and queues
    size lookups for unsized files.
 
+Measured on a local copy at half the production size (4.87M `manifest` rows,
+4.4 GB, 1.24M unique files, production path and hash widths): the five
+migrations take 34 s together (backfill 30 s, the others 1-2 s each) with
+under 80 MB of backend memory, and the data shrinks to about 1 GB. The key
+functions are plpgsql: as SQL-language functions they kept about 1 kB per row
+until the statement ended, and the backfill ran out of memory. On that data,
+reading one 633-file version for `/updates` takes 29 ms, an upload's two
+writes 43 ms, and GC's reference check of a 1,000-object page 18 ms (52 s
+before the tables had statistics, hence the `ANALYZE`).
+
 Size lookups queued for the view's rows are delayed 30 minutes so the new
 workers, which know `delta_files`, process them; size updates through the view
 are ignored (a pre-cutover lookup carries a legacy id). The migrations run
@@ -154,8 +164,8 @@ Around the migrations, the release CI:
 - before them, creates `delta_files` and `version_files` on the Google
   subscriber (`read_replica_schema`, `ALLOWED_NEW_REPLICA_TABLES`);
 - after them, refreshes `capgo_google_eu_2_sub` with `copy_data = true` and
-  waits until every replicated table finished its initial copy
-  (`read_replica_subscription`). The api, files and plugin workers deploy only
+  waits until every replicated table finished its initial copy, then analyzes
+  the newly copied tables (`read_replica_subscription`). The api, files and plugin workers deploy only
   after that, so they never read a half-copied replica. Until then the previous
   workers keep serving: they read the subscriber's now frozen `manifest` table
   and write through the compatibility view on the primary.

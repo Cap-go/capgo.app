@@ -15,14 +15,19 @@ SET lock_timeout = '5s';
 -- until COMMIT.
 BEGIN;
 
+-- The key functions are plpgsql on purpose: on PostgreSQL 17 a non-inlined
+-- SQL-language function called once per row keeps about 1 kB per call until
+-- the statement ends, which would exhaust memory over millions of rows.
 CREATE FUNCTION public.delta_entry_key(p_s3_path text, p_file_name text, p_file_hash text)
 RETURNS bytea
-LANGUAGE sql
+LANGUAGE plpgsql
 IMMUTABLE
 PARALLEL SAFE
 SET search_path = ''
 AS $$
-  SELECT pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.json_build_array(p_s3_path, p_file_name, p_file_hash)::text, 'UTF8'))
+BEGIN
+  RETURN pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.json_build_array(p_s3_path, p_file_name, p_file_hash)::text, 'UTF8'));
+END;
 $$;
 ALTER FUNCTION public.delta_entry_key(text, text, text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_entry_key(text, text, text) FROM PUBLIC;
@@ -75,12 +80,14 @@ GRANT EXECUTE ON FUNCTION public.delta_canonical_path(text) TO service_role;
 -- Same key for every spelling of one object (delta_canonical_path).
 CREATE FUNCTION public.delta_path_key(p_s3_path text)
 RETURNS bytea
-LANGUAGE sql
+LANGUAGE plpgsql
 IMMUTABLE
 PARALLEL SAFE
 SET search_path = ''
 AS $$
-  SELECT pg_catalog.sha256(pg_catalog.convert_to(public.delta_canonical_path(p_s3_path), 'UTF8'))
+BEGIN
+  RETURN pg_catalog.sha256(pg_catalog.convert_to(public.delta_canonical_path(p_s3_path), 'UTF8'));
+END;
 $$;
 ALTER FUNCTION public.delta_path_key(text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_path_key(text) FROM PUBLIC;
@@ -188,6 +195,11 @@ ON CONFLICT (app_version_id) DO NOTHING;
 CREATE INDEX version_files_file_ids_gin_idx ON public.version_files USING gin (file_ids);
 
 COMMIT;
+
+-- Statistics now, not at the next autovacuum: without them the planner treats
+-- the new tables as empty and the first GC and update queries scan them.
+-- ANALYZE does not block reads or writes.
+ANALYZE public.delta_files, public.version_files;
 
 RESET statement_timeout;
 RESET lock_timeout;

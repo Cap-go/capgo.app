@@ -65,11 +65,21 @@ const GOOGLE_READ_REPLICA: GoogleDataApiConfig = {
   database: 'postgres',
 }
 const READ_REPLICA_SUBSCRIPTION = 'capgo_google_eu_2_sub'
-// Fixed statements only: the release job never sends other SQL this way.
+// Fixed statements only (plus ANALYZE of known replicated tables): the release
+// job never sends other SQL this way.
 export const READ_REPLICA_SUBSCRIBED_TABLES_SQL = `SELECT c.relname AS table_name, r.srsubstate AS state FROM pg_catalog.pg_subscription_rel AS r JOIN pg_catalog.pg_subscription AS s ON s.oid = r.srsubid JOIN pg_catalog.pg_class AS c ON c.oid = r.srrelid JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE s.subname = '${READ_REPLICA_SUBSCRIPTION}' AND n.nspname = 'public'`
 // One statement per request runs outside a transaction block, which
 // REFRESH PUBLICATION requires. copy_data only copies newly added tables.
 export const READ_REPLICA_REFRESH_SUBSCRIPTION_SQL = `ALTER SUBSCRIPTION ${READ_REPLICA_SUBSCRIPTION} REFRESH PUBLICATION WITH (copy_data = true)`
+
+/** Statistics for tables the refresh just copied, so the first reads get index plans. */
+export function readReplicaAnalyzeSql(tables: readonly string[]): string {
+  const known = new Set<string>(REPLICA_TABLES)
+  const unknown = tables.filter(table => !known.has(table))
+  if (unknown.length)
+    throw new Error(`Not a replicated table: ${unknown.join(', ')}`)
+  return `ANALYZE ${tables.map(table => `public."${table}"`).join(', ')}`
+}
 
 /** Replicated tables the subscription does not stream yet. */
 export function unsubscribedReplicaTables(subscribed: readonly string[]): string[] {
@@ -120,6 +130,8 @@ async function refreshSubscription(): Promise<void> {
     console.log(`Waiting for the read-replica initial copy of: ${copying.join(', ')}`)
     await new Promise(resolve => setTimeout(resolve, SUBSCRIPTION_COPY_POLL_MS))
   }
+  if (missing.length)
+    await executeGoogleSql(project, instance, database, readReplicaAnalyzeSql(missing), deadline)
   console.log('Read-replica subscription streams every replicated table.')
 }
 

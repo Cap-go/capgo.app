@@ -7,6 +7,7 @@ import {
   copyingReplicaTables,
   preflightCompatibilityIssues,
   READ_REPLICA_REFRESH_SUBSCRIPTION_SQL,
+  readReplicaAnalyzeSql,
   renderReadReplicaImportTransaction,
   unsubscribedReplicaTables,
 } from '../scripts/sync-read-replica-schema.ts'
@@ -101,6 +102,11 @@ describe('read-replica subscription refresh', () => {
 
   it('refreshes with copy_data so new tables get their existing rows', () => {
     expect(READ_REPLICA_REFRESH_SUBSCRIPTION_SQL).toBe('ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true)')
+  })
+
+  it('analyzes only replicated tables after their initial copy', () => {
+    expect(readReplicaAnalyzeSql(NEW_TABLES)).toBe('ANALYZE public."delta_files", public."version_files"')
+    expect(() => readReplicaAnalyzeSql(['pg_authid'])).toThrow('Not a replicated table: pg_authid')
   })
 
   it('runs the refresh after primary migrations in the release workflow', () => {
