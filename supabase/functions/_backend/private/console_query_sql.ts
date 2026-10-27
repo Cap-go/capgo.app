@@ -388,6 +388,11 @@ function splitTop(input: string, separator: string): string[] {
   for (let index = 0; index < input.length; index++) {
     const char = input[index]
     if (quoted) {
+      // PostgREST escapes inside a quoted value with a backslash (\" and \\).
+      if (char === '\\') {
+        index++
+        continue
+      }
       if (char === '"') {
         if (input[index + 1] === '"') {
           index++
@@ -414,11 +419,28 @@ function splitTop(input: string, separator: string): string[] {
   return parts
 }
 
+// A quoted PostgREST value: `\x` is the character x (pQuotedValue), and `""`
+// stays a quote for callers that double it.
 function unquote(value: string): string {
   const trimmed = value.trim()
-  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"'))
-    return trimmed.slice(1, -1).replaceAll('""', '"')
-  return trimmed
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"'))
+    return trimmed
+  const body = trimmed.slice(1, -1)
+  let out = ''
+  for (let index = 0; index < body.length; index++) {
+    const char = body[index]
+    if (char === '\\' && index + 1 < body.length) {
+      out += body[++index]
+      continue
+    }
+    if (char === '"' && body[index + 1] === '"') {
+      out += '"'
+      index++
+      continue
+    }
+    out += char
+  }
+  return out
 }
 
 function jsonbLiteral(value: unknown): string {

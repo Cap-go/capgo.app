@@ -36,9 +36,14 @@ describe('legacy_supabase /functions/v1 relay', () => {
     expect(dispatched[0].headers.get('cf-connecting-ip')).toBe('203.0.113.7')
     expect(dispatched[0].headers.get('authorization')).toBe('key-1')
 
-    await root.request('https://api.example.com/private/legacy_supabase/functions/v1/files/upload_link', { method: 'POST', headers, body: '{}' })
+    await root.request('https://api.example.com/private/legacy_supabase/functions/v1/files/upload_link', { method: 'POST', headers: { ...headers, 'x-forwarded-for': '198.51.100.9' }, body: '{}' })
     expect(dispatched).toHaveLength(1)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The network hop carries the trusted caller address, not the client-supplied one.
+    const sent = new Headers((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers)
+    expect(sent.get('cf-connecting-ip')).toBe('203.0.113.7')
+    expect(sent.get('x-forwarded-for')).toBe('203.0.113.7')
+    expect(sent.get('x-real-ip')).toBe('203.0.113.7')
   })
 
   it('relays a released CLI call made through the edge-runtime host', async () => {

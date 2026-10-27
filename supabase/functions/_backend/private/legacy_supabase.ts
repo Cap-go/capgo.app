@@ -10,6 +10,7 @@ import { jwtSession, runDbQuery } from '../utils/db.ts'
 import { useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { parsePostgrestRequest, PostgrestHttpError, postgrestResponse } from '../utils/postgrest_http.ts'
+import { getClientIP } from '../utils/rate_limit.ts'
 import { existInEnv, getEnv } from '../utils/utils.ts'
 
 /**
@@ -194,6 +195,16 @@ app.all('/functions/v1/*', (c) => {
   const headers = relayHeaders(c)
   if (capgkey)
     headers.set('Authorization', capgkey)
+  // A network hop (the files Worker, or another edge function on Deno): stamp
+  // the address this request was trusted with, so rate limits key on the caller
+  // and a client-supplied X-Forwarded-For cannot pick its own bucket.
+  const clientIp = getClientIP(c)
+  for (const name of ['cf-connecting-ip', 'x-forwarded-for', 'x-real-ip']) {
+    if (clientIp === 'unknown')
+      headers.delete(name)
+    else
+      headers.set(name, clientIp)
+  }
   const target = `${functionsBase(c)}/${tail}`
   return fetch(target, { method: c.req.method, headers, body: relayBody(c), duplex: 'half', redirect: 'manual' } as RequestInit)
 })

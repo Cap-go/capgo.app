@@ -285,3 +285,23 @@ describe('single() with a count', () => {
     expect(result.count).toBe(5)
   })
 })
+
+describe('quoted filter values', () => {
+  it.concurrent('unescapes \\" and \\\\ inside quotes, as PostgREST does', () => {
+    const devices: QueryCatalog = {
+      columns: new Map([['devices', [column('device_id', 'text'), column('custom_id', 'text'), column('app_id', 'text')]]]),
+      foreignKeys: [],
+      functions: [],
+    }
+    // What utils/supabase.ts quotePostgrestFilterValue sends for a"b and a\b.
+    const quoted = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+    for (const search of ['%a"b%', '%a\\b%']) {
+      const compiled = compileConsoleQuery(devices, table('devices', [
+        { method: 'select', args: ['device_id'] },
+        { method: 'or', args: [`device_id.ilike.${quoted(search)},custom_id.ilike.${quoted(search)}`] },
+      ]))
+      expect(compiled.values).toEqual([search, search])
+      expect(flat(compiled.text)).toContain('(t."device_id" ILIKE $1::text OR t."custom_id" ILIKE $2::text)')
+    }
+  })
+})

@@ -35,14 +35,20 @@ const ANON_KEY = env.SUPABASE_ANON_KEY ?? ''
 
 const pool = new Pool({ connectionString: env.SUPABASE_DB_URL, max: 10 })
 
+// Same connection hand-off as utils/db.ts: a service read returns before its
+// COMMIT answers, and the connection goes back to the pool once it has.
 function runner(session: PgQuerySession) {
   return createDbClient(async (request: ConsoleQueryRequest) => {
     const client = await pool.connect()
+    let commit: Promise<unknown> | undefined
     try {
-      return await runPgQuery(client, request, session)
+      return await runPgQuery(client, request, session, { deferCommit: (pending) => { commit = pending } })
     }
     finally {
-      client.release()
+      if (commit)
+        void commit.then(() => client.release(), (error: unknown) => client.release(error as Error))
+      else
+        client.release()
     }
   })
 }
