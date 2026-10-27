@@ -29,13 +29,18 @@ describe('isolate catalog', () => {
 describe('service query timeouts', () => {
   it('fails at the lock timeout instead of waiting for the lock', async () => {
     const pool = new Pool({ connectionString: POSTGRES_URL, max: 1 })
+    // A throwaway table, so the lock never blocks other test files.
+    const table = `tmp_lock_${randomUUID().replaceAll('-', '_')}`
+    await pool.query(`CREATE TABLE public.${table} (id int PRIMARY KEY)`)
     const holder = await pool.connect()
-    const name = `tmp-lock-${randomUUID()}`
+    // If the timeout ever regresses, cancel the query anyway so the lock is released.
+    const deadline = new AbortController()
+    const timer = setTimeout(() => deadline.abort(), 20000)
     try {
       await holder.query('BEGIN')
-      await holder.query('LOCK TABLE public.plans IN ACCESS EXCLUSIVE MODE')
+      await holder.query(`LOCK TABLE public.${table} IN ACCESS EXCLUSIVE MODE`)
       const started = Date.now()
-      const result = await runTestQuery({ kind: 'table', name: 'plans', args: [], operations: [{ method: 'select', args: ['name'] }, { method: 'eq', args: ['name', name] }] }, { role: 'service' }, POSTGRES_URL)
+      const result = await runTestQuery({ kind: 'table', name: table, args: [], operations: [{ method: 'select', args: ['id'] }] }, { role: 'service' }, POSTGRES_URL, deadline.signal)
       const elapsed = Date.now() - started
       // Lock (55P03) and statement (57014) timeouts are both 8s; either bounds the wait.
       expect(['55P03', '57014']).toContain(result.error?.code)
@@ -43,9 +48,11 @@ describe('service query timeouts', () => {
       expect(elapsed).toBeLessThan(15000)
     }
     finally {
+      clearTimeout(timer)
       await holder.query('ROLLBACK').catch(() => {})
       holder.release()
+      await pool.query(`DROP TABLE IF EXISTS public.${table}`)
       await pool.end()
     }
-  }, 30000)
+  }, 40000)
 })

@@ -170,7 +170,12 @@ export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuer
   let failed: Error | undefined
   // An aborted caller cancels the statement, so the connection comes back when
   // the database work stops instead of when a slow query finishes.
-  const onAbort = () => void cancelBackend(connectionString, (client as PoolClient & { processID?: number }).processID)
+  // The connection goes back to the pool only after the cancel has landed, or a
+  // late pg_cancel_backend could hit the next query on the same backend.
+  let cancelling: Promise<void> | undefined
+  const onAbort = () => {
+    cancelling = cancelBackend(connectionString, (client as PoolClient & { processID?: number }).processID)
+  }
   signal?.addEventListener('abort', onAbort, { once: true })
   try {
     if (signal?.aborted)
@@ -183,6 +188,8 @@ export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuer
   }
   finally {
     signal?.removeEventListener('abort', onAbort)
+    if (cancelling)
+      await cancelling
     client.release(failed)
   }
 }
