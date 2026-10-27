@@ -126,11 +126,14 @@ upload, so one rule covers concurrent uploads and GC:
    primary migrations; they are the only tables it may create
    (`ALLOWED_NEW_REPLICA_TABLES` pins their exact SQL and catalog shape), and
    any other missing table still stops the release.
-2. Deploy. The migration first removes `public.manifest` from
-   `capgo_planetscale_r2_pub`: the retired `capgo-r2-inventory-prod` worker
-   deletes delta objects without a `manifest` row and only runs while that
-   publication is healthy, so it stops before any legacy row is converted.
-   Check its logs show the cleanup health failing. It then creates the tables,
+2. Deploy. The migration first drops the PlanetScale replication of the old
+   inventory: the `capgo_planetscale_r2_pub` publication and the
+   `capgo_planetscale_r2_slot` slot (it terminates the slot's walsender, and
+   fails the release rather than leave a slot that would retain WAL). The
+   retired `capgo-r2-inventory-prod` worker deletes delta objects without a
+   `manifest` row and only runs while that replication is healthy, so it stops
+   before any legacy row is converted. Check its logs show the cleanup health
+   failing. It then creates the tables,
    adds them to `capgo_google_eu_2_pub` and seeds `delta_gc_state`. The
    migration sets a 5 s `lock_timeout`; a release that cannot get its locks
    fails and can be retried. Uploads write both the
@@ -166,10 +169,10 @@ upload, so one rule covers concurrent uploads and GC:
    Apps that still have legacy rows are postponed until converted.
 7. Decommission the inventory: delete the `capgo-r2-inventory-prod` worker, its
    queues (`capgo-r2-inventory-prod`, `-repair`, `-cleanup` and their DLQs), the
-   `capgo` bucket notification rule, Hyperdrive `af73fa6a112b495f80e81718b153db76`,
-   the PlanetScale `capgo-r2-inventory` database, and on Supabase the
-   `capgo_planetscale_r2_pub` publication and its replication slot (a slot left
-   behind retains WAL). The worker already stopped deleting at step 2.
+   `capgo` bucket notification rule, Hyperdrive `af73fa6a112b495f80e81718b153db76`
+   and the PlanetScale `capgo-r2-inventory` database (its subscription only
+   retries and fails since step 2). The Supabase publication and slot were
+   already dropped by the migration, and the worker stopped deleting then.
 8. Once only demo rows remain in `public.manifest`, migrate the demo seeding to
    the new tables and drop `public.manifest`, which frees its storage. Replace
    it with a `manifest` view over `version_manifest` so published CLIs that

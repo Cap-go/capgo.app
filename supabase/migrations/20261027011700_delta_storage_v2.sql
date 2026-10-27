@@ -40,17 +40,40 @@
 -- Session-level so it applies whether or not migrations run in a transaction.
 SET lock_timeout = '5s';
 
--- The retired R2 inventory worker deletes delta objects that have no
--- public.manifest row and only runs while manifest is published to its
--- PlanetScale copy. Unpublish it first: the worker's health check then fails
--- and it stops deleting before any legacy row is converted.
+-- Retire the PlanetScale replication of the old R2 inventory. Its worker
+-- deletes delta objects that have no public.manifest row and only runs while
+-- this publication and slot are healthy, so dropping both stops it before any
+-- legacy row is converted. The slot is dropped too: once its subscriber is
+-- gone, a leftover slot would keep WAL on the primary forever.
+-- The walsender runs as this role; it is terminated so the slot is free. The
+-- PlanetScale subscriber only retries and fails until it is decommissioned.
 DO $do$
+DECLARE
+  v_pid integer;
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_catalog.pg_publication_tables
-    WHERE pubname = 'capgo_planetscale_r2_pub' AND schemaname = 'public' AND tablename = 'manifest'
-  ) THEN
-    ALTER PUBLICATION capgo_planetscale_r2_pub DROP TABLE public.manifest;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_publication WHERE pubname = 'capgo_planetscale_r2_pub') THEN
+    DROP PUBLICATION capgo_planetscale_r2_pub;
+  END IF;
+
+  FOR i IN 1..50 LOOP
+    SELECT active_pid INTO v_pid
+    FROM pg_catalog.pg_replication_slots
+    WHERE slot_name = 'capgo_planetscale_r2_slot';
+    EXIT WHEN NOT FOUND;
+    IF v_pid IS NOT NULL THEN
+      PERFORM pg_catalog.pg_terminate_backend(v_pid, 5000);
+    END IF;
+    BEGIN
+      PERFORM pg_catalog.pg_drop_replication_slot('capgo_planetscale_r2_slot');
+    EXCEPTION WHEN object_in_use THEN
+      -- The subscriber reconnected first; terminate it again.
+      PERFORM pg_catalog.pg_sleep(0.1);
+    END;
+  END LOOP;
+
+  -- Fail the release rather than leave a slot that retains WAL.
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = 'capgo_planetscale_r2_slot') THEN
+    RAISE EXCEPTION 'could not drop replication slot capgo_planetscale_r2_slot';
   END IF;
 END;
 $do$;
