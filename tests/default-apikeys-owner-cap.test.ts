@@ -14,7 +14,7 @@ import { ORG_ID, ORG_ID_2, POSTGRES_URL, USER_ID, USER_ID_2 } from './test-utils
 // and only org_member of ORG_ID.
 const MEMBER_ORG_APP_ID = 'com.demo.app'
 const REMEDIATION_MIGRATION_SQL = readFileSync(
-  new URL('../supabase/migrations/20261026013031_cap_default_apikey_bindings_at_owner_rights.sql', import.meta.url),
+  new URL('../supabase/migrations/20261027013031_cap_default_apikey_bindings_at_owner_rights.sql', import.meta.url),
   'utf8',
 )
 
