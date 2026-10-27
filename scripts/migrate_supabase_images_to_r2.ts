@@ -17,7 +17,7 @@
  *
  * Optional:
  *   --prefix=org/<uuid>     only copy one folder
- *   --concurrency=16
+ *   --concurrency=32
  *   --overwrite             replace objects that already exist in R2
  *   --keep-source           copy only; leave the Supabase objects in place
  *   --env-file=./internal/cloudflare/.env.preprod
@@ -35,7 +35,9 @@ import { asyncPool, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, 
 const BUCKET = 'images'
 const PAGE_SIZE = 1000
 const MAX_FOLDER_DEPTH = 6
-const DEFAULT_CONCURRENCY = 16
+const DEFAULT_CONCURRENCY = 32
+// Supabase Storage accepts up to 1000 paths per remove call.
+const REMOVE_BATCH_SIZE = 500
 const LIST_CONCURRENCY = 16
 const PROGRESS_INTERVAL_MS = 5000
 const DB_URL_ENV_KEYS = ['MAIN_SUPABASE_DB_URL', 'DATABASE_URL', 'SUPABASE_DB_URL', 'SUPABASE_DB_DIRECT_URL']
@@ -146,6 +148,10 @@ async function main() {
   const listStartedAt = Date.now()
   const paths = databaseUrl ? await listFromDatabase(databaseUrl, prefix) : await listThroughStorageApi(supabase, prefix)
   console.log(`Found ${paths.length} Supabase image objects in ${Math.round((Date.now() - listStartedAt) / 1000)}s`)
+  // One R2 listing (1000 keys per request) instead of a HEAD per object.
+  console.log('Listing R2 images…')
+  const r2Index = await images.listLastModified(prefix)
+  console.log(`Found ${r2Index.size} R2 image objects`)
   if (!deleteSource)
     console.warn('--keep-source: Supabase copies stay and will not be removed by account, org or app deletion. Run again without it.')
 
@@ -155,6 +161,19 @@ async function main() {
   let removed = 0
   const failures: { path: string, error: string }[] = []
   let processed = 0
+  const toRemove: string[] = []
+  async function flushRemovals() {
+    const batch = toRemove.splice(0, toRemove.length)
+    if (batch.length === 0)
+      return
+    const { error } = await supabase.storage.from(BUCKET).remove(batch)
+    if (error) {
+      for (const path of batch)
+        failures.push({ path, error: `remove from Supabase failed: ${error.message}` })
+      return
+    }
+    removed += batch.length
+  }
   const startedAt = Date.now()
   const progress = setInterval(() => {
     const seconds = (Date.now() - startedAt) / 1000
@@ -167,7 +186,7 @@ async function main() {
     try {
       // Same rule as the backend legacy import: a Supabase copy newer than R2
       // (an old CLI re-upload) replaces it; an older one is a leftover.
-      const r2ModifiedAt = await images.lastModified(path)
+      const r2ModifiedAt = r2Index.get(path) ?? null
       const comparable = Number.isFinite(updatedAt)
       const supabaseIsNewer = !r2ModifiedAt || (comparable && updatedAt > r2ModifiedAt.getTime())
       const copy = overwrite || supabaseIsNewer
@@ -191,11 +210,11 @@ async function main() {
         skipped++
       }
 
+      // Only objects now safely in R2 are queued for removal from Supabase.
       if (apply && deleteSource) {
-        const { error } = await supabase.storage.from(BUCKET).remove([path])
-        if (error)
-          throw error
-        removed++
+        toRemove.push(path)
+        if (toRemove.length >= REMOVE_BATCH_SIZE)
+          await flushRemovals()
       }
     }
     catch (error) {
@@ -205,6 +224,7 @@ async function main() {
       processed++
     }
   })
+  await flushRemovals()
   clearInterval(progress)
 
   console.log(`${apply ? 'Copied' : 'Would copy'}: ${copied}`)
