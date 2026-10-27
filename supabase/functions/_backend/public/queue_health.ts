@@ -328,7 +328,7 @@ async function loadQueueIntervals(client: Awaited<ReturnType<typeof getPgClient>
   return buildQueueIntervalMap(rows)
 }
 
-async function fetchQueueMetrics(
+export async function fetchQueueMetrics(
   client: Awaited<ReturnType<typeof getPgClient>>,
   queueName: string,
   expectedIntervalSeconds: number | null,

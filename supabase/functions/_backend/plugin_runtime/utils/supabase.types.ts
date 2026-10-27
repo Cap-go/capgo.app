@@ -4627,7 +4627,7 @@ export type Database = {
       process_subscribed_orgs: { Args: never; Returns: undefined }
       queue_cron_stat_app_for_app: {
         Args: { p_app_id: string; p_delay_seconds?: number; p_org_id?: string }
-        Returns: undefined
+        Returns: boolean
       }
       queue_cron_stat_org_for_org: {
         Args: { customer_id: string; org_id: string }

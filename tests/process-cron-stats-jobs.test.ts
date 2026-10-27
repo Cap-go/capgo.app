@@ -101,4 +101,46 @@ describe('cron_stat_app queue resilience', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]?.readable).toBe(true)
   })
+
+  it('releases the stats burst 30 apps per minute', async () => {
+    const prefix = `com.cron.stagger.${randomUUID().slice(0, 8)}`
+    // One more than a slot, so the 31st queued app must land in the next minute.
+    const appIds = Array.from({ length: 31 }, (_, index) => `${prefix}.${index}`)
+    await executeSQL(
+      `INSERT INTO public.apps (app_id, icon_url, owner_org, name)
+        SELECT id, '', $2, id FROM unnest($1::varchar[]) AS id`,
+      [appIds, ORG_ID_CRON_QUEUE],
+    )
+    await executeSQL(
+      `INSERT INTO public.app_versions (app_id, name, owner_org)
+        SELECT id, '1.0.0', $2 FROM unnest($1::varchar[]) AS id`,
+      [appIds, ORG_ID_CRON_QUEUE],
+    )
+
+    try {
+      // pgmq stamps enqueued_at with now(), so this run's messages share the
+      // statement timestamp returned here.
+      const [run] = await executeSQL(
+        `SELECT now()::text AS started_at FROM (SELECT public.process_cron_stats_jobs()) AS job`,
+      )
+      const rows = await executeSQL(
+        `SELECT EXTRACT(EPOCH FROM (vt - enqueued_at))::float AS delay_seconds
+          FROM pgmq.q_cron_stat_app
+          WHERE enqueued_at = $1::timestamptz
+          ORDER BY msg_id`,
+        [run?.started_at],
+      )
+
+      expect(rows.length).toBeGreaterThanOrEqual(appIds.length)
+      rows.forEach((row: { delay_seconds: number }, index: number) => {
+        expect(row.delay_seconds).toBeCloseTo(Math.floor(index / 30) * 60, -1)
+      })
+    }
+    finally {
+      await executeSQL(`DELETE FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = ANY($1::varchar[])`, [appIds])
+      await executeSQL(`DELETE FROM public.app_versions WHERE app_id = ANY($1::varchar[])`, [appIds])
+      await executeSQL(`DELETE FROM public.apps WHERE app_id = ANY($1::varchar[])`, [appIds])
+    }
+  })
 })
+

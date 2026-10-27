@@ -46,7 +46,9 @@ END;
 $$;
 
 -- A new trailing parameter would leave the 2-argument signature callable and
--- make 2-argument calls ambiguous, so replace the function instead.
+-- make 2-argument calls ambiguous, so replace the function instead. It now
+-- returns whether it sent a message, so stats_jobs only spends a stagger slot
+-- on apps it actually queued.
 DROP FUNCTION IF EXISTS "public"."queue_cron_stat_app_for_app"(character varying, uuid);
 
 CREATE FUNCTION "public"."queue_cron_stat_app_for_app"(
@@ -54,7 +56,7 @@ CREATE FUNCTION "public"."queue_cron_stat_app_for_app"(
   "p_org_id" uuid DEFAULT NULL::uuid,
   "p_delay_seconds" integer DEFAULT 0
 )
-RETURNS void LANGUAGE "plpgsql" SECURITY DEFINER SET "search_path" TO '' AS $$
+RETURNS boolean LANGUAGE "plpgsql" SECURITY DEFINER SET "search_path" TO '' AS $$
 DECLARE
   v_org_id uuid;
   v_queued_org_id uuid;
@@ -62,7 +64,7 @@ DECLARE
   v_refresh_ttl CONSTANT interval := INTERVAL '5 minutes';
 BEGIN
   IF p_app_id IS NULL OR p_app_id = '' THEN
-    RETURN;
+    RETURN false;
   END IF;
 
   SELECT a.owner_org INTO v_org_id
@@ -70,7 +72,7 @@ BEGIN
   WHERE a.app_id = p_app_id
     AND (p_org_id IS NULL OR a.owner_org = p_org_id);
   IF v_org_id IS NULL THEN
-    RETURN;
+    RETURN false;
   END IF;
 
   INSERT INTO public.org_stats_refresh_state (org_id)
@@ -97,7 +99,7 @@ BEGIN
       UPDATE public.app_stats_refresh_state
       SET stats_refresh_requested_at = v_now_utc
       WHERE app_id = p_app_id;
-      RETURN;
+      RETURN false;
     END IF;
   END IF;
 
@@ -122,7 +124,7 @@ BEGIN
     SELECT 1 FROM pgmq.q_cron_stat_app queued_job
     WHERE queued_job.message->'payload'->>'appId' = p_app_id
   ) THEN
-    RETURN;
+    RETURN false;
   END IF;
 
   PERFORM pgmq.send('cron_stat_app', pg_catalog.jsonb_build_object(
@@ -134,6 +136,7 @@ BEGIN
       'todayOnly', false
     )
   ), GREATEST(p_delay_seconds, 0));
+  RETURN true;
 END;
 $$;
 ALTER FUNCTION "public"."queue_cron_stat_app_for_app"(character varying, uuid, integer) OWNER TO "postgres";
@@ -182,12 +185,13 @@ BEGIN
     INNER JOIN public.apps a ON a.app_id = active_apps.app_id
   )
   LOOP
-    PERFORM public.queue_cron_stat_app_for_app(
+    IF public.queue_cron_stat_app_for_app(
       app_record.app_id,
       app_record.owner_org,
       (v_index / v_per_minute) * 60
-    );
-    v_index := v_index + 1;
+    ) THEN
+      v_index := v_index + 1;
+    END IF;
   END LOOP;
 END;
 $$;
