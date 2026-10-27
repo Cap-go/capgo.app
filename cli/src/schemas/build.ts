@@ -104,6 +104,7 @@ export const buildRequestOptionsSchema = optionsBaseSchema.extend({
   syncIosVersion: z.boolean().optional(),
   syncAndroidVersion: z.boolean().optional(),
   playstoreUpload: z.boolean().optional(),
+  useStoredCredentials: z.boolean().optional(),
   submitToStoreReview: z.boolean().optional(),
   storeReleaseName: z.string().min(1).optional(),
   storeReleaseNotes: z.string().min(1).optional(),
@@ -187,6 +188,43 @@ export const buildOptionsPayloadSchema = z.object({
 })
 
 export type BuildOptionsPayload = z.infer<typeof buildOptionsPayloadSchema>
+
+// ============================================================================
+// Build Zip (offline native project archive) Schemas
+// ============================================================================
+
+export const buildZipOptionsSchema = z.object({
+  platform: z.enum(['ios', 'android']).optional(),
+  path: z.string().optional(),
+  nodeModules: z.string().optional(),
+  syncIosVersion: z.boolean().optional(),
+  syncAndroidVersion: z.boolean().optional(),
+  output: z.string().optional(),
+  json: z.boolean().optional(),
+})
+
+export type BuildZipOptions = z.infer<typeof buildZipOptionsSchema>
+
+export const buildZipResultSchema = z.object({
+  app_id: z.string(),
+  platform: z.enum(['ios', 'android']),
+  filename: z.string(),
+  size_bytes: z.number().int(),
+  sha256: z.string(),
+  ios_dependency_manager: z.enum(['cocoapods', 'spm']).optional(),
+  // Non-secret build_options derived from the local project layout (same keys as `build request`).
+  build_options: buildOptionsPayloadSchema.pick({
+    platform: true,
+    iosSourceDir: true,
+    iosAppDir: true,
+    iosProjectDir: true,
+    androidSourceDir: true,
+    androidAppDir: true,
+    androidProjectDir: true,
+  }),
+})
+
+export type BuildZipResult = z.infer<typeof buildZipResultSchema>
 
 // ============================================================================
 // Credential File Schemas

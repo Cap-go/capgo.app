@@ -42,7 +42,7 @@ interface ResolvedTrackingId {
   orgId?: string
 }
 
-interface TrackEventBody extends TrackOptions {
+export interface TrackEventBody extends TrackOptions {
   // Older clients may still send these fields. They are discarded for
   // analytics; icon is read only by the explicit Realtime console path.
   icon?: string
@@ -608,8 +608,16 @@ function logAcceptedEvent(c: Context, identity: AcceptedEventIdentity, acceptedA
 
 /** Accepts authenticated client events while reserving creation evidence for database handlers. */
 app.post('/', middlewareAuth(), async (c) => {
-  const acceptedAt = Date.now()
   const body = await parseBody<TrackEventBody>(c)
+  return c.json({ ...BRES, ...await acceptTrackEvent(c, body) })
+})
+
+/**
+ * Processes one client event exactly like POST /private/events. Server-side flows
+ * (bundle upload sessions) call it so their events keep the same tracking side effects.
+ */
+export async function acceptTrackEvent(c: Context<MiddlewareKeyVariables>, body: TrackEventBody): Promise<{ event_id: string }> {
+  const acceptedAt = Date.now()
   if (body.event === 'Org Created')
     throw quickError(400, 'server_owned_event', 'This event is recorded from committed database changes')
   if (body.client_event_id !== undefined && !isValidClientEventId(body.client_event_id))
@@ -657,7 +665,7 @@ app.post('/', middlewareAuth(), async (c) => {
     // disabled they are the only login signal, so the AI onboarding page must see them too.
     await markAiOnboardingAgentConnected(c, trackedBody.channel, trackedBody.event)
     logAcceptedEvent(c, identity, acceptedAt)
-    return c.json({ ...BRES, event_id: identity.event_id })
+    return { event_id: identity.event_id }
   }
 
   const apikeyId = c.get('apikey')?.id
@@ -742,5 +750,5 @@ app.post('/', middlewareAuth(), async (c) => {
 
   // Acceptance confirms durable PostHog persistence, independently of provider delivery.
   logAcceptedEvent(c, identity, acceptedAt)
-  return c.json({ ...BRES, event_id: identity.event_id })
-})
+  return { event_id: identity.event_id }
+}

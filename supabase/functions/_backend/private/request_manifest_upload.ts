@@ -27,7 +27,7 @@ function manifestUploadError(error: ManifestUploadRequestError): never {
   return quickError(error.status, error.code, error.message, error.moreInfo)
 }
 
-function manifestUploadPublicUrl(c: Parameters<typeof getEnv>[0]): string {
+export function manifestUploadPublicUrl(c: Parameters<typeof getEnv>[0]): string {
   const configured = getEnv(c, 'FILES_PUBLIC_URL') || getEnv(c, 'PUBLIC_URL')
   if (configured || getRuntimeKey() === 'workerd')
     return configured

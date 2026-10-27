@@ -1,4 +1,5 @@
 import { getRuntimeKey } from 'hono/adapter'
+import { redactSensitiveUrl } from './sensitive_url.ts'
 
 export function cloudlog(message: any) {
   if (getRuntimeKey() === 'workerd') {
@@ -38,4 +39,9 @@ export function cloudlogErr(message: any) {
   else {
     console.error(message)
   }
+}
+
+/** Printer for hono's access logger: same output as its default, with secret path tokens redacted. */
+export function accessLog(message: string, ...rest: string[]) {
+  console.log(redactSensitiveUrl(message), ...rest)
 }

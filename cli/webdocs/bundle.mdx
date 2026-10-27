@@ -282,6 +282,9 @@ npx @capgo/cli@latest bundle zip
 
 🗜️ Create a zip file of your app bundle.
 Returns checksum for use with encryption. Use --json for machine-readable output.
+Works offline: no API key and no calls to Capgo.
+--for-upload produces exactly what 'bundle upload' would send (same checksum, v2 encryption, native packages metadata)
+so the zip can be uploaded through a signed URL. --delta-pack also writes the delta (manifest) files.
 
 **Example:**
 
@@ -299,6 +302,15 @@ npx @capgo/cli@latest bundle zip com.example.app --path ./dist
 | **-j** | <code>boolean</code> | Output in JSON |
 | **--no-code-check** | <code>boolean</code> | Ignore checking if notifyAppReady() is called in source code and index present in root folder |
 | **--ignore-notify-app-ready** | <code>boolean</code> | Skip notifyAppReady() check (not recommended — updates may roll back) |
-| **--key-v2** | <code>boolean</code> | Use encryption v2 |
+| **--key-v2** | <code>string</code> | Use encryption v2. With --for-upload: custom path for private signing key (v2 system), defaults to .capgo_key_v2 |
+| **--key-data-v2** | <code>string</code> | Private signing key (v2 system), used with --for-upload |
+| **--no-key** | <code>boolean</code> | Ignore signing key and produce a clear bundle (with --for-upload) |
+| **--for-upload** | <code>boolean</code> | Produce the exact artifact and metadata 'bundle upload' would send (encryption, checksum, native packages) |
+| **--delta-pack** | <code>string</code> | Also write a delta pack zip (manifest + per-file upload bytes) for delta uploads. Implies --for-upload |
+| **--encrypt-delta** | <code>boolean</code> | Encrypt delta update files (auto-enabled for updater >= 6.14.4) |
+| **--encrypt-partial** | <code>boolean</code> | [DEPRECATED] Use --encrypt-delta instead. Encrypt delta update files |
+| **--disable-brotli** | <code>boolean</code> | Completely disable brotli compression even if updater version supports it |
+| **--force-crc32-checksum** | <code>boolean</code> | Force CRC32 checksum for upload (override auto-detection) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
+| **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
 

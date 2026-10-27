@@ -25,6 +25,7 @@ import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsComm
 import { exportCredentialsCommand, isCredentialsExportInvocation } from './build/credentials-export-command'
 import { sanitizeCredentialsExportTerminalText, writeCredentialsExportStderr } from './build/credentials-export-terminal'
 import { manageCredentialsCommand } from './build/credentials-manage'
+import { deleteRemoteCredentialsCommand, pushRemoteCredentialsCommand, remoteCredentialsStatusCommand } from './build/credentials-remote'
 import { syncIosMarketingVersionCommand } from './build/ios-marketing-version'
 import { iosProvisioningCommand } from './build/ios-provisioning-command'
 import { lastOutputCommand } from './build/last-output-command'
@@ -33,6 +34,7 @@ import { createAppleKeyCommand } from './build/onboarding/asc-key/command'
 import { onboardingBuilderCommand } from './build/onboarding/command'
 import { prescanCommand } from './build/prescan/command'
 import { requestBuildCommand } from './build/request'
+import { zipBuildCommand } from './build/zip-command'
 import { cleanupBundle } from './bundle/cleanup'
 import { checkCompatibility } from './bundle/compatibility'
 import { decryptZip } from './bundle/decrypt'
@@ -459,8 +461,13 @@ bundle
   .description(`🗜️ Create a zip file of your app bundle.
 
 Returns checksum for use with encryption. Use --json for machine-readable output.
+Works offline: no API key and no calls to Capgo.
 
-Example: npx @capgo/cli@latest bundle zip com.example.app --path ./dist`)
+--for-upload produces exactly what 'bundle upload' would send (same checksum, v2 encryption, native packages metadata)
+so the zip can be uploaded through a signed URL. --delta-pack also writes the delta (manifest) files.
+
+Example: npx @capgo/cli@latest bundle zip com.example.app --path ./dist
+Example: npx @capgo/cli@latest bundle zip com.example.app --for-upload --delta-pack ./delta.zip --json`)
   .action(zipBundle)
   .option('-p, --path <path>', `Path of the folder to upload, if not provided it will use the webDir set in capacitor.config`)
   .option('-b, --bundle <bundle>', `Bundle version number to name the zip file`)
@@ -468,8 +475,17 @@ Example: npx @capgo/cli@latest bundle zip com.example.app --path ./dist`)
   .option('-j, --json', `Output in JSON`)
   .option('--no-code-check', `Ignore checking if notifyAppReady() is called in source code and index present in root folder`)
   .option('--ignore-notify-app-ready', optionDescriptions.ignoreNotifyAppReady)
-  .option('--key-v2', `Use encryption v2`)
+  .option('--key-v2 [key]', `Use encryption v2. With --for-upload: custom path for private signing key (v2 system), defaults to .capgo_key_v2`)
+  .option('--key-data-v2 <keyDataV2>', `Private signing key (v2 system), used with --for-upload`)
+  .option('--no-key', `Ignore signing key and produce a clear bundle (with --for-upload)`)
+  .option('--for-upload', `Produce the exact artifact and metadata 'bundle upload' would send (encryption, checksum, native packages)`)
+  .option('--delta-pack <file>', `Also write a delta pack zip (manifest + per-file upload bytes) for delta uploads. Implies --for-upload`)
+  .option('--encrypt-delta', `Encrypt delta update files (auto-enabled for updater >= 6.14.4)`)
+  .option('--encrypt-partial', `[DEPRECATED] Use --encrypt-delta instead. Encrypt delta update files`)
+  .option('--disable-brotli', `Completely disable brotli compression even if updater version supports it`)
+  .option('--force-crc32-checksum', `Force CRC32 checksum for upload (override auto-detection)`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
+  .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
 
 const app = program
   .command('app')
@@ -1159,7 +1175,8 @@ Examples:
   .option('--ios-scheme <scheme>', 'iOS: Xcode scheme to build (default: App)')
   .option('--ios-target <target>', 'iOS: Xcode target for reading build settings (default: same as scheme)')
   .option('--xcode-version <version>', 'iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1, 27). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_XCODE_VERSION) > saved credentials')
-  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']).default('app_store'))
+  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']))
+  .option('--use-stored-credentials', 'Use the signing credentials stored on Capgo for this app (see "build credentials push"). Requires app admin rights (app settings permission) on the app. Credentials given by flags, env or a local saved file still take precedence; Capgo validates the merged set.')
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path mapping (repeatable)', collect, [])
   .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
   .option('--cache-key <key>', 'Custom compilation cache key for this build (e.g. rc, prod, feature-branch). Use to share or isolate cache between environments. Precedence over the default appId-only key; ignored when --no-cache is set.')
@@ -1209,6 +1226,25 @@ Examples:
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--api-host <apiHost>', optionDescriptions.apiHost)
   .option('--files-host <filesHost>', optionDescriptions.filesHost)
+
+build
+  .command('zip [appId]')
+  .summary('Zip the native project for a build, offline')
+  .description(`Zip the native project exactly like 'build request' does, without uploading it.
+
+Works offline: no API key and no calls to Capgo. Use it when an agent uploads the archive
+through a signed URL (Capgo MCP). With --json, prints the archive path, size, sha256 and the
+non-secret build options derived from the project.
+
+Example: npx @capgo/cli@latest build zip com.example.app --platform ios --json`)
+  .action(zipBuildCommand)
+  .option('--platform <platform>', `Target platform: ios or android (required)`)
+  .option('--path <path>', `Path to the project directory to build (default: current directory)`)
+  .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
+  .option('--sync-ios-version', 'iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.')
+  .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal.')
+  .option('--output <file>', `Path of the zip file to write (default: <appId>_<platform>_native.zip)`)
+  .option('-j, --json', `Output in JSON`)
 
 build
   .command('sync-ios-version')
@@ -1442,7 +1478,7 @@ Examples:
   .option('--apple-id <email>', 'iOS: Apple ID email for app-specific password uploads (alternative to App Store Connect API key)')
   .option('--apple-app-specific-password <password>', 'iOS: App-specific password (xxxx-xxxx-xxxx-xxxx) for TestFlight uploads')
   .option('--apple-app-id <id>', 'iOS: Numeric App Store Connect app id (required together with --apple-id and --apple-app-specific-password)')
-  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode').choices(['app_store', 'ad_hoc']).default('app_store'))
+  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode').choices(['app_store', 'ad_hoc']))
   // Android options
   .optionsGroup('Android options:')
   .option('--keystore <path>', 'Path to keystore file (.keystore or .jks)')
@@ -1514,6 +1550,53 @@ Example:
   .option('--appId <appId>', 'App ID (auto-detected from capacitor.config if omitted)')
   .option('--platform <platform>', 'Platform (only ios is supported)')
   .option('--local', 'Migrate from local .capgo-credentials.json instead of global')
+
+buildCredentials
+  .command('push [appId]')
+  .summary('Store saved credentials encrypted on Capgo')
+  .description(`Store this machine's saved build credentials for one platform on Capgo, encrypted.
+
+Builds can then use them without sending secrets (build request --use-stored-credentials,
+or the hosted Capgo MCP). Requires app settings permission (app admin) on the app, and so
+do builds that use the stored credentials. Custom env names that load code into every
+build (NODE_OPTIONS, JAVA_TOOL_OPTIONS, GRADLE_OPTS, LD_PRELOAD, PATH, ...) cannot be stored.
+Only key names are printed; values never are.
+
+Examples:
+  npx @capgo/cli@latest build credentials push com.example.app --platform ios
+  npx @capgo/cli@latest build credentials push --platform android --mode merge`)
+  .action(pushRemoteCredentialsCommand)
+  .option('--platform <platform>', 'Platform to store: ios or android (required)')
+  .addOption(new Option('--mode <mode>', 'replace: overwrite stored keys (default). merge: keep stored keys not in the local set').choices(['replace', 'merge']))
+  .option('--local', 'Read from local .capgo-credentials.json only')
+  .option('--global', 'Read from ~/.capgo-credentials/credentials.json only')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+buildCredentials
+  .command('remote-status [appId]')
+  .summary('Show credentials stored on Capgo')
+  .description(`Show which build credentials are stored on Capgo for an app (key names and
+non-secret facts only) and what is still missing to build.
+
+Example: npx @capgo/cli@latest build credentials remote-status com.example.app`)
+  .action(remoteCredentialsStatusCommand)
+  .option('--platform <platform>', 'Only show ios or android')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+buildCredentials
+  .command('remote-delete [appId]')
+  .summary('Delete credentials stored on Capgo')
+  .description(`Delete the build credentials stored on Capgo for one platform. Local saved
+credentials are not touched.
+
+Example: npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes`)
+  .action(deleteRemoteCredentialsCommand)
+  .option('--platform <platform>', 'Platform to delete: ios or android (required)')
+  .option('-y, --yes', 'Do not ask for confirmation')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
 
 program
   .command('notifications')
