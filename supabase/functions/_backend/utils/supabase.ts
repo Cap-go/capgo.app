@@ -983,6 +983,15 @@ export async function createApiKey(c: Context, userId: string) {
   let inTransaction = false
   try {
     pgClient = await checkoutPgClient(pgPool)
+    // on_user_update runs this for every profile change, and almost every user
+    // already has keys. Bail out before locking the user row; the locked
+    // recheck below still guards the rare first provisioning.
+    const existingKeys = await pgClient.query<{ has_keys: boolean }>(
+      'SELECT EXISTS (SELECT 1 FROM public.apikeys WHERE user_id = $1::uuid) AS has_keys',
+      [userId],
+    )
+    if (existingKeys.rows[0]?.has_keys)
+      return
     await beginWriteTransaction(pgClient)
     inTransaction = true
     await pgClient.query(`SET LOCAL lock_timeout = '5s'`)

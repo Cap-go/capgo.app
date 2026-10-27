@@ -234,6 +234,10 @@ describe('tracking CLI and MCP onboarding', () => {
     await markAppOnboardingLoginFromTracking(context(), 'mcp', 'MCP Tool Invoked')
     expect(order).not.toContain('write')
     expect(mocks.track).not.toHaveBeenCalled()
+    // Every CLI/MCP event lands here: no-op apps must not take the org or row lock.
+    expect(mocks.transaction).not.toHaveBeenCalled()
+    expect(mocks.permission).not.toHaveBeenCalled()
+    expect(statements.some(query => query.sql.includes('FOR UPDATE') || query.sql.includes('lock_rbac_orgs'))).toBe(false)
   })
 
   it('promotes CLI to MCP with the existing timestamp and history behavior', async () => {
