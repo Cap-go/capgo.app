@@ -85,6 +85,8 @@ export interface SubscriptionCheckoutRequest {
   extraMau?: number
   // One of the currencies returned by private/plan_prices.
   currency?: string
+  // Buy the full price instead of the regional discount.
+  standardPrice?: boolean
 }
 
 export async function startSubscriptionCheckout(request: SubscriptionCheckoutRequest): Promise<CheckoutSession | null> {
@@ -104,6 +106,7 @@ export async function startSubscriptionCheckout(request: SubscriptionCheckoutReq
       embedded: true,
       ...(request.extraMau ? { extraMau: request.extraMau } : {}),
       ...(request.currency ? { currency: request.currency } : {}),
+      ...(request.standardPrice ? { standardPrice: true } : {}),
     }),
   })
   if (error || !data) {

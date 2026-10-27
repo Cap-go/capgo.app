@@ -46,6 +46,15 @@ describe('markAiOnboardingAgentConnected', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
+  it('only counts the prompt key of the organization being set up', async () => {
+    const auth = { authType: 'apikey', userId: 'u', apikey: { name: AI_ONBOARDING_API_KEY_NAME, rbac_id: '00000000-0000-4000-8000-0000000000aa' } }
+    await markAiOnboardingAgentConnected(context(auth), 'mcp', 'MCP Tool Invoked')
+    const query = JSON.stringify(execute.mock.calls[0]![0])
+    expect(query).toContain('ai_setup_org_id')
+    expect(query).toContain('role_bindings')
+    expect(query).toContain('00000000-0000-4000-8000-0000000000aa')
+  })
+
   it('stays best effort when the database is unavailable', async () => {
     getPgClient.mockRejectedValueOnce(new Error('connection refused'))
     const auth = { authType: 'apikey', userId: 'u', apikey: { name: AI_ONBOARDING_API_KEY_NAME } }
