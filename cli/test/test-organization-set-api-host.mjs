@@ -29,9 +29,24 @@ try {
   })
   assert.equal(result.error, null)
   assert.equal(request.url, 'https://self-hosted.example.com/functions/v1/app/com.example.app')
-  assert.equal(request.init.redirect, 'error')
+  assert.equal(request.init.redirect, 'manual')
   assert.equal(request.init.headers.Authorization, 'test-api-key', 'no Supabase anon key: the API key is the credential')
   assert.equal(request.init.headers.capgo_api, '2025-10-01')
+
+  // Redirects are not followed: a 3xx comes back as an error, without a second request.
+  let calls = 0
+  globalThis.fetch = async () => {
+    calls++
+    return new Response(null, { status: 302, headers: { Location: 'https://elsewhere.example.com/' } })
+  }
+  const redirected = await invokeCapgoCliApi('app/com.example.app', {
+    apikey: 'test-api-key',
+    method: 'GET',
+    apiHost: 'https://self-hosted.example.com/functions/v1',
+  })
+  assert.equal(redirected.data, null)
+  assert.ok(redirected.error)
+  assert.equal(calls, 1)
 }
 finally {
   globalThis.fetch = originalFetch

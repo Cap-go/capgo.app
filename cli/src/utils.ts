@@ -965,7 +965,7 @@ export async function getRemoteConfig(silent = false, signal?: AbortSignal, apik
       const key = configProbeKey(host, apikey)
       const response = await fetch(`${host}/private/config`, {
         ...(signal ? { signal } : {}),
-        redirect: 'error',
+        redirect: 'manual',
         headers: buildCliRequestHeaders(key ? { capgkey: key } : undefined),
       })
       if (!response.ok)
@@ -1007,7 +1007,7 @@ export async function getRemoteFileConfig(apikey?: string) {
   try {
     const key = configProbeKey(localConfig.hostFilesApi, apikey)
     const response = await fetch(`${localConfig.hostFilesApi}/files/config`, {
-      redirect: 'error',
+      redirect: 'manual',
       headers: buildCliRequestHeaders(key ? { capgkey: key } : undefined),
     })
     if (!response.ok) {
@@ -1142,7 +1142,7 @@ export async function invokeCapgoCliApi<T = any>(
   try {
     const response = await doFetch(url, {
       method,
-      redirect: 'error',
+      redirect: 'manual',
       headers: buildCliRequestHeaders({
         'Content-Type': 'application/json',
         'Authorization': options.apikey,
