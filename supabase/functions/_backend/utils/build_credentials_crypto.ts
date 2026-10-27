@@ -1,13 +1,15 @@
 /**
  * Encryption + upload-capability helpers for stored native build credentials.
  *
- * - Credentials are sealed with AES-256-GCM. The AES key is derived (HKDF-SHA-256) from the
- *   BUILD_CREDENTIALS_ENCRYPTION_KEY runtime secret; the additional authenticated data binds
- *   the ciphertext to app_id + platform so a row cannot be replayed onto another app.
+ * - Credentials are sealed with AES-256-GCM. The AES key is derived (HKDF-SHA-256, with a
+ *   build-credentials label) from BUILD_CREDENTIALS_ENCRYPTION_KEY, or from API_SECRET when
+ *   that optional dedicated key is not set; the additional authenticated data binds the
+ *   ciphertext to app_id + platform so a row cannot be replayed onto another app.
  * - key_version is a fingerprint of the secret that sealed the row. Rotation: set the new
  *   secret in BUILD_CREDENTIALS_ENCRYPTION_KEY and the old one in
- *   BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS; rows are re-sealed with the current key on
- *   their next write (and on read, via needsReseal).
+ *   BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS (API_SECRET is the implicit previous key, so
+ *   moving off the fallback needs nothing else); rows are re-sealed with the current key on
+ *   their next write and on read, via needsReseal.
  * - Upload tokens are HMAC-SHA-256 capabilities signed with BUILD_CREDENTIALS_UPLOAD_SECRET
  *   (falls back to API_SECRET, same pattern as notification secrets). They are single use:
  *   the signed nonce is recorded in build_credentials_upload_token_uses on first upload.
@@ -26,6 +28,7 @@ export const BUILD_CREDENTIALS_UPLOAD_TTL_SECONDS = 10 * 60
 
 const ENVELOPE_VERSION = 'v1'
 const MIN_SECRET_BYTES = 32
+const MIN_FALLBACK_SECRET_BYTES = 16
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -53,6 +56,11 @@ function toHex(buffer: ArrayBuffer): string {
 
 function isStrongSecret(secret: string | undefined): secret is string {
   return !!secret && encoder.encode(secret).byteLength >= MIN_SECRET_BYTES
+}
+
+/** API_SECRET already guards internal service calls; HKDF still separates this use of it. */
+function isUsableFallbackSecret(secret: string | undefined): secret is string {
+  return !!secret && encoder.encode(secret).byteLength >= MIN_FALLBACK_SECRET_BYTES
 }
 
 export async function buildCredentialsKeyVersion(secret: string): Promise<string> {
@@ -150,12 +158,17 @@ export async function openBuildCredentials(input: {
 
 /** Runtime keyring; 503 when the encryption key is not configured (feature unavailable). */
 export function getBuildCredentialsKeyring(c: Context): BuildCredentialsKeyring {
-  const current = getEnv(c, BUILD_CREDENTIALS_ENCRYPTION_KEY_ENV)
-  if (!isStrongSecret(current)) {
+  const dedicated = getEnv(c, BUILD_CREDENTIALS_ENCRYPTION_KEY_ENV)
+  const apiSecret = getEnv(c, 'API_SECRET')
+  const current = isStrongSecret(dedicated) ? dedicated : (isUsableFallbackSecret(apiSecret) ? apiSecret : undefined)
+  if (!current) {
     throw quickError(503, 'build_credentials_unavailable', 'Stored build credentials are not configured on this server', {}, undefined, { alert: false })
   }
-  const previous = getEnv(c, BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS_ENV)
-  return { current, previous: isStrongSecret(previous) ? previous : undefined }
+  const explicitPrevious = getEnv(c, BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS_ENV)
+  const previous = isStrongSecret(explicitPrevious)
+    ? explicitPrevious
+    : (current !== apiSecret && isUsableFallbackSecret(apiSecret) ? apiSecret : undefined)
+  return { current, previous }
 }
 
 // ---------------------------------------------------------------------------
