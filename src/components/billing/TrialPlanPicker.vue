@@ -81,6 +81,9 @@ function openPicker() {
             </span>
           </span>
           <span class="shrink-0 tabular-nums text-slate-600 dark:text-slate-300">
+            <span v-if="option.regularAmount" data-test="trial-plan-regular-price" class="mr-1 text-slate-400 line-through dark:text-slate-500" :title="t('plans-regional-discount-requirement-generic')">
+              {{ formatStripeAmount(option.regularAmount, option.currency) }}
+            </span>
             {{ priceLabel(option) }}/{{ t('mo') }}
           </span>
         </label>
