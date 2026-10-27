@@ -141,6 +141,9 @@ const appsQuery = useQuery({
   query: () => fetchAppsPage(currentOrganization.value!.gid, currentPage.value, searchQuery.value.trim()),
   // Don't fetch apps if user lacks security access - data would be rejected anyway
   enabled: () => route.path === '/apps' && !!currentOrganization.value?.gid && !lacksSecurityAccess.value,
+  // Show the cached list at once, but always refresh it when the page opens: apps can be
+  // renamed, deleted or transferred elsewhere (other pages, the CLI) without touching this cache.
+  refetchOnMount: 'always',
   // Keep the current rows on screen while the next page or search of the same organization loads.
   placeholderData: (previous, previousEntry) => previousEntry?.key[2] === currentOrganization.value?.gid ? previous : undefined,
 })

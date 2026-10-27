@@ -501,7 +501,9 @@ async function submit(form: { first_name: string, last_name: string, email: stri
 
   if (main.user?.email !== form.email) {
     const data = await capgo.auth.updateUser({ email: form.email })
-    seedAccountForm()
+    // The new address only applies once confirmed; keep showing the current one. The other
+    // fields keep the user's edits until the profile save below returns.
+    accountEmail.value = main.user.email ?? ''
     accountSubmitted.value = false
     if (data.error && data.error.name === 'AuthApiError') {
       isLoading.value = false
@@ -528,6 +530,8 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     toast.success(t('account-updated-succ'))
   }
   main.user = usr
+  // Show what was actually saved (e.g. trimmed or normalized values).
+  seedAccountForm()
   isLoading.value = false
 }
 
