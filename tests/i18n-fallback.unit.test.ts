@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  changeLocale: vi.fn(),
   toast: {
     error: vi.fn(),
     info: vi.fn(),
   },
-}))
-
-vi.mock('@formkit/vue', () => ({
-  changeLocale: mocks.changeLocale,
 }))
 
 vi.mock('vue-sonner', () => ({
@@ -19,7 +14,6 @@ vi.mock('vue-sonner', () => ({
 describe('i18n remote message loading', () => {
   beforeEach(() => {
     vi.resetModules()
-    mocks.changeLocale.mockReset()
     mocks.toast.error.mockReset()
     mocks.toast.info.mockReset()
     vi.stubGlobal('localStorage', {
@@ -53,7 +47,6 @@ describe('i18n remote message loading', () => {
 
     expect(selectedLanguage).toBe('en')
     expect(i18n.global.locale.value).toBe('en')
-    expect(mocks.changeLocale).not.toHaveBeenCalled()
     expect(mocks.toast.info).toHaveBeenCalledWith('Translation is being prepared. Try again in a bit.')
   })
 
@@ -67,7 +60,6 @@ describe('i18n remote message loading', () => {
 
     expect(selectedLanguage).toBe('en')
     expect(i18n.global.locale.value).toBe('en')
-    expect(mocks.changeLocale).not.toHaveBeenCalled()
     expect(mocks.toast.error).toHaveBeenCalledWith('This language is not available right now.')
   })
 
@@ -112,7 +104,6 @@ describe('i18n remote message loading', () => {
 
     expect(selectedLanguage).toBe('fr')
     expect(i18n.global.locale.value).toBe('fr')
-    expect(mocks.changeLocale).toHaveBeenCalledWith('fr')
     expect(request).toEqual({ targetLanguage: 'fr' })
     expect(i18n.global.t('credits-flexibility-cta-description')).toBe(
       'Depassez les limites de votre plan en achetant des credits si besoin.',

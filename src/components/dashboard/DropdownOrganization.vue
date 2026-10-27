@@ -166,7 +166,9 @@ async function onDropdownToggle() {
 
 onMounted(async () => {
   isOrganizationDropdownMounted = true
-  await organizationStore.fetchOrganizations()
+  // The auth guard loaded the organizations just before the shell mounted. Forcing a second
+  // fetch replaced currentOrganization and made every page reload its data at startup.
+  await organizationStore.dedupFetchOrganizations()
   if (!isOrganizationDropdownMounted)
     return
 

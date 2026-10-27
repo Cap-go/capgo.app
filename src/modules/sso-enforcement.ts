@@ -52,71 +52,104 @@ export function clearSsoEnforcementCache(): void {
   catch {}
 }
 
+type SsoCheckOutcome = 'allowed' | 'sso_required' | 'check_failed'
+
+interface SsoCheck {
+  userId: string
+  startedAt: number
+  outcome: Promise<SsoCheckOutcome>
+}
+
+// A check started by prefetchSsoEnforcement() for the navigation in progress.
+let pendingCheck: SsoCheck | undefined
+const PENDING_CHECK_MAX_AGE = 30_000
+
+async function currentSession() {
+  const { data: { session } } = await useConsole().auth.getSession()
+  if (!session)
+    return null
+  const provider = session.user.app_metadata?.provider
+  if (provider && provider !== 'email')
+    return null
+  return session.user.id ? session : null
+}
+
+async function runCheck(session: NonNullable<Awaited<ReturnType<typeof currentSession>>>): Promise<SsoCheckOutcome> {
+  const userId = session.user.id
+  try {
+    const spoofedAdminJwt = await getSpoofedAdminJwt()
+    if (!spoofedAdminJwt && isCacheValid(userId))
+      return 'allowed'
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+    }
+    if (spoofedAdminJwt)
+      headers[SPOOF_ADMIN_AUTHORIZATION_HEADER] = `Bearer ${spoofedAdminJwt}`
+
+    const response = await fetch(`${defaultApiHost}/private/sso/check-enforcement`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        email: session.user.email,
+        auth_type: 'password',
+      }),
+    })
+
+    if (!response.ok) {
+      console.error('SSO enforcement check returned error status:', response.status)
+      return 'check_failed'
+    }
+
+    const data: SsoEnforcementResponse = await response.json()
+    if (!data.allowed)
+      return 'sso_required'
+
+    if (!spoofedAdminJwt)
+      setCacheValid(userId)
+    return 'allowed'
+  }
+  catch (e) {
+    // Fail closed: if enforcement check is unreachable, sign user out for safety
+    console.error('SSO enforcement check failed, signing out for security:', e)
+    return 'check_failed'
+  }
+}
+
+/**
+ * Starts the enforcement request as soon as a navigation begins, so it runs alongside the auth
+ * guard's requests instead of after them. The guard below still awaits it and acts on the result.
+ */
+export function prefetchSsoEnforcement(path: string) {
+  if (isPublicRoute(path))
+    return
+  void currentSession().then((session) => {
+    if (session)
+      pendingCheck = { userId: session.user.id, startedAt: Date.now(), outcome: runCheck(session) }
+  }).catch(() => {})
+}
+
 export const install: UserModule = ({ router }) => {
   router.beforeEach(async (to, _from, next) => {
     if (isPublicRoute(to.path))
       return next()
 
-    const capgo = useConsole()
-    const { data: { session } } = await capgo.auth.getSession()
-
+    const session = await currentSession()
     if (!session)
       return next()
 
-    const provider = session.user.app_metadata?.provider
-    if (provider && provider !== 'email')
+    const prefetched = pendingCheck
+    pendingCheck = undefined
+    const outcome = prefetched && prefetched.userId === session.user.id && Date.now() - prefetched.startedAt < PENDING_CHECK_MAX_AGE
+      ? await prefetched.outcome
+      : await runCheck(session)
+
+    if (outcome === 'allowed')
       return next()
 
-    const userId = session.user.id
-    if (!userId)
-      return next()
-
-    try {
-      const spoofedAdminJwt = await getSpoofedAdminJwt()
-      if (!spoofedAdminJwt && isCacheValid(userId))
-        return next()
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-      }
-      if (spoofedAdminJwt)
-        headers[SPOOF_ADMIN_AUTHORIZATION_HEADER] = `Bearer ${spoofedAdminJwt}`
-
-      const response = await fetch(`${defaultApiHost}/private/sso/check-enforcement`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          email: session.user.email,
-          auth_type: 'password',
-        }),
-      })
-
-      if (!response.ok) {
-        console.error('SSO enforcement check returned error status:', response.status)
-        clearSsoEnforcementCache()
-        await capgo.auth.signOut()
-        return next('/login?sso_error=enforcement_check_failed')
-      }
-
-      const data: SsoEnforcementResponse = await response.json()
-      if (!data.allowed) {
-        clearSsoEnforcementCache()
-        await capgo.auth.signOut()
-        return next('/login?sso_required=true')
-      }
-
-      if (!spoofedAdminJwt)
-        setCacheValid(userId)
-    }
-    catch (e) {
-      // Fail closed: if enforcement check is unreachable, sign user out for safety
-      console.error('SSO enforcement check failed, signing out for security:', e)
-      clearSsoEnforcementCache()
-      await capgo.auth.signOut()
-      return next('/login?sso_error=enforcement_check_failed')
-    }
-
-    return next()
+    clearSsoEnforcementCache()
+    await useConsole().auth.signOut()
+    return next(outcome === 'sso_required' ? '/login?sso_required=true' : '/login?sso_error=enforcement_check_failed')
   })
 }

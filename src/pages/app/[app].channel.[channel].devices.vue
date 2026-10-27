@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import type { OrganizationRole } from '~/stores/organization'
 import type { Database } from '~/types/database.types'
-import { FormKit } from '@formkit/vue'
-import { ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
+import FormField from '~/components/forms/FormField.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
@@ -17,6 +17,7 @@ import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -37,6 +38,10 @@ const loading = ref(true)
 const hasDevices = ref(false)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
 const deviceIdInput = ref('')
+const deviceIdErrors = computed(() => validateField(deviceIdInput.value, [
+  rules.required(t('device-id')),
+  rules.uuid(t('device-id')),
+]))
 const role = ref<OrganizationRole | null>(null)
 const { collection: deviceDataCollection } = useDeviceDataCollection(() => channel.value?.version.app_id ?? packageId.value)
 
@@ -340,12 +345,12 @@ watchEffect(async () => {
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('type-device-id')" defer to="#dialog-v2-content">
       <div class="space-y-4">
         <ChannelOverrideRetentionNotice show-label />
-        <FormKit
+        <FormField
           v-model="deviceIdInput"
           type="text"
           :placeholder="t('device-id-placeholder')"
           :label="t('device-id')"
-          validation="required|uuid"
+          :errors="deviceIdErrors"
         />
       </div>
     </Teleport>

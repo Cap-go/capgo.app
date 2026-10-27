@@ -4033,5 +4033,18 @@
   "plans-regional-discount-opt-out": "Not in {country}? Pay the standard price",
   "plans-regional-discount-opt-out-generic": "Card or address from another country? Pay the standard price",
   "plans-regional-discount-requirement": "Regional price for {country}: requires a card and billing address from {country}, otherwise the standard price is charged.",
-  "plans-regional-discount-requirement-generic": "Regional price: requires a card and billing address from your country, otherwise the standard price is charged."
+  "plans-regional-discount-requirement-generic": "Regional price: requires a card and billing address from your country, otherwise the standard price is charged.",
+  "validation-required": "{label} is required.",
+  "validation-email": "Please enter a valid email address.",
+  "validation-length-min": "{label} must be at least {min} characters.",
+  "validation-length-max": "{label} must be at most {max} characters.",
+  "validation-length-between": "{label} must be between {min} and {max} characters.",
+  "validation-min": "{label} must be at least {min}.",
+  "validation-uuid": "{label} must be a valid UUID.",
+  "validation-confirm": "{label} does not match.",
+  "validation-contains-alpha": "{label} must contain alphabetical characters.",
+  "validation-contains-uppercase": "{label} must contain uppercase letters.",
+  "validation-contains-lowercase": "{label} must contain lowercase letters.",
+  "validation-contains-numeric": "{label} must contain numbers.",
+  "validation-contains-symbol": "{label} must contain symbols."
 }

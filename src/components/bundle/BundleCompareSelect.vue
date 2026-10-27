@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { Database } from '~/types/database.types'
-import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
+import FormField from '~/components/forms/FormField.vue'
 import { useConsole } from '~/services/console'
 import { readAllConsoleRows } from '~/services/consoleRows'
 import { formatLocalDate } from '~/services/date'
@@ -466,11 +466,12 @@ watch(
           class="mt-1 flex w-full min-w-0 flex-col overflow-hidden d-dropdown-content rounded-lg border border-slate-200 bg-white p-2 shadow-lg z-50 dark:border-slate-700 dark:bg-slate-900"
         >
           <div class="min-w-0 p-2">
-            <FormKit
+            <FormField
               v-model="compareSearch"
               :prefix-icon="IconSearch"
               :placeholder="searchPlaceholder"
-              :classes="{ outer: 'mb-0! w-full' }"
+              :aria-label="searchPlaceholder"
+              outer-class="mb-0! w-full"
             />
           </div>
           <div class="max-h-64 min-w-0 overflow-x-hidden overflow-y-auto">

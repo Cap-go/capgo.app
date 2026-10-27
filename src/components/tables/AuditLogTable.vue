@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
-import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
+import FormField from '~/components/forms/FormField.vue'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { useDialogV2Store } from '~/stores/dialogv2'
@@ -545,15 +545,14 @@ onUnmounted(() => {
       </div>
 
       <div class="flex overflow-hidden md:w-auto">
-        <FormKit
+        <FormField
           v-model="search"
           :placeholder="t('search-by-record-id')"
+          :aria-label="t('search-by-record-id')"
           :prefix-icon="IconSearch"
           :disabled="isLoading"
           enterkeyhint="send"
-          :classes="{
-            outer: 'mb-0! md:w-96',
-          }"
+          outer-class="mb-0! md:w-96"
         />
       </div>
     </div>

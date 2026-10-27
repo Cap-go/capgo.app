@@ -1,8 +1,8 @@
 import type { Ref } from 'vue'
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera'
 import { Filesystem } from '@capacitor/filesystem'
-import { setErrors } from '@formkit/core'
 import mime from 'mime'
+import { toast } from 'vue-sonner'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { useConsole } from './console'
@@ -12,6 +12,22 @@ const capgo = useConsole()
 const SIGNED_IMAGE_STORAGE_PATH_REGEX = /\/storage\/v1\/object\/(?:public\/|sign\/)?images\/(.+)$/
 const LEADING_SLASHES_REGEX = /^\/+/
 const IMAGES_PREFIX_REGEX = /^images\//
+
+/** Receives the error message to show when a photo upload fails. */
+export type PhotoErrorHandler = (message: string) => void
+/**
+ * Either a callback that displays the error, or a legacy form id (ignored): the error is then shown as a toast.
+ */
+export type PhotoErrorTarget = string | PhotoErrorHandler
+
+function reportPhotoError(target: PhotoErrorTarget, message: string) {
+  if (typeof target === 'function') {
+    target(message)
+    return
+  }
+  if (message)
+    toast.error(message)
+}
 
 function normalizeImageStoragePath(path?: string | null) {
   if (!path)
@@ -77,11 +93,11 @@ async function uploadPhotoShared(
     await callback(true, storagePath, signedUrl)
 }
 
-async function uploadPhotoUser(formId: string, data: string, fileName: string, contentType: string, isLoading: Ref<boolean>, wentWrong: string) {
+async function uploadPhotoUser(onError: PhotoErrorTarget, data: string, fileName: string, contentType: string, isLoading: Ref<boolean>, wentWrong: string) {
   const main = useMainStore()
   const userId = main.user?.id
   if (!userId) {
-    setErrors(formId, [wentWrong], {})
+    reportPhotoError(onError, wentWrong)
     console.error('No user id', userId)
     return
   }
@@ -89,7 +105,7 @@ async function uploadPhotoUser(formId: string, data: string, fileName: string, c
 
   async function userCallback(success: boolean, storagePath: string, signedUrl: string) {
     if (!success) {
-      setErrors(formId, [wentWrong], {})
+      reportPhotoError(onError, wentWrong)
       return
     }
 
@@ -112,7 +128,7 @@ async function uploadPhotoUser(formId: string, data: string, fileName: string, c
       .single()
 
     if (!usr || dbError) {
-      setErrors(formId, [wentWrong], {})
+      reportPhotoError(onError, wentWrong)
       console.error('upload error', dbError)
       const { error: cleanupUploadError } = await capgo
         .storage
@@ -139,19 +155,19 @@ async function uploadPhotoUser(formId: string, data: string, fileName: string, c
   await uploadPhotoShared(data, `${safeUserId}/${fileName}`, contentType, isLoading, userCallback)
 }
 
-async function uploadPhotoOrg(formId: string, data: string, fileName: string, contentType: string, isLoading: Ref<boolean>, wentWrong: string) {
+async function uploadPhotoOrg(onError: PhotoErrorTarget, data: string, fileName: string, contentType: string, isLoading: Ref<boolean>, wentWrong: string) {
   const organizationStore = useOrganizationStore()
   const gid = organizationStore.currentOrganization?.gid
   if (!gid) {
     console.error('No current org id', gid)
-    setErrors(formId, [wentWrong], {})
+    reportPhotoError(onError, wentWrong)
     return
   }
   const safeGid = gid
 
   async function orgCallback(success: boolean, storagePath: string, _signedUrl: string) {
     if (!success) {
-      setErrors(formId, [wentWrong], {})
+      reportPhotoError(onError, wentWrong)
       return
     }
 
@@ -163,7 +179,7 @@ async function uploadPhotoOrg(formId: string, data: string, fileName: string, co
       .single()
 
     if (!usr || dbError) {
-      setErrors(formId, [wentWrong], {})
+      reportPhotoError(onError, wentWrong)
       console.error('upload error', dbError)
       return
     }
@@ -230,7 +246,7 @@ function blobToData(blob: Blob) {
   })
 }
 
-export async function takePhoto(formId: string, isLoading: Ref<boolean>, type: 'org' | 'user', wentWrong: string) {
+export async function takePhoto(onError: PhotoErrorTarget, isLoading: Ref<boolean>, type: 'org' | 'user', wentWrong: string) {
   const uploadPhoto = (type === 'user') ? uploadPhotoUser : uploadPhotoOrg
   let cameraPhoto
   try {
@@ -257,7 +273,7 @@ export async function takePhoto(formId: string, isLoading: Ref<boolean>, type: '
   isLoading.value = true
   const fileName = `${Date.now()}.${cameraPhoto.format}`
   try {
-    await uploadPhoto(formId, cameraPhoto.dataUrl.split('base64,')[1], fileName, contentType, isLoading, wentWrong)
+    await uploadPhoto(onError, cameraPhoto.dataUrl.split('base64,')[1], fileName, contentType, isLoading, wentWrong)
   }
   catch (e) {
     console.error(e)
@@ -265,7 +281,7 @@ export async function takePhoto(formId: string, isLoading: Ref<boolean>, type: '
   }
 }
 
-export async function pickPhoto(formId: string, isLoading: Ref<boolean>, type: 'org' | 'user', wentWrong: string) {
+export async function pickPhoto(onError: PhotoErrorTarget, isLoading: Ref<boolean>, type: 'org' | 'user', wentWrong: string) {
   const uploadPhoto = (type === 'user') ? uploadPhotoUser : uploadPhotoOrg
   let pickedImages
   try {
@@ -298,7 +314,7 @@ export async function pickPhoto(formId: string, isLoading: Ref<boolean>, type: '
       return
     isLoading.value = true
     await uploadPhoto(
-      formId,
+      onError,
       contents.data as any,
       `${Date.now()}.${photos[0].format}`,
       contentType,

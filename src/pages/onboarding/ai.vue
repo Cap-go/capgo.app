@@ -112,7 +112,13 @@ async function loadApiKey() {
     return
   loadFailed.value = false
   try {
-    apiKey.value = await shareInFlightApiKeyLoad({ userId, orgId, name: AI_ONBOARDING_API_KEY_NAME }, () => ensureApiKey(userId, orgId))
+    // Right after signup the backend is still processing the new user and organization, and the
+    // key insert can lose a database deadlock against that work. One retry covers it.
+    const load = () => shareInFlightApiKeyLoad({ userId, orgId, name: AI_ONBOARDING_API_KEY_NAME }, () => ensureApiKey(userId, orgId))
+    apiKey.value = await load().catch(async () => {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      return load()
+    })
     if (!apiKey.value)
       loadFailed.value = true
   }

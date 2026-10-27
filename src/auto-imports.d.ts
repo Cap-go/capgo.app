@@ -43,6 +43,7 @@ declare global {
   const eagerComputed: typeof import('@vueuse/core').eagerComputed
   const effectScope: typeof import('vue').effectScope
   const extendRef: typeof import('@vueuse/core').extendRef
+  const formatLegacyPluginVersions: typeof import('./composables/useReleaseLive').formatLegacyPluginVersions
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
@@ -368,7 +369,7 @@ declare global {
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
   // @ts-ignore
-  export type { ReleaseLiveDeployment, ReleaseLiveChannel, ReleaseLiveBucket, ReleaseLiveRollout, ReleaseLiveResponse } from './composables/useReleaseLive'
+  export type { ReleaseLiveDeployment, ReleaseLiveChannel, ReleaseLiveBucket, ReleaseLiveRollout, LegacyCheckFailures, ReleaseLiveResponse } from './composables/useReleaseLive'
   import('./composables/useReleaseLive')
   // @ts-ignore
   export type { CheckDomainResponse } from './composables/useSSORouting'
@@ -432,6 +433,7 @@ declare module 'vue' {
     readonly eagerComputed: UnwrapRef<typeof import('@vueuse/core')['eagerComputed']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
     readonly extendRef: UnwrapRef<typeof import('@vueuse/core')['extendRef']>
+    readonly formatLegacyPluginVersions: UnwrapRef<typeof import('./composables/useReleaseLive')['formatLegacyPluginVersions']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
     readonly getCurrentWatcher: UnwrapRef<typeof import('vue')['getCurrentWatcher']>

@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import type { TableColumn } from './comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
-import { FormKit } from '@formkit/vue'
 import { useDebounceFn, useNow } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconCheck from '~icons/lucide/check'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
@@ -17,6 +16,7 @@ import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import FilterModal from '~/components/FilterModal.vue'
+import FormField from '~/components/forms/FormField.vue'
 import { RenderCell } from '~/components/RenderCell'
 import { createClearedFilters } from '~/composables/useFilterModal'
 import { clampDateRange, getDateRangeForPreset, inferDateRangePreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
@@ -438,14 +438,13 @@ onMounted(() => {
         </FilterModal>
       </div>
       <div class="flex min-w-0 max-w-[13rem] overflow-hidden sm:max-w-[14rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs md:w-auto">
-        <FormKit
+        <FormField
           v-model="searchVal"
           :placeholder="searchPlaceholder"
+          :aria-label="searchPlaceholder"
           :prefix-icon="IconSearch"
           enterkeyhint="send"
-          :classes="{
-            outer: 'mb-0! w-48 sm:w-52 md:w-56 lg:w-64 xl:w-80',
-          }"
+          outer-class="mb-0! w-48 sm:w-52 md:w-56 lg:w-64 xl:w-80"
         />
       </div>
     </div>

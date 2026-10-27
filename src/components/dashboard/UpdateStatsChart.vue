@@ -3,14 +3,13 @@ import type { ChartData, ChartOptions, Plugin } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
 import { useDark } from '@vueuse/core'
 import { computed } from 'vue'
-import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { Bar, Line } from '~/components/dashboard/lazyCharts'
 import { useOrgBillingCycleChart } from '~/composables/useOrgBillingCycleChart'
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions } from '~/services/chartTodayLine'
 import { dailyChartBaseProps } from '~/services/dailyChartProps'
-import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { generateMonthDays, getUtcDayBounds } from '~/services/date'
 import { useOrganizationStore } from '~/stores/organization'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
@@ -19,8 +18,6 @@ const props = defineProps({
   ...dailyChartBaseProps(),
   appId: { type: String, default: '' },
 })
-
-registerDashboardCharts()
 
 const isDark = useDark()
 const { t } = useI18n()

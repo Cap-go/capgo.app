@@ -4,7 +4,7 @@ import type { OnboardingAppDraft } from '~/utils/onboardingAppDraft'
 import {
   createOnboardingAppWithFallbackIds,
 } from '~/utils/onboardingAppCreateHelpers'
-import { isSafeImageFetchUrl } from '~/utils/sanitize'
+import { isSafeImageFetchUrl } from '~/utils/urlSafety'
 
 type AppRow = Database['public']['Tables']['apps']['Row']
 

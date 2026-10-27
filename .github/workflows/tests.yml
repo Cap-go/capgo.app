@@ -147,8 +147,6 @@ jobs:
               - 'deno-env.d.ts'
               - 'deno.lock'
               - 'eslint.config.js'
-              - 'formkit.config.ts'
-              - 'formkit.theme.ts'
               - 'icons/**'
               - 'index.html'
               - 'internal/**'

@@ -2,14 +2,13 @@
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { PeriodDayOption } from '~/utils/periodDays'
 import { useDark } from '@vueuse/core'
-import { BarElement, CategoryScale, Chart, Legend, LinearScale, Tooltip } from 'chart.js'
 import { computed, ref, useId, watch } from 'vue'
-import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconInfo from '~icons/lucide/info'
+import { Bar } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoBundleInstallStats, useBundleInstallStats } from '~/composables/useBundleInstallStats'
@@ -44,8 +43,6 @@ type DenseView = 'chart' | 'table'
 const DENSE_VIEWS: readonly DenseView[] = ['chart', 'table']
 const denseView = ref<DenseView>('chart')
 const denseViewId = useId()
-
-Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 
 const maxChartBundles = 10
 

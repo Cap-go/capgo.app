@@ -4,7 +4,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import {

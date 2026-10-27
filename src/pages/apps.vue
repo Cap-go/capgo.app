@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Database } from '~/types/database.types'
+import { useQuery } from '@pinia/colada'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -8,13 +9,13 @@ import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
 import { useDisplayStore } from '~/stores/display'
+import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
 const route = useRoute('/apps')
 const router = useRouter()
 const organizationStore = useOrganizationStore()
-const isLoading = ref(true)
-const isTableLoading = ref(false)
+const main = useMainStore()
 const capgo = useConsole()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
@@ -99,91 +100,92 @@ function loadAppIcons(sourceApps: AppIconSource[], runId: number) {
   }
 }
 
-async function getMyApps() {
-  const currentRun = ++appIconLoadRun
-  canCreateApp.value = false
-  isTableLoading.value = true
-  try {
-    await organizationStore.awaitInitialLoad()
+interface AppsPage {
+  rows: AppIconSource[]
+  total: number
+  canCreateApp: boolean
+}
 
-    // Don't fetch apps if user lacks security access - data would be rejected anyway
-    if (lacksSecurityAccess.value) {
-      apps.value = []
-      totalApps.value = 0
-      return
-    }
-
-    const currentGid = organizationStore.currentOrganization?.gid
-
-    if (!currentGid) {
-      console.error('Current organization is null, cannot fetch apps')
-      apps.value = []
-      totalApps.value = 0
-      return
-    }
-
-    const hasCreateAppPermission = await checkPermissions('org.create_app', { orgId: currentGid })
-    if (appIconLoadRun !== currentRun || organizationStore.currentOrganization?.gid !== currentGid)
-      return
-
-    canCreateApp.value = hasCreateAppPermission
-
-    const offset = (currentPage.value - 1) * pageSize
-
-    // Fetch the page via an RPC that derives each app's real last-upload time
-    // (created_at of the bundle matching apps.last_version) and performs search,
-    // ordering, pagination and the total count in SQL. This keeps the page order
-    // consistent with the displayed "Last upload" sort, which apps.updated_at
-    // (bumped by unrelated edits and background/cron jobs) cannot guarantee.
-    const { data, error } = await capgo.rpc('get_org_apps_with_last_upload', {
-      p_org_id: currentGid,
-      p_search: searchQuery.value ? searchQuery.value.trim() : undefined,
+async function fetchAppsPage(orgId: string, page: number, search: string): Promise<AppsPage> {
+  // Fetch the page via an RPC that derives each app's real last-upload time
+  // (created_at of the bundle matching apps.last_version) and performs search,
+  // ordering, pagination and the total count in SQL. This keeps the page order
+  // consistent with the displayed "Last upload" sort, which apps.updated_at
+  // (bumped by unrelated edits and background/cron jobs) cannot guarantee.
+  // The permission check runs alongside it: they are independent round trips.
+  const [canCreate, { data, error }] = await Promise.all([
+    checkPermissions('org.create_app', { orgId }),
+    capgo.rpc('get_org_apps_with_last_upload', {
+      p_org_id: orgId,
+      p_search: search || undefined,
       p_sort_by: 'last_upload_at',
       p_sort_desc: true,
       p_limit: pageSize,
-      p_offset: offset,
-    })
+      p_offset: (page - 1) * pageSize,
+    }),
+  ])
 
-    if (appIconLoadRun !== currentRun)
-      return
-
-    if (error) {
-      console.error('Cannot fetch apps', error)
-      apps.value = []
-      totalApps.value = 0
-      return
-    }
-
-    const rows = data ?? []
-    totalApps.value = rows[0]?.total_count ?? 0
-
-    // appWithImmediateIcon spreads the whole RPC row, so last_upload_at is carried
-    // through as-is. Avoid re-building the object inline (e.g. { ...appWithImmediateIcon(app),
-    // last_upload_at } ) here: spreading into the AppRowWithIconState intersection makes
-    // vue-tsc hit TS2589 (excessively deep type instantiation).
-    apps.value = rows.map(appWithImmediateIcon)
-    if (rows.length)
-      loadAppIcons(rows, currentRun)
+  if (error) {
+    console.error('Cannot fetch apps', error)
+    throw error
   }
-  finally {
-    if (appIconLoadRun === currentRun)
-      isTableLoading.value = false
-  }
+
+  const rows = data ?? []
+  return { rows, total: rows[0]?.total_count ?? 0, canCreateApp: canCreate }
 }
 
-watch(currentOrganization, async () => {
-  currentPage.value = 1
-  searchQuery.value = ''
-  await getMyApps()
+// Cached per user, organization, page and search: coming back to the list shows the last
+// result immediately and refreshes it in the background once it is older than staleTime.
+const appsQuery = useQuery({
+  key: () => ['apps-page', main.auth?.id ?? '', currentOrganization.value?.gid ?? '', currentPage.value, searchQuery.value.trim()],
+  query: () => fetchAppsPage(currentOrganization.value!.gid, currentPage.value, searchQuery.value.trim()),
+  // Don't fetch apps if user lacks security access - data would be rejected anyway
+  enabled: () => route.path === '/apps' && !!currentOrganization.value?.gid && !lacksSecurityAccess.value,
+  // Show the cached list at once, but always refresh it when the page opens: apps can be
+  // renamed, deleted or transferred elsewhere (other pages, the CLI) without touching this cache.
+  refetchOnMount: 'always',
+  // Keep the current rows on screen while the next page or search of the same organization loads.
+  placeholderData: (previous, previousEntry) => previousEntry?.key[2] === currentOrganization.value?.gid ? previous : undefined,
 })
 
-watchEffect(async () => {
-  if (route.path === '/apps') {
+// Full-page loader only before the first result; later loads keep the table and show its own spinner.
+const isLoading = computed(() => !lacksSecurityAccess.value && !!currentOrganization.value?.gid && appsQuery.data.value === undefined && appsQuery.error.value === null)
+const isTableLoading = computed(() => appsQuery.isLoading.value)
+
+watch(() => appsQuery.data.value, (page) => {
+  const currentRun = ++appIconLoadRun
+  totalApps.value = page?.total ?? 0
+  canCreateApp.value = page?.canCreateApp ?? false
+  // appWithImmediateIcon spreads the whole RPC row, so last_upload_at is carried
+  // through as-is. Avoid re-building the object inline (e.g. { ...appWithImmediateIcon(app),
+  // last_upload_at } ) here: spreading into the AppRowWithIconState intersection makes
+  // vue-tsc hit TS2589 (excessively deep type instantiation).
+  apps.value = (page?.rows ?? []).map(appWithImmediateIcon)
+  if (page?.rows.length)
+    loadAppIcons(page.rows, currentRun)
+}, { immediate: true })
+
+watch(() => appsQuery.error.value, (error) => {
+  if (!error)
+    return
+  apps.value = []
+  totalApps.value = 0
+})
+
+function reloadApps() {
+  void appsQuery.refetch()
+}
+
+watch(() => currentOrganization.value?.gid, (gid, previousGid) => {
+  if (gid === previousGid)
+    return
+  currentPage.value = 1
+  searchQuery.value = ''
+})
+
+watchEffect(() => {
+  if (route.path === '/apps')
     displayStore.NavTitle = ''
-    isLoading.value = true
-    await getMyApps()
-    isLoading.value = false
-  }
 })
 
 displayStore.NavTitle = t('apps')
@@ -241,10 +243,10 @@ displayStore.defaultBack = '/apps'
               :add-disabled="!canCreateApp"
               :add-tooltip="t('cannot-add-app-no-permission')"
               @add-app="router.push('/app/new')"
-              @update:current-page="(page) => { currentPage = page; getMyApps() }"
-              @update:search="(query) => { searchQuery = query; currentPage = 1; getMyApps() }"
-              @reload="getMyApps()"
-              @reset="getMyApps()"
+              @update:current-page="(page) => { currentPage = page }"
+              @update:search="(query) => { searchQuery = query; currentPage = 1 }"
+              @reload="reloadApps()"
+              @reset="reloadApps()"
             />
           </div>
         </div>

@@ -2,7 +2,7 @@ import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
 import type { ConsoleClient } from '~/services/consoleClient'
 import type { UserModule } from '~/types'
 import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
-import { clearChartDataCache } from '~/services/chartDataService'
+import { clearChartDataCache } from '~/services/chartDataCache'
 import { isAgentClaimPath, isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
 import { getLocalConfig, useConsole } from '~/services/console'
 import { hideLoader } from '~/services/loader'
@@ -151,24 +151,40 @@ async function maybeProvisionSsoMembership(
   return 'continue'
 }
 
-async function isDisabledAccount(capgo: ConsoleClient, userId: string | null | undefined) {
+// Reuse a recent "account is active" answer instead of paying an API round trip before every
+// dashboard navigation. A disabled answer is never reused, so restoring the account is seen at once.
+const ACTIVE_ACCOUNT_CHECK_TTL_MS = 60_000
+let activeAccountCheck: { userId: string, checkedAt: number } | null = null
+
+async function isDisabledAccount(capgo: ConsoleClient, userId: string | null | undefined, { fresh = false } = {}) {
   if (!userId)
     return false
 
+  if (!fresh && activeAccountCheck?.userId === userId && Date.now() - activeAccountCheck.checkedAt < ACTIVE_ACCOUNT_CHECK_TTL_MS)
+    return false
+
+  const disabled = await fetchDisabledAccount(capgo, userId)
+  // Only an explicit "active" answer is reused; a failed check (null) asks again next time.
+  activeAccountCheck = disabled === false ? { userId, checkedAt: Date.now() } : null
+  return disabled === true
+}
+
+/** true or false from the API, null when the check failed. */
+async function fetchDisabledAccount(capgo: ConsoleClient, userId: string): Promise<boolean | null> {
   try {
     const { data: isDisabled, error } = await capgo
       .rpc('is_account_disabled', { user_id: userId })
 
     if (error) {
       console.error('Error checking account status:', error)
-      return false
+      return null
     }
 
     return !!isDisabled
   }
   catch (error) {
     console.error('Error checking if account is disabled:', error)
-    return false
+    return null
   }
 }
 
@@ -368,7 +384,16 @@ async function guard(
   }
 
   if (hasAuth && sessionUser && !hadAuth) {
-    const isDisabled = await isDisabledAccount(capgo, sessionUser.id)
+    // Start the reads that do not depend on each other at once: on a slow network each
+    // sequential request adds a full round trip before the first screen renders.
+    // SSO users must be provisioned into their organization before it is listed.
+    const disabledRequest = isDisabledAccount(capgo, sessionUser.id, { fresh: true })
+    const userRequest = main.user ? Promise.resolve() : updateUser(main, capgo)
+    const plansRequest = loadPlansIfNeeded()
+    const organizationsRequest = isSsoUser(sessionUser)
+      ? null
+      : tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
+    const isDisabled = await disabledRequest
     if (to.path === '/accountDisabled') {
       hideLoader()
       return isDisabled ? next() : next(getPostRestorePath(to))
@@ -388,9 +413,7 @@ async function guard(
       return
     }
 
-    if (!main.user) {
-      await updateUser(main, capgo)
-    }
+    await userRequest
 
     sendEvent({
       channel: 'user-login',
@@ -398,9 +421,9 @@ async function guard(
       user_id: main.auth?.id,
     }).catch()
 
-    await loadPlansIfNeeded()
+    await plansRequest
 
-    const organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
+    const organizationsLoaded = await (organizationsRequest ?? tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions)))
     const nameRedirect = requiredNameRedirect(organizationsLoaded)
     if (nameRedirect) {
       await hideLoader()
@@ -443,7 +466,7 @@ async function guard(
     })
   }
   else if (hasAuth && main.auth) {
-    const isDisabled = await isDisabledAccount(capgo, sessionUser?.id ?? main.auth.id)
+    const isDisabled = await isDisabledAccount(capgo, sessionUser?.id ?? main.auth.id, { fresh: to.path === '/accountDisabled' })
     if (isDisabled && to.path !== '/accountDisabled') {
       hideLoader()
       return next(getAccountDisabledRedirect(to))

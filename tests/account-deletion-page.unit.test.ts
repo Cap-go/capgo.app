@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import type { App } from 'vue'
-import { defaultConfig, plugin } from '@formkit/vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
@@ -60,7 +59,6 @@ async function clickDeleteAccount() {
   document.body.innerHTML = '<div id="account-page"></div><div id="dialog-v2-content"></div>'
   app = createApp(AccountPage)
   app.use(pinia)
-  app.use(plugin, defaultConfig())
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
   app.component('Spinner', { render: () => h('span') })
   app.component('LangSelector', { render: () => h('span') })
