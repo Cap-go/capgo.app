@@ -1028,11 +1028,8 @@ export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: 
   try {
     const owner = await getAppOwnerWithEdgeCache(c, body.app_id, getDrizzleClient(lazyClient.client, { logger: false }), PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
     // Deleted or no longer a cloud app: nothing to attribute the answer to.
-    if (!owner.value) {
-      if (owner.lookupFailed)
-        throw new Error('snippet edge replay owner lookup failed')
+    if (!owner.value)
       return c.json(BRES)
-    }
     const device = makeDevice(body, owner.value.allow_device_custom_id)
     await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, owner.value.owner_org, body.platform, body.version_build))
     await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: answer.versionName }])

@@ -10,8 +10,9 @@ import { getCachedAppOwner, getCachedAppVersion, getCachedChannelLookup } from '
  * Edge-cached versions of the app-level reads shared by /updates, /stats and
  * /channel_self. Each one is only called once `shouldUseUpdatesEdgeCache`
  * sampled the request in, and mirrors the uncached helper it replaces:
- * - a database error is logged and answered like the uncached helper (null /
- *   empty list) but never cached;
+ * - a database error on app owner lookup is logged and rethrown like the
+ *   uncached helper; other reads answer like their uncached helpers (null /
+ *   empty list) but never cache failures;
  * - a lazy client connect failure is rethrown: without the edge cache the
  *   request fails at connect time, and it must not be classified as a missing
  *   app (on-prem) or a missing bundle/channel.
@@ -42,10 +43,10 @@ export async function getAppOwnerWithEdgeCache(
   }
   catch (error: unknown) {
     rethrowConnectError(error)
+    logPgError(c, 'getAppOwnerPostgres', error, { appId, planActions: actions })
     if (options?.rethrowReadOnlyConnectionErrors)
       rethrowReadOnlyPgConnectionError(error)
-    logPgError(c, 'getAppOwnerPostgres', error, { appId, planActions: actions })
-    return { value: null, hit: false, lookupFailed: true }
+    throw error
   }
 }
 

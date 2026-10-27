@@ -1452,13 +1452,13 @@ export async function getAppOwnerPostgres(
     return await queryAppOwnerPostgres(c, appId, drizzleClient, actions, options)
   }
   catch (e: unknown) {
+    // Rethrow: null means "app missing" and sticky-caches on_premise_app. Transient
+    // database errors become 503 via onError; other failures are never cached as on-prem.
     logPgError(c, 'getAppOwnerPostgres', e, {
       appId,
       planActions: actions,
     })
-    if (options?.rethrowReadOnlyConnectionErrors && isReadOnlyPgConnectionRetryError(e))
-      throw e
-    return null
+    throw e
   }
 }
 

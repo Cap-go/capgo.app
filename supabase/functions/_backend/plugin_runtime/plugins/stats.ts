@@ -11,6 +11,7 @@ import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
 import { closeClient, createLazyPgClient, getAppOwnerPostgres, getAppVersionPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getLazyPgQueryCount, getPgClient, getReadReplicaBinding, queryAppOwnerPostgres } from '../utils/pg.ts'
+import { isDatabaseOriginError } from '../utils/pg_errors.ts'
 import { makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
@@ -24,6 +25,7 @@ import { backgroundTask, INVALID_STRING_APP_ID, isInternalVersionName, isLimited
 import { isRunningVersionAction } from './stats_actions.ts'
 
 const PLAN_ERROR = 'Cannot send stats, upgrade plan to continue to update'
+const STATS_OWNER_PG_OPTIONS = { rethrowReadOnlyConnectionErrors: true } as const
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION = parse('7.17.0')
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION_V6 = parse('6.14.25')
 
@@ -57,7 +59,7 @@ function getRequestOwnerLookup(c: Context, appId: string, drizzleClient: ReturnT
   let lookup = lookups.get(appId)
   if (!lookup) {
     lookup = edgeCache
-      ? getAppOwnerWithEdgeCache(c, appId, drizzleClient, planActions)
+      ? getAppOwnerWithEdgeCache(c, appId, drizzleClient, planActions, STATS_OWNER_PG_OPTIONS)
       : queryOwnerLookup(c, appId, drizzleClient, planActions)
     // The edge read rethrows connection errors; a batch would catch them per
     // event and answer 200, which a replay never retries.
@@ -188,7 +190,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   const appOwner = ownerLookup
     ? ownerLookup.value
     // Snippet fills must not outlive a trial: they need its end date.
-    : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions, { includeTrialAt: getSnippetEdgeAnswerBps(c) > 0 })
+    : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions, { ...STATS_OWNER_PG_OPTIONS, includeTrialAt: getSnippetEdgeAnswerBps(c) > 0 })
   const allowDeviceCustomId = appOwner?.allow_device_custom_id
   const device = makeDevice(body, allowDeviceCustomId)
   const deviceDataCollection = parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection)
@@ -531,6 +533,8 @@ async function processStatsEvents(
       }
     }
     catch (e) {
+      if (isDatabaseOriginError(e))
+        throw e
       const err = e as Error & { cause?: { error?: string } }
       results.push({
         status: 'error',

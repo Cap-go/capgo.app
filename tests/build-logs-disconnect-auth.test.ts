@@ -163,7 +163,7 @@ describe('build log disconnect authorization', () => {
           body: JSON.stringify({ app_id: appId, reason: 'client_disconnected' }),
         })
 
-        return new Response(JSON.stringify({ status: 'cancelled' }), {
+      return new Response(JSON.stringify({ status: 'cancelled' }), {
           status: 200,
           headers: {
             'Content-Type': 'application/json',
@@ -247,7 +247,7 @@ describe('build log disconnect authorization', () => {
           body: JSON.stringify({ app_id: appId, reason: 'client_disconnected' }),
         })
 
-        return new Response(JSON.stringify({ status: 'cancelled' }), {
+      return new Response(JSON.stringify({ status: 'cancelled' }), {
           status: 200,
           headers: {
             'Content-Type': 'application/json',
