@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { parseBody, quickError, simpleError } from '../../utils/hono.ts'
+import { uploadImage } from '../../utils/image_storage.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { assertAllowedImagePath } from '../../utils/storage.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
@@ -10,7 +11,7 @@ import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 
 const MAX_ICON_BYTES = 5 * 1024 * 1024
-// Raster formats only: never store caller-chosen types such as SVG/HTML in the images bucket.
+// Raster formats only: never store caller-chosen types such as SVG/HTML in image storage.
 const ALLOWED_ICON_CONTENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 const uploadIconBodySchema = z.object({
@@ -90,22 +91,15 @@ export async function uploadCliAppIcon(
     })
   }
 
-  const { error: uploadError } = await supabaseAdmin(c)
-    .storage
-    .from('images')
-    .upload(normalizedPath, bytes, {
-      contentType,
-      upsert: body.upsert === true,
-    })
-
-  if (uploadError) {
-    const statusCode = typeof uploadError === 'object' && uploadError && 'statusCode' in uploadError
-      ? String((uploadError as { statusCode?: unknown }).statusCode)
-      : ''
-    if (!body.upsert && statusCode === '409')
-      return c.json({ path: normalizedPath, conflict: true }, 409)
+  let result: 'ok' | 'conflict'
+  try {
+    result = await uploadImage(c, normalizedPath, bytes, { contentType, upsert: body.upsert === true })
+  }
+  catch (uploadError) {
     throw simpleError('cannot_upload_icon', 'Cannot upload app icon', { error: uploadError })
   }
+  if (result === 'conflict')
+    return c.json({ path: normalizedPath, conflict: true }, 409)
 
   return c.json({ path: normalizedPath })
 }
