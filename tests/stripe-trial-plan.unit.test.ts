@@ -10,9 +10,17 @@ import {
   findPendingTrialPlanSchedule,
   getTrialPlanPriceId,
   getTrialPlanStartDate,
+  getTrialPriceTier,
   holdTrialPlanLock,
   settleTrialPlanFirstInvoice,
 } from '../supabase/functions/_backend/utils/stripe_trial_plan.ts'
+
+const supabaseAdmin = vi.hoisted(() => ({ override: null as null | (() => unknown) }))
+
+vi.mock('../supabase/functions/_backend/utils/supabase.ts', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../supabase/functions/_backend/utils/supabase.ts')>()
+  return { ...original, supabaseAdmin: (...args: Parameters<typeof original.supabaseAdmin>) => (supabaseAdmin.override ? supabaseAdmin.override() : original.supabaseAdmin(...args)) }
+})
 
 const context = { get: () => 'request-id' } as any
 
@@ -293,6 +301,31 @@ describe('schedulable trial plans', () => {
     expect(getTrialPlanPriceId(plan, 'ee', 'p50')).toBe('price_solo_m_p50')
     expect(getTrialPlanPriceId(plan, 'ee', 'p70')).toBe('price_solo_m')
     expect(getTrialPlanPriceId({ ...plan, regional_price_ids: {} }, 'ee', 'p50')).toBe('price_solo_m')
+  })
+
+  it('charges the trial a regional price only in its region\'s currency, or USD where Stripe lacks it', async () => {
+    const plans = [{ regional_price_ids: { p50: { price_m_id: 'price_solo_m_p50' }, p70: { price_m_id: 'price_solo_m_p70' } } }]
+    supabaseAdmin.override = () => ({ from: () => ({ select: () => ({ in: async () => ({ data: plans, error: null }) }) }) })
+    const tierFor = (country: string, currency: string | null) => {
+      const stripe = {
+        customers: { retrieve: vi.fn(async () => ({ id: 'cus_1', currency, address: null, invoice_settings: { default_payment_method: null } })) },
+        prices: { retrieve: vi.fn(async (id: string) => ({ id, currency_options: { usd: {}, eur: {}, inr: {} } })) },
+      } as unknown as Stripe
+      const c = { get: () => 'request-id', req: { raw: { cf: { country } }, header: () => undefined } } as any
+      return getTrialPriceTier(c, { stripe, customerId: 'cus_1', billingAccount: 'ee' } as any)
+    }
+    try {
+      // No currency pinned yet: the schedule bills USD.
+      await expect(tierFor('FR', null)).resolves.toBe('p100')
+      await expect(tierFor('FR', 'eur')).resolves.toBe('p70')
+      await expect(tierFor('IN', 'usd')).resolves.toBe('p100')
+      // Stripe does not sell GHS: USD keeps the discount.
+      await expect(tierFor('GH', null)).resolves.toBe('p50')
+      await expect(tierFor('GH', 'eur')).resolves.toBe('p100')
+    }
+    finally {
+      supabaseAdmin.override = null
+    }
   })
 
   it('exposes Solo, Maker and Team for the plan picker', async () => {
