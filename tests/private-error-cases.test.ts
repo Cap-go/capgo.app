@@ -298,6 +298,8 @@ const errorCases: Array<[string, string, () => ErrorCase, number, string | null]
   ['stats with a valid API key', '/private/stats', () => ({ body: { appId: APPNAME } }), 200, null],
   // smoke checks for read-only private endpoints
   ['plans', '/private/plans', () => ({ method: 'GET' }), 200, null],
+  ['public plan prices without auth', '/private/plan_prices/public', () => ({ method: 'GET', auth: 'none' }), 200, null],
+  ['org plan prices without auth', `/private/plan_prices?orgId=${ORG_ID}`, () => ({ method: 'GET', auth: 'none' }), 401, 'no_jwt_apikey_or_subkey'],
   ['latency', '/private/latency', () => ({ method: 'GET' }), 200, null],
   ['config', '/private/config', () => ({ method: 'GET' }), 200, null],
 ]

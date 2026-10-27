@@ -13,7 +13,7 @@ import { checkPermission } from '../utils/rbac.ts'
 import { getCustomerBilling, isRegionalCurrency } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 
 const PLAN_PRICES_CACHE_PATH = '/private/plan_prices'
 const PLAN_PRICES_TTL_SECONDS = 60 * 60
@@ -75,8 +75,9 @@ interface PlanPriceRow {
   regional_price_ids: unknown
 }
 
-async function listPlans(c: Context, authorization: string): Promise<PlanPriceRow[]> {
-  const { data: plans, error } = await supabaseClient(c, authorization)
+// The plan catalog is public (see private/plans); signed-in requests still read it through RLS.
+async function listPlans(c: Context, authorization: string | null): Promise<PlanPriceRow[]> {
+  const { data: plans, error } = await (authorization ? supabaseClient(c, authorization) : supabaseAdmin(c))
     .from('plans')
     .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us, regional_price_ids')
   if (error)
@@ -121,8 +122,7 @@ async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount:
   return { prices: Object.fromEntries(entries), complete }
 }
 
-async function getPlanPrices(c: Context, authorization: string, billingAccount: BillingAccount, tier: PriceTier) {
-  const plans = await listPlans(c, authorization)
+async function getPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount: BillingAccount, tier: PriceTier) {
   const cache = new CacheHelper(c)
   const version = planPricesVersion(plans)
   const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, tier, version })
@@ -137,6 +137,46 @@ async function getPlanPrices(c: Context, authorization: string, billingAccount: 
   // Never write a partial catalog to the main key: it expires within a minute and the failed plans are retried.
   await cache.putJson(complete ? key : degradedKey, prices, complete ? PLAN_PRICES_TTL_SECONDS : PLAN_PRICES_DEGRADED_TTL_SECONDS, { timeoutMs: 200 })
   return { prices, complete }
+}
+
+// Prices for these countries (visitor first), in the currency of a pinned customer when there is one.
+async function buildPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount: BillingAccount, countries: Array<string | null | undefined>, lockedCurrency: string | null) {
+  const offeredTier = priceTierForCountries(countries)
+  const [offered, full] = await Promise.all([
+    getPlanPrices(c, plans, billingAccount, offeredTier),
+    offeredTier === FULL_PRICE_TIER ? null : getPlanPrices(c, plans, billingAccount, FULL_PRICE_TIER),
+  ])
+  // A regional price is only sold in its region's currency: an org pinned to another one pays the full price.
+  const regional = !lockedCurrency || isRegionalCurrency(countries, offeredTier, lockedCurrency, getCommonCurrencies(offered.prices))
+  const tier = regional ? offeredTier : FULL_PRICE_TIER
+  const { prices } = regional || !full ? offered : full
+  // The full prices back the strike-through and the standard-price option: a failure there offers a retry too.
+  const complete = offered.complete && (full?.complete ?? true)
+  // A pinned customer can only check out in its own currency; empty when the catalog lacks it.
+  const common = getCommonCurrencies(prices)
+  // The tier sets the price; within it every currency is at the market rate, so any of them can be picked.
+  const currencies = lockedCurrency ? common.filter(currency => currency === lockedCurrency) : common
+  const shownCurrencies = new Set([...currencies, DEFAULT_CURRENCY])
+  return {
+    // False when some Stripe prices failed to load: the page offers a retry and keeps checkout disabled.
+    complete,
+    currencies,
+    // Null means no currency is sold on every plan: the page shows the stored USD prices.
+    currency: pickCurrency(currencies, lockedCurrency, countries),
+    // USD stays in: the page derives each currency's ratio from it (Enterprise extra MAU).
+    prices: pickPriceCurrencies(prices, shownCurrencies),
+    // Regional discount shown on the discounted plans; it requires a card and billing address from there,
+    // and is only sold in the listed currencies (the region's own, or USD where Stripe lacks it).
+    // The country named is the one whose tier was granted (the IP, billing address or card country).
+    discount: tier === FULL_PRICE_TIER
+      ? null
+      : {
+          percent: tierDiscountPercent(tier),
+          country: countries.find(code => !!code && priceTierForCountry(code) === tier) ?? null,
+          currencies: currencies.filter(currency => isRegionalCurrency(countries, tier, currency, common)),
+        },
+    regularPrices: full && tier !== FULL_PRICE_TIER ? pickPriceCurrencies(getRegularPrices(prices, full.prices), shownCurrencies) : {},
+  }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -172,42 +212,18 @@ app.get('/', middlewareAuth, async (c) => {
   const customerBilling = org.customer_id ? await getCustomerBilling(getStripe(c, billingAccount), org.customer_id) : { currency: null, countries: [] }
   const lockedCurrency = customerBilling.currency
   // Regional discount (Solo): exactly the tier checkout sells, from the visitor, billing address and card countries.
-  const countries = [getRequestCountry(c), ...customerBilling.countries]
-  const offeredTier = priceTierForCountries(countries)
-  const [offered, full] = await Promise.all([
-    getPlanPrices(c, authorization, billingAccount, offeredTier),
-    offeredTier === FULL_PRICE_TIER ? null : getPlanPrices(c, authorization, billingAccount, FULL_PRICE_TIER),
-  ])
-  // A regional price is only sold in its region's currency: an org pinned to another one pays the full price.
-  const regional = !lockedCurrency || isRegionalCurrency(countries, offeredTier, lockedCurrency, getCommonCurrencies(offered.prices))
-  const tier = regional ? offeredTier : FULL_PRICE_TIER
-  const { prices } = regional || !full ? offered : full
-  // The full prices back the strike-through and the standard-price option: a failure there offers a retry too.
-  const complete = offered.complete && (full?.complete ?? true)
-  // A pinned customer can only check out in its own currency; empty when the catalog lacks it.
-  const common = getCommonCurrencies(prices)
-  // The tier sets the price; within it every currency is at the market rate, so any of them can be picked.
-  const currencies = lockedCurrency ? common.filter(currency => currency === lockedCurrency) : common
-  const shownCurrencies = new Set([...currencies, DEFAULT_CURRENCY])
-  return c.json({
-    // False when some Stripe prices failed to load: the page offers a retry and keeps checkout disabled.
-    complete,
-    currencies,
-    // Null means no currency is sold on every plan: the page shows the stored USD prices.
-    currency: pickCurrency(currencies, lockedCurrency, countries),
-    lockedCurrency,
-    // USD stays in: the page derives each currency's ratio from it (Enterprise extra MAU).
-    prices: pickPriceCurrencies(prices, shownCurrencies),
-    // Regional discount shown on the discounted plans; it requires a card and billing address from there,
-    // and is only sold in the listed currencies (the region's own, or USD where Stripe lacks it).
-    // The country named is the one whose tier was granted (the IP, billing address or card country).
-    discount: tier === FULL_PRICE_TIER
-      ? null
-      : {
-          percent: tierDiscountPercent(tier),
-          country: countries.find(code => !!code && priceTierForCountry(code) === tier) ?? null,
-          currencies: currencies.filter(currency => isRegionalCurrency(countries, tier, currency, common)),
-        },
-    regularPrices: full && tier !== FULL_PRICE_TIER ? pickPriceCurrencies(getRegularPrices(prices, full.prices), shownCurrencies) : {},
-  })
+  const catalog = await buildPlanPrices(c, await listPlans(c, authorization), billingAccount, [getRequestCountry(c), ...customerBilling.countries], lockedCurrency)
+  return c.json({ ...catalog, lockedCurrency })
+})
+
+// Public catalog for logged-out pages (website): the EE account new customers start on, priced for the
+// visitor's IP country only. Checkout and the webhook guard still decide the price actually charged.
+app.use('/public', useCors)
+app.get('/public', async (c) => {
+  if (!isStripeConfiguredForAccount(c, 'ee'))
+    return c.json({ complete: true, currencies: [], currency: null, prices: {}, discount: null, regularPrices: {} })
+  const catalog = await buildPlanPrices(c, await listPlans(c, null), 'ee', [getRequestCountry(c)], null)
+  // Depends on the visitor country: browsers may reuse it briefly, shared caches must not.
+  c.header('Cache-Control', 'private, max-age=300')
+  return c.json(catalog)
 })
