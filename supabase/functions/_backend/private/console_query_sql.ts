@@ -5,7 +5,8 @@
 // scoped to one app or organization.
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/
-const JSON_PATH = /^([a-z_][a-z0-9_]*)->>(([a-z_][a-z0-9_]*)|"([^"]+)")$/
+// JSON keys keep their case (`source_ref->>sessionId`); the key is bound as a string literal.
+const JSON_PATH = /^([a-z_][a-z0-9_]*)->>(([A-Za-z_][A-Za-z0-9_]*)|"([^"]+)")$/
 const MAX_ROWS = 1000
 
 // Column filters widen integers and similar types. Comparisons accept that.

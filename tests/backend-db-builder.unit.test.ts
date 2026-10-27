@@ -206,3 +206,19 @@ describe('embedded order and limit (referencedTable)', () => {
     ]))).toThrow('is not an embedded resource')
   })
 })
+
+describe('JSON key filters', () => {
+  it('keeps camelCase JSON keys, as PostgREST does', () => {
+    const jsonCatalog: QueryCatalog = {
+      columns: new Map([['usage_credit_transactions', [column('id', 'int8'), column('source_ref', 'jsonb')]]]),
+      foreignKeys: [],
+      functions: [],
+    }
+    const compiled = compileConsoleQuery(jsonCatalog, table('usage_credit_transactions', [
+      { method: 'select', args: ['id'] },
+      { method: 'or', args: ['source_ref->>sessionId.eq.cs_test_1,source_ref->>paymentIntentId.eq.pi_1'] },
+    ]))
+    expect(flat(compiled.text)).toContain('(t."source_ref"->>\'sessionId\')')
+    expect(flat(compiled.text)).toContain('(t."source_ref"->>\'paymentIntentId\')')
+  })
+})
