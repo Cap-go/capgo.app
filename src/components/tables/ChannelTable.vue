@@ -11,6 +11,7 @@ import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
+import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import ChannelIntroduction from '~/components/dashboard/ChannelIntroduction.vue'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
@@ -471,6 +472,7 @@ watch(props, async () => {
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"
       :show-add="canCreateChannel"
+      add-button-test-id="channel-add"
       filter-text="Filters"
       :is-loading="isLoading"
       :search-placeholder="t('search-by-name')"
@@ -486,6 +488,10 @@ watch(props, async () => {
           type="text"
           :placeholder="t('channel-name-placeholder')"
         />
+        <p class="text-center text-xs font-medium uppercase tracking-wide text-slate-400">
+          {{ t('ai-task-or') }}
+        </p>
+        <AiAgentTaskCard task="create-channel" :app-id="appId" :channel-name="newChannelName" compact @copied="dialogStore.closeDialog()" />
       </div>
     </Teleport>
   </div>

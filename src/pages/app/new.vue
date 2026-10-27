@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import AddAppSetupChoice from '~/components/dashboard/AddAppSetupChoice.vue'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
+const route = useRoute('/app/new')
 const capgo = useConsole()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
@@ -13,6 +16,8 @@ const { currentOrganization } = storeToRefs(organizationStore)
 
 const isLoading = ref(true)
 const appsCount = ref<number | null>(null)
+// The user first picks their AI agent or the manual wizard, unless they already chose manual.
+const showManualFlow = ref(route.query.mode === 'manual')
 
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
@@ -68,6 +73,8 @@ onMounted(() => {
     </div>
 
     <PageLoader v-else-if="isLoading" />
+
+    <AddAppSetupChoice v-else-if="!showManualFlow" @manual="showManualFlow = true" />
 
     <AppOnboardingFlow v-else :onboarding="isOnboarding" />
   </div>

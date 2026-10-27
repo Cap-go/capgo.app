@@ -207,7 +207,7 @@ async function switchToManual() {
   try {
     sendOnboardingEvent('onboarding_ai_switched_to_manual', { org_id: organization.value?.gid ?? '' })
     await rememberManualSetup()
-    await router.push('/app/new')
+    await router.push('/app/new?mode=manual')
   }
   finally {
     isLeaving.value = false

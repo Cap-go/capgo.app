@@ -134,6 +134,8 @@ test.describe('AI onboarding', () => {
 
     // "Create new organization" offers the AI setup again, pinned to the new organization.
     await page.goto('/onboarding/app?new_org=1')
+    // A new organization gets the same three options as a new account.
+    await expect(page.locator('[data-test="onboarding-setup-mode-invite"]')).toBeVisible()
     await page.click('[data-test="onboarding-setup-mode-ai"]')
     // The first organization already uses the default name.
     await expect(page.locator('[data-test="onboarding-ai-org-name"]')).toHaveValue('')
@@ -151,6 +153,34 @@ test.describe('AI onboarding', () => {
     await expect(page.locator('[data-test="onboarding-cancel-new-org"]')).toBeVisible()
     await page.waitForTimeout(4000)
     await expect(page).toHaveURL(/\/onboarding\/ai\?org=/)
+  })
+
+  test('creates the organization and invites a technical teammate to finish the setup', async ({ page }) => {
+    await registerAndName(page, `ai-invite-${Date.now()}@example.com`)
+    await page.click('[data-test="onboarding-setup-mode-invite"]')
+    const create = page.locator('[data-test="onboarding-ai-create-org"]')
+    await expect(create).toBeDisabled()
+
+    // A refresh keeps the user on the invite path.
+    await page.reload()
+    await expect(page.locator('[data-test="onboarding-ai-plan"]')).toBeVisible()
+
+    await page.locator('[data-test="onboarding-ai-plan-option"]').nth(1).click()
+    await page.locator('[data-test="onboarding-ai-goal-builder"]').click()
+    const orgRequest = page.waitForRequest(request => request.method() === 'POST' && /\/organization(?:\?|$)/.test(request.url()))
+    await create.click()
+    const body = (await orgRequest).postDataJSON()
+    expect(body).toMatchObject({ name: 'Example\'s organization', intent: 'builder' })
+    expect(body.developmentEnvironment).toBeUndefined()
+
+    // The invite dialog opens on its own once the organization exists.
+    await expect(page.locator('[data-test="onboarding-invite-teammate"]')).toBeVisible()
+    await page.fill('#invite-email', 'test2@capgo.app')
+    await page.click('[data-test="invite-email-next"]')
+    await expect(page.locator('[data-test="onboarding-invite-sent"]')).toContainText('test2@capgo.app')
+
+    await page.click('[data-test="onboarding-invite-dashboard"]')
+    await page.waitForURL(/\/dashboard/)
   })
 
   test('keeps the manual wizard one click away', async ({ page }) => {

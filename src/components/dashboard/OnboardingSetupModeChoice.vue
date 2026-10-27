@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Json } from '~/types/database.types'
 import type { AiOnboardingGoal, OnboardingSetupMode } from '~/utils/onboardingSetupMode'
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -13,11 +13,14 @@ import IconLayers from '~icons/lucide/layers'
 import IconLightbulb from '~icons/lucide/lightbulb'
 import IconListChecks from '~icons/lucide/list-checks'
 import IconLoader from '~icons/lucide/loader-2'
+import IconMailCheck from '~icons/lucide/mail-check'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSmartphone from '~icons/lucide/smartphone'
+import IconUserPlus from '~icons/lucide/user-plus'
 import IconUsers from '~icons/lucide/users'
 import AppOnboardingHeader from '~/components/dashboard/AppOnboardingHeader.vue'
 import BillingRegionChoice from '~/components/dashboard/BillingRegionChoice.vue'
+import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { developmentEnvironmentOptions } from '~/components/dashboard/onboardingDevelopmentEnvironmentOptions'
 import OnboardingToolPattern from '~/components/dashboard/OnboardingToolPattern.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
@@ -29,7 +32,9 @@ import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/
 import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
 import { aiGoalToIntent, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withAiSetupOrganization, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
 
-const props = defineProps<{ initialScreen: 'choice' | 'ai', newOrganization?: boolean }>()
+type SetupScreen = 'choice' | 'ai' | 'invite'
+
+const props = defineProps<{ initialScreen: SetupScreen, newOrganization?: boolean }>()
 const emit = defineEmits<{ manual: [] }>()
 
 const { t } = useI18n()
@@ -37,7 +42,14 @@ const router = useRouter()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
-const screen = ref<'choice' | 'ai'>(props.initialScreen)
+const screen = ref<SetupScreen>(props.initialScreen)
+const isInvite = computed(() => screen.value === 'invite')
+const goalCopyPrefix = computed(() => isInvite.value ? 'invite' : 'ai')
+// Organization to invite into. A refresh after creating it lands back on the invite step
+// instead of offering to create a second organization.
+const inviteOrgId = ref<string | null>(props.initialScreen === 'invite' ? organizationStore.currentOrganization?.gid ?? null : null)
+const invitedEmails = ref<string[]>([])
+const inviteModalRef = ref<InstanceType<typeof InviteTeammateModal> | null>(null)
 const isSaving = ref(false)
 const isCreating = ref(false)
 const planIndex = ref<number | null>(null)
@@ -79,8 +91,15 @@ const steps = computed(() => [
   ...(props.newOrganization ? [] : [{ id: 'name', label: t('unified-onboarding-step-about-you') }]),
   { id: 'mode', label: t('ai-onboarding-step-mode') },
   { id: 'plan', label: t('ai-onboarding-step-plan') },
-  { id: 'agent', label: t('ai-onboarding-step-agent') },
+  isInvite.value
+    ? { id: 'invite', label: t('invite-onboarding-step-invite') }
+    : { id: 'agent', label: t('ai-onboarding-step-agent') },
 ])
+const currentStepId = computed(() => {
+  if (screen.value === 'choice')
+    return 'mode'
+  return inviteOrgId.value ? 'invite' : 'plan'
+})
 
 function planTitle(index: number) {
   const stop = planStops.value[index]
@@ -146,7 +165,7 @@ async function chooseMode(mode: OnboardingSetupMode) {
       emit('manual')
       return
     }
-    screen.value = 'ai'
+    screen.value = mode
   }
   finally {
     isSaving.value = false
@@ -160,6 +179,7 @@ async function createOrganization() {
   if (!chosenGoal || !plan || name.length < 3 || isCreating.value)
     return
 
+  const inviting = isInvite.value
   isCreating.value = true
   try {
     const intent = aiGoalToIntent(chosenGoal)
@@ -179,7 +199,8 @@ async function createOrganization() {
         estimatedMau: plan.value,
         startingOut: plan.startingOut === true,
         intent,
-        developmentEnvironment: 'ai_assistant',
+        // The invited teammate picks their own tooling.
+        developmentEnvironment: inviting ? undefined : 'ai_assistant',
         billingAccount: billingAccount.value,
       },
     })
@@ -192,10 +213,10 @@ async function createOrganization() {
 
     // Scope the agent markers to this organization. If this write fails, the backend falls
     // back to accepting any prompt key, which only matters with several AI setups in flight.
-    if (!await rememberOnboarding(current => withAiSetupOrganization(current, data.id)))
+    if (!inviting && !await rememberOnboarding(current => withAiSetupOrganization(current, data.id)))
       console.warn('Cannot scope AI onboarding progress to the new organization')
 
-    sendOnboardingEvent('onboarding_ai_org_created', {
+    sendOnboardingEvent(inviting ? 'onboarding_invite_org_created' : 'onboarding_ai_org_created', {
       org_id: data.id,
       estimated_mau: plan.value,
       plan_name: plan.planName,
@@ -212,18 +233,34 @@ async function createOrganization() {
       // The org exists; the AI page reloads organizations itself.
       console.warn('Cannot refresh organizations after AI onboarding create', refreshError)
     }
+    if (inviting) {
+      inviteOrgId.value = data.id
+      await nextTick()
+      openInviteDialog()
+      return
+    }
     await router.replace(aiOnboardingPathFor(data.id))
   }
   finally {
     isCreating.value = false
   }
 }
+
+function openInviteDialog() {
+  sendOnboardingEvent('onboarding_invite_dialog_opened', { org_id: inviteOrgId.value ?? '', invites_sent: invitedEmails.value.length })
+  inviteModalRef.value?.openDialog()
+}
+
+function onInviteSuccess(invite: { email: string }) {
+  invitedEmails.value = [...invitedEmails.value, invite.email]
+  sendOnboardingEvent('onboarding_invite_sent', { org_id: inviteOrgId.value ?? '', invites_sent: invitedEmails.value.length })
+}
 </script>
 
 <template>
   <section class="onboarding-flow-shell onboarding-flow-app-creation h-full min-h-0 flex-1 overflow-y-auto bg-slate-50 px-4 py-6 sm:px-6 lg:px-8 dark:bg-slate-950">
     <div class="onboarding-flow-content mx-auto w-full max-w-3xl space-y-6">
-      <AppOnboardingHeader :title="props.newOrganization ? t('ai-onboarding-new-org-title') : t('onboarding-welcome-title')" :steps="steps" :current-step-id="screen === 'choice' ? 'mode' : 'plan'" />
+      <AppOnboardingHeader :title="props.newOrganization ? t('ai-onboarding-new-org-title') : t('onboarding-welcome-title')" :steps="steps" :current-step-id="currentStepId" />
 
       <div v-if="screen === 'choice'" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95" data-test="onboarding-setup-mode">
         <div class="onboarding-intent-card-content space-y-6">
@@ -236,7 +273,7 @@ async function createOrganization() {
             </p>
           </div>
 
-          <div class="grid gap-3 sm:grid-cols-2">
+          <div class="grid gap-3 sm:grid-cols-3">
             <button
               type="button"
               class="d-btn d-btn-ghost group relative h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 overflow-hidden whitespace-normal rounded-xl border border-primary-500 bg-white p-5 text-left ring-2 ring-primary-500/15 transition hover:border-primary-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:bg-slate-950/90 dark:hover:bg-slate-900"
@@ -254,6 +291,22 @@ async function createOrganization() {
               </span>
               <span class="relative z-10 mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {{ t('ai-onboarding-mode-ai-desc') }}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              class="d-btn d-btn-ghost group h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 whitespace-normal rounded-xl border border-slate-200 bg-white p-5 text-left transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900"
+              :disabled="isSaving"
+              data-test="onboarding-setup-mode-invite"
+              @click="chooseMode('invite')"
+            >
+              <span class="flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
+                <IconUserPlus class="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+                {{ t('ai-onboarding-mode-invite-label') }}
+              </span>
+              <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('ai-onboarding-mode-invite-desc') }}
               </span>
             </button>
 
@@ -280,6 +333,49 @@ async function createOrganization() {
         </div>
       </div>
 
+      <div v-else-if="inviteOrgId" class="onboarding-details-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95" data-test="onboarding-invite-teammate">
+        <div class="onboarding-details-card-content space-y-6">
+          <div>
+            <p class="text-sm font-semibold text-primary-500 dark:text-slate-300">
+              {{ t('ai-onboarding-plan-kicker') }}
+            </p>
+            <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {{ t('invite-onboarding-title') }}
+            </h2>
+            <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {{ t('invite-onboarding-subtitle') }}
+            </p>
+          </div>
+
+          <ul v-if="invitedEmails.length" class="space-y-2" data-test="onboarding-invite-sent">
+            <li v-for="email in invitedEmails" :key="email" class="flex items-center gap-3 rounded-xl bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900 dark:bg-emerald-500/10 dark:text-emerald-200">
+              <IconMailCheck class="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span class="min-w-0 break-all">{{ t('invite-onboarding-sent', { email }) }}</span>
+            </li>
+          </ul>
+
+          <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/15">
+            <button type="button" class="d-btn min-h-12" :class="invitedEmails.length ? onboardingPrimaryButtonClass : onboardingSecondaryButtonClass" data-test="onboarding-invite-dashboard" @click="router.replace('/dashboard')">
+              {{ t('app-onboarding-explore-dashboard') }}
+              <IconArrowRight v-if="invitedEmails.length" class="h-4 w-4" />
+            </button>
+            <button type="button" class="d-btn min-h-12" :class="invitedEmails.length ? onboardingSecondaryButtonClass : onboardingPrimaryButtonClass" data-test="onboarding-invite-open" @click="openInviteDialog">
+              <IconUserPlus class="h-4 w-4" aria-hidden="true" />
+              {{ invitedEmails.length ? t('invite-onboarding-invite-another') : t('onboarding-invite-option-cta') }}
+            </button>
+          </div>
+        </div>
+
+        <InviteTeammateModal
+          ref="inviteModalRef"
+          analytics-channel="onboarding-v3"
+          invite-kind="technical"
+          :organization-id="inviteOrgId"
+          :tracking-version="3"
+          @success="onInviteSuccess"
+        />
+      </div>
+
       <form v-else class="onboarding-details-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95" data-test="onboarding-ai-plan" @submit.prevent="createOrganization">
         <div class="onboarding-details-card-content space-y-6">
           <div>
@@ -290,13 +386,13 @@ async function createOrganization() {
               {{ t('ai-onboarding-plan-title') }}
             </h2>
             <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {{ t('ai-onboarding-plan-subtitle') }}
+              {{ isInvite ? t('invite-onboarding-plan-subtitle') : t('ai-onboarding-plan-subtitle') }}
             </p>
           </div>
 
           <div>
             <p id="ai-onboarding-goal-label" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-              {{ t('ai-onboarding-goal-label') }}
+              {{ isInvite ? t('invite-onboarding-goal-label') : t('ai-onboarding-goal-label') }}
             </p>
             <div class="mt-3 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-labelledby="ai-onboarding-goal-label" data-test="onboarding-ai-goal-options">
               <label v-for="option in goalOptions" :key="option.value" class="group cursor-pointer" :data-test="`onboarding-ai-goal-${option.value}`">
@@ -309,8 +405,8 @@ async function createOrganization() {
                 >
                   <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500"><component :is="option.icon" class="h-5 w-5" aria-hidden="true" /></span>
                   <span class="min-w-0">
-                    <span class="block text-sm font-semibold">{{ t(`ai-onboarding-goal-${option.value}-label`) }}</span>
-                    <span class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`ai-onboarding-goal-${option.value}-desc`) }}</span>
+                    <span class="block text-sm font-semibold">{{ t(`${goalCopyPrefix}-onboarding-goal-${option.value}-label`) }}</span>
+                    <span class="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">{{ t(`${goalCopyPrefix}-onboarding-goal-${option.value}-desc`) }}</span>
                   </span>
                 </span>
               </label>
@@ -384,7 +480,7 @@ async function createOrganization() {
             </button>
             <button type="submit" class="d-btn min-h-12" :class="onboardingPrimaryButtonClass" :disabled="!canCreate" data-test="onboarding-ai-create-org">
               <IconLoader v-if="isCreating" class="h-4 w-4 animate-spin" />
-              {{ t('ai-onboarding-create-org') }}
+              {{ isInvite ? t('invite-onboarding-create-org') : t('ai-onboarding-create-org') }}
               <IconArrowRight v-if="!isCreating" class="h-4 w-4" />
             </button>
           </div>
