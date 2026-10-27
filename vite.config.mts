@@ -263,7 +263,7 @@ function routeChunkPreloadPlugin(): Plugin {
           r: routes.map(route => [route.pattern, route.layouts.map(name => layoutNames.indexOf(name)), route.files]),
         }
         // Escape characters that could end the string or the script when embedded as code.
-        const json = JSON.stringify(data).replace(/[<>/\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+        const json = JSON.stringify(data).replace(/[<>/\u2028\u2029]/g, char => String.raw`\u` + char.codePointAt(0)!.toString(16).padStart(4, '0'))
         const source = `(function(){var d=${json},p=location.pathname;function a(i){var l=document.createElement('link');l.rel='modulepreload';l.crossOrigin='';l.href='/'+d.f[i];document.head.appendChild(l)}for(var i=0;i<d.r.length;i++){var r=d.r[i];if(new RegExp(r[0],'i').test(p)){r[1].forEach(function(x){d.l[x].forEach(a)});r[2].forEach(a);return}}})()\n`
         const fileName = `assets/route-preload-${createHash('sha256').update(source).digest('hex').slice(0, 8)}.js`
         this.emitFile({ type: 'asset', fileName, source })
