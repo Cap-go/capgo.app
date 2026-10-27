@@ -38,7 +38,7 @@ describe('cron_stat_app queue resilience', () => {
     await resetAppDataStats(processCronAppId)
   })
 
-  it.concurrent('process_cron_stats_jobs still queues active apps when first-seen MAU leaves daily_mau quiet', async () => {
+  it('process_cron_stats_jobs still queues active apps when first-seen MAU leaves daily_mau quiet', async () => {
     await clearCronStatAppMessages(processCronAppId)
 
     // MAU is now recorded on the device's first day in the billing window, so
@@ -65,5 +65,32 @@ describe('cron_stat_app queue resilience', () => {
     expect(queuedMessages[0]?.message?.payload?.appId).toBe(processCronAppId)
     expect(queuedMessages[0]?.message?.payload?.orgId).toBe(ORG_ID_CRON_QUEUE)
     expect(queuedMessages[0]?.message?.payload?.todayOnly).toBe(false)
+  })
+
+  it('an immediate refresh promotes a job parked in a staggered stats slot', async () => {
+    const appId = processCronAppId
+    await clearCronStatAppMessages(appId)
+    await executeSQL(`DELETE FROM public.app_stats_refresh_state WHERE app_id = $1`, [appId])
+
+    await executeSQL(`SELECT public.queue_cron_stat_app_for_app($1, $2, 600)`, [appId, ORG_ID_CRON_QUEUE])
+    const [parked] = await executeSQL(
+      `SELECT vt > now() + INTERVAL '5 minutes' AS parked FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = $1`,
+      [appId],
+    )
+    expect(parked?.parked).toBe(true)
+
+    // Let the 5-minute refresh TTL pass so the on-demand request is accepted.
+    await executeSQL(
+      `UPDATE public.app_stats_refresh_state SET stats_refresh_requested_at = stats_refresh_requested_at - INTERVAL '10 minutes' WHERE app_id = $1`,
+      [appId],
+    )
+    await executeSQL(`SELECT public.queue_cron_stat_app_for_app($1, $2)`, [appId, ORG_ID_CRON_QUEUE])
+
+    const rows = await executeSQL(
+      `SELECT vt <= clock_timestamp() AS readable FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = $1`,
+      [appId],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.readable).toBe(true)
   })
 })

@@ -4626,7 +4626,7 @@ export type Database = {
       process_stats_email_weekly: { Args: never; Returns: undefined }
       process_subscribed_orgs: { Args: never; Returns: undefined }
       queue_cron_stat_app_for_app: {
-        Args: { p_app_id: string; p_org_id?: string }
+        Args: { p_app_id: string; p_delay_seconds?: number; p_org_id?: string }
         Returns: undefined
       }
       queue_cron_stat_org_for_org: {
