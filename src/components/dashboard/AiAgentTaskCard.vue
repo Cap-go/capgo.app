@@ -38,17 +38,26 @@ const organizationStore = useOrganizationStore()
 const isCopying = ref(false)
 const copied = ref(false)
 
-// Reuses a key the user already owns for this scope. A new key for an app task is bound to
-// that app only (app_admin), so app administrators without organization rights can use it.
+// App roles whose key can finish each app task. Uploading to a channel needs
+// app.upload_bundle and channel.promote_bundle; creating a channel with --default or
+// --self-assign also needs channel.update_settings, which only app_admin grants.
+const APP_TASK_ROLES: Record<Exclude<AiAgentTask, 'add-app'>, readonly string[]> = {
+  'upload-bundle': ['app_admin', 'app_developer', 'app_uploader'],
+  'create-channel': ['app_admin'],
+}
+
+// Reuses a key the user already owns when it can do the task. A new key for an app task is
+// bound to that app only (app_admin), so app administrators without organization rights can use it.
 async function loadApiKey(userId: string, orgId: string, appId: string | null) {
-  return shareInFlightApiKeyLoad({ userId, orgId, appId }, async () => {
-    const existing = await findUsablePlainApiKey(capgo, userId, orgId, appId)
+  const appRoles = props.task === 'add-app' ? undefined : APP_TASK_ROLES[props.task]
+  return shareInFlightApiKeyLoad({ userId, orgId, appId, appRoles }, async () => {
+    const existing = await findUsablePlainApiKey(capgo, userId, orgId, appId, { appRoles })
     if (existing)
       return existing
     const { data, error } = await createDefaultApiKey(capgo, t('api-key'), appId ? { appId } : { orgId })
     if (error)
       throw error
-    return typeof data?.key === 'string' ? data.key : findUsablePlainApiKey(capgo, userId, orgId, appId)
+    return typeof data?.key === 'string' ? data.key : findUsablePlainApiKey(capgo, userId, orgId, appId, { appRoles })
   })
 }
 

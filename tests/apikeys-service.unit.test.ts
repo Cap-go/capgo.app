@@ -1,7 +1,7 @@
 import type { ConsoleClient } from '../src/services/consoleClient'
 import type { Database } from '../src/types/database.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearApiKeyScopeFilters, filterApiKeyListRows } from '../src/services/apikeys'
+import { clearApiKeyScopeFilters, filterApiKeyListRows, findUsablePlainApiKey } from '../src/services/apikeys'
 
 const mocks = vi.hoisted(() => ({
   invokeCapgoApi: vi.fn(),
@@ -161,5 +161,38 @@ describe('aPI key list filtering', () => {
       'org:org-a': false,
       'app:app-a': false,
     })
+  })
+})
+
+// Minimal chainable console client: every query on a table resolves to its fixed rows.
+function fakeClient(rows: Record<string, unknown>) {
+  return {
+    from: (table: string) => {
+      const result = { data: rows[table], error: null }
+      const builder: Record<string, unknown> = {}
+      for (const method of ['select', 'eq', 'not', 'in', 'order'])
+        builder[method] = () => builder
+      builder.single = async () => result
+      builder.then = (resolve: (value: unknown) => unknown) => Promise.resolve(result).then(resolve)
+      return builder
+    },
+  } as unknown as ConsoleClient<Database>
+}
+
+describe('findUsablePlainApiKey app roles', () => {
+  const rows = (role: string) => ({
+    apikeys: [{ key: 'reader-key', expires_at: null, rbac_id: 'rbac-1', created_at: '2026-10-01' }],
+    apps: { id: 'app-uuid', owner_org: 'org-1' },
+    role_bindings: [{ principal_id: 'rbac-1', scope_type: 'app', app_id: 'app-uuid', roles: { name: role } }],
+  })
+
+  it.concurrent('reuses any app binding when no roles are required', async () => {
+    expect(await findUsablePlainApiKey(fakeClient(rows('app_reader')), 'user-1', 'org-1', 'com.acme.app')).toBe('reader-key')
+  })
+
+  it.concurrent('skips an app key whose role cannot do the task', async () => {
+    const client = fakeClient(rows('app_reader'))
+    expect(await findUsablePlainApiKey(client, 'user-1', 'org-1', 'com.acme.app', { appRoles: ['app_admin'] })).toBeNull()
+    expect(await findUsablePlainApiKey(fakeClient(rows('app_admin')), 'user-1', 'org-1', 'com.acme.app', { appRoles: ['app_admin'] })).toBe('reader-key')
   })
 })
