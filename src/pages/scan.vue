@@ -36,9 +36,17 @@ const isScanning = ref(false)
 const isLoading = ref(false)
 const downloadProgress = ref(0)
 const scannedUrl = ref('')
-const errorMessage = ref('')
+// Keep translation keys, not text, so messages follow a language that loads or changes later.
+interface ScanMessage { key: string, params?: Record<string, unknown> }
+const errorMessage = ref<ScanMessage | null>(null)
 const manualUrl = ref('')
-const statusMessage = ref('')
+const statusMessage = ref<ScanMessage | null>(null)
+function scanMessage(key: string, params?: Record<string, unknown>): ScanMessage {
+  return { key, params }
+}
+function translate(value: ScanMessage | null) {
+  return value ? t(value.key, value.params ?? {}) : ''
+}
 const scannerFrameRef = ref<HTMLElement | null>(null)
 const debugMessages = ref<string[]>([])
 const savedPreviews = ref<PreviewInfo[]>([])
@@ -269,7 +277,7 @@ const scannerHint = computed(() => {
   if (isLoading.value)
     return t('scan-hint-downloading')
   if (statusMessage.value)
-    return statusMessage.value
+    return translate(statusMessage.value)
   if (isScanning.value)
     return t('scan-hint-align')
   if (errorMessage.value)
@@ -367,8 +375,8 @@ function queuePreviewLoad(previewLoad: PendingPreviewLoad) {
     url: previewLoad.url,
   })
   pendingPreviewLoad.value = previewLoad
-  errorMessage.value = ''
-  statusMessage.value = t('scan-preview-detected')
+  errorMessage.value = null
+  statusMessage.value = scanMessage('scan-preview-detected')
   downloadProgress.value = 0
   showOptions.value = false
 }
@@ -379,7 +387,7 @@ async function confirmPreviewLoad() {
     return
 
   pendingPreviewLoad.value = null
-  statusMessage.value = ''
+  statusMessage.value = null
   debugLog('preview load confirmed', { source: previewLoad.source, url: previewLoad.url })
   try {
     await previewLoad.start()
@@ -387,8 +395,8 @@ async function confirmPreviewLoad() {
   catch (error) {
     debugWarn('failed to start confirmed preview', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = t('scan-start-failed', { message })
-    toast.error(errorMessage.value)
+    errorMessage.value = scanMessage('scan-start-failed', { message })
+    toast.error(translate(errorMessage.value))
   }
 }
 
@@ -399,7 +407,7 @@ async function cancelPreviewLoad() {
 
   pendingPreviewLoad.value = null
   debugLog('preview load canceled', { source: previewLoad.source, url: previewLoad.url })
-  statusMessage.value = previewLoad.source === 'camera' ? '' : t('scan-loading-canceled')
+  statusMessage.value = previewLoad.source === 'camera' ? null : scanMessage('scan-loading-canceled')
   if (previewLoad.source === 'camera' && isNativePlatform)
     await startScanner()
 }
@@ -420,7 +428,7 @@ onMounted(async () => {
 
   if (!isNativePlatform) {
     debugLog('native scanner unavailable on web platform')
-    statusMessage.value = t('scan-web-camera-unavailable')
+    statusMessage.value = scanMessage('scan-web-camera-unavailable')
     showOptions.value = true
     return
   }
@@ -709,7 +717,7 @@ async function stopScanner(force = false, options: { keepHandlingBarcode?: boole
 async function startScanner() {
   if (!isNativePlatform) {
     debugLog('startScanner ignored on web platform')
-    statusMessage.value = t('scan-web-camera-unavailable')
+    statusMessage.value = scanMessage('scan-web-camera-unavailable')
     return
   }
 
@@ -722,8 +730,8 @@ async function startScanner() {
     debugLog('starting scanner')
     isScanning.value = true
     isHandlingBarcode = false
-    errorMessage.value = ''
-    statusMessage.value = ''
+    errorMessage.value = null
+    statusMessage.value = null
     scannedUrl.value = ''
     manualUrl.value = ''
     window.scrollTo(0, 0)
@@ -762,8 +770,8 @@ async function startScanner() {
       catch (error) {
         debugWarn('failed to handle scanned barcode', error)
         const message = error instanceof Error ? error.message : String(error)
-        errorMessage.value = t('scan-handle-failed', { message })
-        toast.error(errorMessage.value)
+        errorMessage.value = scanMessage('scan-handle-failed', { message })
+        toast.error(translate(errorMessage.value))
       }
       finally {
         isHandlingBarcode = false
@@ -800,7 +808,7 @@ async function startScanner() {
   }
   catch (error) {
     debugWarn('failed to start scanner', error)
-    errorMessage.value = t('scan-camera-start-failed')
+    errorMessage.value = scanMessage('scan-camera-start-failed')
     await stopScanner(true)
   }
 }
@@ -853,7 +861,7 @@ async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource
   if (!isHttpUrl(value)) {
     debugWarn('scan value is unsupported', value)
     // Show what was scanned so unsupported codes can be diagnosed from the device.
-    errorMessage.value = t('scan-unsupported-code', { value: value.slice(0, 160) })
+    errorMessage.value = scanMessage('scan-unsupported-code', { value: value.slice(0, 160) })
     manualUrl.value = value
     toast.error(t('scan-unsupported-code-toast'))
     return
@@ -1102,9 +1110,9 @@ async function startPreviewPayload(payloadUrl: string, appId?: string) {
   catch (error) {
     debugWarn('failed to start preview payload flow', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = t('scan-start-failed', { message })
+    errorMessage.value = scanMessage('scan-start-failed', { message })
     manualUrl.value = scannedUrl.value
-    toast.error(errorMessage.value)
+    toast.error(translate(errorMessage.value))
   }
   finally {
     isLoading.value = false
@@ -1190,9 +1198,9 @@ async function startChannelPreview(previewLink: Extract<PreviewDeepLink, { type:
   catch (error) {
     debugWarn('failed to start channel preview flow', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = t('scan-start-failed', { message })
+    errorMessage.value = scanMessage('scan-start-failed', { message })
     manualUrl.value = scannedUrl.value
-    toast.error(errorMessage.value)
+    toast.error(translate(errorMessage.value))
   }
   finally {
     isLoading.value = false
@@ -1232,9 +1240,9 @@ async function startPreviewDownloadUrl(downloadUrl: string, version = `preview-$
   catch (error) {
     debugWarn('failed to download/apply direct preview', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = t('scan-start-failed', { message })
+    errorMessage.value = scanMessage('scan-start-failed', { message })
     manualUrl.value = scannedUrl.value
-    toast.error(errorMessage.value)
+    toast.error(translate(errorMessage.value))
   }
   finally {
     isLoading.value = false
@@ -1258,7 +1266,7 @@ async function downloadUpdate(updateUrl: string) {
 
   if (!isHttpUrl(updateUrl)) {
     debugWarn('downloadUpdate rejected unsupported URL', updateUrl)
-    errorMessage.value = t('scan-not-downloadable-url')
+    errorMessage.value = scanMessage('scan-not-downloadable-url')
     toast.error(t('scan-unsupported-update-url'))
     return
   }
@@ -1273,8 +1281,8 @@ async function submitManualUrl() {
     return
   }
 
-  errorMessage.value = ''
-  statusMessage.value = ''
+  errorMessage.value = null
+  statusMessage.value = null
   scannedUrl.value = normalizedManualUrl.value
 
   if (isScanning.value || cameraPreviewStarted)
@@ -1301,8 +1309,8 @@ async function submitManualUrl() {
 
 async function retryScanning() {
   debugLog('retryScanning called')
-  errorMessage.value = ''
-  statusMessage.value = ''
+  errorMessage.value = null
+  statusMessage.value = null
   scannedUrl.value = ''
   manualUrl.value = ''
   downloadProgress.value = 0
@@ -1396,7 +1404,7 @@ async function goBack() {
             class="rounded-2xl bg-amber-400/10 px-4 py-3 text-left text-sm leading-6 text-amber-100"
             role="alert"
           >
-            {{ errorMessage }}
+            {{ translate(errorMessage) }}
           </p>
         </div>
       </section>

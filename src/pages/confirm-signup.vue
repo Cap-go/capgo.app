@@ -14,6 +14,7 @@ import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/saf
 const route = useRoute()
 const { t } = useI18n()
 const isRedirecting = ref(true)
+// Translation key, translated at render so it follows a language that loads later.
 const error = ref('')
 const allowedConfirmationHosts = getAllowedConfirmationHosts()
 onMounted(() => {
@@ -25,14 +26,14 @@ onMounted(() => {
     })
     if (!confirmationUrl) {
       isRedirecting.value = false
-      error.value = t('confirm-email-invalid-url')
+      error.value = 'confirm-email-invalid-url'
       return
     }
     replaceDocument(confirmationUrl)
   }
   catch {
     isRedirecting.value = false
-    error.value = t('confirm-email-redirect-error')
+    error.value = 'confirm-email-redirect-error'
   }
 })
 </script>
@@ -60,7 +61,7 @@ onMounted(() => {
 
       <div v-else class="space-y-4">
         <div class="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm font-medium text-red-700 dark:border-red-800/80 dark:bg-red-950/40 dark:text-red-200">
-          {{ error }}
+          {{ t(error) }}
         </div>
         <p class="text-sm leading-6 text-slate-500 dark:text-slate-300">
           {{ t('confirm-email-stale-link') }}
