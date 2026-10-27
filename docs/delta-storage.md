@@ -166,6 +166,9 @@ After the deploy:
    retries and fails since the migration).
 5. On the Google subscriber, drop the frozen `public.manifest` table once the
    new workers serve (`DROP TABLE public.manifest;`); nothing reads it anymore.
+6. Once the previous API workers are replaced, drop the unused receipt summary
+   table on the primary: `DROP TABLE public.manifest_per_version;` (the old
+   workers still write it during the deploy).
 
 The 14 GB of the old table are freed by the drop itself.
 

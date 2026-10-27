@@ -131,6 +131,12 @@ ALTER TABLE public.delta_files
   ADD CONSTRAINT delta_files_app_id_fkey FOREIGN KEY (app_id) REFERENCES public.apps (app_id) ON DELETE CASCADE NOT VALID;
 ALTER TABLE public.version_files
   ADD CONSTRAINT version_files_app_version_id_fkey FOREIGN KEY (app_version_id) REFERENCES public.app_versions (id) ON DELETE CASCADE NOT VALID;
+-- Apps or versions deleted while the backfill ran left their copied rows
+-- behind (no key existed yet); from here on the keys cascade.
+DELETE FROM public.version_files AS vf
+WHERE NOT EXISTS (SELECT 1 FROM public.app_versions AS av WHERE av.id = vf.app_version_id);
+DELETE FROM public.delta_files AS df
+WHERE NOT EXISTS (SELECT 1 FROM public.apps AS a WHERE a.app_id = df.app_id);
 ALTER TABLE public.delta_files VALIDATE CONSTRAINT delta_files_app_id_fkey;
 ALTER TABLE public.version_files VALIDATE CONSTRAINT version_files_app_version_id_fkey;
 
@@ -1248,7 +1254,8 @@ DROP TABLE IF EXISTS public.r2_objects;
 DROP FUNCTION IF EXISTS public.r2_objects_before_write();
 DROP FUNCTION IF EXISTS public.r2_inventory_checkpoints_before_write();
 DROP TYPE IF EXISTS public.r2_object_state;
-DROP TABLE IF EXISTS public.manifest_per_version;
+-- public.manifest_per_version stays until the previous API workers are
+-- replaced: they still write receipt summaries to it during the deploy.
 
 -- Onboarding demo seeding writes demo file entries into the new tables.
 CREATE OR REPLACE FUNCTION public.reset_onboarding_demo_app_data(p_app_uuid uuid)

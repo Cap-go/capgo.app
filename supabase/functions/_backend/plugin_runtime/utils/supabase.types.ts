@@ -1760,6 +1760,53 @@ export type Database = {
           },
         ]
       }
+      manifest_per_version: {
+        Row: {
+          created_at: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          manifest_size: string | null
+          manifest_size_payload_hash: string | null
+          payload_hash: string
+          size_receipts_provided: boolean
+          total_file_size: number
+          version_id: number
+        }
+        Insert: {
+          created_at?: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
+          payload_hash: string
+          size_receipts_provided?: boolean
+          total_file_size: number
+          version_id: number
+        }
+        Update: {
+          created_at?: string
+          entry_count?: number
+          format_version?: number
+          manifest?: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
+          payload_hash?: string
+          size_receipts_provided?: boolean
+          total_file_size?: number
+          version_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manifest_per_version_version_id_fkey"
+            columns: ["version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notification_app_settings: {
         Row: {
           app_id: string

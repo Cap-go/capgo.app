@@ -11,6 +11,10 @@
 SET statement_timeout = 0;
 SET lock_timeout = '5s';
 
+-- One transaction: the copy is all or nothing, and the keyed temp table lives
+-- until COMMIT.
+BEGIN;
+
 CREATE FUNCTION public.delta_entry_key(p_s3_path text, p_file_name text, p_file_hash text)
 RETURNS bytea
 LANGUAGE sql
@@ -143,6 +147,8 @@ GROUP BY b.app_version_id;
 
 -- Reverse lookup for GC. Primary only: excluded from the read-replica catalog.
 CREATE INDEX version_files_file_ids_gin_idx ON public.version_files USING gin (file_ids);
+
+COMMIT;
 
 RESET statement_timeout;
 RESET lock_timeout;
