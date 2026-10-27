@@ -364,11 +364,14 @@ watch(billingOrgId, () => {
 watch([pendingPlanCheckout, pricesReady], async ([pending, ready]) => {
   if (!pending || !ready)
     return
+  const index = mainStore.plans.findIndex(plan => plan.name === pending.planName)
+  // Kept until the plan's prices load, so a successful Retry still opens the linked checkout.
+  if (index >= 0 && !hasPricesFor(mainStore.plans[index].stripe_id))
+    return
   pendingPlanCheckout.value = null
   const org = currentOrganization.value
-  const index = mainStore.plans.findIndex(plan => plan.name === pending.planName)
   // Never start a checkout for another org than the one the link named.
-  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0 && hasPricesFor(mainStore.plans[index].stripe_id))
+  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0)
     await openChangePlan(mainStore.plans[index], index)
 })
 

@@ -5,6 +5,8 @@ import { formatNumber } from '~/services/formatLocale'
 import { stripeAmountToMajorUnits } from '../../supabase/functions/shared/stripe-amount.ts'
 
 const STORAGE_KEY = 'capgo_plan_currency'
+// The server always returns the USD amounts, so they are shown when no currency is sold on every plan.
+const FALLBACK_CURRENCY = 'usd'
 
 // Smallest-unit amounts per currency, straight from the Stripe prices (currency_options).
 type PlanPriceAmounts = Record<string, { month: Record<string, number>, year: Record<string, number> }>
@@ -100,7 +102,7 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
       return lockedCurrencyUnavailable.value ? null : lockedCurrency.value
     if (storedCurrency.value && currencies.value.includes(storedCurrency.value))
       return storedCurrency.value
-    return data.value?.currency ?? null
+    return data.value ? data.value.currency ?? FALLBACK_CURRENCY : null
   })
 
   function setCurrency(code: string) {
@@ -111,10 +113,12 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     catch {}
   }
 
-  // False when this plan's Stripe prices failed to load: checkout for it stays disabled.
+  // False when this plan's Stripe prices failed to load or lack the shown currency: checkout for it stays
+  // disabled, so the page never sells a price it did not display. No prices at all means Stripe is not set up.
   function hasPricesFor(productId: string) {
-    const amounts = data.value?.prices[productId]
-    return !!amounts && Object.keys(amounts.month).length > 0 && Object.keys(amounts.year).length > 0
+    if (!data.value)
+      return false
+    return Object.keys(data.value.prices).length === 0 || amountsFor(productId) !== null
   }
 
   // Null until Stripe prices load: callers fall back to the USD amounts stored on the plan.
