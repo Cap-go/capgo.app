@@ -125,20 +125,29 @@ upload, so one rule covers concurrent uploads and GC:
 
 ## Rollout
 
-Two migrations, one release:
+Five migrations, one release, each its own short transaction so no slow work
+runs while `apps` or `app_versions` are locked:
 
 1. `delta_storage_backfill` creates `delta_files` and `version_files` and
-   copies every `public.manifest` row into them in one pass (minutes at
-   production scale). It only reads `app_versions` and `manifest`, so uploads
-   keep running.
+   copies every `public.manifest` row in one pass (minutes at production
+   scale). It only reads `app_versions` and `manifest`, so uploads keep running.
 2. `delta_storage_v2` drops the PlanetScale replication of the old inventory
    (`capgo_planetscale_r2_pub` and the `capgo_planetscale_r2_slot` slot; it
    terminates the slot's walsender and fails rather than leave a slot that
-   would retain WAL), adds foreign keys as `NOT VALID` then validates them, adds
-   the GC tables, triggers and policies, then locks `manifest`, converts the
-   versions uploaded during step 1, drops the table and creates the
-   compatibility view. It runs under a 5 s `lock_timeout`; a release that
-   cannot get its locks fails and can be retried.
+   would retain WAL) and adds policies, GC tables, triggers and functions.
+3. `delta_storage_cutover` locks `manifest`, converts the versions uploaded
+   since the backfill (found through indexes, no table scan), drops the table
+   and creates the compatibility view.
+4. `delta_storage_keys` adds the foreign keys as `NOT VALID` (brief locks).
+5. `delta_storage_validate` removes rows whose app or version was deleted
+   during the backfill, validates the keys without blocking writes, and queues
+   size lookups for unsized files.
+
+Size lookups queued for the view's rows are delayed 30 minutes so the new
+workers, which know `delta_files`, process them; size updates through the view
+are ignored (a pre-cutover lookup carries a legacy id). The migrations run
+under a 5 s `lock_timeout`; a release that cannot get its locks fails and can
+be retried.
 
 Around the migrations, the release CI:
 
