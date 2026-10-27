@@ -13,6 +13,8 @@ export const app = new Hono<MiddlewareKeyVariables>()
 // well before that and let the next daily run continue with the rest.
 const CLEANUP_BUDGET_MS = 10_000
 const CLEANUP_CONCURRENCY = 8
+// App folders of one org, inside the org-level concurrency above.
+const APP_FOLDER_CONCURRENCY = 2
 // Keeps PostgREST `in.(...)` filters well under URL length limits.
 const LOOKUP_CHUNK_SIZE = 100
 // Folders listed per run, as before; shuffling spreads work across runs.
@@ -218,11 +220,8 @@ async function cleanOrgFolder(
       .in('app_id', ids))
     const existingAppIds = new Set(existingApps.map(row => row.app_id))
 
-    for (const appId of appIds) {
-      if (Date.now() >= deadline)
-        break
-      if (existingAppIds.has(appId))
-        continue
+    const orphanedAppIds = appIds.filter(appId => !existingAppIds.has(appId))
+    await runWithDeadline(orphanedAppIds, async (appId) => {
       try {
         const deleted = await removeImageFolder(c, `org/${orgId}/${appId}`, { deadline })
         if (deleted > 0) {
@@ -234,7 +233,7 @@ async function cleanOrgFolder(
         cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting orphaned app images', error, appId, orgId })
         stats.errors++
       }
-    }
+    }, { concurrency: APP_FOLDER_CONCURRENCY, deadline })
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'error processing org folder', error, orgId })
