@@ -118,7 +118,58 @@ describe('QueueDispatcher', () => {
 
     await expect(dispatcher.alarm()).resolves.toBeUndefined()
     const status = await (await dispatcher.fetch(new Request('https://queue-dispatcher.capgo.internal/ensure'))).json()
-    expect(status).toEqual({ status: 'ok', inFlight: 1 })
+    expect(status).toEqual({ status: 'ok', active: 1, activeSlow: 1, pending: 0 })
+  })
+
+  it('keeps a connection free for ordinary wakeups while slow consumers hold the rest', async () => {
+    const started: string[] = []
+    const releases: (() => void)[] = []
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      started.push(JSON.parse(init.body as string).queue_name)
+      return new Promise<Response>(resolve => releases.push(() => resolve(new Response('{}'))))
+    }))
+    const manifest = row({ id: '1', target: 'on_manifest_create', body: { queue_name: 'on_manifest_create' }, timeout_ms: 60000, calls: 10 })
+    const appUpdate = row({ id: '2', target: 'on_app_update', body: { queue_name: 'on_app_update' }, calls: 3 })
+    const { dispatcher } = createDispatcher(async () => Response.json({ rows: [manifest, appUpdate] }))
+
+    await dispatcher.alarm()
+    await vi.waitFor(() => expect(started).toHaveLength(6))
+
+    // Six open connections at most, four of them slow, so all fast calls start
+    // immediately instead of waiting (with a running timeout) behind manifests.
+    expect(started.filter(name => name === 'on_manifest_create')).toHaveLength(4)
+    expect(started.filter(name => name === 'on_app_update')).toHaveLength(2)
+    const status = await (await dispatcher.fetch(new Request('https://queue-dispatcher.capgo.internal/ensure'))).json()
+    expect(status).toEqual({ status: 'ok', active: 6, activeSlow: 4, pending: 7 })
+
+    // A finished call frees its slot for the next waiting call.
+    releases[4]()
+    await vi.waitFor(() => expect(started).toHaveLength(7))
+    expect(started[6]).toBe('on_app_update')
+  })
+
+  it('starts each timeout only when its request is sent', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+    const { dispatcher } = createDispatcher(async () => Response.json({ rows: [row({ calls: 8 })] }))
+
+    await dispatcher.alarm()
+    // One for the claim plus one per started call; the two waiting calls have
+    // no timer yet.
+    await vi.waitFor(() => expect(timeoutSpy).toHaveBeenCalledTimes(7))
+    timeoutSpy.mockRestore()
+  })
+
+  it('does not queue more unsent calls per target than one dispatch can use', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+    const slowRow = row({ target: 'on_manifest_create', timeout_ms: 60000, calls: 10 })
+    const { dispatcher } = createDispatcher(async () => Response.json({ rows: [slowRow] }))
+
+    await dispatcher.alarm()
+    await dispatcher.alarm()
+    await dispatcher.alarm()
+    const status = await (await dispatcher.fetch(new Request('https://queue-dispatcher.capgo.internal/ensure'))).json()
+    expect(status).toEqual({ status: 'ok', active: 4, activeSlow: 4, pending: 10 })
   })
 
   it('keeps ticking when the claim fails', async () => {

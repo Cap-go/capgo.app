@@ -27,6 +27,23 @@ function logError(event: string, error: unknown, fields: Record<string, unknown>
   console.error(JSON.stringify({ event, ...fields, error: error instanceof Error ? error.message : String(error) }))
 }
 
+// Cloudflare allows six connections awaiting response headers per invocation
+// and queues the rest, so starting every claimed call at once would let their
+// timeouts expire while they wait. Calls are scheduled through these slots and
+// each timeout starts only when its request is sent.
+const MAX_OPEN_REQUESTS = 6
+// Awaited consumers (on_manifest_create 60s, onboarding 100s) can use at most
+// this many slots, so ordinary 8s wakeups always have one free.
+const MAX_SLOW_REQUESTS = 4
+const SLOW_REQUEST_TIMEOUT_MS = 10_000
+// Same cap as process_function_queue's calls_needed: unsent calls for a target
+// beyond this add no consumer capacity, the backlog is still in pgmq.
+const MAX_PENDING_PER_TARGET = 10
+
+function isSlow(request: HttpDispatchRequest) {
+  return request.timeoutMs > SLOW_REQUEST_TIMEOUT_MS
+}
+
 /**
  * Replaces pg_net for routed targets: every second, claim the wakeups the
  * database wrote to public.http_dispatch_outbox and send them.
@@ -38,13 +55,15 @@ function logError(event: string, error: unknown, fields: Record<string, unknown>
 // A plain class (like ConsoleEvents) instead of extending DurableObject from
 // cloudflare:workers, so Node unit tests can still import the API worker.
 export class QueueDispatcher {
-  private readonly inFlight = new Set<Promise<void>>()
+  private readonly pending: HttpDispatchRequest[] = []
+  private active = 0
+  private activeSlow = 0
 
   constructor(private readonly ctx: DurableObjectState, private readonly env: Env) {}
 
   async fetch(_request: Request): Promise<Response> {
     await this.ensureAlarm()
-    return Response.json({ status: 'ok', inFlight: this.inFlight.size })
+    return Response.json({ status: 'ok', active: this.active, activeSlow: this.activeSlow, pending: this.pending.length })
   }
 
   async alarm(): Promise<void> {
@@ -89,13 +108,32 @@ export class QueueDispatcher {
     )
     for (const row of rejected)
       logError('queue_dispatcher_url_rejected', new Error('dispatch URL origin is not allowed'), { target: row.target, url: row.url })
-    for (const request of requests)
-      this.track(this.send(request))
+    for (const request of requests) {
+      if (this.pending.filter(waiting => waiting.target === request.target).length < MAX_PENDING_PER_TARGET)
+        this.pending.push(request)
+    }
+    this.pump()
   }
 
-  private track(promise: Promise<void>) {
-    this.inFlight.add(promise)
-    promise.finally(() => this.inFlight.delete(promise))
+  private pump() {
+    for (let i = 0; i < this.pending.length && this.active < MAX_OPEN_REQUESTS;) {
+      const request = this.pending[i]
+      const slow = isSlow(request)
+      if (slow && this.activeSlow >= MAX_SLOW_REQUESTS) {
+        i++
+        continue
+      }
+      this.pending.splice(i, 1)
+      this.active++
+      if (slow)
+        this.activeSlow++
+      void this.send(request).finally(() => {
+        this.active--
+        if (slow)
+          this.activeSlow--
+        this.pump()
+      })
+    }
   }
 
   private async send(request: HttpDispatchRequest) {
