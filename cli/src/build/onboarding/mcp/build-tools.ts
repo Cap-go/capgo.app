@@ -43,13 +43,14 @@ function buildLogPath(appId: string, platform: Platform): string {
  * stops the local watcher; the cloud build may still finish — surfaced in the
  * result). All injectable for tests (test-mcp-build-job covers the manager).
  */
-export function buildJobDeps(cwd: string): BuildJobDeps {
+export function buildJobDeps(cwd: string | (() => string)): BuildJobDeps {
+  const getCwd = typeof cwd === 'function' ? cwd : () => cwd
   return {
     spawnBuild: ({ appId, platform, recordPath, logPath }): BuildChild => {
       mkdirSync(dirname(logPath), { recursive: true })
       const fd = openSync(logPath, 'w')
       const args = ['-y', '@capgo/cli@latest', 'build', 'request', appId, '--platform', platform, '--output-upload', '--output-record', recordPath]
-      const child = spawn('npx', args, { cwd, stdio: ['ignore', fd, fd], detached: false })
+      const child = spawn('npx', args, { cwd: getCwd(), stdio: ['ignore', fd, fd], detached: false })
       try {
         closeSync(fd)
       }

@@ -171,6 +171,10 @@ export const mcpSearchDocsInputSchema = z.object({
   limit: z.number().int().min(1).max(DOCS_SEARCH_MAX_RESULTS).optional().describe('Maximum results, default 8'),
 })
 
+export const mcpSetProjectDirInputSchema = z.object({
+  path: z.string().min(1).describe('Absolute path to the Capacitor app folder the agent is working in (the folder containing capacitor.config.*). Relative paths resolve from the current project directory.'),
+})
+
 export const mcpDoctorInputSchema = z.object({
   packageJson: z.string().describe('Path to package.json for monorepos').optional(),
 })

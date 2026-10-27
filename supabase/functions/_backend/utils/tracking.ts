@@ -39,6 +39,11 @@ export interface BentoTrackingPayload {
   uniqId: string
   /** Which org members receive the email. Defaults to 'admins'; use 'billing' for payment/subscription events. */
   audience?: NotificationAudience
+  /**
+   * With `once`: record delivery markers so the org claim proves at least one
+   * recipient got the email (see OrgMembersOnceOptions.recordDelivery).
+   */
+  recordDelivery?: boolean
 }
 
 export interface SendEventToTrackingPayload extends TrackOptions {
@@ -194,6 +199,7 @@ async function executeBentoTracking(c: Context, payload: SendEventToTrackingPayl
           bento.uniqId,
           getDrizzleClient(pgClient),
           bento.audience,
+          { recordDelivery: bento.recordDelivery === true },
         )
         return result !== 'failed'
       }

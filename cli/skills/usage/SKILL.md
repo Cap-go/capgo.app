@@ -63,7 +63,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 
 ### Docs and agent integrations
 
-- `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source. Observe queries use `capgo_observe` (start at `view=summary`).
+- `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source. Observe queries use `capgo_observe` (start at `view=summary`). The server resolves the project from the client's MCP roots (the agent's workspace), not the folder it was spawned in, so a user-scoped install works across projects; clients without roots support call `capgo_set_project_dir` with the app folder.
 
 ### GitHub support commands
 

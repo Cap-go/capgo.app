@@ -4,9 +4,9 @@
  */
 export function buildServerInstructions(opts: { onboardingEnabled: boolean, liveUpdateEnabled: boolean }): string {
   const base
-    = 'Capgo Cloud MCP server: manage apps and live updates — upload/clean bundles, '
-    + 'set channels, query Observe (capgo_observe, start at summary), request native builds, '
-    + 'search docs (capgo_search_docs). Uses the saved API key; not signed in? Call capgo_login.'
+    = 'Capgo MCP: apps, bundles, channels, Observe (capgo_observe, start at summary), '
+    + 'native builds, docs (capgo_search_docs). Not signed in? capgo_login. '
+    + 'Project not found? capgo_set_project_dir with the workspace path.'
 
   const parts = [base]
   if (opts.onboardingEnabled) {

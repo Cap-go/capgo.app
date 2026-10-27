@@ -70,4 +70,5 @@ export const CONSOLE_RPCS = new Set([
   'update_org_member_role',
   'update_tmp_invite_role_rbac',
   'verify_getting_started',
+  'verify_mfa',
 ])
