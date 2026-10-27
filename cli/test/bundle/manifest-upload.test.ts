@@ -354,7 +354,7 @@ describe('manifest upload existence probe', () => {
       expect(requestedUrl).not.toMatch(/\.htaccess/i)
       expect(requestedHeaders?.['x-cli-version']).toBeTruthy()
       expect(requestedHeaders?.range).toBeUndefined()
-      expect(redirectMode).toBe('error')
+      expect(redirectMode).toBe('manual')
     }
     finally {
       globalThis.fetch = originalFetch

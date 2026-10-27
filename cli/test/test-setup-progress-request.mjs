@@ -12,7 +12,7 @@ test('the sole progress request explicitly asks for billing and sends the API ke
     globalThis.fetch = async (url, init) => {
       calls++
       assert.equal(url, prepared.apiHost + '/private/onboarding_progress')
-      assert.equal(init.redirect, 'error')
+      assert.equal(init.redirect, 'manual')
       assert.equal(init.headers.capgkey, prepared.apikey)
       assert.equal(init.headers.Authorization, prepared.apikey)
       assert.deepEqual(JSON.parse(init.body), { appId: prepared.project.appId, N: 0, initial: true, includeBilling: true })

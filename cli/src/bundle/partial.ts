@@ -77,7 +77,7 @@ export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, 
     try {
       const response = await fetch(url.toString(), {
         method: 'GET',
-        redirect: 'error',
+        redirect: 'manual',
         headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
       })
       if (response.status === 404)
