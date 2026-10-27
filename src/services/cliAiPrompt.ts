@@ -133,10 +133,11 @@ npx install-mcp "npx @capgo/cli@latest mcp" --client {MCP_CLIENT}
 
 After installation, check whether Capgo MCP tools are available in the current session.
 
-- If the tools are unavailable until restart, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo Builder setup. Verify Capgo MCP is connected, call capgo_whoami and confirm I am signed in before calling start_capgo_builder_onboarding.” Stop and wait for the restart.
+- If the tools are unavailable in the current session but you can start a sub-agent (a new agent session that loads the newly installed MCP servers), do not stop: start one sub-agent and delegate the rest of this Builder setup to it. Give it every instruction from this point on verbatim, including that it must call \`capgo_whoami\` and confirm I am signed in before calling \`start_capgo_builder_onboarding\`. Do not pass it the API key; the CLI login is already saved. Relay its questions to me and its answers back, and report its result. Only if the sub-agent cannot reach Capgo MCP tools either, fall back to the restart instructions below.
+- If the tools are unavailable until restart and no sub-agent can reach them, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo Builder setup. Verify Capgo MCP is connected, call capgo_whoami and confirm I am signed in before calling start_capgo_builder_onboarding.” Stop and wait for the restart.
 - If the tools are available without restart, continue immediately.
 
-If the Capgo MCP server was already running before the mandatory CLI authentication, reconnect that server so it loads the newly saved login. If reconnecting requires an AI client restart, give the restart and resume instructions above, then stop and wait.
+If the Capgo MCP server was already running before the mandatory CLI authentication, reconnect that server so it loads the newly saved login. If reconnecting requires an AI client restart, first try the sub-agent handoff above; only if that is not possible, give the restart and resume instructions above, then stop and wait.
 
 Once Capgo MCP is connected with the new login, call \`capgo_whoami\` and verify it is signed in before calling \`start_capgo_builder_onboarding\`. If I already named iOS or Android, pass that platform; otherwise omit it and let the tool ask.
 
@@ -744,7 +745,8 @@ npx install-mcp 'npx @capgo/cli@latest mcp' --client {MCP_CLIENT}
 
 After installation, check whether Capgo MCP tools are available in the current session.
 
-- If the tools are unavailable until restart, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo onboarding. Verify Capgo MCP is connected, then call capgo_whoami.” Stop and wait for the restart.
+- If the tools are unavailable in the current session but you can start a sub-agent (a new agent session that loads the newly installed MCP servers), do not stop: start one sub-agent and delegate Section 3 to it. Give it Section 3 verbatim. Do not pass it the API key; the CLI login from Section 1 is already saved, so if \`capgo_whoami\` reports it is not signed in, the sub-agent must tell you instead of logging in. Relay its questions to me and its answers back, and report its result. Only if the sub-agent cannot reach Capgo MCP tools either, fall back to the restart instructions below.
+- If the tools are unavailable until restart and no sub-agent can reach them, tell me to restart the AI client. Do not pretend onboarding has started. Tell me that after restart I can say: “Continue Capgo onboarding. Verify Capgo MCP is connected, then call capgo_whoami.” Stop and wait for the restart.
 - If the tools are available without restart, continue immediately.`
 
 function buildAiOnboardingContinueSection(organization: { id: string, name: string }, goal: AiOnboardingPromptGoal | null | undefined): string {
