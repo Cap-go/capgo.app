@@ -173,7 +173,7 @@ const enterpriseQuote = computed(() => {
 })
 
 // Real Stripe amounts per currency (price currency_options); USD from the plans table until they load.
-const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, hasPricesFor, hasRegionalPrice, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regionalDiscount: offeredRegionalDiscount, regularAmountsFor, reload: reloadPrices, setCurrency, setStandardPrice, standardPrice, usdRatioFor } = usePlanPrices(billingOrgId)
+const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, hasPricesFor, hasRegionalPrice, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regionalDiscount: offeredRegionalDiscount, regularAmountsFor, reload: reloadPrices, setCurrency, setStandardPrice, showsStandardPrice, standardPrice, usdRatioFor } = usePlanPrices(billingOrgId)
 
 function planAmounts(plan: Plan) {
   const stripeAmounts = amountsFor(plan.stripe_id)
@@ -256,8 +256,8 @@ async function startPlanCheckout(plan: Plan, isYear: boolean) {
     extraMau: isEnterprisePlan(plan) ? enterpriseQuote.value?.extraMau : undefined,
     // Only a currency Stripe sells this plan in; otherwise Checkout uses the price default.
     currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
-    // The buyer turned down the regional discount: checkout sells the full price the page now shows.
-    standardPrice: standardPrice.value && hasRegionalPrice(plan.stripe_id),
+    // The page shows the full price (opt-out, or a currency the discount is not sold in): checkout sells it.
+    standardPrice: showsStandardPrice(plan.stripe_id),
   })
 }
 

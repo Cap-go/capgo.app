@@ -187,5 +187,10 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     return !!regionalDiscount.value && !!data.value?.regularPrices?.[productId]
   }
 
-  return { amountsFor, currencies, currency, discount, failed, hasPricesFor, hasRegionalPrice, lockedCurrency, lockedCurrencyUnavailable, ready, regionalDiscount, regularAmountsFor, reload, setCurrency, setStandardPrice, standardPrice: useStandardPrice, usdRatioFor }
+  // The page shows this plan's full price instead of the server's regional one: checkout must sell that.
+  function showsStandardPrice(productId: string) {
+    return useStandardPrice.value && !!data.value?.regularPrices?.[productId]
+  }
+
+  return { amountsFor, currencies, currency, discount, failed, hasPricesFor, hasRegionalPrice, lockedCurrency, lockedCurrencyUnavailable, ready, regionalDiscount, regularAmountsFor, reload, setCurrency, setStandardPrice, showsStandardPrice, standardPrice: useStandardPrice, usdRatioFor }
 }
