@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { unwrapSavedCredentialsFile } from '../supabase/functions/_backend/public/build/credentials.ts'
 import {
   buildCredentialsKeyVersion,
   createBuildCredentialsUploadToken,
+  getBuildCredentialsKeyring,
   openBuildCredentials,
   sealBuildCredentials,
   verifyBuildCredentialsUploadToken,
@@ -117,6 +118,42 @@ describe('build credentials crypto', () => {
     const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
     const signature = createHmac('sha256', SECRET).update(`capgo-build-credentials-upload:v1.${payload}`).digest('base64url')
     expect(await verifyBuildCredentialsUploadToken(SECRET, `${payload}.${signature}`)).toEqual({ ok: false, reason: 'invalid' })
+  })
+})
+
+describe('build credentials keyring', () => {
+  const c = {} as never
+  const apiSecret = 'prod-api-secret-0123456789abcdef'
+  const dedicated = 'dedicated-build-credentials-key-0123456789'
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('derives from API_SECRET when no dedicated key is set', () => {
+    vi.stubEnv('BUILD_CREDENTIALS_ENCRYPTION_KEY', '')
+    vi.stubEnv('BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS', '')
+    vi.stubEnv('API_SECRET', apiSecret)
+    expect(getBuildCredentialsKeyring(c)).toEqual({ current: apiSecret, previous: undefined })
+  })
+
+  it('prefers the dedicated key and keeps API_SECRET as the implicit previous key', async () => {
+    vi.stubEnv('BUILD_CREDENTIALS_ENCRYPTION_KEY', '')
+    vi.stubEnv('BUILD_CREDENTIALS_ENCRYPTION_KEY_PREVIOUS', '')
+    vi.stubEnv('API_SECRET', apiSecret)
+    const sealed = await sealBuildCredentials({ secret: getBuildCredentialsKeyring(c).current, appId: 'com.example.app', platform: 'ios', credentials: { P12_PASSWORD: 'p' } })
+
+    vi.stubEnv('BUILD_CREDENTIALS_ENCRYPTION_KEY', dedicated)
+    const keyring = getBuildCredentialsKeyring(c)
+    expect(keyring).toEqual({ current: dedicated, previous: apiSecret })
+    // Rows sealed with the API_SECRET fallback still open, and are flagged for re-sealing.
+    const opened = await openBuildCredentials({ keyring, appId: 'com.example.app', platform: 'ios', ciphertext: sealed.ciphertext, keyVersion: sealed.keyVersion })
+    expect(opened).toEqual({ credentials: { P12_PASSWORD: 'p' }, needsReseal: true })
+  })
+
+  it('is unavailable without a usable secret', () => {
+    vi.stubEnv('BUILD_CREDENTIALS_ENCRYPTION_KEY', '')
+    vi.stubEnv('API_SECRET', 'short')
+    expect(() => getBuildCredentialsKeyring(c)).toThrow()
   })
 })
 
