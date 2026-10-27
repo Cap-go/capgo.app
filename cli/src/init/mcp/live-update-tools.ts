@@ -71,10 +71,12 @@ function getRunDeviceCommandForPlatform(platform: Platform, projectDir: string, 
 }
 
 export function buildDeps(
-  sdk: CapgoSDK,
+  sdkOrGetter: CapgoSDK | (() => CapgoSDK),
   cwd = process.cwd(),
   getProjectTarget: () => LiveUpdateProjectTarget | undefined = () => undefined,
 ): EngineDeps {
+  // Live accessor: the server re-creates its SDK on login/logout and project switches.
+  const getSdk = typeof sdkOrGetter === 'function' ? sdkOrGetter : () => sdkOrGetter
   const getPackageJsonPath = () => getProjectTarget()?.packageJsonPath ?? join(findRoot(cwd), PACKNAME)
   const getProjectDir = () => dirname(getPackageJsonPath())
   const getMainFile = async () => getProjectTarget()?.mainFilePath ?? findMainFile(true, getProjectDir())
@@ -114,14 +116,14 @@ export function buildDeps(
       return out
     },
     isAppRegistered: async (appId: string) => {
-      const res = await sdk.appHasAccess(appId)
+      const res = await getSdk().appHasAccess(appId)
       return res.success && res.data === true
     },
     loadProgress: () => loadLiveUpdateProgress(),
     saveProgress: data => saveLiveUpdateProgress(data),
     clearProgress: () => clearLiveUpdateProgress(),
     registerApp: async (appId: string) => {
-      const res = await sdk.addApp({ appId })
+      const res = await getSdk().addApp({ appId })
       if (res.success)
         return { ok: true as const }
       const error = res.error || 'Failed to register app'
@@ -298,17 +300,23 @@ function addConfigTargetToResult(
   }
 }
 
-export function registerLiveUpdateTools(server: McpRegistrar, sdk: CapgoSDK, depsOverride?: EngineDeps): void {
+export function registerLiveUpdateTools(server: McpRegistrar, sdk: CapgoSDK | (() => CapgoSDK), depsOverride?: EngineDeps): void {
   const configTargetsByApp = new Map<string, Set<string>>()
   const projectTargetsByConfig = new Map<string, LiveUpdateProjectTarget>()
   // Rebuilt when the MCP project dir changes (client roots / capgo_set_project_dir), so a
   // user-scoped install follows the agent's project instead of the dir it was spawned in.
   const getDeps = depsOverride
     ? () => depsOverride
-    : memoizeByCwd(() => buildDeps(sdk, process.cwd(), () => {
-        const configTarget = getConfigWriteTarget()
-        return configTarget ? projectTargetsByConfig.get(configTarget) : undefined
-      }))
+    : memoizeByCwd(() => {
+        // Remembered config/project targets belong to the previous project: drop them so
+        // a same-appId project elsewhere never reuses (or conflicts with) its paths.
+        configTargetsByApp.clear()
+        projectTargetsByConfig.clear()
+        return buildDeps(sdk, process.cwd(), () => {
+          const configTarget = getConfigWriteTarget()
+          return configTarget ? projectTargetsByConfig.get(configTarget) : undefined
+        })
+      })
   const addConfigTarget = (appId: string, configTarget: string): void => {
     const targets = configTargetsByApp.get(appId) ?? new Set<string>()
     targets.add(configTarget)

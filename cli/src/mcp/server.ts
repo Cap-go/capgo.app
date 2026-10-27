@@ -123,8 +123,8 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     try {
       const { roots } = await server.server.listRoots(undefined, { timeout: 5000 })
       const dir = pickProjectDirFromRoots(roots)
-      if (!projectDirPinned && dir)
-        switchProjectDir(dir)
+      if (!projectDirPinned && dir && switchProjectDir(dir))
+        refreshSdkForProject()
     }
     catch {
       // Client advertised roots but did not answer: keep the spawn dir; the agent can
@@ -158,6 +158,11 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // `let` (not `const`): capgo_login/capgo_logout reassign this so the running session
   // re-authenticates without a restart. Tool handlers close over the binding, not the value.
   let sdk = new CapgoSDK({ apikey: savedApiKey })
+  // On a project switch, drop the startup key so calls re-resolve credentials (env ->
+  // ~/.capgo -> ./.capgo) from the new project, matching what capgo_whoami reports.
+  function refreshSdkForProject(): void {
+    sdk = new CapgoSDK({})
+  }
 
   server.registerTool(
     'capgo_set_project_dir',
@@ -168,10 +173,9 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     async ({ path }) => {
       try {
         const dir = resolveProjectDirInput(path)
-        switchProjectDir(dir)
+        if (switchProjectDir(dir))
+          refreshSdkForProject()
         projectDirPinned = true
-        // Re-resolve the saved key at call time so a project-local ./.capgo key applies.
-        sdk = new CapgoSDK({})
         return { content: [{ type: 'text' as const, text: describeProjectDir(dir) }] }
       }
       catch (error) {
@@ -1060,7 +1064,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // Build-time gated: ships enabled in this release. The flag enables dead-code
   // elimination when the feature is disabled; release builds define it to true.
   if (liveUpdateEnabled)
-    registerLiveUpdateTools(server, sdk)
+    registerLiveUpdateTools(server, () => sdk) // live accessor: honors login/logout and project switches
 
   // Start the server with stdio transport. The stdout guard installed at the top of this
   // function already routed ambient stdout (stray clack/console output from any tool or
