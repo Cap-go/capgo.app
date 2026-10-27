@@ -2,7 +2,6 @@ import type { ConsoleQueryRequest, ConsoleQueryResult, QueryCatalog, QueryColumn
 import { describe, expect, it } from 'vitest'
 import { compileConsoleQuery } from '../supabase/functions/_backend/private/console_query_sql'
 import { createDbClient, DbQueryError } from '../supabase/functions/_backend/utils/db'
-import { freshReadSql } from '../supabase/functions/_backend/utils/pg_query'
 import { parsePostgrestRequest, postgrestResponse } from '../supabase/functions/_backend/utils/postgrest_http'
 
 function column(name: string, udt: string): QueryColumn {
@@ -88,11 +87,6 @@ describe('backend builder → SQL parity with PostgREST', () => {
     expect(() => compileConsoleQuery(catalog, { kind: 'rpc', name: 'get_user_id', args: [{ apikey: 'x' }], operations: [{ method: 'order', args: ['x'] }] })).toThrow('Unsupported RPC modifier')
   })
 
-  it.concurrent('reads fresh past the Hyperdrive cache', () => {
-    expect(freshReadSql('SELECT 1')).toBe('WITH capgo_fresh_read AS (SELECT now()) SELECT 1')
-    expect(freshReadSql('WITH written AS (UPDATE t SET a = 1) SELECT 1')).toBe('WITH capgo_fresh_read AS (SELECT now()), written AS (UPDATE t SET a = 1) SELECT 1')
-    expect(freshReadSql('DELETE FROM t WHERE a = 1')).toBe('DELETE FROM t WHERE a = 1')
-  })
 })
 
 describe('backend builder client', () => {

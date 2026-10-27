@@ -134,9 +134,14 @@ function relayBody(c: Context): BodyInit | undefined {
   return c.req.method === 'GET' || c.req.method === 'HEAD' ? undefined : c.req.raw.body ?? undefined
 }
 
+// The part after this mount's own prefix. On the Supabase edge runtime the
+// mount itself sits under /functions/v1/, so the first match is not this one.
 function tailAfter(c: Context, marker: string): string {
   const url = new URL(c.req.url)
-  return `${url.pathname.slice(url.pathname.indexOf(marker) + marker.length)}${url.search}`
+  const mounted = `/legacy_supabase${marker}`
+  const at = url.pathname.indexOf(mounted)
+  const start = at === -1 ? url.pathname.indexOf(marker) + marker.length : at + mounted.length
+  return `${url.pathname.slice(start)}${url.search}`
 }
 
 // Storage is the Supabase Storage API, not PostgREST. Same request, same headers.

@@ -422,21 +422,6 @@ SET LOCAL statement_timeout = '${ROLE_STATEMENT_TIMEOUT[role]}';
 SET LOCAL lock_timeout = '${ROLE_LOCK_TIMEOUT}'`
 }
 
-// Hyperdrive caches read results for 60s and never invalidates them on writes.
-// PostgREST never cached, so every statement here has to read fresh data. A
-// query that calls a volatile function is never cached (see utils/rbac.ts).
-// RPCs run as SELECT too, and a cached mutating RPC would silently not run.
-const FRESH_READ = 'capgo_fresh_read AS (SELECT now())'
-
-export function freshReadSql(text: string): string {
-  if (text.startsWith('SELECT '))
-    return `WITH ${FRESH_READ} ${text}`
-  if (text.startsWith('WITH '))
-    return `WITH ${FRESH_READ}, ${text.slice(5)}`
-  // INSERT / UPDATE / DELETE with no RETURNING page are never cached.
-  return text
-}
-
 async function executeCompiled(client: PgQueryClient, compiled: ReturnType<typeof compileConsoleQuery>, text = compiled.text): Promise<ConsoleQueryResult> {
   // Filters carry emails, API keys and search text. Keep them out of the query log.
   const db = getDrizzleClient(client, { logger: false })
@@ -457,10 +442,21 @@ function sqlFailure(sqlError: NonNullable<ReturnType<typeof readSqlError>>, role
   }
 }
 
-async function inTransaction(client: PgQueryClient, appendSql: string | undefined, run: () => Promise<ConsoleQueryResult>): Promise<ConsoleQueryResult> {
+// PostgREST ran service_role on the authenticator login, which carries an 8s
+// statement and lock timeout. The backend login has none, so a query stuck
+// behind a lock would hold its Hyperdrive origin connection indefinitely.
+const SERVICE_TIMEOUTS_SQL = `SET LOCAL statement_timeout = '8s'; SET LOCAL lock_timeout = '${ROLE_LOCK_TIMEOUT}'`
+
+async function inTransaction(client: PgQueryClient, appendSql: string | undefined, run: () => Promise<ConsoleQueryResult>, options: { readOnly?: boolean } = {}): Promise<ConsoleQueryResult> {
   try {
     await client.query(transactionBeginSql('read write', appendSql))
     const result = finishConsoleQuery(await run())
+    if (options.readOnly) {
+      // A read has its rows already. The COMMIT is queued on this connection
+      // ahead of anything its next user sends, so the caller skips that round trip.
+      client.query('COMMIT').catch(() => {})
+      return result
+    }
     await client.query('COMMIT')
     return result
   }
@@ -478,9 +474,9 @@ export interface PgQueryRunOptions {
 /**
  * Execute one recorded builder chain on a checked-out connection.
  *
- * Round trips on a warm isolate:
- * - service read / RPC / plain write: 1 (one statement, autocommit)
- * - service write with .single() / .maybeSingle(): 3 (BEGIN, statement, COMMIT)
+ * Round trips on a warm isolate, the caller waits for:
+ * - service table read: 2 (BEGIN + timeouts, statement; COMMIT is not awaited)
+ * - service RPC / write: 3 (BEGIN + timeouts, statement, COMMIT)
  * - authenticated / anon: 3 (BEGIN + role setup, statement, COMMIT)
  */
 export async function runPgQuery(client: PgQueryClient, request: ConsoleQueryRequest, session: PgQuerySession, options: PgQueryRunOptions = {}): Promise<ConsoleQueryResult> {
@@ -489,14 +485,13 @@ export async function runPgQuery(client: PgQueryClient, request: ConsoleQueryReq
     // A warm isolate already has it and pays no round trip.
     const catalog = await loadCatalog(client, request)
     const compiled = compileConsoleQuery(catalog, request)
-    if (session.role === 'service' && session.headers && Object.keys(session.headers).length)
-      return await inTransaction(client, serviceHeadersSetupSql(session.headers), () => executeCompiled(client, compiled))
     if (session.role === 'service') {
-      const write = isWrite(request)
-      // A row-count check after a write must roll the write back, as PostgREST does.
-      if (write && compiled.cardinality !== 'many' && !compiled.minimal)
-        return await inTransaction(client, undefined, () => executeCompiled(client, compiled))
-      return await executeCompiled(client, compiled, freshReadSql(compiled.text))
+      // Every service statement runs with PostgREST's timeouts, set on the BEGIN
+      // round trip. A row-count check after a write rolls the write back, as
+      // PostgREST does. Inside a transaction Hyperdrive never serves a cached read.
+      const headers = session.headers && Object.keys(session.headers).length ? `${serviceHeadersSetupSql(session.headers)}; ` : ''
+      const readOnly = !isWrite(request) && request.kind === 'table'
+      return await inTransaction(client, `${headers}${SERVICE_TIMEOUTS_SQL}`, () => executeCompiled(client, compiled), { readOnly })
     }
     return await inTransaction(client, consoleRoleSetupSql(session), () => executeCompiled(client, compiled))
   }

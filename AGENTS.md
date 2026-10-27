@@ -916,11 +916,13 @@ Playwright or scripts.
   login role (bypasses RLS); JWT = `authenticated` with verified claims; API key
   = `anon` with `request.headers.capgkey`. `auth` and `storage` on those clients
   are still the Supabase Auth and Storage APIs.
-- Performance: an admin call is one statement (one round trip). A JWT or API
-  key call is BEGIN + role setup, the statement, COMMIT. Reads are prefixed so
-  Hyperdrive never serves a cached result (PostgREST never cached). Workers
-  reuse their Hyperdrive clients per request; Deno and Node share one small pool
-  per isolate (`getSharedPgPool`, `DB_POOL_MAX`, `DB_POOL_IDLE_MS`).
+- Every call runs in a transaction that sets PostgREST's limits on the BEGIN
+  round trip: service 8s statement and lock timeouts, anon 3s, authenticated 8s.
+  Without them a query stuck behind a lock holds a Hyperdrive connection forever.
+  Admin table reads do not wait for their COMMIT (2 round trips); writes, RPCs
+  and JWT/API-key calls do (3). Hyperdrive never caches inside a transaction.
+  Workers reuse their Hyperdrive clients per request; Deno and Node share one
+  small pool per isolate (`getSharedPgPool`, `DB_POOL_MAX`, `DB_POOL_IDLE_MS`).
 - Direct database sessions are internal: `session_user` is `postgres`, not
   PostgREST's `authenticator`. A trigger that skips internal sessions (for
   example `apikeys_force_server_key()`) now skips backend writes too, so the
