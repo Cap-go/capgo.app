@@ -13,7 +13,7 @@ import { checkPermission } from '../utils/rbac.ts'
 import { getCustomerBilling, isRegionalCurrency } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
-import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
+import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
 
 const PLAN_PRICES_CACHE_PATH = '/private/plan_prices'
 const PLAN_PRICES_TTL_SECONDS = 60 * 60
@@ -75,9 +75,9 @@ interface PlanPriceRow {
   regional_price_ids: unknown
 }
 
-// The plan catalog is public (see private/plans); signed-in requests still read it through RLS.
+// The plan catalog is readable by anyone through RLS; signed-in requests read it as the user.
 async function listPlans(c: Context, authorization: string | null): Promise<PlanPriceRow[]> {
-  const { data: plans, error } = await (authorization ? supabaseClient(c, authorization) : supabaseAdmin(c))
+  const { data: plans, error } = await (authorization ? supabaseClient(c, authorization) : emptySupabase(c))
     .from('plans')
     .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us, regional_price_ids')
   if (error)

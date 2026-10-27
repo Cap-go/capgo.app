@@ -630,6 +630,8 @@ describe('stripe redirect URL allowlist', () => {
     ['FR', 'usd', {}, 'price_monthly_from_plan'],
     // The buyer turned the regional discount down.
     ['FR', 'eur', { standardPrice: true }, 'price_monthly_from_plan'],
+    // A currency only the full price lists falls back to it instead of failing on the regional price.
+    ['FR', 'gbp', {}, 'price_monthly_from_plan'],
   ])('sells the regional price of the visitor country (%s in %s %o)', async (country, currency, options, expectedPrice) => {
     const plan = {
       stripe_id: 'prod_test',
@@ -655,7 +657,7 @@ describe('stripe redirect URL allowlist', () => {
     const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/subscription' })
     const mocks = subscriptionCheckoutMocks()
     // Regional prices carry their tier in Stripe metadata.
-    mocks.retrievePrice.mockImplementation(async (id: string) => ({ id, currency: 'usd', unit_amount: 1400, currency_options: { usd: { unit_amount: 1400 }, eur: { unit_amount: 1300 } }, metadata: id.endsWith('_p70') ? { capgo_tier: 'p70' } : {} }))
+    mocks.retrievePrice.mockImplementation(async (id: string) => ({ id, currency: 'usd', unit_amount: 1400, currency_options: { usd: { unit_amount: 1400 }, eur: { unit_amount: 1300 }, ...(id.endsWith('_p70') ? {} : { gbp: { unit_amount: 1100 } }) }, metadata: id.endsWith('_p70') ? { capgo_tier: 'p70' } : {} }))
     vi.mocked(Stripe).mockImplementation(function () {
       return { customers: mocks.customers, prices: { retrieve: mocks.retrievePrice, list: vi.fn() }, checkout: { sessions: { create: createSession } } }
     } as any)

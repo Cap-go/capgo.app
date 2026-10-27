@@ -1089,14 +1089,17 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
     const price = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
     const amounts = getPriceCurrencyAmounts(price)
     const currencies = Object.keys(amounts)
-    return { priceId: prices.priceId, price, amounts, currencies, currency: resolveCheckoutCurrency(customerBilling.currency, currencies, requestedCurrency) }
+    return { priceId: prices.priceId, price, amounts, currencies }
   }
   const tier = options.standardPrice ? FULL_PRICE_TIER : priceTierForCountries(countries)
   let checkoutPrice = await loadPlanPrice(tier)
-  // A regional price is only sold in its region's currency: any other one buys the full price.
-  if (!isRegionalCurrency(countries, tier, checkoutPrice.currency ?? checkoutPrice.price.currency, checkoutPrice.currencies))
+  // A regional price is only sold in its region's currency: any other one buys the full price. Decided
+  // before validating the currency, which the regional price may not list while the full price does.
+  const billedCurrency = customerBilling.currency ?? requestedCurrency ?? checkoutPrice.price.currency
+  if (!isRegionalCurrency(countries, tier, billedCurrency, checkoutPrice.currencies))
     checkoutPrice = await loadPlanPrice(FULL_PRICE_TIER)
-  const { priceId, price: planPrice, amounts: planAmounts, currency: checkoutCurrency } = checkoutPrice
+  const { priceId, price: planPrice, amounts: planAmounts } = checkoutPrice
+  const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, checkoutPrice.currencies, requestedCurrency)
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: priceId, quantity: 1 }]
   if (extraMau && extraMau.extraMau > 0) {
     // Same interval as the plan: Checkout bills every item of a subscription together.
