@@ -267,14 +267,14 @@ async function execute(run: DbQueryRunner, request: ConsoleQueryRequest) {
 
 function record(run: DbQueryRunner, kind: ConsoleQueryRequest['kind'], name: string, args: unknown[]) {
   const request: ConsoleQueryRequest = { kind, name, args: wire(args), operations: [] }
-  let execution: Promise<unknown> | undefined
   const builder: any = new Proxy({}, {
     get(_target, method) {
       if (typeof method !== 'string')
         return undefined
       if (method === 'then') {
-        // Like supabase-js, nothing runs until the chain is awaited, and only once.
-        execution ??= execute(run, request)
+        // Like supabase-js, nothing runs until the chain is awaited, and every
+        // await sends it again, so a retry loop can re-await the same builder.
+        const execution = execute(run, request)
         return execution.then.bind(execution)
       }
       if (PASSTHROUGH.has(method))

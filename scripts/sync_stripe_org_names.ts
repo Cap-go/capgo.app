@@ -180,7 +180,7 @@ async function main() {
   const supabase = createClient<Database>(
     supabaseUrl,
     supabaseServiceRoleKey,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
+    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }, databaseUrl: env.SUPABASE_DB_URL },
   )
   const stripe = createStripeClient(stripeSecretKey, stripeApiBaseUrl)
 

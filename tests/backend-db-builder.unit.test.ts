@@ -105,14 +105,15 @@ describe('backend builder client', () => {
     return { db, requests }
   }
 
-  it('sends what supabase-js would put on the wire, once, when awaited', async () => {
+  it('sends what supabase-js would put on the wire, on every await', async () => {
     const { db, requests } = client({ data: [] })
     const date = new Date('2026-01-02T03:04:05.000Z')
     const query = (db.from as any)('daily_mau').insert({ app_id: 'a', mau: undefined, date }).select()
     expect(requests).toHaveLength(0)
     await query
+    // A retry re-awaits the same builder; supabase-js sends the request again.
     await query
-    expect(requests).toHaveLength(1)
+    expect(requests).toHaveLength(2)
     expect(requests[0].operations[0]).toEqual({ method: 'insert', args: [{ app_id: 'a', date: '2026-01-02T03:04:05.000Z' }] })
     expect(String((db.from as any)('x')[Symbol.toStringTag])).toBe('undefined')
   })
@@ -220,5 +221,14 @@ describe('JSON key filters', () => {
     ]))
     expect(flat(compiled.text)).toContain('(t."source_ref"->>\'sessionId\')')
     expect(flat(compiled.text)).toContain('(t."source_ref"->>\'paymentIntentId\')')
+  })
+})
+
+describe('tooling database URL', () => {
+  it('uses the given database and never falls back to local for a remote project', async () => {
+    const { resolveDatabaseUrl } = await import('../scripts/db-client.ts')
+    expect(resolveDatabaseUrl('https://project.supabase.co', 'postgresql://u:p@db.project.supabase.co:5432/postgres')).toBe('postgresql://u:p@db.project.supabase.co:5432/postgres')
+    expect(() => resolveDatabaseUrl('https://project.supabase.co', 'postgresql://postgres:postgres@127.0.0.1:54322/postgres')).toThrow('Refusing to query the local database')
+    expect(resolveDatabaseUrl('http://127.0.0.1:54321', 'postgresql://postgres:postgres@localhost:54322/postgres')).toBe('postgresql://postgres:postgres@127.0.0.1:54322/postgres')
   })
 })

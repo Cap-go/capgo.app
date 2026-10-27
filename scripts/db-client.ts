@@ -12,20 +12,48 @@ import { parsePostgrestRequest, PostgrestHttpError, postgrestResponse } from '..
 /**
  * supabase-js `createClient` for Node/Bun/Deno tooling (tests, Playwright,
  * ops scripts). PostgREST is not exposed, so `from` / `rpc` run through the
- * backend's SQL runner over a direct Postgres connection (SUPABASE_DB_URL, or
- * the local stack by default), under the session PostgREST would have derived
- * from the same key, token and headers. Auth, Storage and Functions stay the
+ * backend's SQL runner over a direct Postgres connection to the same project,
+ * under the session PostgREST would have derived from the same key, token and
+ * headers. Auth, Storage and Functions stay the
  * real supabase-js clients.
  */
 
-let pool: Pool | null = null
-
-function databaseUrl(): string {
-  return (env.SUPABASE_DB_URL ?? env.DB_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres').replace('localhost', '127.0.0.1')
+/** supabase-js options plus the Postgres URL that backs `supabaseUrl`. */
+export type DbClientOptions = SupabaseClientOptions<any> & {
+  /** Defaults to SUPABASE_DB_URL / DB_URL, then the local stack (local `supabaseUrl` only). */
+  databaseUrl?: string
 }
 
-function getPool(): Pool {
-  pool ??= new Pool({ connectionString: databaseUrl(), max: 3, idleTimeoutMillis: 1000, allowExitOnIdle: true, application_name: 'capgo-db-client' })
+const LOCAL_DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres'
+const pools = new Map<string, Pool>()
+
+function isLoopback(url: string): boolean {
+  try {
+    const { hostname } = new URL(url)
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === 'kong'
+  }
+  catch {
+    return false
+  }
+}
+
+// The database must belong to the same project as `supabaseUrl`. A script that
+// targets a remote project must say which database; it never falls back to local.
+export function resolveDatabaseUrl(supabaseUrl: string, explicit?: string): string {
+  const url = (explicit ?? env.SUPABASE_DB_URL ?? env.DB_URL ?? (isLoopback(supabaseUrl) ? LOCAL_DATABASE_URL : undefined))?.replace('localhost', '127.0.0.1')
+  if (!url)
+    throw new Error(`No database URL for ${new URL(supabaseUrl).host}: pass databaseUrl (or set SUPABASE_DB_URL) for that project.`)
+  if (!isLoopback(supabaseUrl) && isLoopback(url))
+    throw new Error(`Refusing to query the local database for ${new URL(supabaseUrl).host}: pass that project's databaseUrl.`)
+  return url
+}
+
+function getPool(connectionString: string): Pool {
+  let pool = pools.get(connectionString)
+  if (!pool) {
+    pool = new Pool({ connectionString, max: 3, idleTimeoutMillis: 1000, allowExitOnIdle: true, application_name: 'capgo-db-client' })
+    pools.set(connectionString, pool)
+  }
   return pool
 }
 
@@ -78,8 +106,8 @@ async function sessionFor(sdk: SupabaseClient<any>, key: string, headers: Record
   return { role: 'authenticated', claims: { ...claims, sub: claims.sub }, headers: requestHeaders }
 }
 
-export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuerySession): Promise<ConsoleQueryResult> {
-  const client = await getPool().connect()
+export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuerySession, connectionString = resolveDatabaseUrl('http://127.0.0.1')): Promise<ConsoleQueryResult> {
+  const client = await getPool(connectionString).connect()
   let failed: Error | undefined
   try {
     return await runPgQuery(client, request, session)
@@ -93,12 +121,14 @@ export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuer
   }
 }
 
-export function createClient<Database = any>(supabaseUrl: string, supabaseKey: string, options?: SupabaseClientOptions<any>): SupabaseClient<Database> {
-  const sdk = createSdkClient<Database>(supabaseUrl, supabaseKey, options as SupabaseClientOptions<any>) as unknown as SupabaseClient<any>
-  const headers = options?.global?.headers as Record<string, string> | undefined
+export function createClient<Database = any>(supabaseUrl: string, supabaseKey: string, options?: DbClientOptions): SupabaseClient<Database> {
+  const { databaseUrl, ...sdkOptions } = options ?? {}
+  const connectionString = resolveDatabaseUrl(supabaseUrl, databaseUrl)
+  const sdk = createSdkClient<Database>(supabaseUrl, supabaseKey, sdkOptions as SupabaseClientOptions<any>) as unknown as SupabaseClient<any>
+  const headers = sdkOptions.global?.headers as Record<string, string> | undefined
   const db = createDbClient(async (request) => {
     const session = await sessionFor(sdk, supabaseKey, headers)
-    return 'role' in session ? runTestQuery(request, session) : session
+    return 'role' in session ? runTestQuery(request, session, connectionString) : session
   })
   return new Proxy(sdk, {
     get(target, property, receiver) {
@@ -138,7 +168,7 @@ export async function fetchPostgrest(input: string | URL, init: RequestInit = {}
   const headerRecord = Object.fromEntries(requestHeaders.entries())
   const sdk = createSdkClient(url.origin, key || 'anon', { auth: { persistSession: false } }) as unknown as SupabaseClient<any>
   const session = await sessionFor(sdk, key, headerRecord)
-  const result = 'role' in session ? await runTestQuery(parsed.request, session) : session
+  const result = 'role' in session ? await runTestQuery(parsed.request, session, resolveDatabaseUrl(url.origin)) : session
   const response = postgrestResponse(parsed, result)
   const body = response.body === undefined ? null : JSON.stringify(response.body)
   return new Response(body, {
