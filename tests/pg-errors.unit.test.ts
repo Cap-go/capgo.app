@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as pluginPgErrors from '../supabase/functions/_backend/plugin_runtime/utils/pg_errors.ts'
 import {
   drizzleErrorFingerprintSegment,
   isDatabaseOriginError,
@@ -106,6 +107,18 @@ describe('pg_errors', () => {
     expect(isReadOnlyPgConnectionRetryError(hyperdriveWait)).toBe(false)
     expect(isTransientDatabaseError(statementTimeout)).toBe(true)
     expect(isTransientDatabaseError(hyperdriveWait)).toBe(true)
+  })
+
+  it('treats hyperdrive connect timeouts as transient and read-only retryable in both copies', () => {
+    const connectTimeout = Object.assign(new Error('Failed query: select "channel_id" from "channel_devices" where "channel_devices"."device_id" = $1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('Timed out while creating a new server connection.'),
+    })
+
+    for (const errors of [{ isReadOnlyPgConnectionRetryError, isTransientDatabaseError }, pluginPgErrors]) {
+      expect(errors.isTransientDatabaseError(connectTimeout)).toBe(true)
+      expect(errors.isReadOnlyPgConnectionRetryError(connectTimeout)).toBe(true)
+    }
   })
 
   it('classifies bare hyperdrive connect failures as database-origin read-only retries', () => {

@@ -355,29 +355,32 @@ async function guard(
     applySignupAttributionToPostHog(sessionUser, getLocalConfig().apiHost)
   }
 
-  // TOTP means the user was force logged using the "email" tactic
-  // In practice this means the user is being spoofed by an admin
-  const isAdminForced
-    = !!sessionUser?.factors?.find(f => f.factor_type === 'totp') || false
-
   const { data: mfaData, error: mfaError }
     = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
   if (mfaError) {
     console.error('Cannot guard auth', mfaError)
-    return
-  }
-
-  if (
-    mfaData.currentLevel === 'aal1'
-    && mfaData.nextLevel === 'aal2'
-    && !isAdminForced
-  ) {
     return next({
       path: '/login',
       query: {
         to: to.fullPath,
       },
     })
+  }
+
+  if (mfaData.currentLevel === 'aal1' && mfaData.nextLevel === 'aal2') {
+    // Only the backend may waive MFA: verify_mfa passes an aal1 session solely
+    // when platform-admin log_as registered its session_id as an impersonation.
+    const { data: hasMfaAssurance, error: verifyMfaError } = await capgo.rpc('verify_mfa')
+    if (verifyMfaError)
+      console.error('Cannot verify MFA assurance', verifyMfaError)
+    if (verifyMfaError || hasMfaAssurance !== true) {
+      return next({
+        path: '/login',
+        query: {
+          to: to.fullPath,
+        },
+      })
+    }
   }
 
   if (hasAuth && sessionUser && !hadAuth) {

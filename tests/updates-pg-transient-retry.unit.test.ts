@@ -62,6 +62,32 @@ describe('withReadOnlyPgTransientRetry', () => {
     }))
   })
 
+  it('retries once when hyperdrive times out creating a server connection', async () => {
+    const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
+    const c = createContext()
+    let sessions = 0
+
+    const result = await withReadOnlyPgTransientRetry(c, 'test', async () => {
+      sessions++
+      return {
+        pgClient: {} as PluginPgClient,
+        drizzle: {} as any,
+        cleanup: vi.fn(async () => undefined),
+      }
+    }, async () => {
+      if (sessions === 1) {
+        throw Object.assign(new Error('Failed query: SELECT 1'), {
+          name: 'DrizzleQueryError',
+          cause: new Error('Timed out while creating a new server connection.'),
+        })
+      }
+      return 'ok'
+    })
+
+    expect(result).toBe('ok')
+    expect(sessions).toBe(2)
+  })
+
   it('rethrows after exactly two attempts when both fail with connection errors', async () => {
     const { withReadOnlyPgTransientRetry } = await import('../supabase/functions/_backend/plugin_runtime/utils/pg.ts')
     const c = createContext()
