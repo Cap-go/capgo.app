@@ -1257,6 +1257,9 @@ DECLARE
   v_cursor bigint;
   v_version_id bigint;
   v_converted integer := 0;
+  v_inline_converted integer := 0;
+  v_limit integer;
+  v_half interval;
   v_inline_cursor bigint;
   v_wrapped boolean := false;
   v_started timestamptz := pg_catalog.clock_timestamp();
@@ -1269,9 +1272,14 @@ BEGIN
     RETURN 0;
   END IF;
 
+  -- Each scan gets its own version budget, and the legacy scan at most half
+  -- of the time: rows kept on purpose (channel versions, demo rows) are
+  -- revisited every cycle and must not starve the inline scan.
+  v_limit := GREATEST(COALESCE(p_max_versions, 20), 1);
+  v_half := pg_catalog.make_interval(secs => GREATEST(COALESCE(p_max_ms, 3000), 100) / 2000.0);
   v_cursor := v_state.convert_cursor;
-  WHILE v_converted < GREATEST(COALESCE(p_max_versions, 20), 1)
-    AND pg_catalog.clock_timestamp() - v_started < pg_catalog.make_interval(secs => GREATEST(COALESCE(p_max_ms, 3000), 100) / 1000.0)
+  WHILE v_converted < v_limit
+    AND pg_catalog.clock_timestamp() - v_started < v_half
   LOOP
     SELECT m.app_version_id INTO v_version_id
     FROM public.manifest AS m
@@ -1304,8 +1312,8 @@ BEGIN
   -- cursor, served by app_versions_manifest_present_idx.
   v_inline_cursor := v_state.inline_cursor;
   v_wrapped := false;
-  WHILE v_converted < GREATEST(COALESCE(p_max_versions, 20), 1)
-    AND pg_catalog.clock_timestamp() - v_started < pg_catalog.make_interval(secs => GREATEST(COALESCE(p_max_ms, 3000), 100) / 1000.0)
+  WHILE v_inline_converted < v_limit
+    AND pg_catalog.clock_timestamp() - v_started < v_half * 2
   LOOP
     SELECT av.id INTO v_version_id
     FROM public.app_versions AS av
@@ -1322,14 +1330,14 @@ BEGIN
     END IF;
     PERFORM public.convert_version_manifest_rows(v_version_id, true);
     v_inline_cursor := v_version_id;
-    v_converted := v_converted + 1;
+    v_inline_converted := v_inline_converted + 1;
     v_version_id := NULL;
   END LOOP;
 
   UPDATE public.delta_storage_state
   SET convert_cursor = v_cursor, inline_cursor = v_inline_cursor, updated_at = now()
   WHERE id;
-  RETURN v_converted;
+  RETURN v_converted + v_inline_converted;
 END;
 $$;
 ALTER FUNCTION public.convert_legacy_manifest_batch(integer, integer) OWNER TO postgres;

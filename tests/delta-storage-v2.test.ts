@@ -215,8 +215,15 @@ describe('delta storage v2 inline-only manifests', () => {
       const before = await client.query<{ blocked: boolean }>('SELECT public.delta_app_has_unconverted_references($1) AS blocked', [APP_ID])
       expect(before.rows[0].blocked).toBe(true)
 
-      await client.query('UPDATE public.delta_storage_state SET inline_cursor = $1 - 1 WHERE id', [versionId])
-      await client.query('SELECT public.convert_legacy_manifest_batch(20, 2000)')
+      // A demo version's rows stay legacy on purpose and fill the legacy
+      // scan's budget of one; the inline scan still runs with its own.
+      const demo = await insertVersion(client)
+      await client.query(
+        `INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, 'demo.js', 'demo', $2, 1)`,
+        [demo, `demo/${APP_ID}/inline-budget.js`],
+      )
+      await client.query('UPDATE public.delta_storage_state SET convert_cursor = $1 - 1, inline_cursor = $2 - 1 WHERE id', [demo, versionId])
+      await client.query('SELECT public.convert_legacy_manifest_batch(1, 2000)')
 
       expect(await versionFilesOf(client, versionId)).toEqual([path])
       const after = await client.query<{ blocked: boolean }>('SELECT public.delta_app_has_unconverted_references($1) AS blocked', [APP_ID])
