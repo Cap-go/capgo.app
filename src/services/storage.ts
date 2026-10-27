@@ -209,6 +209,9 @@ export function installConsoleImageFallback(target: Document = document) {
     // Rebuilding the URL renews the token only when it is near or past expiry,
     // so a page of missing images does not fetch a token per image.
     void createSignedImageUrl(failedUrl).then((freshUrl) => {
+      // Vue may have pointed the element at another image meanwhile; leave that one alone.
+      if (image.src !== failedUrl)
+        return
       if (freshUrl && freshUrl !== failedUrl) {
         image.setAttribute(IMAGE_RETRIED_ATTRIBUTE, freshUrl)
         image.src = freshUrl

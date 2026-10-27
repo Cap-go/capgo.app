@@ -74,6 +74,26 @@ describe('console image fallback', () => {
     expect(image.style.visibility).toBe('')
   })
 
+  it('drops a pending retry when the element moved to another image', async () => {
+    let releaseToken!: () => void
+    mockInvoke.mockImplementation(() => new Promise((resolve) => {
+      releaseToken = () => resolve({ data: { data: { token: 'fresh', expiresAt: Math.floor(Date.now() / 1000) + 12 * 3600 }, error: null }, error: null })
+    }))
+    const image = document.createElement('img')
+    image.src = relayUrl('org/o/logo/old.png', 'expired')
+    document.body.appendChild(image)
+
+    fail(image)
+    await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalled())
+    const replacement = relayUrl('org/o/logo/new.png', 'fresh')
+    image.src = replacement
+    releaseToken()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(image.src).toBe(replacement)
+    expect(image.style.visibility).toBe('')
+  })
+
   it('ignores images that are not served by the console relay', async () => {
     const image = document.createElement('img')
     image.src = 'https://cdn.example.org/logo.png'
