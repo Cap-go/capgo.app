@@ -3,7 +3,7 @@ import type { BillingCard, BillingInvoice, BillingOverview, BillingSubscription 
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
@@ -22,6 +22,7 @@ import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
+const route = useRoute()
 const router = useRouter()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
@@ -332,6 +333,17 @@ onMounted(async () => {
     return
   }
   await organizationStore.awaitInitialLoad()
+  // `?oid=<org>` (billing emails): open that org's billing, then drop the param.
+  const linkedOrgId = route.query.oid
+  if (typeof linkedOrgId === 'string' && linkedOrgId) {
+    void router.replace({ query: { ...route.query, oid: undefined } })
+    if (linkedOrgId !== orgId.value) {
+      organizationStore.setCurrentOrganization(linkedOrgId)
+      // The orgId watcher reloads when the switch happened.
+      if (linkedOrgId === orgId.value)
+        return
+    }
+  }
   await loadOverview()
 })
 </script>
