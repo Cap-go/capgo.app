@@ -5,6 +5,7 @@ import { app as register } from '../../supabase/functions/_backend/auth/register
 import { createMcpApp } from '../../supabase/functions/_backend/mcp/index.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
 import { app as billing_region } from '../../supabase/functions/_backend/private/billing_region.ts'
+import { app as plan_prices } from '../../supabase/functions/_backend/private/plan_prices.ts'
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as cli } from '../../supabase/functions/_backend/private/cli/index.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
@@ -165,6 +166,7 @@ appPrivate.route('/store_top', storeTop)
 appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/cli', cli)
 appPrivate.route('/billing_region', billing_region)
+appPrivate.route('/plan_prices', plan_prices)
 appPrivate.route('/config', config)
 appPrivate.route('/console', console_data)
 appPrivate.route('/config/builder', configBuilder)

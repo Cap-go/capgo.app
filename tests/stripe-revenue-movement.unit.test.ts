@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 
 const plans = [
-  { name: 'Solo', stripe_id: 'prod_solo', price_m: 12, price_m_id: 'price_solo_monthly', price_y: 120, price_y_id: 'price_solo_yearly' },
+  { name: 'Solo', stripe_id: 'prod_solo', price_m: 12, price_m_id: 'price_solo_monthly', price_y: 120, price_y_id: 'price_solo_yearly', alt_price_m_ids: ['price_solo_monthly_p50'], regional_price_ids: { p50: { price_m_id: 'price_solo_monthly_p50' } } },
   { name: 'Team', stripe_id: 'prod_team', price_m: 49, price_m_id: 'price_team_monthly', price_y: 468, price_y_id: 'price_team_yearly' },
 ] as any
 
@@ -22,6 +22,7 @@ describe('stripe revenue movement classification', () => {
     ['paid upgrades as expansion MRR', paying('price_solo_monthly'), paying('price_team_monthly'), { currentMrr: 12, nextMrr: 49, expansionMrr: 37 }],
     ['monthly to yearly cadence changes as contraction when MRR drops', paying('price_solo_monthly'), paying('price_solo_yearly'), { currentMrr: 12, nextMrr: 10, contractionMrr: 2 }],
     ['downgrades as contraction MRR', paying('price_team_monthly'), paying('price_solo_monthly'), { currentMrr: 49, nextMrr: 12, contractionMrr: 37, lostPlan: 'team' }],
+    ['a regional price raised to full price as expansion MRR', paying('price_solo_monthly_p50'), paying('price_solo_monthly'), { currentMrr: 6, nextMrr: 12, expansionMrr: 6 }],
     ['cancellations as churned MRR', paying('price_team_yearly'), paying('price_team_yearly', 'canceled'), { currentMrr: 39, nextMrr: 0, churnMrr: 39, lostPlan: 'team' }],
   ])('records %s', (_label, current, next, expected) => {
     expect(stripeEventTestUtils.classifyRevenueMovement(current as any, next as any, plans)).toMatchObject({ ...zero, ...expected })

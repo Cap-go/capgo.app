@@ -83,6 +83,8 @@ export interface SubscriptionCheckoutRequest {
   isYear: boolean
   orgId: string
   extraMau?: number
+  // One of the currencies returned by private/plan_prices.
+  currency?: string
 }
 
 export async function startSubscriptionCheckout(request: SubscriptionCheckoutRequest): Promise<CheckoutSession | null> {
@@ -101,6 +103,7 @@ export async function startSubscriptionCheckout(request: SubscriptionCheckoutReq
       affonsoReferral,
       embedded: true,
       ...(request.extraMau ? { extraMau: request.extraMau } : {}),
+      ...(request.currency ? { currency: request.currency } : {}),
     }),
   })
   if (error || !data) {
@@ -263,6 +266,8 @@ export interface TrialPlanOption {
   planName: string
   amount: number
   currency: string
+  // Full price when a regional discount applies (it needs a card and billing address from that region).
+  regularAmount?: number
 }
 
 export interface BillingOverview {

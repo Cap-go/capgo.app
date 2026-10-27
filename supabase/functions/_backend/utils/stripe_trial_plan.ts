@@ -8,7 +8,9 @@ import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { checkoutPgClient, closeClient, getPgClient, releasePgClient, TRANSACTION_IDLE_TIMEOUT_MS } from './pg.ts'
 import type { BillingAccount } from './stripe_billing.ts'
-import { findPlanByProductId, getPlanPriceId, getPlanProductId, isAutomaticTaxEnabled, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
+import type { PriceTier } from './country_price_tier.ts'
+import { getCustomerBilling, getRequestPriceTier } from './regional_price.ts'
+import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, isAutomaticTaxEnabled, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 // Starts the plan picked during onboarding when the free trial ends, charging the saved card.
@@ -46,6 +48,8 @@ export interface TrialPlanOption {
   // Monthly list price in the smallest currency unit (same as Stripe unit_amount).
   amount: number
   currency: string
+  // Full price when a regional discount applies, for the strike-through.
+  regularAmount?: number
 }
 
 export interface TrialPlanAttribution {
@@ -73,6 +77,19 @@ export function getTrialPlanStartDate(trialAt: string | null | undefined, now = 
   return start.getTime() > now ? start : null
 }
 
+type TrialPlanPriceRow = Parameters<typeof getPlanPriceId>[0] & { regional_price_ids?: unknown }
+
+// Same monthly price as checkout: plans with regional prices (Solo) charge the tier of the most expensive
+// of the visitor, billing address and saved card countries (the card the trial will charge).
+export function getTrialPlanPriceId(plan: TrialPlanPriceRow, billingAccount: BillingAccount, tier: PriceTier): string {
+  return getRegionalPlanPriceId(plan.regional_price_ids, tier, billingAccount, 'month') ?? getPlanPriceId(plan, billingAccount, 'month')
+}
+
+async function getTrialPriceTier(c: Context, ctx: InAppBillingContext): Promise<PriceTier> {
+  const { countries } = await getCustomerBilling(ctx.stripe, ctx.customerId)
+  return getRequestPriceTier(c, countries)
+}
+
 async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<TrialState | null> {
   const { data: info, error } = await supabaseAdmin(c)
     .from('stripe_info')
@@ -92,10 +109,12 @@ async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<Tri
   const { data: plan } = await findPlanByProductId(c, info.product_id)
   if (!plan)
     return null
+  // Outside the try: a Stripe failure must be retried, not read as a missing trial plan.
+  const tier = await getTrialPriceTier(c, ctx)
   let priceId: string
   let productId: string
   try {
-    priceId = getPlanPriceId(plan, ctx.billingAccount, 'month')
+    priceId = getTrialPlanPriceId(plan, ctx.billingAccount, tier)
     productId = getPlanProductId(plan, ctx.billingAccount)
   }
   catch {
@@ -111,31 +130,37 @@ function isSchedulableTrialPlanName(name: string | null | undefined): boolean {
 }
 
 // Monthly Solo/Maker/Team for the org's billing account so the prompt can switch before scheduling.
-export async function listSchedulableTrialPlans(c: Context, billingAccount: BillingAccount): Promise<TrialPlanOption[]> {
-  const { data: plans, error } = await supabaseAdmin(c)
-    .from('plans')
-    .select('name, price_m, stripe_id, price_m_id, price_y_id, stripe_id_us, price_m_id_us, price_y_id_us')
-    .in('name', [...SCHEDULABLE_TRIAL_PLAN_NAMES])
+export async function listSchedulableTrialPlans(c: Context, ctx: InAppBillingContext): Promise<TrialPlanOption[]> {
+  const { billingAccount } = ctx
+  const [{ data: plans, error }, tier] = await Promise.all([
+    supabaseAdmin(c)
+      .from('plans')
+      .select('name, price_m, stripe_id, price_m_id, price_y_id, stripe_id_us, price_m_id_us, price_y_id_us, regional_price_ids')
+      .in('name', [...SCHEDULABLE_TRIAL_PLAN_NAMES]),
+    getTrialPriceTier(c, ctx),
+  ])
   if (error)
     throw error
   // Console Plans page lists these in USD; keep the picker consistent.
-  return (plans ?? [])
-    .flatMap((plan) => {
-      try {
-        const productId = getPlanProductId(plan, billingAccount)
-        if (!productId || !isSchedulableTrialPlanName(plan.name))
-          return []
-        // plans.price_m is a major-unit monthly list price (e.g. 14 for Solo).
-        const amount = Math.round(Number(plan.price_m) * 100)
-        if (!Number.isFinite(amount) || amount <= 0)
-          return []
-        return [{ productId, planName: plan.name!, amount, currency: 'usd' }]
-      }
-      catch {
-        return []
-      }
-    })
-    .sort((a, b) => a.amount - b.amount)
+  const options = await Promise.all((plans ?? []).map(async (plan): Promise<TrialPlanOption | null> => {
+    try {
+      const productId = getPlanProductId(plan, billingAccount)
+      if (!productId || !isSchedulableTrialPlanName(plan.name))
+        return null
+      // A regional discount shows the USD amount of the price the schedule will charge.
+      const regionalPriceId = getRegionalPlanPriceId(plan.regional_price_ids, tier, billingAccount, 'month')
+      // plans.price_m is a major-unit monthly list price (e.g. 14 for Solo).
+      const regularAmount = Math.round(Number(plan.price_m) * 100)
+      const amount = regionalPriceId ? (await ctx.stripe.prices.retrieve(regionalPriceId)).unit_amount ?? regularAmount : regularAmount
+      if (!Number.isFinite(amount) || amount <= 0)
+        return null
+      return { productId, planName: plan.name!, amount, currency: 'usd', ...(amount < regularAmount ? { regularAmount } : {}) }
+    }
+    catch {
+      return null
+    }
+  }))
+  return options.filter((option): option is TrialPlanOption => !!option).sort((a, b) => a.amount - b.amount)
 }
 
 // Persist a different onboarding product before scheduling so Billing and the schedule agree.
@@ -148,11 +173,13 @@ async function applyTrialPlanProduct(c: Context, ctx: InAppBillingContext, produ
   const { data: plan } = await findPlanByProductId(c, productId)
   if (!plan || !isSchedulableTrialPlanName(plan.name))
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')
+  // Outside the try: a Stripe failure must be retried, not reported as an invalid plan.
+  const tier = await getTrialPriceTier(c, ctx)
   let nextProductId: string
   let priceId: string
   try {
     nextProductId = getPlanProductId(plan, ctx.billingAccount)
-    priceId = getPlanPriceId(plan, ctx.billingAccount, 'month')
+    priceId = getTrialPlanPriceId(plan, ctx.billingAccount, tier)
   }
   catch {
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')

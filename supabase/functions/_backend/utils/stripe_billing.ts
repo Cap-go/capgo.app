@@ -1,4 +1,6 @@
 import type { Context } from 'hono'
+import type { PriceTier } from './country_price_tier.ts'
+import { isPriceTier } from './country_price_tier.ts'
 import { cloudlogErr } from './logging.ts'
 import { supabaseAdmin } from './supabase.ts'
 import { getEnv } from './utils.ts'
@@ -147,6 +149,29 @@ export function getPlanPriceId(plan: PlanStripeIds, account: BillingAccount, rec
       : requireUsPlanField(plan.price_m_id_us, 'price_m_id_us')
   }
   return yearly ? plan.price_y_id : plan.price_m_id
+}
+
+// The tier's Stripe price from plans.regional_price_ids; null when the plan has none, so it sells the full price.
+export function getRegionalPlanPriceId(regionalPriceIds: unknown, tier: PriceTier, account: BillingAccount, recurrence: string): string | null {
+  if (!regionalPriceIds || typeof regionalPriceIds !== 'object')
+    return null
+  const ids = (regionalPriceIds as Record<string, unknown>)[tier]
+  if (!ids || typeof ids !== 'object')
+    return null
+  const column = `${recurrence === 'year' ? 'price_y_id' : 'price_m_id'}${account === 'us' ? '_us' : ''}`
+  const priceId = (ids as Record<string, unknown>)[column]
+  return typeof priceId === 'string' && priceId.trim() ? priceId.trim() : null
+}
+
+// Tier of a regional Stripe price listed in plans.regional_price_ids; null for any other price.
+export function getRegionalPriceTier(regionalPriceIds: unknown, priceId: string): PriceTier | null {
+  if (!regionalPriceIds || typeof regionalPriceIds !== 'object')
+    return null
+  for (const [tier, ids] of Object.entries(regionalPriceIds)) {
+    if (isPriceTier(tier) && ids && typeof ids === 'object' && Object.values(ids).includes(priceId))
+      return tier
+  }
+  return null
 }
 
 export function resolvePlanCreditProductId(plan: PlanStripeIds, account: BillingAccount): string {

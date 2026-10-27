@@ -2868,6 +2868,10 @@
   "plans-category-paying": "Used in Capgo web console. Role: short UI label about \"plans category paying\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-category-payment-problem": "Used in Capgo web console. Role: UI label about \"plans category payment problem\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-category-unknown": "Used in Capgo web console. Role: short UI label about \"plans category unknown\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-currency-locked": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-currency-unavailable": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-prices-load-failed": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-display-currency": "Used in Capgo web console areas: pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-super-only": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "platform": "Used in Capgo web console areas: components/dashboard, components/tables, composables, pages/app, services. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "platform-android": "Used in Capgo web console areas: components/dashboard, components/tables. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
@@ -3994,5 +3998,8 @@
   "native-build-stats-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-build-stats-total": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-build-stats-total-hint": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "native-builds": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "native-builds": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-regional-discount": "Used in Capgo web console areas: pages/settings/organization. Role: UI badge. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-regional-discount-requirement": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-regional-discount-requirement-generic": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
