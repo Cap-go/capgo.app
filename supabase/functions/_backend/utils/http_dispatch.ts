@@ -95,6 +95,10 @@ export function buildHttpDispatchRequests(
         timeoutMs: row.timeout_ms,
         init: {
           method: 'POST',
+          // fetch keeps custom headers across cross-origin redirects, so a
+          // redirect would carry the API secret past the allowlist. pg_net
+          // does not follow redirects either.
+          redirect: 'manual',
           headers: { 'Content-Type': 'application/json', 'apisecret': apiSecret },
           body,
         },

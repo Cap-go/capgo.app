@@ -52,6 +52,7 @@ describe('http dispatch requests', () => {
       timeoutMs: 8000,
       init: {
         method: 'POST',
+        redirect: 'manual',
         headers: { 'Content-Type': 'application/json', 'apisecret': 'secret' },
         body: JSON.stringify({ queue_name: 'on_app_update', batch_size: 100, wait_for_completion: false }),
       },
@@ -99,12 +100,14 @@ function createDispatcher(claimResponse: () => Promise<Response>, env: Record<st
     getAlarm: vi.fn(async () => alarms.at(-1) ?? null),
     setAlarm: vi.fn(async (time: number) => {
       alarms.push(time)
+    }),    deleteAlarm: vi.fn(async () => {
+      alarms.length = 0
     }),
   }
   const apiSelf = { fetch: vi.fn(claimResponse) }
   const dispatcher = new QueueDispatcher(
     { storage } as never,
-    { API_SECRET: 'secret', SUPABASE_URL: 'https://sb.capgo.app', HTTP_DISPATCH_ALLOWED_ORIGINS: ORIGIN, API_SELF: apiSelf, ...env } as never,
+    { API_SECRET: 'secret', SUPABASE_URL: 'https://sb.capgo.app', HTTP_DISPATCH_ALLOWED_ORIGINS: ORIGIN, API_SELF: apiSelf, QUEUE_DISPATCHER: {}, ...env } as never,
   )
   return { dispatcher, storage, apiSelf, alarms }
 }
@@ -195,6 +198,20 @@ describe('QueueDispatcher', () => {
     await expect(dispatcher.alarm()).resolves.toBeUndefined()
     expect(alarms).toHaveLength(1)
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('queue_dispatcher_claim_failed'))
+  })
+
+  it('stops its own loop once the environment no longer binds it', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { dispatcher, storage, apiSelf } = createDispatcher(async () => Response.json({ rows: [row()] }), { QUEUE_DISPATCHER: undefined })
+
+    await dispatcher.alarm()
+    await dispatcher.fetch(new Request('https://queue-dispatcher.capgo.internal/ensure'))
+
+    expect(storage.deleteAlarm).toHaveBeenCalledTimes(2)
+    expect(storage.setAlarm).not.toHaveBeenCalled()
+    expect(apiSelf.fetch).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('only arms an alarm when none is scheduled', async () => {

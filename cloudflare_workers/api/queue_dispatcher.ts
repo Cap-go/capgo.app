@@ -17,6 +17,9 @@ interface Env {
   // Hyperdrive connection follows the per-request lifecycle instead of living
   // as long as this object.
   API_SELF?: { fetch: (input: string, init?: RequestInit) => Promise<Response> }
+  // The object sees the Worker's bindings: without its own binding the
+  // environment no longer runs a dispatcher, so an alarm armed earlier stops.
+  QUEUE_DISPATCHER?: unknown
 }
 
 function log(event: string, fields: Record<string, unknown> = {}) {
@@ -62,11 +65,22 @@ export class QueueDispatcher {
   constructor(private readonly ctx: DurableObjectState, private readonly env: Env) {}
 
   async fetch(_request: Request): Promise<Response> {
+    if (!this.enabled()) {
+      await this.ctx.storage.deleteAlarm()
+      return Response.json({ status: 'disabled' })
+    }
     await this.ensureAlarm()
     return Response.json({ status: 'ok', active: this.active, activeSlow: this.activeSlow, pending: this.pending.length })
   }
 
   async alarm(): Promise<void> {
+    // Routing itself is switched in SQL (public.http_dispatch_targets), so an
+    // enabled dispatcher with nothing routed just claims nothing. Removing the
+    // binding is what stops the loop.
+    if (!this.enabled()) {
+      await this.ctx.storage.deleteAlarm()
+      return
+    }
     // Schedule the next tick first so a failing claim never stops the loop.
     await this.ctx.storage.setAlarm(Date.now() + TICK_MS)
     try {
@@ -79,6 +93,10 @@ export class QueueDispatcher {
       // cron tick re-requests the wakeup and pgmq still holds the work.
       logError('queue_dispatcher_claim_failed', error)
     }
+  }
+
+  private enabled() {
+    return Boolean(this.env.QUEUE_DISPATCHER && this.env.API_SELF && this.env.API_SECRET)
   }
 
   private async ensureAlarm() {
