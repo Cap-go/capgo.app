@@ -5,12 +5,13 @@ import type { Database } from '~/types/database.types'
 import { FormKit } from '@formkit/vue'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, h, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
+import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import ChannelIntroduction from '~/components/dashboard/ChannelIntroduction.vue'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
@@ -445,6 +446,74 @@ async function showAddModal() {
   await dialogStore.onDialogDismiss()
 }
 
+// The copied prompt only hands the work to the agent: refresh the list until its channel
+// shows up, for a bounded time.
+const AGENT_CHANNEL_POLL_MS = 5000
+const AGENT_CHANNEL_MAX_POLLS = 120
+let agentChannelTimer: ReturnType<typeof setInterval> | undefined
+let isUnmounted = false
+
+function stopWatchingAgentChannel() {
+  clearInterval(agentChannelTimer)
+  agentChannelTimer = undefined
+}
+
+async function countChannels(appId: string) {
+  const { count, error } = await capgo
+    .from('channels')
+    .select('id', { count: 'exact', head: true })
+    .eq('app_id', appId)
+  if (error)
+    throw error
+  return count ?? 0
+}
+
+async function watchForAgentChannel() {
+  dialogStore.closeDialog()
+  stopWatchingAgentChannel()
+  const appId = props.appId
+  let countBefore: number
+  try {
+    countBefore = await countChannels(appId)
+  }
+  catch (error) {
+    console.warn('Cannot count channels before the AI agent creates one', error)
+    return
+  }
+  if (isUnmounted)
+    return
+  let polls = 0
+  let checking = false
+  const timer = setInterval(async () => {
+    polls += 1
+    if (polls > AGENT_CHANNEL_MAX_POLLS || props.appId !== appId) {
+      stopWatchingAgentChannel()
+      return
+    }
+    if (document.visibilityState === 'hidden' || checking)
+      return
+    checking = true
+    try {
+      if (await countChannels(appId) > countBefore && agentChannelTimer === timer) {
+        stopWatchingAgentChannel()
+        await refreshData(true)
+      }
+    }
+    catch (error) {
+      console.warn('Cannot check for the channel created by the AI agent', error)
+    }
+    finally {
+      checking = false
+    }
+  }, AGENT_CHANNEL_POLL_MS)
+  agentChannelTimer = timer
+}
+
+onBeforeUnmount(() => {
+  isUnmounted = true
+  stopWatchingAgentChannel()
+})
+
 async function openOneVersion(one: Element) {
   const servingRollout = !!one.rollout_enabled
     && one.rollout_version != null
@@ -471,6 +540,7 @@ watch(props, async () => {
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"
       :show-add="canCreateChannel"
+      add-button-test-id="channel-add"
       filter-text="Filters"
       :is-loading="isLoading"
       :search-placeholder="t('search-by-name')"
@@ -486,6 +556,7 @@ watch(props, async () => {
           type="text"
           :placeholder="t('channel-name-placeholder')"
         />
+        <AiAgentTaskCard task="create-channel" :app-id="appId" :channel-name="newChannelName" compact or-separator @copied="watchForAgentChannel" />
       </div>
     </Teleport>
   </div>

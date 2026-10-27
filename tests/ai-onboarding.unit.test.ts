@@ -31,6 +31,7 @@ describe('onboarding setup mode', () => {
   it.concurrent('reads only known modes', () => {
     expect(readOnboardingSetupMode({ setup_mode: 'ai' })).toBe('ai')
     expect(readOnboardingSetupMode({ setup_mode: 'manual' })).toBe('manual')
+    expect(readOnboardingSetupMode({ setup_mode: 'invite' })).toBe('invite')
     expect(readOnboardingSetupMode({ setup_mode: 'robot' })).toBeNull()
     expect(readOnboardingSetupMode(null)).toBeNull()
     expect(readOnboardingSetupMode(['ai'])).toBeNull()
@@ -47,6 +48,7 @@ describe('onboarding setup mode', () => {
     expect(initialOnboardingSetupScreen({ ...base, onboarding: {} })).toBe('choice')
     expect(initialOnboardingSetupScreen({ ...base, onboarding: { setup_mode: 'ai' } })).toBe('ai')
     expect(initialOnboardingSetupScreen({ ...base, onboarding: { setup_mode: 'manual' } })).toBe('manual')
+    expect(initialOnboardingSetupScreen({ ...base, onboarding: { setup_mode: 'invite' } })).toBe('invite')
     // Saved wizard answers must never be hidden behind the new choice.
     expect(initialOnboardingSetupScreen({ ...base, onboarding: savedManualProgress })).toBe('manual')
     // "Create new organization" is a fresh setup, whatever the account chose before.
@@ -189,6 +191,7 @@ describe('AI onboarding goal', () => {
   it.concurrent('opens the task list for AI setup and hides it for new manual signups only', () => {
     expect(checklistTaskListMode({ setup_mode: 'ai' })).toBe('open')
     expect(checklistTaskListMode({ setup_mode: 'manual' })).toBe('hidden')
+    expect(checklistTaskListMode({ setup_mode: 'invite' })).toBe('default')
     // Accounts from before the setup choice keep the existing behavior.
     expect(checklistTaskListMode({})).toBe('default')
   })

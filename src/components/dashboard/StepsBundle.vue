@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import arrowBack from '~icons/ion/arrow-back?width=2em&height=2em'
 import IconLoader from '~icons/lucide/loader-2'
+import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
@@ -216,7 +217,10 @@ function openInviteDialog() {
   inviteModalRef.value?.openDialog()
 }
 
-function onInviteSuccess() {
+// Someone else (a teammate or an AI agent) uploads the bundle: wait for it.
+function waitForDelegatedUpload() {
+  if (step.value !== 0)
+    return
   step.value += 1
   clicked.value = 0
   realtimeListener.value = false
@@ -324,6 +328,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div v-if="i === 0" class="pt-6 border-t border-gray-200">
+              <AiAgentTaskCard class="mb-6" task="upload-bundle" :app-id="appId" @copied="waitForDelegatedUpload" />
               <h3 class="text-lg font-semibold text-gray-900 font-pj">
                 {{ t('onboarding-invite-option-title') }}
               </h3>
@@ -343,5 +348,5 @@ onUnmounted(() => {
       </div>
     </div>
   </section>
-  <InviteTeammateModal ref="inviteModalRef" invite-kind="technical" @success="onInviteSuccess" />
+  <InviteTeammateModal ref="inviteModalRef" invite-kind="technical" @success="waitForDelegatedUpload" />
 </template>

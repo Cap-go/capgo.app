@@ -78,6 +78,7 @@ describe('canceled_org_retention_alerts', () => {
           event: 'org:bundles_will_be_deleted',
           preferenceKey: 'usage_limit',
           audience: 'billing',
+          recordDelivery: true,
           uniqId: 'retention:bundles_deletion_warning:2026-05-01T00:00:00Z',
           data: expect.objectContaining({
             org_id: ORG_BUNDLES,

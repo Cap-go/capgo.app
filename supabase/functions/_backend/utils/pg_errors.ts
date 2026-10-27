@@ -26,7 +26,20 @@ const TRANSIENT_PG_SQLSTATES = new Set([
   '40P01',
 ])
 
-const TRANSIENT_ERROR_MESSAGE_RE = /connection (?:terminated|ended|closed|refused|reset)|timeout exceeded when trying to connect|connect(?:ion)? timed? ?out|canceling statement due to (?:(?:statement|lock) timeout|conflict with recovery)|network(?: |_)?error|socket hang up|hyperdrive|too many clients already|waiting for an open slot|timed out while waiting for a message from the origin database/i
+// Split into small patterns so each stays readable (and under Sonar's regex complexity limit).
+const TRANSIENT_ERROR_MESSAGE_PATTERNS = [
+  /connection (?:terminated|ended|closed|refused|reset)/i,
+  /timeout exceeded when trying to connect/i,
+  /connect(?:ion)? timed? ?out/i,
+  /canceling statement due to (?:(?:statement|lock) timeout|conflict with recovery)/i,
+  /network[ _]?error/i,
+  /socket hang up|hyperdrive|too many clients already|waiting for an open slot/i,
+  /timed out while (?:waiting for a message from the origin database|creating a new server connection)/i,
+]
+
+function isTransientErrorMessage(message: string): boolean {
+  return TRANSIENT_ERROR_MESSAGE_PATTERNS.some(pattern => pattern.test(message))
+}
 
 const DRIZZLE_ERROR_NAMES = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
 
@@ -151,7 +164,7 @@ export function isTransientPgError(error: unknown, depth = 0): boolean {
     return false
 
   if (typeof error === 'string')
-    return TRANSIENT_ERROR_MESSAGE_RE.test(error)
+    return isTransientErrorMessage(error)
 
   const code = readPgErrorField(error, 'code')
   if (typeof code === 'string') {
@@ -160,7 +173,7 @@ export function isTransientPgError(error: unknown, depth = 0): boolean {
   }
 
   const message = readPgErrorField(error, 'message')
-  if (typeof message === 'string' && TRANSIENT_ERROR_MESSAGE_RE.test(message))
+  if (typeof message === 'string' && isTransientErrorMessage(message))
     return true
 
   const errno = readPgErrorField(error, 'errno')
@@ -222,7 +235,7 @@ export function isTransientDatabaseError(error: unknown): boolean {
   return isTransientPgError(error) && isDatabaseOriginError(error)
 }
 
-const READ_ONLY_PG_CONNECTION_RETRY_MESSAGE_RE = /not queryable|encountered a connection error|connection terminated/i
+const READ_ONLY_PG_CONNECTION_RETRY_MESSAGE_RE = /not queryable|encountered a connection error|connection terminated|timed out while creating a new server connection/i
 
 function hasReadOnlyPgConnectionRetrySignal(error: unknown, depth = 0): boolean {
   if (!error || depth > 6)
