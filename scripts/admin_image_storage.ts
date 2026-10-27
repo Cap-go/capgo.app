@@ -61,6 +61,15 @@ export function createImageStore(env: Record<string, string | undefined>): Image
     else
       bytes = new Uint8Array(await data.arrayBuffer())
     const contentType = options.contentType || (data instanceof Blob ? data.type : '') || 'application/octet-stream'
+    // putObject rejects an empty body ("Stream was closed without uploading any
+    // data"), so a 0-byte image goes through a presigned PUT, like the backend.
+    if (bytes.byteLength === 0) {
+      const url = await client.getPresignedUrl('PUT', key, { expirySeconds: 300, parameters: { 'X-Amz-Content-Sha256': 'UNSIGNED-PAYLOAD', 'x-id': 'PutObject' } })
+      const response = await fetch(url, { method: 'PUT', body: bytes as Uint8Array<ArrayBuffer>, headers: { 'Content-Type': contentType, 'Cache-Control': 'private, max-age=0' } })
+      if (!response.ok)
+        throw new Error(`Empty image upload failed with status ${response.status}: ${(await response.text().catch(() => '')).slice(0, 200)}`)
+      return 'ok' as const
+    }
     await client.putObject(key, bytes, {
       size: bytes.byteLength,
       metadata: { 'Content-Type': contentType, 'Cache-Control': 'private, max-age=0' },
