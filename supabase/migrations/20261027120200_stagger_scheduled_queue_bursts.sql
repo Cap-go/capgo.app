@@ -81,6 +81,21 @@ BEGIN
   WHERE s.org_id = v_org_id
   FOR UPDATE;
 
+  -- An immediate refresh must not wait behind a job still parked in a
+  -- staggered stats_jobs slot: make it readable now. This runs before the
+  -- request TTL, which stats_jobs itself just stamped when it parked the job.
+  -- Rows already read are in flight and keep their visibility timeout.
+  IF p_delay_seconds <= 0 THEN
+    UPDATE pgmq.q_cron_stat_app queued_job
+    SET vt = pg_catalog.clock_timestamp()
+    WHERE queued_job.message->'payload'->>'appId' = p_app_id
+      AND queued_job.read_ct = 0
+      AND queued_job.vt > pg_catalog.clock_timestamp();
+    IF FOUND THEN
+      RETURN;
+    END IF;
+  END IF;
+
   INSERT INTO public.app_stats_refresh_state (app_id, owner_org, stats_refresh_requested_at)
   SELECT a.app_id, a.owner_org, v_now_utc
   FROM public.apps a
@@ -98,24 +113,10 @@ BEGIN
       OR app_stats_refresh_state.stats_refresh_requested_at < v_now_utc - v_refresh_ttl)
   RETURNING owner_org INTO v_queued_org_id;
 
-  IF v_queued_org_id IS NULL THEN
-    RETURN;
-  END IF;
-
-  IF EXISTS (
+  IF v_queued_org_id IS NULL OR EXISTS (
     SELECT 1 FROM pgmq.q_cron_stat_app queued_job
     WHERE queued_job.message->'payload'->>'appId' = p_app_id
   ) THEN
-    -- An immediate refresh must not wait behind a job still parked in a
-    -- staggered stats_jobs slot: make it readable now. Rows already read are
-    -- in flight and keep their visibility timeout.
-    IF p_delay_seconds <= 0 THEN
-      UPDATE pgmq.q_cron_stat_app queued_job
-      SET vt = pg_catalog.clock_timestamp()
-      WHERE queued_job.message->'payload'->>'appId' = p_app_id
-        AND queued_job.read_ct = 0
-        AND queued_job.vt > pg_catalog.clock_timestamp();
-    END IF;
     RETURN;
   END IF;
 

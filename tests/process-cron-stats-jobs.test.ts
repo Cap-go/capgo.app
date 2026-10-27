@@ -79,11 +79,7 @@ describe('cron_stat_app queue resilience', () => {
     )
     expect(parked?.parked).toBe(true)
 
-    // Let the 5-minute refresh TTL pass so the on-demand request is accepted.
-    await executeSQL(
-      `UPDATE public.app_stats_refresh_state SET stats_refresh_requested_at = stats_refresh_requested_at - INTERVAL '10 minutes' WHERE app_id = $1`,
-      [appId],
-    )
+    // Still inside the 5-minute request TTL the parked job just stamped.
     await executeSQL(`SELECT public.queue_cron_stat_app_for_app($1, $2)`, [appId, ORG_ID_CRON_QUEUE])
 
     const rows = await executeSQL(
