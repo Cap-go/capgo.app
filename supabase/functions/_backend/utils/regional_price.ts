@@ -43,14 +43,22 @@ export function getPriceTier(price: Pick<Stripe.Price, 'metadata'>): PriceTier {
   return isPriceTier(tier) ? tier : FULL_PRICE_TIER
 }
 
+function findRegionalItem(subscription: Stripe.Subscription) {
+  return subscription.items.data.find(({ price }) => price.recurring?.usage_type === 'licensed' && getPriceTier(price) !== FULL_PRICE_TIER)
+}
+
 // A regional discount is only kept when the card paying it and the billing address are from that region:
 // otherwise the subscription moves to the price of the most expensive of those countries and the
 // difference is invoiced now. Nothing known about the buyer means the full price.
-export async function enforceRegionalPrice(c: Context, stripe: Stripe, billingAccount: BillingAccount, subscription: Stripe.Subscription): Promise<boolean> {
+export async function enforceRegionalPrice(c: Context, stripe: Stripe, billingAccount: BillingAccount, eventSubscription: Stripe.Subscription): Promise<boolean> {
+  if (!findRegionalItem(eventSubscription))
+    return false
+  // Webhooks can arrive out of order: decide on the live subscription, not the event's snapshot.
+  const subscription = await stripe.subscriptions.retrieve(eventSubscription.id)
   // Incomplete checkouts have not been paid: check once the payment went through.
   if (!['active', 'trialing', 'past_due'].includes(subscription.status))
     return false
-  const item = subscription.items.data.find(({ price }) => price.recurring?.usage_type === 'licensed' && getPriceTier(price) !== FULL_PRICE_TIER)
+  const item = findRegionalItem(subscription)
   if (!item)
     return false
   const soldTier = getPriceTier(item.price)

@@ -34,12 +34,13 @@ function subscription(tier: string | null, overrides: Partial<Stripe.Subscriptio
   } as unknown as Stripe.Subscription
 }
 
-function fakeStripe(cardCountry: string | null, addressCountry: string | null = null) {
+function fakeStripe(cardCountry: string | null, addressCountry: string | null = null, live?: Stripe.Subscription) {
   const update = vi.fn(async () => ({}))
+  const retrieve = vi.fn(async (id: string) => live ?? subscription('p50', { id }))
   const stripe = {
     customers: { retrieve: vi.fn(async () => ({ id: 'cus_1', currency: 'eur', address: addressCountry ? { country: addressCountry } : null, invoice_settings: { default_payment_method: null } })) },
     paymentMethods: { retrieve: vi.fn(async () => ({ id: 'pm_1', card: cardCountry ? { country: cardCountry } : null, billing_details: { address: null } })) },
-    subscriptions: { update },
+    subscriptions: { update, retrieve },
   } as unknown as Stripe
   return { stripe, update }
 }
@@ -75,11 +76,18 @@ describe('regional price guard', () => {
   })
 
   it('leaves full prices and unpaid subscriptions alone', async () => {
-    const { stripe, update } = fakeStripe('DE')
+    const { stripe, update } = fakeStripe('DE', null, subscription('p50', { status: 'incomplete' }))
     await expect(enforceRegionalPrice(context(), stripe, 'ee', subscription(null))).resolves.toBe(false)
-    await expect(enforceRegionalPrice(context(), stripe, 'ee', subscription('p50', { status: 'incomplete' }))).resolves.toBe(false)
+    await expect(enforceRegionalPrice(context(), stripe, 'ee', subscription('p50'))).resolves.toBe(false)
     expect(update).not.toHaveBeenCalled()
     expect(stripe.customers.retrieve).not.toHaveBeenCalled()
+  })
+
+  it('decides on the live subscription when the event is stale', async () => {
+    const { stripe, update } = fakeStripe('DE', null, subscription(null))
+    await expect(enforceRegionalPrice(context(), stripe, 'ee', subscription('p50'))).resolves.toBe(false)
+    expect(stripe.subscriptions.retrieve).toHaveBeenCalledWith('sub_1')
+    expect(update).not.toHaveBeenCalled()
   })
 
   it('offers the tier of the most expensive known country', () => {
