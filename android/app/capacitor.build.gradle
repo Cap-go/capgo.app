@@ -108,7 +108,6 @@ dependencies {
     implementation project(':capgo-capacitor-screen-recorder')
     implementation project(':capgo-capacitor-shake')
     implementation project(':capgo-capacitor-sim')
-    implementation project(':capgo-capacitor-social-login')
     implementation project(':capgo-capacitor-speech-recognition')
     implementation project(':capgo-capacitor-speech-synthesis')
     implementation project(':capgo-capacitor-textinteraction')

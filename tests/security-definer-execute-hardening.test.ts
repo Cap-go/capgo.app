@@ -29,6 +29,7 @@ const SERVICE_ONLY_PROCS = [
   'public.accept_tmp_user_invitation(text, uuid)',
   'public.prevent_role_binding_priority_escalation()',
   'public.check_encrypted_bundle_on_insert()',
+  'public.check_org_encrypted_bundle_enforcement(uuid, text)',
   'public.check_org_hashed_key_enforcement(uuid, public.apikeys)',
   'public.cleanup_onboarding_app_data_on_complete()',
   'public.delete_old_deleted_versions()',

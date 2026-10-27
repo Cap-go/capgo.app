@@ -9,7 +9,7 @@ import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
 import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readLegacyCheckFailuresCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
-import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { mergeLegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -820,6 +820,13 @@ app.post('/', middlewareAuth, async (c) => {
   const channelId = typeof body.channel_id === 'number' && Number.isFinite(body.channel_id)
     ? body.channel_id
     : undefined
+
+  // A channel filter is derived from that channel's deploy history, and the
+  // cached response is shared per app + channel, so check the channel-scoped
+  // history permission before any cache lookup.
+  if (channelId !== undefined && !(await checkPermission(c, 'channel.read_history', { appId, channelId }))) {
+    throw quickError(403, 'channel_access_denied', 'You can\'t access this channel history', { app_id: appId, channel_id: channelId })
+  }
 
   try {
     return c.json(await readBundleInstallStats(c, appId, days, channelId, versionName))

@@ -17,7 +17,6 @@ declare module 'vue' {
     AppAccess: typeof import('./components/dashboard/AppAccess.vue')['default']
     AppDashboardPage: typeof import('./components/dashboard/AppDashboardPage.vue')['default']
     AppDeleteDialogContent: typeof import('./components/dashboard/AppDeleteDialogContent.vue')['default']
-    AppleSignInButton: typeof import('./components/auth/AppleSignInButton.vue')['default']
     AppNotFoundModal: typeof import('./components/AppNotFoundModal.vue')['default']
     AppOnboardingAiButton: typeof import('./components/dashboard/AppOnboardingAiButton.vue')['default']
     AppOnboardingBuilderAiSetup: typeof import('./components/dashboard/AppOnboardingBuilderAiSetup.vue')['default']
