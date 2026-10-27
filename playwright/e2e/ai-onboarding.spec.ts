@@ -7,6 +7,8 @@ import { expect, test } from '../support/commands'
 
 const { ports: supabasePorts } = getSupabaseWorktreeConfig()
 const localSupabaseUrl = `http://127.0.0.1:${supabasePorts.api}`
+// This worktree's database: worktrees shift ports, so the default local port is not it.
+const localDatabaseUrl = `postgresql://postgres:postgres@127.0.0.1:${supabasePorts.db}/postgres`
 
 function localAdminClient() {
   const configured = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY
@@ -14,7 +16,7 @@ function localAdminClient() {
   const key = configured || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
   if (!key)
     throw new Error('Local Supabase service key is required for AI onboarding fixtures')
-  return createClient(localSupabaseUrl, key, { auth: { persistSession: false } })
+  return createClient(localSupabaseUrl, key, { auth: { persistSession: false }, databaseUrl: localDatabaseUrl })
 }
 
 // Every test signs up a fresh user; remove it and everything it created afterwards.

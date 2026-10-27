@@ -160,6 +160,11 @@ app.all('/functions/v1/*', (c) => {
   const capgkey = c.req.header('capgkey')
   if (capgkey)
     headers.set('Authorization', capgkey)
-  const target = `${functionsBase(c)}/${tailAfter(c, '/functions/v1/')}`
+  const tail = tailAfter(c, '/functions/v1/')
+  // The relay targets this same API. A tail that points back at this host would
+  // relay to itself once per nested prefix; no released CLI calls it.
+  if (decodeURIComponent(tail.split('?')[0]).replace(/^\/+/, '').startsWith('private/legacy_supabase'))
+    return c.json({ error: 'not_found', message: 'Not found' }, 404)
+  const target = `${functionsBase(c)}/${tail}`
   return fetch(target, { method: c.req.method, headers, body: relayBody(c), duplex: 'half', redirect: 'manual' } as RequestInit)
 })

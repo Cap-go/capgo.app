@@ -38,7 +38,7 @@ function table(name: string, operations: ConsoleQueryRequest['operations']): Con
 }
 
 describe('backend builder → SQL parity with PostgREST', () => {
-  it('fills a key missing from some rows with NULL, or the column default when asked', () => {
+  it.concurrent('fills a key missing from some rows with NULL, or the column default when asked', () => {
     const rows = [{ app_id: 'a', date: '2026-01-01', mau: 1 }, { app_id: 'b', date: '2026-01-01' }]
     const nulls = compileConsoleQuery(catalog, table('daily_mau', [{ method: 'insert', args: [rows] }]))
     expect(flat(nulls.text)).toContain('VALUES ($1::varchar, $2::date, $3::bigint), ($4::varchar, $5::date, NULL)')
@@ -46,24 +46,24 @@ describe('backend builder → SQL parity with PostgREST', () => {
     expect(flat(defaults.text)).toContain('($4::varchar, $5::date, DEFAULT)')
   })
 
-  it('upserts on the primary key when onConflict is omitted', () => {
+  it.concurrent('upserts on the primary key when onConflict is omitted', () => {
     const compiled = compileConsoleQuery(catalog, table('daily_mau', [{ method: 'upsert', args: [{ app_id: 'a', date: '2026-01-01', mau: 2 }] }]))
     expect(flat(compiled.text)).toContain('ON CONFLICT ("app_id", "date") DO UPDATE SET "mau" = EXCLUDED."mau"')
   })
 
-  it('refuses an UPDATE or DELETE without a filter, like pg-safeupdate behind PostgREST', () => {
+  it.concurrent('refuses an UPDATE or DELETE without a filter, like pg-safeupdate behind PostgREST', () => {
     expect(() => compileConsoleQuery(catalog, table('daily_mau', [{ method: 'delete', args: [] }]))).toThrow('DELETE requires a WHERE clause')
     expect(() => compileConsoleQuery(catalog, table('daily_mau', [{ method: 'update', args: [{ mau: 0 }] }]))).toThrow('UPDATE requires a WHERE clause')
     expect(() => compileConsoleQuery(catalog, table('daily_mau', [{ method: 'delete', args: [] }, { method: 'eq', args: ['app_id', 'a'] }]))).not.toThrow()
   })
 
-  it('treats an empty batch as a write of nothing', () => {
+  it.concurrent('treats an empty batch as a write of nothing', () => {
     const compiled = compileConsoleQuery(catalog, table('daily_mau', [{ method: 'upsert', args: [[]] }]))
     expect(compiled.values).toEqual([])
     expect(compiled.text).toContain('WHERE false')
   })
 
-  it('builds composite columns with jsonb_populate_record on the table type', () => {
+  it.concurrent('builds composite columns with jsonb_populate_record on the table type', () => {
     const compiled = compileConsoleQuery(catalog, table('app_versions', [
       { method: 'update', args: [{ manifest: [{ file_name: 'a.js', s3_path: 'x', file_hash: 'h' }] }] },
       { method: 'eq', args: ['id', 1] },
@@ -72,7 +72,7 @@ describe('backend builder → SQL parity with PostgREST', () => {
     expect(compiled.values[1]).toBe(JSON.stringify([{ file_name: 'a.js', s3_path: 'x', file_hash: 'h' }]))
   })
 
-  it('orders, filters and pages the rows of a set-returning RPC', () => {
+  it.concurrent('orders, filters and pages the rows of a set-returning RPC', () => {
     const compiled = compileConsoleQuery(catalog, {
       kind: 'rpc',
       name: 'get_app_metrics',
@@ -88,7 +88,7 @@ describe('backend builder → SQL parity with PostgREST', () => {
     expect(() => compileConsoleQuery(catalog, { kind: 'rpc', name: 'get_user_id', args: [{ apikey: 'x' }], operations: [{ method: 'order', args: ['x'] }] })).toThrow('Unsupported RPC modifier')
   })
 
-  it('reads fresh past the Hyperdrive cache', () => {
+  it.concurrent('reads fresh past the Hyperdrive cache', () => {
     expect(freshReadSql('SELECT 1')).toBe('WITH capgo_fresh_read AS (SELECT now()) SELECT 1')
     expect(freshReadSql('WITH written AS (UPDATE t SET a = 1) SELECT 1')).toBe('WITH capgo_fresh_read AS (SELECT now()), written AS (UPDATE t SET a = 1) SELECT 1')
     expect(freshReadSql('DELETE FROM t WHERE a = 1')).toBe('DELETE FROM t WHERE a = 1')
@@ -105,7 +105,7 @@ describe('backend builder client', () => {
     return { db, requests }
   }
 
-  it('sends what supabase-js would put on the wire, on every await', async () => {
+  it.concurrent('sends what supabase-js would put on the wire, on every await', async () => {
     const { db, requests } = client({ data: [] })
     const date = new Date('2026-01-02T03:04:05.000Z')
     const query = (db.from as any)('daily_mau').insert({ app_id: 'a', mau: undefined, date }).select()
@@ -121,7 +121,7 @@ describe('backend builder client', () => {
     expect(String((db.from as any)('x')[Symbol.toStringTag])).toBe('undefined')
   })
 
-  it('answers writes with PostgREST status codes', async () => {
+  it.concurrent('answers writes with PostgREST status codes', async () => {
     const inserted = await (client().db.from as any)('daily_mau').insert({ app_id: 'a' })
     expect(inserted.status).toBe(201)
     expect(inserted.statusText).toBe('Created')
@@ -129,7 +129,7 @@ describe('backend builder client', () => {
     expect(updated.status).toBe(204)
   })
 
-  it('returns errors as PostgrestError and throws them with throwOnError()', async () => {
+  it.concurrent('returns errors as PostgrestError and throws them with throwOnError()', async () => {
     const failing = client({ error: { message: 'duplicate key', code: '23505', details: 'Key exists', hint: null }, status: 409 })
     const { error } = await (failing.db.from as any)('daily_mau').insert({ app_id: 'a' })
     expect(error).toBeInstanceOf(DbQueryError)
@@ -149,7 +149,7 @@ describe('PostgREST HTTP requests (released CLIs)', () => {
     })
   }
 
-  it('reads select, filters, or, order and paging from the query string', () => {
+  it.concurrent('reads select, filters, or, order and paging from the query string', () => {
     const parsed = parse('GET', 'channels?select=id,name&app_id=eq.com.demo&name=not.in.(a,b)&or=(version.eq.1,rollout_version.eq.1)&order=name.desc.nullslast&limit=10&offset=20')
     expect(parsed.kind).toBe('table')
     expect(parsed.request.operations).toEqual([
@@ -162,7 +162,7 @@ describe('PostgREST HTTP requests (released CLIs)', () => {
     ])
   })
 
-  it('maps single-object Accept, Range, upsert resolution and RPC bodies', () => {
+  it.concurrent('maps single-object Accept, Range, upsert resolution and RPC bodies', () => {
     expect(parse('GET', 'apps?app_id=eq.x', { accept: 'application/vnd.pgrst.object+json' }).request.operations.at(-1)).toEqual({ method: 'single', args: [] })
     expect(parse('GET', 'apps', { range: '0-0' }).request.operations.at(-1)).toEqual({ method: 'range', args: [0, 0] })
     const upsert = parse('POST', 'channels?on_conflict=app_id,name&select=*', { prefer: 'resolution=merge-duplicates,return=representation' }, { app_id: 'x', name: 'prod' })
@@ -172,7 +172,7 @@ describe('PostgREST HTTP requests (released CLIs)', () => {
     expect(rpc).toMatchObject({ kind: 'rpc', name: 'get_orgs_v7', request: { args: [{ userid: 'u' }] } })
   })
 
-  it('answers with PostgREST status, Content-Range and error bodies', () => {
+  it.concurrent('answers with PostgREST status, Content-Range and error bodies', () => {
     const get = parse('GET', 'apps?offset=5', { prefer: 'count=exact' })
     expect(postgrestResponse(get, { data: [{}, {}], error: null, count: 7, status: 200 })).toEqual({ status: 200, headers: { 'Content-Range': '5-6/7' }, body: [{}, {}] })
     const minimal = parse('PATCH', 'apps?app_id=eq.x', {}, { name: 'n' })
@@ -192,7 +192,7 @@ describe('embedded order and limit (referencedTable)', () => {
     functions: [],
   }
 
-  it('orders and limits the embedded rows, not the parent rows', () => {
+  it.concurrent('orders and limits the embedded rows, not the parent rows', () => {
     const compiled = compileConsoleQuery(embedCatalog, table('channels', [
       { method: 'select', args: ['id, deploy_history(deployed_at)'] },
       { method: 'eq', args: ['app_id', 'com.demo'] },
@@ -212,7 +212,7 @@ describe('embedded order and limit (referencedTable)', () => {
 })
 
 describe('JSON key filters', () => {
-  it('keeps camelCase JSON keys, as PostgREST does', () => {
+  it.concurrent('keeps camelCase JSON keys, as PostgREST does', () => {
     const jsonCatalog: QueryCatalog = {
       columns: new Map([['usage_credit_transactions', [column('id', 'int8'), column('source_ref', 'jsonb')]]]),
       foreignKeys: [],
@@ -228,7 +228,7 @@ describe('JSON key filters', () => {
 })
 
 describe('tooling database URL', () => {
-  it('uses the given database and never falls back to local for a remote project', async () => {
+  it.concurrent('uses the given database and never falls back to local for a remote project', async () => {
     const { resolveDatabaseUrl } = await import('../scripts/db-client.ts')
     expect(resolveDatabaseUrl('https://project.supabase.co', 'postgresql://u:p@db.project.supabase.co:5432/postgres')).toBe('postgresql://u:p@db.project.supabase.co:5432/postgres')
     expect(() => resolveDatabaseUrl('https://project.supabase.co', 'postgresql://postgres:postgres@127.0.0.1:54322/postgres')).toThrow('Refusing to query the local database')
@@ -237,7 +237,7 @@ describe('tooling database URL', () => {
 })
 
 describe('tooling client sessions', () => {
-  it('runs as service with a service key that is not in process.env', async () => {
+  it.concurrent('runs as service with a service key that is not in process.env', async () => {
     const { createClient } = await import('../scripts/db-client.ts')
     // A legacy HS256 service_role key (role claim only, no user subject).
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')

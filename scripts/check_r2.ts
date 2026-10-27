@@ -249,7 +249,7 @@ export function supabaseAdmin() {
       detectSessionInUrl: false,
     },
   }
-  return createClient<Database>(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'), options)
+  return createClient<Database>(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'), { ...options, databaseUrl: getEnv('SUPABASE_DB_URL') || undefined })
 }
 
 export function initS3() {

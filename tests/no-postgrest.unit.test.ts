@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { env } from 'node:process'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -64,8 +65,27 @@ describe('no PostgREST', () => {
     expect(offenders).toEqual([])
   })
 
+  it('calls /rest/v1 from no test, Playwright spec or script', () => {
+    // fetchPostgrest replays a request in-process; route mocks never reach the network.
+    const allowed = new Set(['scripts/db-client.ts', 'tests/no-postgrest.unit.test.ts'])
+    const offenders = ['tests', 'scripts', 'playwright']
+      .flatMap(dir => sourceFiles(join(ROOT, dir)))
+      .filter(file => !allowed.has(relative(ROOT, file)))
+      .flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => ({ file, line, index })))
+      .filter(({ line }) => line.includes('/rest/v1') && /\b(?:fetch|fetchTestRequest)\s*\(/.test(line))
+      .map(({ file, index }) => `${relative(ROOT, file)}:${index + 1}`)
+    expect(offenders).toEqual([])
+  })
+
   for (const version of [MIN_CLI_VERSION, LAST_SDK_CLI]) {
     const source = cliSource(`cli-${version}`)
+    // CI fetches these tags (tests.yml, unit job); a missing tag there is a failure, not a skip.
+    if (source === null && env.CI) {
+      it(`has the cli-${version} tag`, () => {
+        throw new Error(`cli-${version} is not fetched; the unit job must fetch it`)
+      })
+      continue
+    }
     it.skipIf(source === null)(`serves every table and RPC CLI ${version} calls`, () => {
       const rpcs = new Set([...source!.matchAll(/\.rpc\(\s*['"`]([a-z][a-z0-9_]*)['"`]/g)].map(match => match[1]))
       // `.storage.from('images')` is Storage, relayed as is.

@@ -28,7 +28,8 @@ const POSTGREST_URL = env.POSTGREST_URL ?? 'http://127.0.0.1:59990'
 const REQUESTS = Number(env.BENCH_REQUESTS ?? 400)
 const CONCURRENCY = Number(env.BENCH_CONCURRENCY ?? 20)
 const APIKEY = 'ae6e7458-c46d-4c00-aa3b-153b0b8520ea'
-const APP_ID = 'com.demo'
+// Seeded by supabase/seed.sql (owner: test@capgo.app).
+const APP_ID = 'com.demo.app'
 const SERVICE_KEY = env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 const ANON_KEY = env.SUPABASE_ANON_KEY ?? ''
 
@@ -51,21 +52,33 @@ function postgrest(bearer: string, headers: Record<string, string> = {}) {
 }
 
 type Builder = Pick<ReturnType<typeof runner>, 'from' | 'rpc'>
-type Operation = (db: Builder) => PromiseLike<{ error: unknown }>
+type Result = { data: unknown, error: unknown }
+type Operation = (db: Builder) => PromiseLike<Result>
 
-const operations: Record<string, Operation> = {
-  'rpc find_apikey_by_value': db => db.rpc('find_apikey_by_value', { key_value: APIKEY }).single(),
-  'GET apps (one row)': db => db.from('apps').select('app_id, owner_org, name').eq('app_id', APP_ID).maybeSingle(),
-  'GET app_versions (one row)': db => db.from('app_versions').select('id, name').eq('app_id', APP_ID).eq('name', '1.0.0').maybeSingle(),
-  'GET channels + embeds': db => db.from('channels').select('id, name, version:app_versions!channels_version_fkey(id, name)').eq('app_id', APP_ID),
-  'PATCH manifest (indexed, no row)': db => db.from('manifest').update({ file_size: 1 }).eq('id', -1),
+function serviceOperations(manifestId: number): Record<string, Operation> {
+  return {
+    'rpc find_apikey_by_value': db => db.rpc('find_apikey_by_value', { key_value: APIKEY }).single(),
+    'GET apps (one row)': db => db.from('apps').select('app_id, owner_org, name').eq('app_id', APP_ID).single(),
+    'GET app_versions (one row)': db => db.from('app_versions').select('id, name').eq('app_id', APP_ID).eq('name', '1.0.0').single(),
+    'GET channels + embeds': db => db.from('channels').select('id, name, version:app_versions!channels_version_fkey(id, name)').eq('app_id', APP_ID),
+    // Like the hot route: an indexed update of one existing row, no representation.
+    'PATCH manifest (one row)': db => db.from('manifest').update({ file_size: 1 }).eq('id', manifestId),
+  }
+}
+
+// Every timed operation must touch real rows on both paths, or the numbers
+// measure empty results. Writes are checked with a returning variant.
+async function assertReturnsRows(name: string, side: string, result: Result) {
+  const empty = result.data == null || (Array.isArray(result.data) && result.data.length === 0)
+  if (result.error || empty)
+    throw new Error(`${name} (${side}) returned no rows: ${JSON.stringify(result.error ?? result.data)}`)
 }
 
 function percentile(sorted: number[], p: number) {
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))]
 }
 
-async function measure(label: string, run: () => PromiseLike<{ error: unknown }>) {
+async function measure(label: string, run: () => PromiseLike<Result>) {
   for (let index = 0; index < 20; index++)
     await run()
   const latencies: number[] = []
@@ -100,11 +113,28 @@ async function main() {
     apikey: { postgrest: postgrest(ANON_KEY, { capgkey: APIKEY }), runner: runner({ role: 'anon', headers: { capgkey: APIKEY } }) },
     jwt: { postgrest: postgrest(jwt), runner: runner({ role: 'authenticated', claims: { ...claims, role: 'authenticated' } }) },
   }
+  // A real manifest row for the update to hit (the local seed has none).
+  const version = await pool.query<{ id: number }>('SELECT id FROM public.app_versions WHERE app_id = $1 ORDER BY id LIMIT 1', [APP_ID])
+  const manifest = await pool.query<{ id: number }>(
+    'INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size) VALUES ($1, $2, $3, $4, 0) RETURNING id',
+    [version.rows[0].id, 'bench.js', 'bench/bench.js', 'bench-hash'],
+  )
+  const manifestId = manifest.rows[0].id
+
   const plan: Array<[string, keyof typeof sides, Operation]> = [
-    ...Object.entries(operations).map(([name, op]) => [name, 'service', op] as [string, keyof typeof sides, Operation]),
+    ...Object.entries(serviceOperations(manifestId)).map(([name, op]) => [name, 'service', op] as [string, keyof typeof sides, Operation]),
     ['API key: GET apps (RLS)', 'apikey', db => db.from('apps').select('app_id, name').eq('app_id', APP_ID)],
     ['JWT: GET orgs (RLS)', 'jwt', db => db.from('orgs').select('id, name')],
   ]
+
+  for (const [name, side, op] of plan) {
+    for (const [label, db] of [['PostgREST', sides[side].postgrest as unknown as Builder], ['Drizzle runner', sides[side].runner]] as const) {
+      const check = name.startsWith('PATCH')
+        ? await db.from('manifest').update({ file_size: 2 }).eq('id', manifestId).select('id')
+        : await op(db)
+      await assertReturnsRows(name, label, check)
+    }
+  }
 
   const rows: string[] = []
   for (const [name, side, op] of plan) {
@@ -117,6 +147,7 @@ async function main() {
   console.log('| Operation | Path | p50 ms | p95 ms | p99 ms | req/s | errors |')
   console.log('|---|---|---|---|---|---|---|')
   console.log(rows.join('\n'))
+  await pool.query('DELETE FROM public.manifest WHERE id = $1', [manifestId])
   await pool.end()
 }
 

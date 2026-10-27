@@ -130,7 +130,7 @@ function hydrateLocalSupabaseEnvFromStatus(): void {
     try {
       const parsed = parseSupabaseStatusJson(status.stdout || '')
       // No API_URL when PostgREST is disabled; the gateway also serves Storage's S3 endpoint.
-      const supabaseUrl = normalizeLocalhostUrl(parsed.API_URL ?? (parsed.STORAGE_S3_URL ? new URL(parsed.STORAGE_S3_URL).origin : undefined))
+      const supabaseUrl = normalizeLocalhostUrl(parsed.API_URL || (parsed.STORAGE_S3_URL ? new URL(parsed.STORAGE_S3_URL).origin : undefined))
       const dbUrl = parsed.DB_URL ? normalizePostgresUrl(parsed.DB_URL) : undefined
       const anonKey = parsed.ANON_KEY || parsed.PUBLISHABLE_KEY
       const serviceKey = parsed.SERVICE_ROLE_KEY || parsed.SECRET_KEY

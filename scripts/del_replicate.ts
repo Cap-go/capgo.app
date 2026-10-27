@@ -4,12 +4,15 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
+// Postgres URL of the same project (Database settings). Queries go straight to it.
+const supabaseDbUrl = '***'
 const ids = []
 
 async function main() {
 
   // find id who are not in supabase
   const supabase = createClient<Database>(supabaseUrl, supabaseServiceRole, {
+    databaseUrl: supabaseDbUrl,
     auth: {
       autoRefreshToken: false,
       persistSession: false,

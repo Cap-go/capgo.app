@@ -57,7 +57,7 @@ export function createSupabaseServiceClient(env: Record<string, string | undefin
   return createClient<Database>(
     getRequiredEnv(env, 'SUPABASE_URL'),
     getSupabaseServiceRoleKey(env),
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }, databaseUrl: env.SUPABASE_DB_URL },
+    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }, databaseUrl: env.SUPABASE_DB_URL ?? env.DB_URL },
   )
 }
 

@@ -21,7 +21,10 @@ import { parsePostgrestRequest, PostgrestHttpError, postgrestResponse } from '..
 
 /** supabase-js options plus the Postgres URL that backs `supabaseUrl`. */
 export type DbClientOptions = SupabaseClientOptions<any> & {
-  /** Defaults to SUPABASE_DB_URL / DB_URL, then the local stack (local `supabaseUrl` only). */
+  /**
+   * Required for a remote `supabaseUrl`. For a local one it defaults to
+   * SUPABASE_DB_URL / DB_URL, then the default local port.
+   */
   databaseUrl?: string
 }
 
@@ -38,15 +41,39 @@ function isLoopback(url: string): boolean {
   }
 }
 
-// The database must belong to the same project as `supabaseUrl`. A script that
-// targets a remote project must say which database; it never falls back to local.
+// `<ref>.supabase.co`, `db.<ref>.supabase.co`, or the pooler user `postgres.<ref>`.
+function projectRef(url: string, kind: 'api' | 'database'): string | null {
+  try {
+    const parsed = new URL(url)
+    const host = /^(?:db\.)?([a-z0-9]{20})\.supabase\.(?:co|com)$/.exec(parsed.hostname)
+    if (host)
+      return host[1]
+    if (kind === 'database')
+      return /^postgres\.([a-z0-9]{20})$/.exec(decodeURIComponent(parsed.username))?.[1] ?? null
+    return null
+  }
+  catch {
+    return null
+  }
+}
+
+// The database must belong to the same project as `supabaseUrl`. A remote
+// project needs its database passed explicitly: an inherited SUPABASE_DB_URL or
+// DB_URL could name another project, and local is never a fallback.
 export function resolveDatabaseUrl(supabaseUrl: string, explicit?: string): string {
-  const url = (explicit ?? env.SUPABASE_DB_URL ?? env.DB_URL ?? (isLoopback(supabaseUrl) ? LOCAL_DATABASE_URL : undefined))?.replace('localhost', '127.0.0.1')
-  if (!url)
-    throw new Error(`No database URL for ${new URL(supabaseUrl).host}: pass databaseUrl (or set SUPABASE_DB_URL) for that project.`)
-  if (!isLoopback(supabaseUrl) && isLoopback(url))
-    throw new Error(`Refusing to query the local database for ${new URL(supabaseUrl).host}: pass that project's databaseUrl.`)
-  return url
+  const host = new URL(supabaseUrl).host
+  if (!isLoopback(supabaseUrl)) {
+    if (!explicit)
+      throw new Error(`No database URL for ${host}: pass that project's databaseUrl.`)
+    if (isLoopback(explicit))
+      throw new Error(`Refusing to query the local database for ${host}: pass that project's databaseUrl.`)
+    const apiRef = projectRef(supabaseUrl, 'api')
+    const databaseRef = projectRef(explicit, 'database')
+    if (apiRef && databaseRef && apiRef !== databaseRef)
+      throw new Error(`databaseUrl belongs to project ${databaseRef}, not ${apiRef}.`)
+    return explicit
+  }
+  return (explicit ?? env.SUPABASE_DB_URL ?? env.DB_URL ?? LOCAL_DATABASE_URL).replace('localhost', '127.0.0.1')
 }
 
 function getPool(connectionString: string): Pool {
@@ -182,7 +209,16 @@ export async function fetchPostgrest(input: string | URL, init: RequestInit = {}
   const headerRecord = Object.fromEntries(requestHeaders.entries())
   const sdk = createSdkClient(url.origin, key || 'anon', { auth: { persistSession: false } }) as unknown as SupabaseClient<any>
   const session = await sessionFor(sdk, key, headerRecord)
-  const result = 'role' in session ? await runTestQuery(parsed.request, session, resolveDatabaseUrl(url.origin)) : session
+  // Honor the caller's AbortSignal like fetch() did: a hanging probe fails at its own timeout.
+  const signal = init.signal ?? undefined
+  signal?.throwIfAborted()
+  const query = 'role' in session ? runTestQuery(parsed.request, session, resolveDatabaseUrl(url.origin)) : Promise.resolve(session)
+  const result = signal
+    ? await Promise.race([
+        query,
+        new Promise<never>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+      ])
+    : await query
   const response = postgrestResponse(parsed, result)
   const body = response.body === undefined ? null : JSON.stringify(response.body)
   return new Response(body, {

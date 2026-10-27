@@ -44,6 +44,7 @@ interface ToDeleteAccount {
 
 async function main() {
   const supabase = createClient<Database>(supabaseUrl, supabaseServiceRoleKey, {
+    databaseUrl: env.SUPABASE_DB_URL,
     auth: {
       autoRefreshToken: false,
       persistSession: false,

@@ -8,6 +8,8 @@ import { CONSOLE_QUERY_ROUTE, consoleQueryError, consoleQueryFromResponse, conso
 
 const { ports: supabasePorts } = getSupabaseWorktreeConfig()
 const localSupabaseUrl = `http://127.0.0.1:${supabasePorts.api}`
+// This worktree's database: worktrees shift ports, so the default local port is not it.
+const localDatabaseUrl = `postgresql://postgres:postgres@127.0.0.1:${supabasePorts.db}/postgres`
 const localSupabaseAnonKey = env.SUPABASE_ANON_KEY || 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH'
 
 function localAdminClient() {
@@ -16,7 +18,7 @@ function localAdminClient() {
   const key = configured || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
   if (!key)
     throw new Error('Local Supabase service key is required for registration fixtures')
-  return createClient(localSupabaseUrl, key, { auth: { persistSession: false } })
+  return createClient(localSupabaseUrl, key, { auth: { persistSession: false }, databaseUrl: localDatabaseUrl })
 }
 
 async function loginToOnboarding(page: Page, email: string, password: string) {
@@ -89,7 +91,7 @@ async function continuePastChannelOnboardingIfShown(page: Page) {
 }
 
 async function forceWebNativeOnboardingTreatments(email: string, password: string) {
-  const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey)
+  const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey, { databaseUrl: localDatabaseUrl })
   const { data: sessionData, error: signInError } = await capgo.auth.signInWithPassword({ email, password })
   if (signInError || !sessionData.user)
     throw signInError ?? new Error('Cannot sign in treatment user')
@@ -101,7 +103,7 @@ async function forceWebNativeOnboardingTreatments(email: string, password: strin
   const serviceKey = configuredServiceKey || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
   if (!serviceKey)
     throw new Error('Local Supabase service key is required for treatment fixtures')
-  const adminClient = createClient(localSupabaseUrl, serviceKey, { auth: { persistSession: false } })
+  const adminClient = createClient(localSupabaseUrl, serviceKey, { auth: { persistSession: false }, databaseUrl: localDatabaseUrl })
   const { data: profile, error: profileError } = await adminClient
     .from('users')
     .select('onboarding')
@@ -286,7 +288,7 @@ test.describe('Registration', () => {
     await page.click('[data-test="app-onboarding-continue-intent"]')
     await continuePastDevelopmentEnvironmentIfShown(page)
 
-    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey)
+    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey, { databaseUrl: localDatabaseUrl })
     const { data: signedIn, error: signInError } = await capgo.auth.signInWithPassword({ email, password: 'Password123!' })
     expect(signInError).toBeNull()
     const { data: profile, error: profileError } = await capgo.from('users')
@@ -402,7 +404,7 @@ test.describe('Registration', () => {
       await page.fill('[data-test="onboarding-last-name"]', 'User')
       await draftSaved
 
-      const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey)
+      const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey, { databaseUrl: localDatabaseUrl })
       const { data: session, error: signInError } = await capgo.auth.signInWithPassword({ email, password })
       expect(signInError).toBeNull()
       const { data: profile, error } = await capgo.from('users')
@@ -449,7 +451,7 @@ test.describe('Registration', () => {
   test('should save an incomplete profile before creating a standalone organization', async ({ page }) => {
     const email = `standalone-profile-e2e-${Date.now()}@example.com`
     const password = 'Password123!'
-    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey)
+    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey, { databaseUrl: localDatabaseUrl })
     const { data: signedUp, error: signUpError } = await capgo.auth.signUp({ email, password })
     expect(signUpError).toBeNull()
     const { error: updateError } = await localAdminClient().from('users').upsert({ id: signedUp.user!.id, email, first_name: 'Example', last_name: '', onboarding: {} }, { onConflict: 'id' })
@@ -500,7 +502,7 @@ test.describe('Registration', () => {
   test('should complete a partial profile and skip both names for subsequent organizations', async ({ page }) => {
     const email = `partial-profile-e2e-${Date.now()}@example.com`
     const password = 'Password123!'
-    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey)
+    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey, { databaseUrl: localDatabaseUrl })
     const { data: signedUp, error: signUpError } = await capgo.auth.signUp({ email, password })
     expect(signUpError).toBeNull()
     const { data: seededProfile, error: updateError } = await localAdminClient().from('users').upsert({ id: signedUp.user!.id, email, first_name: 'Example', last_name: '', onboarding: {} }, { onConflict: 'id' }).select('first_name, last_name').single()
@@ -552,7 +554,7 @@ test.describe('Registration', () => {
   test('should preserve an existing surname when saving the first name', async ({ page }) => {
     const email = `surname-profile-e2e-${Date.now()}@example.com`
     const password = 'Password123!'
-    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey)
+    const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey, { databaseUrl: localDatabaseUrl })
     const { data: signedUp, error: signUpError } = await capgo.auth.signUp({ email, password })
     expect(signUpError).toBeNull()
     const { error: updateError } = await localAdminClient().from('users').upsert({ id: signedUp.user!.id, email, first_name: '', last_name: 'Existing', onboarding: {} }, { onConflict: 'id' })
