@@ -155,8 +155,6 @@ const frontendEnvironmentVariables: Record<string, string> = {
   VITE_API_HOST: getUrl('api_domain'),
   VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
   VITE_BRANCH: branch,
-  VITE_NATIVE_APPLE_LOGIN_ENABLED: 'false',
-  VITE_WEB_APPLE_LOGIN_ENABLED: 'false',
   package_dependencies: JSON.stringify(pack.dependencies),
   domain: getUrl(),
 }

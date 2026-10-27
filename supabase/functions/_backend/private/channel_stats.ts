@@ -2,7 +2,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { Hono } from 'hono/tiny'
-import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
@@ -233,6 +233,12 @@ app.post('/', middlewareAuth, async (c) => {
 
   if (!(await checkPermission(c, 'app.read', { appId: body.app_id }))) {
     throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: body.app_id })
+  }
+
+  // The response is the channel's deploy history and rollout stats, so the
+  // channel-scoped history permission (and its per-channel overrides) applies.
+  if (!(await checkPermission(c, 'channel.read_history', { appId: body.app_id, channelId: body.channel_id }))) {
+    throw quickError(403, 'channel_access_denied', 'You can\'t access this channel history', { app_id: body.app_id, channel_id: body.channel_id })
   }
 
   try {
