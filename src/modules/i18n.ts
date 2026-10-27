@@ -235,6 +235,9 @@ export async function loadLanguageAsync(lang: string): Promise<Locale> {
     return setI18nLanguage(FALLBACK_LOCALE)
 
   await ensureLanguageLoaded(normalized)
+  // A newer selection was made while this one loaded: leave the active locale alone.
+  if (normalized !== requestedLanguage)
+    return getSelectedLanguage()
   return setI18nLanguage(normalized)
 }
 
@@ -250,7 +253,8 @@ export const install: UserModule = async ({ app }) => {
   }
 
   const load = loadLanguageAsync(initialLanguage).then(() => {}, () => {
-    showFallbackLanguage()
+    if (requestedLanguage === initialLanguage)
+      showFallbackLanguage()
   })
   let timer: ReturnType<typeof setTimeout> | undefined
   await Promise.race([load, new Promise<void>((resolve) => {

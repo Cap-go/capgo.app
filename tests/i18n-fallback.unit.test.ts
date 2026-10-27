@@ -177,4 +177,28 @@ describe('i18n remote message loading', () => {
     expect(readCachedCatalog('de')?.checksum).toBe('de1')
     expect(readCachedCatalog('fr')).toBeNull()
   })
+  it('keeps a newer language selection when a slower load finishes later', async () => {
+    const stored = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      clear: vi.fn(() => stored.clear()),
+      getItem: vi.fn((key: string) => stored.get(key) ?? null),
+      removeItem: vi.fn((key: string) => stored.delete(key)),
+      setItem: vi.fn((key: string, value: string) => stored.set(key, value)),
+    })
+    let releaseFrench: (response: Response) => void = () => {}
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const { targetLanguage } = JSON.parse(init.body as string) as { targetLanguage: string }
+      if (targetLanguage === 'fr')
+        return new Promise<Response>((resolve) => { releaseFrench = resolve })
+      return new Response(JSON.stringify({ checksum: 'de1', messages: { 'just-now': 'Gerade eben' }, status: 'ready' }), { status: 200 })
+    }))
+
+    const { i18n, loadLanguageAsync } = await import('../src/modules/i18n.ts')
+    const slowFrench = loadLanguageAsync('fr')
+    await loadLanguageAsync('de')
+    releaseFrench(new Response(JSON.stringify({ checksum: 'fr1', messages: { 'just-now': 'Tout de suite' }, status: 'ready' }), { status: 200 }))
+
+    await expect(slowFrench).resolves.toBe('de')
+    expect(i18n.global.locale.value).toBe('de')
+  })
 })
