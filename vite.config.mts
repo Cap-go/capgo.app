@@ -142,29 +142,6 @@ function envFaviconPlugin(): Plugin {
   }
 }
 
-// The browser only discovers the font after the CSS is parsed and text renders, which on a slow
-// connection is seconds after the first paint. Preload the Latin subset that every page uses.
-function preloadLatinFontPlugin(): Plugin {
-  let base = '/'
-  return {
-    name: 'capgo-preload-latin-font',
-    apply: 'build',
-    configResolved(config) {
-      base = config.base
-    },
-    transformIndexHtml(_html, context) {
-      const font = Object.keys(context.bundle ?? {}).find(file => /inter-latin-wght-normal-[\w-]+\.woff2$/.test(file))
-      if (!font)
-        return
-      return [{
-        tag: 'link',
-        attrs: { rel: 'preload', href: `${base}${font}`, as: 'font', type: 'font/woff2', crossorigin: '' },
-        injectTo: 'head',
-      }]
-    },
-  }
-}
-
 // Lazy route chunks normally start downloading only after the entry chunk has run and the router
 // matched the URL: a second round of latency on every cold load. This emits a tiny classic script
 // (inline scripts are blocked by the CSP) that index.html fetches in parallel with the entry; it adds
@@ -358,7 +335,6 @@ export default defineConfig({
     },
     wellKnownPasswordManagerPlugin(),
     envFaviconPlugin(),
-    preloadLatinFontPlugin(),
     routeChunkPreloadPlugin(),
     tailwindcss(),
     devtoolsJson(),
