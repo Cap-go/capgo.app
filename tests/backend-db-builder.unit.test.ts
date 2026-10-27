@@ -235,3 +235,19 @@ describe('tooling database URL', () => {
     expect(resolveDatabaseUrl('http://127.0.0.1:54321', 'postgresql://postgres:postgres@localhost:54322/postgres')).toBe('postgresql://postgres:postgres@127.0.0.1:54322/postgres')
   })
 })
+
+describe('tooling client sessions', () => {
+  it('runs as service with a service key that is not in process.env', async () => {
+    const { createClient } = await import('../scripts/db-client.ts')
+    // A legacy HS256 service_role key (role claim only, no user subject).
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+    const payload = Buffer.from(JSON.stringify({ iss: 'supabase', role: 'service_role' })).toString('base64url')
+    const serviceKey = `${header}.${payload}.signature`
+    const seen: string[] = []
+    const client = createClient('http://127.0.0.1:54321', serviceKey, { databaseUrl: 'postgresql://postgres:postgres@127.0.0.1:1/postgres' })
+    const { error } = await client.from('apps').select('app_id').limit(1)
+    // No database on port 1: the query reached the connection, so the session resolved as service, not a 401.
+    seen.push(error?.code ?? 'none')
+    expect(seen).toEqual(['PGRST000'])
+  })
+})

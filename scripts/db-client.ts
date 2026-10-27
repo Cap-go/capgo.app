@@ -1,5 +1,6 @@
 import type { SupabaseClient, SupabaseClientOptions } from '@supabase/supabase-js'
 import type { ConsoleQueryRequest, ConsoleQueryResult } from '../supabase/functions/_backend/private/console_query_sql.ts'
+import type { PoolClient } from 'pg'
 import type { PgQuerySession } from '../supabase/functions/_backend/utils/pg_query.ts'
 import { env } from 'node:process'
 import { createClient as createSdkClient } from '@supabase/supabase-js'
@@ -92,7 +93,13 @@ async function sessionFor(sdk: SupabaseClient<any>, key: string, headers: Record
   catch {
     return failure(401, 'PGRST301', 'Expected 3 parts in JWT; got 1')
   }
-  if (role === 'anon' && token === key)
+  // The client's own key (from whatever env file the caller loaded) is trusted
+  // as configured: the connection already logs in to that project's database,
+  // so the session role only narrows access. A legacy HS256 service key has no
+  // user subject, which Auth's getClaims() rejects.
+  if (token === key && role === 'service_role')
+    return { role: 'service', headers: requestHeaders }
+  if (token === key && role === 'anon')
     return { role: 'anon', headers: requestHeaders }
   // Same check PostgREST makes: the signature must verify before the role counts.
   const { data, error } = await sdk.auth.getClaims(token)
@@ -107,7 +114,14 @@ async function sessionFor(sdk: SupabaseClient<any>, key: string, headers: Record
 }
 
 export async function runTestQuery(request: ConsoleQueryRequest, session: PgQuerySession, connectionString = resolveDatabaseUrl('http://127.0.0.1')): Promise<ConsoleQueryResult> {
-  const client = await getPool(connectionString).connect()
+  let client: PoolClient
+  try {
+    client = await getPool(connectionString).connect()
+  }
+  catch (error) {
+    // Same as the backend: an unreachable database is a PGRST000 result, not a throw.
+    return failure(503, 'PGRST000', error instanceof Error ? error.message : String(error))
+  }
   let failed: Error | undefined
   try {
     return await runPgQuery(client, request, session)
