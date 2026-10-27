@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
-import { consoleQueryFromResponse, consoleQueryJson, routeConsoleQuery } from '../support/consoleQuery'
+import { consoleQueryFromResponse, consoleQueryJson, consoleQueryMethod, routeConsoleQuery } from '../support/consoleQuery'
 
 function localAdminClient() {
   const { ports } = getSupabaseWorktreeConfig()
@@ -27,6 +27,11 @@ test.describe('AI agent alternatives to manual actions', () => {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.login('test@capgo.app', 'testtest')
     await page.evaluate(() => navigator.clipboard.writeText(''))
+    // The shared demo account must keep its saved setup preference: AI or manual picks in these
+    // tests only reorder future choices, so drop their profile writes instead of persisting them.
+    await routeConsoleQuery(page, 'users', (route, query) => consoleQueryMethod(query) === 'GET'
+      ? route.fallback()
+      : route.fulfill(consoleQueryJson([])))
   })
 
   test('add app offers the AI agent or the manual wizard', async ({ page }) => {
@@ -104,13 +109,18 @@ test.describe('AI agent alternatives to manual actions', () => {
   })
 
   test('hides the AI options from users who cannot create the API key they need', async ({ page }) => {
-    // Answer "no" only for API key management; every other permission keeps its real result.
+    // No usable key of their own, and no right to create one: answer "no" for key management and
+    // role assignment; every other permission keeps its real result.
+    const deniedPermissions = new Set(['org.manage_apikeys', 'app.manage_apikeys', 'org.update_user_roles'])
     await routeConsoleQuery(page, 'rbac_check_permission', (route, query) => {
       const key = (query.args[0] as { p_permission_key?: string } | undefined)?.p_permission_key
-      return key === 'org.manage_apikeys' || key === 'app.manage_apikeys'
+      return key && deniedPermissions.has(key)
         ? route.fulfill(consoleQueryJson(false))
         : route.fallback()
     })
+    await routeConsoleQuery(page, 'apikeys', (route, query) => consoleQueryMethod(query) === 'GET'
+      ? route.fulfill(consoleQueryJson([]))
+      : route.fallback())
 
     await page.goto('/app/new')
     await expect(page.getByRole('textbox', { name: 'App name' })).toBeVisible()
