@@ -518,7 +518,7 @@ export async function getPgClient(c: Context, readOnly = false, options?: { idle
 // Hyperdrive is the shared pool (see getPgClient).
 // The edge runtime runs many isolates; each keeps its own pool. Idle
 // connections close quickly so isolates do not hold slots between bursts.
-const SHARED_POOL_MAX = 3
+const SHARED_POOL_MAX = 5
 const SHARED_POOL_IDLE_MS = 2000
 const sharedPools = new Map<string, Pool>()
 
@@ -535,7 +535,9 @@ export function getSharedPgPool(c: Context): Pool {
     max: Number.isInteger(max) && max > 0 ? max : SHARED_POOL_MAX,
     application_name: `capgo-db-${dbName}`,
     idleTimeoutMillis: Number.isInteger(idle) && idle > 0 ? idle : SHARED_POOL_IDLE_MS,
-    connectionTimeoutMillis: 10000,
+    // Also how long a query waits for a free connection. Queue like PostgREST
+    // did under fan-out instead of failing after a short wait.
+    connectionTimeoutMillis: 30000,
     maxLifetimeSeconds: 30 * 60,
     allowExitOnIdle: true,
   })

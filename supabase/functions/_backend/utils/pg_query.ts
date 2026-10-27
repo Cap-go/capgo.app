@@ -210,7 +210,13 @@ function loadFunctions(client: PgQueryClient, name: string): Promise<QueryFuncti
   let task = functionTasks.get(name)
   if (!task) {
     task = client.query<{ functions: FunctionRow[] | null }>(FUNCTION_CATALOG_SQL, [[name]])
-      .then(result => (result.rows[0]?.functions ?? []).map(functionFromCatalogRow).filter((fn): fn is QueryFunction => fn !== null))
+      .then((result) => {
+        const functions = (result.rows[0]?.functions ?? []).map(functionFromCatalogRow).filter((fn): fn is QueryFunction => fn !== null)
+        // A function that does not exist yet may arrive with the next migration.
+        if (!functions.length)
+          functionTasks.delete(name)
+        return functions
+      })
       .catch((error: unknown) => {
         functionTasks.delete(name)
         throw error
@@ -447,14 +453,16 @@ function sqlFailure(sqlError: NonNullable<ReturnType<typeof readSqlError>>, role
 // behind a lock would hold its Hyperdrive origin connection indefinitely.
 const SERVICE_TIMEOUTS_SQL = `SET LOCAL statement_timeout = '8s'; SET LOCAL lock_timeout = '${ROLE_LOCK_TIMEOUT}'`
 
-async function inTransaction(client: PgQueryClient, appendSql: string | undefined, run: () => Promise<ConsoleQueryResult>, options: { readOnly?: boolean } = {}): Promise<ConsoleQueryResult> {
+async function inTransaction(client: PgQueryClient, appendSql: string | undefined, run: () => Promise<ConsoleQueryResult>, options: { deferCommit?: (commit: Promise<unknown>) => void } = {}): Promise<ConsoleQueryResult> {
+  const deferred = options.deferCommit
   try {
-    await client.query(transactionBeginSql('read write', appendSql))
+    // A deferred read runs READ ONLY, so a COMMIT that never lands abandons nothing.
+    await client.query(transactionBeginSql(deferred ? 'read only' : 'read write', appendSql))
     const result = finishConsoleQuery(await run())
-    if (options.readOnly) {
-      // A read has its rows already. The COMMIT is queued on this connection
-      // ahead of anything its next user sends, so the caller skips that round trip.
-      client.query('COMMIT').catch(() => {})
+    if (deferred) {
+      // The rows are already here. The caller keeps the connection until the
+      // COMMIT completes, but does not wait for it to answer.
+      deferred(client.query('COMMIT'))
       return result
     }
     await client.query('COMMIT')
@@ -469,17 +477,37 @@ async function inTransaction(client: PgQueryClient, appendSql: string | undefine
 export interface PgQueryRunOptions {
   /** Called once with the SQLSTATE when a query fails inside Postgres. */
   onSqlError?: (code: string) => void
+  /**
+   * Service table reads hand their COMMIT here instead of awaiting it. The
+   * caller must not reuse the connection before the promise settles.
+   * Without it every COMMIT is awaited.
+   */
+  deferCommit?: (commit: Promise<unknown>) => void
 }
+
+// The catalog is cached per isolate. A missing table, column or function may
+// come from a migration applied after the isolate loaded it, so it is read again
+// once before the error is returned (PostgREST reloaded on NOTIFY pgrst).
+const STALE_CATALOG_CODES = new Set(['42P01', '42703', '42883', 'PGRST202', 'PGRST205'])
 
 /**
  * Execute one recorded builder chain on a checked-out connection.
  *
  * Round trips on a warm isolate, the caller waits for:
- * - service table read: 2 (BEGIN + timeouts, statement; COMMIT is not awaited)
+ * - service table read: 2 with deferCommit (BEGIN READ ONLY + timeouts, statement), else 3
  * - service RPC / write: 3 (BEGIN + timeouts, statement, COMMIT)
  * - authenticated / anon: 3 (BEGIN + role setup, statement, COMMIT)
  */
 export async function runPgQuery(client: PgQueryClient, request: ConsoleQueryRequest, session: PgQuerySession, options: PgQueryRunOptions = {}): Promise<ConsoleQueryResult> {
+  const first = await runPgQueryOnce(client, request, session, options)
+  if (!first.error || !STALE_CATALOG_CODES.has(first.error.code))
+    return first
+  // The failed statement rolled back, so running it again is safe.
+  clearPgQueryCatalogCache()
+  return runPgQueryOnce(client, request, session, options)
+}
+
+async function runPgQueryOnce(client: PgQueryClient, request: ConsoleQueryRequest, session: PgQuerySession, options: PgQueryRunOptions): Promise<ConsoleQueryResult> {
   try {
     // The catalog read must run as the login role, before SET LOCAL ROLE.
     // A warm isolate already has it and pays no round trip.
@@ -490,8 +518,8 @@ export async function runPgQuery(client: PgQueryClient, request: ConsoleQueryReq
       // round trip. A row-count check after a write rolls the write back, as
       // PostgREST does. Inside a transaction Hyperdrive never serves a cached read.
       const headers = session.headers && Object.keys(session.headers).length ? `${serviceHeadersSetupSql(session.headers)}; ` : ''
-      const readOnly = !isWrite(request) && request.kind === 'table'
-      return await inTransaction(client, `${headers}${SERVICE_TIMEOUTS_SQL}`, () => executeCompiled(client, compiled), { readOnly })
+      const read = !isWrite(request) && request.kind === 'table'
+      return await inTransaction(client, `${headers}${SERVICE_TIMEOUTS_SQL}`, () => executeCompiled(client, compiled), { deferCommit: read ? options.deferCommit : undefined })
     }
     return await inTransaction(client, consoleRoleSetupSql(session), () => executeCompiled(client, compiled))
   }

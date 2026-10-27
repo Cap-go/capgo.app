@@ -9,6 +9,7 @@ import { cloudlogErr } from './logging.ts'
 import { closeClient, getPgClient, getSharedPgPool, isHyperdrivePgClient } from './pg.ts'
 import { runPgQuery } from './pg_query.ts'
 import { onRequestFinished } from './request_lifecycle.ts'
+import { backgroundTask } from './utils.ts'
 
 /**
  * The backend's database client: the supabase-js `from` / `rpc` builder, with the
@@ -162,8 +163,14 @@ function unavailable(error: unknown): ConsoleQueryResult {
  * like supabase-js, the problem is returned as `error`.
  */
 export async function runDbQuery(c: Context, request: ConsoleQueryRequest, session: PgQuerySession): Promise<ConsoleQueryResult> {
+  // A service read returns before its COMMIT answers; the connection is only
+  // reused once it has, and the request stays alive until then (waitUntil).
+  let commit: Promise<unknown> | undefined
   const options: PgQueryRunOptions = {
     onSqlError: code => cloudlogErr({ requestId: c.get('requestId'), message: 'db query failed', kind: request.kind, name: request.name, code }),
+    deferCommit: (pending) => {
+      commit = pending
+    },
   }
   // A read that lost its connection is safe to send once more on a new one.
   const attempts = isRead(request) ? 2 : 1
@@ -186,7 +193,17 @@ export async function runDbQuery(c: Context, request: ConsoleQueryRequest, sessi
       lastError = error
     }
     finally {
-      release(c, lease, failed)
+      const pending = commit
+      commit = undefined
+      if (pending && !failed) {
+        backgroundTask(c, pending.then(
+          () => release(c, lease),
+          (error: unknown) => release(c, lease, error instanceof Error ? error : new Error(String(error))),
+        ))
+      }
+      else {
+        release(c, lease, failed)
+      }
     }
   }
   cloudlogErr({ requestId: c.get('requestId'), message: 'db query connection failed', kind: request.kind, name: request.name, error: lastError })

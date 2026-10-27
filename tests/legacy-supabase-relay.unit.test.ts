@@ -1,6 +1,6 @@
 import { Hono } from 'hono/tiny'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { app as legacySupabase } from '../supabase/functions/_backend/private/legacy_supabase.ts'
+import { app as legacySupabase, setLegacyApiDispatcher } from '../supabase/functions/_backend/private/legacy_supabase.ts'
 
 // The Supabase edge runtime serves the private function under /functions/v1, so the
 // legacy host itself contains /functions/v1/ before the relay's own prefix.
@@ -14,6 +14,31 @@ describe('legacy_supabase /functions/v1 relay', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
+    setLegacyApiDispatcher(null)
+  })
+
+  it('replays in-process on Workers with the caller\'s IP, and sends /files over the network', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const dispatched: Request[] = []
+    setLegacyApiDispatcher((request) => {
+      dispatched.push(request)
+      return new Response('{"ok":true}', { status: 200 })
+    })
+    const root = new Hono()
+    root.route('/private/legacy_supabase', legacySupabase)
+    const headers = { 'capgkey': 'key-1', 'authorization': 'Bearer anon', 'cf-connecting-ip': '203.0.113.7' }
+    const response = await root.request('https://api.example.com/private/legacy_supabase/functions/v1/channel?app_id=x', { method: 'GET', headers })
+    expect(response.status).toBe(200)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(dispatched).toHaveLength(1)
+    expect(dispatched[0].url).toBe('https://api.example.com/channel?app_id=x')
+    expect(dispatched[0].headers.get('cf-connecting-ip')).toBe('203.0.113.7')
+    expect(dispatched[0].headers.get('authorization')).toBe('key-1')
+
+    await root.request('https://api.example.com/private/legacy_supabase/functions/v1/files/upload_link', { method: 'POST', headers, body: '{}' })
+    expect(dispatched).toHaveLength(1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('relays a released CLI call made through the edge-runtime host', async () => {

@@ -1357,7 +1357,8 @@ export function shapeConsoleQueryResult(compiled: CompiledConsoleQuery, rows: Ar
   const list = compiled.kind === 'rpc'
     ? (Array.isArray(rpcData) ? rpcData : [])
     : rows.map(row => normalizeJson(row.row)).filter(row => row != null)
-  const found = total ?? list.length
+  // Like PostgREST: the row-count check is on the rows returned, not the total count.
+  const found = list.length
   if (compiled.cardinality === 'one') {
     if (found !== 1)
       return missingRow(found)

@@ -1,6 +1,6 @@
 import type { ConsoleQueryRequest, ConsoleQueryResult, QueryCatalog, QueryColumn, QueryFunction } from '../supabase/functions/_backend/private/console_query_sql'
 import { describe, expect, it } from 'vitest'
-import { compileConsoleQuery } from '../supabase/functions/_backend/private/console_query_sql'
+import { compileConsoleQuery, shapeConsoleQueryResult } from '../supabase/functions/_backend/private/console_query_sql'
 import { createDbClient, DbQueryError } from '../supabase/functions/_backend/utils/db'
 import { parsePostgrestRequest, postgrestResponse } from '../supabase/functions/_backend/utils/postgrest_http'
 
@@ -269,5 +269,19 @@ describe('tooling client sessions', () => {
     // No database on port 1: the query reached the connection, so the session resolved as service, not a 401.
     seen.push(error?.code ?? 'none')
     expect(seen).toEqual(['PGRST000'])
+  })
+})
+
+describe('single() with a count', () => {
+  it.concurrent('checks the rows returned, not the total, as PostgREST does', () => {
+    const compiled = compileConsoleQuery(catalog, table('daily_mau', [
+      { method: 'select', args: ['app_id', { count: 'exact' }] },
+      { method: 'limit', args: [1] },
+      { method: 'single', args: [] },
+    ]))
+    const result = shapeConsoleQueryResult(compiled, [{ row: { app_id: 'a' }, total_count: 5 }])
+    expect(result.error).toBeNull()
+    expect(result.data).toEqual({ app_id: 'a' })
+    expect(result.count).toBe(5)
   })
 })

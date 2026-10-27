@@ -158,18 +158,42 @@ function functionsBase(c: Context): string {
   return new URL(c.req.url).origin
 }
 
+/**
+ * Runs a request through this API in-process (Workers). A Worker fetching its own
+ * custom domain is not a supported path, and a network hop would replace the
+ * caller's IP with the Worker's, merging every legacy CLI into one rate-limit bucket.
+ */
+export type LegacyApiDispatcher = (request: Request, c: Context) => Response | Promise<Response>
+
+let dispatchApi: LegacyApiDispatcher | null = null
+
+/** Set by the Workers API entry point to its own app.fetch. */
+export function setLegacyApiDispatcher(dispatcher: LegacyApiDispatcher | null) {
+  dispatchApi = dispatcher
+}
+
 // These CLIs send `Authorization: Bearer <anon key>` to /functions/v1 and the API
 // key in capgkey. The Capgo API reads the key from Authorization, as the cloud CLI sends it.
 app.all('/functions/v1/*', (c) => {
-  const headers = relayHeaders(c)
   const capgkey = c.req.header('capgkey')
-  if (capgkey)
-    headers.set('Authorization', capgkey)
   const tail = tailAfter(c, '/functions/v1/')
+  const route = decodeURIComponent(tail.split('?')[0]).replace(/^\/+/, '')
   // The relay targets this same API. A tail that points back at this host would
   // relay to itself once per nested prefix; no released CLI calls it.
-  if (decodeURIComponent(tail.split('?')[0]).replace(/^\/+/, '').startsWith('private/legacy_supabase'))
+  if (route.startsWith('private/legacy_supabase'))
     return c.json({ error: 'not_found', message: 'Not found' }, 404)
+  // In-process on Workers, except /files: that is the files Worker, a real hop.
+  if (dispatchApi && !route.startsWith('files')) {
+    // The caller's own headers, client IP included, so auth and rate limits see the same request.
+    const headers = new Headers(c.req.raw.headers)
+    if (capgkey)
+      headers.set('Authorization', capgkey)
+    const target = new URL(`/${tail.replace(/^\/+/, '')}`, new URL(c.req.url).origin)
+    return dispatchApi(new Request(target, { method: c.req.method, headers, body: relayBody(c), duplex: 'half', redirect: 'manual' } as RequestInit), c)
+  }
+  const headers = relayHeaders(c)
+  if (capgkey)
+    headers.set('Authorization', capgkey)
   const target = `${functionsBase(c)}/${tail}`
   return fetch(target, { method: c.req.method, headers, body: relayBody(c), duplex: 'half', redirect: 'manual' } as RequestInit)
 })
