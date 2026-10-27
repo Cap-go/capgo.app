@@ -7,13 +7,13 @@ import { CacheHelper } from '../utils/cache.ts'
 import { simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { currencyForCountry } from '../utils/country_currency.ts'
-import { FULL_PRICE_TIER, priceTierForCountry, tierPricePercent } from '../utils/country_price_tier.ts'
+import { FULL_PRICE_TIER, PRICE_TIERS, priceTierForCountry, tierPricePercent } from '../utils/country_price_tier.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 
 const PLAN_PRICES_CACHE_PATH = '/private/plan_prices'
 const PLAN_PRICES_TTL_SECONDS = 60 * 60
@@ -71,8 +71,9 @@ interface PlanPriceRow {
   regional_price_ids: unknown
 }
 
-async function listPlans(c: Context, authorization: string): Promise<PlanPriceRow[]> {
-  const { data: plans, error } = await supabaseClient(c, authorization)
+// Plans are public (see private/plans.ts); the org route still reads them as the caller.
+async function listPlans(c: Context, authorization?: string): Promise<PlanPriceRow[]> {
+  const { data: plans, error } = await (authorization ? supabaseClient(c, authorization) : supabaseAdmin(c))
     .from('plans')
     .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us, regional_price_ids')
   if (error)
@@ -117,7 +118,7 @@ async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount:
   return { prices: Object.fromEntries(entries), complete }
 }
 
-async function getPlanPrices(c: Context, authorization: string, billingAccount: BillingAccount, tier: PriceTier) {
+async function getPlanPrices(c: Context, authorization: string | undefined, billingAccount: BillingAccount, tier: PriceTier) {
   const plans = await listPlans(c, authorization)
   const cache = new CacheHelper(c)
   const version = planPricesVersion(plans)
@@ -135,9 +136,34 @@ async function getPlanPrices(c: Context, authorization: string, billingAccount: 
   return { prices, complete }
 }
 
+// Public catalog: every plan's Stripe amounts in every currency, plus the regional tier prices of the
+// plans that have them (Solo), keyed by plan product id. Same amounts as Checkout, for the website.
+export async function getPublicPlanPriceCatalog(c: Context) {
+  const discountTiers = PRICE_TIERS.filter(tier => tier !== FULL_PRICE_TIER)
+  const [full, ...tiers] = await Promise.all([FULL_PRICE_TIER, ...discountTiers].map(tier => getPlanPrices(c, undefined, 'ee', tier)))
+  const plans: Record<string, PlanPriceAmounts[string] & { tiers?: Partial<Record<PriceTier, PlanPriceAmounts[string]>> }> = { ...full.prices }
+  tiers.forEach(({ prices }, index) => {
+    for (const plan of Object.keys(getRegularPrices(prices, full.prices))) {
+      plans[plan] = { ...plans[plan], tiers: { ...plans[plan]?.tiers, [discountTiers[index]]: prices[plan] } }
+    }
+  })
+  return { complete: full.complete && tiers.every(tier => tier.complete), plans }
+}
+
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.use('/', useCors)
+
+// Prices are public: without an org, return the catalog (cached by the CDN). An org adds its billing currency and tier.
+app.get('/', async (c, next) => {
+  if (c.req.query('orgId'))
+    return next()
+  if (!isStripeConfiguredForAccount(c, 'ee'))
+    return c.json({ complete: true, plans: {} })
+  const catalog = await getPublicPlanPriceCatalog(c)
+  c.header('Cache-Control', catalog.complete ? 'public, max-age=3600' : 'no-store')
+  return c.json(catalog)
+})
 
 // Plan prices in every currency configured on the Stripe prices, plus which one this org should see.
 app.get('/', middlewareAuth, async (c) => {
