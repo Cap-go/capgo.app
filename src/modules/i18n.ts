@@ -70,6 +70,8 @@ export const i18n = createI18n({
 })
 
 const loadedLanguages = new Set<string>([FALLBACK_LOCALE])
+// Last locale asked for; a late response for another locale must not take its cache slot.
+let requestedLanguage: string = FALLBACK_LOCALE
 const pendingLanguageLoads = new Map<string, Promise<MessageCatalog | null>>()
 function isMessageCatalog(value: unknown): value is MessageCatalog {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -149,7 +151,7 @@ export function readCachedCatalog(lang: string): CachedCatalog | null {
 }
 
 function writeCachedCatalog(lang: string, checksum: unknown, messages: MessageCatalog) {
-  if (typeof checksum !== 'string')
+  if (typeof checksum !== 'string' || lang !== requestedLanguage)
     return
   try {
     localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({ checksum, lang, messages }))
@@ -227,6 +229,7 @@ async function ensureLanguageLoaded(lang: Locale) {
 
 export async function loadLanguageAsync(lang: string): Promise<Locale> {
   const normalized = normalizeLanguage(lang)
+  requestedLanguage = normalized
 
   if (normalized === FALLBACK_LOCALE)
     return setI18nLanguage(FALLBACK_LOCALE)
