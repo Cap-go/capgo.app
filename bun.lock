@@ -244,7 +244,7 @@
     },
     "cli": {
       "name": "@capgo/cli",
-      "version": "8.97.2",
+      "version": "8.97.3",
       "bin": {
         "capgo": "dist/index.js",
       },
