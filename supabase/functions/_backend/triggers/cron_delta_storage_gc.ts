@@ -337,9 +337,14 @@ app.post('/', middlewareAPISecret, async (c) => {
     const db = getDrizzleClient(pool)
     if (canStart(run))
       await repairUnsettledDeletes(c, db, run)
+    // Former-owner prefixes get up to a third of the budget first, so busy
+    // live apps cannot postpone them indefinitely; a stall stops the run.
+    if (canStart(run)) {
+      const orphanRun: GcRun = { deadline: Math.min(run.deadline, Date.now() + DELTA_GC_BUDGET_MS / 3), stalled: false }
+      await drainOrphanPrefixes(c, db, orphanRun)
+      run.stalled ||= orphanRun.stalled
+    }
     const claimedApps = await pageClaimedApps(c, db, run)
-    if (canStart(run))
-      await drainOrphanPrefixes(c, db, run)
     cloudlog({ requestId: c.get('requestId'), message: 'delta gc run done', apps: claimedApps, durationMs: Date.now() - startedAt })
     return c.json(BRES)
   }

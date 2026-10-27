@@ -165,6 +165,31 @@ describe('delta storage GC worker', () => {
     expect(finishes.filter(text => text.includes('false'))).toHaveLength(2)
   })
 
+  it('drains former-owner prefixes before live apps can use the whole budget', async () => {
+    const orphanPrefix = 'orgs/former-org/apps/com.example.gone/'
+    mocks.listObjectPage.mockResolvedValue({ objects: [], nextToken: null })
+    let claims = 0
+    mocks.execute.mockImplementation(async (query: { queryChunks?: unknown[] }) => {
+      const text = sqlText(query)
+      if (text.includes('delta_gc_claim_orphan_prefixes'))
+        return { rows: [{ prefix: orphanPrefix, list_cursor: null }] }
+      if (text.includes('delta_gc_claim_unsettled'))
+        return { rows: [] }
+      // Live apps always have more due pages.
+      if (text.includes('delta_gc_claim')) {
+        claims++
+        return { rows: claims > 50 ? [] : [{ app_id: `app.${claims}`, list_org: 'org-1', list_cursor: null }] }
+      }
+      if (text.includes('delta_gc_unreferenced_paths'))
+        return { rows: [{ paths: [] }] }
+      return { rows: [] }
+    })
+
+    await app.request('/', { method: 'POST' })
+
+    expect(mocks.listObjectPage.mock.calls[0]?.[1]).toBe(orphanPrefix)
+  })
+
   it('binds each path array as one Postgres parameter', async () => {
     const old = new Date(Date.now() - 2 * DAY)
     const keys = [`${prefix}a.js`, `${prefix}b.js`]
