@@ -39,11 +39,14 @@ export function pickPriceCurrencies(prices: PlanPriceAmounts, keep: Set<string>)
 }
 
 // Full prices of the plans the tier discounts (same amounts are not repeated), for the strike-through.
+// A plan whose full price failed to load stays in with empty amounts: the page cannot sell it at full price.
 export function getRegularPrices(prices: PlanPriceAmounts, fullPrices: PlanPriceAmounts): PlanPriceAmounts {
   const differs = (plan: string) => {
     const full = fullPrices[plan]
     const sold = prices[plan]
-    return !!full && !!sold && (['month', 'year'] as const).some(interval => Object.entries(sold[interval]).some(([currency, amount]) => full[interval][currency] !== undefined && full[interval][currency] !== amount))
+    if (!full || !sold)
+      return false
+    return (['month', 'year'] as const).some(interval => !Object.keys(full[interval]).length || Object.entries(sold[interval]).some(([currency, amount]) => full[interval][currency] !== undefined && full[interval][currency] !== amount))
   }
   return Object.fromEntries(Object.entries(fullPrices).filter(([plan]) => differs(plan)))
 }
@@ -178,7 +181,9 @@ app.get('/', middlewareAuth, async (c) => {
   // A regional price is only sold in its region's currency: an org pinned to another one pays the full price.
   const regional = !lockedCurrency || isRegionalCurrency(countries, offeredTier, lockedCurrency, getCommonCurrencies(offered.prices))
   const tier = regional ? offeredTier : FULL_PRICE_TIER
-  const { prices, complete } = regional || !full ? offered : full
+  const { prices } = regional || !full ? offered : full
+  // The full prices back the strike-through and the standard-price option: a failure there offers a retry too.
+  const complete = offered.complete && (full?.complete ?? true)
   // A pinned customer can only check out in its own currency; empty when the catalog lacks it.
   const common = getCommonCurrencies(prices)
   // The tier sets the price; within it every currency is at the market rate, so any of them can be picked.

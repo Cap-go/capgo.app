@@ -138,6 +138,8 @@ describe('plan prices', () => {
     const sold = { solo: { month: { usd: 700, eur: 600 }, year: { usd: 7300, eur: 6300 } }, team: { month: { usd: 9900 }, year: { usd: 99800 } } }
     const full = { solo: { month: { usd: 1400, eur: 1200 }, year: { usd: 14600, eur: 13000 } }, team: { month: { usd: 9900 }, year: { usd: 99800 } } }
     expect(getRegularPrices(sold, full)).toEqual({ solo: full.solo })
+    // A failed full-price lookup keeps the plan, without amounts, so the full price is never guessed.
+    expect(getRegularPrices(sold, { ...full, solo: { month: {}, year: {} } })).toEqual({ solo: { month: {}, year: {} } })
     expect(tierDiscountPercent('p50')).toBe(50)
     expect(tierDiscountPercent('p85')).toBe(15)
   })
