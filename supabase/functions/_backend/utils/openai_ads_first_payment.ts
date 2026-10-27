@@ -120,7 +120,8 @@ export function getOpenAIFirstPaymentAt(input: {
 }
 
 function getLatestInvoiceRef(stripeEvent: Stripe.Event | null | undefined): InvoiceRef | null {
-  if (stripeEvent?.type === 'invoice.updated')
+  // invoice.paid grants paid access to a subscription that waited for its payment (ACH).
+  if (stripeEvent?.type === 'invoice.updated' || stripeEvent?.type === 'invoice.paid' || stripeEvent?.type === 'invoice.payment_succeeded')
     return stripeEvent.data.object.id ?? null
   if (!stripeEvent?.type.startsWith('customer.subscription.'))
     return null
