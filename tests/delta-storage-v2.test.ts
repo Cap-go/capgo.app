@@ -365,6 +365,28 @@ describe('delta storage v2 legacy guards', () => {
     })
   })
 
+  it('keeps an active delete lease on the orphan prefixes of a deleted app', async () => {
+    const formerOrg = '00000000-0000-4000-8000-0000000000dd'
+    const leasedApp = `com.delta.storage.leased.${id}`
+    await withConfig({ gc_enabled: true }, async (client) => {
+      await client.query(`INSERT INTO public.apps (app_id, owner_org, name, icon_url) VALUES ($1, $2, 'leased', '')`, [leasedApp, ORG_ID])
+      await client.query(
+        `INSERT INTO public.delta_files (app_id, s3_path, file_name, file_hash, path_key, entry_key)
+         VALUES ($1, $2::text, 'a.js', 'h', public.delta_path_key($2::text), public.delta_entry_key($2::text, 'a.js', 'h'))`,
+        [leasedApp, `orgs/${formerOrg}/apps/${leasedApp}/delta/a.js`],
+      )
+      // GC authorized deletes under the former owner's prefix and holds the lease.
+      await client.query(`UPDATE public.delta_gc_state SET lease_until = clock_timestamp() + interval '2 seconds' WHERE app_id = $1`, [leasedApp])
+      await client.query('DELETE FROM public.apps WHERE app_id = $1', [leasedApp])
+      const orphan = await client.query<{ active: boolean }>(
+        'SELECT lease_until > clock_timestamp() AS active FROM public.delta_gc_orphan_prefixes WHERE app_id = $1',
+        [leasedApp],
+      )
+      // A re-created app id waits for that lease (delta_gc_wait_for_lease reads it).
+      expect(orphan.rows).toEqual([{ active: true }])
+    })
+  })
+
   it('keeps cleanup progress when a page is cut short', async () => {
     await withConfig({ gc_enabled: true }, async (client) => {
       await client.query(`INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org) VALUES ('orgs/x/apps/partial/', 'partial', 'x')`)

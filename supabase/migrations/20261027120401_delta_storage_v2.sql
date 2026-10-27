@@ -780,8 +780,13 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org)
-  SELECT DISTINCT 'orgs/' || orgs.org || '/apps/' || OLD.app_id || '/', OLD.app_id, orgs.org
+  -- The app's delete lease moves to its orphan rows: deleting the app cascades
+  -- its delta_gc_state, and an app id recreated before the lease ends must
+  -- still wait for deletes GC already authorized under these prefixes.
+  INSERT INTO public.delta_gc_orphan_prefixes (prefix, app_id, org, lease_until)
+  SELECT DISTINCT 'orgs/' || orgs.org || '/apps/' || OLD.app_id || '/', OLD.app_id, orgs.org,
+    (SELECT state.lease_until FROM public.delta_gc_state AS state
+     WHERE state.app_id = OLD.app_id AND state.lease_until > pg_catalog.clock_timestamp())
   FROM (
     SELECT pg_catalog.split_part(df.s3_path, '/', 2) AS org
     FROM public.delta_files AS df
@@ -798,7 +803,8 @@ BEGIN
     WHERE av.app_id = OLD.app_id AND av.manifest IS NOT NULL AND entry.s3_path LIKE 'orgs/%'
   ) AS orgs
   WHERE orgs.org <> '' AND orgs.org <> OLD.owner_org::text
-  ON CONFLICT (prefix) DO NOTHING;
+  ON CONFLICT (prefix) DO UPDATE
+  SET lease_until = GREATEST(public.delta_gc_orphan_prefixes.lease_until, EXCLUDED.lease_until);
   RETURN OLD;
 END;
 $$;
