@@ -2,6 +2,7 @@ import type { Command } from 'commander'
 import { randomUUID } from 'node:crypto'
 import { cwd } from 'node:process'
 import { Worker } from 'node:worker_threads'
+import { isOfflineCommand } from '../analytics/opt-out'
 import { registerOnboardingCheck } from './background-workers'
 import { setupDebug, setupError } from './setup-diagnostics'
 import { shouldEvaluateSetupNotice } from './setup-notice-policy'
@@ -21,6 +22,9 @@ export interface OnboardingCheckOptions {
 }
 
 export function startOnboardingCheck(command: Command, commandPath: string, workerUrl: URL, attemptIds?: string[], ci = false): void {
+  // Offline packers must not report onboarding progress to Capgo.
+  if (isOfflineCommand(commandPath))
+    return
   try {
     const options = command.optsWithGlobals()
     const argument = (name: string) => {

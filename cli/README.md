@@ -185,6 +185,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Needed](#build-needed)
   - [Init](#build-init)
   - [Request](#build-request)
+  - [Zip](#build-zip)
   - [Sync-ios-version](#build-sync-ios-version)
   - [Prescan](#build-prescan)
   - [Last-output](#build-last-output)
@@ -198,6 +199,9 @@ Capgo continues to load the root config while writing only the selected source. 
     - [Manage](#build-credentials-manage)
     - [Export](#build-credentials-export)
     - [Migrate](#build-credentials-migrate)
+    - [Push](#build-credentials-push)
+    - [Remote-status](#build-credentials-remote-status)
+    - [Remote-delete](#build-credentials-remote-delete)
 - 🔹 [Notifications](#notifications)
   - [Setup](#notifications-setup)
 - 🔹 [Probe](#probe)
@@ -658,6 +662,9 @@ npx @capgo/cli@latest bundle zip
 
 🗜️ Create a zip file of your app bundle.
 Returns checksum for use with encryption. Use --json for machine-readable output.
+Works offline: no API key and no calls to Capgo.
+--for-upload produces exactly what 'bundle upload' would send (same checksum, v2 encryption, native packages metadata)
+so the zip can be uploaded through a signed URL. --delta-pack also writes the delta (manifest) files.
 
 **Example:**
 
@@ -675,8 +682,17 @@ npx @capgo/cli@latest bundle zip com.example.app --path ./dist
 | **-j** | <code>boolean</code> | Output in JSON |
 | **--no-code-check** | <code>boolean</code> | Ignore checking if notifyAppReady() is called in source code and index present in root folder |
 | **--ignore-notify-app-ready** | <code>boolean</code> | Skip notifyAppReady() check (not recommended — updates may roll back) |
-| **--key-v2** | <code>boolean</code> | Use encryption v2 |
+| **--key-v2** | <code>string</code> | Use encryption v2. With --for-upload: custom path for private signing key (v2 system), defaults to .capgo_key_v2 |
+| **--key-data-v2** | <code>string</code> | Private signing key (v2 system), used with --for-upload |
+| **--no-key** | <code>boolean</code> | Ignore signing key and produce a clear bundle (with --for-upload) |
+| **--for-upload** | <code>boolean</code> | Produce the exact artifact and metadata 'bundle upload' would send (encryption, checksum, native packages) |
+| **--delta-pack** | <code>string</code> | Also write a delta pack zip (manifest + per-file upload bytes) for delta uploads. Implies --for-upload |
+| **--encrypt-delta** | <code>boolean</code> | Encrypt delta update files (auto-enabled for updater >= 6.14.4) |
+| **--encrypt-partial** | <code>boolean</code> | [DEPRECATED] Use --encrypt-delta instead. Encrypt delta update files |
+| **--disable-brotli** | <code>boolean</code> | Completely disable brotli compression even if updater version supports it |
+| **--force-crc32-checksum** | <code>boolean</code> | Force CRC32 checksum for upload (override auto-detection) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
+| **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
 
 
 ## <a id="app"></a> 📱 **App**
@@ -1692,6 +1708,7 @@ Examples:
 | **--ios-target** | <code>string</code> | iOS: Xcode target for reading build settings (default: same as scheme) |
 | **--xcode-version** | <code>string</code> | iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1, 27). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_XCODE_VERSION) > saved credentials |
 | **--ios-distribution** | <code>string</code> | iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download. |
+| **--use-stored-credentials** | <code>boolean</code> | Use the signing credentials stored on Capgo for this app (see "build credentials push"). Requires app admin rights (app settings permission) on the app. Credentials given by flags, env or a local saved file still take precedence; Capgo validates the merged set. |
 | **--ios-provisioning-profile** | <code>string</code> | iOS: Provisioning profile path or bundleId=path mapping (repeatable) |
 | **--no-cache** | <code>boolean</code> | Disable Xcode compilation cache for this build (default: cache enabled) |
 | **--cache-key** | <code>string</code> | Custom compilation cache key for this build (e.g. rc, prod, feature-branch). Use to share or isolate cache between environments. Precedence over the default appId-only key; ignored when --no-cache is set. |
@@ -1735,6 +1752,35 @@ Examples:
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+
+### <a id="build-zip"></a> 🔹 **Zip**
+
+```bash
+npx @capgo/cli@latest build zip
+```
+
+Zip the native project exactly like 'build request' does, without uploading it.
+Works offline: no API key and no calls to Capgo. Use it when an agent uploads the archive
+through a signed URL (Capgo MCP). With --json, prints the archive path, size, sha256 and the
+non-secret build options derived from the project.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest build zip com.example.app --platform ios --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Target platform: ios or android (required) |
+| **--path** | <code>string</code> | Path to the project directory to build (default: current directory) |
+| **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
+| **--sync-ios-version** | <code>boolean</code> | iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration. |
+| **--sync-android-version** | <code>boolean</code> | Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal. |
+| **--output** | <code>string</code> | Path of the zip file to write (default: <appId>_<platform>_native.zip) |
+| **-j** | <code>boolean</code> | Output in JSON |
 
 ### <a id="build-sync-ios-version"></a> 🔹 **Sync-ios-version**
 
@@ -2111,6 +2157,80 @@ Example:
 | **--appId** | <code>string</code> | App ID (auto-detected from capacitor.config if omitted) |
 | **--platform** | <code>string</code> | Platform (only ios is supported) |
 | **--local** | <code>boolean</code> | Migrate from local .capgo-credentials.json instead of global |
+
+#### <a id="build-credentials-push"></a> 🔹 **Push**
+
+```bash
+npx @capgo/cli@latest build credentials push
+```
+
+Store this machine's saved build credentials for one platform on Capgo, encrypted.
+Builds can then use them without sending secrets (build request --use-stored-credentials,
+or the hosted Capgo MCP). Requires app settings permission (app admin) on the app, and so
+do builds that use the stored credentials. Custom env names that load code into every
+build (NODE_OPTIONS, JAVA_TOOL_OPTIONS, GRADLE_OPTS, LD_PRELOAD, PATH, ...) cannot be stored.
+Only key names are printed; values never are.
+Examples:
+  npx @capgo/cli@latest build credentials push com.example.app --platform ios
+  npx @capgo/cli@latest build credentials push --platform android --mode merge
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Platform to store: ios or android (required) |
+| **--mode** | <code>string</code> | replace: overwrite stored keys (default). merge: keep stored keys not in the local set |
+| **--local** | <code>boolean</code> | Read from local .capgo-credentials.json only |
+| **--global** | <code>boolean</code> | Read from ~/.capgo-credentials/credentials.json only |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+#### <a id="build-credentials-remote-status"></a> 🔹 **Remote-status**
+
+```bash
+npx @capgo/cli@latest build credentials remote-status
+```
+
+Show which build credentials are stored on Capgo for an app (key names and
+non-secret facts only) and what is still missing to build.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest build credentials remote-status com.example.app
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Only show ios or android |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+#### <a id="build-credentials-remote-delete"></a> 🗑️ **Remote-delete**
+
+```bash
+npx @capgo/cli@latest build credentials remote-delete
+```
+
+Delete the build credentials stored on Capgo for one platform. Local saved
+credentials are not touched.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Platform to delete: ios or android (required) |
+| **-y** | <code>boolean</code> | Do not ask for confirmation |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 
 
 ## <a id="notifications"></a> 🔹 **Notifications**

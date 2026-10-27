@@ -11,6 +11,7 @@ const {
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
+  accessLog: vi.fn(),
   cloudlog: cloudlogMock,
 }))
 

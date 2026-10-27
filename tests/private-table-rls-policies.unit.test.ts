@@ -39,8 +39,10 @@ describe('public table RLS protection', () => {
         WITH target_tables(table_name) AS (
           VALUES
             ('agent_identity_registrations'),
+            ('app_build_credentials'),
             ('app_onboarding'),
             ('app_stats_refresh_state'),
+            ('build_credentials_upload_token_uses'),
             ('manifest_per_version'),
             ('mcp_oauth_clients'),
             ('mcp_oauth_requests'),
@@ -69,8 +71,10 @@ describe('public table RLS protection', () => {
 
       expect(denyPolicies.rows).toEqual([
         { table_name: 'agent_identity_registrations', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'app_build_credentials', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'app_onboarding', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'app_stats_refresh_state', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'build_credentials_upload_token_uses', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'manifest_per_version', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'mcp_oauth_clients', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'mcp_oauth_requests', policy_count: 1, denies_all_direct_access: true },
