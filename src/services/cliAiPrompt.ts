@@ -858,3 +858,37 @@ ${appTaskContext(input)}
 When it succeeds, tell me the channel name and its settings. The channel appears in my Capgo dashboard on its own. Do not upload bundles or change other channels.`,
   ].join('\n\n')
 }
+
+/**
+ * Prompt copied from "Request a native build". A platform that already built goes straight to
+ * `build request` with the saved signing setup; a platform without builds goes through Capgo
+ * MCP Builder onboarding, which owns signing and credentials.
+ */
+export function buildAiRequestBuildPrompt(input: AiAppTaskPromptInput & { platform: 'ios' | 'android', platformReady: boolean }): string {
+  const appId = input.app.appId
+  const platformLabel = input.platform === 'ios' ? 'iOS' : 'Android'
+  if (!input.platformReady) {
+    return [
+      buildAuthenticationSection(input.apiKey, 'builder'),
+      `${appTaskContext(input)}
+
+I want a ${platformLabel} build of this app (Capgo app ID: \`${appId}\`) and ${platformLabel} is not set up for Capgo Builder yet. When you call \`start_capgo_builder_onboarding\`, pass the \`${input.platform}\` platform.`,
+      BUILDER_MCP_SECTION,
+    ].join('\n\n')
+  }
+  return [
+    buildAuthenticationSection(input.apiKey, 'task'),
+    `## 2. Request a native build
+
+${appTaskContext(input)}
+
+1. Make sure you are in the Capacitor project of this app: the \`appId\` in \`capacitor.config\` must be \`${appId}\`. If it is not, ask me where the project is and stop until I answer.
+2. Request a ${platformLabel} build with the selected runner. It uses the signing setup already saved for this app:
+
+{CAPGO_CLI_RUNNER} build request ${appId} --platform ${input.platform}
+
+3. Never ask me to paste certificates, passwords or store keys into the chat, and never pass them on the command line. If the build fails because signing or credentials are missing, tell me and stop; I will set them up from the Capgo dashboard or with Capgo MCP Builder onboarding.
+
+When the build is queued, tell me its build ID and status. The build appears in my Capgo dashboard on its own and its logs stream there. Do not change other builds, channels or bundles.`,
+  ].join('\n\n')
+}

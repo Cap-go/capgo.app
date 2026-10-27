@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiUploadBundlePrompt, buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
+import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiRequestBuildPrompt, buildAiUploadBundlePrompt, buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
 
 const apiKey = 'capgo_test_secret'
 
@@ -294,5 +294,19 @@ describe('AI agent task prompts', () => {
     expect(named).toContain('Use the channel name "beta"')
     const unnamed = buildAiCreateChannelPrompt({ apiKey, organization, app })
     expect(unnamed).toContain('Ask me for the channel name')
+  })
+
+  it.concurrent('requests a build for a ready platform without handling credentials', () => {
+    const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'android', platformReady: true })
+    expect(prompt).toContain('{CAPGO_CLI_RUNNER} build request com.acme.app --platform android')
+    expect(prompt).toContain('Never ask me to paste certificates')
+    expect(prompt).not.toContain('start_capgo_builder_onboarding')
+  })
+
+  it.concurrent('sets up a new platform through Capgo MCP Builder onboarding', () => {
+    const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'ios', platformReady: false })
+    expect(prompt).toContain('start_capgo_builder_onboarding')
+    expect(prompt).toContain('pass the `ios` platform')
+    expect(prompt).not.toContain('build request')
   })
 })

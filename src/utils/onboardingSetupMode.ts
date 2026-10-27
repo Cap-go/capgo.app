@@ -152,3 +152,23 @@ export function checklistTaskListMode(onboarding: Json | unknown): ChecklistTask
     return 'open'
   return mode === 'manual' ? 'hidden' : 'default'
 }
+
+/**
+ * Whether the user last chose their AI agent or the manual way for a setup task (the
+ * onboarding choice, add app, bundle upload, channel creation, native build). Every choice
+ * proposes the AI agent first unless the user last picked the manual way.
+ *
+ * Stored in `users.onboarding.setup_method`. Without it, the onboarding setup mode decides.
+ */
+export type SetupMethod = 'ai' | 'manual'
+
+export function readSetupMethod(onboarding: Json | unknown): SetupMethod {
+  const method = asObject(onboarding).setup_method
+  if (method === 'ai' || method === 'manual')
+    return method
+  return readOnboardingSetupMode(onboarding) === 'manual' ? 'manual' : 'ai'
+}
+
+export function withSetupMethod(onboarding: Json, method: SetupMethod): Json {
+  return { ...asObject(onboarding), setup_method: method } as Json
+}

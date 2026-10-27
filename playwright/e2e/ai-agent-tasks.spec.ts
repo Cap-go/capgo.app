@@ -123,4 +123,84 @@ test.describe('AI agent alternatives to manual actions', () => {
     await expect(page.getByRole('button', { name: 'Invite a technical teammate' })).toBeVisible()
     await expect(page.locator('[data-test="ai-task-upload-bundle"]')).toHaveCount(0)
   })
+
+  test('native builds offer the AI agent first, plus a teammate invite', async ({ page }) => {
+    // The demo app has no builds in the seed: add one so the Builds tab shows its table and "Add".
+    const admin = localAdminClient()
+    const { data: app } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
+    const { data: user } = await admin.from('users').select('id').eq('email', 'test@capgo.app').single()
+    const now = new Date().toISOString()
+    const { data: build, error } = await admin.from('build_requests').insert({
+      app_id: 'com.demo.app',
+      owner_org: app!.owner_org,
+      requested_by: user!.id,
+      platform: 'android',
+      build_mode: 'release',
+      build_config: {},
+      status: 'succeeded',
+      builder_job_id: `job-e2e-${Date.now()}`,
+      upload_session_key: `e2e-${Date.now()}`,
+      upload_path: 'e2e/build.zip',
+      upload_url: 'https://builder.example.com/upload/e2e',
+      upload_expires_at: now,
+      created_at: now,
+      updated_at: now,
+    }).select('id').single()
+    expect(error).toBeNull()
+    try {
+      await page.goto('/app/com.demo.app/builds')
+      await page.getByRole('button', { name: 'Add', exact: true }).first().click()
+      const card = page.locator('[data-test="ai-task-request-build"]')
+      await expect(card).toBeVisible()
+      await expect(page.locator('[data-test="build-invite-teammate"]')).toBeVisible()
+      // AI first: the card sits above the manual CLI steps.
+      const cardBox = await card.boundingBox()
+      const firstStep = await page.locator('#build_step_0').boundingBox()
+      expect(cardBox!.y).toBeLessThan(firstStep!.y)
+
+      // Android already built, so the agent requests the build directly.
+      await page.getByRole('button', { name: /Android/ }).first().click()
+      await card.locator('[data-test="ai-task-copy-prompt"]').click()
+      expect(await readClipboard(page)).toContain('{CAPGO_CLI_RUNNER} build request com.demo.app --platform android')
+      // The page now waits for the build the agent requests.
+      await expect(card).toHaveCount(0)
+    }
+    finally {
+      await admin.from('build_requests').delete().eq('id', build!.id)
+    }
+  })
+
+  test('proposes the manual way first after the user picked it', async ({ page }) => {
+    const admin = localAdminClient()
+    const { data: user } = await admin.from('users').select('id, onboarding').eq('email', 'test@capgo.app').single()
+    const original = user!.onboarding
+    const name = `manual-e2e-${Date.now()}`
+    try {
+      await page.goto('/app/com.demo.app/channels')
+      await page.click('[data-test="channel-add"]')
+      const dialog = page.locator('#dialog-v2-content')
+      const card = dialog.locator('[data-test="ai-task-create-channel"]')
+      const input = dialog.locator('input[type="text"]')
+      await expect(card).toBeVisible()
+      expect((await card.boundingBox())!.y).toBeLessThan((await input.boundingBox())!.y)
+
+      // Creating the channel by hand makes manual the first proposal next time.
+      await input.fill(name)
+      await page.getByRole('button', { name: 'Confirm' }).click()
+      await expect(page.getByText(name)).toBeVisible()
+      await expect.poll(async () => {
+        const { data } = await admin.from('users').select('onboarding').eq('id', user!.id).single()
+        return (data?.onboarding as { setup_method?: string } | null)?.setup_method
+      }).toBe('manual')
+
+      await page.click('[data-test="channel-add"]')
+      await expect(card).toBeVisible()
+      expect((await card.boundingBox())!.y).toBeGreaterThan((await input.boundingBox())!.y)
+    }
+    finally {
+      await admin.from('channels').delete().eq('app_id', 'com.demo.app').eq('name', name)
+      await admin.from('users').update({ onboarding: original }).eq('id', user!.id)
+    }
+  })
 })
+

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconBot from '~icons/lucide/bot'
@@ -8,6 +8,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import { developmentEnvironmentOptions } from '~/components/dashboard/onboardingDevelopmentEnvironmentOptions'
 import OnboardingToolPattern from '~/components/dashboard/OnboardingToolPattern.vue'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { useOrganizationStore } from '~/stores/organization'
@@ -25,6 +26,9 @@ const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 
 const screen = ref<'choice' | 'ai'>('choice')
+const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
+// The AI agent comes first unless the user last picked the manual way.
+const modeCards = computed(() => manualFirst.value ? ['manual', 'ai'] as const : ['ai', 'manual'] as const)
 const isWaiting = ref(false)
 const assistantIcons = developmentEnvironmentOptions.find(option => option.value === 'ai_assistant')?.icons ?? []
 // Creation time of the newest app before the prompt was copied; only later apps count.
@@ -111,6 +115,7 @@ async function watchForNewApp() {
 
 function choose(mode: 'ai' | 'manual') {
   sendOnboardingEvent('add_app_setup_mode_selected', { setup_mode: mode, org_id: organizationStore.currentOrganization?.gid ?? '' })
+  void rememberSetupMethod(mode)
   if (mode === 'manual') {
     emit('manual')
     return
@@ -140,39 +145,42 @@ onBeforeUnmount(stopPolling)
         </div>
 
         <div class="grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            class="d-btn d-btn-ghost group relative h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 overflow-hidden whitespace-normal rounded-xl border border-primary-500 bg-white p-5 text-left ring-2 ring-primary-500/15 transition hover:border-primary-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:bg-slate-950/90 dark:hover:bg-slate-900"
-            data-test="add-app-setup-mode-ai"
-            @click="choose('ai')"
-          >
-            <OnboardingToolPattern :icons="assistantIcons" muted />
-            <span class="relative z-10 mb-auto inline-flex items-center gap-1.5 rounded-full bg-primary-500 px-2.5 py-1 text-xs font-semibold text-white">
-              {{ t('ai-onboarding-mode-recommended') }}
-            </span>
-            <span class="relative z-10 mt-6 flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
-              <IconBot class="h-5 w-5 text-primary-500" aria-hidden="true" />
-              {{ t('ai-onboarding-mode-ai-label') }}
-            </span>
-            <span class="relative z-10 mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {{ t('ai-onboarding-mode-ai-desc') }}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            class="d-btn d-btn-ghost group h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 whitespace-normal rounded-xl border border-slate-200 bg-white p-5 text-left transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900"
-            data-test="add-app-setup-mode-manual"
-            @click="choose('manual')"
-          >
-            <span class="flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
-              <IconListChecks class="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
-              {{ t('ai-onboarding-mode-manual-label') }}
-            </span>
-            <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {{ t('ai-onboarding-mode-manual-desc') }}
-            </span>
-          </button>
+          <template v-for="card in modeCards" :key="card">
+            <button
+              v-if="card === 'ai'"
+              type="button"
+              class="d-btn d-btn-ghost group relative h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 overflow-hidden whitespace-normal rounded-xl border border-primary-500 bg-white p-5 text-left ring-2 ring-primary-500/15 transition hover:border-primary-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:bg-slate-950/90 dark:hover:bg-slate-900"
+              data-test="add-app-setup-mode-ai"
+              @click="choose('ai')"
+            >
+              <OnboardingToolPattern :icons="assistantIcons" muted />
+              <span class="relative z-10 mb-auto inline-flex items-center gap-1.5 rounded-full bg-primary-500 px-2.5 py-1 text-xs font-semibold text-white">
+                {{ t('ai-onboarding-mode-recommended') }}
+              </span>
+              <span class="relative z-10 mt-6 flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
+                <IconBot class="h-5 w-5 text-primary-500" aria-hidden="true" />
+                {{ t('ai-onboarding-mode-ai-label') }}
+              </span>
+              <span class="relative z-10 mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('ai-onboarding-mode-ai-desc') }}
+              </span>
+            </button>
+            <button
+              v-else
+              type="button"
+              class="d-btn d-btn-ghost group h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 whitespace-normal rounded-xl border border-slate-200 bg-white p-5 text-left transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900"
+              data-test="add-app-setup-mode-manual"
+              @click="choose('manual')"
+            >
+              <span class="flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
+                <IconListChecks class="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+                {{ t('ai-onboarding-mode-manual-label') }}
+              </span>
+              <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('ai-onboarding-mode-manual-desc') }}
+              </span>
+            </button>
+          </template>
         </div>
       </div>
 

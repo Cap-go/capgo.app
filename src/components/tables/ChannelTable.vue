@@ -13,6 +13,7 @@ import IconTrash from '~icons/heroicons/trash'
 import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import ChannelIntroduction from '~/components/dashboard/ChannelIntroduction.vue'
 import FormField from '~/components/forms/FormField.vue'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
@@ -50,6 +51,8 @@ const organizationStore = useOrganizationStore()
 const capgo = useConsole()
 const router = useRouter()
 const main = useMainStore()
+// The AI agent card comes first unless the user last picked the manual way.
+const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 const total = ref(0)
 const search = ref('')
 const elements = ref<(Element)[]>([])
@@ -438,6 +441,7 @@ async function showAddModal() {
             toast.error(t('missing-name'))
             return false
           }
+          void rememberSetupMethod('manual')
           await addChannel(name)
         },
       },
@@ -551,13 +555,14 @@ watch(props, async () => {
     <!-- Teleport Content for Add Channel Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('channel-create')" defer to="#dialog-v2-content">
       <div class="space-y-4">
+        <AiAgentTaskCard v-if="!manualFirst" task="create-channel" :app-id="appId" :channel-name="newChannelName" compact or-separator="after" @copied="watchForAgentChannel" />
         <FormField
           v-model="newChannelName"
           type="text"
           :placeholder="t('channel-name-placeholder')"
           :aria-label="t('channel-name')"
         />
-        <AiAgentTaskCard task="create-channel" :app-id="appId" :channel-name="newChannelName" compact or-separator @copied="watchForAgentChannel" />
+        <AiAgentTaskCard v-if="manualFirst" task="create-channel" :app-id="appId" :channel-name="newChannelName" compact or-separator="before" @copied="watchForAgentChannel" />
       </div>
     </Teleport>
   </div>

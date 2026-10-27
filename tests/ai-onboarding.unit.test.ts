@@ -14,8 +14,10 @@ import {
   readAiAgentProgress,
   readAiOnboardingGoal,
   readOnboardingSetupMode,
+  readSetupMethod,
   shouldRedirectToAiOnboarding,
   withOnboardingSetupMode,
+  withSetupMethod,
   withAiSetupOrganization,
   withoutAiAgentProgress,
 } from '../src/utils/onboardingSetupMode'
@@ -217,5 +219,21 @@ describe('AI onboarding goal', () => {
       expect(prompt).toContain('wait for my confirmation')
     }
     expect(promptFor('both')).toContain('Help me pick the order')
+  })
+})
+
+describe('setup method preference', () => {
+  it.concurrent('proposes the AI agent first by default', () => {
+    expect(readSetupMethod(null)).toBe('ai')
+    expect(readSetupMethod({})).toBe('ai')
+    expect(readSetupMethod({ setup_mode: 'ai' })).toBe('ai')
+    expect(readSetupMethod({ setup_mode: 'invite' })).toBe('ai')
+  })
+
+  it.concurrent('proposes the manual way first after the user picked it', () => {
+    expect(readSetupMethod({ setup_mode: 'manual' })).toBe('manual')
+    expect(readSetupMethod({ setup_mode: 'manual', setup_method: 'ai' })).toBe('ai')
+    expect(readSetupMethod(withSetupMethod({ setup_mode: 'ai', intent: 'ota' }, 'manual'))).toBe('manual')
+    expect(withSetupMethod({ intent: 'ota' }, 'manual')).toEqual({ intent: 'ota', setup_method: 'manual' })
   })
 })
