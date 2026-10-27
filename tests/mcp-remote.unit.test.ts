@@ -292,6 +292,79 @@ describe('hosted MCP protocol', () => {
   })
 })
 
+describe('hosted MCP signed-URL upload and build tools', () => {
+  it.concurrent('prepares a bundle upload with the CLI packer metadata', async () => {
+    const { ctx, calls } = fakeContext({ upload_token: 't' })
+    await handleJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'capgo_prepare_bundle_upload',
+        arguments: { appId: 'com.example.app', version: '1.2.3', channel: ['beta', 'production'], checksum: 'abc', native_packages: [{ name: '@capacitor/camera', version: '7.0.0' }], delta: true },
+      },
+    }, ctx)
+    expect(calls).toEqual([{
+      method: 'POST',
+      path: '/bundle/upload/prepare',
+      body: { app_id: 'com.example.app', version: '1.2.3', channel: ['beta', 'production'], checksum: 'abc', native_packages: [{ name: '@capacitor/camera', version: '7.0.0' }], delta: true },
+    }])
+  })
+
+  it.concurrent('completes a bundle upload with only the signed token', async () => {
+    const { ctx, calls } = fakeContext({ version: '1.2.3' })
+    await handleJsonRpcMessage({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'capgo_complete_bundle_upload', arguments: { upload_token: 'tok' } } }, ctx)
+    expect(calls).toEqual([{ method: 'POST', path: '/bundle/upload/complete', body: { upload_token: 'tok' } }])
+  })
+
+  it.concurrent('requests a build with stored credentials and returns a signed upload URL', async () => {
+    const calls: McpApiRequest[] = []
+    const ctx: McpToolContext = {
+      call: async (request) => {
+        calls.push(request)
+        const data = request.path === '/build/request'
+          ? { job_id: 'job-1' }
+          : { upload_url: 'https://builder.example/builder_upload_direct_input/x', method: 'PUT' }
+        return { ok: true, status: 200, data }
+      },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'capgo_request_build', arguments: { appId: 'com.example.app', platform: 'ios', build_options: { iosSourceDir: 'ios', iosDistribution: 'ad_hoc' } } },
+    }, ctx)
+    expect(calls[0]).toEqual({
+      method: 'POST',
+      path: '/build/request',
+      body: {
+        app_id: 'com.example.app',
+        platform: 'ios',
+        build_mode: 'release',
+        build_options: { iosSourceDir: 'ios', iosDistribution: 'ad_hoc', platform: 'ios', buildMode: 'release' },
+        use_stored_credentials: true,
+      },
+    })
+    expect(calls[1]).toEqual({ method: 'POST', path: '/build/upload_url/job-1', body: { app_id: 'com.example.app' } })
+    const result = response?.result as { content: Array<{ text: string }>, isError?: boolean }
+    expect(result.isError).toBeUndefined()
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ job_id: 'job-1', upload: { method: 'PUT' } })
+  })
+
+  it.concurrent('keeps the job id when the signed build URL cannot be issued', async () => {
+    const ctx: McpToolContext = {
+      call: async request => request.path === '/build/request'
+        ? { ok: true, status: 200, data: { job_id: 'job-2' } }
+        : { ok: false, status: 503, data: { error: 'builder_error' } },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'capgo_request_build', arguments: { appId: 'com.example.app', platform: 'android' } } }, ctx)
+    expect(response?.result).toMatchObject({ isError: true })
+    expect(JSON.stringify(response?.result)).toContain('job-2')
+  })
+})
+
 describe('hosted MCP OAuth helpers', () => {
   it.concurrent('verifies PKCE S256 challenges', async () => {
     const verifier = randomToken(48)

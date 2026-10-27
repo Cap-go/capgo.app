@@ -190,6 +190,7 @@ export const mcpRequestBuildInputSchema = z.object({
   platform: z.enum(['ios', 'android']),
   path: z.string().optional(),
   nodeModules: z.string().optional(),
+  useStoredCredentials: z.boolean().optional().describe('Use the signing credentials stored on Capgo for this app (saved with "build credentials push"; needs app admin rights) instead of only the locally saved ones'),
   cache: buildCacheOptionSchema.describe('When false, disables compilation cache for this build. Omit or true to use the default (cache enabled).'),
   cacheKey: buildCacheKeyOptionSchema.describe('Custom compilation cache key (e.g. rc, prod) to share or isolate cache between environments.'),
 })

@@ -446,11 +446,35 @@ export const zipBundleOptionsSchema = z.object({
   name: z.string().optional(),
   codeCheck: z.boolean().optional(),
   json: z.boolean().optional(),
-  keyV2: z.boolean().optional(),
+  // `true` or a private key path (path only applies with forUpload).
+  keyV2: z.union([z.string(), z.boolean()]).optional(),
+  keyDataV2: z.string().optional(),
+  // Set to false to skip encryption (CLI --no-key).
+  key: z.boolean().optional(),
   packageJson: z.string().optional(),
+  nodeModules: z.string().optional(),
+  // Produce exactly what `bundle upload` would send (encryption, checksum, native packages).
+  forUpload: z.boolean().optional(),
+  // Also write a delta pack zip at this path (implies forUpload).
+  deltaPack: z.string().optional(),
+  encryptDelta: z.boolean().optional(),
+  disableBrotli: z.boolean().optional(),
+  forceCrc32Checksum: z.boolean().optional(),
 })
 
 export type ZipBundleOptions = z.infer<typeof zipBundleOptionsSchema>
+
+export const zipBuildOptionsSchema = z.object({
+  appId: z.string().optional(),
+  platform: z.enum(['ios', 'android']),
+  path: z.string().optional(),
+  nodeModules: z.string().optional(),
+  syncIosVersion: z.boolean().optional(),
+  syncAndroidVersion: z.boolean().optional(),
+  output: z.string().optional(),
+})
+
+export type ZipBuildOptions = z.infer<typeof zipBuildOptionsSchema>
 
 // ============================================================================
 // SDK Build Schemas
@@ -462,6 +486,8 @@ export const requestBuildOptionsSchema = z.object({
   nodeModules: z.string().optional(),
   platform: z.enum(['ios', 'android']),
   credentials: buildCredentialsSchema.optional(),
+  /** Use the signing credentials stored on Capgo for this app (needs app admin rights); `credentials` still take precedence. */
+  useStoredCredentials: z.boolean().optional(),
   /** iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1). */
   xcodeVersion: z.string().min(1).optional(),
   androidTrack: z.enum(['internal', 'alpha', 'beta', 'production']).optional(),

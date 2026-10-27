@@ -5,6 +5,7 @@ import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
+import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
 type BuildUploadWindowRow = Pick<
   Database['public']['Tables']['build_requests']['Row'],
@@ -112,7 +113,7 @@ export async function tusProxy(
   // Get build request to verify ownership and that the upload window is still open
   const { data: buildRequest, error: buildRequestError } = await supabase
     .from('build_requests')
-    .select('app_id, owner_org, builder_job_id, upload_path, upload_expires_at, status')
+    .select('app_id, owner_org, builder_job_id, upload_path, upload_expires_at, status, uses_stored_credentials')
     .eq('builder_job_id', jobId)
     .single()
 
@@ -139,6 +140,9 @@ export async function tusProxy(
     })
     throw simpleError('unauthorized', 'You do not have permission to upload for this build')
   }
+  // The uploaded project runs with the stored signing secrets: same right as requesting it.
+  if (buildRequest.uses_stored_credentials)
+    await ensureStoredCredentialsPermission(c, buildRequest.app_id, apikey.user_id)
 
   // Validate upload_path structure
   // Expected format: orgs/${org_id}/apps/${app_id}/native-builds/${upload_session_key}.zip

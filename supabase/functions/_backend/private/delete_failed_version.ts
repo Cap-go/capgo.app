@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
@@ -60,8 +61,33 @@ app.delete('/', middlewareKey(), async (c) => {
   if (errorVersion) {
     throw simpleError('error_already_deleted', 'Already deleted', { errorVersion })
   }
+  await deleteFailedVersionRow(c, version)
+  return c.json(BRES)
+})
+
+export interface DeleteFailedVersionOptions {
+  /** The caller owns the version's objects and removes them itself after the row is gone. */
+  skipObjectCheck?: boolean
+  /** Also require this updated_at (compare-and-swap on a stale upload-session claim). */
+  expectedUpdatedAt?: string
+}
+
+/**
+ * Hard-deletes an r2-direct version whose upload never completed. Refuses while the
+ * bundle object still exists in storage unless the caller owns the objects.
+ *
+ * The delete is conditional on the row still being an unfinished upload in the state
+ * the caller observed (`storage_provider = 'r2-direct'`, not deleted, same r2_path), so a
+ * concurrent finalize or upload-session claim makes it a no-op instead of removing a
+ * live bundle. Returns whether a row was deleted.
+ */
+export async function deleteFailedVersionRow(
+  c: Context,
+  version: { id: number, r2_path: string | null, owner_org: string },
+  options: DeleteFailedVersionOptions = {},
+): Promise<boolean> {
   // check if object exist in r2
-  if (version.r2_path) {
+  if (version.r2_path && !options.skipObjectCheck) {
     const exist = await s3.checkIfExist(c, version.r2_path)
     if (exist) {
       throw simpleError('error_already_uploaded_to_s3', 'Error already uploaded to S3, delete is unsafe use the webapp to delete it')
@@ -69,21 +95,26 @@ app.delete('/', middlewareKey(), async (c) => {
   }
 
   // Hard delete after upload-flow checks; upload keys lack bundle.delete RLS
-  const { error: errorDelete } = await supabaseAdmin(c)
+  let query = supabaseAdmin(c)
     .from('app_versions')
     .delete()
     .eq('id', version.id)
-    .single()
+    .eq('storage_provider', 'r2-direct')
+    .eq('deleted', false)
+  query = version.r2_path ? query.eq('r2_path', version.r2_path) : query.is('r2_path', null)
+  if (options.expectedUpdatedAt)
+    query = query.eq('updated_at', options.expectedUpdatedAt)
+  const { data: deletedRows, error: errorDelete } = await query.select('id')
   if (errorDelete) {
-    if (errorDelete.code !== 'PGRST116') {
-      throw simpleError('error_deleting_version', 'Error deleting version', { errorDelete })
-    }
+    throw simpleError('error_deleting_version', 'Error deleting version', { errorDelete })
+  }
+  if (!deletedRows?.length) {
     cloudlog({
       requestId: c.get('requestId'),
-      message: 'delete failed version already deleted',
+      message: 'delete failed version skipped: no unfinished upload row matched',
       versionId: version.id,
-      errorDelete,
     })
+    return false
   }
 
   await sendEventToTracking(c, {
@@ -94,5 +125,5 @@ app.delete('/', middlewareKey(), async (c) => {
   })
 
   cloudlog({ requestId: c.get('requestId'), message: 'delete version', id: version.id })
-  return c.json(BRES)
-})
+  return true
+}

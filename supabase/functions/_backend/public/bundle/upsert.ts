@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
-import { simpleError } from '../../utils/hono.ts'
+import { quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId, isValidSemver } from '../../utils/utils.ts'
@@ -64,11 +64,17 @@ function buildUpsertRow(
   return row
 }
 
-export async function upsertBundle(
+type AppVersionRow = Database['public']['Tables']['app_versions']['Row']
+
+/**
+ * Validation shared by every API write of an app_versions row (upsert and insert-only
+ * create): body checks, app.upload_bundle, deleted-name guard and the org encryption policy.
+ */
+async function prepareBundleWrite(
   c: Context<MiddlewareKeyVariables>,
   body: UpsertBundleBody,
   apikey: Database['public']['Tables']['apikeys']['Row'],
-): Promise<Response> {
+) {
   if (!body.app_id) {
     throw simpleError('missing_app_id', 'Missing app_id', { body })
   }
@@ -116,7 +122,15 @@ export async function upsertBundle(
     )
   }
 
-  const row = buildUpsertRow(body, appWithOrg.owner_org, apikey.user_id)
+  return { supabase, existingVersion, row: buildUpsertRow(body, appWithOrg.owner_org, apikey.user_id) }
+}
+
+export async function upsertBundle(
+  c: Context<MiddlewareKeyVariables>,
+  body: UpsertBundleBody,
+  apikey: Database['public']['Tables']['apikeys']['Row'],
+): Promise<Response> {
+  const { supabase, row } = await prepareBundleWrite(c, body, apikey)
   const { data: upserted, error: upsertError } = await supabase
     .from('app_versions')
     .upsert(row, { onConflict: 'name,app_id' })
@@ -128,4 +142,30 @@ export async function upsertBundle(
   }
 
   return c.json(upserted)
+}
+
+/**
+ * Create a new version, never touching an existing one: a concurrent create of the same
+ * name loses with 409 version_already_exists instead of overwriting the winner.
+ */
+export async function insertBundle(
+  c: Context<MiddlewareKeyVariables>,
+  body: UpsertBundleBody,
+  apikey: Database['public']['Tables']['apikeys']['Row'],
+): Promise<AppVersionRow> {
+  const alreadyExists = () => quickError(409, 'version_already_exists', `Version ${body.name} already exists. Pick a new version.`, { version: body.name })
+  const { supabase, row, existingVersion } = await prepareBundleWrite(c, body, apikey)
+  if (existingVersion)
+    throw alreadyExists()
+  const { data: inserted, error: insertError } = await supabase
+    .from('app_versions')
+    .insert(row)
+    .select()
+    .single()
+  if (insertError?.code === '23505')
+    throw alreadyExists()
+  if (insertError || !inserted) {
+    throw simpleError('cannot_upsert_bundle', 'Cannot create bundle', { supabaseError: insertError })
+  }
+  return inserted
 }

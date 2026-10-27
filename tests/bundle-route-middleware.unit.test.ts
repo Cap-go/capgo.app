@@ -15,6 +15,10 @@ const { middlewareKeyMock, middlewareByOptions } = vi.hoisted(() => {
 
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
   middlewareKey: middlewareKeyMock,
+  // Upload sessions import route modules that build their own apps.
+  middlewareAuth: () => async (_c: unknown, next: () => Promise<void>) => {
+    await next()
+  },
 }))
 
 const { app } = await import('../supabase/functions/_backend/public/bundle/index.ts')
@@ -46,5 +50,13 @@ describe('root bundle route middleware', () => {
     expect(rootMiddleware('DELETE')).toBe(middlewareFor(writeOptions))
     expect(rootMiddleware('PUT')).toBe(middlewareFor(writeOptions))
     expect(rootMiddleware('POST')).toBe(middlewareFor(writeOptions))
+  })
+
+  it('uses direct-primary auth for upload session routes', () => {
+    const writeMiddleware = middlewareFor({ usePostgres: true, readOnly: false })
+    for (const path of ['/upload/prepare', '/upload/complete', '/upload/abort']) {
+      const route = app.routes.find(route => route.method === 'POST' && route.path === path)
+      expect(route?.handler).toBe(writeMiddleware)
+    }
   })
 })

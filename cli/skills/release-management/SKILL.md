@@ -144,17 +144,30 @@ Use this skill for OTA update workflows in Capgo Cloud.
 ### `bundle zip [appId]`
 
 - Example: `npx @capgo/cli@latest bundle zip com.example.app --path ./dist`
+- Offline packer example (for signed-URL uploads through the Capgo MCP): `npx @capgo/cli@latest bundle zip com.example.app --for-upload --delta-pack ./delta.zip --json`
 - Notes:
   - Produces a checksum for encryption workflows.
-  - Use `--json` for machine-readable output.
+  - Use `--json` for machine-readable output (JSON on stdout, logs on stderr).
+  - Works offline: no API key, no calls to Capgo (no analytics either).
+  - `--for-upload` produces exactly what `bundle upload` would send: same zip, checksum algorithm, v2 encryption (`.capgo_key_v2` by default, `--key-v2`, `--key-data-v2`, `--no-key`), and adds `session_key`, `key_id`, `native_packages` to the JSON. Without it, the zip is never encrypted (keeps the `bundle zip` then `bundle encrypt` flow).
+  - `--delta-pack <file>` (implies `--for-upload`) also writes a STORE zip with `capgo-delta-manifest.json` (`protocol_version`, `file_hash_format`, `delta_encryption`, `entries[]` with `file_name`, `file_hash`, `compression` = `none` or `brotli`, `uploaded_bytes_sha256`, `uploaded_bytes_size`, `pack_path`) and the uploaded bytes under `files/<id>`.
+  - JSON keys: `bundle`, `filename`, `checksum`, `app_id`, `updater_version`, `checksum_algorithm`, `size_bytes`, `cli_version`; with `--for-upload`: `encryption_method`, `session_key`, `key_id`, `native_packages`; with `--delta-pack`: `delta_pack`, `delta_pack_entries`, `delta_file_hash_format`, `delta_encryption`.
 - Key options:
   - `-p, --path <path>`
   - `-b, --bundle <bundle>`
   - `-n, --name <name>`
   - `-j, --json`
   - `--no-code-check`
-  - `--key-v2`
+  - `--key-v2 [key]`
+  - `--key-data-v2 <keyDataV2>`
+  - `--no-key`
+  - `--for-upload`
+  - `--delta-pack <file>`
+  - `--encrypt-delta`
+  - `--disable-brotli`
+  - `--force-crc32-checksum`
   - `--package-json <packageJson>`
+  - `--node-modules <nodeModules>`
 
 ### `bundle encrypt [zipPath] [checksum]`
 
