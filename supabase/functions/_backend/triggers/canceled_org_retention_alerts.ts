@@ -36,7 +36,7 @@ function isRetentionAlertType(value: unknown): value is RetentionAlertType {
   return value === 'bundles_deletion_warning' || value === 'app_deletion_warning'
 }
 
-/** Cycle key matching SQL to_char(access_end AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'). */
+/** Cycle key matching SQL to_char(retention anchor AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'); the queue sends the anchor as access_end. */
 function accessEndCycleKey(accessEnd: unknown): string {
   if (typeof accessEnd !== 'string' || !accessEnd.trim())
     return 'unknown'
@@ -108,6 +108,8 @@ app.post('/', middlewareAPISecret, async (c) => {
       preferenceKey: 'usage_limit',
       uniqId,
       audience: 'billing',
+      // Retention cleanup only runs after a delivered warning (SQL gate).
+      recordDelivery: true,
     },
     channel: 'usage',
     event: config.trackingEvent,

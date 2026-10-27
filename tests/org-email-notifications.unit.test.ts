@@ -40,6 +40,7 @@ vi.mock('../supabase/functions/_backend/utils/notifications.ts', () => ({
     const result = await claimNotifOrgOnceMock(...args)
     return result === true ? 'claimed' : result === false ? 'already_claimed' : result
   },
+  buildNotifDeliveryUniqId: (uniqId: string) => `${uniqId}:delivered`,
   hasNotifOrgClaim: hasNotifOrgClaimMock,
   sendNotifOrg: sendNotifOrgMock,
   sendNotifOrgOnce: sendNotifOrgOnceMock,
@@ -158,6 +159,20 @@ function sendOnboardingOnce(client: unknown) {
     'org-123',
     'org-123',
     client as any,
+  )
+}
+
+function sendRetentionOnceWithResult(client: unknown) {
+  return sendNotifToOrgMembersOnceWithResult(
+    createContext(),
+    'org:apps_will_be_deleted',
+    'onboarding',
+    { org_id: 'org-123' },
+    'org-123',
+    'retention:app_deletion_warning:2026-01-01T00:00:00Z',
+    client as any,
+    'admins',
+    { recordDelivery: true },
   )
 }
 
@@ -393,6 +408,7 @@ describe('sendNotifToOrgMembersOnce', () => {
       'admin@example.com',
       expect.anything(),
       primaryClient,
+      { recordDelivery: false },
     )
     expect(claimNotifOrgOnceMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -420,5 +436,83 @@ describe('sendNotifToOrgMembersOnce', () => {
       message: 'sendNotifToOrgMembersOnce: recipient resolution failed',
       orgId: 'org-123',
     }))
+  })
+
+  describe('with recordDelivery', () => {
+    it('asks each recipient send to record a delivery marker', async () => {
+      sendNotifOrgOnceMock.mockResolvedValue({ sent: true, cleanupFailed: false })
+      claimNotifOrgOnceMock.mockResolvedValue(true)
+
+      await expect(sendRetentionOnceWithResult(createDrizzleStub())).resolves.toBe('sent')
+
+      expect(sendNotifOrgOnceMock).toHaveBeenCalledTimes(2)
+      for (const call of sendNotifOrgOnceMock.mock.calls)
+        expect(call[8]).toEqual({ recordDelivery: true })
+      expect(claimNotifOrgOnceMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'org:apps_will_be_deleted',
+        'org-123',
+        'retention:app_deletion_warning:2026-01-01T00:00:00Z',
+        expect.anything(),
+      )
+    })
+
+    it('does not backfill the org claim from recipient claims that have no delivery marker', async () => {
+      // Org claim missing, both recipient claims present (a failed send may
+      // have left them behind), no delivery markers.
+      hasNotifOrgClaimMock.mockImplementation(async (_c: unknown, _client: unknown, _event: string, _org: string, uniqId: string) => {
+        if (uniqId === 'retention:app_deletion_warning:2026-01-01T00:00:00Z')
+          return false
+        return !uniqId.endsWith(':delivered')
+      })
+
+      await expect(sendRetentionOnceWithResult(createDrizzleStub())).resolves.toBe('already_claimed')
+
+      expect(sendNotifOrgOnceMock).not.toHaveBeenCalled()
+      expect(claimNotifOrgOnceMock).not.toHaveBeenCalled()
+    })
+
+    it('backfills the org claim when an earlier send recorded its delivery', async () => {
+      hasNotifOrgClaimMock.mockImplementation(async (_c: unknown, _client: unknown, _event: string, _org: string, uniqId: string) =>
+        uniqId !== 'retention:app_deletion_warning:2026-01-01T00:00:00Z')
+      claimNotifOrgOnceMock.mockResolvedValue(true)
+
+      await expect(sendRetentionOnceWithResult(createDrizzleStub())).resolves.toBe('sent')
+
+      expect(sendNotifOrgOnceMock).not.toHaveBeenCalled()
+      expect(claimNotifOrgOnceMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'org:apps_will_be_deleted',
+        'org-123',
+        'retention:app_deletion_warning:2026-01-01T00:00:00Z',
+        expect.anything(),
+      )
+    })
+
+    it('stays retryable when a delivery marker lookup fails', async () => {
+      hasNotifOrgClaimMock.mockImplementation(async (_c: unknown, _client: unknown, _event: string, _org: string, uniqId: string) => {
+        if (uniqId === 'retention:app_deletion_warning:2026-01-01T00:00:00Z')
+          return false
+        return uniqId.endsWith(':delivered') ? null : true
+      })
+
+      await expect(sendRetentionOnceWithResult(createDrizzleStub())).resolves.toBe('failed')
+      expect(claimNotifOrgOnceMock).not.toHaveBeenCalled()
+    })
+
+    it('claims a distinct no-recipient id so it never reads as a delivered warning', async () => {
+      getDrizzleClientMock.mockReturnValue(createDrizzleStub({ managementEmail: '', kind: 'write-client' }))
+      claimNotifOrgOnceMock.mockResolvedValue(true)
+
+      await expect(sendRetentionOnceWithResult(createDrizzleStub())).resolves.toBe('no_recipients')
+
+      expect(claimNotifOrgOnceMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'org:apps_will_be_deleted',
+        'org-123',
+        'retention:app_deletion_warning:2026-01-01T00:00:00Z:no_recipients',
+        expect.anything(),
+      )
+    })
   })
 })
