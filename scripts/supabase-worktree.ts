@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
+import { gatewayUrlFromStatus } from './supabase-worktree-status'
 
 type SupabaseCmd = { cmd: string, argsPrefix: string[] }
 
@@ -239,17 +240,6 @@ function getStatusJson(supa: SupabaseCmd, workdir?: string): { ok: true, json: a
 /**
  * Map Supabase CLI status variables to the env vars used by the codebase/tests.
  */
-// With PostgREST disabled ([api] enabled = false) the CLI no longer prints
-// API_URL, but the gateway still serves Auth, Storage and Functions on the API
-// port. Storage's S3 endpoint lives on that same gateway.
-export function gatewayUrlFromStatus(status: Record<string, unknown>): string | undefined {
-  if (typeof status.API_URL === 'string' && status.API_URL)
-    return status.API_URL
-  if (typeof status.STORAGE_S3_URL === 'string' && status.STORAGE_S3_URL)
-    return new URL(status.STORAGE_S3_URL).origin
-  return undefined
-}
-
 function statusToEnv(status: any): Record<string, string> {
   const apiUrl = gatewayUrlFromStatus(status)
   const dbUrl = status.DB_URL as string | undefined
