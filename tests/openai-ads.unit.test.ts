@@ -252,6 +252,23 @@ describe('openai ads conversions api', () => {
       })
     })
 
+    it('reports the first payment confirmed by invoice.paid (settled ACH debit)', async () => {
+      const paidAtIso = '2026-10-19T12:00:00.000Z'
+      const invoicePaid = { type: 'invoice.paid', data: { object: { id: 'in_ach', status: 'paid' } } } as any
+      envValues.OPENAI_ADS_API_KEY = 'test-key'
+      vi.useFakeTimers({ now, toFake: ['Date'] })
+      const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+      const retrieveInvoice = vi.fn(async () => ({ status: 'paid' as const, amount_paid: 1400, currency: 'usd' }))
+      try {
+        expect(await trackOpenAIFirstPayment(createContext(), { orgId, ownerUserId: record.id, paidAt: paidAtIso, planId: 'Solo', stripeEvent: invoicePaid }, { loadUser: async () => record, retrieveInvoice })).toBe(true)
+      }
+      finally {
+        vi.useRealTimers()
+      }
+      expect(retrieveInvoice).toHaveBeenCalledWith('in_ach')
+    })
+
     it('uses the console plans page as source url', () => {
       envValues.WEBAPP_URL = 'https://console.capgo.app/'
       expect(getOpenAISubscriptionSourceUrl(createContext())).toBe('https://console.capgo.app/settings/organization/plans')

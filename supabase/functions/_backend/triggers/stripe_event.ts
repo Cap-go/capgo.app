@@ -224,7 +224,9 @@ function getPaidAtUpdate(
   nextStatus: StripeWebhookStatus | null | undefined,
   eventOccurredAtIso: string = new Date().toISOString(),
 ) {
-  if (!nextStatus || !['created', 'succeeded'].includes(nextStatus))
+  // Only a confirmed payment counts: a created subscription can still be waiting
+  // for its first invoice (ACH debit processing, unpaid checkout).
+  if (nextStatus !== 'succeeded')
     return undefined
 
   if (currentStripeInfo?.paid_at)
@@ -248,6 +250,76 @@ function resolveFirstPaidAt(
   if (lockedPaidAt || !nextPaidAt)
     return null
   return nextPaidAt
+}
+
+/**
+ * Status to persist for an active subscription event (created / updated).
+ * Paid access needs a confirmed payment: an `active` subscription can still be
+ * waiting for its first invoice (an ACH debit settles days later).
+ */
+function resolveActiveSubscriptionStatus(
+  webhookStatus: StripeWebhookStatus,
+  currentStripeInfo: Pick<StripeInfoRow, 'status' | 'subscription_id'> | null | undefined,
+  subscriptionId: string | null | undefined,
+  payment: SubscriptionPaymentState,
+): StripeWebhookStatus {
+  // past_due is a dunning grace period for a renewal. A first invoice that was
+  // never paid (a returned ACH debit) grants nothing.
+  if (webhookStatus === 'past_due')
+    return payment === 'first_invoice_unpaid' ? 'failed' : webhookStatus
+  if (payment === 'paid' || isPaidSubscriptionUpdate(currentStripeInfo, subscriptionId))
+    return 'succeeded'
+  // Keep a failed payment visible until a payment succeeds.
+  if (currentStripeInfo?.status === 'failed')
+    return 'failed'
+  return webhookStatus
+}
+
+/**
+ * paid: the subscription's latest invoice is paid (or it needs no payment).
+ * unpaid: still waiting for a payment. first_invoice_unpaid: past_due on the
+ * first invoice, so the org never paid this subscription.
+ */
+type SubscriptionPaymentState = 'paid' | 'unpaid' | 'first_invoice_unpaid'
+
+/**
+ * Renewals and plan changes of the subscription that is already paid keep
+ * access without another payment check (legacy rows without paid_at included).
+ */
+function isPaidSubscriptionUpdate(
+  currentStripeInfo: Pick<StripeInfoRow, 'status' | 'subscription_id'> | null | undefined,
+  subscriptionId: string | null | undefined,
+) {
+  return currentStripeInfo?.status === 'succeeded'
+    && !!subscriptionId
+    && currentStripeInfo.subscription_id === subscriptionId
+}
+
+type InvoicePaymentDecision = 'skip' | 'apply'
+
+/**
+ * Whether a paid subscription invoice may mark the org as paid, decided under
+ * the stripe_info row lock. Only the stored subscription counts, a canceled
+ * subscription stays canceled, and a newer failed payment wins over an older
+ * confirmation. Older confirmations otherwise apply (only status and paid_at
+ * change), so a subscription event that overtook invoice.paid cannot leave an
+ * org that paid without access.
+ */
+function decideInvoicePayment(
+  lockedStripeInfo: Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id'>,
+  invoiceSubscriptionId: string,
+  eventOccurredAtIso: string,
+): InvoicePaymentDecision {
+  if (lockedStripeInfo.subscription_id !== invoiceSubscriptionId)
+    return 'skip'
+  if (lockedStripeInfo.status && CHURNED_SUBSCRIPTION_STATUSES.has(lockedStripeInfo.status))
+    return 'skip'
+  if (lockedStripeInfo.status === 'failed' && isStaleStripeEvent(lockedStripeInfo, eventOccurredAtIso))
+    return 'skip'
+  // Already paid. Legacy rows without paid_at are not backfilled: that is not a first payment.
+  if (lockedStripeInfo.status === 'succeeded')
+    return 'skip'
+  return 'apply'
 }
 
 function toStripeInfoUpdate(data: StripeData['data']): StripeInfoUpdate {
@@ -810,6 +882,68 @@ async function writePaidAtAtomically(c: Context, customerId: string, eventOccurr
   }
 }
 
+interface InvoicePaymentResult {
+  status: 'applied' | 'skipped' | 'missing'
+  /** Set only when this write moved paid_at from null: the org's first payment. */
+  firstPaidAt: string | null
+}
+
+/**
+ * Mark the org as paid from a paid subscription invoice. Only status and
+ * paid_at change (plan fields stay owned by subscription events), under the
+ * row lock so it cannot race a newer failure or cancellation.
+ */
+async function persistInvoicePayment(
+  c: Context,
+  customerId: string,
+  invoiceSubscriptionId: string,
+  eventOccurredAtIso: string,
+): Promise<InvoicePaymentResult> {
+  const pgClient = await getPgClient(c, false)
+
+  try {
+    await beginWriteTransaction(pgClient)
+    const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id'> & { paid_at: string | Date | null }>(
+      'SELECT last_stripe_event_at, status, subscription_id, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
+      [customerId],
+    )
+    const lockedStripeInfo = stripeInfoRow.rows[0]
+    if (!lockedStripeInfo) {
+      await pgClient.query('ROLLBACK')
+      return { status: 'missing', firstPaidAt: null }
+    }
+    if (decideInvoicePayment(lockedStripeInfo, invoiceSubscriptionId, eventOccurredAtIso) === 'skip') {
+      await pgClient.query('ROLLBACK')
+      return { status: 'skipped', firstPaidAt: null }
+    }
+
+    const firstPaidAt = resolveFirstPaidAt(lockedStripeInfo.paid_at, eventOccurredAtIso)
+    // An older confirmation never moves last_stripe_event_at backward.
+    await pgClient.query(`
+      UPDATE public.stripe_info
+      SET status = 'succeeded',
+        paid_at = COALESCE(paid_at, $2::timestamptz),
+        churn_reason = NULL,
+        last_stripe_event_at = GREATEST(COALESCE(last_stripe_event_at, $2::timestamptz), $2::timestamptz)
+      WHERE customer_id = $1
+    `, [customerId, eventOccurredAtIso])
+    await pgClient.query('COMMIT')
+    return { status: 'applied', firstPaidAt }
+  }
+  catch (error) {
+    try {
+      await pgClient.query('ROLLBACK')
+    }
+    catch {
+      // Ignore rollback failures and rethrow the original error.
+    }
+    throw error
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
+}
+
 async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: string): Promise<string> {
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
   const fetchFallbackPlan = async () => {
@@ -1202,7 +1336,8 @@ async function createdOrUpdated(
     else {
       updateData.past_due_at = null
     }
-    const paidAt = getPaidAtUpdate(currentStripeInfo, status, eventOccurredAtIso)
+    // The persisted status says whether the payment is confirmed (see resolveActiveSubscriptionStatus).
+    const paidAt = getPaidAtUpdate(currentStripeInfo, stripeData.data.status, eventOccurredAtIso)
     if (paidAt)
       updateData.paid_at = paidAt
     const revenuePlans = await getRevenuePlans(c)
@@ -1710,6 +1845,47 @@ async function recoverOpenAIFirstPaymentFromInvoice(c: Context<MiddlewareKeyVari
   }
 }
 
+// A paid subscription invoice is what grants paid access to a subscription that
+// was waiting for its payment (ACH debit settled, checkout paid late).
+async function invoicePaid(
+  c: Context<MiddlewareKeyVariablesStripe>,
+  org: Org,
+  stripeEvent: Stripe.Event,
+  stripeData: StripeData,
+  customer: StripeInfoRow,
+) {
+  const subscriptionId = stripeData.data.subscription_id
+  // Credit purchases and other one-off invoices say nothing about the plan.
+  if (stripeData.data.status !== 'succeeded' || !subscriptionId)
+    return c.json(BRES)
+  // Renewals of a paid subscription: nothing to change, skip the row lock.
+  if (isPaidSubscriptionUpdate(customer, subscriptionId))
+    return c.json(BRES)
+
+  const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
+  const { status, firstPaidAt } = await persistInvoicePayment(c, stripeData.data.customer_id, subscriptionId, eventOccurredAtIso)
+  if (status === 'missing')
+    return quickError(404, 'succeeded_customer_id_not_found', 'succeeded: customer_id not found', { stripeData })
+  if (status === 'skipped') {
+    cloudlog({ requestId: c.get('requestId'), message: 'Paid invoice does not change the stored subscription', orgId: org.id, subscriptionId, storedSubscriptionId: customer.subscription_id, storedStatus: customer.status })
+    return c.json(BRES)
+  }
+
+  cloudlog({ requestId: c.get('requestId'), message: 'Paid subscription invoice granted paid access', orgId: org.id, subscriptionId })
+  const plans = await getBillingPlans(c)
+  const plan = plans.find(candidate => candidate.stripe_id === customer.product_id || candidate.stripe_id_us === customer.product_id)
+  if (firstPaidAt) {
+    // Scheduled first, before any step that can fail the webhook (see createdOrUpdated).
+    await scheduleOpenAIFirstPayment(c, org, firstPaidAt, plan?.name || customer.price_id)
+  }
+  await syncBillingBentoTagsFromStoredStripeInfo(c, org, stripeData.data.customer_id)
+  await backgroundTask(c, Promise.all([
+    purgePlanCacheForOrg(c, org.id),
+    purgeOnPremCacheForOrg(c, org.id),
+  ]))
+  return c.json(BRES)
+}
+
 async function handleInvoiceStripeEvent(
   c: Context<MiddlewareKeyVariablesStripe>,
   org: Org,
@@ -1720,6 +1896,8 @@ async function handleInvoiceStripeEvent(
   if (await handleAutoTopUpInvoicePaid(c, stripeEvent, org.id))
     return c.json(BRES)
   await recoverOpenAIFirstPaymentFromInvoice(c, org, stripeEvent, customer)
+  if (stripeEvent.type === 'invoice.paid' || stripeEvent.type === 'invoice.payment_succeeded')
+    return invoicePaid(c, org, stripeEvent, stripeData, customer)
   if (stripeEvent.type === 'invoice.upcoming')
     return invoiceUpcoming(c, org, stripeEvent, stripeData)
   if (stripeEvent.type === 'invoice.created' || stripeEvent.type === 'invoice.updated')
@@ -1746,10 +1924,12 @@ async function handleActiveSubscriptionUpdate(
   stripeData: StripeData,
   org: Org,
   customer: StripeInfoRow,
+  payment: SubscriptionPaymentState,
 ) {
   const originalStatus = stripeData.data.status
   const eventOccurredAtIso = new Date(stripeEvent.created * 1000).toISOString()
-  stripeData.data.status = 'succeeded'
+  if (originalStatus)
+    stripeData.data.status = resolveActiveSubscriptionStatus(originalStatus, customer, stripeData.data.subscription_id, payment)
   const createdOrUpdatedResponse = await createdOrUpdated(c, stripeData, org, customer, eventOccurredAtIso, originalStatus)
   if (createdOrUpdatedResponse)
     return createdOrUpdatedResponse
@@ -1815,6 +1995,27 @@ function handleSubscriptionMissingPriceData(
   return null
 }
 
+/**
+ * A canceled subscription keeps paid access to period end only when it was
+ * paid and the customer (or Capgo) canceled it. Stripe's terminal failure
+ * statuses (unpaid, incomplete_expired) end access right away.
+ */
+function isCancellationGraceEligible(
+  stripeEvent: Pick<Stripe.Event, 'type' | 'data'>,
+  customer: Pick<StripeInfoRow, 'status'> | null | undefined,
+) {
+  if (customer?.status !== 'succeeded')
+    return false
+  if (!stripeEvent.type.startsWith('customer.subscription.'))
+    return false
+  const subscription = stripeEvent.data.object as Stripe.Subscription
+  if (subscription.status !== 'canceled')
+    return false
+  // Stripe canceled it after the payment failed or was disputed: no paid time left.
+  const reason = subscription.cancellation_details?.reason
+  return reason !== 'payment_failed' && reason !== 'payment_disputed'
+}
+
 async function handleCanceledSubscriptionStripeEvent(
   c: Context<MiddlewareKeyVariablesStripe>,
   stripeEvent: Stripe.Event,
@@ -1841,9 +2042,13 @@ async function handleCanceledSubscriptionStripeEvent(
   }
 
   // Paid access runs to period end, but a never-paid trial plan grants none.
-  const neverPaidTrialPlan = (stripeEvent.type === 'customer.subscription.deleted' || stripeEvent.type === 'customer.subscription.updated')
+  // Neither does a subscription Stripe gave up on (unpaid, incomplete_expired) or
+  // one that never had a confirmed payment (ACH debit that failed or never settled).
+  const gracePeriodEligible = isCancellationGraceEligible(stripeEvent, customer)
+  const neverPaidTrialPlan = gracePeriodEligible
+    && (stripeEvent.type === 'customer.subscription.deleted' || stripeEvent.type === 'customer.subscription.updated')
     && await isTrialPlanFirstInvoiceUnpaid(getStripe(c, getWebhookBillingAccount(c)), stripeEvent.data.object)
-  if (!neverPaidTrialPlan && stripeData.data.subscription_anchor_end && new Date(stripeData.data.subscription_anchor_end) > new Date()) {
+  if (gracePeriodEligible && !neverPaidTrialPlan && stripeData.data.subscription_anchor_end && new Date(stripeData.data.subscription_anchor_end) > new Date()) {
     stripeData.data.status = 'succeeded'
   }
   const updateData = toStripeInfoUpdate(stripeData.data)
@@ -1883,6 +2088,44 @@ async function handleCanceledSubscriptionStripeEvent(
 
   await didCancel(c, org, stripeData.data.customer_id)
   return null
+}
+
+/**
+ * Whether an active subscription event proves the org paid. Stripe marks a
+ * subscription `active` while an ACH debit is still processing, so the latest
+ * invoice decides. Stripe-managed trials and invoiced (send_invoice) customers
+ * keep access without a payment, as before. Only orgs without a confirmed
+ * payment hit Stripe: renewals of a paid subscription skip the lookup.
+ */
+async function getSubscriptionPaymentState(
+  c: Context<MiddlewareKeyVariablesStripe>,
+  stripeEvent: Stripe.Event,
+  stripeData: StripeData,
+  customer: StripeInfoRow,
+  trialPlanPayment: TrialPlanFirstInvoiceState | null,
+): Promise<SubscriptionPaymentState> {
+  if (trialPlanPayment === 'first_paid')
+    return 'paid'
+  if (stripeEvent.type !== 'customer.subscription.created' && stripeEvent.type !== 'customer.subscription.updated')
+    return 'unpaid'
+  const isPastDue = stripeData.data.status === 'past_due'
+  // Dunning of an org that paid before keeps its grace period.
+  if (isPastDue && (customer.paid_at || customer.status === 'succeeded'))
+    return 'unpaid'
+  if (!isPastDue && isPaidSubscriptionUpdate(customer, stripeData.data.subscription_id))
+    return 'paid'
+  const subscription = stripeEvent.data.object
+  if (!isPastDue && (subscription.status === 'trialing' || subscription.collection_method === 'send_invoice'))
+    return 'paid'
+  const invoiceId = typeof subscription.latest_invoice === 'string' ? subscription.latest_invoice : subscription.latest_invoice?.id
+  if (!invoiceId)
+    return 'unpaid'
+  // The event snapshot can predate the payment: read the live invoice.
+  // Stripe errors fail the webhook so it is retried.
+  const invoice = await getStripe(c, getWebhookBillingAccount(c)).invoices.retrieve(invoiceId)
+  if (invoice.status === 'paid')
+    return 'paid'
+  return invoice.billing_reason === 'subscription_create' ? 'first_invoice_unpaid' : 'unpaid'
 }
 
 // The trial plan subscription only converts the org once its first invoice is paid.
@@ -1935,7 +2178,8 @@ async function handleSubscriptionStripeEvent(
       stripeData.data.status = 'created'
     if (trialPlanPayment === 'unpaid')
       return persistUnpaidTrialPlanSubscription(c, stripeEvent, stripeData)
-    const response = await handleActiveSubscriptionUpdate(c, stripeEvent, stripeData, org, customer)
+    const payment = await getSubscriptionPaymentState(c, stripeEvent, stripeData, customer, trialPlanPayment)
+    const response = await handleActiveSubscriptionUpdate(c, stripeEvent, stripeData, org, customer, payment)
     if (response)
       return response
   }
@@ -2042,6 +2286,9 @@ export const stripeEventTestUtils = {
   getEventDateId,
   getPaidAtUpdate,
   resolveFirstPaidAt,
+  resolveActiveSubscriptionStatus,
+  decideInvoicePayment,
+  isCancellationGraceEligible,
   getPlanChangeTrackingEventName,
   getChurnReason,
   getSubscriptionMrr,
