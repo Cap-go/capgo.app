@@ -121,7 +121,7 @@ async function checkOrganizationImpact() {
             const planNameFromDb = await getCurrentPlanNameOrg(org.gid)
             // Get the actual plan object to get the real plan name
             const actualPlan = main.plans.find(p => p.name === planNameFromDb)
-            const planName = actualPlan?.name || planNameFromDb || 'Unknown Plan'
+            const planName = actualPlan?.name || planNameFromDb || t('unknown-plan')
 
             paidOrgsToBeDeleted.push({
               name: org.name,
@@ -458,9 +458,9 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     reset('update-account', useMainStore().user)
     if (data.error && data.error.name === 'AuthApiError') {
       isLoading.value = false
-      return toast.error('email already taken')
+      return toast.error(t('email-already-taken'))
     }
-    toast.success('A confirmation email was sent click to link to confirm your new email', {
+    toast.success(t('confirm-new-email-sent'), {
       duration: 10000,
     })
     // public.users.email follows the auth email; it syncs once the change is confirmed.
@@ -755,10 +755,10 @@ onMounted(async () => {
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'delete-account-confirm'" to="#dialog-v2-content" defer>
       <div class="text-base text-gray-500 dark:text-gray-400">
         <p class="mb-4">
-          This action cannot be undone. Your account and all associated data will be permanently deleted.
+          {{ t('delete-account-irreversible') }}
         </p>
         <p class="font-medium text-gray-700 dark:text-gray-300">
-          Your account will be deleted after 30 days
+          {{ t('delete-account-after-30-days') }}
         </p>
         <div class="mt-6">
           <label for="delete-account-password" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -773,7 +773,6 @@ onMounted(async () => {
             class="w-full p-3 border border-gray-300 rounded-lg dark:text-white dark:bg-gray-800 dark:border-gray-600"
             autocomplete="current-password"
             @keydown.enter="$event.preventDefault()"
-          >
           >
         </div>
         <div v-if="captchaKey" class="mt-4">

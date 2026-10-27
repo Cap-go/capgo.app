@@ -15,8 +15,6 @@ const route = useRoute()
 const { t } = useI18n()
 const isRedirecting = ref(true)
 const error = ref('')
-const invalidConfirmationMessage = 'Invalid confirmation URL. Please check your email link.'
-const redirectErrorMessage = 'Error redirecting to confirmation page. Please try again.'
 const allowedConfirmationHosts = getAllowedConfirmationHosts()
 onMounted(() => {
   try {
@@ -27,14 +25,14 @@ onMounted(() => {
     })
     if (!confirmationUrl) {
       isRedirecting.value = false
-      error.value = invalidConfirmationMessage
+      error.value = t('confirm-email-invalid-url')
       return
     }
     replaceDocument(confirmationUrl)
   }
   catch {
     isRedirecting.value = false
-    error.value = redirectErrorMessage
+    error.value = t('confirm-email-redirect-error')
   }
 })
 </script>
@@ -42,9 +40,9 @@ onMounted(() => {
 <template>
   <AuthPageShell
     card-width-class="max-w-md"
-    card-kicker="Secure redirect"
-    card-title="Email confirmation"
-    card-description="We only forward confirmation links to approved Capgo hosts."
+    :card-kicker="t('confirm-email-kicker')"
+    :card-title="t('confirm-email-title')"
+    :card-description="t('confirm-email-description')"
   >
     <div class="space-y-5 text-center">
       <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl border border-slate-200/80 bg-slate-50/85 shadow-[0_20px_40px_-32px_rgba(15,23,42,0.45)] dark:border-slate-700/80 dark:bg-slate-900/80">
@@ -53,10 +51,10 @@ onMounted(() => {
 
       <div v-if="isRedirecting" class="space-y-3">
         <p class="text-base font-semibold text-slate-900 dark:text-white">
-          Redirecting to confirmation page...
+          {{ t('confirm-email-redirecting') }}
         </p>
         <p class="text-sm leading-6 text-slate-500 dark:text-slate-300">
-          Please wait while we redirect you to confirm your email address.
+          {{ t('confirm-email-redirecting-hint') }}
         </p>
       </div>
 
@@ -65,7 +63,7 @@ onMounted(() => {
           {{ error }}
         </div>
         <p class="text-sm leading-6 text-slate-500 dark:text-slate-300">
-          If this link is stale or broken, request a new confirmation email and try again.
+          {{ t('confirm-email-stale-link') }}
         </p>
         <div class="grid gap-3 sm:grid-cols-2">
           <router-link to="/resend_email" :class="authSecondaryButtonClass">
