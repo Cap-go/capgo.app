@@ -13,7 +13,7 @@ const DEFAULT_TRANSLATION_MODEL = '@cf/google/gemma-4-26b-a4b-it'
 const DEFAULT_TRANSLATION_REVIEW_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
 // Bump when the prompt, style guides or default models change so every locale is
 // translated again instead of serving catalogs made by the previous pipeline.
-const TRANSLATION_PIPELINE_VERSION = 3
+const TRANSLATION_PIPELINE_VERSION = 4
 // Hybrid reasoning models think before answering by default. The first translation
 // pass does not need it (same benchmark score, a fraction of the latency and cost);
 // the optional review pass keeps it, since reviewing without thinking changed nothing.

@@ -39,11 +39,14 @@ describe('public table RLS protection', () => {
         WITH target_tables(table_name) AS (
           VALUES
             ('agent_identity_registrations'),
+            ('app_build_credentials'),
             ('app_onboarding'),
             ('app_stats_refresh_state'),
+            ('build_credentials_upload_token_uses'),
             ('delta_gc_orphan_prefixes'),
             ('delta_gc_state'),
             ('delta_gc_unsettled_deletes'),
+            ('manifest_per_version'),
             ('mcp_oauth_clients'),
             ('mcp_oauth_requests'),
             ('org_stats_refresh_state'),
@@ -71,11 +74,14 @@ describe('public table RLS protection', () => {
 
       expect(denyPolicies.rows).toEqual([
         { table_name: 'agent_identity_registrations', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'app_build_credentials', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'app_onboarding', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'app_stats_refresh_state', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'build_credentials_upload_token_uses', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'delta_gc_orphan_prefixes', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'delta_gc_state', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'delta_gc_unsettled_deletes', policy_count: 1, denies_all_direct_access: true },
+        { table_name: 'manifest_per_version', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'mcp_oauth_clients', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'mcp_oauth_requests', policy_count: 1, denies_all_direct_access: true },
         { table_name: 'org_stats_refresh_state', policy_count: 1, denies_all_direct_access: true },

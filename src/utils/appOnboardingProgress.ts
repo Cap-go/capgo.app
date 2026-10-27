@@ -1,3 +1,4 @@
+import type { AppOnboardingState, AppOnboardingStepId } from '~/services/appOnboarding'
 import type { Json } from '~/types/database.types'
 import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, hasSupportedBuilderTodoList, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
@@ -269,23 +270,48 @@ export function gettingStartedProgress(steps: GettingStartedStep[]): {
   }
 }
 
+// Steps proven by real usage in the features ledger (refreshed by the backend
+// worker from devices and daily_version), even if the CLI never reported them.
+export function usageProvenStepIds(onboarding: unknown): AppOnboardingStepId[] {
+  const { cli_install: cliInstall, ota } = parseAppOnboardingLedger(onboarding).features ?? {}
+  // A device row only exists once the updater plugin reported from a running app.
+  const ids: AppOnboardingStepId[] = cliInstall?.succeeded_at || ota?.succeeded_at ? ['add_updater', 'run_device'] : []
+  // ota.succeeded_at is the first device install of a published bundle: the
+  // whole live update path (CLI, channel, code, upload) already worked.
+  if (ota?.succeeded_at)
+    ids.push('login_cli_mcp', 'add_channel', 'add_code', 'upload_bundle', 'test_update')
+  return ids
+}
+
+// Stored checklist state OR usage-proven steps; skipped steps stay skipped,
+// except add_channel which is required for live updates.
+export function withUsageProvenSteps(checklist: AppOnboardingState, onboarding: unknown): AppOnboardingState {
+  const proven = usageProvenStepIds(onboarding)
+  if (!proven.length)
+    return checklist
+  const steps = { ...checklist.steps }
+  for (const id of proven) {
+    if (steps[id]?.status !== 'done' && (id === 'add_channel' || steps[id]?.status !== 'skipped'))
+      steps[id] = { ...steps[id], status: 'done' }
+  }
+  return { ...checklist, steps }
+}
+
 export function shouldShowGettingStartedNav(onboarding: unknown, extras?: GettingStartedStepExtras): boolean {
   const ledger = parseAppOnboardingLedger(onboarding)
   if (ledger.getting_started_dismissed_at)
     return false
 
-  if (hasDualOnboardingChecklists(onboarding)) {
-    const { otaComplete, builderComplete } = resolveDualChecklistResume(onboarding)
-    return !otaComplete || !builderComplete
-  }
+  const checklist = withUsageProvenSteps(parseAppOnboarding(onboarding), onboarding)
+  const hasPendingOtaStep = getAppOnboardingStepIds(checklist.todo_list_version, checklist.ota_todo_list_version)
+    .some((id) => {
+      const status = checklist.steps[id]?.status
+      return status !== 'done' && status !== 'skipped'
+    })
+  if (hasDualOnboardingChecklists(onboarding))
+    return hasPendingOtaStep || !resolveDualChecklistResume(onboarding).builderComplete
 
-  const checklist = parseAppOnboarding(onboarding)
   if (checklist.todo_list_version === 3 || checklist.todo_list_version === 4) {
-    const hasPendingOtaStep = getAppOnboardingStepIds(checklist.todo_list_version, checklist.ota_todo_list_version)
-      .some((id) => {
-        const status = checklist.steps[id]?.status
-        return status !== 'done' && status !== 'skipped'
-      })
     if (checklist.todo_list_version === 3)
       return hasPendingOtaStep
     if (hasPendingOtaStep)

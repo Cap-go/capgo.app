@@ -50,7 +50,7 @@ function assertDeepEquals(actual, expected, message) {
 function testVal(/** @type {string} */ v) { return String(v) }
 
 // Import from TypeScript source (requires bun)
-const { splitPayload, NON_CREDENTIAL_KEYS, normalizeMachineVersion, parseStoreReleaseNotesLocaleEntries } = await import('../src/build/request.ts')
+const { explicitBuildOptions, splitPayload, NON_CREDENTIAL_KEYS, normalizeMachineVersion, parseStoreReleaseNotesLocaleEntries } = await import('../src/build/request.ts')
 const { MIN_OUTPUT_RETENTION_SECONDS } = await import('../src/build/credentials.ts')
 
 // ─── Test: iOS secrets stay in credentials ─────────────────────────────────────
@@ -424,6 +424,19 @@ await test('normalizeMachineVersion accepts dotted versions only', async () => {
 await test('custom build env goes to credentials', () => {
   const { buildCredentials } = splitPayload({ SENTRY_AUTH_TOKEN: 'sntrys_secret' }, 'ios', 'release', '7.83.0')
   assertEquals(buildCredentials.SENTRY_AUTH_TOKEN, 'sntrys_secret')
+})
+
+await test('stored-credential requests only send options the user set', () => {
+  const merged = { CAPGO_IOS_SCHEME: 'App', SKIP_BUILD_NUMBER_BUMP: 'true', BUILD_CERTIFICATE_BASE64: 'secret' }
+  const { buildOptions } = splitPayload(merged, 'ios', 'release', '7.83.0')
+  const explicit = explicitBuildOptions(buildOptions, merged)
+  assertEquals(explicit.iosScheme, 'App')
+  assertEquals(explicit.skipBuildNumberBump, true)
+  assert(!('outputUploadEnabled' in explicit), 'defaulted outputUploadEnabled must not override the stored value')
+  assert(!('outputRetentionSeconds' in explicit), 'defaulted retention must not override the stored value')
+  assert(!('submitToStoreReview' in explicit), 'defaulted submitToStoreReview must not override the stored value')
+  assert(!('iosDistribution' in explicit), 'unset distribution must be left to the stored value')
+  assertEquals(explicit.platform, 'ios')
 })
 
 console.log('\n' + '='.repeat(50))

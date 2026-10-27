@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.19.1",
+  "version": "22.21.4",
   "private": true,
   "workspaces": [
     "cli",
@@ -412,7 +412,7 @@
     "eslint-plugin-perfectionist": "5.10.0",
     "eslint-plugin-regexp": "3.1.1",
     "eslint-plugin-unused-imports": "4.4.1",
-    "happy-dom": "^20.11.0",
+    "happy-dom": "^21.0.4",
     "jose": "^6.2.4",
     "knip": "^6.29.0",
     "miniflare": "^5.20260930.0-alpha",

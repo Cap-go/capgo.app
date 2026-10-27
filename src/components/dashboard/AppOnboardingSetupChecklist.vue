@@ -78,9 +78,8 @@ const waitingMessageKey = computed(() => {
     return `setup-checklist-waiting-${selectedStep.value.id}`
   return 'setup-checklist-waiting-step'
 })
-const completed = computed(() => hasDualOnboardingChecklists(rawOnboarding.value)
-  ? steps.value.length > 0 && doneCount.value === steps.value.length
-  : onboarding.value.outcome === 'completed')
+const completed = computed(() => (steps.value.length > 0 && doneCount.value === steps.value.length)
+  || (!hasDualOnboardingChecklists(rawOnboarding.value) && onboarding.value.outcome === 'completed'))
 // Every step is shown by default; new manual signups only see their next step.
 const checklistOpen = ref(props.taskList !== 'hidden')
 const showTaskList = computed(() => props.taskList !== 'hidden')

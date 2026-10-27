@@ -62,7 +62,7 @@ export async function runOnboardingCheck(prepared: PreparedOnboardingCheck, chec
       }),
       // Preserve source, outcome, and all unrelated onboarding steps.
       body: JSON.stringify({ onboarding: { steps: { [check.step]: { status: 'done' } } } }),
-      redirect: 'error',
+      redirect: 'manual',
     })
     setupDebug('step update finished', { scan: check.step, status: response.status, duration_ms: Date.now() - reportStarted })
     todoReportHttpStatus = response.status

@@ -290,6 +290,74 @@ app.post('/permissions', middlewareKey(), versionedRoute<CliContext>({
   },
 }))
 
+export type CliPreflightBody = z.infer<typeof preflightBodySchema>
+
+export interface CliPreflightResult {
+  user_id: string
+  org_id: string | null
+  app_id: string | null
+  trial_days_left: number | null
+  warnings: unknown[]
+}
+
+/** Shared by the CLI preflight route and server-side flows (bundle upload sessions); failures throw typed errors. */
+export async function runCliPreflight(c: CliContext, body: CliPreflightBody): Promise<CliPreflightResult> {
+  assertValidAppId(body.app_id)
+  const supabase = callerClient(c)
+  const userId = await actorUserId(supabase)
+  if (!userId)
+    return invalidApikey()
+
+  // 2FA first: a key blocked by org policy learns nothing else about the app.
+  if (body.check_2fa !== false && await rejectedBy2fa(supabase, body)) {
+    return quickError(403, '2fa_required', 'Two-factor authentication is required by this organization', {
+      app_id: body.app_id ?? null,
+      org_id: body.org_id ?? null,
+    })
+  }
+
+  // Only app-scoped permission and plan checks need the app row. Channel-scoped keys
+  // may not see it (their channel permission decides), and a 2FA-only check must
+  // not turn into an app visibility check.
+  const channelScoped = body.channel_id !== undefined && body.permission?.startsWith('channel.') === true
+  const needsApp = !channelScoped && (body.permission !== undefined || body.plan !== undefined)
+  const appRow = body.app_id ? await visibleApp(supabase, body.app_id) : null
+  if (body.app_id && !appRow && needsApp)
+    return quickError(404, 'app_not_found', 'App not found', { app_id: body.app_id })
+  const orgId = body.org_id ?? appRow?.owner_org ?? null
+
+  if (body.permission && !(await checkPermission(c, body.permission as Permission, permissionScope(body)))) {
+    return quickError(403, 'permission_denied', `Missing permission ${body.permission}`, {
+      permission: body.permission,
+      app_id: body.app_id ?? null,
+      org_id: body.org_id ?? null,
+      channel_id: body.channel_id ?? null,
+    })
+  }
+
+  let trialDaysLeft: number | null = null
+  if (body.plan) {
+    if (!orgId)
+      return quickError(404, 'app_not_found', 'App not found', { app_id: body.app_id ?? null })
+    const status = await meteredPlanStatus(supabase, orgId, body.plan, body.app_id)
+    if (status === 'permission_denied')
+      return quickError(403, 'plan_permission_denied', 'The API key cannot read plan usage for this app', { org_id: orgId, app_id: body.app_id ?? null })
+    if (status === 'billing_denied')
+      return quickError(402, 'plan_upgrade_required', 'Plan upgrade required', { org_id: orgId, plan: body.plan })
+    trialDaysLeft = await unpaidTrialDaysLeft(supabase, orgId, body.app_id)
+  }
+
+  const warnings = body.cli_version && orgId ? await cliWarnings(supabase, orgId, body.cli_version) : []
+
+  return {
+    user_id: userId,
+    org_id: orgId,
+    app_id: appRow?.app_id ?? null,
+    trial_days_left: trialDaysLeft,
+    warnings,
+  }
+}
+
 /**
  * One call per CLI command before it acts: 2FA policy, app visibility, RBAC
  * permission, metered plan and org CLI warnings. Failures are typed errors
@@ -299,61 +367,8 @@ app.post('/permissions', middlewareKey(), versionedRoute<CliContext>({
 app.post('/preflight', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const body = await parseJson(c, preflightBodySchema)
-    assertValidAppId(body.app_id)
-    const supabase = callerClient(c)
-    const userId = await actorUserId(supabase)
-    if (!userId)
-      return invalidApikey()
-
-    // 2FA first: a key blocked by org policy learns nothing else about the app.
-    if (body.check_2fa !== false && await rejectedBy2fa(supabase, body)) {
-      return quickError(403, '2fa_required', 'Two-factor authentication is required by this organization', {
-        app_id: body.app_id ?? null,
-        org_id: body.org_id ?? null,
-      })
-    }
-
-    // Only app-scoped permission and plan checks need the app row. Channel-scoped keys
-    // may not see it (their channel permission decides), and a 2FA-only check must
-    // not turn into an app visibility check.
-    const channelScoped = body.channel_id !== undefined && body.permission?.startsWith('channel.') === true
-    const needsApp = !channelScoped && (body.permission !== undefined || body.plan !== undefined)
-    const appRow = body.app_id ? await visibleApp(supabase, body.app_id) : null
-    if (body.app_id && !appRow && needsApp)
-      return quickError(404, 'app_not_found', 'App not found', { app_id: body.app_id })
-    const orgId = body.org_id ?? appRow?.owner_org ?? null
-
-    if (body.permission && !(await checkPermission(c, body.permission as Permission, permissionScope(body)))) {
-      return quickError(403, 'permission_denied', `Missing permission ${body.permission}`, {
-        permission: body.permission,
-        app_id: body.app_id ?? null,
-        org_id: body.org_id ?? null,
-        channel_id: body.channel_id ?? null,
-      })
-    }
-
-    let trialDaysLeft: number | null = null
-    if (body.plan) {
-      if (!orgId)
-        return quickError(404, 'app_not_found', 'App not found', { app_id: body.app_id ?? null })
-      const status = await meteredPlanStatus(supabase, orgId, body.plan, body.app_id)
-      if (status === 'permission_denied')
-        return quickError(403, 'plan_permission_denied', 'The API key cannot read plan usage for this app', { org_id: orgId, app_id: body.app_id ?? null })
-      if (status === 'billing_denied')
-        return quickError(402, 'plan_upgrade_required', 'Plan upgrade required', { org_id: orgId, plan: body.plan })
-      trialDaysLeft = await unpaidTrialDaysLeft(supabase, orgId, body.app_id)
-    }
-
-    const warnings = body.cli_version && orgId ? await cliWarnings(supabase, orgId, body.cli_version) : []
-
     // Json[] is recursive in generated Supabase types; avoid deep Hono json() inference.
-    return c.json({
-      user_id: userId,
-      org_id: orgId,
-      app_id: appRow?.app_id ?? null,
-      trial_days_left: trialDaysLeft,
-      warnings,
-    } as unknown)
+    return c.json(await runCliPreflight(c, body) as unknown)
   },
 }))
 

@@ -120,6 +120,48 @@ describe('onError PostHog capture', () => {
     expect(alertBody).not.toContain('Password1!')
   })
 
+  it('never copies /build/credentials* or /build/request bodies into alerts and redacts tokens in URLs', async () => {
+    const { onError, SECRET_ROUTE_BODY_PLACEHOLDER } = await import('../supabase/functions/_backend/utils/on_error.ts')
+    const secretBody = JSON.stringify({ P12_PASSWORD: 'p12-secret', APPLE_KEY_CONTENT: 'p8-secret', ANDROID_KEYSTORE_FILE: 'keystore-secret' })
+    const urls = [
+      'https://api.capgo.app/build/credentials/upload/payload.signature-secret',
+      'https://api.capgo.app/build/credentials',
+      'https://example.com/functions/v1/build/credentials/upload-url',
+      'https://api.capgo.app/build/request',
+    ]
+    for (const url of urls) {
+      sendDiscordAlert500Mock.mockClear()
+      cloudlogErrMock.mockClear()
+      const request = new Request(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: secretBody })
+      const response = await onError('build')(new HTTPException(503, { cause: { error: 'database_unavailable', message: 'Cannot verify upload permission', moreInfo: {} } }), createContext(request))
+      expect(response.status).toBe(503)
+      expect(request.bodyUsed).toBe(false)
+      expect(sendDiscordAlert500Mock).toHaveBeenCalledOnce()
+      expect(sendDiscordAlert500Mock.mock.calls[0]?.[2]).toBe(SECRET_ROUTE_BODY_PLACEHOLDER)
+      const logged = JSON.stringify(cloudlogErrMock.mock.calls)
+      expect(logged).not.toContain('signature-secret')
+      expect(logged).not.toContain('p12-secret')
+    }
+  })
+
+  it('redacts secret-looking keys in alert bodies on any route', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+    await onError('private')(new HTTPException(500, { cause: { error: 'internal_error', message: 'boom', moreInfo: {} } }), createContext(new Request('https://example.com/functions/v1/private/something', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        app_id: 'com.example.app',
+        P12_PASSWORD: 'p12-secret',
+        nested: { APPLE_KEY_CONTENT: 'p8', BUILD_CERTIFICATE_BASE64: 'cert', BUILD_PROVISION_PROFILE_BASE64: 'prov', ANDROID_KEYSTORE_FILE: 'ks', PLAY_CONFIG_JSON: '{}', SENTRY_AUTH_TOKEN: 't', webhook_secret: 's', apikey: 'k' },
+      }),
+    })))
+    expect(sendDiscordAlert500Mock.mock.calls[0]?.[2]).toBe(JSON.stringify({
+      app_id: 'com.example.app',
+      P12_PASSWORD: '[redacted]',
+      nested: { APPLE_KEY_CONTENT: '[redacted]', BUILD_CERTIFICATE_BASE64: '[redacted]', BUILD_PROVISION_PROFILE_BASE64: '[redacted]', ANDROID_KEYSTORE_FILE: '[redacted]', PLAY_CONFIG_JSON: '[redacted]', SENTRY_AUTH_TOKEN: '[redacted]', webhook_secret: '[redacted]', apikey: '[redacted]' },
+    }))
+  })
+
   it('logs 4xx HTTP exceptions without console.error or stack so they stay out of Workers Issues', async () => {
     const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
 

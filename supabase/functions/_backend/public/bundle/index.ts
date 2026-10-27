@@ -11,6 +11,7 @@ import { get } from './get.ts'
 import { setChannel } from './set_channel.ts'
 import { upsertBundle } from './upsert.ts'
 import { app as updateMetadataApp } from './update_metadata.ts'
+import { abortBundleUpload, completeBundleUpload, prepareBundleUpload } from './upload_session.ts'
 
 export const app = honoFactory.createApp()
 // Bundle writes authenticate through the primary connection so a just-created key is visible.
@@ -54,6 +55,25 @@ app.post('/cleanup', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<unknown>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return cleanupBundles(c, body, apikey)
+})
+
+// Presigned upload sessions (hosted MCP): prepare -> PUT zip -> complete, server-side CLI parity.
+app.post('/upload/prepare', writeBundleMiddleware, async (c) => {
+  const body = await getBodyOrQuery<unknown>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return prepareBundleUpload(c, body, apikey)
+})
+
+app.post('/upload/complete', writeBundleMiddleware, async (c) => {
+  const body = await getBodyOrQuery<unknown>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return completeBundleUpload(c, body, apikey)
+})
+
+app.post('/upload/abort', writeBundleMiddleware, async (c) => {
+  const body = await getBodyOrQuery<unknown>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return abortBundleUpload(c, body, apikey)
 })
 
 app.post('/ai_bump_level', writeBundleMiddleware, async (c) => {

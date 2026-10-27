@@ -74,4 +74,32 @@ describe('process_cron_sync_sub_jobs', () => {
     })
     expect(targetMessage?.message?.orgId).toBeUndefined()
   })
+
+  it('releases the burst in per-minute slots so queue_health does not flag it as stale', async () => {
+    await executeSQL('SELECT public.process_cron_sync_sub_jobs()')
+
+    const rows = await executeSQL(
+      `SELECT EXTRACT(EPOCH FROM (vt - enqueued_at))::float AS delay_seconds
+        FROM pgmq.q_cron_sync_sub
+        WHERE message->>'function_name' = 'cron_sync_sub'
+          AND msg_id > $1
+        ORDER BY msg_id`,
+      [baselineMsgId],
+    )
+
+    expect(rows.length).toBeGreaterThan(0)
+    rows.forEach((row: { delay_seconds: number }, index: number) => {
+      expect(row.delay_seconds).toBeCloseTo(Math.floor(index / 500) * 60, -1)
+    })
+  })
+
+  it('drains cron_sync_sub in batches of 100 now that it no longer shares the stats API budget', async () => {
+    const [task] = await executeSQL(
+      `SELECT batch_size, minute_interval, target::jsonb AS target
+        FROM public.cron_tasks
+        WHERE name = 'per_minute_queues'`,
+    )
+    expect(task).toMatchObject({ batch_size: 100, minute_interval: 1, target: ['cron_sync_sub'] })
+  })
 })
+

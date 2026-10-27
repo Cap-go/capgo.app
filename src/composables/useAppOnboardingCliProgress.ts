@@ -1,8 +1,9 @@
 import type { MaybeRefOrGetter } from 'vue'
 import { computed, onBeforeUnmount, onMounted, ref, toValue, watch } from 'vue'
-import { getAppOnboardingStepIds, parseAppOnboarding } from '~/services/appOnboarding'
+import { getAppOnboardingStepIds, hasSupportedOtaTodoList, parseAppOnboarding } from '~/services/appOnboarding'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { FunctionsHttpError } from '~/services/consoleClient'
+import { withUsageProvenSteps } from '~/utils/appOnboardingProgress'
 import { hasDualOnboardingChecklists } from '~/utils/dualOnboardingChecklists'
 
 interface ProgressResponse {
@@ -17,19 +18,23 @@ export function useAppOnboardingCliProgress(appId: MaybeRefOrGetter<string>, ini
   const hasChannel = ref<boolean | null>(null)
   const onboarding = computed(() => {
     const reported = reportedOnboarding.value
-    if (hasChannel.value === null)
-      return reported
     const steps = { ...reported.steps }
     if (hasChannel.value)
       steps.add_channel = { ...steps.add_channel, status: 'done' }
-    else
+    else if (hasChannel.value === false)
       delete steps.add_channel
-    return { ...reported, steps }
+    // Usage applies last, matching the nav: a channel deleted after a successful
+    // OTA install does not reopen onboarding.
+    return withUsageProvenSteps({ ...reported, steps }, rawOnboarding.value)
   })
   const refreshError = ref(false)
-  const isTerminal = computed(() => hasDualOnboardingChecklists(rawOnboarding.value)
-    ? getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).every(id => ['done', 'skipped'].includes(onboarding.value.steps[id]?.status ?? 'pending'))
-    : onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped')
+  const isTerminal = computed(() => {
+    const stepsDone = hasSupportedOtaTodoList(onboarding.value)
+      && getAppOnboardingStepIds(onboarding.value.todo_list_version, onboarding.value.ota_todo_list_version).every(id => ['done', 'skipped'].includes(onboarding.value.steps[id]?.status ?? 'pending'))
+    if (hasDualOnboardingChecklists(rawOnboarding.value))
+      return stepsDone
+    return stepsDone || onboarding.value.outcome === 'completed' || onboarding.value.outcome === 'skipped'
+  })
   let pollTimer: ReturnType<typeof setInterval> | undefined
   let generation = 0
   let refreshing = false

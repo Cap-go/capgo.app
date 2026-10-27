@@ -1,5 +1,7 @@
 import type { Context } from 'hono'
+import type { BuildPlatform } from '../../utils/build_credentials_validation.ts'
 import type { Database, Json } from '../../utils/supabase.types.ts'
+import { BuildCredentialsValidationError, mergeStoredCredentialsForBuild, parseCredentialRecord } from '../../utils/build_credentials_validation.ts'
 import { notifyCocoaPodsDeprecation } from '../../utils/cocoapods_deprecation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
@@ -8,6 +10,8 @@ import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { backgroundTask, getEnv } from '../../utils/utils.ts'
 import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
+import { loadStoredBuildCredentials } from './credentials.ts'
+import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
 export interface RequestBuildBody {
   app_id: string
@@ -24,6 +28,14 @@ export interface RequestBuildBody {
   cache_key?: string
   /** iOS dependency manager detected by the CLI. Stored for build analytics only. */
   ios_dependency_manager?: IosDependencyManager
+  /**
+   * When true, merge the app's stored credentials (PUT /build/credentials) under
+   * build_credentials / build_options and validate the result server-side.
+   * Default false: legacy behaviour, request credentials forwarded unvalidated.
+   */
+  use_stored_credentials?: boolean
+  /** With use_stored_credentials: false drops PLAY_CONFIG_JSON (CLI --no-playstore-upload). */
+  playstore_upload?: boolean
 }
 
 type IosDependencyManager = 'cocoapods' | 'spm'
@@ -63,6 +75,8 @@ interface ValidBuildRequestBody {
   cache_enabled?: boolean
   cache_key?: string
   ios_dependency_manager: IosDependencyManager | null
+  use_stored_credentials: boolean
+  playstore_upload?: boolean
 }
 
 function throwBuilderUnavailable(message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
@@ -131,6 +145,8 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     cache_enabled,
     cache_key,
     ios_dependency_manager,
+    use_stored_credentials,
+    playstore_upload,
   } = body
 
   cloudlog({
@@ -193,6 +209,21 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     }
   }
 
+  if (use_stored_credentials !== undefined && typeof use_stored_credentials !== 'boolean') {
+    throw simpleError('invalid_parameter', 'use_stored_credentials must be a boolean')
+  }
+
+  if (playstore_upload !== undefined && typeof playstore_upload !== 'boolean') {
+    throw simpleError('invalid_parameter', 'playstore_upload must be a boolean')
+  }
+
+  if (use_stored_credentials === true) {
+    if (!build_options || typeof build_options !== 'object' || Array.isArray(build_options))
+      throw simpleError('invalid_parameter', 'build_options must be an object')
+    if (!build_credentials || typeof build_credentials !== 'object' || Array.isArray(build_credentials))
+      throw simpleError('invalid_parameter', 'build_credentials must be an object')
+  }
+
   return {
     app_id,
     platform: platform as 'ios' | 'android',
@@ -203,6 +234,52 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     cache_enabled,
     cache_key: cache_key?.trim(),
     ios_dependency_manager: normalizeIosDependencyManager(platform, ios_dependency_manager),
+    use_stored_credentials: use_stored_credentials === true,
+    playstore_upload,
+  }
+}
+
+/**
+ * use_stored_credentials: stored (lowest) < request build_credentials < request build_options,
+ * validated with the CLI matrix. Only called on the opt-in path so published CLIs are unaffected.
+ */
+async function resolveStoredBuildCredentials(c: Context, input: {
+  appId: string
+  platform: BuildPlatform
+  buildOptions: Record<string, unknown>
+  buildCredentials: Record<string, string>
+  playstoreUpload?: boolean
+}): Promise<{ buildOptions: Record<string, unknown>, buildCredentials: Record<string, string> }> {
+  const stored = await loadStoredBuildCredentials(c, input.appId, input.platform)
+  if (!stored) {
+    throw quickError(400, 'build_credentials_not_found', `No stored ${input.platform} build credentials for this app. Save them first: npx @capgo/cli@latest build credentials push --platform ${input.platform}`, {
+      app_id: input.appId,
+      platform: input.platform,
+    }, undefined, { alert: false })
+  }
+  try {
+    const result = mergeStoredCredentialsForBuild({
+      platform: input.platform,
+      stored,
+      requestCredentials: parseCredentialRecord(input.buildCredentials, 'build_credentials'),
+      requestBuildOptions: input.buildOptions,
+      playstoreUpload: input.playstoreUpload,
+    })
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Using stored build credentials',
+      app_id: input.appId,
+      platform: input.platform,
+      stored_key_count: Object.keys(stored).length,
+      request_key_count: Object.keys(input.buildCredentials).length,
+    })
+    return result
+  }
+  catch (error) {
+    if (error instanceof BuildCredentialsValidationError) {
+      throw quickError(400, 'invalid_build_credentials', error.message, { app_id: input.appId, platform: input.platform }, undefined, { alert: false })
+    }
+    throw error
   }
 }
 
@@ -433,6 +510,7 @@ async function persistBuildRequest(c: Context, input: {
   upload_path: string
   upload_url: string
   upload_expires_at: Date
+  uses_stored_credentials: boolean
 }) {
   const {
     app_id,
@@ -447,6 +525,7 @@ async function persistBuildRequest(c: Context, input: {
     upload_path,
     upload_url,
     upload_expires_at,
+    uses_stored_credentials,
   } = input
 
   const supabaseAdminClient = supabaseAdmin(c)
@@ -466,6 +545,7 @@ async function persistBuildRequest(c: Context, input: {
       upload_path,
       upload_url,
       upload_expires_at: upload_expires_at.toISOString(),
+      uses_stored_credentials,
     })
     .select('*')
     .single()
@@ -521,14 +601,29 @@ export async function requestBuild(
     platform,
     build_mode,
     build_config,
-    build_options,
-    build_credentials,
+    build_options: requested_build_options,
+    build_credentials: requested_build_credentials,
     cache_enabled,
     cache_key,
     ios_dependency_manager,
+    use_stored_credentials,
+    playstore_upload,
   } = validateBuildRequestBody(c, body, apikey.user_id)
 
   await ensureBuildPermission(c, app_id, apikey.user_id)
+  if (use_stored_credentials)
+    await ensureStoredCredentialsPermission(c, app_id, apikey.user_id)
+
+  // Opt-in only: merge + validate the app's stored credentials before any builder/plan side effect.
+  const { buildOptions: build_options, buildCredentials: build_credentials } = use_stored_credentials
+    ? await resolveStoredBuildCredentials(c, {
+        appId: app_id,
+        platform,
+        buildOptions: requested_build_options,
+        buildCredentials: requested_build_credentials,
+        playstoreUpload: playstore_upload,
+      })
+    : { buildOptions: requested_build_options, buildCredentials: requested_build_credentials }
 
   // Use authenticated client for data queries - RLS will enforce access
   const supabase = supabaseApikey(c, apikey.key)
@@ -593,6 +688,7 @@ export async function requestBuild(
     upload_path,
     upload_url,
     upload_expires_at,
+    uses_stored_credentials: use_stored_credentials === true,
   })
 
   cloudlog({

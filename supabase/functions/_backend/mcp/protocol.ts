@@ -14,7 +14,7 @@ export const SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, '2025-06-18
 export const SERVER_INSTRUCTIONS = 'Capgo Cloud MCP server: manage Capacitor live updates (OTA). '
   + 'List organizations and apps, inspect bundles, channels and devices, deploy a bundle by updating a channel, '
   + 'run progressive rollouts, read statistics and Observe health data, follow native builds, and manage webhooks and push notifications. '
-  + 'Search the docs with capgo_search_docs. Start with capgo_whoami and capgo_list_apps. Uploading local bundle files and requesting native builds need the Capgo CLI (npx @capgo/cli@latest). '
+  + 'Search the docs with capgo_search_docs. Start with capgo_whoami and capgo_list_apps. To upload a bundle: package it offline with npx @capgo/cli@latest bundle zip --for-upload --json (no login), call capgo_prepare_bundle_upload, PUT the zip to the returned signed URL, then call capgo_complete_bundle_upload. To run a native build: package the native project with npx @capgo/cli@latest build zip --json, call capgo_request_build, PUT the archive to the signed URL, then capgo_start_build. Signing credentials are stored per app (capgo_prepare_build_credentials_upload) and never pass through the chat. '
   + 'Always confirm destructive actions (delete tools) and push notifications with the user first.'
 
 export const JSON_RPC_ERRORS = {

@@ -10,6 +10,7 @@ import { checkPermission } from '../../utils/rbac.ts'
 import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { isNativeBuildConcurrencyLimitError, reserveNativeBuildSlot } from './concurrency.ts'
+import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
 interface BuilderStartResponse {
   status: string
@@ -232,7 +233,7 @@ export async function startBuild(
 
     const { data: buildRequest, error: buildRequestError } = await supabase
       .from('build_requests')
-      .select('id, app_id, owner_org, requested_by, status, platform, build_mode')
+      .select('id, app_id, owner_org, requested_by, status, platform, build_mode, uses_stored_credentials')
       .eq('builder_job_id', jobId)
       .eq('app_id', appId)
       .maybeSingle()
@@ -258,6 +259,10 @@ export async function startBuild(
       })
       throw simpleError('unauthorized', errorMsg)
     }
+
+    // Starting runs the uploaded project with the stored signing secrets.
+    if (buildRequest.uses_stored_credentials)
+      await ensureStoredCredentialsPermission(c, appId, apikey.user_id)
 
     const boundAppId = appId
 

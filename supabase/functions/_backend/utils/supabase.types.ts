@@ -125,6 +125,63 @@ export type Database = {
           },
         ]
       }
+      app_build_credentials: {
+        Row: {
+          app_id: string
+          ciphertext: string
+          created_at: string
+          created_by: string | null
+          id: string
+          key_version: string
+          owner_org: string
+          platform: string
+          summary: Json
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          app_id: string
+          ciphertext: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key_version: string
+          owner_org: string
+          platform: string
+          summary?: Json
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          app_id?: string
+          ciphertext?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key_version?: string
+          owner_org?: string
+          platform?: string
+          summary?: Json
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_build_credentials_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+          {
+            foreignKeyName: "app_build_credentials_owner_org_fkey"
+            columns: ["owner_org"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_metrics_cache: {
         Row: {
           cached_at: string
@@ -595,6 +652,27 @@ export type Database = {
         }
         Relationships: []
       }
+      build_credentials_upload_token_uses: {
+        Row: {
+          app_id: string
+          expires_at: string
+          nonce: string
+          used_at: string
+        }
+        Insert: {
+          app_id: string
+          expires_at: string
+          nonce: string
+          used_at?: string
+        }
+        Update: {
+          app_id?: string
+          expires_at?: string
+          nonce?: string
+          used_at?: string
+        }
+        Relationships: []
+      }
       build_logs: {
         Row: {
           app_id: string | null
@@ -669,6 +747,7 @@ export type Database = {
           upload_path: string
           upload_session_key: string
           upload_url: string
+          uses_stored_credentials: boolean
           xcode_version: string | null
         }
         Insert: {
@@ -693,6 +772,7 @@ export type Database = {
           upload_path: string
           upload_session_key: string
           upload_url: string
+          uses_stored_credentials?: boolean
           xcode_version?: string | null
         }
         Update: {
@@ -717,6 +797,7 @@ export type Database = {
           upload_path?: string
           upload_session_key?: string
           upload_url?: string
+          uses_stored_credentials?: boolean
           xcode_version?: string | null
         }
         Relationships: [
@@ -5459,8 +5540,8 @@ export type Database = {
         Returns: number
       }
       queue_cron_stat_app_for_app: {
-        Args: { p_app_id: string; p_org_id?: string }
-        Returns: undefined
+        Args: { p_app_id: string; p_delay_seconds?: number; p_org_id?: string }
+        Returns: boolean
       }
       queue_cron_stat_org_for_org: {
         Args: { customer_id: string; org_id: string }
