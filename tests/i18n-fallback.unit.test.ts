@@ -118,4 +118,36 @@ describe('i18n remote message loading', () => {
       'Depassez les limites de votre plan en achetant des credits si besoin.',
     )
   })
+
+  it('caches the catalog by checksum and revalidates it on the next load', async () => {
+    const stored = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      clear: vi.fn(() => stored.clear()),
+      getItem: vi.fn((key: string) => stored.get(key) ?? null),
+      removeItem: vi.fn((key: string) => stored.delete(key)),
+      setItem: vi.fn((key: string, value: string) => stored.set(key, value)),
+    })
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      checksum: 'abc',
+      messages: { 'just-now': 'Juste maintenant' },
+      status: 'ready',
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const first = await import('../src/modules/i18n.ts')
+    await first.loadLanguageAsync('fr')
+    expect(first.readCachedCatalog('fr')?.checksum).toBe('abc')
+
+    // Fresh page load: the catalog comes from localStorage, the worker only confirms the checksum.
+    vi.resetModules()
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ checksum: 'abc', status: 'not_modified' }), { status: 200 }))
+    const second = await import('../src/modules/i18n.ts')
+    await second.loadLanguageAsync('fr')
+
+    expect(second.i18n.global.t('just-now')).toBe('Juste maintenant')
+    const [, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ targetLanguage: 'fr', checksum: 'abc' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(second.readCachedCatalog('fr')?.messages).toEqual({ 'just-now': 'Juste maintenant' })
+  })
 })
