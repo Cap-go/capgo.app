@@ -51,8 +51,42 @@ function trackBytes(cdp: CDPSession) {
   return state
 }
 
+// Playwright's waitFor polls with a backoff (up to 1 s between checks), which rounds timings
+// to its poll schedule. Record the exact moment each target shows up from inside the page.
+// Plain JavaScript string: a serialized TS function can reference helpers injected by the runner.
+const markScript = `
+(() => {
+  const marks = {}
+  window.__marks = marks
+  window.__resetMarks = () => { for (const key of Object.keys(marks)) delete marks[key] }
+  const visible = element => !!element && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden'
+  const checks = {
+    login: () => visible(document.querySelector('[data-test="email"]')) && !visible(document.querySelector('#app-loader')),
+    appList: () => [...document.querySelectorAll('#custom_table *')].some(element => element.textContent.trim() === 'Demo app' && visible(element)),
+    overview: () => visible(document.querySelector('[data-testid="overview-kpis"]')),
+  }
+  const check = () => {
+    for (const name of Object.keys(checks)) {
+      if (marks[name] === undefined && checks[name]())
+        marks[name] = performance.now()
+    }
+  }
+  new MutationObserver(check).observe(document, { subtree: true, childList: true, attributes: true, characterData: true })
+  const frame = () => { check(); requestAnimationFrame(frame) }
+  requestAnimationFrame(frame)
+})()
+`
+
+async function mark(page: Page, name: string) {
+  const expression = `window.__marks && window.__marks[${JSON.stringify(name)}]`
+  await page.waitForFunction(`${expression} !== undefined`, undefined, { timeout: 120000 })
+  return page.evaluate(expression) as Promise<number>
+}
+
 async function newContext(browser: Browser, profile: Profile, storageState?: string) {
-  return browser.newContext({ viewport: profile.viewport, isMobile: profile.isMobile, storageState, serviceWorkers: 'block', ignoreHTTPSErrors: true })
+  const context = await browser.newContext({ viewport: profile.viewport, isMobile: profile.isMobile, storageState, serviceWorkers: 'block', ignoreHTTPSErrors: true })
+  await context.addInitScript({ content: markScript })
+  return context
 }
 
 async function login(browser: Browser, base: string, profile: Profile) {
@@ -88,16 +122,21 @@ async function paintMetrics(page: Page) {
   }))
 }
 
-async function timed(context: BrowserContext, profile: Profile, url: string, ready: (page: Page) => Promise<unknown>) {
+async function timed(context: BrowserContext, profile: Profile, url: string, markName: string) {
   const page = await context.newPage()
   const cdp = await throttle(page, profile)
   const bytes = trackBytes(cdp)
-  const start = Date.now()
   await page.goto(url, { waitUntil: 'commit' })
-  await ready(page)
-  const elapsed = Date.now() - start
+  // performance.now() counts from the navigation start of this document.
+  const elapsed = await mark(page, markName)
   const paint = await paintMetrics(page)
   return { page, cdp, bytes, elapsed, paint }
+}
+
+async function timedAction(page: Page, markName: string, action: () => Promise<unknown>) {
+  const start = await page.evaluate('window.__resetMarks(), performance.now()') as number
+  await action()
+  return (await mark(page, markName)) - start
 }
 
 const median = (values: number[]) => {
@@ -128,10 +167,7 @@ async function main() {
         // 1. First visit to the login page, empty cache.
         {
           const context = await newContext(browser, profile)
-          const r = await timed(context, profile, `${base}/login`, async (page) => {
-            await page.locator('[data-test="email"]').waitFor({ state: 'visible', timeout: 120000 })
-            await page.locator('#app-loader').waitFor({ state: 'hidden', timeout: 120000 })
-          })
+          const r = await timed(context, profile, `${base}/login`, 'login')
           record(profileName, 'Login page, first visit', build, 'ready ms', r.elapsed)
           record(profileName, 'Login page, first visit', build, 'LCP ms', r.paint.lcp)
           record(profileName, 'Login page, first visit', build, 'KB transferred', r.bytes.bytes / 1024)
@@ -140,30 +176,26 @@ async function main() {
         // 2. Signed-in user opens the dashboard, empty cache.
         {
           const context = await newContext(browser, profile, states[build])
-          const r = await timed(context, profile, `${base}/apps`, page => page.locator('#custom_table').getByText('Demo app').filter({ visible: true }).first().waitFor({ timeout: 120000 }))
+          const r = await timed(context, profile, `${base}/apps`, 'appList')
           record(profileName, 'Dashboard (/apps), cold', build, 'ready ms', r.elapsed)
           record(profileName, 'Dashboard (/apps), cold', build, 'KB transferred', r.bytes.bytes / 1024)
           record(profileName, 'Dashboard (/apps), cold', build, 'API requests', r.bytes.api)
 
           // 3. In-app navigation: open the app overview from the list.
-          const navStart = Date.now()
           const before = r.bytes.api
-          await r.page.locator('#custom_table').getByText('Demo app').filter({ visible: true }).first().click()
-          await r.page.locator('[data-testid="overview-kpis"]').waitFor({ timeout: 120000 })
-          record(profileName, 'Open app overview from list', build, 'ready ms', Date.now() - navStart)
+          const overviewMs = await timedAction(r.page, 'overview', () => r.page.locator('#custom_table').getByText('Demo app').filter({ visible: true }).first().click())
+          record(profileName, 'Open app overview from list', build, 'ready ms', overviewMs)
           record(profileName, 'Open app overview from list', build, 'API requests', r.bytes.api - before)
 
-          // 4. Back to the list, then forward again (warm route chunks).
-          const backStart = Date.now()
-          await r.page.goBack()
-          await r.page.locator('#custom_table').getByText('Demo app').filter({ visible: true }).first().waitFor({ timeout: 120000 })
-          record(profileName, 'Back to app list', build, 'ready ms', Date.now() - backStart)
+          // 4. Back to the list (route chunks already loaded).
+          const backMs = await timedAction(r.page, 'appList', () => r.page.goBack())
+          record(profileName, 'Back to app list', build, 'ready ms', backMs)
           await context.close()
         }
         // 5. Signed-in user opens an app overview URL directly, empty cache.
         {
           const context = await newContext(browser, profile, states[build])
-          const r = await timed(context, profile, `${base}/app/com.demo.app`, page => page.locator('[data-testid="overview-kpis"]').waitFor({ timeout: 120000 }))
+          const r = await timed(context, profile, `${base}/app/com.demo.app`, 'overview')
           record(profileName, 'App overview (/app/:id), cold', build, 'ready ms', r.elapsed)
           record(profileName, 'App overview (/app/:id), cold', build, 'KB transferred', r.bytes.bytes / 1024)
           await context.close()
