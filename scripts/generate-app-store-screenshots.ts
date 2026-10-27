@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import net from 'node:net'
 import type { Browser, Page } from '@playwright/test'
 import { chromium } from '@playwright/test'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import { Client } from 'pg'
 import { installMocks, maskIdentities } from './marketing-screenshots/mocks'
 import { getPlaywrightStripeApiBaseUrl, getStripeEmulatorPort } from './playwright-stripe'
@@ -416,8 +416,13 @@ async function ensureLocalStack() {
   return { supabaseUrl, supabaseAnon }
 }
 
+// The active worktree's database (worktrees shift the port), shared by the seed and the client.
+function localDatabaseUrl(): string | undefined {
+  return process.env.DB_URL || getSupabaseStatus()?.DB_URL
+}
+
 async function seedDemoData() {
-  const dbUrl = process.env.DB_URL || getSupabaseStatus()?.DB_URL
+  const dbUrl = localDatabaseUrl()
   if (!dbUrl)
     throw new Error('Unable to resolve the local database URL for the demo seed')
   // IPv6 hosts come back bracketed (`[::1]`) from URL.hostname
@@ -441,6 +446,7 @@ async function prepareScreenshotData(supabaseUrl: string, supabaseAnon: string) 
       persistSession: false,
       detectSessionInUrl: false,
     },
+    databaseUrl: localDatabaseUrl(),
   })
 
   const { error: signInError } = await supabase.auth.signInWithPassword({

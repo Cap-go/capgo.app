@@ -330,37 +330,16 @@ jobs:
         run: bash scripts/setup-bun.sh
       - name: Install dependencies
         run: bun install
+      - name: Fetch CLI tags for compatibility checks
+        # tests/no-postgrest.unit.test.ts reads the sources of the oldest supported CLI and
+        # the last CLI that shipped the Supabase SDK, to check legacy_supabase serves them.
+        run: |
+          min_cli="$(sed -n "s/^export const MIN_CLI_VERSION = '\(.*\)'$/\1/p" supabase/functions/_backend/utils/cliMinVersion.ts)"
+          git fetch --no-tags --depth=1 origin "refs/tags/cli-${min_cli}:refs/tags/cli-${min_cli}" "refs/tags/cli-8.90.0:refs/tags/cli-8.90.0"
       - name: Run unit tests
         # Unit tests have no edge-function load, so use every runner core instead of the
         # integration cap of 2 workers in vitest.config.ts.
         run: bun run test:unit --maxWorkers=100%
-
-  test_db:
-    needs: changes
-    if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    name: Run DB tests (Tinbase)
-    permissions:
-      contents: read
-    steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-      - name: Checkout repository
-        uses: actions/checkout@v6 # v6
-      - name: Setup bun
-        run: bash scripts/setup-bun.sh
-      - name: Cache Tinbase Postgres binaries
-        uses: actions/cache@v5 # v5
-        with:
-          path: ~/.cache/tinbase
-          key: tinbase-postgres-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - name: Install dependencies
-        run: bun install
-      - name: Run DB tests against Tinbase
-        run: bash scripts/test-db-tinbase.sh
 
   test_backend:
     needs: changes
@@ -496,7 +475,7 @@ jobs:
       - name: Run backend integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --shard="$VITEST_SHARD"
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/*.unit.test.ts --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/read-replica-schema-catalog.test.ts --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts --shard="$VITEST_SHARD"
       - name: Show Edge server logs after backend test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -624,7 +603,7 @@ jobs:
             done
           done
       - name: Run backend plugin integration tests (serial)
-        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts tests/channel-rate-limit.test.ts --exclude=tests/*.unit.test.ts --exclude=tests/stats-export-cors.test.ts --no-file-parallelism --maxWorkers=1 --maxConcurrency=1
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts tests/channel-rate-limit.test.ts --exclude=tests/*.unit.test.ts --no-file-parallelism --maxWorkers=1 --maxConcurrency=1
       - name: Show Edge server logs after backend plugin test failure
         if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         run: |
@@ -863,7 +842,7 @@ jobs:
       - name: Run Cloudflare Workers integration tests
         env:
           VITEST_SHARD: ${{ matrix.shard }}
-        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/tinbase-db-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run --exclude=tests/cli* --exclude=tests/published-cli-rpc-contract.test.ts --exclude=tests/*.unit.test.ts $(sed 's|^|--exclude=|' tests/db-only-tests.txt | tr '\n' ' ') --config vitest.config.cloudflare.ts --shard="$VITEST_SHARD"
       - name: Show Cloudflare Worker logs after Cloudflare test failure
         if: failure() && steps.start_cloudflare_workers.outputs.log_path != ''
         run: |
@@ -1724,7 +1703,6 @@ jobs:
       - notifications_package
       - lint_typecheck
       - test_unit
-      - test_db
       - test_backend
       - test_backend_plugin
       - test_backend_sql

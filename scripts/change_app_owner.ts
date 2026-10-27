@@ -2,10 +2,12 @@ import type { Database } from '../supabase/functions/_backend/utils/supabase.typ
 /// <reference lib="deno.ns" />
 import { ensureFile } from 'https://deno.land/std/fs/ensure_file.ts'
 import { S3Client } from 'https://deno.land/x/s3_lite_client@0.7.0/mod.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 
 const supabaseUrl = 'https://sb.capgo.app'
 const supabaseServiceRole = '***'
+// Postgres URL of the same project (Database settings). Queries go straight to it.
+const supabaseDbUrl = '***'
 const appToTransfer = 'com.demo.app'
 const newOwnerEmail = 'admin@capgo.app'
 
@@ -20,6 +22,7 @@ async function main() {
   })
 
   const supabase = createClient<Database>(supabaseUrl, supabaseServiceRole, {
+    databaseUrl: supabaseDbUrl,
     auth: {
       autoRefreshToken: false,
       persistSession: false,

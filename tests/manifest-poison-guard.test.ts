@@ -10,6 +10,7 @@ import {
   ORG_ID,
   USER_ID,
 } from './test-utils.ts'
+import { fetchPostgrest } from './db-client'
 
 const APP_ID = 'com.demo.app'
 
@@ -35,7 +36,7 @@ async function patchVersionManifestAsApiKey(
   const supabaseUrl = process.env.SUPABASE_URL as string
   const anonKey = process.env.SUPABASE_ANON_KEY as string
 
-  return fetch(`${supabaseUrl}/rest/v1/app_versions?id=eq.${versionId}`, {
+  return fetchPostgrest(`${supabaseUrl}/rest/v1/app_versions?id=eq.${versionId}`, {
     method: 'PATCH',
     headers: {
       'apikey': anonKey,

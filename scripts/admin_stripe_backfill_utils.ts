@@ -1,7 +1,7 @@
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import Stripe from 'stripe'
 
 export const DEFAULT_ENV_FILE = './internal/cloudflare/.env.prod'
@@ -57,7 +57,7 @@ export function createSupabaseServiceClient(env: Record<string, string | undefin
   return createClient<Database>(
     getRequiredEnv(env, 'SUPABASE_URL'),
     getSupabaseServiceRoleKey(env),
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
+    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }, databaseUrl: env.SUPABASE_DB_URL ?? env.DB_URL },
   )
 }
 

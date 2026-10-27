@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL } from './test-utils.ts'
 

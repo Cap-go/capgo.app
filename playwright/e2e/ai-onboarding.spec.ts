@@ -1,12 +1,14 @@
 import type { Page } from '@playwright/test'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from '../../scripts/db-client'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
 
 const { ports: supabasePorts } = getSupabaseWorktreeConfig()
 const localSupabaseUrl = `http://127.0.0.1:${supabasePorts.api}`
+// This worktree's database: worktrees shift ports, so the default local port is not it.
+const localDatabaseUrl = `postgresql://postgres:postgres@127.0.0.1:${supabasePorts.db}/postgres`
 
 function localAdminClient() {
   const configured = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY
@@ -14,7 +16,7 @@ function localAdminClient() {
   const key = configured || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
   if (!key)
     throw new Error('Local Supabase service key is required for AI onboarding fixtures')
-  return createClient(localSupabaseUrl, key, { auth: { persistSession: false } })
+  return createClient(localSupabaseUrl, key, { auth: { persistSession: false }, databaseUrl: localDatabaseUrl })
 }
 
 // Every test signs up a fresh user; remove it and everything it created afterwards.

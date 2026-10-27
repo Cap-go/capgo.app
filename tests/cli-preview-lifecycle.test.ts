@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   appApiKeyBindings,

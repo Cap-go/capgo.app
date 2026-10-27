@@ -1,6 +1,6 @@
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   executeSQL,

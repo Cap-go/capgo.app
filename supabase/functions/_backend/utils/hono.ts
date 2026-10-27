@@ -13,6 +13,7 @@ import { Hono } from 'hono/tiny'
 import { timingSafeEqual } from 'hono/utils/buffer'
 import { accessLog, cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
+import { finishRequest } from './request_lifecycle.ts'
 import { redactSensitiveUrl } from './sensitive_url.ts'
 import { getEnv } from './utils.ts'
 
@@ -310,6 +311,17 @@ export function createHono(functionName: string, _version: string) {
     || functionName === 'updates'
     || functionName === 'stats'
     || functionName === 'channel_self'
+
+  // Database connections are opened per request (utils/db.ts). Release them once
+  // the response is ready; background tasks still running keep theirs.
+  appGlobal.use('*', async (c, next) => {
+    try {
+      await next()
+    }
+    finally {
+      finishRequest(c)
+    }
+  })
 
   appGlobal.use('*', (c, next): Promise<any> => {
     // ADD HEADER TO IDENTIFY WORKER SOURCE

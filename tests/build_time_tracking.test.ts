@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, fetchPostgrest } from './db-client'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { fetchTestRequest, getEndpointUrl, getSupabaseClient, PRODUCT_ID, resetAppData, resetAppDataStats, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
@@ -173,7 +173,7 @@ describe('build Time Tracking System', () => {
     const beforeCount = before.count ?? 0
 
     const buildId = `poc_buildtime_${randomUUID()}`
-    const response = await fetch(new URL('/rest/v1/rpc/record_build_time', supabaseUrl), {
+    const response = await fetchPostgrest(new URL('/rest/v1/rpc/record_build_time', supabaseUrl), {
       method: 'POST',
       headers: {
         'apikey': supabaseAnonKey,

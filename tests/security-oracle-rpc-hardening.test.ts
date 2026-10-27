@@ -1,7 +1,7 @@
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { describe, expect, it } from 'vitest'
 import {
   APIKEY_TEST_ORG_SUPER_ADMIN,

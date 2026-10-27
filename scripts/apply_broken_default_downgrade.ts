@@ -7,7 +7,7 @@
  * Optional:
  *   --input=./tmp/unused_versions/broken_default_downgrade_candidates.json
  */
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 
 const ENV_FILE = './internal/cloudflare/.env.prod'
@@ -80,7 +80,7 @@ async function main() {
   const supabase = createClient<Database>(
     env.SUPABASE_URL,
     env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
+    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }, databaseUrl: env.SUPABASE_DB_URL ?? env.DB_URL },
   )
 
   const chunks = chunkArray(items, CHUNK_SIZE)

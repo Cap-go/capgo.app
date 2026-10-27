@@ -12,6 +12,7 @@ import { app as channel_device } from '../../supabase/functions/_backend/private
 import { app as channel_stats } from '../../supabase/functions/_backend/private/channel_stats.ts'
 import { app as config } from '../../supabase/functions/_backend/private/config.ts'
 import { app as configBuilder } from '../../supabase/functions/_backend/private/config_builder.ts'
+import { app as legacySupabase, setLegacyApiDispatcher } from '../../supabase/functions/_backend/private/legacy_supabase.ts'
 import { app as console_data } from '../../supabase/functions/_backend/private/console_data.ts'
 import { app as create_device } from '../../supabase/functions/_backend/private/create_device.ts'
 import { app as credits } from '../../supabase/functions/_backend/private/credits.ts'
@@ -156,6 +157,8 @@ app.route('/auth/register', register)
 // Hosted MCP server (POST /mcp) + OAuth discovery/endpoints. Tools replay public API requests
 // through this same worker with the caller's API key, so RBAC and rate limits apply unchanged.
 app.route('/', createMcpApp((request, c) => app.fetch(request, c.env, getExecutionContext(c))))
+// Released CLIs call the public API through private/legacy_supabase; replay those in-process too.
+setLegacyApiDispatcher((request, c) => app.fetch(request, c.env, getExecutionContext(c)))
 
 // Private routes are bundled into this Cloudflare API worker at deploy time.
 const functionNamePrivate = 'private'
@@ -169,6 +172,7 @@ appPrivate.route('/billing_region', billing_region)
 appPrivate.route('/plan_prices', plan_prices)
 appPrivate.route('/config', config)
 appPrivate.route('/console', console_data)
+appPrivate.route('/legacy_supabase', legacySupabase)
 appPrivate.route('/config/builder', configBuilder)
 appPrivate.route('/custom_domains', customDomains)
 appPrivate.route('/accept_invitation', accept_invitation)

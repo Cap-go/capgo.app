@@ -9,7 +9,7 @@
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDirectApiKeyWithBindings, getSupabaseClient, normalizeLocalhostUrl, SUPABASE_ANON_KEY } from './test-utils.ts'
 

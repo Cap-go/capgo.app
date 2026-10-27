@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
+import { gatewayUrlFromStatus } from './supabase-worktree-status'
 
 type SupabaseCmd = { cmd: string, argsPrefix: string[] }
 
@@ -240,7 +241,7 @@ function getStatusJson(supa: SupabaseCmd, workdir?: string): { ok: true, json: a
  * Map Supabase CLI status variables to the env vars used by the codebase/tests.
  */
 function statusToEnv(status: any): Record<string, string> {
-  const apiUrl = status.API_URL as string | undefined
+  const apiUrl = gatewayUrlFromStatus(status)
   const dbUrl = status.DB_URL as string | undefined
   const anon = (status.ANON_KEY || status.PUBLISHABLE_KEY) as string | undefined
   const service = (status.SERVICE_ROLE_KEY || status.SECRET_KEY) as string | undefined
@@ -262,6 +263,10 @@ function statusToEnv(status: any): Record<string, string> {
   for (const [k, v] of Object.entries(status)) {
     if (typeof v === 'string')
       env[k] = v
+  }
+  if (apiUrl) {
+    env.API_URL ??= apiUrl
+    env.FUNCTIONS_URL ??= `${apiUrl}/functions/v1`
   }
   return env
 }

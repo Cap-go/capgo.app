@@ -1,12 +1,14 @@
 // Import statements for Supabase and Stripe
 // Ensure these are compatible with your environment.
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import Stripe from 'stripe'
 
 // Initialize Supabase client
 const supabaseUrl = 'https://****.supabase.co'
 const supabaseAnonKey = '****'
-const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// Postgres URL of the same project (Database settings). Queries go straight to it.
+const supabaseDbUrl = '***'
+const supabase = createClient(supabaseUrl, supabaseAnonKey, { databaseUrl: supabaseDbUrl })
 
 // Initialize Stripe client
 const stripe = Stripe('****')

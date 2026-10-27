@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getAuthHeadersForCredentials, getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL } from './test-utils.ts'
+import { fetchPostgrest } from './db-client'
 
 const email = `ab-enrollment-${randomUUID()}@example.com`
 const password = `AbEnrollment!${randomUUID()}`
@@ -44,7 +45,7 @@ describe('user A/B enrollment through PostgREST', () => {
       { intent: 'publish', abtests: {}, abtests_enrolled: ['forged'], abtests_bento_sync: { pending: true } },
       { intent: 'ota' },
     ]) {
-      const response = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${userId}&select=onboarding,created_at,created_via_invite`, {
+      const response = await fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${userId}&select=onboarding,created_at,created_via_invite`, {
         method: 'PATCH',
         headers: { ...headers, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
         body: JSON.stringify({ onboarding, created_at: '2030-01-01T00:00:00Z', created_via_invite: false }),
@@ -56,14 +57,14 @@ describe('user A/B enrollment through PostgREST', () => {
       expect(new Date(rows[0].created_at).toISOString()).toBe(new Date(createdAt).toISOString())
       expect(rows[0].created_via_invite).toBe(true)
     }
-    const provenanceOnly = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${userId}&select=created_via_invite`, {
+    const provenanceOnly = await fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${userId}&select=created_via_invite`, {
       method: 'PATCH',
       headers: { ...headers, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
       body: JSON.stringify({ created_via_invite: false }),
     })
     expect(provenanceOnly.status, await provenanceOnly.clone().text()).toBe(200)
     expect(await provenanceOnly.json()).toEqual([{ created_via_invite: true }])
-    const upsert = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?on_conflict=id&select=created_via_invite`, {
+    const upsert = await fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/users?on_conflict=id&select=created_via_invite`, {
       method: 'POST',
       headers: { ...headers, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' },
       body: JSON.stringify({ id: userId, email, created_via_invite: false }),
@@ -88,14 +89,14 @@ describe('user A/B enrollment through PostgREST', () => {
     const signupId = data.user!.id
     try {
       const signupHeaders = await getAuthHeadersForCredentials(signupEmail, password)
-      const response = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?select=created_via_invite`, {
+      const response = await fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/users?select=created_via_invite`, {
         method: 'POST',
         headers: { ...signupHeaders, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
         body: JSON.stringify({ id: signupId, email: signupEmail, created_via_invite: true }),
       })
       expect(response.status, await response.clone().text()).toBe(201)
       expect(await response.json()).toEqual([{ created_via_invite: false }])
-      const update = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${signupId}&select=created_via_invite`, {
+      const update = await fetchPostgrest(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${signupId}&select=created_via_invite`, {
         method: 'PATCH',
         headers: { ...signupHeaders, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
         body: JSON.stringify({ created_via_invite: true }),

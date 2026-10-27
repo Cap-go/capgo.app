@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { describe, expect, it } from 'vitest'
 import { APP_ONBOARDING_OTA_V1_STEP_IDS, APP_ONBOARDING_V3_STEP_IDS, parseAppOnboarding } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 

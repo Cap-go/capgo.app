@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
 // @ts-types="npm:@types/pg"
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
+import type { CapgoDb } from './db.ts'
 import type { AuthInfo } from './hono.ts'
 import type { PgQueryClient } from './pg.ts'
 import type { Database } from './supabase.types.ts'
@@ -9,6 +10,7 @@ import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceWithoutCrea
 import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { applyDirectOfferBentoTags, buildBillingPlanBentoTags } from './billing_bento_tags.ts'
+import { createDb, jwtSession } from './db.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { CREATE_DEFAULT_API_KEYS_SQL } from './default_apikeys.ts'
 import { getDirectOfferStatus } from './direct_offer.ts'
@@ -245,19 +247,44 @@ export interface DeletePayload<T extends keyof Database['public']['Tables']> {
   old_record: Database['public']['Tables'][T]['Row']
 }
 
-export function supabaseClient(c: Context, jwt: string) {
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-    global: { headers: { Authorization: jwt } },
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
+type SupabaseSdk = SupabaseClient<Database>
+
+/**
+ * Database access goes through `from` / `rpc`, executed as SQL with Drizzle
+ * (utils/db.ts), never PostgREST. `auth` and `storage` are the Supabase Auth
+ * and Storage APIs; the SDK client behind them is only built when one is used.
+ */
+export type CapgoClient = CapgoDb & Pick<SupabaseSdk, 'auth' | 'storage'>
+
+const SDK_AUTH_OPTIONS = {
+  autoRefreshToken: false,
+  persistSession: false,
+  detectSessionInUrl: false,
 }
 
-export function supabaseWithAuth(c: Context, auth: AuthInfo) {
+function capgoClient(db: CapgoDb, makeSdk: () => SupabaseSdk): CapgoClient {
+  let sdk: SupabaseSdk | undefined
+  const getSdk = () => (sdk ??= makeSdk())
+  return {
+    from: db.from,
+    rpc: db.rpc,
+    get auth() {
+      return getSdk().auth
+    },
+    get storage() {
+      return getSdk().storage
+    },
+  }
+}
+
+export function supabaseClient(c: Context, jwt: string): CapgoClient {
+  return capgoClient(createDb(c, jwtSession(c, jwt)), () => createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), {
+    auth: SDK_AUTH_OPTIONS,
+    global: { headers: { Authorization: jwt } },
+  }))
+}
+
+export function supabaseWithAuth(c: Context, auth: AuthInfo): CapgoClient {
   if (auth.authType === 'jwt' && auth.jwt) {
     return supabaseClient(c, auth.jwt)
   }
@@ -270,54 +297,40 @@ export function supabaseWithAuth(c: Context, auth: AuthInfo) {
   }
 }
 
-export function emptySupabase(c: Context) {
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
+export function emptySupabase(c: Context): CapgoClient {
+  return capgoClient(createDb(c, { role: 'anon' }), () => createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), {
+    auth: SDK_AUTH_OPTIONS,
+  }))
 }
 
 /** Anon GoTrue client that forwards the trusted client IP for auth rate limiting. */
-export function emptySupabaseWithClientIP(c: Context) {
+export function emptySupabaseWithClientIP(c: Context): CapgoClient {
   const clientIp = getClientIP(c)
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
+  return capgoClient(createDb(c, { role: 'anon' }), () => createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), {
+    auth: SDK_AUTH_OPTIONS,
     ...(clientIp !== 'unknown'
       ? { global: { headers: { 'X-Forwarded-For': clientIp } } }
       : {}),
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), options)
+  }))
 }
 
 // WARNING: The service role key has admin privileges and should only be used in secure server environments!
-export function supabaseAdmin(c: Context) {
-  const serviceRoleKey = getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY')
-  const options = {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  }
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), serviceRoleKey, options)
+// Queries run as the backend's own login role, which bypasses RLS like service_role did.
+export function supabaseAdmin(c: Context): CapgoClient {
+  return capgoClient(createDb(c, { role: 'service' }), () => createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_SERVICE_ROLE_KEY'), {
+    auth: SDK_AUTH_OPTIONS,
+  }))
 }
 
-export function supabaseApikey(c: Context, apikey: string | null | undefined) {
+export function supabaseApikey(c: Context, apikey: string | null | undefined): CapgoClient {
   // For hashed keys, the key column is null, so we use the capgkey from the request header
   const effectiveApikey = apikey ?? c.get('capgkey')
   if (!effectiveApikey) {
     throw new Error('No API key available for authentication')
   }
   cloudlog({ requestId: c.get('requestId'), message: 'supabaseApikey', apikeyPrefix: effectiveApikey.substring(0, 8) })
-  return createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), {
+  // RLS reads the key from request.headers, exactly as PostgREST passed it.
+  return capgoClient(createDb(c, { role: 'anon', headers: { capgkey: effectiveApikey } }), () => createClient<Database>(getEnv(c, 'SUPABASE_URL'), getEnv(c, 'SUPABASE_ANON_KEY'), {
     auth: {
       persistSession: false,
     },
@@ -326,7 +339,7 @@ export function supabaseApikey(c: Context, apikey: string | null | undefined) {
         capgkey: effectiveApikey,
       },
     },
-  })
+  }))
 }
 
 export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<string[]> {
@@ -519,7 +532,7 @@ export async function apikeyHasOrgRightWithPolicy(
   c: Context,
   key: Database['public']['Tables']['apikeys']['Row'],
   orgId: string,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<{ valid: boolean, error?: string }> {
   if (!(await apikeyHasOrgRight(c, key, orgId))) {
     return { valid: false, error: 'invalid_org_id' }
@@ -1404,7 +1417,7 @@ export async function readStatsVersionSB(c: Context, app_id: string, period_star
   return (data ?? []) as unknown as VersionUsage[]
 }
 
-export async function readNativeVersionUsageSB(c: Context, app_id: string, period_start: string, period_end: string, supabase: SupabaseClient<Database>): Promise<NativeVersionUsage[]> {
+export async function readNativeVersionUsageSB(c: Context, app_id: string, period_start: string, period_end: string, supabase: CapgoDb): Promise<NativeVersionUsage[]> {
   const { data, error } = await supabase
     .rpc('read_native_version_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 
@@ -1421,7 +1434,7 @@ export async function readNativeActiveDevicesSummarySB(
   app_id: string,
   period_start: string,
   period_end: string,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<NativeActiveDevicesByPlatformRow[]> {
   const { data, error } = await supabase
     .rpc('read_native_active_devices_summary', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
@@ -1442,7 +1455,7 @@ export async function readNativeDailyPlatformActiveSB(
   app_id: string,
   period_start: string,
   period_end: string,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<Array<{ date: string, platform: string, devices: number }>> {
   const { data, error } = await supabase
     .rpc('read_native_daily_platform_active', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
@@ -1656,7 +1669,7 @@ export async function readDeviceVersionCountsSB(
   app_id: string,
   channelName?: string,
   overrides?: ChannelDeviceOverrideIds,
-  supabase: SupabaseClient<Database> = supabaseAdmin(c),
+  supabase: CapgoDb = supabaseAdmin(c),
 ): Promise<Record<string, number>> {
   const reported = await readAllDeviceVersionRows((from, to) => {
     let query = supabase
@@ -2140,7 +2153,7 @@ export async function getCurrentPlanNameOrg(c: Context, orgId?: string): Promise
  * Uses find_apikey_by_value SQL function to look up both plain-text and hashed keys
  * Expiration is checked after lookup
  */
-export async function checkKey(c: Context, authorization: string | undefined, supabase: SupabaseClient<Database>): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
+export async function checkKey(c: Context, authorization: string | undefined, supabase: CapgoDb): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
   if (!authorization)
     return null
 
@@ -2189,7 +2202,7 @@ export async function checkKey(c: Context, authorization: string | undefined, su
 export async function checkKeyById(
   c: Context,
   id: number,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
   userId?: string,
 ): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
   if (!id)
@@ -2238,11 +2251,11 @@ export function validateExpirationDate(expiresAt: string | null | undefined): vo
  * App-scoped keys inherit expiration policy from the app owner organization.
  */
 export async function resolveApikeyPolicyOrgIds(
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
   options: {
     limitedToApps?: string[] | null
     limitedToOrgs?: string[] | null
-    policyLookupSupabase?: SupabaseClient<Database>
+    policyLookupSupabase?: CapgoDb
   },
 ): Promise<string[]> {
   const orgIds = new Set((options.limitedToOrgs ?? []).filter(Boolean))
@@ -2254,7 +2267,7 @@ export async function resolveApikeyPolicyOrgIds(
 
   const resolvedAppIds = new Set<string>()
 
-  async function addResolvedApps(client: SupabaseClient<Database>, appIds: string[]) {
+  async function addResolvedApps(client: CapgoDb, appIds: string[]) {
     if (appIds.length === 0) {
       return
     }
@@ -2330,7 +2343,7 @@ export function assertExpirationMatchesOrgPolicies(
 export async function validateExpirationAgainstOrgPolicies(
   orgIds: string[],
   expiresAt: string | null,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<void> {
   if (orgIds.length === 0) {
     return
@@ -2356,7 +2369,7 @@ export async function checkApikeyMeetsOrgPolicy(
   c: Context,
   key: Database['public']['Tables']['apikeys']['Row'],
   orgId: string,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<{ valid: boolean, error?: string }> {
   const { data: org, error } = await supabase
     .from('orgs')
@@ -2389,7 +2402,7 @@ export async function checkKeyOrgEnforcement(
   c: Context,
   apikey: Database['public']['Tables']['apikeys']['Row'],
   orgId: string,
-  supabase: SupabaseClient<Database>,
+  supabase: CapgoDb,
 ): Promise<boolean> {
   try {
     // Check if org enforces hashed keys

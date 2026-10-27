@@ -20,6 +20,7 @@ import { app as groups } from '../_backend/private/groups.ts'
 import { app as invite_existing_user_to_org } from '../_backend/private/invite_existing_user_to_org.ts'
 import { app as invite_new_user_to_org } from '../_backend/private/invite_new_user_to_org.ts'
 import { app as latency } from '../_backend/private/latency.ts'
+import { app as legacySupabase } from '../_backend/private/legacy_supabase.ts'
 import { app as log_as } from '../_backend/private/log_as.ts'
 import { app as agent_identity } from '../_backend/private/agent_identity.ts'
 import { app as mcp_oauth } from '../_backend/private/mcp_oauth.ts'
@@ -68,6 +69,7 @@ const appGlobal = createHono(functionName, version)
 
 appGlobal.route('/plans', plans)
 appGlobal.route('/console', console_data)
+appGlobal.route('/legacy_supabase', legacySupabase)
 appGlobal.route('/custom_domains', customDomains)
 appGlobal.route('/credits', credits)
 appGlobal.route('/store_top', storeTop)

@@ -32,8 +32,10 @@ describe('CLI min-version compatibility', () => {
       '--output-text',
       '-a',
       APIKEY_TEST_ALL,
+      // What /private/config gives released CLIs: the Capgo API's Supabase-compatible
+      // endpoint. PostgREST is off, so the CLI's /rest/v1 calls must work there.
       '--supa-host',
-      env.SUPABASE_URL || 'http://127.0.0.1:54321',
+      `${env.SUPABASE_URL || 'http://127.0.0.1:54321'}/functions/v1/private/legacy_supabase`,
       '--supa-anon',
       env.SUPABASE_ANON_KEY || '',
     ], {

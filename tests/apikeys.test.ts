@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   APIKEY_MANAGEMENT_APIKEY_MANAGER,

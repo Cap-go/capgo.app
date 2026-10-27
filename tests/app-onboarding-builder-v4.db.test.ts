@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { describe, expect, it } from 'vitest'
 
 const admin = createClient(env.SUPABASE_URL!, env.SUPABASE_SERVICE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } })

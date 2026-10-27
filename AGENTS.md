@@ -85,10 +85,9 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `bun test:unit` - Run unit tests only (`tests/*.unit.test.ts`, no Supabase or
   Docker required)
 - `bun test:db` - Run the DB-only test subset listed in
-  `tests/tinbase-db-tests.txt` against a throwaway Tinbase instance (no Docker;
-  boots in ~5s). Add a test file to that list only if it talks purely to
-  PostgREST/auth via supabase-js — no edge functions, Cloudflare workers, or raw
-  Postgres TCP (`executeSQL`/`getPostgresClient`)
+  `tests/db-only-tests.txt` against the local Supabase stack. These files use
+  only the database and Auth (no edge functions or Cloudflare workers), so the
+  Cloudflare suite skips them; the backend shards run them
 - `bun test:backend:integration` - Run backend tests excluding unit and CLI
   tests (requires running Supabase; this is what CI shards across runners; CLI
   integration tests run via `bun test:cli`)
@@ -109,10 +108,10 @@ CLI identity path (`get_user_id(text)` with a valid API key must keep working).
 - `./scripts/start-cloudflare-workers.sh` - Start local Cloudflare Workers for
   testing
 
-Note: Prefer Tinbase (`bun test:db` / `tests/tinbase-db-tests.txt`) for
-PostgREST/auth-only coverage so Docker/Cloudflare shards stay small and can
-run at high concurrency. CI caps every test job at 5 minutes and shards
-backend/Cloudflare/Playwright aggressively instead of lowering concurrency.
+Note: CI caps every test job at 5 minutes and shards backend/Cloudflare/Playwright
+aggressively instead of lowering concurrency. Tests build database clients with
+`createClient` from `tests/db-client.ts` (not `@supabase/supabase-js`), and replay
+raw `/rest/v1` requests with `fetchPostgrest`; see "No PostgREST" below.
 
 See [CLOUDFLARE_TESTING.md](CLOUDFLARE_TESTING.md) for detailed information on
 testing against Cloudflare Workers.
@@ -296,7 +295,8 @@ Do:
   one-statement internal helper write into Drizzle just for consistency. A
   small service-role helper that is already a single clear `supabaseAdmin(c)`
   call may stay on `supabaseAdmin` when that keeps the code smaller and equally
-  correct.
+  correct. `supabaseAdmin(c).from()/.rpc()` is not PostgREST: it compiles to SQL
+  and runs through Drizzle (see "No PostgREST").
 
 ### HTTP Response Conventions
 
@@ -902,6 +902,36 @@ expose accessible names by default. Follow `SearchInput.vue` and `RoleSelect.vue
 Also applies to dialog/Teleport content, admin filters, and hidden utility inputs
 (e.g. file pickers): they still need `aria-label` or an associated label.
 
+
+## No PostgREST
+
+PostgREST is off (`[api] enabled = false`, no exposed schema). Nothing may call
+`/rest/v1` on the Supabase host: not the console, the CLI, the backend, tests,
+Playwright or scripts.
+
+- The backend's `supabaseAdmin`, `supabaseClient`, `supabaseApikey` and
+  `supabaseWithAuth` keep the supabase-js `from` / `rpc` builder and its types,
+  but `utils/db.ts` records the chain and `utils/pg_query.ts` runs it as SQL
+  through Drizzle. Sessions match what PostgREST did: service = the backend
+  login role (bypasses RLS); JWT = `authenticated` with verified claims; API key
+  = `anon` with `request.headers.capgkey`. `auth` and `storage` on those clients
+  are still the Supabase Auth and Storage APIs.
+- Every call runs in a transaction that sets PostgREST's limits on the BEGIN
+  round trip: service 8s statement and lock timeouts, anon 3s, authenticated 8s.
+  Without them a query stuck behind a lock holds a Hyperdrive connection forever.
+  Admin table reads do not wait for their COMMIT (2 round trips); writes, RPCs
+  and JWT/API-key calls do (3). Hyperdrive never caches inside a transaction.
+  Workers reuse their Hyperdrive clients per request; Deno and Node share one
+  small pool per isolate (`getSharedPgPool`, `DB_POOL_MAX`, `DB_POOL_IDLE_MS`).
+- Direct database sessions are internal: `session_user` is `postgres`, not
+  PostgREST's `authenticator`. A trigger that skips internal sessions (for
+  example `apikeys_force_server_key()`) now skips backend writes too, so the
+  backend must produce that value itself.
+- Released CLIs before 8.90.1 still build a Supabase client from `supaHost` in
+  `/private/config`. That host is `private/legacy_supabase`, which serves only
+  the tables and RPCs those CLIs call (`LEGACY_CLI_TABLES` / `LEGACY_CLI_RPCS`),
+  relays Storage, and relays `/functions/v1/*` to this API.
+  `tests/cli-compat.test.ts` runs the pinned `MIN_CLI_VERSION` through it.
 
 ## Console Data Access
 

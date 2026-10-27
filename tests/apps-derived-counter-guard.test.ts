@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   executeSQL,
-  fetchTestRequest,
   getAuthHeaders,
   getEndpointUrl,
   resetAndSeedAppData,
@@ -10,6 +9,7 @@ import {
   SUPABASE_ANON_KEY,
   USER_ID,
 } from './test-utils.ts'
+import { fetchPostgrest } from './db-client'
 
 if (!SUPABASE_ANON_KEY)
   throw new Error('SUPABASE_ANON_KEY is required for apps counter guard tests')
@@ -54,7 +54,7 @@ async function parseJson(response: Response) {
 }
 
 async function patchApp(authHeaders: Record<string, string>, body: Record<string, unknown>) {
-  const response = await fetchTestRequest(getEndpointUrl(`/rest/v1/apps?app_id=eq.${APPNAME}`), {
+  const response = await fetchPostgrest(getEndpointUrl(`/rest/v1/apps?app_id=eq.${APPNAME}`), {
     method: 'PATCH',
     headers: restHeaders(authHeaders),
     body: JSON.stringify(body),
@@ -104,7 +104,7 @@ describe('apps derived counter guard', () => {
   })
 
   it('app admin cannot seed counters when inserting an app through PostgREST', async () => {
-    const response = await fetchTestRequest(getEndpointUrl('/rest/v1/apps'), {
+    const response = await fetchPostgrest(getEndpointUrl('/rest/v1/apps'), {
       method: 'POST',
       headers: { ...restHeaders(authHeaders), Prefer: 'return=minimal' },
       body: JSON.stringify({

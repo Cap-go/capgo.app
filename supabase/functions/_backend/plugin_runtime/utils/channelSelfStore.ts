@@ -43,7 +43,8 @@ interface ChannelSelfOverridePayload {
 }
 
 type ChannelSelfContext = Context<MiddlewareKeyVariables>
-type ChannelSelfDeviceClient = SupabaseClient<Database>
+// Only the builder is needed; any client with supabase-js' `from` fits.
+type ChannelSelfDeviceClient = Pick<SupabaseClient<Database>, 'from'>
 type ChannelSelfOverrideSyncInput = Omit<ChannelSelfOverrideWrite, 'plugin_version'>
 
 function getChannelSelfStore(c: ChannelSelfContext) {

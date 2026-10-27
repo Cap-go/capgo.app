@@ -1,7 +1,7 @@
 import type { Database } from '~/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getSupabaseClient, POSTGRES_URL } from './test-utils.ts'

@@ -14,7 +14,7 @@
  *   bun run stripe:sync-org-names --apply --env-file=./internal/cloudflare/.env.preprod
  */
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client.ts'
 import Stripe from 'stripe'
 
 const DEFAULT_ENV_FILE = './internal/cloudflare/.env.prod'
@@ -180,7 +180,7 @@ async function main() {
   const supabase = createClient<Database>(
     supabaseUrl,
     supabaseServiceRoleKey,
-    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
+    { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }, databaseUrl: env.SUPABASE_DB_URL ?? env.DB_URL },
   )
   const stripe = createStripeClient(stripeSecretKey, stripeApiBaseUrl)
 

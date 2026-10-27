@@ -9,6 +9,7 @@ import {
   SUPABASE_ANON_KEY,
   SUPABASE_BASE_URL,
 } from './test-utils.ts'
+import { fetchPostgrest } from './db-client'
 
 if (!SUPABASE_BASE_URL)
   throw new Error('SUPABASE_URL is required for org customer_id guard tests')
@@ -57,7 +58,7 @@ function withRestHeaders(headers: Record<string, string>) {
 }
 
 async function patchOrg(headers: Record<string, string>, body: Record<string, unknown>) {
-  const response = await fetchTestRequest(getEndpointUrl(`/rest/v1/orgs?id=eq.${orgId}`), {
+  const response = await fetchPostgrest(getEndpointUrl(`/rest/v1/orgs?id=eq.${orgId}`), {
     method: 'PATCH',
     headers: {
       ...withRestHeaders(headers),

@@ -4,7 +4,7 @@ import type { Database } from '../src/types/database.types'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { Hono } from 'hono/tiny'
 import { Pool } from 'pg'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
@@ -129,7 +129,8 @@ function hydrateLocalSupabaseEnvFromStatus(): void {
 
     try {
       const parsed = parseSupabaseStatusJson(status.stdout || '')
-      const supabaseUrl = normalizeLocalhostUrl(parsed.API_URL)
+      // No API_URL when PostgREST is disabled; the gateway also serves Storage's S3 endpoint.
+      const supabaseUrl = normalizeLocalhostUrl(parsed.API_URL || (parsed.STORAGE_S3_URL ? new URL(parsed.STORAGE_S3_URL).origin : undefined))
       const dbUrl = parsed.DB_URL ? normalizePostgresUrl(parsed.DB_URL) : undefined
       const anonKey = parsed.ANON_KEY || parsed.PUBLISHABLE_KEY
       const serviceKey = parsed.SERVICE_ROLE_KEY || parsed.SECRET_KEY

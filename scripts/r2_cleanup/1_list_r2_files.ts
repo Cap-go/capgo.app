@@ -11,7 +11,7 @@
 
 import type { Database } from '../../supabase/functions/_backend/utils/supabase.types.ts'
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from '../db-client.ts'
 
 // Load environment from prod file
 const envFile = await Bun.file('./internal/cloudflare/.env.prod').text()
@@ -44,7 +44,7 @@ const s3 = new S3Client({
 const supabase = createClient<Database>(
   env.SUPABASE_URL,
   env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } },
+  { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }, databaseUrl: env.SUPABASE_DB_URL ?? env.DB_URL },
 )
 
 const PAGE_SIZE = 1000

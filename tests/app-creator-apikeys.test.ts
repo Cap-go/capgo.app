@@ -1,7 +1,7 @@
 import type { Database } from '../src/types/database.types.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './db-client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { fetchTestRequest, getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, SUPABASE_ANON_KEY, SUPABASE_BASE_URL, USER_ID } from './test-utils.ts'
 
