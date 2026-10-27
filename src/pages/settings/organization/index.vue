@@ -187,43 +187,58 @@ async function saveChanges(form: { orgName: string, email: string }) {
   currentOrganization.value.name = form.orgName
   currentOrganization.value.management_email = form.email
   isLoading.value = true
+  try {
+    // Update name
+    const { error } = await capgo
+      .from('orgs')
+      .update({
+        name: form.orgName,
+      })
+      .eq('id', gid)
 
-  // Update name
-  const { error } = await capgo
-    .from('orgs')
-    .update({
-      name: form.orgName,
-    })
-    .eq('id', gid)
+    if (error) {
+      // TODO: INFORM USER THAT HE IS NOT ORG OWNER
+      console.log(`Cannot save changes: ${error}`)
 
-  if (error) {
-    // TODO: INFORM USER THAT HE IS NOT ORG OWNER
-    console.log(`Cannot save changes: ${error}`)
+      // Revert the optimistic update
+      currentOrganization.value.name = orgCopy.name
+      return
+    }
 
-    // Revert the optimistic update
-    currentOrganization.value.name = orgCopy.name
+    let hasErrored = false
+    if (orgCopy.management_email !== form.email) {
+      // The management email has changed, call the edge function
+      hasErrored = await updateEmail(form)
+    }
+
+    if (!hasErrored)
+      toast.success(t('org-changes-saved'))
+  }
+  finally {
+    // Also on an unexpected error (e.g. an unreadable error response), so saving stays possible.
     isLoading.value = false
-    return
   }
-
-  let hasErrored = false
-  if (orgCopy.management_email !== form.email) {
-    // The management email has changed, call the edge function
-    hasErrored = await updateEmail(form)
-  }
-
-  isLoading.value = false
-  if (!hasErrored)
-    toast.success(t('org-changes-saved'))
 }
 
+// Separate from isLoading, which photo uploads also toggle: only the save itself may clear it.
+let isSaving = false
 async function onSubmit() {
-  if (isLoading.value)
+  if (isSaving)
     return
   formSubmitted.value = true
   if (orgNameErrors.value.length || emailErrors.value.length)
     return
-  await saveChanges({ orgName: formOrgName.value, email: formEmail.value })
+  isSaving = true
+  try {
+    await saveChanges({ orgName: formOrgName.value, email: formEmail.value })
+  }
+  catch (error) {
+    console.error('Cannot save organization settings', error)
+    toast.error(t('something-went-wrong-try-again-later'))
+  }
+  finally {
+    isSaving = false
+  }
 }
 
 const acronym = computed(() => {

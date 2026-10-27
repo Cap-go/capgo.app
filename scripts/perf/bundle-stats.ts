@@ -97,17 +97,19 @@ const initial = closure([entryKey])
 
 // App.vue mounts these through dynamic imports on every page, so every route pays for them.
 const startup = ['src/components/Toast.vue', 'src/components/DialogV2.vue', 'src/components/dashboard/SupportUsernamesPrompt.vue']
+// The default dashboard shell, plus the prompts it always mounts on web through dynamic imports.
+const dashboardShell = ['src/layouts/default.vue', 'src/components/dashboard/PastDueBanner.vue', 'src/components/dashboard/TrialCardPrompt.vue', 'src/components/assistant/AssistantChat.vue']
 // The app and settings layouts render inside the default dashboard shell.
-const appShell = ['src/layouts/app.vue', 'src/layouts/default.vue']
+const appShell = ['src/layouts/app.vue', ...dashboardShell]
 
 const routes: Record<string, string[]> = {
   'login': ['src/pages/login.vue', 'src/layouts/naked.vue'],
-  'apps (dashboard)': ['src/pages/apps.vue', 'src/layouts/default.vue'],
+  'apps (dashboard)': ['src/pages/apps.vue', ...dashboardShell],
   'app overview': ['src/pages/app/[app].vue', ...appShell],
   'app bundles': ['src/pages/app/[app].bundles.vue', ...appShell],
   'app channels': ['src/pages/app/[app].channels.vue', ...appShell],
   'app devices': ['src/pages/app/[app].devices.vue', ...appShell],
-  'org usage': ['src/pages/settings/organization/Usage.vue', 'src/layouts/settings.vue', 'src/layouts/default.vue'],
+  'org usage': ['src/pages/settings/organization/Usage.vue', 'src/layouts/settings.vue', ...dashboardShell],
 }
 
 const report: Report = {
@@ -117,8 +119,10 @@ const report: Report = {
 for (const [name, files] of Object.entries(routes)) {
   const wanted = [...files, ...startup]
   const keys = wanted.map(findKey).filter((key): key is string => !!key)
-  if (keys.length !== wanted.length)
-    console.warn(`missing manifest entry for route ${name}: ${files.join(', ')}`)
+  // Components can be bundled into their parent (no own manifest entry); pages and layouts cannot.
+  const missingRequired = files.filter(file => /^src\/(?:pages|layouts)\//.test(file) && !findKey(file))
+  if (missingRequired.length)
+    console.warn(`missing manifest entry for route ${name}: ${missingRequired.join(', ')}`)
   const route = closure([entryKey, ...keys])
   report[`route: ${name}`] = { js: sum(route.js), css: sum(route.css) }
 }

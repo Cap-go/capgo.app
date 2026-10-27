@@ -3,7 +3,9 @@
  * Cloudflare Turnstile widget. Same props, events and exposed methods as the `vue-turnstile`
  * package, written with the Composition API so the app can ship without Vue's Options API.
  */
+import type { TurnstileRenderOptions } from '~/utils/turnstile'
 import { computed, onBeforeUnmount, onMounted, useTemplateRef } from 'vue'
+import { loadTurnstileScript, turnstileApi } from '~/utils/turnstile'
 
 const props = withDefaults(defineProps<{
   siteKey: string
@@ -104,64 +106,6 @@ onBeforeUnmount(() => {
 defineExpose({ reset, remove, render })
 </script>
 
-<script lang="ts">
-interface TurnstileRenderOptions {
-  'sitekey': string
-  'theme': string
-  'language': string
-  'size': string
-  'action': string
-  'appearance': string
-  'callback': (token: string) => void
-  'error-callback': (error: unknown) => void
-  'expired-callback': () => void
-  'unsupported-callback': () => void
-  'before-interactive-callback': () => void
-  'after-interactive-callback': () => void
-}
-
-interface TurnstileApi {
-  render: (element: HTMLElement, options: TurnstileRenderOptions) => string
-  reset: (widgetId?: string) => void
-  remove: (widgetId: string) => void
-}
-
-const TURNSTILE_SCRIPT_URL = 'https://challenges.cloudflare.com/turnstile/v0/api.js'
-const ONLOAD_CALLBACK_NAME = 'cfTurnstileOnLoad'
-
-function turnstileApi() {
-  return typeof window === 'undefined' ? undefined : (window as unknown as { turnstile?: TurnstileApi }).turnstile
-}
-
-// Shared across every widget instance: the Cloudflare script is injected once.
-let scriptState: 'unloaded' | 'loading' | 'ready' = turnstileApi() ? 'ready' : 'unloaded'
-let scriptLoad: Promise<void> | undefined
-
-function loadTurnstileScript(): Promise<void> {
-  if (scriptState === 'ready')
-    return Promise.resolve()
-  if (scriptLoad)
-    return scriptLoad
-
-  scriptLoad = new Promise<void>((resolve, reject) => {
-    (window as unknown as Record<string, () => void>)[ONLOAD_CALLBACK_NAME] = () => {
-      scriptState = 'ready'
-      resolve()
-    }
-    scriptState = 'loading'
-    const script = document.createElement('script')
-    script.src = `${TURNSTILE_SCRIPT_URL}?onload=${ONLOAD_CALLBACK_NAME}&render=explicit`
-    script.async = true
-    script.addEventListener('error', () => {
-      scriptLoad = undefined
-      scriptState = 'unloaded'
-      reject(new Error('Failed to load Turnstile.'))
-    })
-    document.head.appendChild(script)
-  })
-  return scriptLoad
-}
-</script>
 
 <template>
   <div ref="turnstile" />
