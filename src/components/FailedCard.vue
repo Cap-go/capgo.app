@@ -84,7 +84,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
@@ -120,7 +120,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
