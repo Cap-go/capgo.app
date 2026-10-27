@@ -146,7 +146,7 @@ async function toastError(error: any) {
   }
 }
 
-async function updateEmail(form: { email: string }) {
+async function updateEmail(form: { email: string }, previousEmail: string) {
   if (!currentOrganization.value)
     return false
   const orgCopy = { ...currentOrganization.value }
@@ -159,9 +159,9 @@ async function updateEmail(form: { email: string }) {
   })
 
   if (error) {
+    // Revert the optimistic update before anything that can throw.
+    currentOrganization.value.management_email = previousEmail
     await toastError(error)
-    // Revert the optimistic update
-    currentOrganization.value.management_email = orgCopy.management_email
     return true
   }
 
@@ -187,6 +187,8 @@ async function saveChanges(form: { orgName: string, email: string }) {
   currentOrganization.value.name = form.orgName
   currentOrganization.value.management_email = form.email
   isLoading.value = true
+  let nameSaved = false
+  let emailSettled = orgCopy.management_email === form.email
   try {
     // Update name
     const { error } = await capgo
@@ -199,22 +201,27 @@ async function saveChanges(form: { orgName: string, email: string }) {
     if (error) {
       // TODO: INFORM USER THAT HE IS NOT ORG OWNER
       console.log(`Cannot save changes: ${error}`)
-
-      // Revert the optimistic update
-      currentOrganization.value.name = orgCopy.name
       return
     }
+    nameSaved = true
 
     let hasErrored = false
     if (orgCopy.management_email !== form.email) {
       // The management email has changed, call the edge function
-      hasErrored = await updateEmail(form)
+      hasErrored = await updateEmail(form, orgCopy.management_email)
+      emailSettled = true
     }
 
     if (!hasErrored)
       toast.success(t('org-changes-saved'))
   }
   finally {
+    // Undo the optimistic values that did not reach the server, so a retry compares against
+    // what is really saved.
+    if (currentOrganization.value && !nameSaved)
+      currentOrganization.value.name = orgCopy.name
+    if (currentOrganization.value && !emailSettled)
+      currentOrganization.value.management_email = orgCopy.management_email
     // Also on an unexpected error (e.g. an unreadable error response), so saving stays possible.
     isLoading.value = false
   }
