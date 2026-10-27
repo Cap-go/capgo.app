@@ -150,17 +150,26 @@ function routeChunkPreloadPlugin(): Plugin {
   const pagesDir = path.resolve(__dirname, 'src/pages')
   const layoutsDir = path.resolve(__dirname, 'src/layouts')
 
+  // `segments` are path parts where a leading ':' marks a parameter.
+  function toPattern(segments: string[]) {
+    const parts = segments.map(segment => segment.startsWith(':') ? '[^/]+' : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    return {
+      source: `^/${parts.join('/')}/?$`,
+      params: segments.filter(segment => segment.startsWith(':')).length,
+      path: `/${segments.join('/')}`,
+    }
+  }
+
   function routePattern(file: string) {
-    const segments = path.relative(pagesDir, file).replace(/\.vue$/, '').split(/[\\/.]/)
-    const parts: string[] = []
-    for (const segment of segments) {
+    const segments: string[] = []
+    for (const segment of path.relative(pagesDir, file).replace(/\.vue$/, '').split(/[\\/.]/)) {
       if (segment === 'index')
         continue
       if (segment.startsWith('[...'))
         return null
-      parts.push(segment.startsWith('[') ? '[^/]+' : segment.replace(/[$()*+?[\]^{|}]/g, '\\$&'))
+      segments.push(segment.startsWith('[') ? `:${segment.slice(1, -1)}` : segment)
     }
-    return { source: `^/${parts.join('/')}/?$`, params: parts.filter(part => part === '[^/]+').length, path: `/${parts.join('/')}` }
+    return toPattern(segments)
   }
 
   function customPath(file: string) {
@@ -226,7 +235,7 @@ function routeChunkPreloadPlugin(): Plugin {
           if (!moduleId.startsWith(pagesDir) || !moduleId.endsWith('.vue'))
             continue
           const override = customPath(moduleId)
-          const pattern = override ? { source: `^${override.replace(/:\w+/g, '[^/]+')}/?$`, params: (override.match(/:\w+/g) ?? []).length, path: override } : routePattern(moduleId)
+          const pattern = override ? toPattern(override.split('/').filter(Boolean)) : routePattern(moduleId)
           if (!pattern)
             continue
           const layouts = layoutOf(moduleId, pattern.path)
@@ -242,7 +251,9 @@ function routeChunkPreloadPlugin(): Plugin {
           l: layoutNames.map(name => layoutClosures.get(name)!),
           r: routes.map(route => [route.pattern, route.layouts.map(name => layoutNames.indexOf(name)), route.files]),
         }
-        const source = `(function(){var d=${JSON.stringify(data)},p=location.pathname;function a(i){var l=document.createElement('link');l.rel='modulepreload';l.crossOrigin='';l.href='/'+d.f[i];document.head.appendChild(l)}for(var i=0;i<d.r.length;i++){var r=d.r[i];if(new RegExp(r[0],'i').test(p)){r[1].forEach(function(x){d.l[x].forEach(a)});r[2].forEach(a);return}}})()\n`
+        // Escape characters that could end the string or the script when embedded as code.
+        const json = JSON.stringify(data).replace(/[<>/\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+        const source = `(function(){var d=${json},p=location.pathname;function a(i){var l=document.createElement('link');l.rel='modulepreload';l.crossOrigin='';l.href='/'+d.f[i];document.head.appendChild(l)}for(var i=0;i<d.r.length;i++){var r=d.r[i];if(new RegExp(r[0],'i').test(p)){r[1].forEach(function(x){d.l[x].forEach(a)});r[2].forEach(a);return}}})()\n`
         const fileName = `assets/route-preload-${createHash('sha256').update(source).digest('hex').slice(0, 8)}.js`
         this.emitFile({ type: 'asset', fileName, source })
         html.source = String(html.source).replace(/<script type="module"/, `<script async src="/${fileName}"></script>\n  <script type="module"`)
