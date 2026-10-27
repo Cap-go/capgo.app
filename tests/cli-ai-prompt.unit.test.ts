@@ -88,6 +88,8 @@ describe('buildCliAiSetupPrompt', () => {
     expect(prompt).toContain('call `capgo_whoami` and verify it is signed in before calling `start_capgo_builder_onboarding`')
     expect(prompt).toContain('call capgo_whoami and confirm I am signed in before calling start_capgo_builder_onboarding')
     expect(prompt).toContain('restart the AI client')
+    expect(prompt).toContain('delegate the rest of this Builder setup to it')
+    expect(prompt).toContain('Do not pass it the API key')
     expect(prompt).toContain('start_capgo_builder_onboarding')
     expect(prompt).toContain('capgo_builder_onboarding_next_step')
     expect(prompt).not.toContain('## 8. Test the first live update')

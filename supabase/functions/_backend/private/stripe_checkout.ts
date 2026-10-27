@@ -25,6 +25,8 @@ interface CheckoutData {
   embedded?: boolean
   // One of the plan price's Stripe currencies (see private/plan_prices).
   currency?: string
+  // Skip the regional discount and buy the full price (see private/plan_prices).
+  standardPrice?: boolean
 }
 
 function parseExtraMau(value: unknown) {
@@ -101,6 +103,7 @@ app.post('/', middlewareAuth, async (c) => {
     extraMau: extraMauCheckout,
     embedded: body.embedded === true,
     currency: typeof body.currency === 'string' ? body.currency : undefined,
+    standardPrice: body.standardPrice === true,
   })
   return c.json(checkout)
 })

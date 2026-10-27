@@ -9,7 +9,6 @@ import {
   countInstallSourcesCF,
   countUpdatesFromLogsCF,
   countUpdatesFromLogsExternalCF,
-  getPublicLiveUpdateMetricsCF,
   readBandwidthUsageCF,
   readDevicesCF,
   readDeviceUsageCF,
@@ -19,6 +18,7 @@ import {
   readStatsVersionCF,
   readUpdateDeliveryTimingEventsCF,
 } from '../../supabase/functions/_backend/utils/cloudflare.ts'
+import { getPublicLiveUpdateMetricsCF } from '../../supabase/functions/_backend/utils/public_live_update_metrics.ts'
 import {
   buildNotificationStatsQuery,
 } from '../../supabase/functions/_backend/utils/nativeNotifications.ts'

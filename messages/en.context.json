@@ -510,6 +510,8 @@
   "ai-onboarding-mode-title": "Used in Capgo web console areas: components/dashboard, pages/onboarding. AI-agent onboarding (Capgo MCP) for new accounts. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "ai-onboarding-open-app": "Used in Capgo web console areas: components/dashboard, pages/onboarding. AI-agent onboarding (Capgo MCP) for new accounts. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "ai-onboarding-org-name-help": "Used in Capgo web console areas: components/dashboard, pages/onboarding. AI-agent onboarding (Capgo MCP) for new accounts. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "ai-onboarding-org-name-help-new": "Used in Capgo web console areas: components/dashboard. AI-agent onboarding (Capgo MCP) when the organization name could not be pre-filled. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "ai-onboarding-new-org-title": "Used in Capgo web console areas: components/dashboard. AI-agent onboarding (Capgo MCP) when an existing user creates another organization. Role: page heading. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "ai-onboarding-org-name-label": "Used in Capgo web console areas: components/dashboard, pages/onboarding. AI-agent onboarding (Capgo MCP) for new accounts. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "ai-onboarding-plan-kicker": "Used in Capgo web console areas: components/dashboard, pages/onboarding. AI-agent onboarding (Capgo MCP) for new accounts. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "ai-onboarding-plan-subtitle": "Used in Capgo web console areas: components/dashboard, pages/onboarding. AI-agent onboarding (Capgo MCP) for new accounts. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
@@ -4000,6 +4002,9 @@
   "native-build-stats-total-hint": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "native-builds": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-regional-discount": "Used in Capgo web console areas: pages/settings/organization. Role: UI badge. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-regional-discount-opt-in": "Used in Capgo web console areas: pages/settings/organization. Role: UI button. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-regional-discount-opt-out": "Used in Capgo web console areas: pages/settings/organization. Role: UI button. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plans-regional-discount-opt-out-generic": "Used in Capgo web console areas: pages/settings/organization. Role: UI button. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-regional-discount-requirement": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plans-regional-discount-requirement-generic": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

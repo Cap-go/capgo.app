@@ -28,15 +28,19 @@ export async function markAiOnboardingAgentConnected(
     return
   // Only the key the AI onboarding prompt hands out can be the agent we are waiting for. This
   // in-memory check keeps every other CLI/MCP event free of an extra database query.
-  const keyName = auth.apikey?.name ?? c.get('apikey')?.name
-  if (keyName !== AI_ONBOARDING_API_KEY_NAME)
+  const apikey = auth.apikey ?? c.get('apikey')
+  if (apikey?.name !== AI_ONBOARDING_API_KEY_NAME)
     return
+  // The prompt key of an earlier organization's setup must not tick off a newer one.
+  const rbacId = apikey.rbac_id ?? null
 
   let pool: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
     pool = await getPgClient(c)
     // First contact sets ai_agent_connected_at; the first MCP tool call also sets
-    // ai_mcp_connected_at. Later events match no row and write nothing.
+    // ai_mcp_connected_at. Later events match no row and write nothing. When the console
+    // recorded which organization is being set up, only that organization's key counts;
+    // setups started before that field existed keep accepting any prompt key.
     await getDrizzleClient(pool, { logger: false }).execute(sql`
       UPDATE public.users
       SET onboarding = onboarding
@@ -47,6 +51,16 @@ export async function markAiOnboardingAgentConnected(
         END
       WHERE id = ${auth.userId}::uuid
         AND onboarding ->> 'setup_mode' = 'ai'
+        AND (
+          onboarding -> 'ai_setup_org_id' IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM public.role_bindings AS bindings
+            WHERE bindings.principal_type = public.rbac_principal_apikey()
+              AND bindings.principal_id = ${rbacId}::uuid
+              AND bindings.org_id::text = onboarding ->> 'ai_setup_org_id'
+          )
+        )
         AND (
           onboarding -> 'ai_agent_connected_at' IS NULL
           OR (${source}::text = 'mcp' AND onboarding -> 'ai_mcp_connected_at' IS NULL)

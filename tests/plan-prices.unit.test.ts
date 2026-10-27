@@ -45,16 +45,20 @@ describe('plan prices', () => {
   })
 
   it.concurrent('picks the locked, local, then USD currency', () => {
-    expect(pickCurrency(['eur', 'gbp', 'usd'], 'usd', 'FR')).toBe('usd')
-    expect(pickCurrency(['eur', 'gbp', 'usd'], null, 'FR')).toBe('eur')
-    expect(pickCurrency(['eur', 'gbp', 'usd'], null, 'GB')).toBe('gbp')
-    expect(pickCurrency(['eur', 'usd'], null, 'GB')).toBe('usd')
-    expect(pickCurrency(['eur', 'usd'], null, null)).toBe('usd')
-    expect(pickCurrency(['usd'], 'eur', 'FR')).toBeNull()
-    expect(pickCurrency([], null, 'FR')).toBeNull()
+    expect(pickCurrency(['eur', 'gbp', 'usd'], 'usd', ['FR'])).toBe('usd')
+    expect(pickCurrency(['eur', 'gbp', 'usd'], null, ['FR'])).toBe('eur')
+    expect(pickCurrency(['eur', 'gbp', 'usd'], null, ['GB'])).toBe('gbp')
+    expect(pickCurrency(['eur', 'usd'], null, ['GB'])).toBe('usd')
+    expect(pickCurrency(['eur', 'usd'], null, [null])).toBe('usd')
+    expect(pickCurrency(['usd'], 'eur', ['FR'])).toBeNull()
+    expect(pickCurrency([], null, ['FR'])).toBeNull()
     // Any local currency Stripe sells is picked; unsold ones fall back to USD.
-    expect(pickCurrency(['eur', 'jpy', 'usd'], null, 'JP')).toBe('jpy')
-    expect(pickCurrency(['eur', 'usd'], null, 'JP')).toBe('usd')
+    expect(pickCurrency(['eur', 'jpy', 'usd'], null, ['JP'])).toBe('jpy')
+    expect(pickCurrency(['eur', 'usd'], null, ['JP'])).toBe('usd')
+    // No IP country (or one without a sold currency): the billing address or card country decides.
+    expect(pickCurrency(['eur', 'usd'], null, [null, 'FR'])).toBe('eur')
+    expect(pickCurrency(['eur', 'usd'], null, ['JP', 'FR'])).toBe('eur')
+    expect(pickCurrency(['eur', 'gbp', 'usd'], null, ['GB', 'FR'])).toBe('gbp')
   })
 
   it.concurrent('returns Stripe amounts in major units, or null when not sold in that currency', () => {
@@ -134,6 +138,8 @@ describe('plan prices', () => {
     const sold = { solo: { month: { usd: 700, eur: 600 }, year: { usd: 7300, eur: 6300 } }, team: { month: { usd: 9900 }, year: { usd: 99800 } } }
     const full = { solo: { month: { usd: 1400, eur: 1200 }, year: { usd: 14600, eur: 13000 } }, team: { month: { usd: 9900 }, year: { usd: 99800 } } }
     expect(getRegularPrices(sold, full)).toEqual({ solo: full.solo })
+    // A failed full-price lookup keeps the plan, without amounts, so the full price is never guessed.
+    expect(getRegularPrices(sold, { ...full, solo: { month: {}, year: {} } })).toEqual({ solo: { month: {}, year: {} } })
     expect(tierDiscountPercent('p50')).toBe(50)
     expect(tierDiscountPercent('p85')).toBe(15)
   })

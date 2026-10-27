@@ -5,6 +5,8 @@ import { formatNumber } from '~/services/formatLocale'
 import { stripeAmountToMajorUnits } from '../../supabase/functions/shared/stripe-amount.ts'
 
 const STORAGE_KEY = 'capgo_plan_currency'
+// Set when the buyer turned down the regional discount (card or billing address from another country).
+const STANDARD_PRICE_STORAGE_KEY = 'capgo_plan_standard_price'
 // The server always returns the USD amounts, so they are shown when no currency is sold on every plan.
 const FALLBACK_CURRENCY = 'usd'
 
@@ -19,8 +21,9 @@ interface PlanPricesResponse {
   currency: string | null
   lockedCurrency: string | null
   prices: PlanPriceAmounts
-  // Regional discount (purchasing power) on the plans listed in regularPrices; needs a local card and address.
-  discount?: { percent: number, country: string | null } | null
+  // Regional discount (purchasing power) on the plans listed in regularPrices; needs a local card and address,
+  // and is only sold in these currencies (the region's own, or USD where Stripe does not sell it).
+  discount?: { percent: number, country: string | null, currencies?: string[] } | null
   // Full prices of the discounted plans, for the strike-through.
   regularPrices?: PlanPriceAmounts
 }
@@ -36,6 +39,15 @@ function readStoredCurrency() {
   }
   catch {
     return null
+  }
+}
+
+function readStoredStandardPrice() {
+  try {
+    return globalThis.sessionStorage?.getItem(STANDARD_PRICE_STORAGE_KEY) === '1'
+  }
+  catch {
+    return false
   }
 }
 
@@ -71,6 +83,8 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
   // The lookup settled without prices: the page offers a retry instead of a silent dead end.
   const failed = ref(false)
   const storedCurrency = ref(readStoredCurrency())
+  // The buyer chose the full price over the regional discount: show and sell it instead.
+  const standardPrice = ref(readStoredStandardPrice())
 
   async function load(id: string | undefined) {
     data.value = null
@@ -121,9 +135,37 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     return Object.keys(data.value.prices).length === 0 || amountsFor(productId) !== null
   }
 
+  // A regional discount on offer in the shown currency, even while the buyer has chosen the full price.
+  const regionalDiscount = computed(() => {
+    const offered = data.value?.regularPrices ? data.value.discount ?? null : null
+    if (!offered || !currency.value || !(offered.currencies ?? []).includes(currency.value))
+      return null
+    return offered
+  })
+  // Full prices once the buyer opts out; another market's currency never had a discount to show.
+  const useStandardPrice = computed(() => !!data.value?.discount && (standardPrice.value || !regionalDiscount.value))
+
+  function setStandardPrice(value: boolean) {
+    standardPrice.value = value
+    try {
+      if (value)
+        globalThis.sessionStorage?.setItem(STANDARD_PRICE_STORAGE_KEY, '1')
+      else
+        globalThis.sessionStorage?.removeItem(STANDARD_PRICE_STORAGE_KEY)
+    }
+    catch {}
+  }
+
+  // Prices the page shows and checkout sells: the full prices replace the discounted ones once the buyer opts out.
+  const shownPrices = computed(() => {
+    if (!data.value)
+      return null
+    return useStandardPrice.value ? { ...data.value.prices, ...data.value.regularPrices } : data.value.prices
+  })
+
   // Null until Stripe prices load: callers fall back to the USD amounts stored on the plan.
   function amountsFor(productId: string) {
-    return data.value && currency.value ? getPlanAmounts(data.value.prices, productId, currency.value) : null
+    return shownPrices.value && currency.value ? getPlanAmounts(shownPrices.value, productId, currency.value) : null
   }
 
   // Converts a USD figure (Enterprise extra MAU) with the plan's own per-currency ratio, as Checkout does.
@@ -131,12 +173,24 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     return data.value && currency.value ? getUsdRatio(data.value.prices, productId, currency.value, interval) : null
   }
 
-  const discount = computed(() => data.value?.discount ?? null)
+  const discount = computed(() => useStandardPrice.value ? null : regionalDiscount.value)
 
   // Full price of a regionally discounted plan in the shown currency; null when the plan is not discounted.
   function regularAmountsFor(productId: string) {
+    if (useStandardPrice.value)
+      return null
     return data.value?.regularPrices && currency.value ? getPlanAmounts(data.value.regularPrices, productId, currency.value) : null
   }
 
-  return { amountsFor, currencies, currency, discount, failed, hasPricesFor, lockedCurrency, lockedCurrencyUnavailable, ready, regularAmountsFor, reload, setCurrency, usdRatioFor }
+  // The plan has a regional discount on offer, whether or not the buyer chose the full price instead.
+  function hasRegionalPrice(productId: string) {
+    return !!regionalDiscount.value && !!data.value?.regularPrices?.[productId]
+  }
+
+  // The page shows this plan's full price instead of the server's regional one: checkout must sell that.
+  function showsStandardPrice(productId: string) {
+    return useStandardPrice.value && !!data.value?.regularPrices?.[productId]
+  }
+
+  return { amountsFor, currencies, currency, discount, failed, hasPricesFor, hasRegionalPrice, lockedCurrency, lockedCurrencyUnavailable, ready, regionalDiscount, regularAmountsFor, reload, setCurrency, setStandardPrice, showsStandardPrice, standardPrice: useStandardPrice, usdRatioFor }
 }

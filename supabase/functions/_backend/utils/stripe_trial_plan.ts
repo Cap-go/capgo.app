@@ -9,8 +9,9 @@ import { cloudlog, cloudlogErr } from './logging.ts'
 import { checkoutPgClient, closeClient, getPgClient, releasePgClient, TRANSACTION_IDLE_TIMEOUT_MS } from './pg.ts'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { PriceTier } from './country_price_tier.ts'
-import { getCustomerBilling, getRequestPriceTier } from './regional_price.ts'
-import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, isAutomaticTaxEnabled, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
+import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
+import { getCustomerBilling, isRegionalCurrency } from './regional_price.ts'
+import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 // Starts the plan picked during onboarding when the free trial ends, charging the saved card.
@@ -85,9 +86,34 @@ export function getTrialPlanPriceId(plan: TrialPlanPriceRow, billingAccount: Bil
   return getRegionalPlanPriceId(plan.regional_price_ids, tier, billingAccount, 'month') ?? getPlanPriceId(plan, billingAccount, 'month')
 }
 
-async function getTrialPriceTier(c: Context, ctx: InAppBillingContext): Promise<PriceTier> {
-  const { countries } = await getCustomerBilling(ctx.stripe, ctx.customerId)
-  return getRequestPriceTier(c, countries)
+// Currencies the tier's regional price is sold in, so USD can stand in where Stripe lacks the local one.
+async function getRegionalSoldCurrencies(c: Context, ctx: InAppBillingContext, tier: PriceTier): Promise<string[] | null> {
+  const { data: plans, error } = await supabaseAdmin(c)
+    .from('plans')
+    .select('regional_price_ids')
+    .in('name', [...SCHEDULABLE_TRIAL_PLAN_NAMES])
+  if (error)
+    throw error
+  const priceId = (plans ?? []).map(plan => getRegionalPlanPriceId(plan.regional_price_ids, tier, ctx.billingAccount, 'month')).find(id => !!id)
+  if (!priceId)
+    return null
+  const price = await ctx.stripe.prices.retrieve(priceId, { expand: ['currency_options'] })
+  return Object.keys(price.currency_options ?? {})
+}
+
+// The schedule bills in the customer's Stripe currency, USD until one is pinned: a regional price needs it
+// to be the region's currency, or USD where Stripe does not sell that one.
+export async function getTrialPriceTier(c: Context, ctx: InAppBillingContext): Promise<PriceTier> {
+  const { countries: billingCountries, currency } = await getCustomerBilling(ctx.stripe, ctx.customerId)
+  const countries = [getRequestCountry(c), ...billingCountries]
+  const billedCurrency = currency ?? 'usd'
+  const tier = priceTierForCountries(countries)
+  if (isRegionalCurrency(countries, tier, billedCurrency, null))
+    return tier
+  // Only USD can still qualify, and only when Stripe does not sell the local currency.
+  if (billedCurrency !== 'usd')
+    return FULL_PRICE_TIER
+  return isRegionalCurrency(countries, tier, billedCurrency, await getRegionalSoldCurrencies(c, ctx, tier)) ? tier : FULL_PRICE_TIER
 }
 
 async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<TrialState | null> {
