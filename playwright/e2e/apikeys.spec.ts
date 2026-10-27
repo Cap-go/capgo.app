@@ -236,7 +236,10 @@ test.describe('API Key Management', () => {
       await expect(orgCheckboxes.nth(index)).toBeChecked()
     }
 
-    await page.mouse.click(5, 5)
+    // Close the dropdown through its click-outside overlay. A click at a screen
+    // corner can land on the dialog backdrop instead and close the whole dialog.
+    await dialog.locator('div.fixed.inset-0.z-10').click({ position: { x: 5, y: 5 } })
+    await expect(orgDropdown).toHaveAttribute('aria-expanded', 'false')
     await page.getByRole('button', { name: 'Cancel' }).click()
   })
 
