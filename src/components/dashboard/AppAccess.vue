@@ -555,8 +555,8 @@ onMounted(async () => {
     </DataTable>
 
     <!-- Assign Role Modal -->
-    <dialog :open="isAssignRoleModalOpen" class="modal" @close="isAssignRoleModalOpen = false">
-      <div class="max-w-2xl modal-box">
+    <dialog :open="isAssignRoleModalOpen" class="d-modal" @close="isAssignRoleModalOpen = false">
+      <div class="max-w-2xl d-modal-box">
         <h3 class="text-lg font-bold">
           {{ t('assign-app-role') }}
         </h3>
@@ -622,7 +622,7 @@ onMounted(async () => {
           />
         </div>
 
-        <div class="modal-action">
+        <div class="d-modal-action">
           <button type="button" class="d-btn" @click="isAssignRoleModalOpen = false">
             {{ t('cancel') }}
           </button>
@@ -636,7 +636,7 @@ onMounted(async () => {
           </button>
         </div>
       </div>
-      <div class="modal-backdrop" @click="isAssignRoleModalOpen = false" />
+      <div class="d-modal-backdrop" @click="isAssignRoleModalOpen = false" />
     </dialog>
 
     <!-- Edit Role Modal -->

@@ -1744,7 +1744,7 @@ getKeys()
 
             <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div class="flex min-w-0 gap-4">
-                <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500/10 text-primary-500 ring-1 ring-primary-500/15 dark:bg-primary-500/25 dark:text-primary-300 dark:ring-primary-500/30">
+                <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500/10 text-primary-500 ring-1 ring-primary-500/15 dark:bg-primary-500/25 dark:text-slate-300 dark:ring-primary-500/30">
                   <IconCommandLine class="h-6 w-6" aria-hidden="true" />
                 </div>
                 <div class="min-w-0">
@@ -1766,7 +1766,7 @@ getKeys()
                 @click="copyCliLoginCommand"
               >
                 <code class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ cliLoginCommand }}</code>
-                <span class="flex shrink-0 items-center gap-2 text-xs font-semibold text-primary-500 dark:text-primary-300">
+                <span class="flex shrink-0 items-center gap-2 text-xs font-semibold text-primary-500 dark:text-slate-300">
                   <IconClipboard class="h-4 w-4" aria-hidden="true" />
                   {{ t('copy') }}
                 </span>
@@ -1911,7 +1911,7 @@ getKeys()
                 id="create-as-hashed"
                 v-model="createAsHashed"
                 type="checkbox"
-                class="mt-1 border-blue-500 dark:border-blue-400 checkbox checkbox-primary"
+                class="mt-1 border-blue-500 dark:border-blue-400 d-checkbox d-checkbox-primary"
               >
               <div>
                 <label for="create-as-hashed" class="font-medium text-blue-800 cursor-pointer dark:text-blue-200">
@@ -2175,7 +2175,7 @@ getKeys()
               id="set-expiration"
               v-model="setExpirationCheckbox"
               type="checkbox"
-              class="border-gray-500 dark:border-gray-700 checkbox"
+              class="border-gray-500 dark:border-gray-700 d-checkbox"
             >
             <label for="set-expiration" class="text-sm">
               {{ t('set-expiration-date') }}

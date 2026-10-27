@@ -328,7 +328,7 @@ function statusLabel(status: BuilderStepStatus) {
             <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t('builder-checklist-complete-description') }}
             </p>
-            <button type="button" class="d-btn mt-6 min-h-12 self-start border-primary-500 bg-primary-500 text-white hover:border-primary-600 hover:bg-primary-600" :disabled="hiding || leaving" @click="emit('complete')">
+            <button type="button" class="d-btn mt-6 min-h-12 self-start border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90" :disabled="hiding || leaving" @click="emit('complete')">
               {{ completionAction || t('setup-checklist-open-app') }}
               <IconArrowRight class="h-4 w-4" aria-hidden="true" />
             </button>
@@ -363,7 +363,7 @@ function statusLabel(status: BuilderStepStatus) {
                 <IconCopy class="absolute right-4 top-5 h-5 w-5 text-slate-400 group-hover:text-white" aria-hidden="true" />
               </button>
               <output v-else class="mt-5 block rounded-2xl bg-slate-950 p-5 text-sm text-slate-300">{{ t('app-onboarding-command-apikey-loading') }}</output>
-              <button type="button" class="d-btn mt-4 min-h-12 self-start border-primary-500 bg-primary-500 px-5 text-white hover:border-primary-600 hover:bg-primary-600" :disabled="!platformCommand" @click="emit('copyCommand', viewedPlatform)">
+              <button type="button" class="d-btn mt-4 min-h-12 self-start border-primary-500 bg-primary-500 px-5 text-white hover:border-primary-500 hover:bg-primary-500/90" :disabled="!platformCommand" @click="emit('copyCommand', viewedPlatform)">
                 <IconCopy class="h-4 w-4" aria-hidden="true" />
                 {{ t('builder-checklist-copy-command') }}
               </button>

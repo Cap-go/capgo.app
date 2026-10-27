@@ -128,11 +128,11 @@ watchEffect(async () => {
 
     <!-- Version Not Found -->
     <div v-else-if="!version" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
+      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
+      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
         {{ t('bundle-not-found') }}
       </h2>
-      <p class="mt-2 text-muted-foreground">
+      <p class="mt-2 text-slate-500 dark:text-slate-400">
         {{ t('bundle-not-found-description') }}
       </p>
       <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
@@ -142,11 +142,11 @@ watchEffect(async () => {
 
     <!-- Preview Disabled State -->
     <div v-else-if="previewState === 'preview-disabled'" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconSettings class="w-16 h-16 mb-4 text-muted-foreground" />
-      <h2 class="text-xl font-semibold text-foreground">
+      <IconSettings class="w-16 h-16 mb-4 text-slate-500 dark:text-slate-400" />
+      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
         {{ t('preview-disabled') }}
       </h2>
-      <p class="mt-2 text-center text-muted-foreground max-w-md">
+      <p class="mt-2 text-center text-slate-500 dark:text-slate-400 max-w-md">
         {{ t('preview-disabled-description') }}
       </p>
       <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">

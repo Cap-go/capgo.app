@@ -112,11 +112,11 @@ watchEffect(async () => {
     </div>
 
     <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
+      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
+      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
         {{ t('channel-not-found') }}
       </h2>
-      <p class="mt-2 text-muted-foreground">
+      <p class="mt-2 text-slate-500 dark:text-slate-400">
         {{ t('channel-not-found-description') }}
       </p>
       <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">

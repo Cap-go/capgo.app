@@ -70,8 +70,8 @@ function handleConfirm() {
 </script>
 
 <template>
-  <dialog :open="open" class="modal" @close="handleClose">
-    <div class="modal-box max-w-2xl">
+  <dialog :open="open" class="d-modal" @close="handleClose">
+    <div class="d-modal-box max-w-2xl">
       <h3 class="text-lg font-bold">
         {{ modalTitle }}
       </h3>
@@ -87,7 +87,7 @@ function handleConfirm() {
         class="mt-4"
       />
 
-      <div class="modal-action">
+      <div class="d-modal-action">
         <button type="button" class="d-btn" @click="handleClose">
           {{ cancelButtonText }}
         </button>
@@ -101,6 +101,6 @@ function handleConfirm() {
         </button>
       </div>
     </div>
-    <div class="modal-backdrop" @click="handleClose" />
+    <div class="d-modal-backdrop" @click="handleClose" />
   </dialog>
 </template>
