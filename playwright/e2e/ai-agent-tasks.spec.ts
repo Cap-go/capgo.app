@@ -161,7 +161,7 @@ test.describe('AI agent alternatives to manual actions', () => {
       // Android already built, so the agent requests the build directly.
       await page.getByRole('button', { name: /Android/ }).first().click()
       await card.locator('[data-test="ai-task-copy-prompt"]').click()
-      expect(await readClipboard(page)).toContain('{CAPGO_CLI_RUNNER} build request com.demo.app --platform android')
+      expect(await readClipboard(page)).toContain('{CAPGO_CLI_RUNNER} build request com.demo.app --platform android --use-stored-credentials')
       // The page now waits for the build the agent requests.
       await expect(card).toHaveCount(0)
     }
@@ -169,38 +169,4 @@ test.describe('AI agent alternatives to manual actions', () => {
       await admin.from('build_requests').delete().eq('id', build!.id)
     }
   })
-
-  test('proposes the manual way first after the user picked it', async ({ page }) => {
-    const admin = localAdminClient()
-    const { data: user } = await admin.from('users').select('id, onboarding').eq('email', 'test@capgo.app').single()
-    const original = user!.onboarding
-    const name = `manual-e2e-${Date.now()}`
-    try {
-      await page.goto('/app/com.demo.app/channels')
-      await page.click('[data-test="channel-add"]')
-      const dialog = page.locator('#dialog-v2-content')
-      const card = dialog.locator('[data-test="ai-task-create-channel"]')
-      const input = dialog.locator('input[type="text"]')
-      await expect(card).toBeVisible()
-      expect((await card.boundingBox())!.y).toBeLessThan((await input.boundingBox())!.y)
-
-      // Creating the channel by hand makes manual the first proposal next time.
-      await input.fill(name)
-      await page.getByRole('button', { name: 'Confirm' }).click()
-      await expect(page.getByText(name)).toBeVisible()
-      await expect.poll(async () => {
-        const { data } = await admin.from('users').select('onboarding').eq('id', user!.id).single()
-        return (data?.onboarding as { setup_method?: string } | null)?.setup_method
-      }).toBe('manual')
-
-      await page.click('[data-test="channel-add"]')
-      await expect(card).toBeVisible()
-      expect((await card.boundingBox())!.y).toBeGreaterThan((await input.boundingBox())!.y)
-    }
-    finally {
-      await admin.from('channels').delete().eq('app_id', 'com.demo.app').eq('name', name)
-      await admin.from('users').update({ onboarding: original }).eq('id', user!.id)
-    }
-  })
 })
-

@@ -60,7 +60,8 @@ watchEffect(async () => {
 // App roles whose key can finish each app task. Uploading to a channel needs
 // app.upload_bundle and channel.promote_bundle; creating a channel with --default or
 // --self-assign also needs channel.update_settings, which only app_admin grants. A native
-// build needs app.build_native; setting up signing for a new platform needs app_admin.
+// build uses the signing stored on Capgo (--use-stored-credentials) and setting up a new
+// platform stores signing: both need app settings rights, which only app_admin grants.
 function appTaskRoles(): readonly string[] | undefined {
   switch (props.task) {
     case 'upload-bundle':
@@ -68,7 +69,7 @@ function appTaskRoles(): readonly string[] | undefined {
     case 'create-channel':
       return ['app_admin']
     case 'request-build':
-      return props.platformReady ? ['app_admin', 'app_developer'] : ['app_admin']
+      return ['app_admin']
     default:
       return undefined
   }

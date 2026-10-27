@@ -883,9 +883,9 @@ I want a ${platformLabel} build of this app (Capgo app ID: \`${appId}\`) and ${p
 ${appTaskContext(input)}
 
 1. Make sure you are in the Capacitor project of this app: the \`appId\` in \`capacitor.config\` must be \`${appId}\`. If it is not, ask me where the project is and stop until I answer.
-2. Request a ${platformLabel} build with the selected runner. It uses the signing setup already saved for this app:
+2. Request a ${platformLabel} build with the selected runner. \`--use-stored-credentials\` uses the signing setup saved on Capgo for this app; signing already configured on this machine still takes precedence:
 
-{CAPGO_CLI_RUNNER} build request ${appId} --platform ${input.platform}
+{CAPGO_CLI_RUNNER} build request ${appId} --platform ${input.platform} --use-stored-credentials
 
 3. Never ask me to paste certificates, passwords or store keys into the chat, and never pass them on the command line. If the build fails because signing or credentials are missing, tell me and stop; I will set them up from the Capgo dashboard or with Capgo MCP Builder onboarding.
 

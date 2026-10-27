@@ -188,6 +188,26 @@ test.describe('AI onboarding', () => {
     await page.waitForURL(/\/dashboard/)
   })
 
+  test('proposes the AI agent first, and the manual way first after the user picked it', async ({ page }) => {
+    // A dedicated signup: the saved preference must not touch shared test accounts.
+    const email = `ai-order-${Date.now()}@example.com`
+    await registerAndName(page, email)
+    const firstCard = page.locator('[data-test="onboarding-setup-mode"] button[data-test^="onboarding-setup-mode-"]').first()
+    await expect(firstCard).toHaveAttribute('data-test', 'onboarding-setup-mode-ai')
+
+    await page.click('[data-test="onboarding-setup-mode-manual"]')
+    await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
+    await expect.poll(async () => {
+      const { data } = await localAdminClient().from('users').select('onboarding').eq('email', email).single()
+      return (data?.onboarding as { setup_method?: string } | null)?.setup_method
+    }).toBe('manual')
+
+    // The next choice proposes the manual way first, the AI agent stays available.
+    await page.goto('/onboarding/app?new_org=1')
+    await expect(firstCard).toHaveAttribute('data-test', 'onboarding-setup-mode-manual')
+    await expect(page.locator('[data-test="onboarding-setup-mode-ai"]')).toBeVisible()
+  })
+
   test('keeps the manual wizard one click away', async ({ page }) => {
     await registerAndName(page, `ai-manual-${Date.now()}@example.com`)
     await page.click('[data-test="onboarding-setup-mode-manual"]')

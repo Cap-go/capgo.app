@@ -298,7 +298,8 @@ describe('AI agent task prompts', () => {
 
   it.concurrent('requests a build for a ready platform without handling credentials', () => {
     const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'android', platformReady: true })
-    expect(prompt).toContain('{CAPGO_CLI_RUNNER} build request com.acme.app --platform android')
+    // Signing saved on Capgo must be usable even when it is not on the agent's machine.
+    expect(prompt).toContain('{CAPGO_CLI_RUNNER} build request com.acme.app --platform android --use-stored-credentials')
     expect(prompt).toContain('Never ask me to paste certificates')
     expect(prompt).not.toContain('start_capgo_builder_onboarding')
   })
