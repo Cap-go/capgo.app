@@ -43,10 +43,11 @@ CREATE UNLOGGED TABLE public.http_dispatch_outbox (
   body jsonb NOT NULL,
   timeout_ms integer NOT NULL CHECK (timeout_ms > 0),
   calls integer NOT NULL CHECK (calls > 0),
-  created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
-  -- Identical pending wakeups coalesce, so a dispatcher outage leaves one row
-  -- per target instead of a backlog that would burst on recovery.
-  CONSTRAINT http_dispatch_outbox_request_key UNIQUE (target, url, body)
+  -- Append-only on purpose: wake_updates_cache_purge() runs inside business
+  -- transactions, and an upsert on a shared key would make concurrent writers
+  -- wait on each other's uncommitted wakeup row. The dispatcher coalesces
+  -- identical rows when it claims them.
+  created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp()
 );
 
 COMMENT ON TABLE public.http_dispatch_outbox IS
@@ -88,12 +89,8 @@ BEGIN
     SELECT 1 FROM public.http_dispatch_targets t
     WHERE t.target IN (p_target, '*')
   ) THEN
-    INSERT INTO public.http_dispatch_outbox AS o (target, url, body, timeout_ms, calls)
-    VALUES (p_target, p_url, p_body, p_timeout_ms, p_calls)
-    ON CONFLICT ON CONSTRAINT http_dispatch_outbox_request_key DO UPDATE
-    SET
-      calls = GREATEST(o.calls, excluded.calls),
-      timeout_ms = GREATEST(o.timeout_ms, excluded.timeout_ms);
+    INSERT INTO public.http_dispatch_outbox (target, url, body, timeout_ms, calls)
+    VALUES (p_target, p_url, p_body, p_timeout_ms, p_calls);
     RETURN;
   END IF;
 

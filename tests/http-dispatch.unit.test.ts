@@ -58,6 +58,22 @@ describe('http dispatch requests', () => {
     })
   })
 
+  it.concurrent('coalesces identical claimed rows to the largest call count and timeout', () => {
+    const { requests } = buildHttpDispatchRequests([
+      row({ id: '1', calls: 1, timeout_ms: 8000 }),
+      row({ id: '2', calls: 3, timeout_ms: 5000 }),
+      row({ id: '3', target: 'updates_cache_purge', body: { wake: true }, calls: 1, timeout_ms: 5000 }),
+      row({ id: '4', target: 'updates_cache_purge', body: { wake: true }, calls: 1, timeout_ms: 5000 }),
+    ], 'secret', [ORIGIN])
+
+    expect(requests.map(request => [request.target, request.timeoutMs])).toEqual([
+      ['on_app_update', 8000],
+      ['on_app_update', 8000],
+      ['on_app_update', 8000],
+      ['updates_cache_purge', 5000],
+    ])
+  })
+
   it.concurrent('caps calls per row like process_function_queue', () => {
     const { requests } = buildHttpDispatchRequests([row({ calls: 50 })], 'secret', [ORIGIN])
     expect(requests).toHaveLength(HTTP_DISPATCH_MAX_CALLS_PER_ROW)

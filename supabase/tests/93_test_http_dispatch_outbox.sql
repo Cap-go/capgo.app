@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(9);
+SELECT plan(10);
 
 SELECT pgmq.create('test_http_dispatch');
 
@@ -68,10 +68,12 @@ SELECT ok(
   'outbox rows keep the consumer URL'
 );
 
--- Unclaimed wakeups coalesce instead of piling up.
+-- Wakeups are appended, never upserted: business transactions that wake the
+-- cache purge must not wait on each other's uncommitted row. The dispatcher
+-- coalesces identical rows after claiming them.
 SELECT public.http_dispatch_post(
   'test_http_dispatch',
-  (SELECT url FROM public.http_dispatch_outbox WHERE target = 'test_http_dispatch'),
+  (SELECT url FROM public.http_dispatch_outbox WHERE target = 'test_http_dispatch' LIMIT 1),
   '{}'::jsonb,
   '{"queue_name":"test_http_dispatch","batch_size":100,"wait_for_completion":false}'::jsonb,
   60000,
@@ -79,9 +81,20 @@ SELECT public.http_dispatch_post(
 );
 
 SELECT results_eq(
-  'SELECT calls, timeout_ms FROM test_outbox',
-  $$VALUES (2, 60000)$$,
-  'repeated wakeups keep one row with the largest call count and timeout'
+  'SELECT calls, timeout_ms FROM test_outbox ORDER BY timeout_ms',
+  $$VALUES (2, 8000), (1, 60000)$$,
+  'repeated wakeups append rows instead of locking a shared one'
+);
+
+SELECT is(
+  (
+    SELECT count(*)
+    FROM pg_index i
+    WHERE i.indrelid = 'public.http_dispatch_outbox'::regclass
+      AND i.indisunique AND NOT i.indisprimary
+  ),
+  0::bigint,
+  'the outbox has no unique key that writers could contend on'
 );
 
 SELECT is(

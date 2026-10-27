@@ -17,9 +17,10 @@ export interface HttpDispatchRequest {
   init: RequestInit
 }
 
-// One claim per tick. process_function_queue coalesces to one row per queue,
-// so a full claim is far above the ~40 routable targets.
-export const HTTP_DISPATCH_CLAIM_LIMIT = 500
+// Rows are append-only (one per wakeup, including one per cache-purge business
+// write), so a claim must drain a dispatcher outage backlog quickly; rows are
+// tiny and coalesced right after the claim.
+export const HTTP_DISPATCH_CLAIM_LIMIT = 5000
 // Same ceiling process_function_queue applies to calls_needed.
 export const HTTP_DISPATCH_MAX_CALLS_PER_ROW = 10
 
@@ -34,6 +35,25 @@ WHERE id IN (
   FOR UPDATE SKIP LOCKED
 )
 RETURNING id::text, target, url, body, timeout_ms, calls`
+
+/**
+ * Identical wakeups add nothing over one: keep one row per request with the
+ * largest call count and timeout, like pg_net would have sent the latest tick.
+ */
+export function coalesceHttpDispatchRows(rows: readonly HttpDispatchRow[]): HttpDispatchRow[] {
+  const byRequest = new Map<string, HttpDispatchRow>()
+  for (const row of rows) {
+    const key = JSON.stringify([row.target, row.url, row.body])
+    const existing = byRequest.get(key)
+    if (!existing) {
+      byRequest.set(key, { ...row })
+      continue
+    }
+    existing.calls = Math.max(existing.calls, row.calls)
+    existing.timeout_ms = Math.max(existing.timeout_ms, row.timeout_ms)
+  }
+  return [...byRequest.values()]
+}
 
 function originOf(url: string): string | null {
   try {
@@ -61,7 +81,7 @@ export function buildHttpDispatchRequests(
 ): { requests: HttpDispatchRequest[], rejected: HttpDispatchRow[] } {
   const requests: HttpDispatchRequest[] = []
   const rejected: HttpDispatchRow[] = []
-  for (const row of rows) {
+  for (const row of coalesceHttpDispatchRows(rows)) {
     if (!isAllowedDispatchUrl(row.url, allowedOrigins)) {
       rejected.push(row)
       continue
