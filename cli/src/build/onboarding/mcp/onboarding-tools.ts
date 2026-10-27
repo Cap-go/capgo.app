@@ -49,6 +49,7 @@ import { getSession } from './session-state.js'
 import type { BuildJobDeps } from './build-job.js'
 import { buildJobDeps, registerBuildTools } from './build-tools.js'
 import { type CredentialsManageDeps, registerCredentialsManageTool } from './credentials-manage.js'
+import { memoizeByCwd } from '../../../mcp/project-dir.js'
 
 
 
@@ -512,7 +513,9 @@ export function buildDeps(getSdk: () => CapgoSDK): EngineDeps {
  * `depsOverride` is for tests; production passes only `server` + `sdk`.
  */
 export function registerOnboardingTools(server: McpRegistrar, getSdk: () => CapgoSDK, depsOverride?: EngineDeps, buildJobDepsOverride?: BuildJobDeps, credentialsManageDepsOverride?: CredentialsManageDeps): void {
-  const deps = depsOverride ?? buildDeps(getSdk)
+  // Rebuilt when the MCP project dir changes (client roots / capgo_set_project_dir), so a
+  // user-scoped install follows the agent's project instead of the dir it was spawned in.
+  const getDeps = depsOverride ? () => depsOverride : memoizeByCwd(() => buildDeps(getSdk))
 
   server.registerTool(
     'start_capgo_builder_onboarding',
@@ -521,7 +524,7 @@ export function registerOnboardingTools(server: McpRegistrar, getSdk: () => Capg
       inputSchema: onboardingStartInputSchema,
     },
     async (args: { platform?: 'ios' | 'android' }) => {
-      const result = await runStart(deps, args.platform)
+      const result = await runStart(getDeps(), args.platform)
       return { content: [{ type: 'text' as const, text: renderResult(result) }] }
     },
   )
@@ -533,7 +536,7 @@ export function registerOnboardingTools(server: McpRegistrar, getSdk: () => Capg
       inputSchema: onboardingNextStepSchema,
     },
     async (args: OnboardingNextStepInput) => {
-      const result = await runAdvance(deps, args)
+      const result = await runAdvance(getDeps(), args)
       return { content: [{ type: 'text' as const, text: renderResult(result) }] }
     },
   )
@@ -545,7 +548,7 @@ export function registerOnboardingTools(server: McpRegistrar, getSdk: () => Capg
       inputSchema: onboardingExplainInputSchema,
     },
     async (args: { state?: string }) => {
-      const text = await explainOnboarding(deps, args)
+      const text = await explainOnboarding(getDeps(), args)
       return { content: [{ type: 'text' as const, text }] }
     },
   )
@@ -555,12 +558,12 @@ export function registerOnboardingTools(server: McpRegistrar, getSdk: () => Capg
   // (no Terminal.app/AppleScript) + bounded-wait polling. The onboarding
   // build-ready step points the agent at start_capgo_build; a COMPLETED build
   // hands back to capgo_builder_onboarding_next_step({ checkBuild }) for the tail.
-  registerBuildTools(server, deps.getAppId, buildJobDepsOverride ?? buildJobDeps(deps.cwd))
+  registerBuildTools(server, () => getDeps().getAppId(), buildJobDepsOverride ?? buildJobDeps(() => getDeps().cwd))
 
   // ── Credentials management (post-onboarding) ─────────────────────────────────
   // Manage credentials that ALREADY exist: export to .env, or add/edit/remove a
   // field. Refuses (and points at onboarding) when no credentials exist for the app.
-  registerCredentialsManageTool(server, deps.getAppId, credentialsManageDepsOverride)
+  registerCredentialsManageTool(server, () => getDeps().getAppId(), credentialsManageDepsOverride)
   // ── Discoverable, client-agnostic entry point (MCP prompt) ──────────────────
   // Clients that support MCP prompts surface this as a slash command (e.g.
   // /capgo-builder-setup). Invoking it injects the message below, which kicks
