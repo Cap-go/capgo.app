@@ -58,6 +58,9 @@ export async function enforceRegionalPrice(c: Context, stripe: Stripe, billingAc
   // Incomplete checkouts have not been paid: check once the payment went through.
   if (!['active', 'trialing', 'past_due'].includes(subscription.status))
     return false
+  // Stripe rejects price changes on schedule-managed subscriptions (trial plans): check again once released.
+  if (subscription.schedule)
+    return false
   const item = findRegionalItem(subscription)
   if (!item)
     return false

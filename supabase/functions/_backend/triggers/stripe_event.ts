@@ -2000,8 +2000,9 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   }
 
   // A regional discount needs a card and billing address from its region; otherwise the price is raised.
+  // Also checked when a trial-plan schedule releases the subscription, since scheduled ones are skipped.
   if (stripeEvent.type === 'customer.subscription.created'
-    || (stripeEvent.type === 'customer.subscription.updated' && (stripeEvent.data.previous_attributes?.status || 'default_payment_method' in (stripeEvent.data.previous_attributes ?? {})))) {
+    || (stripeEvent.type === 'customer.subscription.updated' && ['status', 'default_payment_method', 'schedule'].some(key => key in (stripeEvent.data.previous_attributes ?? {})))) {
     await enforceRegionalPrice(c, getStripe(c, getWebhookBillingAccount(c)), getWebhookBillingAccount(c), stripeEvent.data.object)
   }
 

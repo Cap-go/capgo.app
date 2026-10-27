@@ -83,6 +83,12 @@ describe('regional price guard', () => {
     expect(stripe.customers.retrieve).not.toHaveBeenCalled()
   })
 
+  it('waits for a trial-plan schedule to release the subscription', async () => {
+    const { stripe, update } = fakeStripe('DE', null, subscription('p50', { schedule: 'sub_sched_1' }))
+    await expect(enforceRegionalPrice(context(), stripe, 'ee', subscription('p50'))).resolves.toBe(false)
+    expect(update).not.toHaveBeenCalled()
+  })
+
   it('decides on the live subscription when the event is stale', async () => {
     const { stripe, update } = fakeStripe('DE', null, subscription(null))
     await expect(enforceRegionalPrice(context(), stripe, 'ee', subscription('p50'))).resolves.toBe(false)
