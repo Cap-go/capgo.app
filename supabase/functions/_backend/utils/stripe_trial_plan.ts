@@ -9,8 +9,8 @@ import { cloudlog, cloudlogErr } from './logging.ts'
 import { checkoutPgClient, closeClient, getPgClient, releasePgClient, TRANSACTION_IDLE_TIMEOUT_MS } from './pg.ts'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { PriceTier } from './country_price_tier.ts'
-import { getCustomerBilling, getRequestPriceTier } from './regional_price.ts'
-import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, isAutomaticTaxEnabled, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
+import { getCustomerBilling, priceTierForCurrency } from './regional_price.ts'
+import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 // Starts the plan picked during onboarding when the free trial ends, charging the saved card.
@@ -85,9 +85,11 @@ export function getTrialPlanPriceId(plan: TrialPlanPriceRow, billingAccount: Bil
   return getRegionalPlanPriceId(plan.regional_price_ids, tier, billingAccount, 'month') ?? getPlanPriceId(plan, billingAccount, 'month')
 }
 
+// The schedule bills in the customer's Stripe currency, USD until one is pinned: a regional price needs it
+// to be the region's currency.
 async function getTrialPriceTier(c: Context, ctx: InAppBillingContext): Promise<PriceTier> {
-  const { countries } = await getCustomerBilling(ctx.stripe, ctx.customerId)
-  return getRequestPriceTier(c, countries)
+  const { countries, currency } = await getCustomerBilling(ctx.stripe, ctx.customerId)
+  return priceTierForCurrency([getRequestCountry(c), ...countries], currency ?? 'usd', null)
 }
 
 async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<TrialState | null> {

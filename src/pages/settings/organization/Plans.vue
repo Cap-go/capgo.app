@@ -173,7 +173,7 @@ const enterpriseQuote = computed(() => {
 })
 
 // Real Stripe amounts per currency (price currency_options); USD from the plans table until they load.
-const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, hasPricesFor, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regularAmountsFor, reload: reloadPrices, setCurrency, usdRatioFor } = usePlanPrices(billingOrgId)
+const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, hasPricesFor, hasRegionalPrice, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regionalDiscount: offeredRegionalDiscount, regularAmountsFor, reload: reloadPrices, setCurrency, setStandardPrice, standardPrice, usdRatioFor } = usePlanPrices(billingOrgId)
 
 function planAmounts(plan: Plan) {
   const stripeAmounts = amountsFor(plan.stripe_id)
@@ -256,6 +256,8 @@ async function startPlanCheckout(plan: Plan, isYear: boolean) {
     extraMau: isEnterprisePlan(plan) ? enterpriseQuote.value?.extraMau : undefined,
     // Only a currency Stripe sells this plan in; otherwise Checkout uses the price default.
     currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
+    // The buyer turned down the regional discount: checkout sells the full price the page now shows.
+    standardPrice: standardPrice.value && hasRegionalPrice(plan.stripe_id),
   })
 }
 
@@ -855,7 +857,13 @@ function buttonStyle(p: Plan) {
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 {{ regionalDiscount.country ? t('plans-regional-discount-requirement', { country: regionalCountryName(regionalDiscount.country) }) : t('plans-regional-discount-requirement-generic') }}
               </p>
+              <button type="button" data-test="plan-standard-price" class="mt-1 text-xs font-medium text-blue-600 underline dark:text-blue-400 hover:text-blue-500" @click="setStandardPrice(true)">
+                {{ regionalDiscount.country ? t('plans-regional-discount-opt-out', { country: regionalCountryName(regionalDiscount.country) }) : t('plans-regional-discount-opt-out-generic') }}
+              </button>
             </template>
+            <button v-else-if="standardPrice && offeredRegionalDiscount && hasRegionalPrice(p.stripe_id)" type="button" data-test="plan-regional-price" class="block mt-2 text-xs font-medium text-blue-600 underline dark:text-blue-400 hover:text-blue-500" @click="setStandardPrice(false)">
+              {{ t('plans-regional-discount-opt-in', { percent: offeredRegionalDiscount.percent }) }}
+            </button>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatPlanPrice(p, hasYearlyDiscount(p) ? planAmounts(p).year : planAmounts(p).month) }}
             </p>

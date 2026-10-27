@@ -4001,6 +4001,9 @@
   "onboarding-choose-plan-step-next": "Then set up your app below. Bundle uploads and live updates start working once your plan is active.",
   "onboarding-choose-plan-step-cta": "See plans",
   "plans-regional-discount": "{percent}% regional discount",
-  "plans-regional-discount-requirement": "Regional price for {country}: requires a card and billing address from {country}.",
-  "plans-regional-discount-requirement-generic": "Regional price: requires a card and billing address from your country."
+  "plans-regional-discount-opt-in": "Show the {percent}% regional price",
+  "plans-regional-discount-opt-out": "Not in {country}? Pay the standard price",
+  "plans-regional-discount-opt-out-generic": "Card or address from another country? Pay the standard price",
+  "plans-regional-discount-requirement": "Regional price for {country}: requires a card and billing address from {country}, otherwise the standard price is charged.",
+  "plans-regional-discount-requirement-generic": "Regional price: requires a card and billing address from your country, otherwise the standard price is charged."
 }

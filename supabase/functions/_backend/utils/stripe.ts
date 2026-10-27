@@ -3,15 +3,16 @@ import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
 import type { PriceTier } from './country_price_tier.ts'
-import { FULL_PRICE_TIER } from './country_price_tier.ts'
+import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getCustomerBilling, getPriceTier, getRequestPriceTier } from './regional_price.ts'
+import { getCustomerBilling, getPriceTier, isRegionalCurrency } from './regional_price.ts'
 import {
   BillingAccountUnavailableError,
   getBillingAccountForCustomer,
   getPlanPriceId,
   getRegionalPlanPriceId,
+  getRequestCountry,
   getStripePublishableKey,
   getStripeSecretKey,
   isAutomaticTaxEnabled,
@@ -1065,6 +1066,8 @@ export interface CheckoutOptions {
   embedded?: boolean
   // Lowercase ISO currency; must be one of the plan price's Stripe currency_options.
   currency?: string
+  // The buyer turned down the regional discount (card or address from another country): sell the full price.
+  standardPrice?: boolean
 }
 
 export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, options: CheckoutOptions = {}): Promise<CheckoutSessionResult> {
@@ -1077,16 +1080,24 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   const resolvedPlanId = await resolveCheckoutPlanProductId(c, planId, billingAccount)
   // Same tier as the Plans page: the most expensive of the visitor, billing address and saved card countries.
   const customerBilling = await getCustomerBilling(getStripe(c, billingAccount), customerId)
-  const tier = getRequestPriceTier(c, customerBilling.countries)
-  const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
-  cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
-  if (!prices.priceId)
-    return Promise.reject(new Error('Cannot find price'))
-  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: prices.priceId, quantity: 1 }]
-  const planPrice = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
-  const planAmounts = getPriceCurrencyAmounts(planPrice)
-  const planCurrencies = Object.keys(planAmounts)
-  const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, planCurrencies, requestedCurrency)
+  const countries = [getRequestCountry(c), ...customerBilling.countries]
+  const loadPlanPrice = async (tier: PriceTier) => {
+    const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
+    cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
+    if (!prices.priceId)
+      throw new Error('Cannot find price')
+    const price = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
+    const amounts = getPriceCurrencyAmounts(price)
+    const currencies = Object.keys(amounts)
+    return { priceId: prices.priceId, price, amounts, currencies, currency: resolveCheckoutCurrency(customerBilling.currency, currencies, requestedCurrency) }
+  }
+  const tier = options.standardPrice ? FULL_PRICE_TIER : priceTierForCountries(countries)
+  let checkoutPrice = await loadPlanPrice(tier)
+  // A regional price is only sold in its region's currency: any other one buys the full price.
+  if (!isRegionalCurrency(countries, tier, checkoutPrice.currency ?? checkoutPrice.price.currency, checkoutPrice.currencies))
+    checkoutPrice = await loadPlanPrice(FULL_PRICE_TIER)
+  const { priceId, price: planPrice, amounts: planAmounts, currency: checkoutCurrency } = checkoutPrice
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: priceId, quantity: 1 }]
   if (extraMau && extraMau.extraMau > 0) {
     // Same interval as the plan: Checkout bills every item of a subscription together.
     const interval = recurrence === 'year' ? 'year' : 'month'

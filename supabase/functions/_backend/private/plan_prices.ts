@@ -7,10 +7,10 @@ import { CacheHelper } from '../utils/cache.ts'
 import { simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { currencyForCountry } from '../utils/country_currency.ts'
-import { FULL_PRICE_TIER, priceTierForCountry, tierPricePercent } from '../utils/country_price_tier.ts'
+import { FULL_PRICE_TIER, priceTierForCountries, priceTierForCountry, tierPricePercent } from '../utils/country_price_tier.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
+import { getCustomerBilling, isRegionalCurrency } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
 import { supabaseClient } from '../utils/supabase.ts'
@@ -53,11 +53,12 @@ export function tierDiscountPercent(tier: PriceTier) {
   return 100 - tierPricePercent(tier)
 }
 
-export function pickCurrency(currencies: string[], lockedCurrency: string | null, country: string | null) {
+// Countries in order of preference: the visitor first, then the billing address and card (no IP country in some setups).
+export function pickCurrency(currencies: string[], lockedCurrency: string | null, countries: (string | null | undefined)[]) {
   if (lockedCurrency)
     return currencies.includes(lockedCurrency) ? lockedCurrency : null
-  const local = currencyForCountry(country)
-  if (local && currencies.includes(local))
+  const local = countries.map(currencyForCountry).find(code => !!code && currencies.includes(code))
+  if (local)
     return local
   return currencies.includes(DEFAULT_CURRENCY) ? DEFAULT_CURRENCY : currencies[0] ?? null
 }
@@ -164,32 +165,44 @@ app.get('/', middlewareAuth, async (c) => {
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return c.json({ complete: true, currencies: [], currency: null, lockedCurrency: null, prices: {}, discount: null, regularPrices: {} })
 
-  const country = getRequestCountry(c)
   // Fail closed: an unknown customer currency must not unlock currencies checkout would reject.
   const customerBilling = org.customer_id ? await getCustomerBilling(getStripe(c, billingAccount), org.customer_id) : { currency: null, countries: [] }
   const lockedCurrency = customerBilling.currency
   // Regional discount (Solo): exactly the tier checkout sells, from the visitor, billing address and card countries.
-  const tier = getRequestPriceTier(c, customerBilling.countries)
-  const [{ prices, complete }, full] = await Promise.all([
-    getPlanPrices(c, authorization, billingAccount, tier),
-    tier === FULL_PRICE_TIER ? null : getPlanPrices(c, authorization, billingAccount, FULL_PRICE_TIER),
+  const countries = [getRequestCountry(c), ...customerBilling.countries]
+  const offeredTier = priceTierForCountries(countries)
+  const [offered, full] = await Promise.all([
+    getPlanPrices(c, authorization, billingAccount, offeredTier),
+    offeredTier === FULL_PRICE_TIER ? null : getPlanPrices(c, authorization, billingAccount, FULL_PRICE_TIER),
   ])
+  // A regional price is only sold in its region's currency: an org pinned to another one pays the full price.
+  const regional = !lockedCurrency || isRegionalCurrency(countries, offeredTier, lockedCurrency, getCommonCurrencies(offered.prices))
+  const tier = regional ? offeredTier : FULL_PRICE_TIER
+  const { prices, complete } = regional || !full ? offered : full
   // A pinned customer can only check out in its own currency; empty when the catalog lacks it.
   const common = getCommonCurrencies(prices)
   // The tier sets the price; within it every currency is at the market rate, so any of them can be picked.
   const currencies = lockedCurrency ? common.filter(currency => currency === lockedCurrency) : common
+  const shownCurrencies = new Set([...currencies, DEFAULT_CURRENCY])
   return c.json({
     // False when some Stripe prices failed to load: the page offers a retry and keeps checkout disabled.
     complete,
     currencies,
     // Null means no currency is sold on every plan: the page shows the stored USD prices.
-    currency: pickCurrency(currencies, lockedCurrency, country),
+    currency: pickCurrency(currencies, lockedCurrency, countries),
     lockedCurrency,
     // USD stays in: the page derives each currency's ratio from it (Enterprise extra MAU).
-    prices: pickPriceCurrencies(prices, new Set([...currencies, DEFAULT_CURRENCY])),
-    // Regional discount shown on the discounted plans; it requires a card and billing address from there.
+    prices: pickPriceCurrencies(prices, shownCurrencies),
+    // Regional discount shown on the discounted plans; it requires a card and billing address from there,
+    // and is only sold in the listed currencies (the region's own, or USD where Stripe lacks it).
     // The country named is the one whose tier was granted (the IP, billing address or card country).
-    discount: tier === FULL_PRICE_TIER ? null : { percent: tierDiscountPercent(tier), country: [country, ...customerBilling.countries].find(code => !!code && priceTierForCountry(code) === tier) ?? null },
-    regularPrices: full ? pickPriceCurrencies(getRegularPrices(prices, full.prices), new Set([...currencies, DEFAULT_CURRENCY])) : {},
+    discount: tier === FULL_PRICE_TIER
+      ? null
+      : {
+          percent: tierDiscountPercent(tier),
+          country: countries.find(code => !!code && priceTierForCountry(code) === tier) ?? null,
+          currencies: currencies.filter(currency => isRegionalCurrency(countries, tier, currency, common)),
+        },
+    regularPrices: full && tier !== FULL_PRICE_TIER ? pickPriceCurrencies(getRegularPrices(prices, full.prices), shownCurrencies) : {},
   })
 })

@@ -2,7 +2,8 @@ import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { PriceTier } from './country_price_tier.ts'
 import type { BillingAccount } from './stripe_billing.ts'
-import { FULL_PRICE_TIER, isCheaperTier, isPriceTier, priceTierForCountries } from './country_price_tier.ts'
+import { currencyForCountry } from './country_currency.ts'
+import { FULL_PRICE_TIER, isCheaperTier, isPriceTier, priceTierForCountries, priceTierForCountry } from './country_price_tier.ts'
 import { cloudlog } from './logging.ts'
 import { findPlanByProductId, getPlanPriceId, getRegionalPlanPriceId, getRequestCountry } from './stripe_billing.ts'
 
@@ -38,6 +39,27 @@ export function getRequestPriceTier(c: Context, customerCountries: string[] = []
   return priceTierForCountries([getRequestCountry(c), ...customerCountries])
 }
 
+// A regional price is set for one market, so it is only sold in that country's currency, or in USD where
+// Stripe does not sell that currency (null soldCurrencies: only for countries without a known currency).
+export function isRegionalCurrency(countries: Array<string | null | undefined>, tier: PriceTier, currency: string, soldCurrencies: string[] | null): boolean {
+  if (tier === FULL_PRICE_TIER)
+    return true
+  return countries.some((country) => {
+    if (!country || priceTierForCountry(country) !== tier)
+      return false
+    const local = currencyForCountry(country)
+    if (local === currency)
+      return true
+    return currency === 'usd' && (!local || (!!soldCurrencies && !soldCurrencies.includes(local)))
+  })
+}
+
+// The tier of these countries, or the full price when billed in a currency of another market.
+export function priceTierForCurrency(countries: Array<string | null | undefined>, currency: string, soldCurrencies: string[] | null): PriceTier {
+  const tier = priceTierForCountries(countries)
+  return isRegionalCurrency(countries, tier, currency, soldCurrencies) ? tier : FULL_PRICE_TIER
+}
+
 export function getPriceTier(price: Pick<Stripe.Price, 'metadata'>): PriceTier {
   const tier = price.metadata?.[PRICE_TIER_METADATA_KEY]
   return isPriceTier(tier) ? tier : FULL_PRICE_TIER
@@ -47,9 +69,10 @@ function findRegionalItem(subscription: Stripe.Subscription) {
   return subscription.items.data.find(({ price }) => price.recurring?.usage_type === 'licensed' && getPriceTier(price) !== FULL_PRICE_TIER)
 }
 
-// A regional discount is only kept when the card paying it and the billing address are from that region:
-// otherwise the subscription moves to the price of the most expensive of those countries and the
-// difference is invoiced now. Nothing known about the buyer means the full price.
+// A regional discount is only kept when the card paying it and the billing address are from that region,
+// and the subscription is billed in that region's currency: otherwise the subscription moves to the price
+// of the most expensive of those countries and the difference is invoiced now. Nothing known about the
+// buyer means the full price.
 export async function enforceRegionalPrice(c: Context, stripe: Stripe, billingAccount: BillingAccount, eventSubscription: Stripe.Subscription): Promise<boolean> {
   if (!findRegionalItem(eventSubscription))
     return false
@@ -72,7 +95,9 @@ export async function enforceRegionalPrice(c: Context, stripe: Stripe, billingAc
     typeof subscriptionPaymentMethod === 'string' ? stripe.paymentMethods.retrieve(subscriptionPaymentMethod) : subscriptionPaymentMethod,
   ])
   const countries = [paymentMethodCountry(paymentMethod), ...billing.countries]
-  const requiredTier = priceTierForCountries(countries)
+  // Billed in another market's currency (an org pinned to USD, a buyer who picked USD): the full price.
+  const soldPrice = await stripe.prices.retrieve(item.price.id, { expand: ['currency_options'] })
+  const requiredTier = priceTierForCurrency(countries, subscription.currency, Object.keys(soldPrice.currency_options ?? {}))
   if (!isCheaperTier(soldTier, requiredTier))
     return false
 
