@@ -27,14 +27,33 @@ const organizationStore = useOrganizationStore()
 const screen = ref<'choice' | 'ai'>('choice')
 const isWaiting = ref(false)
 const assistantIcons = developmentEnvironmentOptions.find(option => option.value === 'ai_assistant')?.icons ?? []
-let knownAppIds: Set<string> | null = null
+// Creation time of the newest app before the prompt was copied; only later apps count.
+let appCursor: string | null | undefined
 let pollTimer: ReturnType<typeof setInterval> | undefined
 
-async function listAppIds(orgId: string) {
-  const { data, error } = await capgo.from('apps').select('app_id').eq('owner_org', orgId)
+async function newestAppCreatedAt(orgId: string) {
+  const { data, error } = await capgo
+    .from('apps')
+    .select('created_at')
+    .eq('owner_org', orgId)
+    .order('created_at', { ascending: false })
+    .limit(1)
   if (error)
     throw error
-  return (data ?? []).map(app => app.app_id)
+  return data?.[0]?.created_at ?? null
+}
+
+async function firstAppAfter(orgId: string, cursor: string | null) {
+  let query = capgo
+    .from('apps')
+    .select('app_id')
+    .eq('owner_org', orgId)
+  if (cursor)
+    query = query.gt('created_at', cursor)
+  const { data, error } = await query.order('created_at', { ascending: true }).limit(1)
+  if (error)
+    throw error
+  return data?.[0]?.app_id ?? null
 }
 
 function stopPolling() {
@@ -45,10 +64,10 @@ function stopPolling() {
 }
 
 async function checkForNewApp(orgId: string) {
-  if (document.visibilityState === 'hidden' || !knownAppIds)
+  if (document.visibilityState === 'hidden' || appCursor === undefined)
     return
   try {
-    const appId = (await listAppIds(orgId)).find(id => !knownAppIds!.has(id))
+    const appId = await firstAppAfter(orgId, appCursor)
     if (!appId || !pollTimer)
       return
     stopPolling()
@@ -66,7 +85,7 @@ async function watchForNewApp() {
   if (!orgId || pollTimer)
     return
   try {
-    knownAppIds = new Set(await listAppIds(orgId))
+    appCursor = await newestAppCreatedAt(orgId)
   }
   catch (error) {
     console.warn('Cannot list apps before the AI agent adds one', error)

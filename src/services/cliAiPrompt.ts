@@ -823,11 +823,11 @@ export function buildAiUploadBundlePrompt(input: AiAppTaskPromptInput): string {
 ${appTaskContext(input)}
 
 1. Make sure you are in the Capacitor project of this app: the \`appId\` in \`capacitor.config\` must be \`${appId}\`. If it is not, ask me where the project is and stop until I answer.
-2. Ask me which channel the bundle should go to. If I do not want to link it to a channel, upload it without one.
+2. Ask me which channel the bundle should go to and wait for my answer. Every upload is delivered through a channel: without \`--channel\`, the CLI uses the app's default upload channel, which can be \`production\` and reach every installed app. Replace \`{CHANNEL_NAME}\` with the channel I confirm. If I do not name one, stop and do not upload.
 3. Build the web assets with the project's existing build script (for example \`npm run build\`). Do not change native code and do not run \`cap sync\`.
-4. Upload the build with the selected runner, adding \`--channel <name>\` only if I picked a channel:
+4. Upload the build with the selected runner, always with the confirmed channel:
 
-{CAPGO_CLI_RUNNER} bundle upload ${appId}
+{CAPGO_CLI_RUNNER} bundle upload ${appId} --channel {CHANNEL_NAME}
 
 5. If the upload is rejected because this version already exists, ask me for a new version and retry with \`--bundle <version>\`. Do not edit \`package.json\` unless I ask.
 

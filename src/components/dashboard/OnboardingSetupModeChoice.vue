@@ -45,9 +45,15 @@ const organizationStore = useOrganizationStore()
 const screen = ref<SetupScreen>(props.initialScreen)
 const isInvite = computed(() => screen.value === 'invite')
 const goalCopyPrefix = computed(() => isInvite.value ? 'invite' : 'ai')
-// Organization to invite into. A refresh after creating it lands back on the invite step
-// instead of offering to create a second organization.
-const inviteOrgId = ref<string | null>(props.initialScreen === 'invite' ? organizationStore.currentOrganization?.gid ?? null : null)
+// Organization to invite into. A refresh after the invite flow created it lands back on the
+// invite step instead of offering to create a second one. Only that saved organization counts,
+// never whichever organization happens to be current.
+function savedInviteOrgId() {
+  const onboarding = main.user?.onboarding
+  const orgId = onboarding && typeof onboarding === 'object' && !Array.isArray(onboarding) ? onboarding.invite_setup_org_id : null
+  return typeof orgId === 'string' && organizationStore.organizations.some(org => org.gid === orgId) ? orgId : null
+}
+const inviteOrgId = ref<string | null>(props.initialScreen === 'invite' && !props.newOrganization ? savedInviteOrgId() : null)
 const invitedEmails = ref<string[]>([])
 const inviteModalRef = ref<InstanceType<typeof InviteTeammateModal> | null>(null)
 const isSaving = ref(false)
@@ -234,6 +240,9 @@ async function createOrganization() {
       console.warn('Cannot refresh organizations after AI onboarding create', refreshError)
     }
     if (inviting) {
+      // Lets a refresh return to this organization's invite step.
+      if (!await rememberOnboarding(current => withOnboardingFields(current, { invite_setup_org_id: data.id })))
+        console.warn('Cannot remember the organization created for the teammate invite')
       inviteOrgId.value = data.id
       await nextTick()
       openInviteDialog()

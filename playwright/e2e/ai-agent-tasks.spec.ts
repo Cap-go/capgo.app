@@ -1,5 +1,19 @@
 import type { Page } from '@playwright/test'
+import { env } from 'node:process'
+import { createClient } from '@supabase/supabase-js'
+import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
+import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
+
+function localAdminClient() {
+  const { ports } = getSupabaseWorktreeConfig()
+  const configured = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY
+  const status = configured ? null : getSupabaseStatus()
+  const key = configured || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
+  if (!key)
+    throw new Error('Local Supabase service key is required for AI agent task fixtures')
+  return createClient(`http://127.0.0.1:${ports.api}`, key, { auth: { persistSession: false } })
+}
 
 // Copying waits for the API key first, so poll until the prompt lands.
 async function readClipboard(page: Page) {
@@ -25,6 +39,21 @@ test.describe('AI agent alternatives to manual actions', () => {
     expect(prompt).toContain('I want to add a new app to it')
     await expect(page.locator('[data-test="add-app-ai-waiting"]')).toBeVisible()
 
+    // The page opens the app the agent registers, and only that new one.
+    const admin = localAdminClient()
+    const { data: demo } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
+    const appId = `com.agent.e2e${Date.now()}`
+    const { error } = await admin.from('apps').insert({ app_id: appId, name: 'Agent app', owner_org: demo!.owner_org, icon_url: '' })
+    expect(error).toBeNull()
+    try {
+      await page.waitForURL(new RegExp(`/app/${appId.replaceAll('.', '\\.')}/getting-started$`))
+    }
+    finally {
+      await admin.from('apps').delete().eq('app_id', appId)
+    }
+    await page.goto('/app/new')
+    await page.click('[data-test="add-app-setup-mode-ai"]')
+
     // The manual wizard starts on the app name for an organization that already has apps.
     const appName = page.getByRole('textbox', { name: 'App name' })
     await page.click('[data-test="add-app-ai-manual"]')
@@ -40,7 +69,7 @@ test.describe('AI agent alternatives to manual actions', () => {
     await page.goto('/app/com.demo.app/bundles/new')
     await page.locator('[data-test="ai-task-upload-bundle"] [data-test="ai-task-copy-prompt"]').click()
     const prompt = await readClipboard(page)
-    expect(prompt).toContain('{CAPGO_CLI_RUNNER} bundle upload com.demo.app')
+    expect(prompt).toContain('{CAPGO_CLI_RUNNER} bundle upload com.demo.app --channel {CHANNEL_NAME}')
   })
 
   test('create channel offers a prompt for the AI agent', async ({ page }) => {

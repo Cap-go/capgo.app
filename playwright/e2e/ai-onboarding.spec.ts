@@ -175,6 +175,11 @@ test.describe('AI onboarding', () => {
 
     // The invite dialog opens on its own once the organization exists.
     await expect(page.locator('[data-test="onboarding-invite-teammate"]')).toBeVisible()
+    await expect(page.locator('#invite-email')).toBeVisible()
+    // A refresh returns to the invite step of the organization just created, not a new form.
+    await page.reload()
+    await expect(page.locator('[data-test="onboarding-invite-teammate"]')).toBeVisible()
+    await page.click('[data-test="onboarding-invite-open"]')
     await page.fill('#invite-email', 'test2@capgo.app')
     await page.click('[data-test="invite-email-next"]')
     await expect(page.locator('[data-test="onboarding-invite-sent"]')).toContainText('test2@capgo.app')
