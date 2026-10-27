@@ -81,7 +81,7 @@ async function prepareProfileResumeScreenshot(page: Page) {
   await page.locator('[data-test="onboarding-name-step"]').or(page.locator('[data-test="onboarding-resume-continue"]')).waitFor()
 }
 
-async function prepareAiOnboardingScreenshot(page: Page, setupMode: 'ai' | null) {
+async function prepareAiOnboardingScreenshot(page: Page, setupMode: 'ai' | 'invite' | null) {
   await routeConsoleQuery(page, 'users', async (route, query) => {
     if (consoleQueryMethod(query) !== 'GET')
       return route.fulfill(consoleQueryJson(consoleQueryRows(query, [])))
@@ -455,6 +455,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     prepare: page => prepareAiOnboardingScreenshot(page, 'ai'),
   },
   {
+    // Same goal and plan form, worded for the teammate who will finish the setup.
+    slug: 'onboarding-invite-plan',
+    path: '/onboarding/app',
+    auth: true,
+    prepare: page => prepareAiOnboardingScreenshot(page, 'invite'),
+  },
+  {
     slug: 'onboarding-ai-prompt',
     path: '/onboarding/ai',
     auth: true,
@@ -747,6 +754,49 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'org-settings-team', path: '/settings/organization/members', auth: true },
   { slug: 'org-settings-billing', path: '/settings/organization/plans', auth: true },
   { slug: 'channels', path: '/app/com.demo.app/channels', auth: true },
+  {
+    // The create dialog offers the AI agent prompt under the name field.
+    slug: 'channels-create-dialog',
+    path: '/app/com.demo.app/channels',
+    auth: true,
+    prepare: async (page) => {
+      await page.getByRole('button', { name: 'Add', exact: true }).first().click()
+      await page.locator('#dialog-v2-content input[type="text"]').waitFor()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.locator('[data-test="ai-task-create-channel"]').waitFor()
+    },
+  },
+  {
+    // Bundle upload steps, with the AI agent card above the teammate invite.
+    slug: 'bundles-new',
+    path: '/app/com.demo.app/bundles/new',
+    auth: true,
+    prepare: async (page) => {
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.locator('[data-test="ai-task-upload-bundle"]').waitFor()
+    },
+  },
+  {
+    // Add app asks for the AI agent or the manual wizard first.
+    slug: 'add-app-setup-mode',
+    path: '/app/new',
+    auth: true,
+    prepare: async (page) => {
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.locator('[data-test="add-app-setup-mode"]').waitFor()
+    },
+  },
+  {
+    slug: 'add-app-ai',
+    path: '/app/new',
+    auth: true,
+    prepare: async (page) => {
+      if (process.env.VISUAL_DIFF_PHASE !== 'after')
+        return
+      await page.locator('[data-test="add-app-setup-mode-ai"]').click()
+      await page.locator('[data-test="ai-task-add-app"]').waitFor()
+    },
+  },
   {
     slug: 'channels-empty',
     path: '/app/com.demo.app/channels',

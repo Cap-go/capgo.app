@@ -10,6 +10,8 @@ interface ApiKeyLoadScope {
   appId?: string | null
   /** Distinguishes loads of a specific named key (AI onboarding) from any usable key. */
   name?: string | null
+  /** Distinguishes loads restricted to keys with these app roles. */
+  appRoles?: readonly string[]
 }
 
 const inFlightApiKeyLoads = new Map<string, Promise<string | null>>()
@@ -18,7 +20,7 @@ export function shareInFlightApiKeyLoad(
   scope: ApiKeyLoadScope,
   load: () => Promise<string | null>,
 ): Promise<string | null> {
-  const scopeKey = JSON.stringify([scope.userId, scope.orgId ?? null, scope.appId ?? null, scope.name ?? null])
+  const scopeKey = JSON.stringify([scope.userId, scope.orgId ?? null, scope.appId ?? null, scope.name ?? null, scope.appRoles ?? null])
   const existingLoad = inFlightApiKeyLoads.get(scopeKey)
   if (existingLoad)
     return existingLoad
@@ -166,7 +168,11 @@ export async function findUsablePlainApiKey(
   userId: string,
   orgId?: string | null,
   appId?: string | null,
-  options: { name?: string } = {},
+  /**
+   * `appRoles`: only reuse an app-level binding with one of these roles (org admin keys still
+   * qualify). Without it, any app-level binding on the app counts, even a read-only one.
+   */
+  options: { name?: string, appRoles?: readonly string[] } = {},
 ): Promise<string | null> {
   const isLiveKey = (expiresAt: string | null) => !expiresAt || new Date(expiresAt).getTime() > Date.now()
   let appUuid: string | null = null
@@ -235,7 +241,9 @@ export async function findUsablePlainApiKey(
         return false
       if (binding.scope_type === 'org' && orgAdminRoles.has(roleName))
         return true
-      return !!appUuid && binding.scope_type === 'app' && binding.app_id === appUuid
+      if (!appUuid || binding.scope_type !== 'app' || binding.app_id !== appUuid)
+        return false
+      return !options.appRoles || options.appRoles.includes(roleName)
     })
     .map(binding => binding.principal_id)
     .filter((principalId): principalId is string => typeof principalId === 'string'))
