@@ -9,6 +9,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { currencyForCountry } from '../utils/country_currency.ts'
 import { FULL_PRICE_TIER, priceTierForCountry, tierPricePercent } from '../utils/country_price_tier.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
+import { checkPermission } from '../utils/rbac.ts'
 import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
@@ -145,6 +146,9 @@ app.get('/', middlewareAuth, async (c) => {
     throw simpleError('no_org_id_provided', 'No org_id provided')
   const authorization = c.get('authorization')
   if (!authorization)
+    throw simpleError('not_authorized', 'Not authorized')
+  // The billing currency and billing countries are billing data, not plain org data.
+  if (!await checkPermission(c, 'org.read_billing', { orgId }))
     throw simpleError('not_authorized', 'Not authorized')
 
   // RLS: only members of the org can read its billing currency.
