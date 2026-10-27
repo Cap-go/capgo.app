@@ -13,7 +13,7 @@ import { checkPermission } from '../utils/rbac.ts'
 import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
-import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
+import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
 
 const PLAN_PRICES_CACHE_PATH = '/private/plan_prices'
 const PLAN_PRICES_TTL_SECONDS = 60 * 60
@@ -71,9 +71,9 @@ interface PlanPriceRow {
   regional_price_ids: unknown
 }
 
-// Plans are public (see private/plans.ts); the org route still reads them as the caller.
+// Plans are readable by anon (RLS); the org route reads them as the caller.
 async function listPlans(c: Context, authorization?: string): Promise<PlanPriceRow[]> {
-  const { data: plans, error } = await (authorization ? supabaseClient(c, authorization) : supabaseAdmin(c))
+  const { data: plans, error } = await (authorization ? supabaseClient(c, authorization) : emptySupabase(c))
     .from('plans')
     .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us, regional_price_ids')
   if (error)
