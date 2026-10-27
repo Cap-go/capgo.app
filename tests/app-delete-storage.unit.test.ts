@@ -7,6 +7,11 @@ const mocks = vi.hoisted(() => ({
   deleteObjectsWithPrefix: vi.fn(),
   list: vi.fn(),
   remove: vi.fn(),
+  removeImageFolder: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({
+  removeImageFolder: (...args: unknown[]) => mocks.removeImageFolder(...args),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -72,13 +77,12 @@ describe('app delete storage cleanup', () => {
     mocks.deleteObjectsWithPrefix.mockResolvedValue(0)
     mocks.remove.mockResolvedValue({ data: [], error: null })
     mocks.list.mockResolvedValue({ data: [], error: null })
+    mocks.removeImageFolder.mockResolvedValue(0)
   })
 
-  it('paginates and recurses before removing every listed object', async () => {
-    const firstImagesPage = Array.from({ length: 100 }, (_, i) => file(`img-${i}`))
-    mocks.list.mockImplementation(async (bucket: string, prefix: string, options: { offset: number }) => {
-      if (bucket === 'images' && prefix === `org/${ORG_ID}/${APP_ID}`)
-        return { data: options.offset === 0 ? firstImagesPage : [file('icon')], error: null }
+  it('removes app images from R2 and paginates the legacy apps bucket', async () => {
+    mocks.removeImageFolder.mockResolvedValue(2)
+    mocks.list.mockImplementation(async (bucket: string, prefix: string) => {
       if (bucket === 'apps' && prefix === `${USER_ID}/${APP_ID}`)
         return { data: [{ id: null, name: 'versions' }], error: null }
       if (bucket === 'apps' && prefix === `${USER_ID}/${APP_ID}/versions`)
@@ -89,39 +93,35 @@ describe('app delete storage cleanup', () => {
     const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
 
     expect(response.status).toBe(200)
-    expect(mocks.list).toHaveBeenCalledWith('images', `org/${ORG_ID}/${APP_ID}`, { limit: 100, offset: 0 })
-    expect(mocks.list).toHaveBeenCalledWith('images', `org/${ORG_ID}/${APP_ID}`, { limit: 100, offset: 100 })
-    const removedImages = mocks.remove.mock.calls.filter(([bucket]) => bucket === 'images').flatMap(([, paths]) => paths)
-    expect(removedImages).toHaveLength(101)
-    expect(removedImages).toContain(`org/${ORG_ID}/${APP_ID}/icon`)
+    expect(mocks.removeImageFolder).toHaveBeenCalledWith(expect.anything(), `org/${ORG_ID}/${APP_ID}`)
+    // Images no longer go through Supabase Storage.
+    expect(mocks.list).not.toHaveBeenCalledWith('images', expect.anything(), expect.anything())
+    expect(mocks.remove).not.toHaveBeenCalledWith('images', expect.anything())
     expect(mocks.remove).toHaveBeenCalledWith('apps', [
       `${USER_ID}/${APP_ID}/versions/1.0.0.zip`,
       `${USER_ID}/${APP_ID}/versions/1.0.1.zip`,
     ])
+    expect(mocks.cloudlog).toHaveBeenCalledWith(expect.objectContaining({ message: 'deleted app images', count: 2 }))
     expect(mocks.cloudlogErr).not.toHaveBeenCalled()
   })
 
-  it('logs list errors returned by storage instead of claiming success', async () => {
+  it('logs R2 image errors instead of claiming success', async () => {
+    mocks.removeImageFolder.mockRejectedValue(new Error('r2 unavailable'))
+
+    const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
+
+    expect(response.status).toBe(200)
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error deleting app images' }))
+    expect(mocks.cloudlog).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'deleted app images' }))
+  })
+
+  it('logs legacy apps bucket errors returned by storage', async () => {
     mocks.list.mockResolvedValue({ data: null, error: { message: 'storage unavailable' } })
 
     const response = await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
 
     expect(response.status).toBe(200)
     expect(mocks.remove).not.toHaveBeenCalled()
-    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error deleting app images' }))
-    expect(mocks.cloudlog).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'deleted app images' }))
-  })
-
-  it('logs remove errors returned by storage instead of claiming success', async () => {
-    mocks.list.mockImplementation(async (bucket: string) => ({
-      data: bucket === 'images' ? [file('icon')] : [],
-      error: null,
-    }))
-    mocks.remove.mockResolvedValue({ data: null, error: { message: 'remove failed' } })
-
-    await deleteApp(createContext(), APP_ID, { key: 'test-key', user_id: USER_ID } as any)
-
-    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error deleting app images' }))
-    expect(mocks.cloudlog).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'deleted app images' }))
+    expect(mocks.cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'error deleting legacy user-scoped app storage' }))
   })
 })

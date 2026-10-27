@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
   rpcResults: {} as Record<string, unknown>,
   checkPermission: vi.fn(),
-  // Admin client used by the storage icon upload.
+  // Admin client and R2 image store used by the icon upload.
   adminMaybeSingle: vi.fn(),
   upload: vi.fn(),
   apikey: {
@@ -67,12 +67,11 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
         }),
       }),
     }),
-    storage: {
-      from: () => ({
-        upload: mocks.upload,
-      }),
-    },
   }),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({
+  uploadImage: (_c: unknown, ...args: unknown[]) => mocks.upload(...args),
 }))
 
 const DEFAULT_RPC_RESULTS: Record<string, unknown> = {
@@ -117,7 +116,7 @@ beforeEach(() => {
   mocks.rpcResults = { ...DEFAULT_RPC_RESULTS }
   mocks.checkPermission.mockResolvedValue(true)
   mocks.adminMaybeSingle.mockResolvedValue({ data: null, error: null })
-  mocks.upload.mockResolvedValue({ error: null })
+  mocks.upload.mockResolvedValue('ok')
   mocks.rpc.mockImplementation(async (name: string) => {
     if (name in mocks.rpcResults)
       return { data: mocks.rpcResults[name], error: null }
@@ -401,7 +400,7 @@ describe('private/cli storage icon upload', () => {
   })
 
   it('returns 409 conflict when upsert is false and storage already has the object', async () => {
-    mocks.upload.mockResolvedValueOnce({ error: { statusCode: '409' } })
+    mocks.upload.mockResolvedValueOnce('conflict')
     const response = await requestIcon({ upsert: false })
 
     expect(response.status).toBe(409)

@@ -26,6 +26,8 @@ import {
   warmEdgeEndpoint,
 } from './test-utils.ts'
 
+// Bucket behind the local S3 endpoint that stands in for R2.
+const LOCAL_R2_BUCKET = 'capgo'
 const normalizedSupabaseBaseUrl = normalizeLocalhostUrl(SUPABASE_BASE_URL) ?? SUPABASE_BASE_URL
 
 const ORG_ID = randomUUID()
@@ -329,11 +331,13 @@ describe('scoped write API keys cannot cross organization boundaries', () => {
     scopedKey = createdKey.key
     scopedKeyId = createdKey.id
 
+    // Images live in R2 under `images/`; locally the S3 endpoint is the Supabase
+    // Storage `capgo` bucket, so seed and inspect the object through it.
     const imageContent = new Blob(['scope bypass regression'], { type: 'text/plain' })
     const { error: uploadError } = await getSupabaseClient()
       .storage
-      .from('images')
-      .upload(imagePath, imageContent, {
+      .from(LOCAL_R2_BUCKET)
+      .upload(`images/${imagePath}`, imageContent, {
         contentType: 'text/plain',
         upsert: true,
       })
@@ -346,7 +350,7 @@ describe('scoped write API keys cannot cross organization boundaries', () => {
       await getSupabaseClient().from('apikeys').delete().eq('id', scopedKeyId)
     }
 
-    await getSupabaseClient().storage.from('images').remove([imagePath])
+    await getSupabaseClient().storage.from(LOCAL_R2_BUCKET).remove([`images/${imagePath}`])
     await getSupabaseClient().from('role_bindings').delete().eq('org_id', allowedOrgId)
     await getSupabaseClient().from('role_bindings').delete().eq('org_id', targetOrgId)
     await getSupabaseClient().from('org_users').delete().eq('org_id', allowedOrgId)
@@ -380,8 +384,8 @@ describe('scoped write API keys cannot cross organization boundaries', () => {
 
     const { data: imageList, error: imageError } = await getSupabaseClient()
       .storage
-      .from('images')
-      .list(`org/${targetOrgId}`)
+      .from(LOCAL_R2_BUCKET)
+      .list(`images/org/${targetOrgId}`)
 
     expect(imageError).toBeNull()
     expect(imageList?.some(file => file.name === imagePath.split('/').at(-1))).toBe(true)

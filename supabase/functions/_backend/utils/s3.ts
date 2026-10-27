@@ -26,7 +26,11 @@ function resolveEndpointProtocol(c: Context): 'http' | 'https' {
   return getEnv(c, 'S3_SSL') === 'true' ? 'https' : 'http'
 }
 
-export function resolveStorageEndpoint(c: Context): string {
+/**
+ * `serverSide` is for requests this runtime sends itself rather than presigned
+ * URLs handed to clients. It only changes the local Supabase Storage endpoint.
+ */
+export function resolveStorageEndpoint(c: Context, options: { serverSide?: boolean } = {}): string {
   const storageEndpoint = getEnv(c, 'S3_ENDPOINT')
   const protocol = resolveEndpointProtocol(c)
   const rawEndpoint = storageEndpoint.includes('://')
@@ -42,8 +46,19 @@ export function resolveStorageEndpoint(c: Context): string {
     if (!looksLikeLocalStorage || !rewriteLocalEndpoint)
       return endpointUrl.toString()
 
-    let forwardedHost = firstForwardedHeaderValue(c.req.header('X-Forwarded-Host'))
     const forwardedPort = firstForwardedHeaderValue(c.req.header('X-Forwarded-Port'))
+    if (options.serverSide) {
+      // Local Kong tells Storage its published port, and Storage checks the
+      // signature against that host. The caller's host is not reachable from the
+      // edge runtime container, so go back through the Docker host on that port.
+      endpointUrl.protocol = `${protocol}:`
+      endpointUrl.hostname = 'host.docker.internal'
+      if (forwardedPort)
+        endpointUrl.port = forwardedPort
+      return endpointUrl.toString()
+    }
+
+    let forwardedHost = firstForwardedHeaderValue(c.req.header('X-Forwarded-Host'))
     const hostHeader = c.req.header('Host')
 
     if (forwardedHost && !forwardedHost.includes(':') && forwardedPort) {
@@ -59,13 +74,13 @@ export function resolveStorageEndpoint(c: Context): string {
   }
 }
 
-function initS3(c: Context) {
+export function initS3(c: Context, options: { serverSide?: boolean } = {}) {
   const access_key_id = getEnv(c, 'S3_ACCESS_KEY_ID')
   const access_key_secret = getEnv(c, 'S3_SECRET_ACCESS_KEY')
   const storageRegion = getEnv(c, 'S3_REGION') || 'us-east-1'
   const bucket = getEnv(c, 'S3_BUCKET')
   const client = new S3Client({
-    endPoint: resolveStorageEndpoint(c),
+    endPoint: resolveStorageEndpoint(c, options),
     accessKey: access_key_id,
     pathStyle: true,
     secretKey: access_key_secret,

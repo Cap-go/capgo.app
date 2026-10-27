@@ -20,7 +20,9 @@
  *   bun run admin:migrate-legacy-bare-image-paths --apply --env-file=./internal/cloudflare/.env.preprod
  */
 import { mkdir, writeFile } from 'node:fs/promises'
+import type { ImageStore } from './admin_image_storage.ts'
 import { dirname } from 'node:path'
+import { createImageStore } from './admin_image_storage.ts'
 import {
   asyncPool,
   createSupabaseServiceClient,
@@ -42,6 +44,8 @@ const PLACEHOLDER_BARE_NAMES = new Set([
 ])
 
 type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
+// Images are stored in R2 (S3_* env vars), not Supabase Storage.
+let images: ImageStore
 
 type Kind = 'app_icon' | 'org_logo' | 'user_avatar'
 
@@ -309,49 +313,34 @@ async function listLegacyUsers(supabase: SupabaseClient, remaining: number | nul
 }
 
 async function storageObjectExists(supabase: SupabaseClient, path: string) {
-  // Prefer signed-URL probe over list+search (search can miss exact names past limit).
+  if (await images.exists(path))
+    return true
+  // Images live in R2 now. One still only in Supabase was not migrated yet:
+  // fail the row instead of letting the caller clear its database pointer.
   const { data, error } = await supabase.storage.from('images').createSignedUrl(path, 60)
   if (error) {
     if (/not found|404|Object not found|does not exist/i.test(error.message))
       return false
     throw error
   }
-  return !!data?.signedUrl
+  if (data?.signedUrl)
+    throw new Error(`"${path}" exists only in Supabase Storage. Run admin:migrate-supabase-images-to-r2 first.`)
+  return false
 }
 
 async function copyObject(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   fromPath: string,
   toPath: string,
   options?: { force?: boolean },
 ) {
   if (fromPath === toPath)
     return
-  const existsTarget = await storageObjectExists(supabase, toPath)
+  const existsTarget = await images.exists(toPath)
   if (existsTarget && !options?.force)
     return
-
-  if (existsTarget && options?.force) {
-    // Never remove-then-copy: a failed copy after delete would destroy the owned object.
-    const { data: blob, error: downloadError } = await supabase.storage.from('images').download(fromPath)
-    if (downloadError || !blob)
-      throw downloadError ?? new Error(`source missing: ${fromPath}`)
-    const { error: uploadError } = await supabase.storage.from('images').upload(toPath, blob, {
-      upsert: true,
-      contentType: blob.type || undefined,
-    })
-    if (uploadError)
-      throw uploadError
-    return
-  }
-
-  const { error } = await supabase.storage.from('images').copy(fromPath, toPath)
-  if (error) {
-    // Race / already exists
-    if (/already exists|duplicate|409/i.test(error.message))
-      return
-    throw error
-  }
+  // Copy overwrites the target in place; never remove-then-copy so a failed copy cannot destroy it.
+  await images.copy(fromPath, toPath)
 }
 
 /**
@@ -660,9 +649,7 @@ async function processRow(
     if (updated && deleteSource && bareRefIndex) {
       const remaining = consumeBareReference(bareRefIndex, row.sourcePath)
       if (remaining === 0 && !isPlaceholderBare(row.rawValue, row.sourcePath)) {
-        const { error } = await supabase.storage.from('images').remove([row.sourcePath])
-        if (error)
-          throw error
+        await images.remove([row.sourcePath])
         deletedSource = true
       }
     }
@@ -724,9 +711,7 @@ async function processRow(
   if (deleteSource && bareRefIndex) {
     const remaining = consumeBareReference(bareRefIndex, row.sourcePath)
     if (remaining === 0) {
-      const { error } = await supabase.storage.from('images').remove([row.sourcePath])
-      if (error)
-        throw error
+      await images.remove([row.sourcePath])
       deletedSource = true
     }
   }
@@ -760,6 +745,7 @@ async function main() {
   const fileEnv = await loadEnv(envFile)
   const env = { ...fileEnv, ...process.env }
   const supabase = createSupabaseServiceClient(env)
+  images = createImageStore(env)
 
   console.log(apply ? 'Mode: APPLY' : 'Mode: DRY RUN')
   console.log(`Env file: ${envFile}`)
