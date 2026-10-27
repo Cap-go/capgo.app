@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { describe, expect, it } from 'vitest'
+import { i18n } from '../src/modules/i18n'
 import { FORMAT_LOCALE_REGIONS, formatNumberValue, getFormatLocale, getFormatLocaleOptions, resolveFormatLocale } from '../src/services/formatLocale'
 import { useMainStore } from '../src/stores/main'
 
@@ -9,6 +10,20 @@ describe('format locale helpers', () => {
     expect(resolveFormatLocale('fr-FR')).toBe('fr-FR')
     expect(resolveFormatLocale('pt-BR')).toBe('pt-BR')
     expect(resolveFormatLocale('not-a-locale')).toBe('en-GB')
+  })
+
+  it('falls back to the UI language when the account has no format locale', () => {
+    setActivePinia(createPinia())
+    try {
+      expect(formatNumberValue(2000)).toBe('2,000')
+      i18n.global.locale.value = 'fr' as any
+      expect(getFormatLocale()).toBe('fr-FR')
+      expect(formatNumberValue(2000)).toBe(new Intl.NumberFormat('fr-FR').format(2000))
+      expect(formatNumberValue(2000)).not.toBe('2,000')
+    }
+    finally {
+      i18n.global.locale.value = 'en' as any
+    }
   })
 
   it('uses the account format locale from the main store', () => {

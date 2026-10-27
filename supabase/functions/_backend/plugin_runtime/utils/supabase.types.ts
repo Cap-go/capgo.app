@@ -2281,6 +2281,8 @@ export type Database = {
       }
       plans: {
         Row: {
+          alt_price_m_ids: string[]
+          alt_price_y_ids: string[]
           bandwidth: number
           build_time_unit: number
           created_at: string
@@ -2298,12 +2300,15 @@ export type Database = {
           price_y_id: string
           price_y_id_us: string | null
           price_m_id_us: string | null
+          regional_price_ids: Json
           storage: number
           stripe_id: string
           stripe_id_us: string | null
           updated_at: string
         }
         Insert: {
+          alt_price_m_ids?: string[]
+          alt_price_y_ids?: string[]
           bandwidth: number
           build_time_unit?: number
           created_at?: string
@@ -2321,12 +2326,15 @@ export type Database = {
           price_y_id: string
           price_y_id_us?: string | null
           price_m_id_us?: string | null
+          regional_price_ids?: Json
           storage: number
           stripe_id?: string
           stripe_id_us?: string | null
           updated_at?: string
         }
         Update: {
+          alt_price_m_ids?: string[]
+          alt_price_y_ids?: string[]
           bandwidth?: number
           build_time_unit?: number
           created_at?: string
@@ -2344,6 +2352,7 @@ export type Database = {
           price_y_id?: string
           price_y_id_us?: string | null
           price_m_id_us?: string | null
+          regional_price_ids?: Json
           storage?: number
           stripe_id?: string
           stripe_id_us?: string | null
@@ -4623,6 +4632,14 @@ export type Database = {
       queue_cron_stat_org_for_org: {
         Args: { customer_id: string; org_id: string }
         Returns: undefined
+      }
+      rbac_caller_can_check_user_permission: {
+        Args: {
+          p_org_id: string
+          p_skip_password_policy?: boolean
+          p_target_user_id: string
+        }
+        Returns: boolean
       }
       rbac_check_permission: {
         Args: {

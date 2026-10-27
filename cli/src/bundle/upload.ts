@@ -17,7 +17,7 @@ import pack from '../../package.json'
 import { trackEvent } from '../analytics/track'
 import { fetchChannelCompatibilityContext } from '../api/channels'
 import { fetchCliChannels, fetchLatestBundle } from '../api/cli-data'
-import { runCliPreflight } from '../api/preflight'
+import { printAgentUploadTrialNote, runCliPreflight } from '../api/preflight'
 import { checkAlerts } from '../api/update'
 import { fetchBundleVersionRow, upsertAppVersion } from '../api/versions'
 import { loadSavedCredentials } from '../build/credentials'
@@ -2134,8 +2134,10 @@ async function uploadBundleInternalWithReporter(preAppid: string, options: Optio
     }
   }
 
-  if (!silent && !result.skipped)
+  if (!silent && !result.skipped) {
+    await printAgentUploadTrialNote(preflight)
     getUploadReporter().outro('Time to share your update to the world 🌍')
+  }
 
   return result
 }

@@ -2,10 +2,10 @@ import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-
 import type { Context } from 'hono'
 import type { Bindings } from '../../supabase/functions/_backend/utils/cloudflare.ts'
 import { app as register } from '../../supabase/functions/_backend/auth/register.ts'
-import { app as apple } from '../../supabase/functions/_backend/auth/apple.ts'
 import { createMcpApp } from '../../supabase/functions/_backend/mcp/index.ts'
 import { app as accept_invitation } from '../../supabase/functions/_backend/private/accept_invitation.ts'
 import { app as billing_region } from '../../supabase/functions/_backend/private/billing_region.ts'
+import { app as plan_prices } from '../../supabase/functions/_backend/private/plan_prices.ts'
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as cli } from '../../supabase/functions/_backend/private/cli/index.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
@@ -39,7 +39,6 @@ import { app as publicStats } from '../../supabase/functions/_backend/private/pu
 import { app as release_live } from '../../supabase/functions/_backend/private/release_live.ts'
 import { app as replay } from '../../supabase/functions/_backend/private/replay.ts'
 import { app as request_manifest_upload } from '../../supabase/functions/_backend/private/request_manifest_upload.ts'
-import { app as revoke_apple_authorization } from '../../supabase/functions/_backend/private/revoke_apple_authorization.ts'
 import { app as role_bindings } from '../../supabase/functions/_backend/private/role_bindings.ts'
 // Manifest finalization validates size receipts issued by the files worker.
 import { app as set_manifest } from '../../supabase/functions/_backend/private/set_manifest.ts'
@@ -154,7 +153,6 @@ app.route('/check_cpu_usage', check_cpu_usage)
 app.route('/translation', translation)
 app.route('/plugin_regions', pluginRegions)
 app.route('/auth/register', register)
-app.route('/auth/apple', apple)
 // Hosted MCP server (POST /mcp) + OAuth discovery/endpoints. Tools replay public API requests
 // through this same worker with the caller's API key, so RBAC and rate limits apply unchanged.
 app.route('/', createMcpApp((request, c) => app.fetch(request, c.env, getExecutionContext(c))))
@@ -168,6 +166,7 @@ appPrivate.route('/store_top', storeTop)
 appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/cli', cli)
 appPrivate.route('/billing_region', billing_region)
+appPrivate.route('/plan_prices', plan_prices)
 appPrivate.route('/config', config)
 appPrivate.route('/console', console_data)
 appPrivate.route('/config/builder', configBuilder)
@@ -200,7 +199,6 @@ appPrivate.route('/stripe_billing', stripe_billing)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/stripe_past_due', stripe_past_due)
 appPrivate.route('/verify_email_otp', verify_email_otp)
-appPrivate.route('/revoke_apple_authorization', revoke_apple_authorization)
 appPrivate.route('/delete_failed_version', deleted_failed_version)
 appPrivate.route('/request_manifest_upload', request_manifest_upload)
 appPrivate.route('/set_manifest', set_manifest)

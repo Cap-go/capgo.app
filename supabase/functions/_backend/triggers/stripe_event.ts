@@ -18,11 +18,15 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { getOpenAIFirstPaymentAt, trackOpenAIFirstPayment } from '../utils/openai_ads_first_payment.ts'
 import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications.ts'
 import { beginWriteTransaction, closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { tierPricePercent } from '../utils/country_price_tier.ts'
+import { getPlanPriceInterval } from '../utils/plan_price_interval.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
+import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
 import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { getRegionalPriceTier } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
@@ -85,7 +89,7 @@ type StripeInfoRevenueState = {
   product_id?: string | null
   status?: Database['public']['Enums']['stripe_status'] | null
 } | null | undefined
-type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us'>
+type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'alt_price_m_ids' | 'alt_price_y_ids' | 'regional_price_ids'>
 type RevenuePlanKey = 'solo' | 'maker' | 'team' | 'enterprise'
 type ChurnReason = 'past_due_unresolved'
 const CHURNED_SUBSCRIPTION_STATUSES = new Set<Database['public']['Enums']['stripe_status']>(['canceled', 'deleted'])
@@ -261,19 +265,13 @@ function compactMetadata(metadata: Record<string, string | undefined>) {
   ) as Record<string, string>
 }
 
-type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us'>
+type PlanPriceIdsRow = Pick<PlanRow, 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'alt_price_m_ids' | 'alt_price_y_ids'>
 
 function getPlanType(
   plan: PlanPriceIdsRow,
   priceId: string | null | undefined,
 ) {
-  if (!priceId)
-    return undefined
-  if (plan.price_m_id === priceId || plan.price_m_id_us === priceId)
-    return 'monthly'
-  if (plan.price_y_id === priceId || plan.price_y_id_us === priceId)
-    return 'yearly'
-  return undefined
+  return getPlanPriceInterval(plan, priceId)
 }
 
 function getSubscriptionTrackingState(
@@ -292,8 +290,8 @@ function getSubscriptionTrackingState(
 
 function buildSubscriptionEventMetadata(
   stripeData: Pick<StripeData, 'data' | 'previousPriceId' | 'previousProductId'>,
-  currentPlan: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'>,
-  previousPlan?: Pick<PlanRow, 'name' | 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us'> | null,
+  currentPlan: Pick<PlanRow, 'name' | 'stripe_id' | 'stripe_id_us'> & PlanPriceIdsRow,
+  previousPlan?: (Pick<PlanRow, 'name' | 'stripe_id' | 'stripe_id_us'> & PlanPriceIdsRow) | null,
 ) {
   const currentPlanType = getPlanType(currentPlan, stripeData.data.price_id)
   const fallbackPreviousPlan = stripeData.previousProductId === currentPlan.stripe_id
@@ -331,11 +329,15 @@ function getPlanMrr(plan: RevenuePlanRow | null | undefined, priceId: string | n
   if (!plan || !priceId)
     return 0
 
-  if (plan.price_m_id === priceId || plan.price_m_id_us === priceId)
-    return Number(plan.price_m) || 0
+  const interval = getPlanPriceInterval(plan, priceId)
+  // Regional prices charge their tier's share of the plan price.
+  const tier = getRegionalPriceTier(plan.regional_price_ids, priceId)
+  const share = tier ? tierPricePercent(tier) / 100 : 1
+  if (interval === 'monthly')
+    return (Number(plan.price_m) || 0) * share
 
-  if (plan.price_y_id === priceId || plan.price_y_id_us === priceId)
-    return (Number(plan.price_y) || 0) / 12
+  if (interval === 'yearly')
+    return (Number(plan.price_y) || 0) * share / 12
 
   return 0
 }
@@ -642,7 +644,7 @@ function isStaleStripeEvent(
 async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
   const { data: plans, error } = await supabaseAdmin(c)
     .from('plans')
-    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us')
+    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, alt_price_m_ids, alt_price_y_ids, regional_price_ids')
     .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
 
   if (error) {
@@ -1124,7 +1126,7 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
   if (productIds.length) {
     const { data: plans } = await supabaseAdmin(c)
       .from('plans')
-      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us')
+      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us, alt_price_y_ids')
       .or(productIds.map(productId => planProductIdOrFilter(productId)).join(','))
     const plan = plans?.[0]
     if (!plan) {
@@ -1132,8 +1134,8 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
     }
     planName = plan.name
     const linePriceIds = (invoice.lines?.data ?? []).map((line: any) => line.pricing?.price_details?.price)
-    const yearlyPriceIds = [plan.price_y_id, plan.price_y_id_us].filter((id): id is string => !!id)
-    if (yearlyPriceIds.includes(stripeData.data.price_id ?? '') || linePriceIds.some((id: unknown) => typeof id === 'string' && yearlyPriceIds.includes(id))) {
+    const yearlyPriceIds = new Set([plan.price_y_id, plan.price_y_id_us, ...(plan.alt_price_y_ids ?? [])].filter((id): id is string => !!id))
+    if (yearlyPriceIds.has(stripeData.data.price_id ?? '') || linePriceIds.some((id: unknown) => typeof id === 'string' && yearlyPriceIds.has(id))) {
       planType = 'yearly'
     }
   }
@@ -1551,13 +1553,30 @@ async function handleCustomerProfileStripeEvent(
       stripeEvent,
     )
     await syncBillingBentoTagsFromStoredStripeInfo(c, billingOrg, stripeData.data.customer_id)
+    // A new billing address or default card can disqualify a regional discount.
+    if (stripeEvent.type === 'customer.updated' && ['address', 'invoice_settings'].some(key => key in (stripeEvent.data.previous_attributes ?? {})))
+      await enforceRegionalPriceForCustomer(c, getStripe(c, getWebhookBillingAccount(c)), getWebhookBillingAccount(c), stripeData.data.customer_id)
   }
 
   if (stripeEvent.type === 'customer.created') {
-    // Compatibility with the native Stripe -> Bento trigger: one Stripe customer
-    // email, even before provisioning links the org. Never fan out to org members.
-    // This contract includes every customer.created on both accounts; org metadata
-    // provides optional context, not a product/cohort eligibility check for US.
+    // Backend replacement for Bento's native Stripe "CustomerCreated" trigger:
+    // one send per customer.created delivery on BOTH billing accounts (EE/US), to
+    // the Stripe customer's email only. Never fan out to org members.
+    // Two live Bento flows use org:legacy_stripe_trial_started as their trigger:
+    // - "Trial": countdown/upgrade emails on days 7/12/14/15/18/23/28:
+    //   "Halfway", "3 days left", "ends today", "trial ended",
+    //   "Stuck after trial? Reply EXTEND or ONBOARD", "Without Capgo...",
+    //   "What was missing". The flow has its own "already paying" checks.
+    // - "Onboarding": email drip from day 1 ("Can you DM Ionic's founder..."),
+    //   then Channels, Device logs, "Live updates were one command. Native builds
+    //   are too.", and Notifications. Deduplicated by flow_onboarding:started;
+    //   stops on onboarded / first_app_update / onboarding_disabled.
+    // Despite its name, ALWAYS send this event for every customer.created, even if
+    // the org/user is NOT eligible for a trial (e.g. direct-offer/paid-ads signups
+    // with no trial, or a customer created before the org is linked).
+    // Onboarding depends on it for every new customer. Trial/paid filtering belongs
+    // in Bento flows, not here: do not add trial/plan/cohort eligibility checks.
+    // Org metadata is optional context, never an eligibility requirement.
     const email = getStripeCustomerEmailFromEvent(stripeEvent)
     const event = 'org:legacy_stripe_trial_started'
     const context = {
@@ -1981,6 +2000,13 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   if (stripeEvent.type === 'customer.subscription.created'
     || (stripeEvent.type === 'customer.subscription.updated' && stripeEvent.data.previous_attributes?.status)) {
     await cancelTrialPlanScheduleForSubscription(c, getStripe(c, getWebhookBillingAccount(c)), stripeEvent.data.object)
+  }
+
+  // A regional discount needs a card and billing address from its region; otherwise the price is raised.
+  // Also checked when a trial-plan schedule releases the subscription, since scheduled ones are skipped.
+  if (stripeEvent.type === 'customer.subscription.created'
+    || (stripeEvent.type === 'customer.subscription.updated' && ['status', 'default_payment_method', 'schedule'].some(key => key in (stripeEvent.data.previous_attributes ?? {})))) {
+    await enforceRegionalPrice(c, getStripe(c, getWebhookBillingAccount(c)), getWebhookBillingAccount(c), stripeEvent.data.object)
   }
 
   const subscriptionResponse = await handleSubscriptionStripeEvent(c, stripeEvent, stripeData, org, customer)

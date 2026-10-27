@@ -47,7 +47,7 @@ const STATS_ACTION_RE = /^\w{1,64}$/
 // PROVIDER_INFRA_ASNS (plugin_runtime/utils/providerAsns.ts): without a fill
 // the snippet does not know whether the app blocks them, so their /stats keep
 // reaching the worker, which answers them 429 when it does.
-const PROVIDER_ASNS = [15169, 16591, 19527, 36040, 36492, 43515, 139070, 396982, 714, 6185]
+const PROVIDER_ASNS = new Set([15169, 16591, 19527, 36040, 36492, 43515, 139070, 396982, 714, 6185])
 const EDGE_FILL_HEADER = 'X-Capgo-Edge-Fill'
 const EDGE_IP_LIMIT_HEADER = 'X-Capgo-Edge-Ip-Limit'
 const EDGE_STAT_HEADER = 'X-Capgo-Edge-Stat'
@@ -68,6 +68,14 @@ const MAX_EDGE_STAT_HEADER_BYTES = 8000
 const APP_ID_RE = /^[a-z0-9]+(?:\.[\w-]+)+$/i
 const DEVICE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const PLAIN_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+// @std/semver FULL_REGEXP, piece by piece: core numbers kept below
+// MAX_SAFE_INTEGER (its parse rejects larger ones), no surrounding whitespace
+// (it trims) and a lowercase v prefix only.
+const SEMVER_PARTS_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+(.+))?$/
+const SEMVER_CORE_NUMBER_RE = /^(?:0|[1-9]\d{0,14})$/
+const SEMVER_PRERELEASE_ID_RE = /^(?:0|[1-9]\d*|\d*[a-zA-Z-][\da-zA-Z-]*)$/
+const SEMVER_BUILD_ID_RE = /^[\da-zA-Z-]+$/
+const MAX_SEMVER_LENGTH = 256
 const DEVICE_PLATFORMS = new Set(['ios', 'android', 'electron'])
 
 function createBudget() {
@@ -509,9 +517,28 @@ function isValidStatsMetadata(metadata) {
   return entries.length <= 30 && entries.every(([key, value]) => key.length <= 64 && typeof value === 'string' && value.length <= 2048)
 }
 
-/** parsePluginBody rejects a native version it cannot read as semver; anything but plain x.y.z goes to the worker. */
+/**
+ * parsePluginBody rejects a native version @std/semver cannot parse after
+ * fixSemver; prerelease and build tags (1.2.3-native.4+ota.5) are valid.
+ */
 function isAnswerableStatsVersionBuild(versionBuild) {
-  return versionBuild === undefined || versionBuild === '' || (typeof versionBuild === 'string' && PLAIN_SEMVER_RE.test(fixSemver(versionBuild)))
+  if (versionBuild === undefined || versionBuild === '')
+    return true
+  if (typeof versionBuild !== 'string')
+    return false
+  const version = fixSemver(versionBuild)
+  return version.length <= MAX_SEMVER_LENGTH && isSemver(version)
+}
+
+function isSemver(version) {
+  const parts = SEMVER_PARTS_RE.exec(version)
+  if (!parts)
+    return false
+  // Absent tags read as '': SEMVER_PARTS_RE never captures an empty one.
+  const [, major, minor, patch, prerelease = '', build = ''] = parts
+  return [major, minor, patch].every(part => SEMVER_CORE_NUMBER_RE.test(part))
+    && (!prerelease || prerelease.split('.').every(id => SEMVER_PRERELEASE_ID_RE.test(id)))
+    && (!build || build.split('.').every(id => SEMVER_BUILD_ID_RE.test(id)))
 }
 
 /**
@@ -552,7 +579,7 @@ function isProviderNetwork(request, fill) {
   const asn = request.cf?.asn
   // No fill (STATS_ANSWER_ALL): any provider network could be blocked.
   if (!isPlainObject(fill))
-    return typeof asn !== 'number' || PROVIDER_ASNS.includes(asn)
+    return typeof asn !== 'number' || PROVIDER_ASNS.has(asn)
   if (fill.pa === undefined)
     return false
   return typeof asn !== 'number' || !Array.isArray(fill.pa) || fill.pa.includes(asn)

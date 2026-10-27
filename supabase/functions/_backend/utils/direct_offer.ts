@@ -4,7 +4,7 @@ import { cloudlogErr, serializeError } from './logging.ts'
 /**
  * Paid-ads signups ("pay first") carry `offer = 'direct'` in their auth app
  * metadata (raw_app_meta_data). Only the server writes it, at signup
- * (/auth/register and the Apple flow), so users cannot remove it to get a
+ * (/auth/register), so users cannot remove it to get a
  * trial. Their orgs get no free trial: trial_at is set to the creation time.
  * Only this exact value has any effect. Keep in sync with
  * public.generate_org_user_stripe_info_on_org_create().

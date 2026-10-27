@@ -10,10 +10,12 @@ import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { applyDirectOfferBentoTags, buildBillingPlanBentoTags } from './billing_bento_tags.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
+import { CREATE_DEFAULT_API_KEYS_SQL } from './default_apikeys.ts'
 import { getDirectOfferStatus } from './direct_offer.ts'
 import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
+import { getPlanPriceInterval } from './plan_price_interval.ts'
 import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
 import { Constants } from './supabase.types.ts'
@@ -1056,113 +1058,9 @@ export async function createApiKey(c: Context, userId: string) {
       return
     }
 
+    // Default keys are capped at the owner's own rights per org/app.
     await pgClient.query(
-      `WITH default_keys(name, org_role_name, app_role_name) AS (
-         VALUES
-           ('default org admin', public.rbac_role_org_admin(), NULL::text),
-           ('default app uploader', public.rbac_role_org_member(), public.rbac_role_app_uploader()),
-           ('default app reader', public.rbac_role_org_member(), public.rbac_role_app_reader())
-       ),
-       inserted AS (
-         INSERT INTO public.apikeys (
-           user_id,
-           key,
-           key_hash,
-           name
-         )
-         SELECT
-           $1::uuid,
-           gen_random_uuid()::text,
-           NULL,
-           default_key.name
-         FROM default_keys AS default_key
-         RETURNING user_id, rbac_id, name
-       ),
-       inserted_with_roles AS (
-         SELECT
-           inserted.user_id,
-           inserted.rbac_id,
-           inserted.name,
-           default_keys.org_role_name,
-           default_keys.app_role_name
-         FROM inserted
-         JOIN default_keys USING (name)
-       ),
-       current_orgs AS (
-         SELECT DISTINCT rb.org_id
-         FROM public.role_bindings rb
-         WHERE rb.principal_type = public.rbac_principal_user()
-           AND rb.principal_id = $1::uuid
-           AND rb.org_id IS NOT NULL
-           AND (rb.expires_at IS NULL OR rb.expires_at > now())
-
-         UNION
-
-         SELECT DISTINCT g.org_id
-         FROM public.group_members gm
-         INNER JOIN public.groups g ON g.id = gm.group_id
-         INNER JOIN public.role_bindings rb
-           ON rb.principal_type = public.rbac_principal_group()
-           AND rb.principal_id = gm.group_id
-           AND rb.org_id = g.org_id
-         WHERE gm.user_id = $1::uuid
-           AND rb.org_id IS NOT NULL
-           AND (rb.expires_at IS NULL OR rb.expires_at > now())
-       ),
-       org_bindings AS (
-         INSERT INTO public.role_bindings (
-           principal_type,
-           principal_id,
-           role_id,
-           scope_type,
-           org_id,
-           granted_by,
-           reason,
-           is_direct
-         )
-         SELECT
-           public.rbac_principal_apikey(),
-           inserted_with_roles.rbac_id,
-           roles.id,
-           public.rbac_scope_org(),
-           current_orgs.org_id,
-           inserted_with_roles.user_id,
-           'Default API key RBAC org binding',
-           true
-         FROM inserted_with_roles
-         CROSS JOIN current_orgs
-         JOIN public.roles roles
-           ON roles.name = inserted_with_roles.org_role_name
-         ON CONFLICT DO NOTHING
-       )
-       INSERT INTO public.role_bindings (
-         principal_type,
-         principal_id,
-         role_id,
-         scope_type,
-         org_id,
-         app_id,
-         granted_by,
-         reason,
-         is_direct
-       )
-       SELECT
-         public.rbac_principal_apikey(),
-         inserted_with_roles.rbac_id,
-         roles.id,
-         public.rbac_scope_app(),
-         apps.owner_org,
-         apps.id,
-         inserted_with_roles.user_id,
-         'Default API key RBAC app binding',
-         true
-       FROM inserted_with_roles
-       JOIN current_orgs ON true
-       JOIN public.apps apps ON apps.owner_org = current_orgs.org_id
-       JOIN public.roles roles
-         ON roles.name = inserted_with_roles.app_role_name
-       WHERE inserted_with_roles.app_role_name IS NOT NULL
-       ON CONFLICT DO NOTHING`,
+      CREATE_DEFAULT_API_KEYS_SQL,
       [userId],
     )
     await pgClient.query('COMMIT')
@@ -1215,7 +1113,7 @@ async function customerToSegmentOrgBase(
     trial1: false,
     trial0: false,
     paying: false,
-    payingMonthly: !!price_id && (plan?.price_m_id === price_id || plan?.price_m_id_us === price_id),
+    payingMonthly: !!plan && getPlanPriceInterval(plan, price_id) === 'monthly',
     overuse: false,
     canceled: await isCanceledOrg(c, orgId),
     issueSegment: false,

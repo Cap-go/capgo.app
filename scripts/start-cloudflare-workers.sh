@@ -114,15 +114,10 @@ mkdir -p "${PERSIST_DIR}"
 
 # Route worker S3 calls through the selected isolated Supabase API endpoint.
 S3_ENDPOINT_TO_USE="${S3_ENDPOINT:-${SUPABASE_URL%/}/storage/v1/s3}"
-# The Storage S3 gateway signs with its own keys, not the MinIO defaults in .env.local.
-S3_ACCESS_KEY_ID_TO_USE="${S3_ACCESS_KEY_ID:-}"
-S3_SECRET_ACCESS_KEY_TO_USE="${S3_SECRET_ACCESS_KEY:-}"
-S3_REGION_TO_USE="${S3_REGION:-}"
-if [ -z "${S3_ENDPOINT:-}" ]; then
-  S3_ACCESS_KEY_ID_TO_USE="${S3_ACCESS_KEY_ID_TO_USE:-$(get_supabase_status_var 'S3_PROTOCOL_ACCESS_KEY_ID')}"
-  S3_SECRET_ACCESS_KEY_TO_USE="${S3_SECRET_ACCESS_KEY_TO_USE:-$(get_supabase_status_var 'S3_PROTOCOL_ACCESS_KEY_SECRET')}"
-  S3_REGION_TO_USE="${S3_REGION_TO_USE:-$(get_supabase_status_var 'S3_PROTOCOL_REGION')}"
-fi
+# Sign them with that Storage instance's S3 keys, not the MinIO defaults in .env.local.
+S3_ACCESS_KEY_ID_TO_USE="${S3_ACCESS_KEY_ID:-$(get_supabase_status_var 'S3_PROTOCOL_ACCESS_KEY_ID')}"
+S3_SECRET_ACCESS_KEY_TO_USE="${S3_SECRET_ACCESS_KEY:-$(get_supabase_status_var 'S3_PROTOCOL_ACCESS_KEY_SECRET')}"
+S3_REGION_TO_USE="${S3_REGION:-$(get_supabase_status_var 'S3_PROTOCOL_REGION')}"
 
 API_PID=''
 PLUGIN_PID=''
@@ -155,15 +150,19 @@ CLOUDFLARE_FUNCTION_URL=${CLOUDFLARE_FUNCTION_URL}
 FILES_PUBLIC_URL=http://127.0.0.1:${CLOUDFLARE_FILES_PORT}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
 S3_ENDPOINT=${S3_ENDPOINT_TO_USE}
-${S3_ACCESS_KEY_ID_TO_USE:+S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID_TO_USE}}
-${S3_SECRET_ACCESS_KEY_TO_USE:+S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY_TO_USE}}
-${S3_REGION_TO_USE:+S3_REGION=${S3_REGION_TO_USE}}
 # Worker requests must keep the isolated Storage API host instead of their own host.
 S3_REWRITE_LOCAL_ENDPOINT=false
 RATE_LIMIT_API_KEY=999999
 RATE_LIMIT_FAILED_AUTH=999999
 RATE_LIMIT_CHANNEL_SELF_IP=999999
 ENV_EOF
+
+for s3_var in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_REGION; do
+  s3_value_var="${s3_var}_TO_USE"
+  if [[ -n "${!s3_value_var}" ]]; then
+    printf '%s=%s\n' "${s3_var}" "${!s3_value_var}" >> "${RUNTIME_ENV_FILE}"
+  fi
+done
 
 # Start API worker on its isolated port.
 echo -e "${GREEN}Starting API worker on port ${CLOUDFLARE_API_PORT}...${NC}"

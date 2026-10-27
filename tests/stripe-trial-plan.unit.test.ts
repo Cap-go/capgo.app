@@ -8,6 +8,7 @@ import {
   cancelTrialPlanScheduleForSubscription,
   createStartNowSubscription,
   findPendingTrialPlanSchedule,
+  getTrialPlanPriceId,
   getTrialPlanStartDate,
   holdTrialPlanLock,
   settleTrialPlanFirstInvoice,
@@ -287,6 +288,13 @@ describe('cancel trial plan', () => {
 })
 
 describe('schedulable trial plans', () => {
+  it('schedules the regional price the visitor qualifies for, else the full price', () => {
+    const plan = { stripe_id: 'prod_solo', price_m_id: 'price_solo_m', price_y_id: 'price_solo_y', regional_price_ids: { p50: { price_m_id: 'price_solo_m_p50' } } }
+    expect(getTrialPlanPriceId(plan, 'ee', 'p50')).toBe('price_solo_m_p50')
+    expect(getTrialPlanPriceId(plan, 'ee', 'p70')).toBe('price_solo_m')
+    expect(getTrialPlanPriceId({ ...plan, regional_price_ids: {} }, 'ee', 'p50')).toBe('price_solo_m')
+  })
+
   it('exposes Solo, Maker and Team for the plan picker', async () => {
     const { SCHEDULABLE_TRIAL_PLAN_NAMES } = await import('../supabase/functions/_backend/utils/stripe_trial_plan.ts')
     expect([...SCHEDULABLE_TRIAL_PLAN_NAMES]).toEqual(['Solo', 'Maker', 'Team'])

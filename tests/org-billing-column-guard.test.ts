@@ -212,6 +212,99 @@ describe('org customer_id guard', () => {
     expect(orgRow?.customer_id).toBe(replacementCustomerId)
   })
 
+  it.each([
+    ['auto_top_up_enabled', { auto_top_up_enabled: true }],
+    ['auto_top_up_threshold', { auto_top_up_threshold: 5000 }],
+    ['auto_top_up_monthly_limit', { auto_top_up_monthly_limit: 100 }],
+    ['auto_top_up_last_attempt_at', { auto_top_up_last_attempt_at: '2000-01-01T00:00:00Z' }],
+    ['has_usage_credits', { has_usage_credits: true }],
+  ])('blocks org_admin from changing %s via PostgREST', async (_column, body) => {
+    const { data: before, error: beforeError } = await serviceRoleSupabase
+      .from('orgs')
+      .select('auto_top_up_enabled, auto_top_up_threshold, auto_top_up_monthly_limit, auto_top_up_last_attempt_at, has_usage_credits')
+      .eq('id', orgId)
+      .single()
+    expect(beforeError).toBeNull()
+
+    const { response, data } = await patchOrg(settingsAdminHeaders, body)
+
+    expect(response.status).toBe(403)
+    expect(data).toMatchObject({
+      code: '42501',
+      message: 'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+    })
+
+    const { data: after, error: afterError } = await serviceRoleSupabase
+      .from('orgs')
+      .select('auto_top_up_enabled, auto_top_up_threshold, auto_top_up_monthly_limit, auto_top_up_last_attempt_at, has_usage_credits')
+      .eq('id', orgId)
+      .single()
+    expect(afterError).toBeNull()
+    expect(after).toEqual(before)
+  })
+
+  it('blocks org_super_admin from changing auto top-up columns via PostgREST', async () => {
+    const { response, data } = await patchOrg(superAdminHeaders, {
+      auto_top_up_enabled: true,
+      auto_top_up_threshold: 5000,
+    })
+
+    expect(response.status).toBe(403)
+    expect(data).toMatchObject({
+      code: '42501',
+      message: 'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+    })
+  })
+
+  it('still allows org_admin to send unchanged billing columns with a settings update', async () => {
+    const updatedName = `Org billing guard noop ${fixtureId}`
+    const { response } = await patchOrg(settingsAdminHeaders, {
+      name: updatedName,
+      auto_top_up_enabled: false,
+      has_usage_credits: false,
+    })
+
+    expect(response.status).toBe(200)
+  })
+
+  it('allows billing admins to save auto top-up settings through the credits API', async () => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits/auto-top-up'), {
+      method: 'POST',
+      headers: {
+        ...superAdminHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ orgId, enabled: false, threshold: 30, monthlyLimit: 0 }),
+    })
+
+    expect(response.status).toBe(200)
+
+    const { data: orgRow, error: readError } = await serviceRoleSupabase
+      .from('orgs')
+      .select('auto_top_up_enabled, auto_top_up_threshold')
+      .eq('id', orgId)
+      .single()
+
+    expect(readError).toBeNull()
+    expect(orgRow?.auto_top_up_enabled).toBe(false)
+    expect(Number(orgRow?.auto_top_up_threshold)).toBe(30)
+  })
+
+  it('rejects auto top-up saves through the credits API for org_admin', async () => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/credits/auto-top-up'), {
+      method: 'POST',
+      headers: {
+        ...settingsAdminHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ orgId, enabled: false, threshold: 40 }),
+    })
+
+    expect(response.status).toBe(400)
+    const payload = await response.json() as { error?: string }
+    expect(payload.error).toBe('not_authorized')
+  })
+
   it('assigns pending customer_id when creating an org via the organization API', async () => {
     const orgName = `Org customer_id guard create ${fixtureId}`
 

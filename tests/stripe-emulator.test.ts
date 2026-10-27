@@ -17,6 +17,7 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
 function createContext() {
   return {
     get: (key: string) => key === 'requestId' ? 'stripe-emulator-test' : undefined,
+    req: { raw: {}, header: () => undefined },
   } as any
 }
 

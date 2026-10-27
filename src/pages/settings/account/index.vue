@@ -449,7 +449,8 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     email: main.user.email,
     country: form.country,
     discord_username: form.discord_username || null,
-    format_locale: formatLocale,
+    // Keep "follow UI language" (null) unless the user picked a different format.
+    format_locale: !main.user.format_locale && formatLocale === currentFormatLocale ? null : formatLocale,
   }
 
   if (main.user?.email !== form.email) {
@@ -462,7 +463,7 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     toast.success('A confirmation email was sent click to link to confirm your new email', {
       duration: 10000,
     })
-    updateData.email = form.email
+    // public.users.email follows the auth email; it syncs once the change is confirmed.
   }
 
   const { data: usr, error: dbError } = await capgo

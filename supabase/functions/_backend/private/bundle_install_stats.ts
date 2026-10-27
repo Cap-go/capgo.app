@@ -1,15 +1,17 @@
 import type { Context } from 'hono'
 import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { BundleLegacyCheckFailures, LegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import type { VersionUsage, VersionUsageChannel } from '../utils/types.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
-import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readLegacyCheckFailuresCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
+import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { mergeLegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
@@ -94,6 +96,12 @@ export interface BundleInstallStatsResponse {
     fail: number
     success_rate: number | null
   }
+  // download_fail from plugins that also send it for a failed update check:
+  // never counted above, shown so users know why and update the plugin.
+  legacy_check_failures: LegacyCheckFailures | null
+  // Per bundle, including bundles without install or failure rows in the
+  // period, so a single-bundle view keeps its own count and plugin versions.
+  legacy_check_failures_by_bundle: BundleLegacyCheckFailures[]
 }
 
 interface InstallTimingSample {
@@ -293,6 +301,7 @@ function buildBundleInstallResponse(input: {
   successRows: BundleSuccessRow[]
   timingRows: Map<string, BundleTimingRow>
   versionFilter?: Set<string>
+  legacyCheckFailures?: BundleLegacyCheckFailures[]
 }): BundleInstallStatsResponse {
   const versionNames = new Set<string>()
   for (const row of input.successRows) {
@@ -335,6 +344,7 @@ function buildBundleInstallResponse(input: {
 
   const totalInstall = bundles.reduce((sum, bundle) => sum + bundle.install, 0)
   const totalFail = bundles.reduce((sum, bundle) => sum + bundle.fail, 0)
+  const legacyByBundle = (input.legacyCheckFailures ?? []).filter(bundle => !input.versionFilter || input.versionFilter.has(bundle.version_name))
 
   const endDate = dayjs(input.end).utc().startOf('day')
   const startDate = dayjs(input.start).utc().startOf('day')
@@ -353,6 +363,8 @@ function buildBundleInstallResponse(input: {
       fail: totalFail,
       success_rate: computeSuccessRate(totalInstall, totalFail),
     },
+    legacy_check_failures: mergeLegacyCheckFailures(legacyByBundle),
+    legacy_check_failures_by_bundle: legacyByBundle,
   }
 }
 
@@ -450,6 +462,7 @@ function filterResponseByVersionName(
   const bundles = response.bundles.filter(bundle => bundle.version_name === versionName)
   const totalInstall = bundles.reduce((sum, bundle) => sum + bundle.install, 0)
   const totalFail = bundles.reduce((sum, bundle) => sum + bundle.fail, 0)
+  const legacyByBundle = (response.legacy_check_failures_by_bundle ?? []).filter(bundle => bundle.version_name === versionName)
   return {
     ...response,
     bundles,
@@ -458,6 +471,8 @@ function filterResponseByVersionName(
       fail: totalFail,
       success_rate: computeSuccessRate(totalInstall, totalFail),
     },
+    legacy_check_failures: mergeLegacyCheckFailures(legacyByBundle),
+    legacy_check_failures_by_bundle: legacyByBundle,
   }
 }
 
@@ -617,6 +632,13 @@ async function readBundleInstallStatsCF(
   // version names only.
   const queryStart = start.subtract(2, 'hour')
   const versionNames = versionFilter ? [...versionFilter] : undefined
+  const legacyCheckFailuresPromise = readLegacyCheckFailuresCF(c, {
+    appId,
+    start: start.toDate(),
+    end: endExclusive.toDate(),
+    channel,
+    versionNames,
+  })
   const events = await readInstallTimingEventsCFChunked(c, {
     appId,
     queryStart,
@@ -692,6 +714,7 @@ async function readBundleInstallStatsCF(
     successRows,
     timingRows,
     versionFilter,
+    legacyCheckFailures: await legacyCheckFailuresPromise,
   })
 }
 
@@ -797,6 +820,13 @@ app.post('/', middlewareAuth, async (c) => {
   const channelId = typeof body.channel_id === 'number' && Number.isFinite(body.channel_id)
     ? body.channel_id
     : undefined
+
+  // A channel filter is derived from that channel's deploy history, and the
+  // cached response is shared per app + channel, so check the channel-scoped
+  // history permission before any cache lookup.
+  if (channelId !== undefined && !(await checkPermission(c, 'channel.read_history', { appId, channelId }))) {
+    throw quickError(403, 'channel_access_denied', 'You can\'t access this channel history', { app_id: appId, channel_id: channelId })
+  }
 
   try {
     return c.json(await readBundleInstallStats(c, appId, days, channelId, versionName))

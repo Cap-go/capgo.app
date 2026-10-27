@@ -5,7 +5,7 @@ import type { Permission } from '../utils/rbac.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { emitCommittedAppOnboardingHistory } from '../utils/app_onboarding_posthog.ts'
-import { getAppOnboardingStepIds, hasSupportedOtaTodoList, parseAppOnboarding, pickAppOnboardingSource } from '../utils/appOnboarding.ts'
+import { getAppOnboardingStepIds, hasSupportedOtaTodoList, inferredAddCodeStep, parseAppOnboarding, pickAppOnboardingSource, shouldInferAddCode } from '../utils/appOnboarding.ts'
 import { tryCompletePendingAppOnboarding } from '../utils/appOnboardingCompletion.ts'
 import { persistAuthorizedOnboardingMutation } from '../utils/appOnboardingMutation.ts'
 import { parseBody, quickError, useCors } from '../utils/hono.ts'
@@ -95,6 +95,10 @@ function observedProgressPatch(current: AppOnboardingState, observations: Observ
     if (allowedSteps.has(`ota.${id}`) && present && current.steps[id]?.status !== 'done')
       patch.steps![id] = { status: 'done', at }
   }
+  // Match the todo refresh cron right away, so a read never shows a delivered
+  // update next to a pending app-ready step.
+  if (allowedSteps.has('ota.add_code') && shouldInferAddCode(current, observations.test_update === true))
+    patch.steps!.add_code = inferredAddCodeStep(at)
   if (allowedSteps.has('ota.add_channel') && observations.add_channel === false && current.steps.add_channel?.status === 'done')
     patch.steps!.add_channel = { status: 'pending' }
   const sourceChanged = canMarkCliStart && pickAppOnboardingSource(current.source, 'cli') !== current.source
@@ -103,7 +107,8 @@ function observedProgressPatch(current: AppOnboardingState, observations: Observ
 
 export async function persistObservedProgress(c: Context<MiddlewareKeyVariables>, appId: string, observations: Observations) {
   const result = await persistAuthorizedOnboardingMutation(c, appId, {
-    requestedSteps: (Object.keys(observations) as Array<keyof Observations>).map(id => `ota.${id}` as const),
+    // add_code is never observed directly; observedProgressPatch infers it.
+    requestedSteps: [...Object.keys(observations), 'add_code'].map(id => `ota.${id}` as const),
     stepOverrides: { 'ota.login_cli_mcp': { permission: 'app.read', authType: 'apikey' } },
     buildPatch: ({ current, allowedSteps, at }) => observedProgressPatch(current, observations, allowedSteps, at),
     afterPersist: tryCompletePendingAppOnboarding,
@@ -218,6 +223,10 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   // Conservatively assume all observed steps are writable for this no-op test.
   // Real changes still recheck permissions and rebuild against the locked row.
   const observedSteps = new Set(Object.keys(observations).map(id => `ota.${id}`))
+  // Inference repeats on every read, so check write access first: read-only
+  // pollers must not take the org lock every 2s for a write they cannot make.
+  if (shouldInferAddCode(current, observations.test_update === true) && await canWriteOnboarding(c, appId))
+    observedSteps.add('ota.add_code')
   const onboarding = observedProgressPatch(current, observations, observedSteps)
     ? await persistObservedProgress(c, appId, observations) ?? row.onboarding
     : row.onboarding

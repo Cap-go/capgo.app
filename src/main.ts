@@ -5,7 +5,6 @@ import { setupLayouts } from 'virtual:generated-layouts'
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from 'vue-router/auto-routes'
-import { prepareAppleOAuthLanding } from '~/services/appleOAuth'
 import { getLocalConfig } from '~/services/console'
 import { installDeepLinkHandler } from '~/services/deepLinks'
 import { isDocumentNavigationPending, replaceDocument } from '~/services/documentNavigation'
@@ -13,6 +12,7 @@ import { getNativeExternalPurchaseRedirect, isNativeAppStoreContext, isNativeExt
 import { posthogLoader } from '~/services/posthog'
 import { captureConsoleAttributionFromLocation } from '~/services/signupAttribution'
 import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
+import { installConsoleImageFallback } from '~/services/storage'
 import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 import App from './App.vue'
 import { defaultApiHost, getRemoteConfig } from './services/console'
@@ -20,8 +20,6 @@ import { resolveConsoleApiBase } from './services/consoleAuth'
 import '@fontsource-variable/inter'
 // your custom styles here
 import './styles/style.css'
-
-prepareAppleOAuthLanding()
 
 // Handle chunk load errors (stale chunks after deployment)
 // When a new version is deployed, old chunk URLs return 404/HTML instead of JS
@@ -165,6 +163,7 @@ function isGuestRoutePath(path: string) {
 
 getRemoteConfig()
 const app = createApp(App)
+installConsoleImageFallback()
 CapacitorUpdater.notifyAppReady()
 console.log(`Capgo Version : "${import.meta.env.VITE_APP_VERSION}"`)
 // setup up pages with layouts

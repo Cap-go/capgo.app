@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { releaseLiveTestUtils } from '../supabase/functions/_backend/private/release_live.ts'
 import { lintAnalyticsEngineSql } from '../supabase/functions/_backend/utils/analyticsEngineSqlLint.ts'
+import { NOT_LEGACY_DOWNLOAD_FAIL_CF } from '../supabase/functions/_backend/utils/legacyDownloadFail.ts'
 
 describe('release live helpers', () => {
   it.concurrent('picks the smallest bucket that keeps the series bounded', () => {
@@ -87,6 +88,7 @@ describe('release live helpers', () => {
     const failures = releaseLiveTestUtils.buildFailuresQueryCF('com.demo.app', '1.0.0', start, end, { id: 7, name: 'prod\'uction' })
     expect(failures).toContain('blob3 = \'1.0.0\'')
     expect(failures).toContain('LIKE \'%fail%\'')
+    expect(failures).toContain(`AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF}`)
     expect(failures).toContain('AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))')
   })
 
@@ -106,7 +108,8 @@ describe('release live helpers', () => {
     expect(query).toContain('sum(if(last_set >= first_fail, 0, 1)) AS stuck')
     expect(query).toContain('WHERE first_fail < 4102444800')
     // Only failures are channel scoped: set logs carry no channel.
-    expect(query).toContain('(blob2 = \'set\' OR ((blob2 LIKE \'%_fail\' OR blob2 IN (\'insufficient_disk_space\', \'cannotGetBundle\', \'blocked_by_server_url\', \'backend_refusal\')) AND (blob9 = \'7\' OR (blob9 = \'\' AND blob8 = \'prod\'\'uction\'))))')
+    // download_fail of plugins that also send it for a failed update check is no failure.
+    expect(query).toContain(`(blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN ('insufficient_disk_space', 'cannotGetBundle', 'blocked_by_server_url', 'backend_refusal')) AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF} AND (blob9 = '7' OR (blob9 = '' AND blob8 = 'prod''uction'))))`)
 
     // The Postgres fallback must keep the same rules.
     const sb = releaseLiveTestUtils.FAILED_DEVICES_QUERY_SB
@@ -229,5 +232,33 @@ describe('release live helpers', () => {
     expect(releaseLiveTestUtils.computeRollout({ ...rolloutProduction.rollout, percentage_bps: 0 }, prodNew, { '1.1.0': 5 }, null).status).toBe('zero')
     // Reach is capped: sticky devices from an earlier, wider rollout can exceed the share.
     expect(releaseLiveTestUtils.computeRollout(rolloutProduction.rollout, prodNew, { '1.2.0': 60, '1.1.0': 40 }, null).reach_percent).toBe(100)
+  })
+
+  it.concurrent('drops channels and deploy history where history reads are denied', () => {
+    const candidates = {
+      channels: [
+        { id: 10, name: 'production', public: true, current: null, rollout: null },
+        { id: 20, name: 'beta', public: false, current: null, rollout: null },
+      ],
+      deployments: [
+        { bundle_id: 1, version_name: '1.0.0', channel_id: 10, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' },
+        { bundle_id: 2, version_name: '1.1.0', channel_id: 20, channel_name: 'beta', deployed_at: '2026-09-29T11:00:00.000Z' },
+      ],
+    }
+    expect(releaseLiveTestUtils.withoutDeniedHistory(candidates, new Set())).toBe(candidates)
+    const filtered = releaseLiveTestUtils.withoutDeniedHistory(candidates, new Set([10]))
+    expect(filtered.deployments.map(row => row.channel_id)).toEqual([20])
+    expect(filtered.channels.map(channel => channel.id)).toEqual([20])
+    // A denied public channel is no longer picked as the default.
+    expect(releaseLiveTestUtils.pickDefaultChannel(filtered)?.id).toBe(20)
+  })
+
+  it.concurrent('orders per-channel deploy history newest first across the app', () => {
+    const sorted = releaseLiveTestUtils.sortDeploymentsNewestFirst([
+      { bundle_id: 1, version_name: '1.0.0', channel_id: 10, channel_name: 'beta', deployed_at: '2026-09-29T09:00:00.000Z' },
+      { bundle_id: 2, version_name: '1.1.0', channel_id: 10, channel_name: 'beta', deployed_at: '2026-09-29T08:00:00.000Z' },
+      { bundle_id: 3, version_name: '1.2.0', channel_id: 20, channel_name: 'production', deployed_at: '2026-09-29T10:00:00.000Z' },
+    ])
+    expect(sorted.map(row => row.bundle_id)).toEqual([3, 1, 2])
   })
 })

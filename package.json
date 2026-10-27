@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.15.1",
+  "version": "22.20.0",
   "private": true,
   "workspaces": [
     "cli",
@@ -112,8 +112,10 @@
     "admin:backfill-credit-usage-posthog": "bun scripts/backfill_credit_usage_posthog_events.ts",
     "admin:backfill-missing-app-icons": "bun scripts/backfill_missing_app_icons.ts",
     "admin:migrate-legacy-bare-image-paths": "bun scripts/migrate_legacy_bare_image_paths.ts",
+    "admin:migrate-supabase-images-to-r2": "bun scripts/migrate_supabase_images_to_r2.ts",
     "admin:backfill-missing-store-urls": "bun scripts/backfill_missing_store_urls.ts",
     "admin:backfill-github-user-ids": "bun scripts/backfill_github_user_ids.ts",
+    "admin:backfill-legacy-download-fail": "bun scripts/backfill_legacy_download_fail_daily_version.ts",
     "stripe:backfill-customer-countries": "bun scripts/backfill_stripe_customer_countries.ts",
     "stripe:backfill-subscription-end-dates": "bun scripts/backfill_stripe_subscription_end_dates.ts",
     "stripe:export-six-month-org-emails": "bun scripts/export_stripe_six_month_org_emails.ts",
@@ -311,7 +313,6 @@
     "@capgo/capacitor-shake": "^8.0.44",
     "@capgo/capacitor-sheets": "^8.1.0",
     "@capgo/capacitor-sim": "^8.0.39",
-    "@capgo/capacitor-social-login": "^8.5.18",
     "@capgo/capacitor-speech-recognition": "^8.3.2",
     "@capgo/capacitor-speech-synthesis": "^8.0.22",
     "@capgo/capacitor-textinteraction": "^8.0.40",
