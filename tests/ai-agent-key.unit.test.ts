@@ -56,6 +56,12 @@ describe('AI agent prompt key', () => {
     expect(await canPrepareAgentKey(capgo, { ...appScope, appId: null, task: 'add-app' })).toBe(false)
   })
 
+  it('gives an org admin only an app_developer key for bundle uploads', async () => {
+    grant('org.update_user_roles', 'org.manage_apikeys')
+    expect(await loadAgentKey(capgo, { ...appScope, task: 'upload-bundle' }, 'API key')).toBe('new-key')
+    expect(mocks.createDefaultApiKey).toHaveBeenCalledWith(capgo, 'API key', { appId: 'com.acme.app', appRole: 'app_developer' })
+  })
+
   it('lets an app key manager upload bundles with an app_developer key, but not run admin tasks', async () => {
     grant('app.manage_apikeys')
     expect(await loadAgentKey(capgo, { ...appScope, task: 'upload-bundle' }, 'API key')).toBe('new-key')

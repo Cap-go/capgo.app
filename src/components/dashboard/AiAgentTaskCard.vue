@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AiAgentKeyTask } from '~/services/aiAgentKey'
-import { ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconBot from '~icons/lucide/bot'
@@ -54,14 +54,24 @@ async function appOwnerOrg(appId: string) {
   return error || !data?.owner_org ? null : data
 }
 
-watchEffect(async () => {
+// Saving the setup preference replaces main.user: only a different user re-runs the check.
+const currentUserId = computed(() => main.user?.id ?? main.auth?.id)
+
+watchEffect(async (onCleanup) => {
+  // A newer run (task, app, user or organization changed) supersedes this one.
+  let stale = false
+  onCleanup(() => {
+    stale = true
+  })
   // Read every reactive input before awaiting, so a change re-runs this check.
   const task = props.task
   const appId = props.appId ?? null
-  const userId = main.user?.id ?? main.auth?.id
+  const userId = currentUserId.value
   const currentOrgId = organizationStore.currentOrganization?.gid ?? null
   const orgId = task === 'add-app' ? currentOrgId : appId ? (await appOwnerOrg(appId))?.owner_org ?? null : null
-  canPrepareKey.value = !!userId && !!orgId && await canPrepareAgentKey(capgo, { userId, orgId, appId: task === 'add-app' ? null : appId, task })
+  const allowed = !!userId && !!orgId && await canPrepareAgentKey(capgo, { userId, orgId, appId: task === 'add-app' ? null : appId, task })
+  if (!stale)
+    canPrepareKey.value = allowed
 })
 
 async function buildPrompt(): Promise<string | null> {

@@ -36,8 +36,8 @@ interface AgentKeyPlan {
 
 /**
  * Which key the prompt would carry. Only someone who can manage user roles may give a key
- * org_admin or app_admin (the API rejects it otherwise); an app API key manager may still
- * create an app_developer key, which is enough to upload a bundle.
+ * org_admin or app_admin (the API rejects it otherwise). Uploads only need app_developer,
+ * which an org admin or an app API key manager may create.
  */
 async function agentKeyPlan(capgo: ConsoleClient<Database>, scope: AgentKeyScope): Promise<AgentKeyPlan> {
   const appRoles = agentKeyAppRoles(scope.task)
@@ -45,10 +45,15 @@ async function agentKeyPlan(capgo: ConsoleClient<Database>, scope: AgentKeyScope
     findUsablePlainApiKey(capgo, scope.userId, scope.orgId, scope.appId, { appRoles }),
     checkPermissions(['org.update_user_roles', 'org.manage_apikeys'], { orgId: scope.orgId }).catch(() => false),
   ])
+  // The key goes to a third-party agent: an upload never gets more than app_developer.
+  if (scope.task === 'upload-bundle') {
+    if (!scope.appId)
+      return { existingKey, createRole: null }
+    const canCreateDeveloperKey = canAssignAdminRoles || await checkPermissions('app.manage_apikeys', { appId: scope.appId }).catch(() => false)
+    return { existingKey, createRole: canCreateDeveloperKey ? 'app_developer' : null }
+  }
   if (canAssignAdminRoles)
     return { existingKey, createRole: scope.task === 'add-app' ? 'org_admin' : 'app_admin' }
-  if (scope.task === 'upload-bundle' && scope.appId && await checkPermissions('app.manage_apikeys', { appId: scope.appId }).catch(() => false))
-    return { existingKey, createRole: 'app_developer' }
   return { existingKey, createRole: null }
 }
 
