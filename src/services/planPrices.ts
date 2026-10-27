@@ -80,9 +80,9 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     if (orgId.value !== id)
       return
     data.value = !error && response ? response : null
-    // A partial catalog is treated like a failed lookup: retry, checkout stays disabled.
-    ready.value = !!data.value && data.value.complete !== false
-    failed.value = !ready.value
+    ready.value = !!data.value
+    // A partial catalog offers a retry; only the plans whose prices failed keep checkout disabled.
+    failed.value = !data.value || data.value.complete === false
   }
 
   watch(orgId, load, { immediate: true })
@@ -111,6 +111,12 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     catch {}
   }
 
+  // False when this plan's Stripe prices failed to load: checkout for it stays disabled.
+  function hasPricesFor(productId: string) {
+    const amounts = data.value?.prices[productId]
+    return !!amounts && Object.keys(amounts.month).length > 0 && Object.keys(amounts.year).length > 0
+  }
+
   // Null until Stripe prices load: callers fall back to the USD amounts stored on the plan.
   function amountsFor(productId: string) {
     return data.value && currency.value ? getPlanAmounts(data.value.prices, productId, currency.value) : null
@@ -128,5 +134,5 @@ export function usePlanPrices(orgId: Ref<string | undefined>) {
     return data.value?.regularPrices && currency.value ? getPlanAmounts(data.value.regularPrices, productId, currency.value) : null
   }
 
-  return { amountsFor, currencies, currency, discount, failed, lockedCurrency, lockedCurrencyUnavailable, ready, regularAmountsFor, reload, setCurrency, usdRatioFor }
+  return { amountsFor, currencies, currency, discount, failed, hasPricesFor, lockedCurrency, lockedCurrencyUnavailable, ready, regularAmountsFor, reload, setCurrency, usdRatioFor }
 }

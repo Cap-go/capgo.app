@@ -173,7 +173,7 @@ const enterpriseQuote = computed(() => {
 })
 
 // Real Stripe amounts per currency (price currency_options); USD from the plans table until they load.
-const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regularAmountsFor, reload: reloadPrices, setCurrency, usdRatioFor } = usePlanPrices(billingOrgId)
+const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, hasPricesFor, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regularAmountsFor, reload: reloadPrices, setCurrency, usdRatioFor } = usePlanPrices(billingOrgId)
 
 function planAmounts(plan: Plan) {
   const stripeAmounts = amountsFor(plan.stripe_id)
@@ -368,7 +368,7 @@ watch([pendingPlanCheckout, pricesReady], async ([pending, ready]) => {
   const org = currentOrganization.value
   const index = mainStore.plans.findIndex(plan => plan.name === pending.planName)
   // Never start a checkout for another org than the one the link named.
-  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0)
+  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && index >= 0 && hasPricesFor(mainStore.plans[index].stripe_id))
     await openChangePlan(mainStore.plans[index], index)
 })
 
@@ -621,8 +621,8 @@ function isDisabled(plan: Plan) {
   // Above the allowance, checkout needs the MAU price to add the extra MAU item.
   if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
     return true
-  // Wait for the billing currency, and never start a checkout Stripe would reject for currency.
-  if (!pricesReady.value || lockedCurrencyUnavailable.value)
+  // Wait for the billing currency and the plan's Stripe prices; never start a checkout Stripe would reject for currency.
+  if (!pricesReady.value || lockedCurrencyUnavailable.value || !hasPricesFor(plan.stripe_id))
     return true
   if (isEnterprisePlan(plan) && !isCurrentEnterpriseScale(plan))
     return isMobile
