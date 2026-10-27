@@ -114,6 +114,8 @@ GRANT EXECUTE ON FUNCTION public.delta_storage_gc_enabled() TO service_role;
 CREATE TABLE public.delta_storage_state (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
   convert_cursor bigint NOT NULL DEFAULT 0,
+  -- Versions whose list only lives in the inline app_versions.manifest.
+  inline_cursor bigint NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO public.delta_storage_state (id) VALUES (true) ON CONFLICT DO NOTHING;
@@ -565,7 +567,11 @@ AS $$
     FROM public.app_versions AS av
     WHERE av.app_id = p_app_id
       AND (
-        (av.manifest IS NOT NULL AND public.delta_version_keeps_files(av.deleted, av.deleted_at, av.updated_at))
+        (
+          av.manifest IS NOT NULL
+          AND public.delta_version_keeps_files(av.deleted, av.deleted_at, av.updated_at)
+          AND NOT EXISTS (SELECT 1 FROM public.version_files AS vf WHERE vf.app_version_id = av.id)
+        )
         OR (
           EXISTS (
             SELECT 1 FROM public.manifest AS m
@@ -1251,6 +1257,7 @@ DECLARE
   v_cursor bigint;
   v_version_id bigint;
   v_converted integer := 0;
+  v_inline_cursor bigint;
   v_wrapped boolean := false;
   v_started timestamptz := pg_catalog.clock_timestamp();
 BEGIN
@@ -1293,8 +1300,34 @@ BEGIN
     v_version_id := NULL;
   END LOOP;
 
+  -- Inline-only versions (no legacy rows to enumerate): same budget, own
+  -- cursor, served by app_versions_manifest_present_idx.
+  v_inline_cursor := v_state.inline_cursor;
+  v_wrapped := false;
+  WHILE v_converted < GREATEST(COALESCE(p_max_versions, 20), 1)
+    AND pg_catalog.clock_timestamp() - v_started < pg_catalog.make_interval(secs => GREATEST(COALESCE(p_max_ms, 3000), 100) / 1000.0)
+  LOOP
+    SELECT av.id INTO v_version_id
+    FROM public.app_versions AS av
+    WHERE av.manifest IS NOT NULL
+      AND av.id > v_inline_cursor
+      AND NOT EXISTS (SELECT 1 FROM public.version_files AS vf WHERE vf.app_version_id = av.id)
+    ORDER BY av.id
+    LIMIT 1;
+    IF v_version_id IS NULL THEN
+      EXIT WHEN v_wrapped OR v_inline_cursor = 0;
+      v_wrapped := true;
+      v_inline_cursor := 0;
+      CONTINUE;
+    END IF;
+    PERFORM public.convert_version_manifest_rows(v_version_id, true);
+    v_inline_cursor := v_version_id;
+    v_converted := v_converted + 1;
+    v_version_id := NULL;
+  END LOOP;
+
   UPDATE public.delta_storage_state
-  SET convert_cursor = v_cursor, updated_at = now()
+  SET convert_cursor = v_cursor, inline_cursor = v_inline_cursor, updated_at = now()
   WHERE id;
   RETURN v_converted;
 END;

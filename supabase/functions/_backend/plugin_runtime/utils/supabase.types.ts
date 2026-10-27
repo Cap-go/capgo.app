@@ -1532,16 +1532,19 @@ export type Database = {
         Row: {
           convert_cursor: number
           id: boolean
+          inline_cursor: number
           updated_at: string
         }
         Insert: {
           convert_cursor?: number
           id?: boolean
+          inline_cursor?: number
           updated_at?: string
         }
         Update: {
           convert_cursor?: number
           id?: boolean
+          inline_cursor?: number
           updated_at?: string
         }
         Relationships: []

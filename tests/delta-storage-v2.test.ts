@@ -200,6 +200,31 @@ describe('delta storage v2 conversion', () => {
   })
 })
 
+describe('delta storage v2 inline-only manifests', () => {
+  it('converts a live inline-only version so GC no longer postpones the app', async () => {
+    await withConfig({ legacy_manifest_writes: false }, async (client) => {
+      await client.query('SELECT public.convert_version_manifest_rows(id) FROM public.app_versions WHERE app_id = $1', [APP_ID])
+      const path = deltaPath('inline-live.js')
+      const [{ id }] = (await client.query<{ id: string }>(
+        `INSERT INTO public.app_versions (app_id, name, owner_org, user_id, storage_provider, checksum, manifest)
+         VALUES ($1, $2, $3, $4, 'r2', 'c', ARRAY[ROW('inline-live.js', $5, 'h')::public.manifest_entry])
+         RETURNING id`,
+        [APP_ID, `inline-live-${randomUUID().slice(0, 8)}`, ORG_ID, USER_ID, path],
+      )).rows
+      const versionId = Number(id)
+      const before = await client.query<{ blocked: boolean }>('SELECT public.delta_app_has_unconverted_references($1) AS blocked', [APP_ID])
+      expect(before.rows[0].blocked).toBe(true)
+
+      await client.query('UPDATE public.delta_storage_state SET inline_cursor = $1 - 1 WHERE id', [versionId])
+      await client.query('SELECT public.convert_legacy_manifest_batch(20, 2000)')
+
+      expect(await versionFilesOf(client, versionId)).toEqual([path])
+      const after = await client.query<{ blocked: boolean }>('SELECT public.delta_app_has_unconverted_references($1) AS blocked', [APP_ID])
+      expect(after.rows[0].blocked).toBe(false)
+    })
+  })
+})
+
 describe('delta storage v2 published CLI compatibility', () => {
   it('keeps legacy rows of a channel version and mirrors them when a channel moves to a converted version', async () => {
     await withConfig({ legacy_manifest_writes: false }, async (client) => {
