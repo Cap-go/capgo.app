@@ -12,7 +12,7 @@ import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
-import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
+import { getBillingAccountForCustomer, getRegionalPlanPriceId, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
 import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
 
 const PLAN_PRICES_CACHE_PATH = '/private/plan_prices'
@@ -94,7 +94,7 @@ export function planPricesVersion(plans: PlanPriceRow[]) {
 
 async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount: BillingAccount, tier: PriceTier): Promise<{ prices: PlanPriceAmounts, complete: boolean }> {
   let complete = true
-  const entries = await Promise.all(plans.map(async ({ stripe_id }) => {
+  const entries = await Promise.all(plans.map(async ({ stripe_id, regional_price_ids }) => {
     try {
       const [month, year] = await Promise.all([
         getCheckoutPlanPrice(c, stripe_id, 'month', billingAccount, tier),
@@ -102,6 +102,10 @@ async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount:
       ])
       // A null price means the lookup and its stored-ID fallback both failed: do not cache it.
       if (!month || !year)
+        complete = false
+      // A tier lookup that fell back to another price (e.g. the full price) must not be cached as that tier.
+      const expected = (interval: 'month' | 'year') => tier === FULL_PRICE_TIER ? null : getRegionalPlanPriceId(regional_price_ids, tier, billingAccount, interval)
+      if ((month && expected('month') && month.id !== expected('month')) || (year && expected('year') && year.id !== expected('year')))
         complete = false
       return [stripe_id, {
         month: month ? getPriceCurrencyAmounts(month) : {},
@@ -118,8 +122,8 @@ async function loadPlanPrices(c: Context, plans: PlanPriceRow[], billingAccount:
   return { prices: Object.fromEntries(entries), complete }
 }
 
-async function getPlanPrices(c: Context, authorization: string | undefined, billingAccount: BillingAccount, tier: PriceTier) {
-  const plans = await listPlans(c, authorization)
+async function getPlanPrices(c: Context, authorization: string | undefined, billingAccount: BillingAccount, tier: PriceTier, planRows?: PlanPriceRow[]) {
+  const plans = planRows ?? await listPlans(c, authorization)
   const cache = new CacheHelper(c)
   const version = planPricesVersion(plans)
   const key = cache.buildRequest(PLAN_PRICES_CACHE_PATH, { account: billingAccount, tier, version })
@@ -140,7 +144,8 @@ async function getPlanPrices(c: Context, authorization: string | undefined, bill
 // plans that have them (Solo), keyed by plan product id. Same amounts as Checkout, for the website.
 export async function getPublicPlanPriceCatalog(c: Context) {
   const discountTiers = PRICE_TIERS.filter(tier => tier !== FULL_PRICE_TIER)
-  const [full, ...tiers] = await Promise.all([FULL_PRICE_TIER, ...discountTiers].map(tier => getPlanPrices(c, undefined, 'ee', tier)))
+  const planRows = await listPlans(c)
+  const [full, ...tiers] = await Promise.all([FULL_PRICE_TIER, ...discountTiers].map(tier => getPlanPrices(c, undefined, 'ee', tier, planRows)))
   const plans: Record<string, PlanPriceAmounts[string] & { tiers?: Partial<Record<PriceTier, PlanPriceAmounts[string]>> }> = { ...full.prices }
   tiers.forEach(({ prices }, index) => {
     for (const plan of Object.keys(getRegularPrices(prices, full.prices))) {
