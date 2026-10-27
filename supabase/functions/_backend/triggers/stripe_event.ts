@@ -34,7 +34,7 @@ import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, 
 import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { trackUsChargeRefunded, trackUsChargeSucceeded } from '../utils/us_revenue_tracking.ts'
-import { backgroundTask } from '../utils/utils.ts'
+import { backgroundTask, getEnv, trimTrailingSlashes } from '../utils/utils.ts'
 
 function getWebhookBillingAccount(c: Context): BillingAccount {
   return c.get('stripeBillingAccount') ?? 'ee'
@@ -469,6 +469,13 @@ async function syncBillingBentoTags(
   })
 }
 
+// Billing emails link to the in-console billing page (pay the open invoice, change card),
+// with `oid` so members of several orgs land on the right one.
+function getConsoleBillingUrl(c: Context, orgId: string) {
+  const baseUrl = trimTrailingSlashes(getEnv(c, 'WEBAPP_URL') || '')
+  return baseUrl ? `${baseUrl}/settings/organization/billing?oid=${encodeURIComponent(orgId)}` : null
+}
+
 async function trackBillingBentoEvent(
   c: Context,
   org: Org,
@@ -491,7 +498,9 @@ async function trackBillingBentoEvent(
     return
   }
 
-  await Promise.all(emails.map(email => trackBentoEvent(c, email, data, event)))
+  const billingUrl = getConsoleBillingUrl(c, org.id)
+  const payload = billingUrl ? { billing_url: billingUrl, ...data } : data
+  await Promise.all(emails.map(email => trackBentoEvent(c, email, payload, event)))
   cloudlog({
     requestId: c.get('requestId'),
     message: 'trackBillingBentoEvent',
@@ -978,13 +987,12 @@ async function handleCheckoutSessionCompleted(
   return c.json(BRES)
 }
 
-// Bento email payload: hosted_invoice_url lets the customer pay with any method
-// (another card, bank transfer...) when the saved card keeps declining.
+// Bento email payload for the open invoice. The pay link is billing_url (added by
+// trackBillingBentoEvent), not Stripe's hosted invoice page.
 function buildDunningInvoiceBentoData(invoice: OpenSubscriptionInvoiceSummary | null) {
   if (!invoice)
     return {}
   return {
-    hosted_invoice_url: invoice.hosted_invoice_url,
     attempt_count: invoice.attempt_count,
     next_payment_attempt: invoice.next_payment_attempt,
     amount: stripeAmountToMajorUnits(invoice.amount_due, invoice.currency),
@@ -994,13 +1002,12 @@ function buildDunningInvoiceBentoData(invoice: OpenSubscriptionInvoiceSummary | 
 
 async function invoicePaymentActionRequired(c: Context, org: Org, stripeEvent: Stripe.InvoicePaymentActionRequiredEvent, customerId: string) {
   const invoice = stripeEvent.data.object
-  if (!isSubscriptionInvoice(invoice) || !invoice.hosted_invoice_url) {
+  if (!isSubscriptionInvoice(invoice)) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Skipping payment action required email',
       invoiceId: invoice.id,
       billingReason: invoice.billing_reason,
-      hasHostedInvoiceUrl: Boolean(invoice.hosted_invoice_url),
     })
     return c.json(BRES)
   }
@@ -2026,6 +2033,7 @@ export const stripeEventTestUtils = {
   TRANSFER_INVOICE_FOOTER_MAX_LENGTH,
   buildBillingBentoTagUpdates,
   buildDunningInvoiceBentoData,
+  getConsoleBillingUrl,
   uniqueBillingEmails,
   buildSubscriptionEventMetadata,
   classifyRevenueMovement,

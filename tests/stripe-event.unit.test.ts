@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
 import { orgEmailNotificationTestUtils } from '../supabase/functions/_backend/utils/org_email_notifications.ts'
 import { buildExtraMauTiers, getExtraMau, isExtraMauPrice, isSubscriptionInvoice, normalizeStripeCountryCode, toOpenSubscriptionInvoiceSummary } from '../supabase/functions/_backend/utils/stripe.ts'
@@ -196,16 +196,27 @@ describe('dunning invoice helpers', () => {
     expect(toOpenSubscriptionInvoiceSummary(makeDunningInvoice({ next_payment_attempt: null, hosted_invoice_url: undefined })).next_payment_attempt).toBeNull()
   })
 
-  it.concurrent('adds the hosted invoice link and retry info to the failed payment event, or nothing without an invoice', () => {
+  it.concurrent('adds retry info but never the Stripe hosted invoice link to the failed payment event, or nothing without an invoice', () => {
     const summary = toOpenSubscriptionInvoiceSummary(makeDunningInvoice())
     expect(stripeEventTestUtils.buildDunningInvoiceBentoData(summary)).toEqual({
-      hosted_invoice_url: 'https://invoice.stripe.com/i/test_dunning',
       attempt_count: 2,
       next_payment_attempt: summary.next_payment_attempt,
       amount: 14,
       currency: 'usd',
     })
     expect(stripeEventTestUtils.buildDunningInvoiceBentoData(null)).toEqual({})
+  })
+
+  it('links billing emails to the console billing page of the org', () => {
+    try {
+      vi.stubEnv('WEBAPP_URL', 'https://console.capgo.app/')
+      expect(stripeEventTestUtils.getConsoleBillingUrl(mockContext, 'org-1')).toBe('https://console.capgo.app/settings/organization/billing?oid=org-1')
+      vi.stubEnv('WEBAPP_URL', '')
+      expect(stripeEventTestUtils.getConsoleBillingUrl(mockContext, 'org-1')).toBeNull()
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

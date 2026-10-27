@@ -58,7 +58,7 @@ try {
   await getRemoteFileConfig()
   assert.equal(requests[0].url, 'http://127.0.0.1:8787/files/config')
   assert.equal(requests[0].capgkey, null, 'saved key never reaches a custom backend')
-  assert.equal(requests[0].redirect, 'error', 'config probes never follow redirects')
+  assert.equal(requests[0].redirect, 'manual', 'config probes never follow redirects')
   await getRemoteFileConfig('self-key')
   assert.equal(requests[1].capgkey, 'self-key', 'the caller key is sent instead')
 

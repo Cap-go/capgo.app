@@ -51,8 +51,18 @@ interface LegacyObject {
   updatedAt: number
 }
 
+// Supabase's pooler presents a certificate signed by Supabase's own CA, so a
+// remote connection is encrypted without CA verification, like the other admin
+// scripts. `sslmode` is dropped from the URL because pg lets it override `ssl`.
+function databaseClient(databaseUrl: string) {
+  const url = new URL(databaseUrl)
+  const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+  url.searchParams.delete('sslmode')
+  return new Client({ connectionString: url.toString(), ssl: local ? false : { rejectUnauthorized: false } })
+}
+
 async function listFromDatabase(databaseUrl: string, prefix: string): Promise<LegacyObject[]> {
-  const pg = new Client({ connectionString: databaseUrl })
+  const pg = databaseClient(databaseUrl)
   await pg.connect()
   try {
     const { rows } = await pg.query<{ name: string, updated_at: Date | null, created_at: Date | null }>(

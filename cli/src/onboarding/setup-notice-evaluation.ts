@@ -18,7 +18,7 @@ export async function readSetupProgress(prepared: Pick<PreparedOnboardingCheck, 
       (async () => {
         const response = await fetch(`${trimTrailingSlashes(prepared.apiHost)}/private/onboarding_progress`, {
           method: 'POST',
-          redirect: 'error',
+          redirect: 'manual',
           signal: controller.signal,
           headers: buildCliRequestHeaders({
             'Content-Type': 'application/json',

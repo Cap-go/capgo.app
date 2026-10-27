@@ -38,7 +38,7 @@ describe('cron_stat_app queue resilience', () => {
     await resetAppDataStats(processCronAppId)
   })
 
-  it.concurrent('process_cron_stats_jobs still queues active apps when first-seen MAU leaves daily_mau quiet', async () => {
+  it('process_cron_stats_jobs still queues active apps when first-seen MAU leaves daily_mau quiet', async () => {
     await clearCronStatAppMessages(processCronAppId)
 
     // MAU is now recorded on the device's first day in the billing window, so
@@ -66,4 +66,81 @@ describe('cron_stat_app queue resilience', () => {
     expect(queuedMessages[0]?.message?.payload?.orgId).toBe(ORG_ID_CRON_QUEUE)
     expect(queuedMessages[0]?.message?.payload?.todayOnly).toBe(false)
   })
+
+  it('an immediate refresh promotes a job parked in a staggered stats slot', async () => {
+    const appId = processCronAppId
+    await clearCronStatAppMessages(appId)
+    await executeSQL(`DELETE FROM public.app_stats_refresh_state WHERE app_id = $1`, [appId])
+
+    await executeSQL(`SELECT public.queue_cron_stat_app_for_app($1, $2, 600)`, [appId, ORG_ID_CRON_QUEUE])
+    const [parked] = await executeSQL(
+      `SELECT vt > now() + INTERVAL '5 minutes' AS parked FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = $1`,
+      [appId],
+    )
+    expect(parked?.parked).toBe(true)
+
+    const [before] = await executeSQL(
+      `SELECT stats_refresh_requested_at::text AS requested_at FROM public.app_stats_refresh_state WHERE app_id = $1`,
+      [appId],
+    )
+
+    // Still inside the 5-minute request TTL the parked job just stamped.
+    await executeSQL(`SELECT public.queue_cron_stat_app_for_app($1, $2)`, [appId, ORG_ID_CRON_QUEUE])
+
+    // Chart refresh RPCs report an app as queued only when this stamp advances.
+    const [after] = await executeSQL(
+      `SELECT stats_refresh_requested_at > $2::timestamp AS advanced FROM public.app_stats_refresh_state WHERE app_id = $1`,
+      [appId, before?.requested_at],
+    )
+    expect(after?.advanced).toBe(true)
+
+    const rows = await executeSQL(
+      `SELECT vt <= clock_timestamp() AS readable FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = $1`,
+      [appId],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.readable).toBe(true)
+  })
+
+  it('releases the stats burst 30 apps per minute', async () => {
+    const prefix = `com.cron.stagger.${randomUUID().slice(0, 8)}`
+    // One more than a slot, so the 31st queued app must land in the next minute.
+    const appIds = Array.from({ length: 31 }, (_, index) => `${prefix}.${index}`)
+    await executeSQL(
+      `INSERT INTO public.apps (app_id, icon_url, owner_org, name)
+        SELECT id, '', $2, id FROM unnest($1::varchar[]) AS id`,
+      [appIds, ORG_ID_CRON_QUEUE],
+    )
+    await executeSQL(
+      `INSERT INTO public.app_versions (app_id, name, owner_org)
+        SELECT id, '1.0.0', $2 FROM unnest($1::varchar[]) AS id`,
+      [appIds, ORG_ID_CRON_QUEUE],
+    )
+
+    try {
+      // pgmq stamps enqueued_at with now(), so this run's messages share the
+      // statement timestamp returned here.
+      const [run] = await executeSQL(
+        `SELECT now()::text AS started_at FROM (SELECT public.process_cron_stats_jobs()) AS job`,
+      )
+      const rows = await executeSQL(
+        `SELECT EXTRACT(EPOCH FROM (vt - enqueued_at))::float AS delay_seconds
+          FROM pgmq.q_cron_stat_app
+          WHERE enqueued_at = $1::timestamptz
+          ORDER BY msg_id`,
+        [run?.started_at],
+      )
+
+      expect(rows.length).toBeGreaterThanOrEqual(appIds.length)
+      rows.forEach((row: { delay_seconds: number }, index: number) => {
+        expect(row.delay_seconds).toBeCloseTo(Math.floor(index / 30) * 60, -1)
+      })
+    }
+    finally {
+      await executeSQL(`DELETE FROM pgmq.q_cron_stat_app WHERE message->'payload'->>'appId' = ANY($1::varchar[])`, [appIds])
+      await executeSQL(`DELETE FROM public.app_versions WHERE app_id = ANY($1::varchar[])`, [appIds])
+      await executeSQL(`DELETE FROM public.apps WHERE app_id = ANY($1::varchar[])`, [appIds])
+    }
+  })
 })
+

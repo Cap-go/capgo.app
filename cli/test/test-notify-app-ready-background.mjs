@@ -801,7 +801,8 @@ test.concurrent('neither telemetry nor onboarding redirects can forward worker c
         harness.behavior.events = 'ok'
         harness.behavior.putRedirect = true
         await harness.run()
-        assert.equal(harness.requests.at(-1).body.nonPersonTags.todo_report_status, 'failed')
+        // The 3xx is returned unfollowed (redirect: 'manual'), so the report counts as rejected.
+        assert.equal(harness.requests.at(-1).body.nonPersonTags.todo_report_status, 'rejected')
         assert.deepEqual(forwarded, [], 'custom capgkey headers must never follow a redirect')
       }
       finally {
