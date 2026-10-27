@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Plan } from '~/services/console'
 import type { Database } from '~/types/database.types'
 import dayjs from 'dayjs'
 import { storeToRefs } from 'pinia'
@@ -22,7 +23,7 @@ type PlanUsageDetailed = Database['public']['Functions']['get_plan_usage_percent
 // tabs handled by settings layout
 
 const { t } = useI18n()
-const plans = ref<Database['public']['Tables']['plans']['Row'][]>([])
+const plans = ref<Plan[]>([])
 
 const isLoading = ref(false)
 const initialLoad = ref(true)
@@ -48,7 +49,7 @@ watchEffect(async () => {
 
 type UsageTotals = Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number>
 
-async function estimateOverageCost(orgId: string, plan: Database['public']['Tables']['plans']['Row'], usage: UsageTotals) {
+async function estimateOverageCost(orgId: string, plan: Plan, usage: UsageTotals) {
   // Credit-only orgs have no plan allowance: billing prices all usage
   // from the bottom of the tier ladder.
   const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
@@ -79,7 +80,7 @@ async function getUsage(orgId: string) {
   const usage = main.dashboard
 
   const planCurrent = await getCurrentPlanNameOrg(orgId)
-  const basePlan = plans.value.find((p: Database['public']['Tables']['plans']['Row']) => p.name === planCurrent)
+  const basePlan = plans.value.find((p: Plan) => p.name === planCurrent)
   // Enterprise extra MAU is part of the plan quota and billed with the plan.
   const extraMau = basePlan?.name === 'Enterprise' ? await getOrgExtraMau(orgId).catch(() => 0) : 0
   const currentPlan = basePlan && extraMau > 0 ? { ...basePlan, mau: basePlan.mau + extraMau } : basePlan
@@ -264,7 +265,7 @@ function roundUsagePercents(usage: PlanUsageDetailed) {
 
 function maybeDeriveMissingUsagePercents(params: {
   detailPlanUsage: PlanUsageDetailed
-  currentPlan: Database['public']['Tables']['plans']['Row'] | undefined
+  currentPlan: Plan | undefined
   totalMau: number
   totalBandwidth: number
   totalStorage: number

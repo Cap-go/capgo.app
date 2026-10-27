@@ -23,6 +23,8 @@ interface CheckoutData {
   extraMau?: number
   // Request an in-app embedded Checkout session instead of a hosted page URL.
   embedded?: boolean
+  // One of the plan price's Stripe currencies (see private/plan_prices).
+  currency?: string
 }
 
 function parseExtraMau(value: unknown) {
@@ -98,6 +100,7 @@ app.post('/', middlewareAuth, async (c) => {
     affonsoReferral: body.affonsoReferral,
     extraMau: extraMauCheckout,
     embedded: body.embedded === true,
+    currency: typeof body.currency === 'string' ? body.currency : undefined,
   })
   return c.json(checkout)
 })

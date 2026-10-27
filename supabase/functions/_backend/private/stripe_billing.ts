@@ -106,7 +106,7 @@ app.post('/trial-plan', middlewareAuth, async (c) => {
   const [cards, plan, plans] = await Promise.all([
     getSavedCards(c, ctx),
     getTrialPlanSummary(c, ctx),
-    listSchedulableTrialPlans(c, ctx.billingAccount),
+    listSchedulableTrialPlans(c, ctx),
   ])
   return c.json({ card: cards.card, plan, plans })
 })

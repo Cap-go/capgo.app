@@ -2634,6 +2634,10 @@
   "plan-upgrade": "Subscribe",
   "plan-upgrade-v2": "Upgrade",
   "plans": "plans",
+  "plans-currency-locked": "This organization is billed in {currency}.",
+  "plans-currency-unavailable": "This organization is billed in {currency}, which these plans are not sold in. Contact support to change plan.",
+  "plans-prices-load-failed": "Could not load plan prices. Checkout is paused until they load.",
+  "plans-display-currency": "Currency",
   "plans-category-paying": "Paying",
   "plans-category-active-trial": "Active trial",
   "plans-category-expired-trial": "Expired trial — never subscribed",
@@ -3995,5 +3999,8 @@
   "onboarding-choose-plan-step-label": "Step 1 · Start here",
   "onboarding-choose-plan-step-description": "Choose a plan to start using Capgo.",
   "onboarding-choose-plan-step-next": "Then set up your app below. Bundle uploads and live updates start working once your plan is active.",
-  "onboarding-choose-plan-step-cta": "See plans"
+  "onboarding-choose-plan-step-cta": "See plans",
+  "plans-regional-discount": "{percent}% regional discount",
+  "plans-regional-discount-requirement": "Regional price for {country}: requires a card and billing address from {country}.",
+  "plans-regional-discount-requirement-generic": "Regional price: requires a card and billing address from your country."
 }

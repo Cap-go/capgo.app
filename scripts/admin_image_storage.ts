@@ -10,6 +10,8 @@ export interface ImageStore {
   bucket: string
   exists: (path: string) => Promise<boolean>
   lastModified: (path: string) => Promise<Date | null>
+  /** Last-modified time of every image object under a folder ('' = all), keyed by image path. */
+  listLastModified: (prefix: string) => Promise<Map<string, Date>>
   download: (path: string) => Promise<Blob | null>
   upload: (path: string, data: Blob | Uint8Array | ArrayBuffer, options?: { contentType?: string, upsert?: boolean }) => Promise<'ok' | 'conflict'>
   copy: (fromPath: string, toPath: string) => Promise<void>
@@ -78,6 +80,14 @@ export function createImageStore(env: Record<string, string | undefined>): Image
           return null
         throw error
       }
+    },
+    async listLastModified(prefix) {
+      const trimmed = prefix.replace(/^\/+|\/+$/g, '')
+      const listPrefix = trimmed ? `${IMAGE_KEY_PREFIX}${trimmed}/` : IMAGE_KEY_PREFIX
+      const index = new Map<string, Date>()
+      for await (const object of client.listObjects({ prefix: listPrefix }))
+        index.set(object.key.slice(IMAGE_KEY_PREFIX.length), object.lastModified)
+      return index
     },
     async download(path) {
       try {
