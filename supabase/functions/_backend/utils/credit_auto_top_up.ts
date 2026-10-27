@@ -3,7 +3,8 @@ import type { BillingAccount } from './stripe.ts'
 import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { getBillingAccountForCustomer, getOneTimePriceId, getStripe, isStripeConfiguredForAccount, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from './stripe.ts'
+import { getBillingAccountForCustomer, getOneTimePriceId, getStripe, isStripeConfiguredForAccount, planProductIdOrFilter, resolvePlanCreditProductId } from './stripe.ts'
+import { isAutomaticTaxEnabled } from './stripe_billing.ts'
 import { supabaseAdmin } from './supabase.ts'
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
@@ -217,6 +218,100 @@ export async function grantCreditsFromAutoTopUpPayment(
   }
 }
 
+// Customers whose address Stripe Tax can use; anything else would make finalize fail.
+const AUTO_TAX_READY_STATUSES = new Set<Stripe.Customer.Tax.AutomaticTax>(['supported', 'not_collecting'])
+
+interface AutoTopUpInvoiceInput {
+  orgId: string
+  customerId: string
+  quantity: number
+  productId: string
+  priceId: string
+  paymentMethodId: string
+  automaticTax: boolean
+}
+
+function getInvoicePaymentIntentId(invoice: Stripe.Invoice): string | null {
+  const payment = invoice.payments?.data.find(entry => entry.payment.type === 'payment_intent')?.payment.payment_intent
+  return typeof payment === 'string' ? payment : payment?.id ?? null
+}
+
+// A failed top-up must not leave an open invoice the customer could be asked to pay.
+async function discardAutoTopUpInvoice(c: Context, stripe: Stripe, invoiceId: string) {
+  try {
+    const invoice = await stripe.invoices.retrieve(invoiceId)
+    if (invoice.status === 'draft')
+      await stripe.invoices.del(invoiceId)
+    else if (invoice.status === 'open')
+      await stripe.invoices.voidInvoice(invoiceId)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_invoice_cleanup_failed', invoiceId, error })
+  }
+}
+
+// Bill the top-up through an invoice so it shows in Billing > Invoices like any other purchase.
+// Returns the PaymentIntent that paid it, or null when the charge did not succeed.
+export async function payAutoTopUpInvoice(c: Context, stripe: Stripe, input: AutoTopUpInvoiceInput): Promise<string | null> {
+  const metadata = {
+    kind: AUTO_TOP_UP_KIND,
+    orgId: input.orgId,
+    productId: input.productId,
+    intendedQuantity: String(input.quantity),
+  }
+  const idempotencyKey = `credit_auto_top_up:${input.orgId}:${input.quantity}:${Math.floor(Date.now() / (60 * 60 * 1000))}`
+  let invoiceId: string | null = null
+  try {
+    const draft = await stripe.invoices.create({
+      customer: input.customerId,
+      collection_method: 'charge_automatically',
+      auto_advance: false,
+      pending_invoice_items_behavior: 'exclude',
+      automatic_tax: { enabled: input.automaticTax },
+      default_payment_method: input.paymentMethodId,
+      description: 'Automatic credit top-up',
+      metadata,
+    }, { idempotencyKey: `${idempotencyKey}:invoice` })
+    invoiceId = draft.id
+    await stripe.invoiceItems.create({
+      customer: input.customerId,
+      invoice: draft.id,
+      pricing: { price: input.priceId },
+      quantity: input.quantity,
+      metadata,
+    }, { idempotencyKey: `${idempotencyKey}:item` })
+
+    const finalized = await stripe.invoices.finalizeInvoice(draft.id, { auto_advance: false, expand: ['payments'] })
+    const paymentIntentId = getInvoicePaymentIntentId(finalized)
+    // The payment_intent.succeeded webhook grants the credits if this request dies after the charge.
+    if (paymentIntentId)
+      await stripe.paymentIntents.update(paymentIntentId, { metadata })
+
+    const paid = finalized.status === 'paid'
+      ? finalized
+      : await stripe.invoices.pay(draft.id, { payment_method: input.paymentMethodId, off_session: true, expand: ['payments'] })
+    if (paid.status !== 'paid') {
+      await discardAutoTopUpInvoice(c, stripe, draft.id)
+      return null
+    }
+    // A zero-due invoice (covered by customer balance) has no PaymentIntent: the invoice id is the grant reference.
+    return getInvoicePaymentIntentId(paid) ?? paymentIntentId ?? paid.id
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'credit_auto_top_up_charge_failed',
+      orgId: input.orgId,
+      customerId: input.customerId,
+      invoiceId,
+      error,
+    })
+    if (invoiceId)
+      await discardAutoTopUpInvoice(c, stripe, invoiceId)
+    return null
+  }
+}
+
 async function chargeOffSessionCredits(
   c: Context,
   orgId: string,
@@ -225,7 +320,7 @@ async function chargeOffSessionCredits(
   billingAccount: BillingAccount,
   productId: string,
   priceId: string,
-): Promise<Stripe.PaymentIntent | null> {
+): Promise<string | null> {
   const paymentMethodId = await getDefaultPaymentMethodId(c, customerId)
   if (!paymentMethodId) {
     cloudlog({ requestId: c.get('requestId'), message: 'credit_auto_top_up_skipped_no_payment_method', orgId, customerId })
@@ -233,41 +328,18 @@ async function chargeOffSessionCredits(
   }
 
   const stripe = getStripe(c, billingAccount)
-  const price = await stripe.prices.retrieve(priceId)
-  const unitAmount = price.unit_amount
-  if (!unitAmount || unitAmount <= 0) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_invalid_unit_amount', orgId, priceId })
-    return null
+  let automaticTax = false
+  if (isAutomaticTaxEnabled(billingAccount)) {
+    try {
+      const customer = await stripe.customers.retrieve(customerId, { expand: ['tax'] })
+      automaticTax = !customer.deleted && AUTO_TAX_READY_STATUSES.has(customer.tax?.automatic_tax ?? 'unrecognized_location')
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_tax_lookup_failed', orgId, customerId, error })
+    }
   }
 
-  const idempotencyKey = `credit_auto_top_up:${orgId}:${quantity}:${Math.floor(Date.now() / (60 * 60 * 1000))}`
-  try {
-    return await stripe.paymentIntents.create({
-      amount: unitAmount * quantity,
-      currency: price.currency,
-      customer: customerId,
-      payment_method: paymentMethodId,
-      off_session: true,
-      confirm: true,
-      metadata: {
-        kind: AUTO_TOP_UP_KIND,
-        orgId,
-        productId,
-        intendedQuantity: String(quantity),
-      },
-    }, { idempotencyKey })
-  }
-  catch (error) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'credit_auto_top_up_charge_failed',
-      orgId,
-      customerId,
-      error,
-      emulator: isStripeEmulatorEnabled(c),
-    })
-    return null
-  }
+  return await payAutoTopUpInvoice(c, stripe, { orgId, customerId, quantity, productId, priceId, paymentMethodId, automaticTax })
 }
 
 export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<AutoTopUpSettings> {
@@ -399,11 +471,11 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
     return
   }
 
-  const paymentIntent = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, billingAccount, productId, priceId)
-  if (!paymentIntent || paymentIntent.status !== 'succeeded')
+  const paymentIntentId = await chargeOffSessionCredits(c, orgId, claim.customer_id, quantity, billingAccount, productId, priceId)
+  if (!paymentIntentId)
     return
 
-  await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntent.id)
+  await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntentId)
 }
 
 export async function handleAutoTopUpPaymentIntent(c: Context, event: Stripe.Event, orgId: string): Promise<boolean> {
@@ -431,5 +503,33 @@ export async function handleAutoTopUpPaymentIntent(c: Context, event: Stripe.Eve
     return true
 
   await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, paymentIntent.id)
+  return true
+}
+
+// An auto top-up invoice fully covered by the customer's Stripe balance has no PaymentIntent,
+// so payment_intent.succeeded never fires: grant from the paid invoice, keyed by its id.
+// invoice.updated is the invoice event the webhook routes (it fires when the invoice becomes paid).
+export async function handleAutoTopUpInvoicePaid(c: Context, event: Stripe.Event, orgId: string): Promise<boolean> {
+  if (event.type !== 'invoice.updated')
+    return false
+
+  const invoice = event.data.object
+  if (invoice.metadata?.kind !== AUTO_TOP_UP_KIND)
+    return false
+  // Invoices charged to a card are granted from their PaymentIntent.
+  if (invoice.status !== 'paid' || invoice.amount_paid !== 0 || !invoice.id)
+    return true
+
+  const metadataOrgId = invoice.metadata.orgId
+  if (metadataOrgId && metadataOrgId !== orgId) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_org_mismatch', orgId, metadataOrgId, invoiceId: invoice.id })
+    return true
+  }
+
+  const quantity = Math.floor(Number(invoice.metadata.intendedQuantity ?? 0))
+  if (quantity < MIN_AUTO_TOP_UP_THRESHOLD)
+    return true
+
+  await grantCreditsFromAutoTopUpPayment(c, orgId, quantity, invoice.id)
   return true
 }

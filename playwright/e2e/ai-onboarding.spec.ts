@@ -86,7 +86,7 @@ test.describe('AI onboarding', () => {
     expect(body).toMatchObject({ name: 'Example\'s organization', developmentEnvironment: 'ai_assistant', startingOut: false, intent: 'ota' })
     expect(body.estimatedMau).toBeGreaterThan(0)
 
-    await page.waitForURL(/\/onboarding\/ai$/)
+    await page.waitForURL(/\/onboarding\/ai\?org=/)
     const prompt = page.locator('[data-test="onboarding-ai-prompt"]')
     await expect(prompt).toContainText('npx install-mcp \'npx @capgo/cli@latest mcp\'')
     await expect(prompt).toContainText('start_capgo_live_update_onboarding')
@@ -131,6 +131,26 @@ test.describe('AI onboarding', () => {
     await expect(page.locator('[data-test="setup-checklist-progress"]')).toBeVisible()
     // The agent logged in before the app existed; creating it with the key marks that step.
     await expect(page.locator('[data-test="app-onboarding-cli-step-login_cli_mcp"]')).toHaveAttribute('data-status', 'done')
+
+    // "Create new organization" offers the AI setup again, pinned to the new organization.
+    await page.goto('/onboarding/app?new_org=1')
+    await page.click('[data-test="onboarding-setup-mode-ai"]')
+    // The first organization already uses the default name.
+    await expect(page.locator('[data-test="onboarding-ai-org-name"]')).toHaveValue('')
+    await page.fill('[data-test="onboarding-ai-org-name"]', 'Second organization')
+    await page.locator('[data-test="onboarding-ai-plan-option"]').first().click()
+    await page.locator('[data-test="onboarding-ai-goal-builder"]').click()
+    await page.click('[data-test="onboarding-ai-create-org"]')
+    await page.waitForURL(/\/onboarding\/ai\?org=/)
+    await expect(page.locator('[data-test="onboarding-ai-prompt"]')).toContainText('start_capgo_builder_onboarding')
+    await expect(page.locator('[data-test="onboarding-ai-prompt"]')).toContainText('Second organization')
+    // The first setup's agent markers do not carry over, and the existing app is not picked up.
+    await expect(task(1)).toHaveAttribute('data-done', 'false')
+    await expect(page.locator('[data-test="onboarding-ai-waiting"]')).toBeVisible()
+    // An existing user can go back to their dashboard instead of only logging out.
+    await expect(page.locator('[data-test="onboarding-cancel-new-org"]')).toBeVisible()
+    await page.waitForTimeout(4000)
+    await expect(page).toHaveURL(/\/onboarding\/ai\?org=/)
   })
 
   test('keeps the manual wizard one click away', async ({ page }) => {

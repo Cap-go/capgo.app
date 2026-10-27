@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest'
-import { normalizeAutoTopUpMonthlyLimit, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
+import type Stripe from 'stripe'
+import { describe, expect, it, vi } from 'vitest'
+import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
+import { AUTO_TOP_UP_KIND, handleAutoTopUpInvoicePaid, normalizeAutoTopUpMonthlyLimit, payAutoTopUpInvoice, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
+
+const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }))
+
+vi.mock('../supabase/functions/_backend/utils/supabase.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/supabase.ts')>(),
+  supabaseAdmin: () => ({ rpc: rpcMock }),
+}))
 
 describe('credit auto top-up decision', () => {
   const base = { enabled: true, availableCredits: 0, threshold: 10, lastAttemptAt: null as string | null }
@@ -43,5 +52,124 @@ describe('credit auto top-up monthly limit validation', () => {
     expect(normalizeAutoTopUpMonthlyLimit(false, 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit('', 10)).toBeNull()
     expect(normalizeAutoTopUpMonthlyLimit('  ', 10)).toBeNull()
+  })
+})
+
+describe('credit auto top-up invoice', () => {
+  const context = { get: () => 'request-id' } as any
+  const input = {
+    orgId: 'org_1',
+    customerId: 'cus_1',
+    quantity: 25,
+    productId: 'prod_credits',
+    priceId: 'price_credits',
+    paymentMethodId: 'pm_1',
+    automaticTax: true,
+  }
+
+  // paid: card charged. declined: pay throws. unpaid: pay returns an open invoice.
+  // covered: the customer balance pays it at finalize. item_error: adding the line fails.
+  function fakeStripe(mode: 'paid' | 'declined' | 'unpaid' | 'covered' | 'item_error') {
+    const state: { status: string } = { status: 'draft' }
+    const payments = { data: mode === 'covered' ? [] : [{ payment: { type: 'payment_intent', payment_intent: 'pi_1' } }] }
+    const stripe = {
+      invoices: {
+        create: vi.fn(async () => ({ id: 'in_1', status: 'draft' })),
+        finalizeInvoice: vi.fn(async () => Object.assign(state, { status: mode === 'covered' ? 'paid' : 'open', id: 'in_1', payments })),
+        pay: vi.fn(async () => {
+          if (mode === 'declined')
+            throw new Error('card_declined')
+          return Object.assign(state, { status: mode === 'unpaid' ? 'open' : 'paid' })
+        }),
+        retrieve: vi.fn(async () => ({ id: 'in_1', ...state })),
+        voidInvoice: vi.fn(async () => Object.assign(state, { status: 'void' })),
+        del: vi.fn(async () => ({ id: 'in_1', deleted: true })),
+      },
+      invoiceItems: {
+        create: vi.fn(async () => {
+          if (mode === 'item_error')
+            throw new Error('invalid_price')
+          return { id: 'ii_1' }
+        }),
+      },
+      paymentIntents: { update: vi.fn(async () => ({ id: 'pi_1' })) },
+    } as unknown as Stripe
+    return stripe as any
+  }
+
+  it('bills the top-up through a paid invoice and tags its PaymentIntent', async () => {
+    const stripe = fakeStripe('paid')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBe('pi_1')
+
+    expect(stripe.invoices.create).toHaveBeenCalledWith(expect.objectContaining({
+      customer: 'cus_1',
+      automatic_tax: { enabled: true },
+      pending_invoice_items_behavior: 'exclude',
+      metadata: expect.objectContaining({ kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }),
+    }), expect.anything())
+    expect(stripe.invoiceItems.create).toHaveBeenCalledWith(expect.objectContaining({
+      invoice: 'in_1',
+      pricing: { price: 'price_credits' },
+      quantity: 25,
+    }), expect.anything())
+    expect(stripe.paymentIntents.update).toHaveBeenCalledWith('pi_1', { metadata: expect.objectContaining({ kind: AUTO_TOP_UP_KIND }) })
+    expect(stripe.invoices.pay).toHaveBeenCalledWith('in_1', expect.objectContaining({ payment_method: 'pm_1', off_session: true }))
+    expect(stripe.invoices.voidInvoice).not.toHaveBeenCalled()
+  })
+
+  it('voids the invoice when the card is declined', async () => {
+    const stripe = fakeStripe('declined')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
+    expect(stripe.invoices.voidInvoice).toHaveBeenCalledWith('in_1')
+  })
+
+  it('voids the invoice when the payment does not settle', async () => {
+    const stripe = fakeStripe('unpaid')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
+    expect(stripe.invoices.voidInvoice).toHaveBeenCalledWith('in_1')
+  })
+
+  it('returns the invoice id when the customer balance pays it at finalize', async () => {
+    const stripe = fakeStripe('covered')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBe('in_1')
+    expect(stripe.invoices.pay).not.toHaveBeenCalled()
+    expect(stripe.paymentIntents.update).not.toHaveBeenCalled()
+  })
+
+  it('deletes the draft when building the invoice fails', async () => {
+    const stripe = fakeStripe('item_error')
+    await expect(payAutoTopUpInvoice(context, stripe, input)).resolves.toBeNull()
+    expect(stripe.invoices.del).toHaveBeenCalledWith('in_1')
+    expect(stripe.invoices.finalizeInvoice).not.toHaveBeenCalled()
+  })
+})
+
+describe('credit auto top-up invoice webhook', () => {
+  const context = { get: () => 'request-id' } as any
+  const event = (invoice: Record<string, unknown>) => ({ type: 'invoice.updated', created: 1_711_925_200, data: { object: { id: 'in_1', object: 'invoice', customer: 'cus_1', status: 'paid', ...invoice } } }) as unknown as Stripe.Event
+
+  it('routes the paid auto top-up invoice to its customer through the webhook extraction', () => {
+    const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 0 })
+    expect(extractDataEvent(context, invoice).data.customer_id).toBe('cus_1')
+  })
+
+  it('leaves other invoices to the regular invoice handlers', async () => {
+    await expect(handleAutoTopUpInvoicePaid(context, event({ metadata: {}, amount_paid: 0 }), 'org_1')).resolves.toBe(false)
+  })
+
+  it('leaves card-paid auto top-up invoices to the PaymentIntent webhook', async () => {
+    const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 2500 })
+    await expect(handleAutoTopUpInvoicePaid(context, invoice, 'org_1')).resolves.toBe(true)
+  })
+
+  it('grants a balance-paid auto top-up from the invoice, keyed by the invoice id', async () => {
+    rpcMock.mockReturnValueOnce({ single: async () => ({ data: {}, error: null }) })
+    const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 0 })
+    await expect(handleAutoTopUpInvoicePaid(context, invoice, 'org_1')).resolves.toBe(true)
+    expect(rpcMock).toHaveBeenCalledWith('top_up_usage_credits', expect.objectContaining({
+      p_org_id: 'org_1',
+      p_amount: 25,
+      p_source_ref: expect.objectContaining({ paymentIntentId: 'in_1', quantity: 25 }),
+    }))
   })
 })

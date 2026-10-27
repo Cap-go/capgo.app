@@ -21,8 +21,8 @@ const isReady = ref(false)
 const isLoggingOut = ref(false)
 // Existing users reach this page from "Create new organization".
 const isNewOrganization = route.query.new_org === '1'
-// First-time users pick AI or manual setup before the wizard. Anyone already inside the
-// manual wizard (saved progress, resume link, extra organization) keeps it unchanged.
+// Users pick AI or manual setup before the wizard, also when creating another organization.
+// A first-time user already inside the manual wizard (saved progress, resume link) keeps it.
 const setupScreen = ref(initialOnboardingSetupScreen({
   onboarding: main.user?.onboarding,
   newOrganization: isNewOrganization,
@@ -74,6 +74,7 @@ onMounted(async () => {
       v-else-if="setupScreen !== 'manual'"
       class="min-h-0 flex-1"
       :initial-screen="setupScreen"
+      :new-organization="isNewOrganization"
       @manual="setupScreen = 'manual'"
     />
     <div v-else class="min-h-0 flex-1">
