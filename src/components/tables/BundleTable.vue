@@ -456,10 +456,12 @@ columns.value = [
     actions: [
       {
         icon: IconSettings,
+        title: t('settings'),
         onClick: (elem: Element) => openOne(elem),
       },
       {
         icon: IconTrash,
+        title: t('delete'),
         visible: () => canDeleteBundle.value,
         onClick: (elem: Element) => deleteOne(elem),
       },

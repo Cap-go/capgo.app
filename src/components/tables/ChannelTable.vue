@@ -395,12 +395,13 @@ columns.value = [
         icon: IconSettings,
         disabled: (elem: Element) => !canReadChannel.value[elem.id],
         title: (elem: Element) => (canReadChannel.value[elem.id]
-          ? ''
+          ? t('settings')
           : t('channel-permission-read-required')),
         onClick: (elem: Element) => openOne(elem),
       },
       {
         icon: IconTrash,
+        title: t('delete'),
         visible: (elem: Element) => !!canDeleteChannel.value[elem.id],
         onClick: (elem: Element) => deleteOne(elem),
       },

@@ -208,6 +208,7 @@ const columns = ref<TableColumn[]>([
     actions: [
       {
         icon: IconSettings,
+        title: t('settings'),
         onClick: item => openSettings(item),
       },
     ],

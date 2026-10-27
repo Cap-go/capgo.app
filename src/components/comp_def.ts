@@ -27,7 +27,8 @@ export interface TableAction<T = TableRow> {
   onClick: (item: T) => void
   visible?: (item: T) => boolean
   disabled?: (item: T) => boolean
-  title?: string | ((item: T) => string)
+  /** Accessible name and tooltip of the icon-only button. */
+  title: string | ((item: T) => string)
   testId?: string | ((item: T) => string)
 }
 

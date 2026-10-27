@@ -431,10 +431,6 @@ function isActionDisabled(action: NonNullable<TableColumn['actions']>[number], e
   return Boolean(action.disabled && action.disabled(elem))
 }
 
-function tooltipIdFor(rowIndex: number, actionIndex: number): string {
-  return `datatable-action-tooltip-${rowIndex}-${actionIndex}`
-}
-
 const displayElemRange = computed(() => {
   if (props.elementList.length === 0)
     return '0'
@@ -807,7 +803,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                           <button
                             type="button"
                             :disabled="isActionDisabled(action, elem)"
-                            :aria-describedby="getActionTitle(action, elem) ? tooltipIdFor(i, actionIndex) : undefined"
+                            :aria-label="getActionTitle(action, elem)"
                             :data-test="action.testId ? (typeof action.testId === 'function' ? action.testId(elem) : action.testId) : undefined"
                             class="inline-flex items-center justify-center size-8 text-slate-400 rounded-md cursor-pointer transition-colors hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
                             @click.stop="action.onClick(elem)"
@@ -816,8 +812,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                           </button>
                           <span
                             v-if="getActionTitle(action, elem)"
-                            :id="tooltipIdFor(i, actionIndex)"
-                            role="tooltip"
+                            aria-hidden="true"
                             class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg transition-opacity duration-150 group-hover:block group-focus-within:block dark:bg-slate-100 dark:text-slate-900"
                           >
                             {{ getActionTitle(action, elem) }}
