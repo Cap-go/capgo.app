@@ -58,10 +58,11 @@ const options = computed<TurnstileRenderOptions>(() => ({
 
 function reset() {
   const api = turnstileApi()
-  if (!api)
+  if (!api || !widgetId)
     return
   emit('update:modelValue', '')
-  api.reset()
+  // Target this instance's widget: a page can show several.
+  api.reset(widgetId)
 }
 
 function remove() {
@@ -78,6 +79,8 @@ function render() {
 }
 
 function startResetTimeout() {
+  // A newer token restarts the countdown; the previous timer must not reset it early.
+  clearTimeout(resetTimeout)
   resetTimeout = setTimeout(reset, props.resetInterval)
 }
 

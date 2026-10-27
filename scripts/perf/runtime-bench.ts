@@ -41,12 +41,18 @@ async function throttle(page: Page, profile: Profile) {
 function trackBytes(cdp: CDPSession) {
   const state = { bytes: 0, requests: 0, api: 0 }
   const urls = new Map<string, string>()
-  cdp.on('Network.requestWillBeSent', (event: any) => urls.set(event.requestId, event.request.url))
+  // Count requests when they start so each lands in the interval that issued it; add bytes when
+  // they finish so in-flight requests still contribute once complete.
+  cdp.on('Network.requestWillBeSent', (event: any) => {
+    if (urls.has(event.requestId))
+      return
+    urls.set(event.requestId, event.request.url)
+    state.requests++
+    if (event.request.url.includes('/functions/v1/') && event.request.method !== 'OPTIONS')
+      state.api++
+  })
   cdp.on('Network.loadingFinished', (event: any) => {
     state.bytes += event.encodedDataLength
-    state.requests++
-    if ((urls.get(event.requestId) ?? '').includes('/functions/v1/'))
-      state.api++
   })
   return state
 }

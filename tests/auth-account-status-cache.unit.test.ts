@@ -12,11 +12,12 @@ const user = {
 
 const state = {
   disabled: false,
+  failing: false,
 }
 
 const rpc = vi.fn(async (name: string) => {
   if (name === 'is_account_disabled')
-    return { data: state.disabled, error: null }
+    return state.failing ? { data: null, error: { message: 'temporarily unavailable' } } : { data: state.disabled, error: null }
   return { data: null, error: null }
 })
 
@@ -82,6 +83,7 @@ describe('auth guard account status cache', () => {
     vi.resetModules()
     rpc.mockClear()
     state.disabled = false
+    state.failing = false
     mainStore.auth = { ...user }
   })
 
@@ -108,6 +110,23 @@ describe('auth guard account status cache', () => {
 
     expect(disabledChecks()).toBe(2)
     expect(secondNext).toHaveBeenCalledWith()
+  })
+
+  it('does not reuse a failed check as an active answer', async () => {
+    const guard = await getGuard()
+    state.failing = true
+    const firstNext = vi.fn()
+    await guard(DASHBOARD_ROUTE, APPS_ROUTE, firstNext)
+    // Same as before this cache: a failed check lets the navigation through.
+    expect(firstNext).toHaveBeenCalledWith()
+
+    state.failing = false
+    state.disabled = true
+    const secondNext = vi.fn()
+    await guard(APPS_ROUTE, DASHBOARD_ROUTE, secondNext)
+
+    expect(disabledChecks()).toBe(2)
+    expect(secondNext).toHaveBeenCalledWith(expect.objectContaining({ path: '/accountDisabled' }))
   })
 
   it('always asks the API when opening the account disabled page', async () => {

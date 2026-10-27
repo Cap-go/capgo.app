@@ -317,7 +317,21 @@ function setCustomRetentionValue(value: string | number | null | undefined) {
   customRetentionValue.value = Math.trunc(parsed)
 }
 
+// A second click while a save is running would repeat every update and toast.
+let isSaving = false
 async function onSubmit() {
+  if (isSaving)
+    return
+  isSaving = true
+  try {
+    await submitAppForm()
+  }
+  finally {
+    isSaving = false
+  }
+}
+
+async function submitAppForm() {
   await submit({
     app_name: appNameInput.value,
     ios_store_url: iosStoreUrlInput.value,

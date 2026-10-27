@@ -112,7 +112,7 @@ async function presentActionSheet() {
         role: 'primary',
         id: 'camera-button',
         handler: async () => {
-          takePhoto('update-org', isLoading, 'org', '')
+          takePhoto('update-org', isLoading, 'org', t('something-went-wrong-try-again-later'))
         },
       },
       {
@@ -120,7 +120,7 @@ async function presentActionSheet() {
         role: 'secondary',
         id: 'browse-button',
         handler: () => {
-          pickPhoto('update-org', isLoading, 'org', '')
+          pickPhoto('update-org', isLoading, 'org', t('something-went-wrong-try-again-later'))
         },
       },
     ],
@@ -218,6 +218,8 @@ async function saveChanges(form: { orgName: string, email: string }) {
 }
 
 async function onSubmit() {
+  if (isLoading.value)
+    return
   formSubmitted.value = true
   if (orgNameErrors.value.length || emailErrors.value.length)
     return

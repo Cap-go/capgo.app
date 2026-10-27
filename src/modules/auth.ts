@@ -164,25 +164,27 @@ async function isDisabledAccount(capgo: ConsoleClient, userId: string | null | u
     return false
 
   const disabled = await fetchDisabledAccount(capgo, userId)
-  activeAccountCheck = disabled ? null : { userId, checkedAt: Date.now() }
-  return disabled
+  // Only an explicit "active" answer is reused; a failed check (null) asks again next time.
+  activeAccountCheck = disabled === false ? { userId, checkedAt: Date.now() } : null
+  return disabled === true
 }
 
-async function fetchDisabledAccount(capgo: ConsoleClient, userId: string) {
+/** true or false from the API, null when the check failed. */
+async function fetchDisabledAccount(capgo: ConsoleClient, userId: string): Promise<boolean | null> {
   try {
     const { data: isDisabled, error } = await capgo
       .rpc('is_account_disabled', { user_id: userId })
 
     if (error) {
       console.error('Error checking account status:', error)
-      return false
+      return null
     }
 
     return !!isDisabled
   }
   catch (error) {
     console.error('Error checking if account is disabled:', error)
-    return false
+    return null
   }
 }
 

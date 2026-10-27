@@ -166,7 +166,7 @@ async function notifyNativeAppReady() {
   await CapacitorUpdater.notifyAppReady()
 }
 if (Capacitor.isNativePlatform())
-  void notifyNativeAppReady()
+  notifyNativeAppReady().catch(error => console.error('Cannot notify the updater that the app is ready', error))
 console.log(`Capgo Version : "${import.meta.env.VITE_APP_VERSION}"`)
 // setup up pages with layouts
 const newRoutes = routes.map((route) => {

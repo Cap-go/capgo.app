@@ -6,8 +6,9 @@
  *   bun scripts/perf/bundle-stats.ts <dir> [--json out.json] [--compare before.json]
  *
  * "Initial" is what index.html loads before the first paint (entry chunk, its
- * static imports and its CSS). Each route adds its page chunk, its layout and
- * their static imports on top of that.
+ * static imports and its CSS). Each route adds its page chunk, its layouts, the
+ * components App.vue always mounts, and their static imports. Chunks a page
+ * loads later on demand (e.g. Chart.js) are not counted.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -94,14 +95,19 @@ function findKey(suffix: string) {
 const entryKey = Object.keys(manifest).find(key => manifest[key].isEntry && key.endsWith('index.html'))!
 const initial = closure([entryKey])
 
+// App.vue mounts these through dynamic imports on every page, so every route pays for them.
+const startup = ['src/components/Toast.vue', 'src/components/DialogV2.vue', 'src/components/dashboard/SupportUsernamesPrompt.vue']
+// The app and settings layouts render inside the default dashboard shell.
+const appShell = ['src/layouts/app.vue', 'src/layouts/default.vue']
+
 const routes: Record<string, string[]> = {
   'login': ['src/pages/login.vue', 'src/layouts/naked.vue'],
   'apps (dashboard)': ['src/pages/apps.vue', 'src/layouts/default.vue'],
-  'app overview': ['src/pages/app/[app].vue', 'src/layouts/app.vue'],
-  'app bundles': ['src/pages/app/[app].bundles.vue', 'src/layouts/app.vue'],
-  'app channels': ['src/pages/app/[app].channels.vue', 'src/layouts/app.vue'],
-  'app devices': ['src/pages/app/[app].devices.vue', 'src/layouts/app.vue'],
-  'org usage': ['src/pages/settings/organization/Usage.vue', 'src/layouts/settings.vue'],
+  'app overview': ['src/pages/app/[app].vue', ...appShell],
+  'app bundles': ['src/pages/app/[app].bundles.vue', ...appShell],
+  'app channels': ['src/pages/app/[app].channels.vue', ...appShell],
+  'app devices': ['src/pages/app/[app].devices.vue', ...appShell],
+  'org usage': ['src/pages/settings/organization/Usage.vue', 'src/layouts/settings.vue', 'src/layouts/default.vue'],
 }
 
 const report: Report = {
@@ -109,8 +115,9 @@ const report: Report = {
 }
 
 for (const [name, files] of Object.entries(routes)) {
-  const keys = files.map(findKey).filter((key): key is string => !!key)
-  if (keys.length !== files.length)
+  const wanted = [...files, ...startup]
+  const keys = wanted.map(findKey).filter((key): key is string => !!key)
+  if (keys.length !== wanted.length)
     console.warn(`missing manifest entry for route ${name}: ${files.join(', ')}`)
   const route = closure([entryKey, ...keys])
   report[`route: ${name}`] = { js: sum(route.js), css: sum(route.css) }
