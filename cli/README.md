@@ -2487,7 +2487,9 @@ Selected tools exposed via MCP:
   - capgo_star_all_repositories
   - capgo_get_account_id, capgo_get_account, capgo_update_account, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_generate_encryption_keys
-  - capgo_search_docs
+  - capgo_search_docs, capgo_set_project_dir
+The project directory follows the client's MCP roots (the agent's workspace), so a global
+install works from any folder. Clients without roots can call capgo_set_project_dir.
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:
   {

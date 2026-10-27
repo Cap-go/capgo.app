@@ -33,6 +33,7 @@ import {
   mcpOrganizationMemberRoleInputSchema,
   mcpOrgIdInputSchema,
   mcpRemoveOrganizationMemberInputSchema,
+  mcpSetProjectDirInputSchema,
   mcpUpdateAccountInputSchema,
   mcpUpdateOrganizationInputSchema,
 } from './tool-schemas'
@@ -46,6 +47,7 @@ import { registerOnboardingTools } from '../build/onboarding/mcp/onboarding-tool
 import { registerLiveUpdateTools } from '../init/mcp/live-update-tools'
 import { buildServerInstructions } from './instructions'
 import { installMcpStdoutGuard } from './stdout-guard'
+import { describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, switchProjectDir } from './project-dir'
 
 /**
  * Format an SDK result error for MCP response.
@@ -109,10 +111,43 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   setInvocationSource('mcp')
   enableApiInstrumentation()
 
-  // Auto-track every tool invocation without touching each registration.
+  // Project directory: the server reads the user's project (capacitor config, package.json,
+  // native folders, ./.capgo) from process.cwd(). A user-scoped install is spawned from the
+  // client's dir (often ~ or /), not the agent's workspace, so follow the client's MCP roots
+  // once initialized and on roots/list_changed. capgo_set_project_dir overrides both.
+  let projectDirSync: Promise<void> = Promise.resolve()
+  let projectDirPinned = false
+  const syncProjectDirFromRoots = async (): Promise<void> => {
+    if (projectDirPinned || !server.server.getClientCapabilities()?.roots)
+      return
+    try {
+      const { roots } = await server.server.listRoots(undefined, { timeout: 5000 })
+      const dir = pickProjectDirFromRoots(roots)
+      if (!projectDirPinned && dir)
+        switchProjectDir(dir)
+    }
+    catch {
+      // Client advertised roots but did not answer: keep the spawn dir; the agent can
+      // still call capgo_set_project_dir.
+    }
+  }
+  server.server.oninitialized = () => {
+    projectDirSync = syncProjectDirFromRoots()
+  }
+  server.server.setNotificationHandler('notifications/roots/list_changed', () => {
+    projectDirSync = syncProjectDirFromRoots()
+  })
+
+  // Auto-track every tool invocation without touching each registration. Every tool waits
+  // for a pending roots sync so its first call already runs in the agent's project.
   const originalRegisterTool = server.registerTool.bind(server)
   ;(server as unknown as { registerTool: typeof server.registerTool }).registerTool = (name: string, config: Parameters<typeof server.registerTool>[1], handler: Parameters<typeof server.registerTool>[2]) => {
-    return originalRegisterTool(name, config, withMcpToolTracking(String(name), handler as any) as typeof handler)
+    const tracked = withMcpToolTracking(String(name), handler as any) as (...args: unknown[]) => Promise<unknown>
+    const waitForProjectDir = async (...args: unknown[]) => {
+      await projectDirSync
+      return tracked(...args)
+    }
+    return originalRegisterTool(name, config, waitForProjectDir as typeof handler)
   }
 
   // Initialize the SDK from any saved key. Silent lookup (env -> ~/.capgo -> ./.capgo):
@@ -123,6 +158,27 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // `let` (not `const`): capgo_login/capgo_logout reassign this so the running session
   // re-authenticates without a restart. Tool handlers close over the binding, not the value.
   let sdk = new CapgoSDK({ apikey: savedApiKey })
+
+  server.registerTool(
+    'capgo_set_project_dir',
+    {
+      description: 'Point the Capgo MCP at the project the agent is working in. Call this FIRST with the absolute path of the current workspace / Capacitor app folder whenever Capgo cannot find the project (no capacitor.config, wrong app, missing package.json) — e.g. when the MCP is installed globally and was started from another folder.',
+      inputSchema: mcpSetProjectDirInputSchema,
+    },
+    async ({ path }) => {
+      try {
+        const dir = resolveProjectDirInput(path)
+        switchProjectDir(dir)
+        projectDirPinned = true
+        // Re-resolve the saved key at call time so a project-local ./.capgo key applies.
+        sdk = new CapgoSDK({})
+        return { content: [{ type: 'text' as const, text: describeProjectDir(dir) }] }
+      }
+      catch (error) {
+        return { content: [{ type: 'text' as const, text: formatError(error) }], isError: true as const }
+      }
+    },
+  )
 
   // ============================================================================
   // App Management Tools
