@@ -89,7 +89,17 @@ describe('process_cron_sync_sub_jobs', () => {
 
     expect(rows.length).toBeGreaterThan(0)
     rows.forEach((row: { delay_seconds: number }, index: number) => {
-      expect(row.delay_seconds).toBeCloseTo(Math.floor(index / 60) * 60, -1)
+      expect(row.delay_seconds).toBeCloseTo(Math.floor(index / 500) * 60, -1)
     })
   })
+
+  it('drains cron_sync_sub in batches of 100 now that it no longer shares the stats API budget', async () => {
+    const [task] = await executeSQL(
+      `SELECT batch_size, minute_interval, target::jsonb AS target
+        FROM public.cron_tasks
+        WHERE name = 'per_minute_queues'`,
+    )
+    expect(task).toMatchObject({ batch_size: 100, minute_interval: 1, target: ['cron_sync_sub'] })
+  })
 })
+
