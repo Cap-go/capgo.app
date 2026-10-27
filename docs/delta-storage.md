@@ -82,7 +82,10 @@ request-rate limit on these calls besides 1 write per second per key, and
 every key is copied or deleted once per run. The `capgo` bucket held about
 9.7 million objects (2.1 TB) at rollout, so a first full drain takes days to a
 few weeks; to speed it up, schedule the `delta_storage_gc` queue task more often
-(runs claim apps with `SKIP LOCKED` and may overlap).
+(runs claim apps with `SKIP LOCKED` and may overlap). The run is an ordinary
+`cron_tasks` queue task, so its wakeup goes through `http_dispatch_post`: pg_net
+by default, or the QueueDispatcher Durable Object once `http_dispatch_targets`
+routes `cron_delta_storage_gc` (or `*`).
 Pages skipped because the app had an upload in progress are retried by the
 next weekly pass.
 
