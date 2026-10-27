@@ -80,7 +80,9 @@ describe('build credentials crypto', () => {
   it.concurrent('rejects tampered ciphertext', async () => {
     const sealed = await sealBuildCredentials({ secret: SECRET, appId: 'com.test.app', platform: 'ios', credentials: completeIos })
     const [v, iv, ct] = sealed.ciphertext.split(':')
-    const tampered = `${v}:${iv}:${ct!.slice(0, -2)}${ct!.endsWith('A') ? 'B' : 'A'}${ct!.slice(-1)}`
+    // Flip a character that is always changed (not the last one, whose low bits may be padding).
+    const target = ct!.at(-2)
+    const tampered = `${v}:${iv}:${ct!.slice(0, -2)}${target === 'A' ? 'B' : 'A'}${ct!.slice(-1)}`
     await expect(openBuildCredentials({ keyring: { current: SECRET }, appId: 'com.test.app', platform: 'ios', ciphertext: tampered, keyVersion: sealed.keyVersion })).rejects.toThrow()
   })
 
