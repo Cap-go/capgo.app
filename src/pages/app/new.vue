@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import AddAppSetupChoice from '~/components/dashboard/AddAppSetupChoice.vue'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import { useConsole } from '~/services/console'
+import { checkPermissions } from '~/services/permissions'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -18,6 +19,8 @@ const isLoading = ref(true)
 const appsCount = ref<number | null>(null)
 // The user first picks their AI agent or the manual wizard, unless they already chose manual.
 const showManualFlow = ref(route.query.mode === 'manual')
+// The AI prompt needs an organization API key, so only users who can manage keys get the choice.
+const canUseAiAgent = ref(false)
 
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
@@ -50,7 +53,12 @@ async function init() {
       return
 
     await organizationStore.awaitInitialLoad()
-    await fetchAppsCount()
+    const orgId = organizationStore.currentOrganization?.gid
+    const [, canManageKeys] = await Promise.all([
+      fetchAppsCount(),
+      orgId ? checkPermissions('org.manage_apikeys', { orgId }).catch(() => false) : Promise.resolve(false),
+    ])
+    canUseAiAgent.value = canManageKeys
   }
   finally {
     isLoading.value = false
@@ -74,7 +82,7 @@ onMounted(() => {
 
     <PageLoader v-else-if="isLoading" />
 
-    <AddAppSetupChoice v-else-if="!showManualFlow" @manual="showManualFlow = true" />
+    <AddAppSetupChoice v-else-if="canUseAiAgent && !showManualFlow" @manual="showManualFlow = true" />
 
     <AppOnboardingFlow v-else :onboarding="isOnboarding" />
   </div>

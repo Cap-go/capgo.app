@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconBot from '~icons/lucide/bot'
@@ -10,6 +10,7 @@ import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } f
 import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiUploadBundlePrompt } from '~/services/cliAiPrompt'
 import { useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
+import { checkPermissions } from '~/services/permissions'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -26,6 +27,8 @@ const props = defineProps<{
   appId?: string
   channelName?: string
   compact?: boolean
+  /** Shows an "or" line above the card, for use under a manual form. */
+  orSeparator?: boolean
 }>()
 
 const emit = defineEmits<{ copied: [] }>()
@@ -37,6 +40,17 @@ const organizationStore = useOrganizationStore()
 
 const isCopying = ref(false)
 const copied = ref(false)
+// The prompt carries an API key; without the right to create one the copy would always fail,
+// so the card stays hidden and the manual path remains.
+const canCreateKey = ref(false)
+watchEffect(async () => {
+  const appId = props.appId
+  const orgId = organizationStore.currentOrganization?.gid
+  const allowed = props.task === 'add-app'
+    ? !!orgId && await checkPermissions('org.manage_apikeys', { orgId }).catch(() => false)
+    : !!appId && await checkPermissions('app.manage_apikeys', { appId }).catch(() => false)
+  canCreateKey.value = allowed
+})
 
 // App roles whose key can finish each app task. Uploading to a channel needs
 // app.upload_bundle and channel.promote_bundle; creating a channel with --default or
@@ -144,38 +158,43 @@ async function copyPrompt() {
 </script>
 
 <template>
-  <div
-    class="rounded-xl border border-slate-200 bg-slate-50/80 text-left dark:border-white/15 dark:bg-slate-950/60"
-    :class="compact ? 'p-3' : 'p-4'"
-    :data-test="`ai-task-${task}`"
-  >
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div class="flex min-w-0 items-start gap-3">
-        <IconBot class="mt-0.5 h-5 w-5 shrink-0 text-primary-500" aria-hidden="true" />
-        <div class="min-w-0">
-          <p class="text-sm font-semibold text-slate-950 dark:text-white">
-            {{ t('ai-task-title') }}
-          </p>
-          <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
-            {{ t(`ai-task-${task}-desc`) }}
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        class="d-btn min-h-10 shrink-0 self-start border-slate-300 bg-white px-3 text-sm text-slate-800 hover:border-slate-400 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-primary-500 sm:self-auto dark:border-white/20 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
-        :disabled="isCopying"
-        data-test="ai-task-copy-prompt"
-        @click="copyPrompt"
-      >
-        <IconLoader v-if="isCopying" class="h-4 w-4 animate-spin" aria-hidden="true" />
-        <IconCheck v-else-if="copied" class="h-4 w-4 text-emerald-600" aria-hidden="true" />
-        <IconCopy v-else class="h-4 w-4" aria-hidden="true" />
-        {{ t('ai-onboarding-copy-prompt') }}
-      </button>
-    </div>
-    <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-      {{ t('ai-task-key-note') }}
+  <div v-if="canCreateKey" class="space-y-4">
+    <p v-if="orSeparator" class="text-center text-xs font-medium uppercase tracking-wide text-slate-400">
+      {{ t('ai-task-or') }}
     </p>
+    <div
+      class="rounded-xl border border-slate-200 bg-slate-50/80 text-left dark:border-white/15 dark:bg-slate-950/60"
+      :class="compact ? 'p-3' : 'p-4'"
+      :data-test="`ai-task-${task}`"
+    >
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex min-w-0 items-start gap-3">
+          <IconBot class="mt-0.5 h-5 w-5 shrink-0 text-primary-500" aria-hidden="true" />
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-slate-950 dark:text-white">
+              {{ t('ai-task-title') }}
+            </p>
+            <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
+              {{ t(`ai-task-${task}-desc`) }}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="d-btn min-h-10 shrink-0 self-start border-slate-300 bg-white px-3 text-sm text-slate-800 hover:border-slate-400 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-primary-500 sm:self-auto dark:border-white/20 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+          :disabled="isCopying"
+          data-test="ai-task-copy-prompt"
+          @click="copyPrompt"
+        >
+          <IconLoader v-if="isCopying" class="h-4 w-4 animate-spin" aria-hidden="true" />
+          <IconCheck v-else-if="copied" class="h-4 w-4 text-emerald-600" aria-hidden="true" />
+          <IconCopy v-else class="h-4 w-4" aria-hidden="true" />
+          {{ t('ai-onboarding-copy-prompt') }}
+        </button>
+      </div>
+      <p class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+        {{ t('ai-task-key-note') }}
+      </p>
+    </div>
   </div>
 </template>

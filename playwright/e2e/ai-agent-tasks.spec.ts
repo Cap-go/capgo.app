@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
-import { consoleQueryFromResponse } from '../support/consoleQuery'
+import { consoleQueryFromResponse, consoleQueryJson, routeConsoleQuery } from '../support/consoleQuery'
 
 function localAdminClient() {
   const { ports } = getSupabaseWorktreeConfig()
@@ -101,5 +101,26 @@ test.describe('AI agent alternatives to manual actions', () => {
     finally {
       await admin.from('channels').delete().eq('app_id', 'com.demo.app').eq('name', name)
     }
+  })
+
+  test('hides the AI options from users who cannot create the API key they need', async ({ page }) => {
+    // Answer "no" only for API key management; every other permission keeps its real result.
+    await routeConsoleQuery(page, 'rbac_check_permission', (route, query) => {
+      const key = (query.args[0] as { p_permission_key?: string } | undefined)?.p_permission_key
+      return key === 'org.manage_apikeys' || key === 'app.manage_apikeys'
+        ? route.fulfill(consoleQueryJson(false))
+        : route.fallback()
+    })
+
+    await page.goto('/app/new')
+    await expect(page.getByRole('textbox', { name: 'App name' })).toBeVisible()
+    await expect(page.locator('[data-test="add-app-setup-mode"]')).toHaveCount(0)
+
+    // Wait for the card's own permission answer, so the absence below is not just "not yet".
+    const keyCheck = page.waitForResponse(response => (consoleQueryFromResponse(response)?.args[0] as { p_permission_key?: string } | undefined)?.p_permission_key === 'app.manage_apikeys')
+    await page.goto('/app/com.demo.app/bundles/new')
+    await keyCheck
+    await expect(page.getByRole('button', { name: 'Invite a technical teammate' })).toBeVisible()
+    await expect(page.locator('[data-test="ai-task-upload-bundle"]')).toHaveCount(0)
   })
 })

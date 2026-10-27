@@ -556,10 +556,7 @@ watch(props, async () => {
           type="text"
           :placeholder="t('channel-name-placeholder')"
         />
-        <p class="text-center text-xs font-medium uppercase tracking-wide text-slate-400">
-          {{ t('ai-task-or') }}
-        </p>
-        <AiAgentTaskCard task="create-channel" :app-id="appId" :channel-name="newChannelName" compact @copied="watchForAgentChannel" />
+        <AiAgentTaskCard task="create-channel" :app-id="appId" :channel-name="newChannelName" compact or-separator @copied="watchForAgentChannel" />
       </div>
     </Teleport>
   </div>
