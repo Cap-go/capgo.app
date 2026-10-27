@@ -223,7 +223,7 @@ describe('dunning invoice helpers', () => {
 describe('stripe paid_at tracking', () => {
   const at = '2026-03-24T12:00:00.000Z'
   it.concurrent.each([
-    ['sets paid_at on first subscription creation', { paid_at: null, status: null }, 'created', at],
+    ['does not set paid_at before the first payment is confirmed', { paid_at: null, status: null }, 'created', undefined],
     ['sets paid_at when an org first becomes paying', { paid_at: null, status: null }, 'succeeded', at],
     ['does not overwrite an existing paid_at', { paid_at: '2026-03-20T09:00:00.000Z', status: 'succeeded' }, 'succeeded', undefined],
     ['does not backfill legacy succeeded rows', { paid_at: null, status: 'succeeded' }, 'succeeded', undefined],
@@ -343,10 +343,10 @@ describe('first payment detection for the OpenAI Ads paid conversion', () => {
 
   it.concurrent('a Stripe retry of the first payment does not write paid_at again', () => {
     const at = '2026-10-19T11:30:00.000Z'
-    const firstWrite = getPaidAtUpdate({ paid_at: null, status: null }, 'created', at)
+    const firstWrite = getPaidAtUpdate({ paid_at: null, status: 'created' }, 'succeeded', at)
     expect(firstWrite).toBe(at)
     expect(resolveFirstPaidAt(null, firstWrite)).toBe(at)
-    const retryWrite = getPaidAtUpdate({ paid_at: at, status: 'succeeded' }, 'created', at)
+    const retryWrite = getPaidAtUpdate({ paid_at: at, status: 'succeeded' }, 'succeeded', at)
     expect(retryWrite).toBeUndefined()
     expect(resolveFirstPaidAt(at, retryWrite)).toBeNull()
   })
