@@ -108,14 +108,14 @@ beforeAll(async () => {
   // Apply the actual migration to existing recovery state as well as fresh schemas.
   await pool.query(await readFile(new URL('../supabase/migrations/20261014101115_retain_manifest_delta_objects.sql', import.meta.url), 'utf8'))
   // Real delta storage key helpers (step 1 of the delta storage migration).
-  const deltaStorage = await readFile(new URL('../supabase/migrations/20261027120400_delta_storage_backfill.sql', import.meta.url), 'utf8')
+  const deltaStorage = await readFile(new URL('../supabase/migrations/20261027130100_delta_storage_backfill.sql', import.meta.url), 'utf8')
   for (const name of ['delta_entry_key', 'delta_canonical_path', 'delta_path_key']) {
     const definition = deltaStorage.match(new RegExp(`CREATE FUNCTION public\\.${name}\\([\\s\\S]*?\\n\\$\\$;\\n`))?.[0]
     if (!definition)
       throw new Error(`Missing ${name} in delta storage migration`)
     await pool.query(definition)
   }
-  const cutover = await readFile(new URL('../supabase/migrations/20261027120401_delta_storage_v2.sql', import.meta.url), 'utf8')
+  const cutover = await readFile(new URL('../supabase/migrations/20261027130101_delta_storage_v2.sql', import.meta.url), 'utf8')
   const lockKey = cutover.match(/CREATE FUNCTION public\.delta_gc_lock_key\([\s\S]*?\n\$\$;\n/)?.[0]
   if (!lockKey)
     throw new Error('Missing delta_gc_lock_key in delta storage migration')
