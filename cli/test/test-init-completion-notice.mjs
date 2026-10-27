@@ -83,7 +83,7 @@ test('the footer follows TUI teardown and uses the final app and authenticated A
     assert.equal(url, `${client.apiHost}/private/onboarding_progress`)
     assert.equal(init.headers.Authorization, client.apikey)
     assert.equal(init.headers.capgkey, client.apikey)
-    assert.equal(init.redirect, 'error')
+    assert.equal(init.redirect, 'manual')
     assert.deepEqual(JSON.parse(init.body), { appId, N: 0, initial: true, includeBilling: true })
     return Response.json(completedProgress())
   }
