@@ -57,6 +57,17 @@ describe('useAppOnboardingCliProgress polling', () => {
     app.unmount()
   })
 
+  it('stops polling once an OTA install proves the setup, even without a current channel', async () => {
+    const onboarding = { setup: { todo_list_version: 3, steps: {} }, features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z' } } }
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding, hasChannel: false, checkErrors: [] }, error: null })
+
+    const app = await mountProgress(onboarding)
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(1)
+    app.unmount()
+  })
+
   it('keeps polling after a transient server error', async () => {
     invokeCapgoApiMock.mockResolvedValue({ data: null, error: new FunctionsHttpError(new Response('{}', { status: 503 })) })
 

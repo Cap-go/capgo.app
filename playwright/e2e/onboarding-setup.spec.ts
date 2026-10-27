@@ -757,9 +757,16 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     }
   })
 
+  // An OTA install proves every OTA step, so OTA-only setups are done.
+  for (const query of ['version=3', 'version=4&assignment=ota-only']) {
+    test(`hides Getting started for ${query} after an OTA install`, async ({ page }) => {
+      await page.goto(`/app/${appId}?${query}&otaInstalled=1`)
+      await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+      await expect(page.locator('[data-test="getting-started-nav-link"]')).toHaveCount(0)
+    })
+  }
+
   for (const scenario of [
-    { name: 'v3 OTA', query: 'version=3', checklist: '[data-test="onboarding-setup-cli"]', pollsProgress: true },
-    { name: 'v4 OTA', query: 'version=4&assignment=ota-only', checklist: '[data-test="onboarding-setup-cli"]', pollsProgress: true },
     { name: 'v4 Builder', query: 'version=4&assignment=builder-only', checklist: '[data-test="builder-checklist"]', pollsProgress: false },
   ]) {
     test(`keeps pending ${scenario.name} setup open after an OTA install`, async ({ page }) => {
