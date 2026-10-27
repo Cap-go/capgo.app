@@ -216,7 +216,7 @@ test('captures same-version native checksum diff reasons in dependency diff tabl
   await page.login('test@capgo.app', 'testtest')
   await page.goto(`/app/${APP_ID}/bundle/${CURRENT_VERSION_ID}/dependencies?compare=${PREVIOUS_VERSION_ID}`)
 
-  await expect(page.getByRole('heading', { name: 'Native Dependencies' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Native dependencies' })).toBeVisible()
   await expect(page.getByText('Version text is unchanged').first()).toBeVisible()
   await expect(page.getByText(/iOS checksum changed:/).first()).toBeVisible()
   await expect(page.getByText(/Android checksum changed:/).first()).toBeVisible()
