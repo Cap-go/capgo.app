@@ -282,6 +282,9 @@ describe('AI agent task prompts', () => {
     expect(prompt).toContain('login capgo_test_secret')
     // Without --channel the CLI publishes to the default upload channel: always require one.
     expect(prompt).toContain('{CAPGO_CLI_RUNNER} bundle upload com.acme.app --channel {CHANNEL_NAME}')
+    // Uploads resolve the updater's app ID override before the native ID.
+    expect(prompt).toContain('`plugins.CapacitorUpdater.appId` if set, otherwise the native `appId`')
+    expect(prompt).not.toContain('CapgoBuilder')
     expect(prompt).toContain('If I do not name one, stop and do not upload.')
     expect(prompt).not.toContain('install-mcp')
     // App names are data on one line, never instructions.
@@ -302,6 +305,8 @@ describe('AI agent task prompts', () => {
     expect(prompt).toContain('{CAPGO_CLI_RUNNER} build request com.acme.app --platform android --use-stored-credentials')
     expect(prompt).toContain('Never ask me to paste certificates')
     expect(prompt).not.toContain('start_capgo_builder_onboarding')
+    // Builder resolves its own app ID override before the native ID.
+    expect(prompt).toContain('`plugins.CapgoBuilder.capgoBuilderAppId` if set')
   })
 
   it.concurrent('sets up a new platform through Capgo MCP Builder onboarding', () => {
