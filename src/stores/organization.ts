@@ -662,6 +662,11 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
 
     main.invalidatePlatformAdminStatus()
+    // Independent of the organization list: request it alongside get_orgs_v7, not after it.
+    main.resolvePlatformAdminStatus()
+      .catch((error) => {
+        console.error('Failed to resolve platform admin status:', error)
+      })
 
     if (!_initialized.value) {
       const listener = capgo.auth.onAuthStateChange((event: AuthChangeEvent) => {
@@ -706,10 +711,6 @@ export const useOrganizationStore = defineStore('organization', () => {
     })
 
     syncWebsitePaidUserCookieFromOrganizations(mappedData)
-    main.resolvePlatformAdminStatus()
-      .catch((error) => {
-        console.error('Failed to resolve platform admin status:', error)
-      })
     _organizations.value = new Map(mappedData.map(item => [item.gid, item as Organization]))
     if (loadImages)
       void loadOrganizationLogos(mappedData, logoLoadRun)

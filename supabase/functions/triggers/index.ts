@@ -11,6 +11,7 @@ import { app as cron_rollout_auto_pause } from '../_backend/triggers/cron_rollou
 import { app as cron_stat_app } from '../_backend/triggers/cron_stat_app.ts'
 import { app as cron_stat_org } from '../_backend/triggers/cron_stat_org.ts'
 import { app as cron_sync_sub } from '../_backend/triggers/cron_sync_sub.ts'
+import { app as http_dispatch } from '../_backend/triggers/http_dispatch.ts'
 import { app as on_app_create } from '../_backend/triggers/on_app_create.ts'
 import { app as on_app_delete } from '../_backend/triggers/on_app_delete.ts'
 import { app as on_app_update } from '../_backend/triggers/on_app_update.ts'
@@ -75,6 +76,7 @@ appGlobal.route('/on_organization_delete', on_organization_delete)
 appGlobal.route('/on_deploy_history_create', on_deploy_history_create)
 appGlobal.route('/plugin_notifications', pluginNotifications)
 appGlobal.route('/queue_consumer', queue_consumer)
+appGlobal.route('/http_dispatch', http_dispatch)
 appGlobal.route('/send_email', send_email)
 appGlobal.route('/webhook_delivery', webhook_delivery)
 appGlobal.route('/webhook_dispatcher', webhook_dispatcher)

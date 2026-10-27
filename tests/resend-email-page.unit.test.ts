@@ -1,9 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { FormKitNode } from '@formkit/core'
 import type { App } from 'vue'
-import { getNode } from '@formkit/core'
-import { defaultConfig, plugin } from '@formkit/vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
@@ -39,7 +36,7 @@ vi.mock('~/services/emailOtp', async importOriginal => ({
   sendEmailOtpVerification: mocks.sendEmailOtpVerification,
   verifyEmailOtp: mocks.verifyEmailOtp,
 }))
-vi.mock('vue-turnstile', () => ({
+vi.mock('~/components/VueTurnstile.vue', () => ({
   default: defineComponent({
     props: ['modelValue', 'siteKey'],
     emits: ['update:modelValue', 'error', 'unsupported', 'expired'],
@@ -67,14 +64,9 @@ vi.mock('vue-turnstile', () => ({
 }))
 
 const apps: App[] = []
-const inputs = new Map<string, FormKitNode>()
 
 async function mountPage() {
   const app = createApp(ResendEmailPage)
-  app.use(plugin, defaultConfig({
-    config: { delay: 20 },
-    plugins: [(node) => { inputs.set(node.name, node) }],
-  }))
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
   app.component('AuthPageShell', defineComponent({ setup: (_, { slots }) => () => h('main', slots.default?.()) }))
   app.component('RouterLink', defineComponent({ setup: (_, { slots }) => () => h('a', slots.default?.()) }))
@@ -96,12 +88,21 @@ async function completeCaptcha(container: HTMLElement, token = 'test-captcha-tok
   await nextTick()
 }
 
-async function submitResend() {
-  const form = getNode('resend-email')!
-  await form.input({ email: 'confirmation-test@example.com' })
-  form.submit()
-  await vi.waitFor(() => expect(form.context?.state.submitted).toBe(true))
+async function typeInto(input: HTMLInputElement, value: string) {
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
   await nextTick()
+}
+
+async function submitResend() {
+  const form = document.querySelector<HTMLFormElement>('form#resend-email')!
+  await typeInto(form.querySelector<HTMLInputElement>('input[name="email"]')!, 'confirmation-test@example.com')
+  form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  await nextTick()
+}
+
+async function typeOtpCode(value: string) {
+  await typeInto(document.querySelector<HTMLInputElement>('input[name="email_otp"]')!, value)
 }
 
 function button(container: HTMLElement, text: string) {
@@ -289,7 +290,7 @@ describe('progressive email verification', () => {
       'delete_account',
     )
 
-    await inputs.get('email_otp')!.input('123456')
+    await typeOtpCode('123456')
     button(container, messages['validate-email']).click()
     await vi.waitFor(() => expect(mocks.router.replace).toHaveBeenCalledWith('/settings/account'))
   })
@@ -297,7 +298,7 @@ describe('progressive email verification', () => {
   it('requires a fresh CAPTCHA to resend and preserves the previous code when going back', async () => {
     const container = await mountOtpPage()
     await sendOtp(container)
-    await inputs.get('email_otp')!.input('123456')
+    await typeOtpCode('123456')
     button(container, messages['email-otp-resend-code']).click()
     await nextTick()
     expect(container.querySelector<HTMLElement>('form#verify-email-otp')?.style.display).toBe('none')
@@ -317,14 +318,14 @@ describe('progressive email verification', () => {
     mocks.verifyEmailOtp.mockResolvedValueOnce({ data: null, error: new Error('Invalid code') })
     const container = await mountOtpPage()
     await sendOtp(container)
-    await inputs.get('email_otp')!.input('000000')
+    await typeOtpCode('000000')
     button(container, messages['validate-email']).click()
     await vi.waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(messages['verification-failed']))
     expect(container.querySelector('input[autocomplete="one-time-code"]')).not.toBeNull()
     expect(container.querySelector('[data-test="captcha"]')).toBeNull()
     expect(mocks.router.replace).not.toHaveBeenCalled()
 
-    await inputs.get('email_otp')!.input('123456')
+    await typeOtpCode('123456')
     button(container, messages['validate-email']).click()
     await vi.waitFor(() => expect(mocks.router.replace).toHaveBeenCalledWith('/settings/account'))
   })
@@ -356,7 +357,6 @@ describe('progressive email verification', () => {
 afterEach(() => {
   apps.splice(0).forEach(app => app.unmount())
   document.body.replaceChildren()
-  inputs.clear()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   vi.useRealTimers()
@@ -550,7 +550,7 @@ describe('email confirmation CAPTCHA', () => {
     expect(mocks.resetCaptcha).toHaveBeenCalledOnce()
     await vi.waitFor(() => expect(container.querySelector('input[autocomplete="one-time-code"]')).not.toBeNull())
 
-    await inputs.get('email_otp')!.input('123456')
+    await typeOtpCode('123456')
     await nextTick()
     button(container, messages['validate-email']).click()
     await vi.waitFor(() => expect(mocks.router.replace).toHaveBeenCalledWith('/settings/account'))

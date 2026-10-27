@@ -1,19 +1,19 @@
 <script setup lang="ts">
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
-import iconEmail from '~icons/oui/email?raw'
-import iconPassword from '~icons/ph/key?raw'
+import IconEmail from '~icons/oui/email'
+import IconPassword from '~icons/ph/key'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass, authSecondaryButtonClass } from '~/components/auth/pageStyles'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { hideLoader } from '~/services/loader'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
+import { rules, validateField } from '~/utils/formValidation'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const capgo = useConsole()
@@ -31,6 +31,17 @@ const router = useRouter()
 const isLoadingSession = ref(true)
 const isEmailVerified = ref(true)
 const isDeleteBlocked = computed(() => !isEmailVerified.value)
+const email = ref('')
+const password = ref('')
+const submitted = ref(false)
+const formErrors = ref<string[]>([])
+const emailErrors = computed(() => validateField(email.value, [rules.required(t('email'), { trim: true })]))
+const passwordErrors = computed(() => validateField(password.value, [rules.required(t('password'), { trim: true })]))
+
+/** Shows a form-level error above the submit button. */
+function setFormError(message: string) {
+  formErrors.value = [message]
+}
 
 async function redirectToEmailVerification() {
   await router.push({
@@ -85,12 +96,12 @@ async function deleteAccount() {
           try {
             if (!pendingEmail.value || !pendingPassword.value) {
               isLoading.value = false
-              return setErrors('delete-account', [t('invalid-auth')], {})
+              return setFormError(t('invalid-auth'))
             }
 
             if (captchaKey.value && !confirmCaptchaToken.value) {
               isLoading.value = false
-              return setErrors('delete-account', [t('captcha-required')], {})
+              return setFormError(t('captcha-required'))
             }
 
             const { error: reauthError } = await capgo.auth.signInWithPassword({
@@ -104,14 +115,14 @@ async function deleteAccount() {
               isLoading.value = false
               if (reauthError.message.includes('captcha'))
                 toast.error(t('captcha-fail'))
-              return setErrors('delete-account', [t('invalid-auth')], {})
+              return setFormError(t('invalid-auth'))
             }
 
             const { data: claimsData, error: claimsError } = await capgo.auth.getClaims()
             const userId = claimsData?.claims?.sub
             if (claimsError || !userId) {
               isLoading.value = false
-              return setErrors('delete-account', [t('something-went-wrong-try-again-later')], {})
+              return setFormError(t('something-went-wrong-try-again-later'))
             }
 
             const { data: user } = await capgoClient
@@ -122,7 +133,7 @@ async function deleteAccount() {
 
             if (!user) {
               isLoading.value = false
-              return setErrors('delete-account', [t('something-went-wrong-try-again-later')], {})
+              return setFormError(t('something-went-wrong-try-again-later'))
             }
 
             if (!await ensureRecentEmailVerification(userId)) {
@@ -142,10 +153,10 @@ async function deleteAccount() {
               }
               if (deleteError.message?.includes('reauth_required')) {
                 isLoading.value = false
-                return setErrors('delete-account', [t('invalid-auth')], {})
+                return setFormError(t('invalid-auth'))
               }
               isLoading.value = false
-              return setErrors('delete-account', [t('something-went-wrong-try-again-later')], {})
+              return setFormError(t('something-went-wrong-try-again-later'))
             }
 
             // Sign out and redirect to login page
@@ -156,7 +167,7 @@ async function deleteAccount() {
           catch (error) {
             console.error(error)
             isLoading.value = false
-            return setErrors('delete-account', [t('something-went-wrong-try-again-later')], {})
+            return setFormError(t('something-went-wrong-try-again-later'))
           }
           finally {
             isLoading.value = false
@@ -188,12 +199,12 @@ async function deleteAccount() {
 
 async function submit(form: { email: string, password: string }) {
   if (isDeleteBlocked.value) {
-    return setErrors('delete-account', [t('email-not-verified')], {})
+    return setFormError(t('email-not-verified'))
   }
   isLoading.value = true
   if (captchaKey.value && !turnstileToken.value) {
     isLoading.value = false
-    setErrors('delete-account', [t('captcha-required')], {})
+    setFormError(t('captcha-required'))
     return
   }
   const { error } = await capgo.auth.signInWithPassword({
@@ -204,7 +215,7 @@ async function submit(form: { email: string, password: string }) {
   isLoading.value = false
   if (error) {
     console.error('error', error)
-    setErrors('delete-account', [error.message], {})
+    setFormError(error.message)
     if (error.message.includes('captcha')) {
       safeResetTurnstile(captchaComponent.value)
       toast.error(t('captcha-fail'))
@@ -217,7 +228,7 @@ async function submit(form: { email: string, password: string }) {
     const userId = claimsData?.claims?.sub
     if (claimsError || !userId) {
       isLoading.value = false
-      return setErrors('delete-account', [t('something-went-wrong-try-again-later')], {})
+      return setFormError(t('something-went-wrong-try-again-later'))
     }
 
     if (!await ensureRecentEmailVerification(userId)) {
@@ -232,6 +243,14 @@ async function submit(form: { email: string, password: string }) {
     // delete account
     deleteAccount()
   }
+}
+
+function onSubmit() {
+  submitted.value = true
+  formErrors.value = []
+  if (emailErrors.value.length || passwordErrors.value.length)
+    return
+  return submit({ email: email.value, password: password.value })
 }
 
 onMounted (() => {
@@ -269,18 +288,20 @@ onMounted (() => {
       </router-link>
     </div>
 
-    <FormKit v-else id="delete-account" type="form" :actions="false" @submit="submit">
+    <form v-else id="delete-account" novalidate @submit.prevent="onSubmit">
       <div class="space-y-5 text-slate-500 dark:text-slate-300">
-        <FormKit
+        <FormField
+          v-model="email"
           type="email"
           name="email"
           :disabled="isLoading"
           enterkeyhint="next"
-          :prefix-icon="iconEmail"
+          :prefix-icon="IconEmail"
           inputmode="email"
           :label="t('email')"
           autocomplete="email"
-          validation="required:trim"
+          :errors="emailErrors"
+          :submitted="submitted"
         />
 
         <div>
@@ -292,15 +313,17 @@ onMounted (() => {
               {{ t('forgot-password') }}
             </router-link>
           </div>
-          <FormKit
+          <FormField
             id="passwordInput"
+            v-model="password"
             type="password"
             :placeholder="t('password')"
             name="password"
             :label="t('password')"
-            :prefix-icon="iconPassword"
+            :prefix-icon="IconPassword"
             :disabled="isLoading"
-            validation="required:trim"
+            :errors="passwordErrors"
+            :submitted="submitted"
             enterkeyhint="send"
             autocomplete="current-password"
           />
@@ -313,7 +336,11 @@ onMounted (() => {
           <VueTurnstile ref="captchaComponent" v-model="turnstileToken" size="flexible" :site-key="captchaKey" />
         </div>
 
-        <FormKitMessages />
+        <ul v-if="formErrors.length" role="alert" class="mb-1.5">
+          <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+            {{ error }}
+          </li>
+        </ul>
 
         <div>
           <button
@@ -346,7 +373,7 @@ onMounted (() => {
           </router-link>
         </div>
       </div>
-    </FormKit>
+    </form>
 
     <template #footer>
       <section class="mt-6 flex flex-col items-center">

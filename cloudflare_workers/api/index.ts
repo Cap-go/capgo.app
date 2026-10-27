@@ -91,6 +91,7 @@ import { app as cron_rollout_auto_pause } from '../../supabase/functions/_backen
 import { app as cron_stat_app } from '../../supabase/functions/_backend/triggers/cron_stat_app.ts'
 import { app as cron_stat_org } from '../../supabase/functions/_backend/triggers/cron_stat_org.ts'
 import { app as cron_sync_sub } from '../../supabase/functions/_backend/triggers/cron_sync_sub.ts'
+import { app as http_dispatch } from '../../supabase/functions/_backend/triggers/http_dispatch.ts'
 import { app as on_app_create } from '../../supabase/functions/_backend/triggers/on_app_create.ts'
 import { app as on_app_delete } from '../../supabase/functions/_backend/triggers/on_app_delete.ts'
 import { app as on_app_update } from '../../supabase/functions/_backend/triggers/on_app_update.ts'
@@ -118,6 +119,7 @@ import { BRES, createAllCatch, createHono } from '../../supabase/functions/_back
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
 import { processApiQueueBatch } from './queue.ts'
+import { QUEUE_DISPATCHER_NAME } from './queue_dispatcher.ts'
 import { app as send_email } from './triggers/send_email.ts'
 
 function getExecutionContext(c: Context): Context['executionCtx'] | undefined {
@@ -257,6 +259,8 @@ appTriggers.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
 // The queue dispatcher sends onboarding refresh batches to this Cloudflare route.
 appTriggers.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
 appTriggers.route('/queue_consumer', queue_consumer)
+// Claimed by the QueueDispatcher Durable Object (replaces pg_net for routed targets).
+appTriggers.route('/http_dispatch', http_dispatch)
 appTriggers.route('/send_email', send_email)
 appTriggers.route('/webhook_delivery', webhook_delivery)
 appTriggers.route('/webhook_dispatcher', webhook_dispatcher)
@@ -281,16 +285,31 @@ async function runScheduledPluginNotificationFlush(env: Bindings, ctx: Execution
     throw new Error(`flush-plugin-notifications had ${body.failed} failed transfers`)
 }
 
+// The minute cron is only a watchdog: the dispatcher re-arms its own 1s alarm,
+// this restarts it after a first deploy or if the alarm was ever dropped.
+async function ensureQueueDispatcher(env: Bindings) {
+  if (!env.QUEUE_DISPATCHER)
+    return
+  const stub = env.QUEUE_DISPATCHER.get(env.QUEUE_DISPATCHER.idFromName(QUEUE_DISPATCHER_NAME))
+  const response = await stub.fetch('https://queue-dispatcher.capgo.internal/ensure')
+  if (!response.ok)
+    throw new Error(`queue dispatcher ensure HTTP ${response.status}`)
+}
+
 createAllCatch(app, functionName)
 createAllCatch(appPrivate, functionNamePrivate)
 createAllCatch(appTriggers, functionNameTriggers)
 createAllCatch(appScheduled, functionNameScheduled)
 
 export { ConsoleEvents } from './console_events.ts'
+export { QueueDispatcher } from './queue_dispatcher.ts'
 export default {
   fetch: app.fetch,
   queue: processApiQueueBatch,
   scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
     ctx.waitUntil(runScheduledPluginNotificationFlush(env, ctx))
+    ctx.waitUntil(ensureQueueDispatcher(env).catch((error) => {
+      console.error(JSON.stringify({ event: 'queue_dispatcher_ensure_failed', error: error instanceof Error ? error.message : 'Unknown error' }))
+    }))
   },
 }

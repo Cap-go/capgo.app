@@ -5,7 +5,6 @@ import type { Database } from '~/types/database.types'
 import type { PeriodDayOption } from '~/utils/periodDays'
 import { useDark } from '@vueuse/core'
 import { computed, ref, useId, watch, watchEffect } from 'vue'
-import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -16,11 +15,11 @@ import IconDownload from '~icons/lucide/download'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
+import { Bar } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { defaultApiHost, useConsole } from '~/services/console'
-import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterFailureCategory, updaterFailureHelpKey, updaterInsightActions } from '~/services/statsActions'
@@ -81,7 +80,6 @@ interface LogInsightsResponse {
 
 const { t } = useI18n()
 const isDark = useDark()
-registerDashboardCharts()
 const route = useRoute('/app/[app].observe.errors')
 const router = useRouter()
 const capgo = useConsole()

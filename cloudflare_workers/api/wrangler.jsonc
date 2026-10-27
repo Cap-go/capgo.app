@@ -19,11 +19,19 @@
   "workers_dev": false,
   "upload_source_maps": true,
   "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
-  "migrations": [{ "tag": "console-events-v1", "new_sqlite_classes": ["ConsoleEvents"] }],
+  "migrations": [
+    { "tag": "console-events-v1", "new_sqlite_classes": ["ConsoleEvents"] },
+    { "tag": "queue-dispatcher-v1", "new_sqlite_classes": ["QueueDispatcher"] }
+  ],
   "env": {
     "prod": {
       "name": "capgo_api-prod",
-      "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
+      "durable_objects": {
+        "bindings": [
+          { "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" },
+          { "name": "QUEUE_DISPATCHER", "class_name": "QueueDispatcher" }
+        ]
+      },
       "send_email": [{ "name": "AUTH_EMAIL", "allowed_sender_addresses": ["noreply@capgo.app"] }],
       "triggers": {
         "crons": ["* * * * *"]
@@ -34,7 +42,8 @@
       "vars": {
         "ENV_NAME": "capgo_api-prod",
         "MCP_OAUTH_ISSUER": "https://capgo.app",
-        "MCP_OAUTH_API_ORIGIN": "https://api.capgo.app"
+        "MCP_OAUTH_API_ORIGIN": "https://api.capgo.app",
+        "HTTP_DISPATCH_ALLOWED_ORIGINS": "https://xvwzpoazmxkqosrdewyv.supabase.co"
       },
       "routes": [
         {
@@ -90,7 +99,8 @@
           "binding": "ADMIN_CLI_USAGE",
           "service": "capgo-admin-dashboard-api",
           "entrypoint": "CliUsageIngest"
-        }
+        },
+        { "binding": "API_SELF", "service": "capgo_api-prod" }
       ],
       "d1_databases": [
         {

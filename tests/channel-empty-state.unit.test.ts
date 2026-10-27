@@ -22,17 +22,6 @@ const state = vi.hoisted(() => ({
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
-vi.mock('@formkit/vue', async () => {
-  const { defineComponent, h } = await import('vue')
-  return { FormKit: defineComponent({
-    props: ['modelValue'],
-    emits: ['update:modelValue'],
-    setup: (props, { emit }) => () => h('input', {
-      value: props.modelValue,
-      onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value),
-    }),
-  }) }
-})
 vi.mock('~/stores/main', () => ({ useMainStore: () => ({ user: { id: 'preview-user' } }) }))
 vi.mock('~/stores/organization', async () => {
   const { defineStore } = await import('pinia')

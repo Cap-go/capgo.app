@@ -31,13 +31,15 @@ vi.mock('~/composables/useNativeChrome', () => ({
 }))
 vi.mock('~/composables/useEdgeSwipeBack', () => ({ useEdgeSwipeBack: vi.fn() }))
 vi.mock('~/composables/useRealtimeCLIFeed', () => ({ useRealtimeCLIFeed: vi.fn() }))
+// The layout loads these with defineAsyncComponent, which reads `__esModule` on the module.
 vi.mock('~/components/dashboard/OnboardingExploreBanner.vue', () => ({
+  __esModule: true,
   default: { props: ['appId'], template: '<div data-test="explore-banner">{{ appId }}</div>' },
 }))
-vi.mock('~/components/dashboard/OnboardingExploreReminder.vue', () => ({ default: { render: () => null } }))
-vi.mock('~/components/dashboard/PastDueBanner.vue', () => ({ default: { render: () => null } }))
-vi.mock('~/components/dashboard/TrialCardPrompt.vue', () => ({ default: { render: () => null } }))
-vi.mock('~/components/assistant/AssistantChat.vue', () => ({ default: { render: () => null } }))
+vi.mock('~/components/dashboard/OnboardingExploreReminder.vue', () => ({ __esModule: true, default: { render: () => null } }))
+vi.mock('~/components/dashboard/PastDueBanner.vue', () => ({ __esModule: true, default: { render: () => null } }))
+vi.mock('~/components/dashboard/TrialCardPrompt.vue', () => ({ __esModule: true, default: { render: () => null } }))
+vi.mock('~/components/assistant/AssistantChat.vue', () => ({ __esModule: true, default: { render: () => null } }))
 vi.mock('~/components/LogAsDialogField.vue', () => ({ default: { render: () => null } }))
 vi.mock('~/components/Navbar.vue', () => ({ default: { render: () => null } }))
 vi.mock('~/components/Sidebar.vue', () => ({ default: { render: () => null } }))

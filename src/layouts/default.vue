@@ -1,13 +1,8 @@
 <script setup lang="ts">
 import { Capacitor } from '@capacitor/core'
 import { useLocalStorage, useMediaQuery } from '@vueuse/core'
-import { computed, ref, useTemplateRef, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, useTemplateRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import AssistantChat from '~/components/assistant/AssistantChat.vue'
-import OnboardingExploreBanner from '~/components/dashboard/OnboardingExploreBanner.vue'
-import OnboardingExploreReminder from '~/components/dashboard/OnboardingExploreReminder.vue'
-import PastDueBanner from '~/components/dashboard/PastDueBanner.vue'
-import TrialCardPrompt from '~/components/dashboard/TrialCardPrompt.vue'
 import LogAsDialogField from '~/components/LogAsDialogField.vue'
 import { useEdgeSwipeBack } from '~/composables/useEdgeSwipeBack'
 import { isNativeChromeEnabled, useNativeChrome } from '~/composables/useNativeChrome'
@@ -19,6 +14,13 @@ import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingExploreBannerAppId, getOnboardingResumeAppId } from '~/utils/onboardingRedirect'
 import Navbar from '../components/Navbar.vue'
 import Sidebar from '../components/Sidebar.vue'
+
+// Overlays and prompts that wait on their own data load after the page instead of blocking it.
+const AssistantChat = defineAsyncComponent(() => import('~/components/assistant/AssistantChat.vue'))
+const OnboardingExploreBanner = defineAsyncComponent(() => import('~/components/dashboard/OnboardingExploreBanner.vue'))
+const OnboardingExploreReminder = defineAsyncComponent(() => import('~/components/dashboard/OnboardingExploreReminder.vue'))
+const PastDueBanner = defineAsyncComponent(() => import('~/components/dashboard/PastDueBanner.vue'))
+const TrialCardPrompt = defineAsyncComponent(() => import('~/components/dashboard/TrialCardPrompt.vue'))
 
 const sidebarOpen = ref(false)
 const sidebarCollapsedPreference = useLocalStorage('capgo-sidebar-collapsed', false)

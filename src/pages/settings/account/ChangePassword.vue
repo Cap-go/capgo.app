@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
-import iconPassword from '~icons/heroicons/key?raw'
+import IconPassword from '~icons/heroicons/key'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { FunctionsHttpError } from '~/services/consoleClient'
@@ -13,6 +12,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 import { safeResetTurnstile } from '~/utils/turnstile'
 // tabs handled by settings layout
 
@@ -61,21 +61,40 @@ const passwordPolicy = computed(() => {
 })
 
 // Build dynamic validation rules based on org's password policy
-const validationRules = computed(() => {
-  const rules = ['required', `length:${passwordPolicy.value.min_length}`]
+const passwordRules = computed(() => {
+  const label = t('password')
+  const fieldRules = [rules.required(label), rules.length(label, passwordPolicy.value.min_length)]
 
   if (passwordPolicy.value.require_uppercase) {
-    rules.push('contains_uppercase')
+    fieldRules.push(rules.containsUppercase(label))
   }
-  // contains_alpha ensures at least one letter
-  rules.push('contains_alpha')
+  // containsAlpha ensures at least one letter
+  fieldRules.push(rules.containsAlpha(label))
   if (passwordPolicy.value.require_special) {
-    rules.push('contains_symbol')
+    fieldRules.push(rules.containsSymbol(label))
   }
-  // Note: FormKit doesn't have contains_number, but contains_alpha + the regex validation in backend handles this
+  // Note: no number rule here; the backend regex validation enforces it
 
-  return rules.join('|')
+  return fieldRules
 })
+
+// Verify password form
+const verifyCurrentPassword = ref('')
+const verifySubmitted = ref(false)
+const verifyFormErrors = ref<string[]>([])
+const verifyCurrentPasswordErrors = computed(() => validateField(verifyCurrentPassword.value, [rules.required(t('current-password'))]))
+
+// Change password form
+const currentPasswordInput = ref('')
+const newPassword = ref('')
+const passwordConfirm = ref('')
+const changeFormErrors = ref<string[]>([])
+const currentPasswordErrors = computed(() => validateField(currentPasswordInput.value, [rules.required(t('current-password'))]))
+const newPasswordErrors = computed(() => validateField(newPassword.value, passwordRules.value))
+const passwordConfirmErrors = computed(() => validateField(passwordConfirm.value, [
+  rules.required(t('password-confirmatio')),
+  rules.confirm(t('password-confirmatio'), () => newPassword.value),
+]))
 
 // Build dynamic help text based on org's password policy
 const helpText = computed(() => {
@@ -92,6 +111,16 @@ const helpText = computed(() => {
 })
 
 // Verify existing password meets org requirements (no password change needed)
+async function onVerifySubmit() {
+  verifySubmitted.value = true
+  if (verifyCurrentPasswordErrors.value.length)
+    return
+  if (isVerifying.value)
+    return
+  verifyFormErrors.value = []
+  await verifyPassword({ current_password: verifyCurrentPassword.value })
+}
+
 async function verifyPassword(form: { current_password: string }) {
   if (isVerifying.value)
     return
@@ -100,13 +129,13 @@ async function verifyPassword(form: { current_password: string }) {
   try {
     const user = mainStore.user
     if (!user?.email) {
-      setErrors('verify-password', [t('user-not-found')], {})
+      verifyFormErrors.value = [t('user-not-found')]
       return
     }
 
     const orgId = organizationStore.currentOrganization?.gid
     if (!orgId) {
-      setErrors('verify-password', [t('no-organization-selected')], {})
+      verifyFormErrors.value = [t('no-organization-selected')]
       return
     }
 
@@ -131,14 +160,14 @@ async function verifyPassword(form: { current_password: string }) {
         resetCaptcha()
       }
       else if (result.error === 'invalid_credentials') {
-        setErrors('verify-password', [t('invalid-password')], {})
+        verifyFormErrors.value = [t('invalid-password')]
         resetCaptcha()
       }
       else if (result.error === 'password_does_not_meet_policy') {
-        setErrors('verify-password', [t('password-does-not-meet-requirements')], {})
+        verifyFormErrors.value = [t('password-does-not-meet-requirements')]
       }
       else {
-        setErrors('verify-password', [result.message || t('verification-failed')], {})
+        verifyFormErrors.value = [result.message || t('verification-failed')]
       }
       return
     }
@@ -149,7 +178,8 @@ async function verifyPassword(form: { current_password: string }) {
     // Refresh org data to update access status
     await organizationStore.fetchOrganizations()
 
-    form.current_password = ''
+    verifyCurrentPassword.value = ''
+    verifySubmitted.value = false
   }
   finally {
     isVerifying.value = false
@@ -159,14 +189,14 @@ async function verifyPassword(form: { current_password: string }) {
 async function runMfaChallenge() {
   const { data: mfaFactors, error: mfaError } = await capgo.auth.mfa.listFactors()
   if (mfaError) {
-    setErrors('change-pass', [mfaError.message], {})
+    changeFormErrors.value = [mfaError.message]
     toast.error(mfaError.message)
     console.error('Cannot get MFA factors', mfaError)
     return false
   }
   const factor = mfaFactors.all.find(factor => factor.status === 'verified')
   if (!factor) {
-    setErrors('change-pass', [t('alert-2fa-required')], {})
+    changeFormErrors.value = [t('alert-2fa-required')]
     toast.error(t('alert-2fa-required'))
     console.error('Cannot find MFA factors', mfaError)
     return false
@@ -174,7 +204,7 @@ async function runMfaChallenge() {
 
   const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: factor.id })
   if (errorChallenge) {
-    setErrors('change-pass', [errorChallenge.message], {})
+    changeFormErrors.value = [errorChallenge.message]
     toast.error(errorChallenge.message)
     console.error('Cannot challenge MFA factor', errorChallenge)
     return false
@@ -247,7 +277,7 @@ async function refreshSessionWithCurrentPassword(currentPassword: string) {
 }
 
 function reportPasswordUpdateError(message: string) {
-  setErrors('change-pass', [message], {})
+  changeFormErrors.value = [message]
   toast.error(message)
 }
 
@@ -256,6 +286,15 @@ async function updatePasswordWithCurrent(password: string, currentPassword: stri
     password,
     current_password: currentPassword,
   })
+}
+
+async function onChangeSubmit() {
+  if (currentPasswordErrors.value.length || newPasswordErrors.value.length || passwordConfirmErrors.value.length)
+    return
+  if (isLoading.value)
+    return
+  changeFormErrors.value = []
+  await submit({ current_password: currentPasswordInput.value, password: newPassword.value, password_confirm: passwordConfirm.value })
 }
 
 async function submit(form: { current_password: string, password: string, password_confirm: string }) {
@@ -309,9 +348,9 @@ async function submit(form: { current_password: string, password: string, passwo
       console.error('Failed to sign out other sessions after password change', signOutError)
 
     toast.success(t('changed-password-suc'))
-    form.password = ''
-    form.password_confirm = ''
-    form.current_password = ''
+    newPassword.value = ''
+    passwordConfirm.value = ''
+    currentPasswordInput.value = ''
   }
   finally {
     isLoading.value = false
@@ -374,24 +413,30 @@ async function submit(form: { current_password: string, password: string, passwo
           </div>
         </div>
 
-        <FormKit id="verify-password" type="form" :actions="false" @submit="verifyPassword">
+        <form id="verify-password" novalidate @submit.prevent="onVerifySubmit">
           <section>
             <h2 class="mb-4 text-xl font-bold dark:text-white text-slate-800">
               {{ t('verify-current-password') }}
             </h2>
             <div class="space-y-4">
-              <FormKit
+              <FormField
+                v-model="verifyCurrentPassword"
                 type="password"
                 name="current_password"
-                :prefix-icon="iconPassword"
+                :prefix-icon="IconPassword"
                 autocomplete="current-password"
                 outer-class="sm:w-1/2"
                 :label="t('current-password')"
                 :help="helpText"
-                validation="required"
+                :errors="verifyCurrentPasswordErrors"
+                :submitted="verifySubmitted"
               />
             </div>
-            <FormKitMessages />
+            <ul v-if="verifyFormErrors.length" role="alert" class="mb-1.5">
+              <li v-for="e in verifyFormErrors" :key="e" class="text-xs text-red-600 dark:text-red-400">
+                {{ e }}
+              </li>
+            </ul>
           </section>
           <footer>
             <div class="flex flex-col py-5">
@@ -408,11 +453,11 @@ async function submit(form: { current_password: string, password: string, passwo
               </div>
             </div>
           </footer>
-        </FormKit>
+        </form>
       </div>
 
       <!-- Change Password Section -->
-      <FormKit id="change-pass" type="form" :actions="false" @submit="submit">
+      <form id="change-pass" novalidate @submit.prevent="onChangeSubmit">
         <!-- Panel body -->
         <div class="p-6 space-y-6">
           <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
@@ -432,40 +477,46 @@ async function submit(form: { current_password: string, password: string, passwo
                 tabindex="-1"
                 class="sr-only"
               >
-              <FormKit
+              <FormField
+                v-model="currentPasswordInput"
                 type="password"
                 name="current_password"
-                :prefix-icon="iconPassword"
+                :prefix-icon="IconPassword"
                 autocomplete="current-password"
                 outer-class="sm:w-full"
                 :label="t('current-password')"
-                validation="required"
+                :errors="currentPasswordErrors"
                 validation-visibility="live"
               />
-              <FormKit
+              <FormField
+                v-model="newPassword"
                 type="password"
                 name="password"
-                :prefix-icon="iconPassword"
+                :prefix-icon="IconPassword"
                 autocomplete="new-password"
                 outer-class="sm:w-1/2"
                 :label="t('password')"
                 :help="helpText"
-                :validation="validationRules"
+                :errors="newPasswordErrors"
                 validation-visibility="live"
               />
-              <FormKit
+              <FormField
+                v-model="passwordConfirm"
                 type="password"
                 name="password_confirm"
-                :prefix-icon="iconPassword"
+                :prefix-icon="IconPassword"
                 autocomplete="new-password"
                 outer-class="sm:w-1/2"
                 :label="t('confirm-password')"
-                validation="required|confirm"
+                :errors="passwordConfirmErrors"
                 validation-visibility="live"
-                :validation-label="t('password-confirmatio')"
               />
             </div>
-            <FormKitMessages />
+            <ul v-if="changeFormErrors.length" role="alert" class="mb-1.5">
+              <li v-for="e in changeFormErrors" :key="e" class="text-xs text-red-600 dark:text-red-400">
+                {{ e }}
+              </li>
+            </ul>
           </section>
           <!-- Panel footer -->
           <footer>
@@ -486,7 +537,7 @@ async function submit(form: { current_password: string, password: string, passwo
             </div>
           </footer>
         </div>
-      </FormKit>
+      </form>
     </div>
 
     <div v-if="!!captchaKey" class="mt-4">

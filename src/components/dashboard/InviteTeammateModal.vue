@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { sendEvent } from '~/services/tracking'

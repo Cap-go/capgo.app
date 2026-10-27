@@ -103,6 +103,34 @@ describe('sso enforcement redirect handling', () => {
     expect(next).toHaveBeenCalledWith('/login?sso_required=true')
   })
 
+  it('reuses the check started at navigation start and still fails closed on denial', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ allowed: false }),
+    } as unknown as Response)
+
+    const guard = await getGuard()
+    const { prefetchSsoEnforcement } = await import('../src/modules/sso-enforcement.ts')
+    prefetchSsoEnforcement('/dashboard')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const next = vi.fn()
+
+    await guard({ path: '/dashboard' }, { path: '/login' }, next)
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(mockSignOut).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/login?sso_required=true')
+  })
+
+  it('does not start a check for public routes', async () => {
+    const { prefetchSsoEnforcement } = await import('../src/modules/sso-enforcement.ts')
+    prefetchSsoEnforcement('/login')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(mockGetSession).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('sends the stored admin token for backend-verified impersonation bypass', async () => {
     mockGetSpoofedAdminJwt.mockReturnValue('admin-token-456')
     vi.mocked(fetch).mockResolvedValue({

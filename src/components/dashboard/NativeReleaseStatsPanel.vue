@@ -2,11 +2,10 @@
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { NativeReleasePlatform, NativeReleasePlatformFilter, NativeReleaseSeriesInput } from '~/services/nativeReleaseStats'
 import { useDark } from '@vueuse/core'
-import { BarElement, CategoryScale, Chart, Legend, LinearScale, Tooltip } from 'chart.js'
 import { computed, ref } from 'vue'
-import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import { Bar } from '~/components/dashboard/lazyCharts'
 import Spinner from '~/components/Spinner.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
@@ -35,8 +34,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   retry: []
 }>()
-
-Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 
 const { t } = useI18n()
 const isDark = useDark()

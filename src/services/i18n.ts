@@ -1,4 +1,3 @@
-import { changeLocale } from '@formkit/vue'
 import countryCodeToFlagEmoji from 'country-code-to-flag-emoji'
 import { toast } from 'vue-sonner'
 import { getSelectedLanguage, i18n, loadLanguageAsync, normalizeLanguage, RemoteLanguageError } from '../modules/i18n'
@@ -11,11 +10,6 @@ const countryCodes: Record<string, string> = {
   'pt-br': 'BR',
   'vi': 'VN',
   'zh-cn': 'CN',
-}
-
-const formkitLocales: Record<string, string> = {
-  'pt-br': 'pt',
-  'zh-cn': 'zh',
 }
 
 export function getEmoji(locale: string) {
@@ -31,7 +25,6 @@ export async function changeLanguage(lang: string) {
 
   try {
     await loadLanguageAsync(nextLanguage)
-    changeLocale(formkitLocales[nextLanguage] ?? nextLanguage)
     return nextLanguage
   }
   catch (error) {

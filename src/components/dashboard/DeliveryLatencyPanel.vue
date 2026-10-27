@@ -2,11 +2,10 @@
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from '~/composables/useUpdateDeliveryStats'
 import type { PluginVersionRow } from '~/services/pluginVersionRecommendation'
-import { CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
-import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import IconTimer from '~icons/lucide/timer'
+import { Line } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import Spinner from '~/components/Spinner.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
@@ -36,8 +35,6 @@ const props = withDefaults(defineProps<{
   hidePeriodSelector: false,
   dense: false,
 })
-
-Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend)
 
 const { t } = useI18n()
 const localDays = ref<PeriodDayOption>(7)

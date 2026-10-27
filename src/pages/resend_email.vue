@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
-import iconEmail from '~icons/oui/email?raw'
+import IconEmail from '~icons/oui/email'
 import { authGhostButtonClass, authInsetCardClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsole } from '~/services/console'
 import { getEmailOtpSendErrorMessage, getRecentEmailOtpVerification, parseEmailOtpSendError, sendEmailOtpVerification, verifyEmailOtp } from '~/services/emailOtp'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
+import { rules, validateField } from '~/utils/formValidation'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
@@ -38,6 +38,15 @@ const otpCaptchaRetryKey = ref(0)
 let otpCaptchaInitTimeout: ReturnType<typeof setTimeout> | null = null
 const otpVerificationCode = ref('')
 const otpVerificationLoading = ref(false)
+const resendEmail = ref('')
+const resendSubmitted = ref(false)
+const resendFormErrors = ref<string[]>([])
+const otpSubmitted = ref(false)
+const resendEmailErrors = computed(() => validateField(resendEmail.value, [rules.required(t('email'), { trim: true })]))
+const otpCodeErrors = computed(() => validateField(otpVerificationCode.value, [
+  rules.required(t('email-otp-code-required'), { trim: true }),
+  rules.length(t('email-otp-code-required'), 6),
+]))
 let otpSendCooldownTimer: ReturnType<typeof setInterval> | null = null
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const currentUserId = ref('')
@@ -139,7 +148,7 @@ watch(resendCaptchaToken, (token) => {
 }, { flush: 'sync' })
 
 function showResendError(message: string) {
-  setErrors('resend-email', [message], {})
+  resendFormErrors.value = [message]
   toast.error(message)
 }
 
@@ -176,7 +185,7 @@ async function submit(form: { email: string }) {
     return
 
   if (shouldBlockForResendCaptcha.value) {
-    setErrors('resend-email', [t('captcha-required')], {})
+    resendFormErrors.value = [t('captcha-required')]
     return
   }
 
@@ -199,6 +208,14 @@ async function submit(form: { email: string }) {
     resendCaptchaToken.value = ''
     safeResetTurnstile(resendCaptchaRef.value)
   }
+}
+
+function onResendSubmit() {
+  resendSubmitted.value = true
+  resendFormErrors.value = []
+  if (resendEmailErrors.value.length)
+    return
+  return submit({ email: resendEmail.value })
 }
 
 async function loadEmailVerificationState() {
@@ -306,6 +323,13 @@ async function verifyOtpCode(form: { email_otp: string }) {
   finally {
     otpVerificationLoading.value = false
   }
+}
+
+function onVerifyOtpSubmit() {
+  otpSubmitted.value = true
+  if (otpCodeErrors.value.length)
+    return
+  return verifyOtpCode({ email_otp: otpVerificationCode.value })
 }
 
 onMounted(async () => {
@@ -424,9 +448,9 @@ onBeforeUnmount(() => {
           </button>
         </template>
 
-        <FormKit v-if="otpHasSentCode" v-show="otpStep === 'verify'" id="verify-email-otp" type="form" :actions="false" @submit="verifyOtpCode">
+        <form v-if="otpHasSentCode" v-show="otpStep === 'verify'" id="verify-email-otp" novalidate @submit.prevent="onVerifyOtpSubmit">
           <div class="space-y-5">
-            <FormKit
+            <FormField
               id="email-verification-code"
               v-model="otpVerificationCode"
               type="text"
@@ -435,7 +459,8 @@ onBeforeUnmount(() => {
               :disabled="otpVerificationLoading"
               inputmode="numeric"
               autocomplete="one-time-code"
-              validation="required:trim|length:6"
+              :errors="otpCodeErrors"
+              :submitted="otpSubmitted"
             />
 
             <button
@@ -460,7 +485,7 @@ onBeforeUnmount(() => {
               {{ t('email-otp-resend-code') }}
             </button>
           </div>
-        </FormKit>
+        </form>
 
         <div :class="authPanelClass">
           <router-link to="/login" class="text-sm font-semibold text-[rgb(255,114,17)] transition-colors duration-200 hover:text-[rgb(235,94,0)]">
@@ -469,17 +494,19 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <FormKit v-else id="resend-email" type="form" :actions="false" @submit="submit">
+      <form v-else id="resend-email" novalidate @submit.prevent="onResendSubmit">
         <div class="space-y-5 text-slate-500 dark:text-slate-300">
-          <FormKit
+          <FormField
+            v-model="resendEmail"
             type="email"
             name="email"
             :label="t('email')"
             :disabled="isLoading"
-            :prefix-icon="iconEmail"
+            :prefix-icon="IconEmail"
             inputmode="email"
             autocomplete="email"
-            validation="required:trim"
+            :errors="resendEmailErrors"
+            :submitted="resendSubmitted"
           />
 
           <div v-if="captchaKey" class="space-y-2">
@@ -500,7 +527,11 @@ onBeforeUnmount(() => {
             </p>
           </div>
 
-          <FormKitMessages />
+          <ul v-if="resendFormErrors.length" role="alert" class="mb-1.5">
+            <li v-for="error in resendFormErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+              {{ error }}
+            </li>
+          </ul>
 
           <div>
             <button type="submit" :disabled="isLoading" :aria-busy="isLoading ? 'true' : 'false'" :class="authPrimaryButtonClass">
@@ -525,7 +556,7 @@ onBeforeUnmount(() => {
             </router-link>
           </div>
         </div>
-      </FormKit>
+      </form>
     </template>
 
     <template #footer>

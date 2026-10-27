@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { TableColumn } from './comp_def'
-import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
 import {
   computed,
@@ -18,7 +17,7 @@ import IconPrev from '~icons/ic/round-keyboard-arrow-left'
 import IconNext from '~icons/ic/round-keyboard-arrow-right'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
 import IconFastForward from '~icons/ic/round-keyboard-double-arrow-right'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import plusOutline from '~icons/ion/add-outline'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
@@ -27,9 +26,9 @@ import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import FilterModal from '~/components/FilterModal.vue'
+import FormField from '~/components/forms/FormField.vue'
 import { RenderCell } from '~/components/RenderCell'
 import { createClearedFilters } from '~/composables/useFilterModal'
-import { sanitizeHtml } from '~/utils/sanitize'
 
 interface Props {
   isLoading?: boolean
@@ -419,10 +418,7 @@ watch(
 function displayValueKey(elem: any, col: TableColumn | undefined) {
   if (!col)
     return ''
-  const text = col.displayFunction ? col.displayFunction(elem) : elem[col.key]
-  if (col.sanitizeHtml)
-    return sanitizeHtml(text)
-  return text
+  return col.displayFunction ? col.displayFunction(elem) : elem[col.key]
 }
 
 function getActionTitle(action: NonNullable<TableColumn['actions']>[number], elem: any): string {
@@ -733,13 +729,11 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </div>
         <div class="min-w-0 w-full overflow-hidden sm:w-auto sm:max-w-[13rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs">
           <label :for="searchInputId" class="sr-only">{{ searchAriaLabel }}</label>
-          <FormKit
+          <FormField
             :id="searchInputId"
             v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
-            :attrs="{ 'aria-label': searchAriaLabel }"
-            :disabled="isLoading" enterkeyhint="send" :classes="{
-              outer: 'mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80',
-            }"
+            :aria-label="searchAriaLabel"
+            :disabled="isLoading" enterkeyhint="send" outer-class="mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80"
           />
         </div>
       </div>

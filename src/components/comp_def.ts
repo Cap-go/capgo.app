@@ -42,7 +42,6 @@ export interface TableColumn<T = TableRow> {
   actions?: TableAction<T>[] // New property for multiple actions
   class?: string
   allowHtml?: boolean
-  sanitizeHtml?: boolean
   displayFunction?: (item: T) => string | number
   // Preferred way to render complex cell content without v-html
   renderFunction?: (item: T) => VNodeChild

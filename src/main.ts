@@ -1,10 +1,12 @@
 // register vue composition api globally
 import type { RouteLocationNormalized, Router } from 'vue-router'
-import { CapacitorUpdater } from '@capgo/capacitor-updater'
+import { Capacitor } from '@capacitor/core'
 import { setupLayouts } from 'virtual:generated-layouts'
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from 'vue-router/auto-routes'
+import { isGuestRoutePath } from '~/constants/guestRoutes'
+import { prefetchSsoEnforcement } from '~/modules/sso-enforcement'
 import { getLocalConfig } from '~/services/console'
 import { installDeepLinkHandler } from '~/services/deepLinks'
 import { isDocumentNavigationPending, replaceDocument } from '~/services/documentNavigation'
@@ -147,8 +149,6 @@ window.addEventListener('vite:preloadError', (event) => {
   handleChunkError(message)
 })
 
-const guestPath = new Set(['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/email-preferences', '/scan', '/sso-callback'])
-
 function redirectAppPath(suffix: string) {
   return (to: RouteLocationNormalized) => ({
     path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}${suffix}`,
@@ -157,14 +157,16 @@ function redirectAppPath(suffix: string) {
   })
 }
 
-function isGuestRoutePath(path: string) {
-  return guestPath.has(path) || path === '/preview' || path.startsWith('/preview/')
-}
-
 getRemoteConfig()
 const app = createApp(App)
 installConsoleImageFallback()
-CapacitorUpdater.notifyAppReady()
+// The updater only does work inside the native shell; keep it out of the web entry chunk.
+async function notifyNativeAppReady() {
+  const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
+  await CapacitorUpdater.notifyAppReady()
+}
+if (Capacitor.isNativePlatform())
+  notifyNativeAppReady().catch(error => console.error('Cannot notify the updater that the app is ready', error))
 console.log(`Capgo Version : "${import.meta.env.VITE_APP_VERSION}"`)
 // setup up pages with layouts
 const newRoutes = routes.map((route) => {
@@ -275,6 +277,19 @@ router.onError((error, to) => {
   const message = getErrorMessage(error) ?? String(error)
   if (isStaleAssetErrorMessage(message) || isComponentResolutionErrorMessage(message))
     handleChunkError(message, to?.fullPath)
+})
+
+// vue-router only fetches lazy route chunks after every beforeEach guard resolved, and the auth
+// guard waits on the API. Start the chunk downloads and the SSO enforcement request now so they
+// run in parallel with it; the router's own import() later reuses the same module request.
+router.beforeEach((to) => {
+  prefetchSsoEnforcement(to.path)
+  for (const record of to.matched) {
+    for (const component of Object.values(record.components ?? {})) {
+      if (typeof component === 'function' && !('displayName' in component) && !('props' in component))
+        void (component as () => Promise<unknown>)()?.catch?.(() => {})
+    }
+  }
 })
 
 router.beforeEach((to, from, next) => {

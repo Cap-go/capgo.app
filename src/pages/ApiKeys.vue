@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
 import type { Database } from '~/types/database.types'
-import { FormKit } from '@formkit/vue'
 import { VueDatePicker } from '@vuepic/vue-datepicker'
 import { useDark, useNow } from '@vueuse/core'
 import dayjs from 'dayjs'
@@ -18,6 +17,7 @@ import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
 import ApiKeyHiddenScopeNotice from '~/components/ApiKeyHiddenScopeNotice.vue'
+import FormField from '~/components/forms/FormField.vue'
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import {
@@ -39,6 +39,7 @@ import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 import '@vuepic/vue-datepicker/dist/main.css'
 
 interface Role {
@@ -126,6 +127,13 @@ const allBindings = ref<RoleBindingRow[]>([])
 
 // State for API key dialog
 const newApiKeyName = ref('')
+const newApiKeyNameErrors = computed(() => {
+  const errors = validateField(newApiKeyName.value, [rules.required(t('name'))])
+  // Names are 1 to 32 characters, with the page's custom length message.
+  if (newApiKeyName.value.length > 32)
+    errors.push(t('name-length-error'))
+  return errors
+})
 const editingApiKey = ref<ApiKeyRow | null>(null)
 
 // State for hashed key creation
@@ -1885,17 +1893,14 @@ getKeys()
           <!-- The dialog autofocuses this field. Showing "required" on blur would push the -->
           <!-- form down between mousedown and mouseup and swallow the first click below it. -->
           <div>
-            <FormKit
+            <FormField
               v-model="newApiKeyName"
               type="text"
               data-test="create-key-name"
               :label="t('name')"
               :placeholder="t('type-new-name')"
-              validation="required|length:1,32"
+              :errors="newApiKeyNameErrors"
               validation-visibility="dirty"
-              :validation-messages="{
-                length: t('name-length-error'),
-              }"
             />
           </div>
 

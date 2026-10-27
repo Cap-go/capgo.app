@@ -8,18 +8,6 @@ import en from '../messages/en.json'
 import ApiKeyHiddenScopeNotice from '../src/components/ApiKeyHiddenScopeNotice.vue'
 import DataTable from '../src/components/DataTable.vue'
 
-vi.mock('@formkit/vue', async () => {
-  const { defineComponent, h } = await import('vue')
-  return {
-    FormKit: defineComponent({
-      inheritAttrs: false,
-      setup(_, { attrs }) {
-        return () => h('input', attrs)
-      },
-    }),
-  }
-})
-
 vi.mock('@vuepic/vue-datepicker', async () => {
   const { defineComponent, h } = await import('vue')
   return {

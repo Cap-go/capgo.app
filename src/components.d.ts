@@ -12,6 +12,8 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AccessTable: typeof import('./components/tables/AccessTable.vue')['default']
+    AddAppSetupChoice: typeof import('./components/dashboard/AddAppSetupChoice.vue')['default']
+    AiAgentTaskCard: typeof import('./components/dashboard/AiAgentTaskCard.vue')['default']
     AlertsMenu: typeof import('./components/dashboard/AlertsMenu.vue')['default']
     ApiKeyHiddenScopeNotice: typeof import('./components/ApiKeyHiddenScopeNotice.vue')['default']
     AppAccess: typeof import('./components/dashboard/AppAccess.vue')['default']
@@ -102,6 +104,8 @@ declare module 'vue' {
     EmbeddedCheckoutModal: typeof import('./components/billing/EmbeddedCheckoutModal.vue')['default']
     FailedCard: typeof import('./components/FailedCard.vue')['default']
     FilterModal: typeof import('./components/FilterModal.vue')['default']
+    FormCheckbox: typeof import('./components/forms/FormCheckbox.vue')['default']
+    FormField: typeof import('./components/forms/FormField.vue')['default']
     GettingStartedNav: typeof import('./components/dashboard/GettingStartedNav.vue')['default']
     GitHubProfileDialog: typeof import('./components/dashboard/GitHubProfileDialog.vue')['default']
     GroupsRbacManager: typeof import('./components/organization/GroupsRbacManager.vue')['default']
@@ -181,6 +185,7 @@ declare module 'vue' {
     UsageCard: typeof import('./components/dashboard/UsageCard.vue')['default']
     VersionCompareField: typeof import('./components/tables/VersionCompareField.vue')['default']
     VersionGroupSelector: typeof import('./components/dashboard/VersionGroupSelector.vue')['default']
+    VueTurnstile: typeof import('./components/VueTurnstile.vue')['default']
     WebhookDeliveryLog: typeof import('./components/WebhookDeliveryLog.vue')['default']
     WebhookForm: typeof import('./components/WebhookForm.vue')['default']
     WelcomeBanner: typeof import('./components/dashboard/WelcomeBanner.vue')['default']

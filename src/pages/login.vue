@@ -3,25 +3,25 @@ import type { Ref } from 'vue'
 import type { Factor } from '~/services/consoleClient'
 import type { LoginAuthStatus } from '~/utils/loginActions'
 import { Capacitor } from '@capacitor/core'
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
 import dayjs from 'dayjs'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
 import IconRollback from '~icons/heroicons/arrow-uturn-left'
 import IconDevice from '~icons/heroicons/device-phone-mobile'
 import IconTeam from '~icons/heroicons/user-group'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
-import iconEmail from '~icons/oui/email?raw'
-import iconPassword from '~icons/ph/key?raw'
-import mfaIcon from '~icons/simple-icons/2fas?raw'
+import IconEmail from '~icons/oui/email'
+import IconPassword from '~icons/ph/key'
+import IconMfa from '~icons/simple-icons/2fas'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
 import { autoAuth, defaultApiHost, hashEmail, useConsole } from '~/services/console'
 import { hideLoader } from '~/services/loader'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
+import { rules, validateField } from '~/utils/formValidation'
 import { getLoginActionVisibility } from '~/utils/loginActions'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
@@ -73,9 +73,19 @@ let domainCheckSeq = 0
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
 const loginActionVisibility = computed(() => getLoginActionVisibility(statusAuth.value, passwordPathReady.value))
-const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
-const passwordValidation = computed(() => (passwordPathReady.value ? 'required:trim' : ''))
-const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
+const mfaRegex = /^(?:\d{6}|\d{3} \d{3})$/
+const loginPassword = ref('')
+const submitted = ref(false)
+const formErrors = ref<string[]>([])
+const emailErrors = computed(() => (isLoginStep.value
+  ? validateField(emailForLogin.value, [rules.required(t('email'), { trim: true }), rules.email()])
+  : []))
+const passwordErrors = computed(() => (passwordPathReady.value
+  ? validateField(loginPassword.value, [rules.required(t('password'), { trim: true })])
+  : []))
+const mfaErrors = computed(() => (statusAuth.value === '2fa'
+  ? validateField(mfaCode.value, [rules.required(t('2fa-code')), rules.matches(mfaRegex, t('login-2fa-code-invalid'))])
+  : []))
 const autofillPreserveHiddenStyle = {
   position: 'absolute',
   width: '1px',
@@ -84,7 +94,6 @@ const autofillPreserveHiddenStyle = {
   overflow: 'hidden',
   pointerEvents: 'none',
 } as const
-const mfaRegex = /^(?:\d{6}|\d{3} \d{3})$/
 const shouldBlockForCaptcha = computed(() => !!captchaKey.value && captchaStatus.value === 'loading' && !turnstileToken.value)
 const loginHeroChips = computed(() => [
   t('login-chip-live-updates'),
@@ -260,7 +269,7 @@ async function logoutFromProfileRecovery() {
 async function checkMfa() {
   const { data: mfaFactors, error: mfaError } = await capgo.auth.mfa.listFactors()
   if (mfaError) {
-    setErrors('login-account', ['See browser console'], {})
+    formErrors.value = ['See browser console']
     console.error('Cannot get MFA factors', mfaError)
     return false
   }
@@ -283,7 +292,7 @@ async function checkMfa() {
     const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: mfaFactor.id })
     if (errorChallenge) {
       isLoading.value = false
-      setErrors('login-account', ['See browser console'], {})
+      formErrors.value = ['See browser console']
       console.error('Cannot challenge mfa', errorChallenge)
       return false
     }
@@ -307,14 +316,14 @@ async function checkReviewAccount(form: { email: string }) {
   if (!userPreData && userPreError) {
     isLoading.value = false
     console.error('error', userPreError)
-    setErrors('login-account', [userPreError.message], {})
+    formErrors.value = [userPreError.message]
     toast.error(t('failed-to-get-user'))
     return
   }
 
   if (!!userPreData.ban_time && dayjs().isBefore(userPreData.ban_time)) {
     isLoading.value = false
-    setErrors('login-account', ['Invalid login credentials'], {})
+    formErrors.value = ['Invalid login credentials']
     toast.error(t('failed-to-get-user'))
   }
 }
@@ -326,14 +335,14 @@ async function login(form: { email: string, password: string }) {
   if (errorDeleted) {
     console.error(errorDeleted)
     isLoading.value = false
-    setErrors('login-account', [errorDeleted.message], {})
+    formErrors.value = [errorDeleted.message]
     return
   }
 
   if (!deleted) {
     toast.error(t('used-to-create'))
     isLoading.value = false
-    setErrors('login-account', [t('used-to-create')], {})
+    formErrors.value = [t('used-to-create')]
     return
   }
   const { error } = await capgo.auth.signInWithPassword({
@@ -349,7 +358,7 @@ async function login(form: { email: string, password: string }) {
       || error.code === 'captcha_failed'
     if (!isExpectedAuthError)
       console.error('Login failed', error)
-    setErrors('login-account', [error.message], {})
+    formErrors.value = [error.message]
     if (error.code === 'invalid_credentials' || error.message.includes('Invalid login credentials')) {
       turnstileToken.value = ''
       safeResetTurnstile(captchaComponent.value)
@@ -607,7 +616,7 @@ async function checkAuthUser() {
   if (mfaData.currentLevel === 'aal1' && mfaData.nextLevel === 'aal2') {
     const { data: mfaFactors, error } = await capgo.auth.mfa.listFactors()
     if (error) {
-      setErrors('login-account', ['See browser console'], {})
+      formErrors.value = ['See browser console']
       console.error('Cannot get MFA factors', error)
       isLoading.value = false
       return
@@ -617,7 +626,7 @@ async function checkAuthUser() {
 
     const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: mfaFactor!.id })
     if (errorChallenge) {
-      setErrors('login-account', ['See browser console'], {})
+      formErrors.value = ['See browser console']
       console.error('Cannot challenge mfa', errorChallenge)
       isLoading.value = false
       return
@@ -806,8 +815,18 @@ function declineQuerySession() {
   hideLoader()
 }
 
-function mfa_code_validation(node: { value: any }) {
-  return Promise.resolve(mfaRegex.test(node.value))
+// A new step (password revealed, 2FA asked) starts with untouched fields: only show its
+// errors after the user tries to submit that step.
+watch([passwordPathReady, statusAuth], () => {
+  submitted.value = false
+})
+
+function onLoginSubmit() {
+  submitted.value = true
+  formErrors.value = []
+  if (emailErrors.value.length || passwordErrors.value.length || mfaErrors.value.length)
+    return
+  return handleLoginSubmit({ email: emailForLogin.value, password: loginPassword.value, code: mfaCode.value })
 }
 
 async function goback() {
@@ -972,21 +991,22 @@ onMounted(checkLogin)
 
             <div v-else :class="authStepCardClass">
               <div class="text-slate-500 dark:text-slate-300" :class="authCardBodyClass">
-                <FormKit id="login-account" type="form" :actions="false" autocapitalize="off" data-test="login-form" @submit="handleLoginSubmit">
+                <form id="login-account" novalidate autocapitalize="off" data-test="login-form" @submit.prevent="onLoginSubmit">
                   <div class="space-y-5">
                     <div v-show="isLoginStep" class="space-y-5">
-                      <FormKit
+                      <FormField
                         id="login-email"
                         v-model="emailForLogin"
                         type="email"
                         name="email"
                         enterkeyhint="next"
                         :placeholder="t('email')"
-                        :prefix-icon="iconEmail"
+                        :prefix-icon="IconEmail"
                         inputmode="email"
                         :label="t('email')"
                         autocomplete="username"
-                        :validation="emailValidation"
+                        :errors="emailErrors"
+                        :submitted="submitted"
                         data-test="email"
                       />
 
@@ -1025,14 +1045,16 @@ onMounted(checkLogin)
                         :style="passwordPathReady ? undefined : autofillPreserveHiddenStyle"
                         :data-password-ready="passwordPathReady ? 'true' : 'false'"
                       >
-                        <FormKit
+                        <FormField
                           id="passwordInput"
+                          v-model="loginPassword"
                           type="password"
                           :placeholder="t('password')"
                           name="password"
                           :label="t('password')"
-                          :prefix-icon="iconPassword"
-                          :validation="passwordValidation"
+                          :prefix-icon="IconPassword"
+                          :errors="passwordErrors"
+                          :submitted="submitted"
                           enterkeyhint="send"
                           autocomplete="current-password"
                           data-test="password"
@@ -1056,27 +1078,28 @@ onMounted(checkLogin)
                       a TOTP during the same prompt. Reveal it only when MFA is required.
                     -->
                     <div :style="statusAuth === '2fa' ? undefined : autofillPreserveHiddenStyle">
-                      <FormKit
+                      <FormField
                         v-model="mfaCode"
                         type="text"
                         name="code"
                         :disabled="isLoading && statusAuth === '2fa'"
-                        :prefix-icon="mfaIcon"
+                        :prefix-icon="IconMfa"
                         inputmode="numeric"
                         :label="t('2fa-code')"
-                        :validation-rules="{ mfa_code_validation }"
-                        :validation-messages="{
-                          mfa_code_validation: t('login-2fa-code-invalid'),
-                        }"
                         placeholder="xxx xxx"
                         autocomplete="one-time-code"
-                        :validation="mfaValidation"
+                        :errors="mfaErrors"
+                        :submitted="submitted"
                         :validation-visibility="statusAuth === '2fa' ? 'live' : 'blur'"
                         data-test="2fa-code"
                       />
                     </div>
 
-                    <FormKitMessages data-test="form-error" />
+                    <ul v-if="formErrors.length" role="alert" data-test="form-error" class="mb-1.5">
+                      <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+                        {{ error }}
+                      </li>
+                    </ul>
 
                     <div v-show="loginActionVisibility.login">
                       <div class="inline-flex justify-center items-center w-full">
@@ -1155,7 +1178,7 @@ onMounted(checkLogin)
                       </button>
                     </div>
                   </div>
-                </FormKit>
+                </form>
               </div>
             </div>
 

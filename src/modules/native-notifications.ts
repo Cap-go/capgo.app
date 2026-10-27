@@ -2,12 +2,15 @@ import type { UserModule } from '~/types'
 import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import { isSpoofed, useConsole } from '~/services/console'
-import { registerNativeNotifications, setupNativeNotifications, unregisterNativeNotifications } from '~/services/nativeNotifications'
 
 export const install: UserModule = () => {
   if (!Capacitor.isNativePlatform())
     return
-  void setupNativeNotifications()
+  // The notifications plugin is native-only; keep it out of the web entry chunk.
+  const notifications = import('~/services/nativeNotifications')
+  notifications
+    .then(({ setupNativeNotifications }) => setupNativeNotifications())
+    .catch(error => console.error('Cannot set up native notifications', error))
 
   let userId: string | null = null
   const registerWhenActive = async () => {
@@ -15,7 +18,13 @@ export const install: UserModule = () => {
     // open it so the permission prompt is never requested off-screen.
     if (!userId || !(await App.getState().catch(() => ({ isActive: false }))).isActive)
       return
-    await registerNativeNotifications(userId)
+    try {
+      const { registerNativeNotifications } = await notifications
+      await registerNativeNotifications(userId)
+    }
+    catch (error) {
+      console.error('Cannot register native notifications', error)
+    }
   }
 
   void App.addListener('appStateChange', ({ isActive }) => {
@@ -30,10 +39,15 @@ export const install: UserModule = () => {
     setTimeout(() => {
       const previousUserId = userId
       userId = session?.user?.id && !isSpoofed() ? session.user.id : null
-      if (event === 'SIGNED_OUT' || (previousUserId && previousUserId !== userId))
-        void unregisterNativeNotifications(event === 'SIGNED_OUT').then(() => registerWhenActive())
-      else
+      if (event === 'SIGNED_OUT' || (previousUserId && previousUserId !== userId)) {
+        notifications
+          .then(({ unregisterNativeNotifications }) => unregisterNativeNotifications(event === 'SIGNED_OUT'))
+          .then(() => registerWhenActive())
+          .catch(error => console.error('Cannot refresh native notification registration', error))
+      }
+      else {
         void registerWhenActive()
+      }
     }, 0)
   })
 }

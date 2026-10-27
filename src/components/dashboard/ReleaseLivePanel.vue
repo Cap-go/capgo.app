@@ -3,17 +3,16 @@ import type { ChartData, ChartOptions } from 'chart.js'
 import type { ReleaseLiveChannel, ReleaseLiveDeployment, ReleaseLiveResponse } from '~/composables/useReleaseLive'
 import { useDark, useDocumentVisibility, useNow } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
-import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconChevronDown from '~icons/lucide/chevron-down'
 import IconInfo from '~icons/lucide/info'
 import IconRefresh from '~icons/lucide/refresh-cw'
+import { Bar } from '~/components/dashboard/lazyCharts'
 import Spinner from '~/components/Spinner.vue'
 import { buildDemoReleaseLive, formatLegacyPluginVersions, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } from '~/composables/useReleaseLive'
 import { useConsole } from '~/services/console'
-import { registerDashboardCharts } from '~/services/dashboardChartRegister'
 import { formatDistanceToNow, formatLocalDateShort, formatLocalDateTime, formatLocalTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 
@@ -37,8 +36,6 @@ const emit = defineEmits<{
   // instead of polling release_live a second time.
   live: [value: ReleaseLiveResponse | null]
 }>()
-
-registerDashboardCharts()
 
 const { t } = useI18n()
 const isDark = useDark()

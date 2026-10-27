@@ -7,12 +7,14 @@ import { parseUserOnboardingProgress } from '~/utils/userOnboardingProgress'
  * - `ai`: the console creates the organization (with the plan picked in the UI) and hands
  *   the rest (app, channel, updater plugin, first upload) to the user's coding agent
  *   through Capgo MCP.
+ * - `invite`: the console creates the organization (goal and plan picked in the UI) and the
+ *   user invites a technical teammate as admin to finish the setup.
  * - `manual`: the existing browser wizard (intent → app → organization → setup).
  *
  * Stored in `users.onboarding.setup_mode`. The key is not one of the wizard progress fields,
  * so `mergeUserOnboardingProgress` keeps it when the manual wizard saves its progress.
  */
-export const ONBOARDING_SETUP_MODES = ['ai', 'manual'] as const
+export const ONBOARDING_SETUP_MODES = ['ai', 'invite', 'manual'] as const
 export type OnboardingSetupMode = typeof ONBOARDING_SETUP_MODES[number]
 
 export const AI_ONBOARDING_PATH = '/onboarding/ai'
@@ -23,7 +25,7 @@ function asObject(value: Json | unknown): Record<string, unknown> {
 
 export function readOnboardingSetupMode(onboarding: Json | unknown): OnboardingSetupMode | null {
   const mode = asObject(onboarding).setup_mode
-  return mode === 'ai' || mode === 'manual' ? mode : null
+  return (ONBOARDING_SETUP_MODES as readonly unknown[]).includes(mode) ? mode as OnboardingSetupMode : null
 }
 
 export function withOnboardingSetupMode(onboarding: Json, mode: OnboardingSetupMode): Json {
@@ -40,16 +42,14 @@ export function initialOnboardingSetupScreen(options: {
   onboarding: Json | unknown
   newOrganization: boolean
   resuming: boolean
-}): 'choice' | 'ai' | 'manual' {
+}): 'choice' | OnboardingSetupMode {
   if (options.resuming)
     return 'manual'
   if (options.newOrganization)
     return 'choice'
   const saved = readOnboardingSetupMode(options.onboarding)
-  if (saved === 'ai')
-    return 'ai'
-  if (saved === 'manual')
-    return 'manual'
+  if (saved)
+    return saved
   if (parseUserOnboardingProgress(options.onboarding))
     return 'manual'
   return 'choice'
@@ -141,6 +141,7 @@ export function aiOnboardingPathFor(orgId: string) {
  * How Getting started shows its task list:
  * - AI setup: open, so the user watches the agent tick tasks off.
  * - Manual setup (new signups): hidden, one next step at a time without counts.
+ * - Teammate invite: unchanged (the invited teammate sees every step).
  * - Accounts from before the setup choice: unchanged (every step shown, user can hide the list).
  */
 export type ChecklistTaskListMode = 'default' | 'hidden' | 'open'
