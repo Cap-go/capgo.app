@@ -18,6 +18,7 @@ import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { getOpenAIFirstPaymentAt, trackOpenAIFirstPayment } from '../utils/openai_ads_first_payment.ts'
 import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications.ts'
 import { beginWriteTransaction, closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { tierPricePercent } from '../utils/country_price_tier.ts'
 import { getPlanPriceInterval } from '../utils/plan_price_interval.ts'
 import * as schema from '../utils/postgres_schema.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
@@ -25,6 +26,7 @@ import { enforceRegionalPrice } from '../utils/regional_price.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
 import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
+import { getRegionalPriceTier } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
@@ -87,7 +89,7 @@ type StripeInfoRevenueState = {
   product_id?: string | null
   status?: Database['public']['Enums']['stripe_status'] | null
 } | null | undefined
-type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'alt_price_m_ids' | 'alt_price_y_ids'>
+type RevenuePlanRow = Pick<PlanRow, 'name' | 'price_m' | 'price_m_id' | 'price_y' | 'price_y_id' | 'stripe_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'alt_price_m_ids' | 'alt_price_y_ids' | 'regional_price_ids'>
 type RevenuePlanKey = 'solo' | 'maker' | 'team' | 'enterprise'
 type ChurnReason = 'past_due_unresolved'
 const CHURNED_SUBSCRIPTION_STATUSES = new Set<Database['public']['Enums']['stripe_status']>(['canceled', 'deleted'])
@@ -328,11 +330,14 @@ function getPlanMrr(plan: RevenuePlanRow | null | undefined, priceId: string | n
     return 0
 
   const interval = getPlanPriceInterval(plan, priceId)
+  // Regional prices charge their tier's share of the plan price.
+  const tier = getRegionalPriceTier(plan.regional_price_ids, priceId)
+  const share = tier ? tierPricePercent(tier) / 100 : 1
   if (interval === 'monthly')
-    return Number(plan.price_m) || 0
+    return (Number(plan.price_m) || 0) * share
 
   if (interval === 'yearly')
-    return (Number(plan.price_y) || 0) / 12
+    return (Number(plan.price_y) || 0) * share / 12
 
   return 0
 }
@@ -639,7 +644,7 @@ function isStaleStripeEvent(
 async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
   const { data: plans, error } = await supabaseAdmin(c)
     .from('plans')
-    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, alt_price_m_ids, alt_price_y_ids')
+    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, alt_price_m_ids, alt_price_y_ids, regional_price_ids')
     .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
 
   if (error) {
@@ -1129,8 +1134,8 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
     }
     planName = plan.name
     const linePriceIds = (invoice.lines?.data ?? []).map((line: any) => line.pricing?.price_details?.price)
-    const yearlyPriceIds = [plan.price_y_id, plan.price_y_id_us, ...(plan.alt_price_y_ids ?? [])].filter((id): id is string => !!id)
-    if (yearlyPriceIds.includes(stripeData.data.price_id ?? '') || linePriceIds.some((id: unknown) => typeof id === 'string' && yearlyPriceIds.includes(id))) {
+    const yearlyPriceIds = new Set([plan.price_y_id, plan.price_y_id_us, ...(plan.alt_price_y_ids ?? [])].filter((id): id is string => !!id))
+    if (yearlyPriceIds.has(stripeData.data.price_id ?? '') || linePriceIds.some((id: unknown) => typeof id === 'string' && yearlyPriceIds.has(id))) {
       planType = 'yearly'
     }
   }
@@ -1996,7 +2001,7 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
 
   // A regional discount needs a card and billing address from its region; otherwise the price is raised.
   if (stripeEvent.type === 'customer.subscription.created'
-    || (stripeEvent.type === 'customer.subscription.updated' && (stripeEvent.data.previous_attributes?.status || stripeEvent.data.previous_attributes?.default_payment_method))) {
+    || (stripeEvent.type === 'customer.subscription.updated' && (stripeEvent.data.previous_attributes?.status || 'default_payment_method' in (stripeEvent.data.previous_attributes ?? {})))) {
     await enforceRegionalPrice(c, getStripe(c, getWebhookBillingAccount(c)), getWebhookBillingAccount(c), stripeEvent.data.object)
   }
 

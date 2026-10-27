@@ -760,12 +760,12 @@ async function getPriceIds(c: Context, planId: string, recurrence: string, billi
 }
 
 // Stripe sets unit_amount_decimal alone for sub-unit amounts.
-function readStripeUnitAmount(source: { unit_amount?: number | null, unit_amount_decimal?: unknown }) {
+function readStripeUnitAmount(source: { unit_amount?: number | null, unit_amount_decimal?: { toString: () => string } | null }) {
   if (typeof source.unit_amount === 'number')
     return source.unit_amount
   if (source.unit_amount_decimal === null || source.unit_amount_decimal === undefined)
     return null
-  const decimal = Number(String(source.unit_amount_decimal))
+  const decimal = Number(source.unit_amount_decimal.toString())
   return Number.isFinite(decimal) ? decimal : null
 }
 

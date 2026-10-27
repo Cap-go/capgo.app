@@ -7,7 +7,7 @@ import { CacheHelper } from '../utils/cache.ts'
 import { simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { currencyForCountry } from '../utils/country_currency.ts'
-import { FULL_PRICE_TIER } from '../utils/country_price_tier.ts'
+import { FULL_PRICE_TIER, tierPricePercent } from '../utils/country_price_tier.ts'
 import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getCustomerBilling, getRequestPriceTier } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
@@ -49,7 +49,7 @@ export function getRegularPrices(prices: PlanPriceAmounts, fullPrices: PlanPrice
 
 // p85 → 15 (% off the full price).
 export function tierDiscountPercent(tier: PriceTier) {
-  return 100 - Number(tier.slice(1))
+  return 100 - tierPricePercent(tier)
 }
 
 export function pickCurrency(currencies: string[], lockedCurrency: string | null, country: string | null) {
@@ -84,7 +84,7 @@ export function planPricesVersion(plans: PlanPriceRow[]) {
   const ids = plans.flatMap(plan => [plan.stripe_id, plan.price_m_id, plan.price_y_id, plan.price_m_id_us ?? '', plan.price_y_id_us ?? '', JSON.stringify(plan.regional_price_ids ?? {})]).sort((a, b) => a.localeCompare(b)).join(',')
   let hash = 0x811C9DC5
   for (let i = 0; i < ids.length; i++) {
-    hash ^= ids.charCodeAt(i)
+    hash ^= ids.codePointAt(i) ?? 0
     hash = Math.imul(hash, 0x01000193) >>> 0
   }
   return hash.toString(36)

@@ -36,7 +36,12 @@ export function priceTierForCountries(countries: Array<string | null | undefined
   const known = countries.filter((country): country is string => !!country)
   if (!known.length)
     return FULL_PRICE_TIER
-  return known.map(priceTierForCountry).reduce((max, tier) => PRICE_TIERS.indexOf(tier) < PRICE_TIERS.indexOf(max) ? tier : max)
+  return known.map(priceTierForCountry).reduce<PriceTier>((max, tier) => PRICE_TIERS.indexOf(tier) < PRICE_TIERS.indexOf(max) ? tier : max, PRICE_TIERS.at(-1)!)
+}
+
+// Share of the full price a tier charges, in percent (p70 -> 70).
+export function tierPricePercent(tier: PriceTier): number {
+  return Number(tier.slice(1))
 }
 
 // True when `tier` is cheaper than `than`.

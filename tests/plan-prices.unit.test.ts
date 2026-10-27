@@ -3,7 +3,7 @@ import { getCommonCurrencies, getRegularPrices, pickCurrency, pickPriceCurrencie
 import { currencyForCountry } from '../supabase/functions/_backend/utils/country_currency.ts'
 import { isCheaperTier, PRICE_TIERS, priceTierForCountries, priceTierForCountry } from '../supabase/functions/_backend/utils/country_price_tier.ts'
 import { getPlanPriceInterval } from '../supabase/functions/_backend/utils/plan_price_interval.ts'
-import { getRegionalPlanPriceId } from '../supabase/functions/_backend/utils/stripe_billing.ts'
+import { getRegionalPlanPriceId, getRegionalPriceTier } from '../supabase/functions/_backend/utils/stripe_billing.ts'
 import { getCurrencyRatios, getPriceCurrencyAmounts, scaleTiersToCurrency } from '../supabase/functions/_backend/utils/stripe.ts'
 import { getPlanAmounts, getUsdRatio } from '../src/services/planPrices'
 
@@ -163,5 +163,14 @@ describe('plan prices', () => {
     expect(getRegionalPlanPriceId(regional, 'p85', 'ee', 'month')).toBeNull()
     expect(getRegionalPlanPriceId(null, 'p50', 'ee', 'month')).toBeNull()
     expect(getRegionalPlanPriceId({ p50: 'price_x' }, 'p50', 'ee', 'month')).toBeNull()
+  })
+
+  it.concurrent('finds the tier of a regional price', () => {
+    const regional = { p85: { price_m_id: 'price_m_p85' }, p50: { price_m_id: 'price_m_ee', price_y_id_us: 'price_y_us' } }
+    expect(getRegionalPriceTier(regional, 'price_y_us')).toBe('p50')
+    expect(getRegionalPriceTier(regional, 'price_m_p85')).toBe('p85')
+    expect(getRegionalPriceTier(regional, 'price_full')).toBeNull()
+    expect(getRegionalPriceTier({ p999: { price_m_id: 'price_full' } }, 'price_full')).toBeNull()
+    expect(getRegionalPriceTier(null, 'price_full')).toBeNull()
   })
 })
