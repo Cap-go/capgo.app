@@ -998,6 +998,7 @@ function buttonStyle(p: Plan) {
       :plan-name="currentPlan?.name"
       @close="showCancelModal = false"
       @canceled="onPlanCanceled"
+      @saved="onPlanCanceled"
     />
     <!-- Permission modal shown when the user can't manage billing -->
     <RbacPermissionOnlyModal

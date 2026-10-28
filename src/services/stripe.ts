@@ -372,8 +372,28 @@ export function removeBackupCard(orgId: string, paymentMethodId: string) {
   return callBilling<{ card: BillingCard | null, backupCard: BillingCard | null }>('remove-backup-card', { orgId, paymentMethodId })
 }
 
-export function cancelSubscriptionWithReason(orgId: string, reason: CancelReason, comment: string) {
-  return callBilling<{ subscription: BillingSubscription | null }>('cancel', { orgId, reason, comment })
+// Discount offered to stay instead of canceling a monthly plan.
+export interface CancelSaveOffer {
+  id: string
+  percentOff: number
+  durationMonths: number
+  // Minor units, like every Stripe amount.
+  monthlyAmount: number
+  discountedAmount: number
+  currency: string
+}
+
+export function getCancelSaveOffer(orgId: string, reason: CancelReason) {
+  return callBilling<{ offer: CancelSaveOffer | null }>('cancel-offer', { orgId, reason })
+}
+
+export function acceptCancelSaveOffer(orgId: string, offerId: string) {
+  return callBilling<{ discountEnd: string, subscription: BillingSubscription | null }>('cancel-offer/accept', { orgId, offerId })
+}
+
+// offerId: the save offer the customer turned down before canceling.
+export function cancelSubscriptionWithReason(orgId: string, reason: CancelReason, comment: string, offerId?: string) {
+  return callBilling<{ subscription: BillingSubscription | null }>('cancel', { orgId, reason, comment, ...(offerId ? { offerId } : {}) })
 }
 
 export function resumeSubscription(orgId: string) {
