@@ -39,6 +39,8 @@ export async function createDefaultApiKey(
   options: {
     orgId?: string | null
     appId?: string | null
+    /** App-scoped keys only: the app role to bind (default `app_admin`). */
+    appRole?: string
     hashed?: boolean
   } = {},
 ) {
@@ -80,7 +82,7 @@ export async function createDefaultApiKey(
           org_id: orgId,
         },
         {
-          role_name: 'app_admin',
+          role_name: options.appRole ?? 'app_admin',
           scope_type: 'app',
           org_id: orgId,
           app_id: appUuid,

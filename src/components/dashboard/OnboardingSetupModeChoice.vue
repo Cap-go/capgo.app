@@ -23,6 +23,7 @@ import BillingRegionChoice from '~/components/dashboard/BillingRegionChoice.vue'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
 import { developmentEnvironmentOptions } from '~/components/dashboard/onboardingDevelopmentEnvironmentOptions'
 import OnboardingToolPattern from '~/components/dashboard/OnboardingToolPattern.vue'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
@@ -43,6 +44,9 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
 const screen = ref<SetupScreen>(props.initialScreen)
+const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
+// The AI agent comes first unless the user last picked the manual way.
+const modeCards = computed(() => manualFirst.value ? ['manual', 'ai', 'invite'] as const : ['ai', 'invite', 'manual'] as const)
 const isInvite = computed(() => screen.value === 'invite')
 const goalCopyPrefix = computed(() => isInvite.value ? 'invite' : 'ai')
 // Organization to invite into. A refresh after the invite flow created it lands back on the
@@ -162,6 +166,8 @@ async function chooseMode(mode: OnboardingSetupMode) {
   isSaving.value = true
   try {
     sendOnboardingEvent('onboarding_setup_mode_selected', { setup_mode: mode })
+    if (mode !== 'invite')
+      void rememberSetupMethod(mode)
     // The mode drives redirects and the Getting started checklist, so it must be saved first.
     if (!await rememberSetupMode(mode)) {
       toast.error(t('account-error'))
@@ -283,57 +289,60 @@ function onInviteSuccess(invite: { email: string }) {
           </div>
 
           <div class="grid gap-3 sm:grid-cols-3">
-            <button
-              type="button"
-              class="d-btn d-btn-ghost group relative h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 overflow-hidden whitespace-normal rounded-xl border border-primary-500 bg-white p-5 text-left ring-2 ring-primary-500/15 transition hover:border-primary-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:bg-slate-950/90 dark:hover:bg-slate-900"
-              :disabled="isSaving"
-              data-test="onboarding-setup-mode-ai"
-              @click="chooseMode('ai')"
-            >
-              <OnboardingToolPattern :icons="assistantIcons" muted />
-              <span class="relative z-10 mb-auto inline-flex items-center gap-1.5 rounded-full bg-primary-500 px-2.5 py-1 text-xs font-semibold text-white">
-                {{ t('ai-onboarding-mode-recommended') }}
-              </span>
-              <span class="relative z-10 mt-6 flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
-                <IconBot class="h-5 w-5 text-primary-500" aria-hidden="true" />
-                {{ t('ai-onboarding-mode-ai-label') }}
-              </span>
-              <span class="relative z-10 mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('ai-onboarding-mode-ai-desc') }}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              class="d-btn d-btn-ghost group h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 whitespace-normal rounded-xl border border-slate-200 bg-white p-5 text-left transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900"
-              :disabled="isSaving"
-              data-test="onboarding-setup-mode-invite"
-              @click="chooseMode('invite')"
-            >
-              <span class="flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
-                <IconUserPlus class="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
-                {{ t('ai-onboarding-mode-invite-label') }}
-              </span>
-              <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('ai-onboarding-mode-invite-desc') }}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              class="d-btn d-btn-ghost group h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 whitespace-normal rounded-xl border border-slate-200 bg-white p-5 text-left transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900"
-              :disabled="isSaving"
-              data-test="onboarding-setup-mode-manual"
-              @click="chooseMode('manual')"
-            >
-              <span class="flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
-                <IconListChecks class="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
-                {{ t('ai-onboarding-mode-manual-label') }}
-              </span>
-              <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('ai-onboarding-mode-manual-desc') }}
-              </span>
-            </button>
+            <template v-for="card in modeCards" :key="card">
+              <button
+                v-if="card === 'ai'"
+                type="button"
+                class="d-btn d-btn-ghost group relative h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 overflow-hidden whitespace-normal rounded-xl border border-primary-500 bg-white p-5 text-left ring-2 ring-primary-500/15 transition hover:border-primary-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:bg-slate-950/90 dark:hover:bg-slate-900"
+                :disabled="isSaving"
+                data-test="onboarding-setup-mode-ai"
+                @click="chooseMode('ai')"
+              >
+                <OnboardingToolPattern :icons="assistantIcons" muted />
+                <span class="relative z-10 mb-auto inline-flex items-center gap-1.5 rounded-full bg-primary-500 px-2.5 py-1 text-xs font-semibold text-white">
+                  {{ t('ai-onboarding-mode-recommended') }}
+                </span>
+                <span class="relative z-10 mt-6 flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
+                  <IconBot class="h-5 w-5 text-primary-500" aria-hidden="true" />
+                  {{ t('ai-onboarding-mode-ai-label') }}
+                </span>
+                <span class="relative z-10 mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('ai-onboarding-mode-ai-desc') }}
+                </span>
+              </button>
+              <button
+                v-else-if="card === 'invite'"
+                type="button"
+                class="d-btn d-btn-ghost group h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 whitespace-normal rounded-xl border border-slate-200 bg-white p-5 text-left transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900"
+                :disabled="isSaving"
+                data-test="onboarding-setup-mode-invite"
+                @click="chooseMode('invite')"
+              >
+                <span class="flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
+                  <IconUserPlus class="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+                  {{ t('ai-onboarding-mode-invite-label') }}
+                </span>
+                <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('ai-onboarding-mode-invite-desc') }}
+                </span>
+              </button>
+              <button
+                v-else
+                type="button"
+                class="d-btn d-btn-ghost group h-auto min-h-[13rem] w-full flex-col items-start justify-end gap-0 whitespace-normal rounded-xl border border-slate-200 bg-white p-5 text-left transition hover:border-primary-500/40 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-950/90 dark:hover:border-white/30 dark:hover:bg-slate-900"
+                :disabled="isSaving"
+                data-test="onboarding-setup-mode-manual"
+                @click="chooseMode('manual')"
+              >
+                <span class="flex items-center gap-2 text-base font-semibold text-slate-950 dark:text-white">
+                  <IconListChecks class="h-5 w-5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+                  {{ t('ai-onboarding-mode-manual-label') }}
+                </span>
+                <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('ai-onboarding-mode-manual-desc') }}
+                </span>
+              </button>
+            </template>
           </div>
 
           <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">

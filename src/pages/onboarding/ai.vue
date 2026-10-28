@@ -12,6 +12,7 @@ import IconShieldCheck from '~icons/lucide/shield-check'
 import AppOnboardingHeader from '~/components/dashboard/AppOnboardingHeader.vue'
 import AppOnboardingPageFrame from '~/components/dashboard/AppOnboardingPageFrame.vue'
 import { developmentEnvironmentOptions } from '~/components/dashboard/onboardingDevelopmentEnvironmentOptions'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import { buildAiOnboardingPrompt } from '~/services/cliAiPrompt'
 import { useConsole } from '~/services/console'
@@ -36,6 +37,7 @@ const capgo = useConsole()
 const route = useRoute()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const { rememberSetupMethod } = useSetupMethodPreference()
 
 const isLoading = ref(true)
 const isLoggingOut = ref(false)
@@ -136,6 +138,7 @@ async function copyPrompt() {
     copied.value = true
     toast.success(t('copied-to-clipboard'))
     sendOnboardingEvent('onboarding_ai_setup_prompt_copied', { org_id: organization.value?.gid ?? '' })
+    void rememberSetupMethod('ai')
   }
   catch (error) {
     // Never put the key in a dialog: it would bypass the masked preview. Point to the reveal toggle instead.
@@ -212,6 +215,7 @@ async function switchToManual() {
   isLeaving.value = true
   try {
     sendOnboardingEvent('onboarding_ai_switched_to_manual', { org_id: organization.value?.gid ?? '' })
+    void rememberSetupMethod('manual')
     await rememberManualSetup()
     await router.push('/app/new?mode=manual')
   }

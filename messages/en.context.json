@@ -4045,5 +4045,6 @@
   "validation-contains-uppercase": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
   "validation-contains-lowercase": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
   "validation-contains-numeric": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
-  "validation-contains-symbol": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged."
+  "validation-contains-symbol": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
+  "ai-task-request-build-desc": "Used in Capgo web console areas: components/dashboard. Card offering to copy a prompt so the user's AI coding agent requests a native build (Capgo Builder). Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

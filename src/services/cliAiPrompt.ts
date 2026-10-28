@@ -814,6 +814,17 @@ function appTaskContext(input: AiAppTaskPromptInput): string {
 - App: ${promptDataLabel(input.app.name, input.app.appId)} (Capgo app ID: \`${input.app.appId}\`)`
 }
 
+/**
+ * How the CLI finds the Capgo app ID in `capacitor.config`, so the agent checks the same value
+ * instead of stopping in a project whose native ID differs from its Capgo app ID.
+ */
+function projectAppIdCheck(appId: string, builder: boolean): string {
+  const keys = builder
+    ? '`plugins.CapgoBuilder.capgoBuilderAppId` if set, otherwise `plugins.CapacitorUpdater.appId` if set, otherwise the native `appId`'
+    : '`plugins.CapacitorUpdater.appId` if set, otherwise the native `appId`'
+  return `Make sure you are in the Capacitor project of this app. In \`capacitor.config\`, the Capgo app ID is ${keys}; it must be \`${appId}\`. If it is not, ask me where the project is and stop until I answer.`
+}
+
 /** Prompt copied from "Upload a bundle": the agent builds the web assets and uploads them with the CLI. */
 export function buildAiUploadBundlePrompt(input: AiAppTaskPromptInput): string {
   const appId = input.app.appId
@@ -823,7 +834,7 @@ export function buildAiUploadBundlePrompt(input: AiAppTaskPromptInput): string {
 
 ${appTaskContext(input)}
 
-1. Make sure you are in the Capacitor project of this app: the \`appId\` in \`capacitor.config\` must be \`${appId}\`. If it is not, ask me where the project is and stop until I answer.
+1. ${projectAppIdCheck(appId, false)}
 2. Ask me which channel the bundle should go to and wait for my answer. Every upload is delivered through a channel: without \`--channel\`, the CLI uses the app's default upload channel, which can be \`production\` and reach every installed app. Replace \`{CHANNEL_NAME}\` with the channel I confirm. If I do not name one, stop and do not upload.
 3. Build the web assets with the project's existing build script (for example \`npm run build\`). Do not change native code and do not run \`cap sync\`.
 4. Upload the build with the selected runner, always with the confirmed channel:
@@ -856,5 +867,32 @@ ${appTaskContext(input)}
 {CAPGO_CLI_RUNNER} channel add {CHANNEL_NAME} ${appId}
 
 When it succeeds, tell me the channel name and its settings. The channel appears in my Capgo dashboard on its own. Do not upload bundles or change other channels.`,
+  ].join('\n\n')
+}
+
+/**
+ * Prompt copied from "Request a native build". The console cannot tell whether signing is
+ * stored on Capgo, so the agent first requests the build with the stored signing and only
+ * falls back to Capgo MCP Builder onboarding (which owns signing) when it is missing.
+ */
+export function buildAiRequestBuildPrompt(input: AiAppTaskPromptInput & { platform: 'ios' | 'android' }): string {
+  const appId = input.app.appId
+  const platformLabel = input.platform === 'ios' ? 'iOS' : 'Android'
+  return [
+    buildAuthenticationSection(input.apiKey, 'task'),
+    `## 2. Request a native build
+
+${appTaskContext(input)}
+
+1. ${projectAppIdCheck(appId, true)}
+2. Request a ${platformLabel} build with the selected runner. \`--use-stored-credentials\` uses the signing setup saved on Capgo for this app; signing already configured on this machine still takes precedence:
+
+{CAPGO_CLI_RUNNER} build request ${appId} --platform ${input.platform} --use-stored-credentials
+
+3. Never ask me to paste certificates, passwords or store keys into the chat, and never pass them on the command line.
+4. If the request fails because ${platformLabel} signing or credentials are missing, do not configure them by hand: follow the Capgo MCP section below and pass the \`${input.platform}\` platform to \`start_capgo_builder_onboarding\`. When it reports completion, request the build again with the command above.
+
+When the build is queued, tell me its build ID and status. The build appears in my Capgo dashboard on its own and its logs stream there. Do not change other builds, channels or bundles.`,
+    BUILDER_MCP_SECTION,
   ].join('\n\n')
 }

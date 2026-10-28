@@ -13,6 +13,9 @@ import IconSettings from '~icons/lucide/settings-2'
 import IconTerminal from '~icons/lucide/terminal-square'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
+import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
+import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
@@ -60,6 +63,8 @@ const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
+// The AI agent card comes first unless the user last picked the manual way.
+const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 const config = getLocalConfig()
 const initialOnboarding = props.onboarding
 const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ''
@@ -173,6 +178,18 @@ function resetFlow() {
   clearWatchers()
 }
 
+// Someone else (an AI agent or a teammate) requests the build: wait for it.
+function waitForDelegatedBuild() {
+  if (step.value >= waitStepIndex.value)
+    return
+  clicked.value = 0
+  realtimeListener.value = false
+  clearWatchers()
+  step.value = waitStepIndex.value
+  scrollToElement(`build_step_${waitStepIndex.value}`)
+  setLog()
+}
+
 function selectPlatform(platform: Platform) {
   if (selectedPlatform.value === platform)
     return
@@ -189,6 +206,8 @@ function scrollToElement(id: string) {
 async function copyToast(allowed: boolean, id: string, text?: string) {
   if (!allowed || !text)
     return
+  if (step.value === 0)
+    void rememberSetupMethod('manual')
   try {
     await navigator.clipboard.writeText(text)
     toast.success(t('copied-to-clipboard'))
@@ -392,6 +411,15 @@ onUnmounted(() => {
         </div>
       </header>
 
+      <AiAgentTaskCard
+        v-if="!manualFirst && step === 0"
+        task="request-build"
+        :app-id="appId"
+        :platform="selectedPlatform"
+        or-separator="after"
+        @copied="waitForDelegatedBuild"
+      />
+
       <div class="flex flex-col gap-3">
         <article
           v-for="(s, i) in steps"
@@ -441,6 +469,23 @@ onUnmounted(() => {
             </div>
           </div>
         </article>
+      </div>
+
+      <AiAgentTaskCard
+        v-if="manualFirst && step === 0"
+        task="request-build"
+        :app-id="appId"
+        :platform="selectedPlatform"
+        or-separator="before"
+        @copied="waitForDelegatedBuild"
+      />
+
+      <div v-if="step === 0" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60 sm:p-6" data-test="build-invite-teammate">
+        <TechnicalTeammateInviteCard
+          analytics-channel="onboarding-build"
+          :show-manual-setup-link="false"
+          @success="waitForDelegatedBuild"
+        />
       </div>
     </div>
   </section>

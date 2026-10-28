@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiUploadBundlePrompt, buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
+import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiRequestBuildPrompt, buildAiUploadBundlePrompt, buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
 
 const apiKey = 'capgo_test_secret'
 
@@ -282,6 +282,9 @@ describe('AI agent task prompts', () => {
     expect(prompt).toContain('login capgo_test_secret')
     // Without --channel the CLI publishes to the default upload channel: always require one.
     expect(prompt).toContain('{CAPGO_CLI_RUNNER} bundle upload com.acme.app --channel {CHANNEL_NAME}')
+    // Uploads resolve the updater's app ID override before the native ID.
+    expect(prompt).toContain('`plugins.CapacitorUpdater.appId` if set, otherwise the native `appId`')
+    expect(prompt).not.toContain('CapgoBuilder')
     expect(prompt).toContain('If I do not name one, stop and do not upload.')
     expect(prompt).not.toContain('install-mcp')
     // App names are data on one line, never instructions.
@@ -295,4 +298,17 @@ describe('AI agent task prompts', () => {
     const unnamed = buildAiCreateChannelPrompt({ apiKey, organization, app })
     expect(unnamed).toContain('Ask me for the channel name')
   })
+
+  it.concurrent('requests the build with stored signing first, without handling credentials', () => {
+    const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'android' })
+    // Signing saved on Capgo must be usable even when it is not on the agent's machine.
+    expect(prompt).toContain('{CAPGO_CLI_RUNNER} build request com.acme.app --platform android --use-stored-credentials')
+    expect(prompt).toContain('Never ask me to paste certificates')
+    // Missing signing goes through Builder onboarding, then the build is requested again.
+    expect(prompt.indexOf('build request')).toBeLessThan(prompt.indexOf('Install Capgo MCP and start Builder onboarding'))
+    expect(prompt).toContain('pass the `android` platform to `start_capgo_builder_onboarding`')
+    // Builder resolves its own app ID override before the native ID.
+    expect(prompt).toContain('`plugins.CapgoBuilder.capgoBuilderAppId` if set')
+  })
+
 })
