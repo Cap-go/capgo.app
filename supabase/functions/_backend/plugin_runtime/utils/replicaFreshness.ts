@@ -110,6 +110,23 @@ export function resetReplicationLagMemory() {
   replicationLagColoMisses.clear()
 }
 
+/**
+ * Lag past which a regional replica stops serving its region: reads go to the
+ * EU replica (the subscriber every regional replica streams from) until a
+ * probe measures it back under this. Never to the primary.
+ */
+export const READ_REPLICA_FALLBACK_LAG_SECONDS = 600
+
+/**
+ * True when this isolate's lag figure for `source` is over
+ * READ_REPLICA_FALLBACK_LAG_SECONDS. Memory only, so replica selection stays
+ * synchronous; once the figure expires the next read probes the replica again.
+ */
+export function isReplicaTooFarBehind(source: string, now = Date.now()) {
+  const lag = getFreshReplicationLagMemoryEntry(source, now)
+  return lag?.max_lag_seconds != null && lag.max_lag_seconds > READ_REPLICA_FALLBACK_LAG_SECONDS
+}
+
 /** True for a database source that is a read replica (it can be behind the primary). */
 export function isReadReplicaSource(source: string) {
   return source.startsWith('HYPERDRIVE_CAPGO_READ_') || source === 'local_read_replica'

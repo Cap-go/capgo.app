@@ -19,7 +19,7 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
-import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
+import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
@@ -290,8 +290,17 @@ function setDatabaseSource(c: Context, source: string): void {
   safeSetResponseHeader(c, 'X-Database-Source', source)
 }
 
+const EU_READ_REPLICA_ROUTE = READ_REPLICA_ROUTES.find(route => route.region === 'EU')!
+
+/**
+ * Read replica for this region, or the EU replica while the regional one is
+ * measured more than READ_REPLICA_FALLBACK_LAG_SECONDS behind it.
+ */
 function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
-  return READ_REPLICA_ROUTES.find(route => route.region === dbRegion && c.env[route.binding])
+  const route = READ_REPLICA_ROUTES.find(route => route.region === dbRegion && c.env[route.binding])
+  if (!route || route === EU_READ_REPLICA_ROUTE || !c.env[EU_READ_REPLICA_ROUTE.binding] || !isReplicaTooFarBehind(route.binding))
+    return route
+  return EU_READ_REPLICA_ROUTE
 }
 
 /** Read replica source this worker reads from, without selecting or connecting it. */
@@ -309,6 +318,8 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
   if (!selectedRoute)
     return null
 
+  if (selectedRoute.region !== dbRegion)
+    cloudlog({ requestId: c.get('requestId'), message: 'Regional read replica too far behind, reading from EU replica', dbRegion })
   setDatabaseSource(c, selectedRoute.binding)
   return c.env[selectedRoute.binding].connectionString
 }
