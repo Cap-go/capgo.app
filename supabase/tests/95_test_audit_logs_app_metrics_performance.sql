@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(10);
+SELECT plan(11);
 
 -- audit_logs RLS computes a bounded org set once per statement.
 SELECT
@@ -54,31 +54,29 @@ SELECT set_config('request.headers', '', true);
 
 -- seed_get_app_metrics_caches() returns one row per org app and day, with
 -- daily_version summed across versions and missing days filled with zeros.
+-- It writes the org's daily_* rows and app_metrics_cache, so it uses the
+-- dedicated seed org 95f0a1b2-... and its two apps.
 -- Every column gets a distinct value and two days hold data, so a swapped
 -- column or a cross-day join cannot pass the assertions below.
-DELETE FROM public.daily_mau WHERE app_id = 'com.demo.app' AND date BETWEEN DATE '2023-03-01' AND DATE '2023-03-03';
-DELETE FROM public.daily_storage WHERE app_id = 'com.demo.app' AND date BETWEEN DATE '2023-03-01' AND DATE '2023-03-03';
-DELETE FROM public.daily_bandwidth WHERE app_id = 'com.demo.app' AND date BETWEEN DATE '2023-03-01' AND DATE '2023-03-03';
-DELETE FROM public.daily_version WHERE app_id = 'com.demo.app' AND date BETWEEN DATE '2023-03-01' AND DATE '2023-03-03';
 INSERT INTO public.daily_mau (app_id, date, mau) VALUES
-('com.demo.app', DATE '2023-03-02', 13),
-('com.demo.app', DATE '2023-03-03', 31);
+('com.test.appmetrics.seed', DATE '2023-03-02', 13),
+('com.test.appmetrics.seed', DATE '2023-03-03', 31);
 INSERT INTO public.daily_storage (app_id, date, storage) VALUES
-('com.demo.app', DATE '2023-03-02', 17),
-('com.demo.app', DATE '2023-03-03', 37);
+('com.test.appmetrics.seed', DATE '2023-03-02', 17),
+('com.test.appmetrics.seed', DATE '2023-03-03', 37);
 INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES
-('com.demo.app', DATE '2023-03-02', 19),
-('com.demo.app', DATE '2023-03-03', 41);
+('com.test.appmetrics.seed', DATE '2023-03-02', 19),
+('com.test.appmetrics.seed', DATE '2023-03-03', 41);
 INSERT INTO public.daily_version (app_id, date, version_name, get, fail, install, uninstall) VALUES
-('com.demo.app', DATE '2023-03-02', '1.0.0', 3, 1, 2, 0),
-('com.demo.app', DATE '2023-03-02', '1.0.1', 4, 2, 9, 5),
-('com.demo.app', DATE '2023-03-03', '1.0.1', 20, 21, 22, 23);
+('com.test.appmetrics.seed', DATE '2023-03-02', '1.0.0', 3, 1, 2, 0),
+('com.test.appmetrics.seed', DATE '2023-03-02', '1.0.1', 4, 2, 9, 5),
+('com.test.appmetrics.seed', DATE '2023-03-03', '1.0.1', 20, 21, 22, 23);
 
 CREATE TEMP TABLE perf_metrics AS
 SELECT m.*
 FROM
     pg_catalog.jsonb_to_recordset(
-        (public.seed_get_app_metrics_caches('046a36ac-e03c-4590-9257-bd6c9dba9ee8', DATE '2023-03-01', DATE '2023-03-03')).response
+        (public.seed_get_app_metrics_caches('95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b', DATE '2023-03-01', DATE '2023-03-03')).response
     ) AS m (
         app_id character varying,
         date date,
@@ -98,9 +96,9 @@ SELECT
         (
             SELECT 3 * count(*)
             FROM (
-                SELECT app_id FROM public.apps WHERE owner_org = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+                SELECT app_id FROM public.apps WHERE owner_org = '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b'
                 UNION
-                SELECT app_id FROM public.deleted_apps WHERE owner_org = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+                SELECT app_id FROM public.deleted_apps WHERE owner_org = '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b'
             ) org_apps
         ),
         'metrics cover every org app for every day of the range'
@@ -115,30 +113,37 @@ SELECT
 
 SELECT
     is(
-        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.demo.app' AND date = DATE '2023-03-02'),
+        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-02'),
         ARRAY[13, 17, 19, 7, 3, 11, 5]::bigint[],
         'daily_version is summed across versions for the day'
     );
 
 SELECT
     is(
-        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.demo.app' AND date = DATE '2023-03-03'),
+        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-03'),
         ARRAY[31, 37, 41, 20, 21, 22, 23]::bigint[],
         'each day keeps its own metrics'
     );
 
 SELECT
     is(
-        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.demo.app' AND date = DATE '2023-03-01'),
+        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-01'),
         ARRAY[0, 0, 0, 0, 0, 0, 0]::bigint[],
         'days without stats are zero-filled'
     );
 
 SELECT
     is(
-        (SELECT array_agg(date ORDER BY date) FROM perf_metrics WHERE app_id = 'com.demo.app'),
+        (SELECT array_agg(date ORDER BY date) FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed'),
         ARRAY[DATE '2023-03-01', DATE '2023-03-02', DATE '2023-03-03'],
         'metrics are limited to the requested range'
+    );
+
+SELECT
+    is(
+        (SELECT sum(mau + storage + bandwidth + get + fail + install + uninstall) FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed2'),
+        0::numeric,
+        'metrics of one app do not leak into another app of the org'
     );
 
 SELECT * FROM finish();
