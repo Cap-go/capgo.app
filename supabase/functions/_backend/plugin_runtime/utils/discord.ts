@@ -63,7 +63,18 @@ function sanitizeSensitiveHeaders(headers: Record<string, string>): Record<strin
   return sanitized
 }
 
+// Preprod workers (ENV_NAME like capgo_plugin-eu-preprod) read prod data with
+// whatever code was last deployed there: their failures are not prod alerts.
+export function isPreprodEnv(c: Context): boolean {
+  return getEnv(c, 'ENV_NAME').endsWith('-preprod')
+}
+
 export async function sendDiscordAlert(c: Context, payload: RESTPostAPIWebhookWithTokenJSONBody): Promise<boolean> {
+  if (isPreprodEnv(c)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'Discord alert skipped on preprod' })
+    return true
+  }
+
   const webhookUrl = getEnv(c, 'DISCORD_ALERT')
 
   if (!webhookUrl) {
