@@ -171,6 +171,20 @@ describe('normalizeTailEvent', () => {
     expect(record?.stack).toContain('[redacted]')
   })
 
+  it.concurrent('redacts sensitive values in requestId headers', () => {
+    const record = normalizeTailEvent({
+      outcome: 'exception',
+      exceptions: [{ name: 'Error', message: 'fail' }],
+      event: {
+        request: {
+          headers: { 'x-request-id': 'trace-user@example.com' },
+        },
+      },
+    })
+    expect(record?.requestId).not.toContain('user@example.com')
+    expect(record?.requestId).toContain('[redacted-email]')
+  })
+
   it.concurrent('truncates stack traces to 4KB', () => {
     const longStack = 'x'.repeat(MAX_STACK_CHARS + 50)
     const record = normalizeTailEvent({

@@ -166,7 +166,7 @@ export function normalizeTailEvent(event: TailTraceEvent): AlertTailRecord | nul
     stack: stackRaw ? redactSensitiveText(stackRaw) : null,
     method: event.event?.request?.method ?? null,
     url: redactOptionalText(rawUrl),
-    requestId: resolveRequestId(event),
+    requestId: redactOptionalText(resolveRequestId(event)),
     timestamp: new Date(tsMs).toISOString(),
     environment: functionName,
     userAgent: redactOptionalText(rawUserAgent),

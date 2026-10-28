@@ -148,6 +148,20 @@ export function parseThrottleSummaryIntervalSec(raw: string | undefined): number
   return parsed
 }
 
+export function durableObjectStorageThrottleStore(storage: DurableObjectStorage): ThrottleStore {
+  return {
+    async get(key: string) {
+      const value = await storage.get(`throttle:${key}`)
+      if (!value || typeof value !== 'object')
+        return null
+      return value as ThrottleState
+    },
+    async put(key: string, state: ThrottleState) {
+      await storage.put(`throttle:${key}`, state)
+    },
+  }
+}
+
 export class MemoryThrottleStore implements ThrottleStore {
   private readonly map = new Map<string, ThrottleState>()
 

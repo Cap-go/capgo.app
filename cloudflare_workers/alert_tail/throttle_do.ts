@@ -1,10 +1,11 @@
+import type { DurableObjectState } from '@cloudflare/workers-types'
 import {
   capPostBodyAlerts,
   type AlertTailRecord,
 } from './tail_logic.ts'
 import {
   commitThrottleWrites,
-  MemoryThrottleStore,
+  durableObjectStorageThrottleStore,
   parseThrottleSummaryIntervalSec,
   parseThrottleWindowSec,
   planCrossCallThrottle,
@@ -19,25 +20,43 @@ type ApplyThrottleRequest = {
   summaryIntervalSec?: number
 }
 
+type FinalizeRequest = {
+  planId?: string
+}
+
 export class AlertThrottle {
-  private readonly store = new MemoryThrottleStore()
-  private pendingWrites: ThrottleWrite[] | null = null
+  private readonly store
+  private readonly pendingPlans = new Map<string, ThrottleWrite[]>()
+
+  constructor(ctx: DurableObjectState) {
+    this.store = durableObjectStorageThrottleStore(ctx.storage)
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (request.method !== 'POST')
       return new Response('method not allowed', { status: 405 })
 
-    if (url.pathname.endsWith('/ack')) {
-      if (this.pendingWrites) {
-        await commitThrottleWrites(this.store, this.pendingWrites)
-        this.pendingWrites = null
+    if (url.pathname.endsWith('/ack') || url.pathname.endsWith('/rollback')) {
+      let body: FinalizeRequest = {}
+      try {
+        body = await request.json() as FinalizeRequest
       }
-      return Response.json({ status: 'ok' })
-    }
+      catch {
+        return new Response('invalid json', { status: 400 })
+      }
+      const planId = body.planId
+      if (!planId)
+        return new Response('missing planId', { status: 400 })
 
-    if (url.pathname.endsWith('/rollback')) {
-      this.pendingWrites = null
+      const writes = this.pendingPlans.get(planId)
+      if (!writes)
+        return Response.json({ status: 'unknown_plan' })
+
+      if (url.pathname.endsWith('/ack'))
+        await commitThrottleWrites(this.store, writes)
+
+      this.pendingPlans.delete(planId)
       return Response.json({ status: 'ok' })
     }
 
@@ -60,8 +79,9 @@ export class AlertThrottle {
       body.nowMs ?? Date.now(),
       options,
     )
-    this.pendingWrites = writes
+    const planId = crypto.randomUUID()
+    this.pendingPlans.set(planId, writes)
     const alerts = capPostBodyAlerts(toSend)
-    return Response.json({ alerts })
+    return Response.json({ alerts, planId })
   }
 }

@@ -1,6 +1,7 @@
 import { isAllowedAlertWebhookUrl } from './redact.ts'
 import {
   processTailBatch,
+  type AlertTailRecord,
   type TailTraceEvent,
 } from './tail_logic.ts'
 import { AlertThrottle } from './throttle_do.ts'
@@ -23,16 +24,20 @@ export interface Env {
 let warnedMissingWebhookSecrets = false
 let warnedInsecureWebhookUrl = false
 
+type ThrottleApplyResult = {
+  alerts: AlertTailRecord[]
+  planId: string
+}
+
 async function applyDurableThrottle(
   namespace: DurableObjectNamespace,
   envName: string,
-  records: Awaited<ReturnType<typeof processTailBatch>>,
+  records: AlertTailRecord[],
   env: Env,
-): Promise<Awaited<ReturnType<typeof processTailBatch>>> {
+): Promise<ThrottleApplyResult | null> {
   const id = namespace.idFromName(envName)
   const stub = namespace.get(id)
-  const applyUrl = 'https://alert-throttle/apply'
-  const response = await stub.fetch(applyUrl, {
+  const response = await stub.fetch('https://alert-throttle/apply', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -44,22 +49,28 @@ async function applyDurableThrottle(
   })
   if (!response.ok) {
     console.error('alert tail throttle DO failed', response.status)
-    await stub.fetch('https://alert-throttle/rollback', { method: 'POST' })
-    return []
+    return null
   }
-  const body = await response.json() as { alerts?: Awaited<ReturnType<typeof processTailBatch>> }
-  return body.alerts ?? []
+  const body = await response.json() as { alerts?: AlertTailRecord[], planId?: string }
+  if (!body.planId)
+    return null
+  return { alerts: body.alerts ?? [], planId: body.planId }
 }
 
 async function finalizeDurableThrottle(
   namespace: DurableObjectNamespace,
   envName: string,
+  planId: string,
   delivered: boolean,
 ): Promise<void> {
   const id = namespace.idFromName(envName)
   const stub = namespace.get(id)
   const path = delivered ? 'https://alert-throttle/ack' : 'https://alert-throttle/rollback'
-  await stub.fetch(path, { method: 'POST' })
+  await stub.fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ planId }),
+  })
 }
 
 export default {
@@ -82,26 +93,32 @@ export default {
       return
     }
 
+    const throttleNamespace = env.ALERT_THROTTLE
+    const throttleEnvName = env.ENV_NAME ?? 'capgo_alert_tail'
+    let throttlePlanId: string | undefined
+
     try {
       const batch = processTailBatch(events)
       if (batch.length === 0)
         return
 
       let alerts = batch
-      const throttleNamespace = env.ALERT_THROTTLE
-      const throttleEnvName = env.ENV_NAME ?? 'capgo_alert_tail'
       if (throttleNamespace) {
-        alerts = await applyDurableThrottle(
+        const applied = await applyDurableThrottle(
           throttleNamespace,
           throttleEnvName,
           batch,
           env,
         )
+        if (!applied)
+          return
+        alerts = applied.alerts
+        throttlePlanId = applied.planId
       }
 
       if (alerts.length === 0) {
-        if (throttleNamespace)
-          await finalizeDurableThrottle(throttleNamespace, throttleEnvName, false)
+        if (throttleNamespace && throttlePlanId)
+          await finalizeDurableThrottle(throttleNamespace, throttleEnvName, throttlePlanId, true)
         return
       }
 
@@ -116,13 +133,17 @@ export default {
         body: JSON.stringify({ alerts }),
         signal: AbortSignal.timeout(5000),
       })
-      if (throttleNamespace)
-        await finalizeDurableThrottle(throttleNamespace, throttleEnvName, response.ok)
+      if (throttleNamespace && throttlePlanId)
+        await finalizeDurableThrottle(throttleNamespace, throttleEnvName, throttlePlanId, response.ok)
 
       if (!response.ok)
         console.error('alert webhook rejected batch', response.status, alerts.length)
     }
     catch (error) {
+      if (throttleNamespace && throttlePlanId) {
+        await finalizeDurableThrottle(throttleNamespace, throttleEnvName, throttlePlanId, false)
+          .catch(() => undefined)
+      }
       console.error('alert webhook delivery failed', error instanceof Error ? error.name : 'unknown')
     }
   },
