@@ -137,6 +137,93 @@ await test('runStart re-prompts after a previous resume decision', async () => {
   eq(r.state, 'resume-prompt')
 })
 
+
+const { runAdvance } = await import('../src/init/mcp/engine.ts')
+const afterDeviceRun = { step_done: 8, appId: 'com.acme.app', platform: 'ios', channelName: 'production', currentVersion: '0.0.0' }
+function resumedDeps(o, progress = afterDeviceRun) {
+  const deps = fakeDeps(o)
+  deps.saveProgress({ ...progress })
+  mergeSession('com.acme.app', { resumeResolved: true })
+  return deps
+}
+
+await test('test change: asks manual or agent before touching files', async () => {
+  const calls = []
+  const deps = resumedDeps({ applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } } })
+  const r = await runAdvance(deps, {})
+  eq(r.state, 'test-change-choice')
+  eq(r.kind, 'choice')
+  eq(r.options.map(o => o.value).join(','), 'manual,agent')
+  eq(calls.length, 0, 'nothing may happen before the user chooses')
+})
+
+await test('test change: readiness sent before the choice is ignored', async () => {
+  const calls = []
+  const deps = resumedDeps({ applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } } })
+  const early = await runAdvance(deps, { testChangeReady: true })
+  eq(early.state, 'test-change-choice')
+  const gate = await runAdvance(deps, { testChangeChoice: 'manual' })
+  eq(gate.state, 'make-test-change-manual', 'the manual gate still waits for the user')
+  eq(calls.length, 0)
+})
+
+await test('test change: manual waits for the user, then only bumps the version', async () => {
+  const calls = []
+  const deps = resumedDeps({ applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } } })
+  const gate = await runAdvance(deps, { testChangeChoice: 'manual' })
+  eq(gate.state, 'make-test-change-manual')
+  eq(gate.kind, 'human_gate')
+  eq(calls.length, 0)
+  const next = await runAdvance(deps, { testChangeReady: true })
+  eq(calls.length, 1)
+  eq(next.state, 'test-update')
+  ok(/change you made/.test(next.human.instruction))
+  eq(deps.loadProgress().testChangeMode, 'manual')
+  const done = await runAdvance(deps, { otaReceivedConfirmed: true })
+  eq(done.state, 'completion')
+  ok(/manual test change/.test(done.summary))
+})
+
+await test('test change: agent gets guidelines, then reverts its own change after confirmation', async () => {
+  const deps = resumedDeps()
+  const task = await runAdvance(deps, { testChangeChoice: 'agent' })
+  eq(task.state, 'make-test-change-agent')
+  eq(task.kind, 'info')
+  ok(/first screen/.test(task.next.instruction))
+  ok(/No banners/.test(task.next.instruction))
+  ok(/cap sync/.test(task.next.instruction))
+  eq(deps.loadProgress().step_done, 8, 'no step completes before the change is saved')
+  const next = await runAdvance(deps, { testChangeReady: true, testChangeFiles: ['src/pages/Home.vue'], testChangeDescription: 'the home title ends with (Capgo test)' })
+  eq(next.state, 'test-update')
+  ok(/the home title ends with \(Capgo test\)/.test(next.human.instruction))
+  eq(deps.loadProgress().testChangeFiles[0], 'src/pages/Home.vue')
+  const done = await runAdvance(deps, { otaReceivedConfirmed: true })
+  eq(done.state, 'completion')
+  ok(/revert the temporary test change you made in src\/pages\/Home.vue/.test(done.summary))
+  eq(done.context.testChange.revertNow, true)
+  eq(done.next.with.testChangeRevertedConfirmed, true)
+  const lost = await runAdvance(deps, {})
+  ok(/revert the temporary/.test(lost.summary), 'revert request repeats until confirmed')
+  const confirmed = await runAdvance(deps, { testChangeRevertedConfirmed: true })
+  ok(!/revert the temporary/.test(confirmed.summary), 'revert request stops after confirmation')
+  eq(deps.loadProgress().testChangeReverted, true)
+})
+
+await test('test change: the user\'s manual edit does not reopen the dirty-git check', async () => {
+  let clean = true
+  const calls = []
+  const deps = resumedDeps({
+    getGitStatus: () => ({ inRepo: true, clean, entries: clean ? [] : [' M src/App.vue'] }),
+    applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } },
+  })
+  const gate = await runAdvance(deps, { testChangeChoice: 'manual' })
+  eq(gate.state, 'make-test-change-manual')
+  clean = false
+  const next = await runAdvance(deps, { testChangeReady: true })
+  eq(calls.length, 1)
+  eq(next.state, 'test-update')
+})
+
 const { buildDeps, registerLiveUpdateTools, resolveLiveUpdateProjectTarget } = await import('../src/init/mcp/live-update-tools.ts')
 const { liveUpdateNextStepSchema, liveUpdateStartSchema, liveUpdateExplainInputSchema } = await import('../src/schemas/live-update-onboarding.ts')
 const { safeParseSchema } = await import('../src/schemas/schema_validation.ts')
@@ -270,6 +357,7 @@ await test('MCP monorepo targets keep project work scoped to the selected app', 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
 const { startMcpServer } = await import('../src/mcp/server.ts')
 
 await test('MCP startup restores the prior config target after failure', async () => {

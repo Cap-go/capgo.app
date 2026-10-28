@@ -43,6 +43,14 @@ describe('buildCliAiSetupPrompt', () => {
     expect(prompt.match(new RegExp(apiKey, 'g'))).toHaveLength(1)
   })
 
+  it.concurrent('asks whether the user makes the OTA test change before editing files', () => {
+    const prompt = buildCliAiSetupPrompt(promptInput())
+
+    expect(prompt).toContain('Before editing any file, ask me how I want to make the test change')
+    expect(prompt).toContain('Do not edit application files for me in this case.')
+    expect(prompt).toContain('if you made the test change, revert it in the source')
+  })
+
   it.concurrent('leaves v1 and v2 OTA prompts without checklist instructions', () => {
     for (const version of [1, 2, undefined]) {
       const prompt = buildCliAiSetupPrompt(promptInput(version), 'ota')

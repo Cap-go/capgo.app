@@ -33,6 +33,7 @@ export interface EngineDeps {
   addIntegrationCode: (appId: string) => Promise<{ ok: boolean, error?: string }>
   setupEncryption: (appId: string, enable: boolean) => Promise<{ ok: boolean, enabled: boolean, error?: string }>
   buildProject: (appId: string, platform: Platform) => Promise<{ ok: boolean, error?: string }>
+  /** Pick the guided test bundle version. The visible change itself is made by the user or their AI assistant. */
   applyTestChange: (appId: string, baseVersion?: string) => Promise<{ ok: boolean, version?: string, error?: string }>
   uploadBundle: (appId: string, opts: { channelName: string, version: string, delta?: boolean, encrypt?: boolean }) => Promise<{ ok: boolean, error?: string }>
   getRunDeviceCommand: (platform: Platform) => { command: string, cwd?: string }
@@ -234,6 +235,19 @@ export async function decideAdvance(facts: LiveUpdateFacts, deps: EngineDeps, in
   if (input?.dirtyGitAction === 'continue-dirty')
     mergeSession(appId, { dirtyGitResolved: true })
 
+  if (input?.testChangeChoice)
+    mergeSession(appId, { testChangeChoice: input.testChangeChoice })
+
+  // Readiness only counts at the change gate of a chosen mode, never before the user picks who edits.
+  if (input?.testChangeReady && getSession(appId).testChangeChoice && stepNumberFromProgress(deps.loadProgress()) === 9)
+    mergeSession(appId, { testChangeReady: true, testChangeFiles: input.testChangeFiles, testChangeDescription: input.testChangeDescription })
+
+  if (input?.testChangeRevertedConfirmed) {
+    const p = deps.loadProgress()
+    if (p?.testChangeMode === 'agent' && !p.testChangeReverted)
+      mergeProgress(deps, p, { testChangeReverted: true })
+  }
+
   if (input?.deviceRunConfirmed) {
     mergeSession(appId, { deviceRunConfirmed: true })
     const p = deps.loadProgress()
@@ -345,13 +359,59 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
         ),
       })
     }
+
+    // The tree was clean (or the user accepted a dirty one) before the test change:
+    // the user's own manual edit must not send them back to this git check.
+    if (!session.dirtyGitResolved)
+      mergeSession(facts.appId, { dirtyGitResolved: true })
+
+    if (!session.testChangeChoice) {
+      return baseResult(stepNumber, 'test-change-choice', 'choice', `${title} — how do you want to make the visible change for the test update?`, {
+        options: [
+          { value: 'manual', label: 'I\'ll make the change myself', note: 'edit a text, color or element you will recognize, then revert it whenever you want' },
+          { value: 'agent', label: 'Let my AI assistant make it', note: 'your assistant makes one small change that fits your app, tells you what to look for, and reverts it once the update is confirmed' },
+        ],
+        next: nextAction(
+          'Ask the user which option they prefer — do not pick for them and do not edit any app file before they answer. Then call next_step with testChangeChoice.',
+          { testChangeChoice: '<manual|agent>' },
+          `${NEXT_STEP_TOOL}({ testChangeChoice: "manual" })`,
+        ),
+      })
+    }
+
+    if (session.testChangeChoice === 'manual' && !session.testChangeReady) {
+      return baseResult(stepNumber, 'make-test-change-manual', 'human_gate', `${title} — make one small visible change in your web code.`, {
+        human: {
+          instruction: `Make one small change you will easily recognize on the device, for example change a heading text or a button color. ${TEST_CHANGE_LIMITS} Tell me when the change is saved.`,
+          resourceUri: 'https://capgo.app/docs/getting-started/onboarding/',
+        },
+        collect: [{ field: 'testChangeReady', desc: 'set true once the user saved their visible change' }],
+        next: nextAction(
+          'Wait for the user to make the change themselves — do not edit app files for them unless they explicitly ask. Then call next_step with testChangeReady: true.',
+          { testChangeReady: true },
+          `${NEXT_STEP_TOOL}({ testChangeReady: true })`,
+        ),
+        context: { appId: facts.appId },
+      })
+    }
+
+    if (session.testChangeChoice === 'agent' && !session.testChangeReady) {
+      return baseResult(stepNumber, 'make-test-change-agent', 'info', `${title} — you (the AI assistant) make one small, temporary visible change.`, {
+        context: { appId: facts.appId, guidelines: AGENT_TEST_CHANGE_GUIDELINES },
+        next: nextAction(
+          `Make the change yourself now, following these guidelines:\n${AGENT_TEST_CHANGE_GUIDELINES.map(line => `- ${line}`).join('\n')}\nThen tell the user in one sentence what you changed and call next_step with testChangeReady: true, testChangeFiles (the paths you edited) and testChangeDescription (what to look for on the device).`,
+          { testChangeReady: true, testChangeFiles: ['<path>'], testChangeDescription: '<what to look for>' },
+          `${NEXT_STEP_TOOL}({ testChangeReady: true, testChangeFiles: ["src/pages/Home.vue"], testChangeDescription: "the home title now ends with (Capgo test)" })`,
+        ),
+      })
+    }
   }
 
   if (stepNumber === 11 && !session.otaReceivedConfirmed && !input?.otaReceivedConfirmed) {
     return baseResult(stepNumber, 'test-update', 'human_gate', `${title} — confirm the OTA update on your device.`, {
       platform: session.platform ?? progress?.platform,
       human: {
-        instruction: 'Background and reopen the app (or relaunch it). Look for the Capgo test banner or visible change. Tell me when the update appeared.',
+        instruction: `Background and reopen the app (or relaunch it). ${testChangeLookFor(progress)} Tell me when it appeared.`,
       },
       collect: [{ field: 'otaReceivedConfirmed', desc: 'set true when the user confirms the update was received' }],
       next: nextAction(
@@ -366,20 +426,66 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
     if ((progress?.step_done ?? 0) < TOTAL_STEPS)
       mergeProgress(deps, progress, { step_done: TOTAL_STEPS, appId: facts.appId })
     const channel = progress?.channelName ?? session.channelName ?? DEFAULT_CHANNEL
-    return baseResult(stepNumber, 'completion', 'done', `${facts.appId} is wired for Capgo OTA updates.`, {
+    const nextUpload = `npx @capgo/cli@latest bundle upload --bundle <version> --channel ${channel}`
+    const testChange = testChangeFollowUp(deps, nextUpload)
+    return baseResult(stepNumber, 'completion', 'done', `${facts.appId} is wired for Capgo OTA updates.${testChange ? `\n\n${testChange.summary}` : ''}`, {
       progress: 100,
       phase: 'done',
       context: {
         appId: facts.appId,
         channel,
-        nextUpload: `npx @capgo/cli@latest bundle upload --bundle <version> --channel ${channel}`,
+        nextUpload,
+        ...(testChange ? { testChange: testChange.context } : {}),
       },
+      ...(testChange?.next ? { next: testChange.next } : {}),
     })
   }
 
   return baseResult(stepNumber, state, 'auto', `${title} — running automatically…`, {
     context: { appId: facts.appId, stepNumber },
   })
+}
+
+const TEST_CHANGE_LIMITS = 'Keep it in your web code only (no native files, plugins or Capacitor config) and do not run `cap sync` or `cap run` afterward: the change must reach the installed app through Capgo.'
+
+const AGENT_TEST_CHANGE_GUIDELINES = [
+  'Change exactly one thing the user sees on the first screen right after launch, such as a heading, a label or a button text (for example append " (Capgo test)" to the main title). No banners, overlays or new components.',
+  'Match the app\'s existing style and code conventions; it should look like a normal edit, not injected content.',
+  'Edit only web source files (no native ios/ or android/ files, plugins, dependencies or Capacitor config) and keep the diff to a few lines.',
+  'Do not run `cap sync`, `cap copy` or `cap run` afterward: the change must reach the installed app through Capgo.',
+  'Remember the exact original content so you can restore it after the update is confirmed.',
+]
+
+function testChangeLookFor(progress: LiveUpdateProgress | null): string {
+  if (progress?.testChangeMode === 'agent')
+    return progress.testChangeDescription ? `Look for this change: ${progress.testChangeDescription}.` : 'Look for the change your AI assistant made.'
+  return 'Look for the visible change you made.'
+}
+
+function testChangeFollowUp(deps: EngineDeps, nextUpload: string): { summary: string, context: Record<string, unknown>, next?: NextStepResult['next'] } | undefined {
+  const progress = deps.loadProgress()
+  const redeploy = `Devices keep showing the test bundle until the next upload: rebuild your web app and upload a new, higher version (${nextUpload}).`
+  if (progress?.testChangeMode === 'manual') {
+    return {
+      summary: `Your manual test change is still in your code. Revert it if it was temporary. ${redeploy}`,
+      context: { mode: 'manual', redeploy: nextUpload },
+    }
+  }
+  if (progress?.testChangeMode !== 'agent')
+    return undefined
+  const files = progress.testChangeFiles ?? []
+  if (progress.testChangeReverted)
+    return { summary: redeploy, context: { mode: 'agent', files, reverted: true, redeploy: nextUpload } }
+  // Only mark the revert done once the assistant confirms it, so a lost response still repeats the request.
+  return {
+    summary: `AI assistant: revert the temporary test change you made${files.length ? ` in ${files.join(', ')}` : ''} now, restoring the previous content exactly, then tell the user it is removed. ${redeploy}`,
+    context: { mode: 'agent', files, revertNow: true, redeploy: nextUpload },
+    next: nextAction(
+      'After reverting the test change, call next_step with testChangeRevertedConfirmed: true.',
+      { testChangeRevertedConfirmed: true },
+      `${NEXT_STEP_TOOL}({ testChangeRevertedConfirmed: true })`,
+    ),
+  }
 }
 
 async function runAutoEffect(deps: EngineDeps, facts: LiveUpdateFacts, state: string): Promise<{ ok: boolean, error?: string }> {
@@ -457,11 +563,18 @@ async function runAutoEffect(deps: EngineDeps, facts: LiveUpdateFacts, state: st
       return { ok: true }
     case 'make-test-change': {
       const base = progress?.currentVersion ?? session.currentVersion
+      const mode = session.testChangeChoice ?? 'manual'
       const res = await deps.applyTestChange(appId, base)
       if (!res.ok)
         return { ok: false, error: res.error ?? 'Test change failed' }
       mergeSession(appId, { currentVersion: res.version })
-      mergeProgress(deps, progress, { step_done: 9, appId, currentVersion: res.version })
+      mergeProgress(deps, progress, {
+        step_done: 9,
+        appId,
+        currentVersion: res.version,
+        testChangeMode: mode,
+        ...(mode === 'agent' ? { testChangeFiles: session.testChangeFiles, testChangeDescription: session.testChangeDescription } : {}),
+      })
       return { ok: true }
     }
     case 'upload-bundle': {

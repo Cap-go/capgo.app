@@ -13,7 +13,6 @@ import { getPlatformDirFromCapacitorConfig } from '../../build/platform-paths.js
 import { createKeyInternal } from '../../key.js'
 import { isAppAlreadyExistsError } from '../app-conflict.js'
 import {
-  applyInitAutoTestChange,
   getGitRepoStatus,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
@@ -210,15 +209,10 @@ export function buildDeps(
     },
     applyTestChange: async (_appId: string, baseVersion?: string) => {
       try {
-        const packageJsonPath = getPackageJsonPath()
-        const mainFile = await getMainFile()
-        if (!mainFile)
-          return { ok: false as const, error: 'Could not find main entry file for test change' }
-        const content = await readFile(mainFile, 'utf8')
-        const changed = applyInitAutoTestChange(mainFile, content)
-        if (changed)
-          await writeFile(mainFile, changed.content, 'utf8')
-        const version = getInitSuggestedOtaVersion(baseVersion || getBundleVersion(undefined, packageJsonPath) || '1.0.0')
+        const version = getInitSuggestedOtaVersion(baseVersion || getBundleVersion(undefined, getPackageJsonPath()) || '1.0.0')
+        // Rebuild the web assets so the upload contains the test change; no cap sync, it must arrive through Capgo.
+        const pm = getPMAndCommand()
+        execSync(`${pm.pm} run build`, { cwd: getProjectDir(), stdio: 'pipe' })
         return { ok: true as const, version }
       }
       catch (error) {
