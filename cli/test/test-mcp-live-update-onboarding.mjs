@@ -198,11 +198,36 @@ await test('test change: auto banner is removed once the update is confirmed', a
   const done = await runAdvance(deps, { otaReceivedConfirmed: true })
   eq(done.state, 'completion')
   eq(reverted.length, 1)
-  ok(/Removed the temporary Capgo test banner/.test(done.summary))
+  ok(/Removed the temporary Capgo test change/.test(done.summary))
   eq(done.context.testChange.removed, true)
   eq(deps.loadProgress().autoTestChange, undefined)
   await runAdvance(deps, {})
   eq(reverted.length, 1, 'cleanup runs once')
+})
+
+await test('test change: the user\'s manual edit does not reopen the dirty-git check', async () => {
+  let clean = true
+  const calls = []
+  const deps = resumedDeps({
+    getGitStatus: () => ({ inRepo: true, clean, entries: clean ? [] : [' M src/App.vue'] }),
+    applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } },
+  })
+  const gate = await runAdvance(deps, { testChangeChoice: 'manual' })
+  eq(gate.state, 'make-test-change-manual')
+  clean = false
+  const next = await runAdvance(deps, { testChangeReady: true })
+  eq(calls.length, 1)
+  eq(next.state, 'test-update')
+})
+
+await test('test change: auto CSS fallback asks for the background change, not a banner', async () => {
+  const deps = resumedDeps({
+    applyTestChange: async () => ({ ok: true, version: '0.0.1', autoTestChange: { filePath: '/tmp/app/src/style.css', kind: 'css-background' } }),
+  })
+  const r = await runAdvance(deps, { testChangeChoice: 'auto' })
+  eq(r.state, 'test-update')
+  ok(/purple gradient background/.test(r.human.instruction))
+  ok(!/banner/.test(r.human.instruction))
 })
 
 await test('test change: failed banner removal tells the user what to delete', async () => {

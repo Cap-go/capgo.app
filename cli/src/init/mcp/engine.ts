@@ -361,6 +361,11 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
       })
     }
 
+    // The tree was clean (or the user accepted a dirty one) before the test change:
+    // the user's own manual edit must not send them back to this git check.
+    if (!session.dirtyGitResolved)
+      mergeSession(facts.appId, { dirtyGitResolved: true })
+
     if (!session.testChangeChoice) {
       return baseResult(stepNumber, 'test-change-choice', 'choice', `${title} — how do you want to make the visible change for the test update?`, {
         options: [
@@ -399,9 +404,7 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
     return baseResult(stepNumber, 'test-update', 'human_gate', `${title} — confirm the OTA update on your device.`, {
       platform: session.platform ?? progress?.platform,
       human: {
-        instruction: progress?.testChangeMode === 'auto'
-          ? 'Background and reopen the app (or relaunch it). Look for the green "Capgo Update Test" banner at the top of the screen. Tell me when it appeared — Capgo removes the banner from your source right after.'
-          : 'Background and reopen the app (or relaunch it). Look for the visible change you made. Tell me when it appeared.',
+        instruction: `Background and reopen the app (or relaunch it). ${testChangeLookFor(progress)} Tell me when it appeared.`,
       },
       collect: [{ field: 'otaReceivedConfirmed', desc: 'set true when the user confirms the update was received' }],
       next: nextAction(
@@ -435,6 +438,14 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
   })
 }
 
+function testChangeLookFor(progress: LiveUpdateProgress | null): string {
+  if (progress?.testChangeMode !== 'auto')
+    return 'Look for the visible change you made.'
+  if (progress.autoTestChange?.kind === 'css-background')
+    return 'Look for the purple gradient background Capgo added to the app — Capgo removes it from your source right after.'
+  return 'Look for the green "Capgo Update Test" banner at the top of the screen — Capgo removes it from your source right after.'
+}
+
 async function cleanUpTestChange(deps: EngineDeps, nextUpload: string): Promise<{ summary: string, context: Record<string, unknown> } | undefined> {
   const progress = deps.loadProgress()
   const change = progress?.autoTestChange
@@ -451,13 +462,13 @@ async function cleanUpTestChange(deps: EngineDeps, nextUpload: string): Promise<
   const res = await deps.revertTestChange(change)
   if (!res.ok) {
     return {
-      summary: `Could not remove the temporary Capgo test banner from ${change.filePath} automatically (${res.error ?? 'unknown error'}). Remove the block marked "capgo-test-banner", "capgo-test-vue" or "capgo-test-background" from that file. ${redeploy}`,
+      summary: `Could not remove the temporary Capgo test change from ${change.filePath} automatically (${res.error ?? 'unknown error'}). Remove the block marked "capgo-test-banner", "capgo-test-vue" or "capgo-test-background" from that file. ${redeploy}`,
       context: { mode: 'auto', file: change.filePath, removed: false, redeploy: nextUpload },
     }
   }
   mergeProgress(deps, progress, { autoTestChange: undefined })
   return {
-    summary: `${res.reverted ? 'Removed' : 'Nothing left to remove for'} the temporary Capgo test banner in ${change.filePath}. ${redeploy}`,
+    summary: `${res.reverted ? 'Removed' : 'Nothing left to remove for'} the temporary Capgo test change in ${change.filePath}. ${redeploy}`,
     context: { mode: 'auto', file: change.filePath, removed: true, redeploy: nextUpload },
   }
 }

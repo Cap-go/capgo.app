@@ -63,6 +63,7 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 
 ### Docs and agent integrations
 
+- MCP live-update onboarding (`start_capgo_live_update_onboarding`, then `capgo_live_update_onboarding_next_step`): before the test update it asks who makes the visible change (`testChangeChoice`). With `manual`, it waits until the user saved their own change (`testChangeReady: true`) and only bumps the bundle version; the agent must not edit app files for them. With `auto`, Capgo adds a temporary test banner (or a background change in a stylesheet) to one known web file, falls back to `manual` when it finds none, and removes that change from the source once the user confirms the update; devices keep the test bundle until the next upload. A clean git check done before the test change still counts after the user's manual edit.
 - `mcp`: start the Capgo MCP server for AI-agent integrations; pass `--capacitor-config <path>` when its config-writing tools should target an app-specific source. Observe queries use `capgo_observe` (start at `view=summary`). The server resolves the project from the client's MCP roots (the agent's workspace), not the folder it was spawned in, so a user-scoped install works across projects; clients without roots support call `capgo_set_project_dir` with the app folder.
 
 ### GitHub support commands
