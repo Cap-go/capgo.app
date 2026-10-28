@@ -1853,7 +1853,7 @@ async function transferAppOwnership() {
                 v-model="selectedChannel"
                 type="radio"
                 :value="channel.name"
-                class="radio radio-primary"
+                class="d-radio d-radio-primary"
               >
               <span class="text-sm font-medium">{{ channel.name }}</span>
             </label>
@@ -1948,7 +1948,7 @@ async function transferAppOwnership() {
                     v-model="selectedCombinedChannelId"
                     type="radio"
                     :value="channel.id"
-                    class="mt-1 radio radio-primary"
+                    class="mt-1 d-radio d-radio-primary"
                   >
                   <div class="flex flex-col">
                     <span class="text-sm font-medium">{{ channel.name }}</span>
@@ -1997,7 +1997,7 @@ async function transferAppOwnership() {
                     v-model="selectedDownloadChannelIds[section.platform]"
                     type="radio"
                     :value="channel.id"
-                    class="mt-1 radio radio-primary"
+                    class="mt-1 d-radio d-radio-primary"
                   >
                   <div class="flex flex-col">
                     <span class="text-sm font-medium">{{ channel.name }}</span>

@@ -693,7 +693,7 @@ watch(
                   type="radio"
                   name="access-role"
                   :value="option.name"
-                  class="radio radio-primary radio-sm"
+                  class="d-radio d-radio-primary d-radio-sm"
                 >
                 <span class="text-sm font-medium text-slate-900 dark:text-slate-100">
                   {{ getRoleDisplayName(option.name) }}
@@ -790,7 +790,7 @@ watch(
               type="radio"
               name="assign-scope"
               value="app"
-              class="radio radio-primary radio-sm mt-0.5"
+              class="d-radio d-radio-primary d-radio-sm mt-0.5"
               :disabled="!canAssignAppScope"
             >
             <span class="min-w-0">
@@ -816,7 +816,7 @@ watch(
               type="radio"
               name="assign-scope"
               value="channel"
-              class="radio radio-primary radio-sm mt-0.5"
+              class="d-radio d-radio-primary d-radio-sm mt-0.5"
               :disabled="!canAssignChannelScope"
             >
             <span class="min-w-0">

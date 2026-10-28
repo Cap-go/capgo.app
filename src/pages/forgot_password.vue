@@ -325,7 +325,7 @@ watchEffect(() => {
           type="text"
           placeholder="123456"
           :aria-label="t('enter-2fa-code')"
-          class="w-full input input-bordered"
+          class="w-full d-input"
           maxlength="6"
           inputmode="numeric"
         >
