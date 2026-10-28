@@ -525,6 +525,7 @@ describe('hosted MCP errors always give a way out', () => {
       [409, 'version_already_exists', 'conflict'],
       [429, 'api_key_rate_limit_exceeded', 'rate_limited'],
       [400, 'need_plan_upgrade', 'plan_limit'],
+      [429, 'need_plan_upgrade', 'plan_limit'],
       [400, 'org_requires_expiring_key', 'security_policy'],
       [400, 'upload_token_expired', 'expired'],
       [500, 'internal_error', 'unexpected'],

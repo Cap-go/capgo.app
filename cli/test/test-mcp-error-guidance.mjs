@@ -13,6 +13,7 @@ const cases = [
   ['org_requires_expiring_key: This organization requires API keys with expiration dates.', 'security_policy'],
   ['Error status 429: rate_limit_exceeded', 'rate_limited'],
   ['need_plan_upgrade: upgrade your plan', 'plan_limit'],
+  ['Error status 429: need_plan_upgrade: Cannot request native build, upgrade plan to continue to build', 'plan_limit'],
   ['not_authorized: you cannot access this app', 'permission'],
   ['Missing appId, use --app-id or set it in capacitor.config', 'project'],
   ['Channel production not found for app com.example.app', 'not_found'],

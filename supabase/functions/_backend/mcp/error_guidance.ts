@@ -69,17 +69,17 @@ export function guidanceForError(input: ErrorGuidanceInput): ErrorGuidance {
     ])
   }
 
-  if (status === 429 || matches(code, message, ['rate_limit', 'rate_limited', 'too_many', 'concurrency_limit'])) {
-    return withEscape('rate_limited', [
-      'Too many requests or concurrent jobs. Wait before retrying (about a minute for request limits, or until running builds finish), and do not retry in a tight loop.',
-      'Batch your reads (use pagination and filters) instead of calling a tool once per item.',
-    ])
-  }
-
   if (status === 402 || matches(code, message, ['need_plan', 'plan_upgrade', 'plan_permission', 'trial_plan', 'missing_payment_method', 'over_limit', 'quota', 'on_premise'])) {
     return withEscape('plan_limit', [
       'The organization\'s plan or billing state does not allow this action. Retrying will not help.',
       `Read the current plan and usage with capgo_get_organization and capgo_get_organization_statistics, then ask the user whether to upgrade or fix billing at ${CONSOLE}/settings/organization/plans.`,
+    ])
+  }
+
+  if (status === 429 || matches(code, message, ['rate_limit', 'rate_limited', 'too_many', 'concurrency_limit'])) {
+    return withEscape('rate_limited', [
+      'Too many requests or concurrent jobs. Wait before retrying (about a minute for request limits, or until running builds finish), and do not retry in a tight loop.',
+      'Batch your reads (use pagination and filters) instead of calling a tool once per item.',
     ])
   }
 

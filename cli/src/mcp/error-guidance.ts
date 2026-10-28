@@ -63,16 +63,16 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
     ])
   }
 
-  if (has(text, ['rate limit', 'rate_limit', 'too many requests', 'too_many', ' 429', 'concurrency_limit'])) {
-    return withEscape('rate_limited', [
-      'Too many requests or concurrent jobs. Wait before retrying (about a minute, or until running builds finish), and do not retry in a tight loop.',
-    ])
-  }
-
   if (has(text, ['need_plan', 'plan_upgrade', 'upgrade your plan', 'upgrade plan', 'plan limit', 'trial', 'missing_payment_method', 'payment method', 'over limit', 'quota'])) {
     return withEscape('plan_limit', [
       'The organization\'s plan or billing state does not allow this action. Retrying will not help.',
       `Check usage with capgo_get_stats, then ask the user whether to upgrade or fix billing at ${CONSOLE}/settings/organization/plans.`,
+    ])
+  }
+
+  if (has(text, ['rate limit', 'rate_limit', 'too many requests', 'too_many', ' 429', 'concurrency_limit'])) {
+    return withEscape('rate_limited', [
+      'Too many requests or concurrent jobs. Wait before retrying (about a minute, or until running builds finish), and do not retry in a tight loop.',
     ])
   }
 
