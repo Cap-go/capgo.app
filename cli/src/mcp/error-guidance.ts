@@ -56,14 +56,14 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
     ])
   }
 
-  if (has(text, ['missing api key', 'no api key', 'no capgo api key', 'api key found', 'no capgo client or api key', 'not logged in', 'login` first', 'login first', 'please login', 'invalid api key', 'invalid_apikey', 'invalid apikey', 'apikey expired', 'api key expired', 'invalid_jwt', 'unauthorized', 'not_authenticated', ' 401'])) {
+  if (has(text, ['missing api key', 'no api key', 'no capgo api key', 'api key found', 'no capgo client or api key', 'not logged in', 'login` first', 'login first', 'please login', 'invalid api key', 'invalid_apikey', 'invalid apikey', 'apikey expired', 'api key expired', 'api key has expired', 'jwt expired', 'invalid_jwt', 'unauthorized', 'not_authenticated', ' 401'])) {
     return withEscape('authentication', [
       'The Capgo CLI has no valid API key. Call capgo_whoami to see which key, if any, is in use.',
       `Ask the user for a Capgo API key (they create one at ${CONSOLE}/apikeys), then call capgo_login with it and retry the tool.`,
     ])
   }
 
-  if (has(text, ['need_plan', 'plan_upgrade', 'upgrade your plan', 'upgrade plan', 'plan limit', 'trial', 'missing_payment_method', 'payment method', 'over limit', 'quota'])) {
+  if (has(text, ['need_plan', 'plan_upgrade', 'upgrade your plan', 'upgrade plan', 'plan limit', 'trial_plan', 'trial plan', 'trial ended', 'trial has ended', 'missing_payment_method', 'payment method', 'over limit', 'quota'])) {
     return withEscape('plan_limit', [
       'The organization\'s plan or billing state does not allow this action. Retrying will not help.',
       `Check usage with capgo_get_stats, then ask the user whether to upgrade or fix billing at ${CONSOLE}/settings/organization/plans.`,

@@ -51,6 +51,12 @@ function matches(code: string, message: string, fragments: string[]) {
   return fragments.some(fragment => code.includes(fragment) || message.includes(fragment))
 }
 
+/** Short terms like "sso" must stand alone: "associated" is not an SSO error. */
+function hasToken(code: string, message: string, token: string) {
+  const pattern = new RegExp(`(^|[^a-z0-9])${token}([^a-z0-9]|$)`)
+  return pattern.test(code) || pattern.test(message)
+}
+
 /** Classify an API or tool error and say what the agent should do next. */
 export function guidanceForError(input: ErrorGuidanceInput): ErrorGuidance {
   const status = input.status ?? 0
@@ -61,7 +67,7 @@ export function guidanceForError(input: ErrorGuidanceInput): ErrorGuidance {
     next_steps: [...steps, docsStep(input.code), supportStep(input)],
   })
 
-  if (matches(code, message, ['requires_expiring_key', 'expiration_required', 'expiration_exceeds_max', '2fa', 'password_policy', 'password_does_not_meet_policy', 'security_policy', 'sso'])) {
+  if (matches(code, message, ['requires_expiring_key', 'expiration_required', 'expiration_exceeds_max', '2fa', 'password_policy', 'password_does_not_meet_policy', 'security_policy']) || hasToken(code, message, 'sso')) {
     return withEscape('security_policy', [
       'The organization enforces a security policy (API key expiration, 2FA or password rules) that this connection does not meet. This is not something to retry.',
       `Ask the user to comply in the console: 2FA and password at ${CONSOLE}/settings/account, a new API key with an expiration date at ${CONSOLE}/apikeys, policies at ${CONSOLE}/settings/organization/security.`,
@@ -83,7 +89,7 @@ export function guidanceForError(input: ErrorGuidanceInput): ErrorGuidance {
     ])
   }
 
-  if (status === 401 || matches(code, message, ['invalid_apikey', 'invalid_jwt', 'not_authenticated', 'unauthorized', 'apikey_expired', 'invalid_subkey'])) {
+  if (status === 401 || matches(code, message, ['invalid_apikey', 'invalid_jwt', 'not_authenticated', 'unauthorized', 'apikey_expired', 'api key has expired', 'api key expired', 'jwt expired', 'invalid_subkey'])) {
     return withEscape('authentication', [
       'The API key behind this MCP connection is missing, invalid, expired or revoked. Call capgo_whoami to confirm.',
       `Ask the user to reconnect the Capgo MCP (sign in again through OAuth) or create a new API key at ${CONSOLE}/apikeys and update the connection.`,

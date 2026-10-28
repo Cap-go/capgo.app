@@ -9,6 +9,10 @@ console.log('🧪 Testing MCP error guidance (no dead ends)...\n')
 const cases = [
   ['Missing API key, specify a key with --apikey', 'authentication'],
   ['Invalid API key', 'authentication'],
+  ['JWT expired', 'authentication'],
+  ['Your API key has expired', 'authentication'],
+  ['Upload token has expired, restart the upload', 'expired'],
+  ['The industrial build failed', 'unexpected'],
   ['No Capgo API key found. Run `npx -y @capgo/cli@latest login` first, then retry this command.', 'authentication'],
   ['org_requires_expiring_key: This organization requires API keys with expiration dates.', 'security_policy'],
   ['Error status 429: rate_limit_exceeded', 'rate_limited'],

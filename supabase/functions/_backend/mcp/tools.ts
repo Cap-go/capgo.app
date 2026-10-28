@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.ts'
+import { guidanceForError } from './error_guidance.ts'
 
 /**
  * Hosted Capgo MCP tools.
@@ -64,7 +65,7 @@ export interface McpTool {
   run: (input: Record<string, unknown>, ctx: McpToolContext) => Promise<McpToolResult>
 }
 
-const MAX_RESULT_CHARS = 100_000
+export const MAX_RESULT_CHARS = 100_000
 
 export function textResult(value: unknown, isError = false): McpToolResult {
   let text = typeof value === 'string' ? value : JSON.stringify(value, null, 1)
@@ -997,16 +998,33 @@ const requestBuildTool: McpTool = {
         status: signed.status,
         upload_error: signed.data,
         ...(signed.requestId ? { request_id: signed.requestId } : {}),
-        how_to_fix: {
-          kind: 'unexpected',
-          next_steps: [
-            `The build ${job.job_id} was requested but no signed upload URL could be issued. Call capgo_get_build_upload_url with this job_id to get one, then PUT the archive and call capgo_start_build.`,
-            'If that also fails, cancel the job with capgo_cancel_build so it does not stay pending, and tell the user to contact support@capgo.app with the job_id and this error.',
-          ],
-        },
+        how_to_fix: buildUploadUrlGuidance(job.job_id, signed),
       }, true)
     return textResult({ job_id: job.job_id, upload: signed.data, next_step: 'PUT the archive to upload.upload_url, then call capgo_start_build with this job_id.' })
   },
+}
+
+/** The build exists but has no upload URL: say what blocked it, and how to finish or cancel this job. */
+function buildUploadUrlGuidance(jobId: string, signed: McpApiResponse) {
+  const data = typeof signed.data === 'object' && signed.data !== null ? signed.data as { error?: unknown, message?: unknown } : {}
+  const guidance = guidanceForError({
+    status: signed.status,
+    code: typeof data.error === 'string' ? data.error : undefined,
+    message: typeof data.message === 'string' ? data.message : typeof signed.data === 'string' ? signed.data : undefined,
+    tool: 'capgo_request_build',
+    requestId: signed.requestId,
+  })
+  const jobSteps = guidance.kind === 'unexpected'
+    ? [`Build ${jobId} was requested but no signed upload URL could be issued. Call capgo_get_build_upload_url with this job_id, then PUT the archive and call capgo_start_build.`]
+    : [`Build ${jobId} was requested but no signed upload URL could be issued because of the error above. Fix that first, then call capgo_get_build_upload_url with this job_id, PUT the archive and call capgo_start_build.`]
+  return {
+    kind: guidance.kind,
+    next_steps: [
+      ...jobSteps,
+      ...guidance.next_steps,
+      `If the build will not go ahead, cancel it with capgo_cancel_build (job_id ${jobId}) so it does not stay pending.`,
+    ],
+  }
 }
 
 const buildTools: McpTool[] = [

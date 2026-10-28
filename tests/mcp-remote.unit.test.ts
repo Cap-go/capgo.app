@@ -497,23 +497,82 @@ describe('hosted MCP errors always give a way out', () => {
     }
   }
 
-  it.concurrent('adds how_to_fix to every error of every tool', async () => {
+  // Smallest valid value for a JSON schema, so each tool passes validation and reaches the API.
+  function sampleValue(schema: Record<string, any>): unknown {
+    if (schema.const !== undefined)
+      return schema.const
+    if (Array.isArray(schema.enum))
+      return schema.enum[0]
+    const options = schema.anyOf ?? schema.oneOf
+    if (Array.isArray(options))
+      return sampleValue(options.find((option: Record<string, any>) => option.type !== 'null') ?? options[0])
+    const type = Array.isArray(schema.type) ? schema.type.find((t: string) => t !== 'null') : schema.type
+    switch (type) {
+      case 'string':
+        if (schema.format === 'uuid')
+          return '7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601'
+        if (schema.format === 'uri' || schema.format === 'url' || /https/.test(schema.pattern ?? ''))
+          return 'https://example.com/bundle.zip'
+        if (schema.format === 'email')
+          return 'dev@example.com'
+        return 'com.example.app'
+      case 'integer':
+      case 'number':
+        return Math.max(1, schema.minimum ?? 1, schema.exclusiveMinimum !== undefined ? schema.exclusiveMinimum + 1 : 1)
+      case 'boolean':
+        return true
+      case 'array':
+        return Array.from({ length: Math.max(1, schema.minItems ?? 1) }, () => sampleValue(schema.items ?? { type: 'string' }))
+      case 'object':
+        return sampleArgs(schema)
+      default:
+        return 'com.example.app'
+    }
+  }
+
+  function sampleArgs(schema: Record<string, any>): Record<string, unknown> {
+    const args: Record<string, unknown> = {}
+    for (const key of schema.required ?? [])
+      args[key] = sampleValue(schema.properties?.[key] ?? {})
+    return args
+  }
+
+  it.concurrent('adds how_to_fix to every error of every API-backed tool', async () => {
     const failures = [
       [400, { error: 'invalid_body', message: 'Invalid body' }],
       [401, { error: 'invalid_apikey', message: 'Invalid API key' }],
       [404, { error: 'app_not_found', message: 'App not found' }],
       [500, '<html>Internal Server Error</html>'],
     ] as const
-    for (const tool of MCP_TOOLS) {
+    // Tools that answer without calling the API (whoami, docs search) are covered separately.
+    const localTools = new Set(['capgo_whoami', 'capgo_search_docs'])
+    const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
+    for (const tool of tools) {
+      const args = sampleArgs(tool.inputSchema)
       for (const [status, data] of failures) {
-        const result = await callTool(tool.name, {}, failingContext(status, data, 'req-1'))
-        if (!result.isError)
-          continue
+        let apiCalls = 0
+        const ctx: McpToolContext = {
+          ...failingContext(status, data, 'req-1'),
+          call: async () => {
+            apiCalls += 1
+            return { ok: false, status, data, requestId: 'req-1' }
+          },
+          apikey: 'key-123',
+        }
+        const result = await callTool(tool.name, args, ctx)
+        const label = `${tool.name} → ${status}`
+        expect(apiCalls, `${label} reaches the API with ${JSON.stringify(args)}`).toBeGreaterThan(0)
+        expect(result.isError, label).toBe(true)
         const guidance = guidanceOf(result)
-        expect(guidance, `${tool.name} → ${status}`).toBeDefined()
-        expect(guidance!.next_steps.length, `${tool.name} → ${status}`).toBeGreaterThan(0)
+        expect(guidance, label).toBeDefined()
+        expect(guidance!.next_steps.length, label).toBeGreaterThan(0)
       }
     }
+  })
+
+  it.concurrent('keeps tools that answer without the API free of guidance on success', async () => {
+    const result = await callTool('capgo_whoami', {}, failingContext(500, null))
+    expect(result.isError).toBeUndefined()
   })
 
   it.concurrent('classifies API errors and ends with a support escape hatch', async () => {
@@ -537,6 +596,41 @@ describe('hosted MCP errors always give a way out', () => {
       expect(body.request_id).toBe('req-42')
       expect(body.how_to_fix.next_steps.join(' '), error).toContain('support@capgo.app')
     }
+  })
+
+  it.concurrent('does not mistake words containing sso for an SSO policy, and treats expired keys as authentication', async () => {
+    const associated = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(404, { error: 'not_found', message: 'Associated app not found' }))
+    expect(JSON.parse(associated.content[0].text).how_to_fix.kind).toBe('not_found')
+    const sso = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(400, { error: 'sso_required', message: 'SSO required' }))
+    expect(JSON.parse(sso.content[0].text).how_to_fix.kind).toBe('security_policy')
+    const jwt = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(400, { error: 'auth_error', message: 'JWT expired' }))
+    expect(JSON.parse(jwt.content[0].text).how_to_fix.kind).toBe('authentication')
+  })
+
+  it.concurrent('keeps guidance when the error body hits the result size limit', async () => {
+    const huge = 'x'.repeat(150_000)
+    const asJson = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(500, { error: 'internal_error', message: huge }))
+    const asText = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(502, huge))
+    for (const result of [asJson, asText]) {
+      const text = result.content[0].text
+      expect(text.length).toBeLessThanOrEqual(100_100)
+      expect(text).toContain('how_to_fix')
+      expect(text).toContain('support@capgo.app')
+    }
+  })
+
+  it.concurrent('classifies a build upload URL failure instead of calling it unexpected', async () => {
+    const ctx: McpToolContext = {
+      call: async request => request.path === '/build/request'
+        ? { ok: true, status: 200, data: { job_id: 'job-9' } }
+        : { ok: false, status: 429, data: { error: 'need_plan_upgrade', message: 'Upgrade plan to continue to build' } },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const result = await callTool('capgo_request_build', { appId: 'com.example.app', platform: 'ios' }, ctx)
+    const body = JSON.parse(result.content[0].text)
+    expect(body.how_to_fix.kind).toBe('plan_limit')
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('job-9')
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('capgo_cancel_build')
   })
 
   it.concurrent('guides the agent when a tool throws or gets invalid arguments', async () => {

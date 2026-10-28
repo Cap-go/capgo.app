@@ -2,7 +2,7 @@ import type { McpTool, McpToolContext, McpToolResult } from './tools.ts'
 import { z } from 'zod'
 import { version } from '../utils/version.ts'
 import { GUIDANCE_KEY, guidanceForError } from './error_guidance.ts'
-import { MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './tools.ts'
+import { MAX_RESULT_CHARS, MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './tools.ts'
 
 /**
  * Minimal, stateless MCP server over JSON-RPC 2.0 (Streamable HTTP transport, JSON responses).
@@ -110,10 +110,15 @@ export function withErrorGuidance(result: McpToolResult, tool: string): McpToolR
       requestId: typeof record.request_id === 'string' ? record.request_id : undefined,
       tool,
     })
-    return textResult({ ...record, [GUIDANCE_KEY]: guidance }, true)
+    // Guidance first, so it survives when a huge error body is cut at the result size limit.
+    return textResult({ [GUIDANCE_KEY]: guidance, ...record }, true)
   }
   const guidance = guidanceForError({ message: text, tool })
-  return textResult(`${text}\n\n${GUIDANCE_KEY} (${guidance.kind}):\n${guidance.next_steps.map(step => `- ${step}`).join('\n')}`, true)
+  const guidanceText = `\n\n${GUIDANCE_KEY} (${guidance.kind}):\n${guidance.next_steps.map(step => `- ${step}`).join('\n')}`
+  // Cut the error text, never the guidance, to stay under the result size limit.
+  const room = MAX_RESULT_CHARS - guidanceText.length - 20
+  const errorText = text.length > room ? `${text.slice(0, room)}\n… (truncated)` : text
+  return textResult(`${errorText}${guidanceText}`, true)
 }
 
 async function callTool(params: Record<string, unknown>, ctx: McpToolContext): Promise<McpToolResult | JsonRpcResponse['error']> {
