@@ -275,12 +275,16 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
   const discountStart = new Date(discount.start * 1000).toISOString()
   const discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months)
 
-  await withPg(c, pg => pg.query(
+  // The discount is on the subscription, so record it even if a concurrent attempt on
+  // this offer failed and released the reservation in the meantime.
+  const { rowCount } = await withPg(c, pg => pg.query(
     `UPDATE public.cancel_save_offers
-     SET outcome = 'accepted', discount_start = $3, discount_end = $4
-     WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
+     SET outcome = 'accepted', responded_at = COALESCE(responded_at, now()), discount_start = $3, discount_end = $4
+     WHERE id = $1 AND customer_id = $2 AND outcome IN ('offered', 'accepting', 'accepted')`,
     [offerId, ctx.customerId, discountStart, discountEnd],
   ))
+  if (!rowCount)
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer applied but not recorded', customerId: ctx.customerId, offerId })
   cloudlog({ requestId: c.get('requestId'), message: 'cancel save offer accepted', customerId: ctx.customerId, subscriptionId, discountEnd })
   await syncSubscriptionData(c, ctx.customerId, subscriptionId)
   return { discountEnd }
