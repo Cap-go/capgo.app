@@ -8,8 +8,16 @@
     "prod": {
       "name": "capgo_alert_tail-prod",
       "vars": {
-        "ENV_NAME": "capgo_alert_tail-prod"
+        "ENV_NAME": "capgo_alert_tail-prod",
+        "ALERT_THROTTLE_WINDOW_SEC": "300",
+        "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
       },
+      "kv_namespaces": [
+        {
+          "binding": "ALERT_THROTTLE_STORE",
+          "id": "7f3c8a2b9d1e4f50618293ab4c5d6e7f"
+        }
+      ],
       "observability": {
         "enabled": true,
         "issues": { "enabled": true }
@@ -18,8 +26,16 @@
     "preprod": {
       "name": "capgo_alert_tail-preprod",
       "vars": {
-        "ENV_NAME": "capgo_alert_tail-preprod"
+        "ENV_NAME": "capgo_alert_tail-preprod",
+        "ALERT_THROTTLE_WINDOW_SEC": "300",
+        "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
       },
+      "kv_namespaces": [
+        {
+          "binding": "ALERT_THROTTLE_STORE",
+          "id": "8e4d9b3c0a2f5e61729384bc5d6e7f80"
+        }
+      ],
       "observability": {
         "enabled": true,
         "issues": { "enabled": true }
@@ -28,8 +44,16 @@
     "alpha": {
       "name": "capgo_alert_tail-alpha",
       "vars": {
-        "ENV_NAME": "capgo_alert_tail-alpha"
+        "ENV_NAME": "capgo_alert_tail-alpha",
+        "ALERT_THROTTLE_WINDOW_SEC": "300",
+        "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
       },
+      "kv_namespaces": [
+        {
+          "binding": "ALERT_THROTTLE_STORE",
+          "id": "local-alert-throttle-store"
+        }
+      ],
       "observability": {
         "enabled": true,
         "issues": { "enabled": true }

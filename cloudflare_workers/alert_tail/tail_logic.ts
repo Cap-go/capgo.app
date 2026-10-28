@@ -1,6 +1,10 @@
+import { redactSensitiveText } from './redact.ts'
+
 export const MAX_STACK_CHARS = 4096
 export const MAX_BATCH_ALERTS = 100
 export const MAX_POST_BODY_BYTES = 256 * 1024
+/** HTTP status alerts use status >= this value (5xx only, not 4xx). */
+export const MIN_HTTP_ALERT_STATUS = 500
 
 export type TailException = {
   name?: string
@@ -103,7 +107,7 @@ export function shouldKeepTailEvent(event: TailTraceEvent): boolean {
   if ((event.exceptions?.length ?? 0) > 0)
     return true
   const status = event.event?.response?.status
-  if (typeof status === 'number' && status >= 500)
+  if (typeof status === 'number' && status >= MIN_HTTP_ALERT_STATUS)
     return true
   return false
 }
@@ -115,7 +119,7 @@ function resolveErrorName(event: TailTraceEvent): string {
   if (event.outcome && ERROR_OUTCOMES.has(event.outcome))
     return event.outcome
   const status = event.event?.response?.status
-  if (typeof status === 'number' && status >= 500)
+  if (typeof status === 'number' && status >= MIN_HTTP_ALERT_STATUS)
     return `HTTP_${status}`
   return 'WorkerError'
 }
@@ -125,7 +129,7 @@ function resolveMessage(event: TailTraceEvent): string {
   if (first?.message !== undefined && first.message !== null && stringifyMessage(first.message) !== '')
     return stringifyMessage(first.message)
   const status = event.event?.response?.status
-  if (typeof status === 'number' && status >= 500)
+  if (typeof status === 'number' && status >= MIN_HTTP_ALERT_STATUS)
     return `HTTP response status ${status}`
   if (event.outcome && ERROR_OUTCOMES.has(event.outcome))
     return `Worker outcome ${event.outcome}`
@@ -149,11 +153,14 @@ export function normalizeTailEvent(event: TailTraceEvent): AlertTailRecord | nul
   const first = event.exceptions?.[0]
   const tsMs = event.eventTimestamp ?? Date.now()
 
+  const message = redactSensitiveText(resolveMessage(event))
+  const stackRaw = truncateStack(first?.stack ?? null)
+
   return {
     functionName,
     errorName: resolveErrorName(event),
-    message: resolveMessage(event),
-    stack: truncateStack(first?.stack ?? null),
+    message,
+    stack: stackRaw ? redactSensitiveText(stackRaw) : null,
     method: event.event?.request?.method ?? null,
     url: stripUrlQuery(event.event?.request?.url),
     requestId: resolveRequestId(event),
