@@ -185,6 +185,20 @@ describe('delta storage v2 GC guards', () => {
     })
   })
 
+  it('never runs the path key functions in parallel workers', async () => {
+    // A PostgreSQL 17 worker that took delta_canonical_path's EXCEPTION branch
+    // returns later paths undecoded.
+    const result = await pool.query<{ proname: string, proparallel: string }>(
+      `SELECT proname, proparallel FROM pg_catalog.pg_proc
+       WHERE pronamespace = 'public'::regnamespace AND proname IN ('delta_canonical_path', 'delta_path_key')
+       ORDER BY proname`,
+    )
+    expect(result.rows).toEqual([
+      { proname: 'delta_canonical_path', proparallel: 'r' },
+      { proname: 'delta_path_key', proparallel: 'r' },
+    ])
+  })
+
   it('restores a deleted version\'s counters and queues its missing size lookups', async () => {
     await withConfig({}, async (client) => {
       const path = deltaPath('restore-unsized.js')
