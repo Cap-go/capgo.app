@@ -8,18 +8,20 @@ export type TailException = {
   stack?: string
 }
 
+export type TailRequest = {
+  url?: string
+  method?: string
+  headers?: Record<string, string> | Headers
+  cf?: { rayId?: string }
+}
+
 export type TailTraceEvent = {
   scriptName?: string
   outcome?: string
   exceptions?: TailException[]
   eventTimestamp?: number
   event?: {
-    request?: {
-      url?: string
-      method?: string
-      headers?: Record<string, string> | Headers
-      cf?: { rayId?: string }
-    }
+    request?: TailRequest
     response?: { status?: number }
   }
 }
@@ -42,7 +44,7 @@ export type AlertTailRecord = {
 const ERROR_OUTCOMES = new Set(['exception', 'exceededCpu', 'exceededMemory'])
 
 function getHeaderFromRequest(
-  request: TailTraceEvent['event'] extends { request?: infer R } ? R : undefined,
+  request: TailRequest | undefined,
   name: string,
 ): string | null {
   if (!request?.headers)
