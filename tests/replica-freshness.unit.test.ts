@@ -143,6 +143,8 @@ describe('replica freshness', () => {
 
   it('stores a lag probe under the source its own client connected to', async () => {
     stubCaches()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-28T12:00:00Z'))
     vi.stubEnv('SB_REGION', 'af-south-1')
     let databaseSource: string | undefined
     const c = {
@@ -159,10 +161,10 @@ describe('replica freshness', () => {
     }
     try {
       const regional = await getPgClient(c, true)
-      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 900 }, Date.now() + 5)
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 900 }, Date.now() + 1000)
       const eu = await getPgClient(c, true)
       expect(databaseSource).toBe('HYPERDRIVE_CAPGO_READ_EU')
-      await new Promise(resolve => setTimeout(resolve, 10))
+      vi.setSystemTime(new Date('2026-10-28T12:00:02Z'))
 
       // The regional client is probed after the request context moved to EU.
       ;(regional as any).query = vi.fn().mockResolvedValue({ rows: [{ lag_seconds: '1200' }] })
@@ -172,6 +174,7 @@ describe('replica freshness', () => {
       await Promise.all([(regional as any).end(), (eu as any).end()])
     }
     finally {
+      vi.useRealTimers()
       vi.unstubAllEnvs()
     }
   })
