@@ -245,22 +245,33 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
     return { discountEnd: offer.discount_end }
 
   const subscriptionId = await getActiveSubscriptionId(c, ctx.customerId)
-  let discountStart: string
-  let discountEnd: string
+  if (offer.subscription_id !== subscriptionId) {
+    await releaseOffer(c, ctx.customerId, offerId)
+    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
+  }
+  let discount: Stripe.Discount | null
   try {
-    if (offer.subscription_id !== subscriptionId)
-      throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-    const discount = discountFor(await applyDiscount(ctx, subscriptionId, offerId))
-    if (!discount)
-      throw simpleError('cancel_offer_failed', 'The discount could not be applied')
-    discountStart = new Date(discount.start * 1000).toISOString()
-    discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months)
+    discount = discountFor(await applyDiscount(ctx, subscriptionId, offerId))
   }
   catch (error) {
-    // Nothing was applied: give the reservation back so the customer can try again.
-    await releaseOffer(c, ctx.customerId, offerId)
-    throw error
+    // The update may have reached Stripe even though the call failed: look before releasing.
+    const after = await retrieveSubscription(ctx, subscriptionId).then(subscription => ({ discount: discountFor(subscription) })).catch(() => null)
+    // Stripe unreadable: the offer stays reserved and a retry reconciles it.
+    if (!after)
+      throw error
+    if (!after.discount) {
+      // Nothing applied: give the reservation back so the customer can try again.
+      await releaseOffer(c, ctx.customerId, offerId)
+      throw error
+    }
+    discount = after.discount
   }
+  if (!discount) {
+    await releaseOffer(c, ctx.customerId, offerId)
+    throw simpleError('cancel_offer_failed', 'The discount could not be applied')
+  }
+  const discountStart = new Date(discount.start * 1000).toISOString()
+  const discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months)
 
   await withPg(c, pg => pg.query(
     `UPDATE public.cancel_save_offers
