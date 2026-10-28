@@ -22,7 +22,8 @@ import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness
 import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
-import { versionManifestJsonSql } from './version_manifest_sql.ts'
+import type { VersionManifestRow } from './version_manifest_sql.ts'
+import { completeVersionManifest, versionManifestJsonSql, versionManifestRowsSql } from './version_manifest_sql.ts'
 
 /**
  * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -1034,11 +1035,8 @@ export async function requestManifestEntriesPostgres(
     return cached
 
   const rows = await retryOnRecoveryConflict(c, 'manifest_entries', async () => {
-    const result = await drizzleClient
-      .select({ entries: versionManifestJsonSql(sql`${versionId}::bigint`) })
-      .from(sql`(SELECT 1) AS one`)
-      .execute()
-    return (result[0]?.entries ?? []) as ManifestRow[]
+    const result = await drizzleClient.execute<VersionManifestRow>(versionManifestRowsSql(sql`${versionId}::bigint`))
+    return completeVersionManifest(result.rows)
   })
 
   // Cache API size limits may reject huge manifests; the put fails open.

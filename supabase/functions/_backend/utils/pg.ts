@@ -20,8 +20,8 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
-import type { VersionManifestJsonRow } from './version_manifest_sql.ts'
-import { versionManifestJsonSql } from './version_manifest_sql.ts'
+import type { VersionManifestRow } from './version_manifest_sql.ts'
+import { completeVersionManifest, versionManifestJsonSql, versionManifestRowsSql } from './version_manifest_sql.ts'
 
 /**
  * PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -900,12 +900,9 @@ export function requestManifestEntriesPostgres(
   versionId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ) {
-  const manifestQuery = drizzleClient
-    .select({ entries: versionManifestJsonSql(sql`${versionId}::bigint`) })
-    .from(sql`(SELECT 1) AS one`)
-
-  cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', manifestQuery: manifestQuery.toSQL() })
-  return manifestQuery.then(result => (result[0]?.entries ?? []) as VersionManifestJsonRow[])
+  cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', versionId })
+  return drizzleClient.execute<VersionManifestRow>(versionManifestRowsSql(sql`${versionId}::bigint`))
+    .then(result => completeVersionManifest(result.rows))
 }
 
 export function requestInfosChannelByIdPostgresRollout(
