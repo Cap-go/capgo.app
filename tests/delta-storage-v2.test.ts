@@ -629,27 +629,25 @@ describe('delta storage v2 compacted rows', () => {
       { file_name: 'index.html', file_hash: 'ef'.repeat(32), s3_path: deltaPath(`${sha}_index.html`) },
       { file_name: 'svg/rainy.svg', file_hash: 'uhAeBLCA==', s3_path: `orgs/${ORG_ID}/apps/${APP_ID}/1.0.0/svg/rainy.svg` },
     ]
-    for (const entry of entries) {
-      await pool.query(
-        'INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size) VALUES ($1, $2, $3, $4, 10)',
-        [versionId, entry.file_name, entry.file_hash, entry.s3_path],
-      )
-    }
-
     await withConfig({ compact_enabled: true }, async (client) => {
-      const ids = (await client.query<{ id: string }>(
-        'SELECT unnest(file_ids) AS id FROM public.version_files WHERE app_version_id = $1',
-        [versionId],
-      )).rows.map(row => Number(row.id))
-      // Only this version's rows: the cursor starts right before them.
-      await client.query(`UPDATE public.delta_files SET created_at = now() - interval '1 hour' WHERE id = ANY($1::bigint[])`, [ids])
+      // delta_files_compact scans ids globally: explicit negative ids keep rows
+      // inserted by parallel test files out of this batch.
+      const ids = entries.map((_, index) => -9_690_000 - entries.length + index)
+      await client.query(
+        `INSERT INTO public.delta_files (id, app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key, created_at)
+         SELECT e.id, $1, e.s3_path, e.file_name, e.file_hash, 10, public.delta_path_key(e.s3_path),
+           public.delta_entry_key(e.s3_path, e.file_name, e.file_hash), now() - interval '1 hour'
+         FROM jsonb_to_recordset($2::jsonb) AS e(id bigint, s3_path text, file_name text, file_hash text)`,
+        [APP_ID, JSON.stringify(entries.map((entry, index) => ({ ...entry, id: ids[index] })))],
+      )
+      await client.query('INSERT INTO public.version_files (app_version_id, file_ids) VALUES ($1, $2::bigint[])', [versionId, ids])
       await client.query(
         `INSERT INTO public.backfill_progress (job_name, scope_key, cutover_at, last_processed_id)
          VALUES ('delta_files_compact', 'all', now(), $1)
          ON CONFLICT (job_name, scope_key) DO UPDATE SET last_processed_id = EXCLUDED.last_processed_id`,
-        [Math.min(...ids) - 1],
+        [ids[0] - 1],
       )
-      const compacted = await client.query<{ count: number }>('SELECT public.delta_files_compact($1) AS count', [Math.max(...ids) - Math.min(...ids) + 1])
+      const compacted = await client.query<{ count: number }>('SELECT public.delta_files_compact($1) AS count', [ids.length])
       expect(compacted.rows[0].count).toBe(2)
       const stored = await client.query<{ s3_path: string, file_hash: string }>('SELECT s3_path, file_hash FROM public.delta_files WHERE id = ANY($1::bigint[]) ORDER BY id', [ids])
       expect(stored.rows.filter(row => row.s3_path === '')).toHaveLength(2)
