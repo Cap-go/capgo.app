@@ -371,6 +371,31 @@ describe('manifest deletion Postgres effects', () => {
     expect(await state(1)).toMatchObject({ kept: 1, manifest_count: '0', manifest_bundle_count: '0' })
   })
 
+  it('reuses stored files without locking them and fills a missing size', async () => {
+    await seedVersion(1, 2, false)
+    await pool.query(`UPDATE public.delta_files SET file_size = 0 WHERE s3_path = 'delta/file-2'`)
+    await seedVersion(2, 0, false)
+    await persistVersionManifestEntries(c, record(2), [
+      { file_name: 'new.js', file_hash: 'hash-new', s3_path: 'delta/new.js', file_size: 3 },
+      { file_name: 'file-1', file_hash: 'hash-1', s3_path: 'delta/file-1', file_size: 7 },
+      { file_name: 'file-2', file_hash: 'hash-2', s3_path: 'delta/file-2', file_size: 9 },
+    ], { trustFileSizes: true })
+
+    const files = await pool.query(`SELECT s3_path, file_size::int AS file_size, xmax::text AS xmax
+      FROM public.delta_files ORDER BY s3_path`)
+    // A sized file shared with an earlier version is neither resized nor row-locked.
+    expect(files.rows).toEqual([
+      { s3_path: 'delta/file-1', file_size: 42, xmax: '0' },
+      { s3_path: 'delta/file-2', file_size: 9, xmax: expect.any(String) },
+      { s3_path: 'delta/new.js', file_size: 3, xmax: '0' },
+    ])
+    const refs = await pool.query(`SELECT array_agg(df.s3_path ORDER BY f.ord) AS paths
+      FROM public.version_files vf, unnest(vf.file_ids) WITH ORDINALITY AS f(id, ord)
+      JOIN public.delta_files df ON df.id = f.id
+      WHERE vf.app_version_id = 2`)
+    expect(refs.rows[0].paths).toEqual(['delta/new.js', 'delta/file-1', 'delta/file-2'])
+  })
+
   it('registers a manifest on a reused backend whose session default is read-only', async () => {
     await seedVersion(1, 0, false)
     const client = await pool.connect()
