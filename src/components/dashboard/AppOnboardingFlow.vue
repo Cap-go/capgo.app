@@ -3429,7 +3429,7 @@ defineExpose({
 
               <BillingRegionChoice v-model="billingAccount" />
 
-              <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-400/30 dark:bg-primary-400/10" data-test="onboarding-webnative-recommendation">
+              <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-500/30 dark:bg-primary-500/10" data-test="onboarding-webnative-recommendation">
                 <div class="flex gap-3">
                   <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white"><IconSparkles class="h-5 w-5" /></span>
                   <div>

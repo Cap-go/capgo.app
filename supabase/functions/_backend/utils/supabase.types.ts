@@ -817,6 +817,71 @@ export type Database = {
           },
         ]
       }
+      cancel_save_offers: {
+        Row: {
+          billing_account: string
+          coupon_id: string
+          created_at: string
+          currency: string
+          customer_id: string
+          discount_end: string | null
+          discount_start: string | null
+          duration_months: number
+          id: string
+          monthly_amount: number
+          org_id: string
+          outcome: string
+          percent_off: number
+          reason: string
+          responded_at: string | null
+          subscription_id: string
+        }
+        Insert: {
+          billing_account: string
+          coupon_id: string
+          created_at?: string
+          currency: string
+          customer_id: string
+          discount_end?: string | null
+          discount_start?: string | null
+          duration_months: number
+          id?: string
+          monthly_amount: number
+          org_id: string
+          outcome?: string
+          percent_off: number
+          reason: string
+          responded_at?: string | null
+          subscription_id: string
+        }
+        Update: {
+          billing_account?: string
+          coupon_id?: string
+          created_at?: string
+          currency?: string
+          customer_id?: string
+          discount_end?: string | null
+          discount_start?: string | null
+          duration_months?: number
+          id?: string
+          monthly_amount?: number
+          org_id?: string
+          outcome?: string
+          percent_off?: number
+          reason?: string
+          responded_at?: string | null
+          subscription_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cancel_save_offers_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       capgo_credits_steps: {
         Row: {
           created_at: string

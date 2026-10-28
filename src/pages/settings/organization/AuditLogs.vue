@@ -38,8 +38,8 @@ onMounted(async () => {
       <AuditLogTable v-else-if="currentOrganization" :org-id="currentOrganization.gid" />
     </div>
     <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
+      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
+      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
         {{ t('no-organization-selected') }}
       </h2>
     </div>

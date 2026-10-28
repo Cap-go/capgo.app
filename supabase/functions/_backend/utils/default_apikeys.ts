@@ -14,6 +14,8 @@
  *   mirrors the owner's own highest-priority org-scoped role instead;
  * - "default app uploader" / "default app reader" get org_member and
  *   app_uploader / app_reader only where the owner already has those rights;
+ * - apps are locked for the statement, so a concurrently deleted app is
+ *   skipped rather than violating the role_bindings app_id foreign key;
  * - a binding never outlives the owner's own rights: when a permission of the
  *   role is only granted to the owner by expiring bindings, the key binding
  *   expires when the earliest such permission does.
@@ -104,6 +106,15 @@ owner_bindings AS (
     AND rb.org_id IS NOT NULL
     AND (rb.expires_at IS NULL OR rb.expires_at > now())
 ),
+candidate_apps AS (
+  -- Lock the apps the keys may be bound to: an app deleted while this runs is
+  -- skipped instead of failing the role_bindings app_id foreign key, and a
+  -- delete that starts later waits until the bindings are written.
+  SELECT apps.id, apps.app_id, apps.owner_org
+  FROM public.apps apps
+  WHERE apps.owner_org IN (SELECT current_orgs.org_id FROM current_orgs)
+  FOR KEY SHARE OF apps
+),
 base_candidates AS (
   SELECT
     candidate.name,
@@ -137,8 +148,7 @@ base_candidates AS (
       ('default app uploader', public.rbac_role_app_uploader()),
       ('default app reader', public.rbac_role_app_reader())
   ) AS candidate(name, role_name)
-  CROSS JOIN current_orgs
-  JOIN public.apps apps ON apps.owner_org = current_orgs.org_id
+  CROSS JOIN candidate_apps apps
   JOIN public.roles roles
     ON roles.name = candidate.role_name
     AND roles.scope_type = public.rbac_scope_app()

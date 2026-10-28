@@ -61,7 +61,7 @@ function openGitHubProfileDialog() {
         <div :class="{ 'min-w-0': !hideIntro }">
           <p
             v-if="!hideIntro && isNewUserOnboarding"
-            class="text-xs font-medium uppercase tracking-wide text-primary-600 dark:text-primary-300"
+            class="text-xs font-medium uppercase tracking-wide text-primary-500 dark:text-slate-300"
           >
             {{ t('organization-onboarding-support-usernames-step') }}
           </p>

@@ -1,7 +1,8 @@
 import type { McpTool, McpToolContext, McpToolResult } from './tools.ts'
 import { z } from 'zod'
 import { version } from '../utils/version.ts'
-import { MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './tools.ts'
+import { GUIDANCE_KEY, guidanceForError } from './error_guidance.ts'
+import { MAX_RESULT_CHARS, MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './tools.ts'
 
 /**
  * Minimal, stateless MCP server over JSON-RPC 2.0 (Streamable HTTP transport, JSON responses).
@@ -84,18 +85,72 @@ export function negotiateProtocolVersion(requested: unknown): string {
     : LATEST_PROTOCOL_VERSION
 }
 
+/**
+ * Never hand the agent a dead end: every error result carries a `how_to_fix` block (what to change,
+ * which tool to call, what to ask the user, or how to reach support). Tools that already explain
+ * their error keep their own block.
+ */
+export function withErrorGuidance(result: McpToolResult, tool: string): McpToolResult {
+  if (!result.isError)
+    return result
+  const text = result.content.map(part => part.text).join('\n')
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  }
+  catch {}
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    const record = body as Record<string, unknown>
+    if (record[GUIDANCE_KEY])
+      return result
+    const guidance = guidanceForError({
+      status: typeof record.status === 'number' ? record.status : undefined,
+      code: typeof record.error === 'string' ? record.error : undefined,
+      message: typeof record.message === 'string' ? record.message : undefined,
+      requestId: typeof record.request_id === 'string' ? record.request_id : undefined,
+      tool,
+    })
+    // Guidance first, so it survives when a huge error body is cut at the result size limit. Drop any
+    // empty how_to_fix the API sent, so it cannot overwrite the generated one.
+    const { [GUIDANCE_KEY]: _empty, ...rest } = record
+    return textResult({ [GUIDANCE_KEY]: guidance, ...rest }, true)
+  }
+  const guidance = guidanceForError({ message: text, tool })
+  const guidanceText = `\n\n${GUIDANCE_KEY} (${guidance.kind}):\n${guidance.next_steps.map(step => `- ${step}`).join('\n')}`
+  // Cut the error text, never the guidance, to stay under the result size limit.
+  const room = MAX_RESULT_CHARS - guidanceText.length - 20
+  const errorText = text.length > room ? `${text.slice(0, room)}\n… (truncated)` : text
+  return textResult(`${errorText}${guidanceText}`, true)
+}
+
 async function callTool(params: Record<string, unknown>, ctx: McpToolContext): Promise<McpToolResult | JsonRpcResponse['error']> {
   const name = typeof params.name === 'string' ? params.name : ''
   const tool = MCP_TOOLS_BY_NAME.get(name)
   if (!tool)
-    return { code: JSON_RPC_ERRORS.invalidParams, message: `Unknown tool: ${name}` }
+    return { code: JSON_RPC_ERRORS.invalidParams, message: `Unknown tool: ${name}. Call tools/list to see the available Capgo tools (all start with capgo_), then call one of those.` }
 
   // Invalid arguments are reported as a tool error (not a protocol error) so the model can self-correct.
   const parsed = tool.inputSchema.safeParse(params.arguments ?? {})
-  if (!parsed.success)
-    return textResult(`Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}`, true)
+  if (!parsed.success) {
+    return textResult({
+      error: 'invalid_arguments',
+      message: `Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}`,
+      [GUIDANCE_KEY]: {
+        kind: 'fix_input',
+        next_steps: [
+          `Fix the arguments listed above to match the inputSchema of ${name} (see tools/list) and call it again.`,
+          'Read real IDs with the list tools (capgo_list_organizations, capgo_list_apps, capgo_list_channels, capgo_list_bundles) instead of guessing, and ask the user for values you do not know.',
+        ],
+      },
+    }, true)
+  }
 
-  return tool.run(parsed.data as Record<string, unknown>, ctx)
+  try {
+    return withErrorGuidance(await tool.run(parsed.data as Record<string, unknown>, ctx), name)
+  }
+  catch (error) {
+    return withErrorGuidance(textResult({ error: 'tool_failed', message: `Tool failed: ${error instanceof Error ? error.message : String(error)}` }, true), name)
+  }
 }
 
 /**
@@ -138,15 +193,10 @@ export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext
     case 'tools/list':
       return jsonRpcResult(requestId, { tools: listTools() })
     case 'tools/call': {
-      try {
-        const result = await callTool(paramsObject, ctx)
-        if (result && 'code' in result)
-          return jsonRpcError(requestId, result.code, result.message)
-        return jsonRpcResult(requestId, result)
-      }
-      catch (error) {
-        return jsonRpcResult(requestId, textResult(`Tool failed: ${error instanceof Error ? error.message : String(error)}`, true))
-      }
+      const result = await callTool(paramsObject, ctx)
+      if (result && 'code' in result)
+        return jsonRpcError(requestId, result.code, result.message)
+      return jsonRpcResult(requestId, result)
     }
     case 'resources/list':
       return jsonRpcResult(requestId, { resources: [] })
@@ -155,6 +205,6 @@ export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext
     case 'prompts/list':
       return jsonRpcResult(requestId, { prompts: [] })
     default:
-      return jsonRpcError(requestId, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${method}`)
+      return jsonRpcError(requestId, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${method}. This server supports initialize, ping, tools/list and tools/call.`)
   }
 }

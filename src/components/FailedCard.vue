@@ -59,18 +59,18 @@ async function copyOrgId() {
 
 <template>
   <!-- Password Update Required Card -->
-  <div v-if="needsPasswordUpdate" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-[#FFFBEC] rounded-xl border border-orange-200">
+  <div v-if="needsPasswordUpdate" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-amber-50 rounded-xl border border-orange-200 dark:bg-amber-900/20 dark:border-amber-800">
     <div class="flex items-start">
       <div class="shrink-0">
-        <svg class="w-8 h-8 text-[#FE9A02]" viewBox="0 0 20 20" fill="currentColor">
+        <svg class="w-8 h-8 text-amber-500 dark:text-amber-400" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z" clip-rule="evenodd" />
         </svg>
       </div>
       <div class="flex-1 ml-4">
-        <h3 class="text-lg font-semibold text-[#973C00]">
+        <h3 class="text-lg font-semibold text-amber-800 dark:text-amber-100">
           {{ t('password-policy-required') }}
         </h3>
-        <div class="mt-3 text-base text-[#BB4D00]">
+        <div class="mt-3 text-base text-amber-700 dark:text-amber-300">
           <p>{{ t('password-update-org-access') }}</p>
         </div>
         <div class="flex flex-wrap gap-3 mt-6">
@@ -84,7 +84,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="py-3 px-8 text-base font-semibold text-[#973C00] bg-transparent border border-[#973C00] rounded-lg transition-colors duration-200 hover:bg-orange-100 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
@@ -95,18 +95,18 @@ async function copyOrgId() {
   </div>
 
   <!-- 2FA Setup Required Card -->
-  <div v-else-if="needs2FASetup" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-[#FFFBEC] rounded-xl border border-orange-200">
+  <div v-else-if="needs2FASetup" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-amber-50 rounded-xl border border-orange-200 dark:bg-amber-900/20 dark:border-amber-800">
     <div class="flex items-start">
       <div class="shrink-0">
-        <svg class="w-8 h-8 text-[#FE9A02]" viewBox="0 0 20 20" fill="currentColor">
+        <svg class="w-8 h-8 text-amber-500 dark:text-amber-400" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
         </svg>
       </div>
       <div class="flex-1 ml-4">
-        <h3 class="text-lg font-semibold text-[#973C00]">
+        <h3 class="text-lg font-semibold text-amber-800 dark:text-amber-100">
           {{ t('2fa-setup-required') }}
         </h3>
-        <div class="mt-3 text-base text-[#BB4D00]">
+        <div class="mt-3 text-base text-amber-700 dark:text-amber-300">
           <p>{{ t('2fa-setup-org-access') }}</p>
         </div>
         <div class="flex flex-wrap gap-3 mt-6">
@@ -120,7 +120,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="py-3 px-8 text-base font-semibold text-[#973C00] bg-transparent border border-[#973C00] rounded-lg transition-colors duration-200 hover:bg-orange-100 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
+            class="py-3 px-8 text-base font-semibold text-amber-800 bg-transparent border border-amber-800 rounded-lg transition-colors duration-200 hover:bg-orange-100 dark:text-amber-200 dark:border-amber-400 dark:hover:bg-amber-900/40 focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:outline-none"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
@@ -131,7 +131,7 @@ async function copyOrgId() {
   </div>
 
   <!-- Error Alert for Non-paying Users (only show if no password issue or 2FA issue) -->
-  <div v-else-if="organizationStore.currentOrganizationFailed" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-red-50 rounded-xl border border-red-200">
+  <div v-else-if="organizationStore.currentOrganizationFailed" class="p-8 mx-auto mt-6 mb-6 max-w-2xl bg-red-50 rounded-xl border border-red-200 dark:bg-red-900/20 dark:border-red-900/60">
     <div class="flex items-start">
       <div class="shrink-0">
         <svg class="w-8 h-8 text-red-400" viewBox="0 0 20 20" fill="currentColor">
@@ -139,10 +139,10 @@ async function copyOrgId() {
         </svg>
       </div>
       <div class="flex-1 ml-4">
-        <h3 class="text-lg font-semibold text-red-800">
+        <h3 class="text-lg font-semibold text-red-800 dark:text-red-200">
           {{ t('subscription-required') }}
         </h3>
-        <div class="mt-3 text-base text-red-700">
+        <div class="mt-3 text-base text-red-700 dark:text-red-300">
           <p>{{ t(hideExternalPurchaseFlows ? 'plan-failed-native-description' : 'plan-failed-description') }}</p>
         </div>
         <div v-if="!hideExternalPurchaseFlows" class="mt-6">

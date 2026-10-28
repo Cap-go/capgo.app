@@ -45,6 +45,7 @@ import { mcpLoginInputSchema, mcpLogoutInputSchema } from '../schemas/auth'
 import { findSavedKeySilent, formatError } from '../utils'
 import { registerOnboardingTools } from '../build/onboarding/mcp/onboarding-tools'
 import { registerLiveUpdateTools } from '../init/mcp/live-update-tools'
+import { withErrorGuidance, withGuidedErrorResults } from './error-guidance'
 import { buildServerInstructions } from './instructions'
 import { installMcpStdoutGuard } from './stdout-guard'
 import { describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, switchProjectDir } from './project-dir'
@@ -142,7 +143,9 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // for a pending roots sync so its first call already runs in the agent's project.
   const originalRegisterTool = server.registerTool.bind(server)
   ;(server as unknown as { registerTool: typeof server.registerTool }).registerTool = (name: string, config: Parameters<typeof server.registerTool>[1], handler: Parameters<typeof server.registerTool>[2]) => {
-    const tracked = withMcpToolTracking(String(name), handler as any) as (...args: unknown[]) => Promise<unknown>
+    // Never leave the agent in a dead end: every error result (or throw) gets a way out appended.
+    const guided = withErrorGuidance(String(name), handler as any)
+    const tracked = withMcpToolTracking(String(name), guided) as (...args: unknown[]) => Promise<unknown>
     const waitForProjectDir = async (...args: unknown[]) => {
       await projectDirSync
       return tracked(...args)
@@ -1072,6 +1075,10 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // reads; otherwise the transport drops ("Transport closed"). Keep the config target
   // for this server's lifetime because tool calls happen after the CLI action completes.
   const transport = new StdioServerTransport(process.stdin, transportStdout)
+  // Last safety net: error results the SDK builds before a handler runs (invalid arguments,
+  // output validation) also leave the agent a way out.
+  const send = transport.send.bind(transport)
+  transport.send = (message: Parameters<typeof send>[0]) => send(withGuidedErrorResults(message))
   transport.onclose = restoreConfigWriteTarget
   await server.connect(transport)
   trackMcpServerStarted(Boolean(savedApiKey))

@@ -359,7 +359,7 @@ const { continueOnboarding, goBack, replay } = useOnboardingChannelAnimation({
   <main ref="root" class="csa-shell overflow-hidden rounded-[1.6rem] border border-slate-200 bg-white shadow-xl shadow-slate-950/5 dark:border-white/10 dark:bg-slate-950" :class="{ 'csa-shell-embedded': embedded }">
     <header class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6 dark:border-white/10">
       <div class="min-w-0 max-w-3xl">
-        <div class="mb-1 inline-flex items-center gap-2 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-primary-600 dark:text-emerald-300">
+        <div class="mb-1 inline-flex items-center gap-2 text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-primary-500 dark:text-emerald-300">
           <IconSparkles class="h-3.5 w-3.5" />
           {{ t('channel-self-assign-kicker') }}
         </div>
