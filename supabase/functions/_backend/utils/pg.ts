@@ -104,7 +104,7 @@ function leaseHyperdriveClient(c: Context, key: string, client: Client, connect:
         return async (...args: unknown[]) => {
           lease.detached ??= connect()
           const detached = await lease.detached
-          return (detached.query as (...queryArgs: unknown[]) => unknown)(...args)
+          return (detached.query as (...queryArgs: unknown[]) => unknown).apply(detached, args)
         }
       }
       // Methods run with the handle as `this`; pg.Client has no private fields and every

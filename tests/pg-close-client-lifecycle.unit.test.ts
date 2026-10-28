@@ -234,7 +234,13 @@ describe('main pg.ts Hyperdrive pg Client lifecycle', () => {
         this.txStatus = 'I'
         this.readyForQuery = true
         this.getTransactionStatus = () => this.txStatus
-        this.query = vi.fn(async () => ({ rows: [] }))
+        this.isFakeClient = true
+        // Like pg.Client#query, which reads its own state through `this` (the Client or its handle).
+        this.query = vi.fn(async function (this: { isFakeClient?: boolean } | undefined) {
+          if (this?.isFakeClient !== true)
+            throw new TypeError('query called without its Client as this')
+          return { rows: [] }
+        })
         instances.push(this)
         return this
       })
