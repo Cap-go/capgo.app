@@ -128,7 +128,8 @@ describe('replica freshness', () => {
 
       setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 601 })
       expect(getDatabaseURL(c, true)).toBe('postgresql://eu')
-      expect(getReadReplicaBinding(c)).toBe('HYPERDRIVE_CAPGO_READ_EU')
+      // Answers cached from the regional replica keep its lag cap.
+      expect(getReadReplicaBinding(c)).toBe('HYPERDRIVE_CAPGO_READ_AF')
       expect(c.set).toHaveBeenLastCalledWith('databaseSource', 'HYPERDRIVE_CAPGO_READ_EU')
 
       // The figure expires after its TTL: the next read probes the regional replica again.

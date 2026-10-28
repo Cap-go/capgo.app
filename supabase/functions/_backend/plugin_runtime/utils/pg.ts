@@ -292,20 +292,28 @@ function setDatabaseSource(c: Context, source: string): void {
 
 const EU_READ_REPLICA_ROUTE = READ_REPLICA_ROUTES.find(route => route.region === 'EU')!
 
+function findRegionalReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+  return READ_REPLICA_ROUTES.find(route => route.region === dbRegion && c.env[route.binding])
+}
+
 /**
  * Read replica for this region, or the EU replica while the regional one is
  * measured more than READ_REPLICA_FALLBACK_LAG_SECONDS behind it.
  */
 function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
-  const route = READ_REPLICA_ROUTES.find(route => route.region === dbRegion && c.env[route.binding])
+  const route = findRegionalReadReplicaRoute(c, dbRegion)
   if (!route || route === EU_READ_REPLICA_ROUTE || !c.env[EU_READ_REPLICA_ROUTE.binding] || !isReplicaTooFarBehind(route.binding))
     return route
   return EU_READ_REPLICA_ROUTE
 }
 
-/** Read replica source this worker reads from, without selecting or connecting it. */
+/**
+ * This region's own read replica, without selecting or connecting it. Labels
+ * answers filled from it (read cache entries): it ignores the EU fallback, so
+ * their edge cache TTL keeps the regional replica's lag cap.
+ */
 export function getReadReplicaBinding(c: Context): string | null {
-  const route = findReadReplicaRoute(c, getClientDbRegionSB(c))
+  const route = findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
   if (route)
     return route.binding
   return isLocalWorkerEnv(c) && existInEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL')
