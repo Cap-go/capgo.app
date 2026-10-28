@@ -16,7 +16,9 @@
 -- task that does nothing until CAPGO_DELTA_FILES_COMPACT_ENABLED is set, after
 -- every worker reading delta_files runs this release (the previous workers,
 -- and their plugin reads on the replicas, read s3_path / file_hash directly).
--- Writers keep inserting text; the task compacts rows older than 10 minutes.
+-- Writers keep inserting text. After the switch, CALL delta_files_compact_all()
+-- compacts the existing rows in minutes; the task then compacts new rows once
+-- they are 10 minutes old.
 
 SET lock_timeout = '5s';
 
@@ -198,7 +200,55 @@ ALTER FUNCTION public.delta_files_compact(integer) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_files_compact(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_files_compact(integer) TO service_role;
 
--- Every 10 seconds: about 12,000 rows a minute once enabled.
+-- Catch-up for the rows that exist when the switch is turned on: large
+-- batches, each committed, so the backlog takes minutes instead of hours; the
+-- cron task then only follows new rows. Run once with psql as postgres:
+--   SET statement_timeout = 0; CALL public.delta_files_compact_all();
+-- p_pause_ms throttles it if the Google subscriber falls behind. A procedure
+-- with a SET clause cannot COMMIT, hence the qualified names and no search_path.
+CREATE PROCEDURE public.delta_files_compact_all(p_batch_size integer DEFAULT 20000, p_pause_ms integer DEFAULT 0)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_before bigint;
+  v_after bigint;
+  v_rewritten bigint := 0;
+  v_idle integer := 0;
+BEGIN
+  IF NOT public.delta_storage_setting('CAPGO_DELTA_FILES_COMPACT_ENABLED', false) THEN
+    RAISE EXCEPTION 'delta_files_compact_all: set CAPGO_DELTA_FILES_COMPACT_ENABLED first';
+  END IF;
+
+  LOOP
+    SELECT bp.last_processed_id INTO v_before
+    FROM public.backfill_progress AS bp
+    WHERE bp.job_name = 'delta_files_compact' AND bp.scope_key = 'all';
+    v_rewritten := v_rewritten + public.delta_files_compact(p_batch_size);
+    COMMIT;
+    SELECT bp.last_processed_id INTO v_after
+    FROM public.backfill_progress AS bp
+    WHERE bp.job_name = 'delta_files_compact' AND bp.scope_key = 'all';
+
+    IF v_after IS NOT DISTINCT FROM v_before THEN
+      -- Caught up, or the cron run held the cursor: retry a few times.
+      v_idle := v_idle + 1;
+      EXIT WHEN v_idle >= 3;
+      PERFORM pg_catalog.pg_sleep(1);
+    ELSE
+      v_idle := 0;
+      RAISE NOTICE 'delta_files_compact_all: cursor % rewritten %', v_after, v_rewritten;
+      IF COALESCE(p_pause_ms, 0) > 0 THEN
+        PERFORM pg_catalog.pg_sleep(p_pause_ms / 1000.0);
+      END IF;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'delta_files_compact_all: done, cursor % rewritten %', v_after, v_rewritten;
+END;
+$$;
+ALTER PROCEDURE public.delta_files_compact_all(integer, integer) OWNER TO postgres;
+REVOKE ALL ON PROCEDURE public.delta_files_compact_all(integer, integer) FROM PUBLIC;
+
+-- Every 10 seconds, 2,000 rows: follows new uploads once the catch-up ran.
 INSERT INTO public.cron_tasks (name, description, task_type, target, second_interval, minute_interval, enabled)
 VALUES ('delta_files_compact', 'Compact delta_files paths and hashes (CAPGO_DELTA_FILES_COMPACT_ENABLED)', 'function', 'public.delta_files_compact(2000)', 10, NULL, true)
 ON CONFLICT (name) DO NOTHING;

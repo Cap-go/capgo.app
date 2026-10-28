@@ -68,18 +68,26 @@ functions. The size lookup worker reads the path from the row, not from the
 queued message.
 
 Writers keep inserting text. The `delta_files_compact` cron task (every
-10 seconds, 2,000 rows) rewrites rows in id order once they are 10 minutes
+10 seconds, 2,000 rows) compacts new rows in id order once they are 10 minutes
 old; its cursor is `backfill_progress` (`job_name = 'delta_files_compact'`).
-It does nothing until the Vault switch is on, because workers of the previous
+The rows that already exist are compacted once by
+`CALL public.delta_files_compact_all()`: batches of 20,000, each committed.
+Nothing runs until the Vault switch is on, because workers of the previous
 release, and their plugin reads on the replicas, read `s3_path` directly.
 
 After the release that adds it (every api, files and plugin worker replaced):
 
 1. `SELECT vault.create_secret('true', 'CAPGO_DELTA_FILES_COMPACT_ENABLED');`
-2. Follow progress:
+2. Catch up the existing rows with psql as `postgres` (not in a transaction
+   block: the procedure commits each batch):
+   `SET statement_timeout = 0; CALL public.delta_files_compact_all();`
+   On a laptop it rewrites 1M production-shaped rows in about 80 seconds, so
+   the 5.1M production rows take minutes. It prints the cursor after each
+   batch and can be stopped and called again at any time. If the Google
+   subscriber falls behind, call it with a pause between batches:
+   `CALL public.delta_files_compact_all(20000, 500);`
+   Progress:
    `SELECT last_processed_id, (SELECT max(id) FROM public.delta_files) FROM public.backfill_progress WHERE job_name = 'delta_files_compact';`
-   About 12,000 rows a minute: the 5.1M production rows take about 7 hours.
-   Every update also replicates to the Google subscriber.
 3. Once caught up, rebuild the indexes the updates bloated, on the primary
    and on the Google subscriber (pkey only there), without blocking writes:
    `REINDEX TABLE CONCURRENTLY public.delta_files;`
