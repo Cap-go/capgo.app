@@ -26,6 +26,17 @@ export function isAuthRateLimitError(error: unknown) {
     || String(err?.message ?? '').toLowerCase().includes('rate limit')
 }
 
+// GoTrue rejects passwords found in breach lists (HaveIBeenPwned) with weak_password even when they pass our own policy.
+export function isWeakPasswordError(error: unknown) {
+  const err = error as { code?: string, message?: string }
+  return err?.code === 'weak_password' || String(err?.message ?? '').toLowerCase().includes('known to be weak')
+}
+
+export function isLeakedPasswordError(error: unknown) {
+  const err = error as { message?: string, reasons?: unknown }
+  return (Array.isArray(err?.reasons) && err.reasons.includes('pwned')) || String(err?.message ?? '').toLowerCase().includes('known to be weak')
+}
+
 export interface ProfileInput {
   id: string
   email: string
