@@ -366,7 +366,7 @@ jobs:
 
   deploy_alert_tail:
     needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && (needs.changes.outputs.alert_tail == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.files == 'true' || needs.changes.outputs.plugins == 'true') && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.alert_tail == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

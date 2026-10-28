@@ -14,8 +14,10 @@ export default {
   async tail(events: TailTraceEvent[], env: Env): Promise<void> {
     const webhookUrl = env.ALERT_WEBHOOK_URL
     const webhookAuth = env.ALERT_WEBHOOK_AUTH
-    if (!webhookUrl || !webhookAuth)
+    if (!webhookUrl || !webhookAuth) {
+      console.warn('alert tail webhook secrets missing, skipping delivery')
       return
+    }
 
     try {
       const alerts = capPostBodyAlerts(processTailBatch(events))
@@ -27,14 +29,17 @@ export default {
         authorization: webhookAuth,
       }
 
-      await fetch(webhookUrl, {
+      const response = await fetch(webhookUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify({ alerts }),
+        signal: AbortSignal.timeout(5000),
       })
+      if (!response.ok)
+        console.error('alert webhook rejected batch', response.status, alerts.length)
     }
-    catch {
-      // Never throw from tail handler
+    catch (error) {
+      console.error('alert webhook delivery failed', error instanceof Error ? error.name : 'unknown')
     }
   },
 }

@@ -29,3 +29,7 @@ Deploy the tail worker before redeploying producers that reference it in `tail_c
 ## Payload
 
 Each POST body is JSON `{ "alerts": [ ... ] }`. Entries include `functionName`, `errorName`, `message`, `stack` (max 4KB), HTTP metadata, `count` (deduped within the tail batch), and `body: null`.
+
+## Volume
+
+Cloudflare invokes `tail()` once per producer Worker invocation. This handler sends at most one webhook POST per tail batch when at least one event matches the filter. A widespread outage can produce many POSTs in a short window. Size limits (`MAX_BATCH_ALERTS`, `MAX_POST_BODY_BYTES`) cap each payload. Throttle or aggregate at the receiver if needed.

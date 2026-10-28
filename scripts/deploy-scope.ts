@@ -48,7 +48,6 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     ...backendDependencyMatchers,
     ...backendUtilityMatchers,
     /^cloudflare_workers\/api\//,
-    /^cloudflare_workers\/alert_tail\//,
     /^supabase\/functions\/_backend\/files\/util\.ts$/,
     /^supabase\/functions\/_backend\/mcp\//,
     /^supabase\/functions\/_backend\/private\//,
@@ -66,7 +65,6 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     ...backendDependencyMatchers,
     ...backendUtilityMatchers,
     /^cloudflare_workers\/files\//,
-    /^cloudflare_workers\/alert_tail\//,
     /^supabase\/functions\/_backend\/files\//,
     /^supabase\/functions\/_backend\/private\/(download_link|upload_link)\.ts$/,
     /^supabase\/functions\/_backend\/public\/ok\.ts$/,
@@ -78,7 +76,6 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     // Isolated plugin tree only — do not match shared _backend/utils (API dual-use).
     // Deno-only shared/plugin_deno_stats_fallbacks.ts is supabase-scoped, not CF plugin.
     /^cloudflare_workers\/plugin\//,
-    /^cloudflare_workers\/alert_tail\//,
     /^supabase\/functions\/_backend\/plugin_runtime\//,
     /^supabase\/functions\/(updates|stats|channel_self|updates_debug)\//,
   ],

@@ -51,7 +51,7 @@ describe('deploy scope matching', () => {
     ['the shared preview subdomain helper deploys the files worker', ['supabase/functions/shared/preview-subdomain.ts'], { files: true, supabase: true }],
     ['the shared TUS file utility deploys API and files workers', ['supabase/functions/_backend/files/util.ts'], { api: true, files: true, supabase: true }],
     ['package dependency changes deploy Cloudflare workers without forcing Supabase', ['package.json'], { alert_tail: true, api: true, files: true, plugins: true, translation: true }],
-    ['alert tail worker changes deploy the tail worker and producer workers', ['cloudflare_workers/alert_tail/tail_logic.ts'], { alert_tail: true, api: true, files: true, plugins: true }],
+    ['alert tail worker changes deploy only the tail worker', ['cloudflare_workers/alert_tail/tail_logic.ts'], { alert_tail: true }],
   ] as const)('%s', (_name, files, deploys) => {
     expect(resolveDeployScopeFromFiles([...files])).toEqual({ ...noBackendDeploys, ...deploys })
   })
@@ -202,9 +202,6 @@ describe('deploy scope matching', () => {
       ? {
           ...noBackendDeploys,
           alert_tail: true,
-          api: true,
-          files: true,
-          plugins: true,
         }
       : {
           ...noBackendDeploys,
