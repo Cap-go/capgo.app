@@ -147,19 +147,6 @@ export function replicationLagStatusFromSeconds(
   return lagSeconds > thresholdSeconds ? 'lagging' : 'ok'
 }
 
-/** Cached apply lag for a read-replica source (probe runs on the replica itself). */
-export function isCachedReadReplicaApplyLagging(
-  source: string | null | undefined,
-  thresholdSeconds = REPLICATION_LAG_APPLY_THRESHOLD_SECONDS,
-): boolean {
-  if (!source || !isReadReplicaSource(source))
-    return false
-  const lag = getFreshReplicationLagMemoryEntry(source)
-  if (!lag || lag.max_lag_seconds === null)
-    return false
-  return lag.status === 'lagging' || lag.max_lag_seconds > thresholdSeconds
-}
-
 const REPLICATION_LAG_CACHE_PATH = '/cache/replication-lag'
 
 const replicationLagMemoryCache = new Map<string, ReplicationLagCacheEntry>()

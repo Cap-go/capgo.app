@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { getReadReplicaBinding } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { computeLogicalSubscriberApplyLagSeconds, edgeCacheTtlForReplicaLag, isCachedReadReplicaApplyLagging, isReadReplicaSource, maxLogicalSubscriberApplyLagSeconds, REPLICA_LAG_QUERY, REPLICATION_LAG_APPLY_THRESHOLD_SECONDS, replicationLagCacheRequest, replicationLagStatusFromSeconds, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
+import { computeLogicalSubscriberApplyLagSeconds, edgeCacheTtlForReplicaLag, isReadReplicaSource, maxLogicalSubscriberApplyLagSeconds, REPLICA_LAG_QUERY, REPLICATION_LAG_APPLY_THRESHOLD_SECONDS, replicationLagCacheRequest, replicationLagStatusFromSeconds, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 
 function contextFrom(source: string | undefined) {
   return {
@@ -152,16 +152,6 @@ describe('replica freshness', () => {
 
     const aggregate = maxLogicalSubscriberApplyLagSeconds([row], now)
     expect(aggregate).toBe(applyLag)
-  })
-
-  it('uses the 180s apply threshold for cached primary fallback decisions', () => {
-    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU', { status: 'ok', max_lag_seconds: 181 })
-    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_READ_EU')).toBe(true)
-    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU', { status: 'lagging', max_lag_seconds: 400 })
-    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_READ_EU')).toBe(true)
-    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU', { status: 'ok', max_lag_seconds: 2 })
-    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_READ_EU')).toBe(false)
-    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_DIRECT_EU')).toBe(false)
   })
 
   it('keeps a healthy subscriber with fresh apply at ok lag', () => {
