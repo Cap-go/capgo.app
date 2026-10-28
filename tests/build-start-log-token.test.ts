@@ -2,9 +2,9 @@ import { jwtVerify } from 'jose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startBuild } from '../supabase/functions/_backend/public/build/start.ts'
 
-const { mockSupabaseAdmin, mockSupabaseApikey, mockCheckPermission, mockGetEnv, mockPersistBuilderBuildOutcome, mockReserveNativeBuildSlot, mockSendEventToTracking } = vi.hoisted(() => ({
-  mockSupabaseAdmin: vi.fn(),
-  mockSupabaseApikey: vi.fn(),
+const { mockAdminQuery, mockRlsQuery, mockCheckPermission, mockGetEnv, mockPersistBuilderBuildOutcome, mockReserveNativeBuildSlot, mockSendEventToTracking } = vi.hoisted(() => ({
+  mockAdminQuery: vi.fn(),
+  mockRlsQuery: vi.fn(),
   mockCheckPermission: vi.fn(),
   mockGetEnv: vi.fn(),
   mockPersistBuilderBuildOutcome: vi.fn(),
@@ -16,10 +16,18 @@ vi.mock('../supabase/functions/_backend/utils/builder_onboarding_checklist.ts', 
   persistBuilderBuildOutcome: mockPersistBuilderBuildOutcome,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: mockSupabaseAdmin,
-  supabaseApikey: mockSupabaseApikey,
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({ query: mockAdminQuery }),
+  closeClient: () => {},
 }))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mockRlsQuery }),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: mockCheckPermission,
@@ -56,31 +64,37 @@ describe('build start direct log token', () => {
   const builderUrl = 'https://builder.capgo.test'
   const builderApiKey = 'builder-api-key'
 
-  // Mock the CAS update chain: .update(...).eq(...).eq(...).eq(...).select('id')
-  // Returns { data, error } from .select(); `data` shape decides whether
-  // emitBuildTransitionEvent fires. `mockReturnThis()` on .eq() lets the chain
-  // accept any number of guards (builder_job_id + app_id + status, currently).
-  function configureUpdateMock(selectResult: { data: Array<{ id: string }> | null, error: { message: string } | null }) {
-    const updateBuilder = {
-      eq: vi.fn().mockReturnThis(),
-      select: vi.fn().mockResolvedValue(selectResult),
-    }
+  const failedRow = {
+    status: 'pending',
+    platform: 'ios',
+    build_mode: 'release',
+    owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
+    requested_by: userId,
+  }
 
-    mockSupabaseAdmin.mockReturnValue({
-      from: vi.fn().mockImplementation((table: string) => {
-        expect(table).toBe('build_requests')
-        return {
-          update: vi.fn().mockReturnValue(updateBuilder),
-        }
-      }),
+  // Admin (service-role) statements: the markBuildAsFailed prefetch goes through
+  // queryJson (`WITH q AS (...)`); every UPDATE ... RETURNING returns `updateRows`,
+  // whose length decides whether the CAS writer won and emits the lifecycle event.
+  function configureAdmin(opts: { prefetchRow?: Record<string, unknown> | null, prefetchError?: Error, updateRows?: Array<Record<string, unknown>> } = {}) {
+    const updates: Array<{ text: string, params: unknown[] }> = []
+    mockAdminQuery.mockImplementation(async (text: string, params: unknown[]) => {
+      if (text.startsWith('WITH q AS')) {
+        if (opts.prefetchError)
+          throw opts.prefetchError
+        const row = opts.prefetchRow === undefined ? failedRow : opts.prefetchRow
+        return { rows: row ? [{ row }] : [] }
+      }
+      expect(text).toContain('UPDATE public.build_requests')
+      updates.push({ text, params })
+      const rows = opts.updateRows ?? [{ id: 'row-1' }]
+      return { rows, rowCount: rows.length }
     })
-
-    return updateBuilder
+    return updates
   }
 
   beforeEach(() => {
-    mockSupabaseAdmin.mockReset()
-    mockSupabaseApikey.mockReset()
+    mockAdminQuery.mockReset()
+    mockRlsQuery.mockReset()
     mockCheckPermission.mockReset()
     mockGetEnv.mockReset()
     mockPersistBuilderBuildOutcome.mockReset()
@@ -89,33 +103,25 @@ describe('build start direct log token', () => {
     mockSendEventToTracking.mockResolvedValue(undefined)
     mockPersistBuilderBuildOutcome.mockResolvedValue(true)
 
-    const selectBuilder = {
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({
-        data: {
-          id: '3eb4f870-720d-46b9-843f-2e6d57d54000',
-          app_id: appId,
-          owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
-          requested_by: userId,
-          status: 'pending',
-          platform: 'ios',
-          build_mode: 'release',
-        },
-        error: null,
-      }),
-    }
-
-    mockSupabaseApikey.mockReturnValue({
-      from: vi.fn().mockImplementation((table: string) => {
-        expect(table).toBe('build_requests')
-        return {
-          select: vi.fn().mockReturnValue(selectBuilder),
-        }
-      }),
+    mockRlsQuery.mockImplementation(async (text: string) => {
+      expect(text).toContain('FROM public.build_requests')
+      return {
+        rows: [{
+          row: {
+            id: '3eb4f870-720d-46b9-843f-2e6d57d54000',
+            app_id: appId,
+            owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
+            requested_by: userId,
+            status: 'pending',
+            platform: 'ios',
+            build_mode: 'release',
+          },
+        }],
+      }
     })
 
     // Default: CAS guard succeeds, one row returned, lifecycle event should fire.
-    configureUpdateMock({ data: [{ id: 'row-1' }], error: null })
+    configureAdmin()
 
     mockCheckPermission.mockResolvedValue(true)
     mockReserveNativeBuildSlot.mockResolvedValue({
@@ -243,35 +249,8 @@ describe('build start direct log token', () => {
     // Without step 3 (the bug this guards against), the builder-rejection path
     // would silently update status='failed' but never appear in the lifecycle funnel.
 
-    // Override the admin mock to handle BOTH operations markBuildAsFailed performs:
-    //  - `.from('build_requests').select(...)` to read the row
-    //  - `.from('build_requests').update(...)` for the CAS write
-    const updateBuilder = {
-      eq: vi.fn().mockReturnThis(),
-      select: vi.fn().mockResolvedValue({ data: [{ id: 'row-1' }], error: null }),
-    }
-    const adminSelectChain = {
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({
-        data: {
-          status: 'pending',
-          platform: 'ios',
-          build_mode: 'release',
-          owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
-          requested_by: userId,
-        },
-        error: null,
-      }),
-    }
-    mockSupabaseAdmin.mockReturnValue({
-      from: vi.fn().mockImplementation((table: string) => {
-        expect(table).toBe('build_requests')
-        return {
-          update: vi.fn().mockReturnValue(updateBuilder),
-          select: vi.fn().mockReturnValue(adminSelectChain),
-        }
-      }),
-    })
+    // markBuildAsFailed reads the row, then runs the CAS UPDATE (default admin mock).
+    configureAdmin()
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('builder is offline', {
       status: 500,
@@ -339,33 +318,7 @@ describe('build start direct log token', () => {
       },
     }))
 
-    const updateBuilder = {
-      eq: vi.fn().mockReturnThis(),
-      select: vi.fn().mockResolvedValue({ data: [{ id: 'row-1' }], error: null }),
-    }
-    const updateMock = vi.fn().mockReturnValue(updateBuilder)
-    const adminSelectChain = {
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({
-        data: {
-          status: 'pending',
-          platform: 'ios',
-          build_mode: 'release',
-          owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
-          requested_by: userId,
-        },
-        error: null,
-      }),
-    }
-    mockSupabaseAdmin.mockReturnValue({
-      from: vi.fn().mockImplementation((table: string) => {
-        expect(table).toBe('build_requests')
-        return {
-          update: updateMock,
-          select: vi.fn().mockReturnValue(adminSelectChain),
-        }
-      }),
-    })
+    const updates = configureAdmin()
 
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     const context = {
@@ -391,11 +344,10 @@ describe('build start direct log token', () => {
       })
 
       expect(fetchMock).not.toHaveBeenCalled()
-      expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({
-        status: 'failed',
-        last_error: concurrencyMessage,
-      }))
-      expect(updateBuilder.select).toHaveBeenCalled()
+      expect(updates).toHaveLength(1)
+      expect(updates[0].text).toContain('SET status = \'failed\', last_error = $3')
+      expect(updates[0].text).toContain('RETURNING id')
+      expect(updates[0].params[2]).toBe(concurrencyMessage)
       expect(mockSendEventToTracking).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -412,29 +364,7 @@ describe('build start direct log token', () => {
   })
 
   it('does not update the checklist when an immediate failure loses the CAS race', async () => {
-    const updateBuilder = {
-      eq: vi.fn().mockReturnThis(),
-      select: vi.fn().mockResolvedValue({ data: [], error: null }),
-    }
-    const adminSelectChain = {
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({
-        data: {
-          status: 'pending',
-          platform: 'ios',
-          build_mode: 'release',
-          owner_org: '3eb4f870-720d-46b9-843f-2e6d57d54001',
-          requested_by: userId,
-        },
-        error: null,
-      }),
-    }
-    mockSupabaseAdmin.mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        update: vi.fn().mockReturnValue(updateBuilder),
-        select: vi.fn().mockReturnValue(adminSelectChain),
-      }),
-    })
+    configureAdmin({ updateRows: [] })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('builder is offline', { status: 500 }))
     const context = {
       get: vi.fn().mockReturnValue(requestId),
@@ -451,21 +381,7 @@ describe('build start direct log token', () => {
   })
 
   it('does not overwrite a terminal build when the failure prefetch fails', async () => {
-    const updateBuilder = {
-      eq: vi.fn().mockReturnThis(),
-      not: vi.fn().mockReturnThis(),
-      select: vi.fn().mockResolvedValue({ data: [], error: null }),
-    }
-    const adminSelectChain = {
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'prefetch failed' } }),
-    }
-    mockSupabaseAdmin.mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        update: vi.fn().mockReturnValue(updateBuilder),
-        select: vi.fn().mockReturnValue(adminSelectChain),
-      }),
-    })
+    const updates = configureAdmin({ prefetchError: new Error('prefetch failed'), updateRows: [] })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('builder is offline', { status: 500 }))
     const context = {
       get: vi.fn().mockReturnValue(requestId),
@@ -474,7 +390,9 @@ describe('build start direct log token', () => {
 
     try {
       await expect(startBuild(context as any, jobId, appId, { key: 'cli-api-key', user_id: userId } as any)).rejects.toThrow()
-      expect(updateBuilder.not).toHaveBeenCalledWith('status', 'in', '(succeeded,failed,expired,released,cancelled)')
+      expect(updates).toHaveLength(1)
+      expect(updates[0].text).toContain('NOT (status = ANY($5::text[]))')
+      expect(updates[0].params[4]).toEqual(['succeeded', 'failed', 'expired', 'released', 'cancelled'])
       expect(mockPersistBuilderBuildOutcome).not.toHaveBeenCalled()
     }
     finally {
@@ -483,12 +401,12 @@ describe('build start direct log token', () => {
   })
 
   it('skips Build Started emission when CAS guard finds no matching row (lost race)', async () => {
-    // Override the default update mock: zero rows returned from .select('id')
+    // Override the default update mock: zero rows returned from RETURNING id
     // simulates another writer having already advanced the row's status before
-    // this request's UPDATE landed. The CAS guard `.eq('status', previousStatus)`
+    // this request's UPDATE landed. The CAS guard `status = previousStatus`
     // matched no rows, so emitBuildTransitionEvent must NOT be called — the
     // winning writer is responsible for emitting.
-    configureUpdateMock({ data: [], error: null })
+    configureAdmin({ updateRows: [] })
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       status: 'running',

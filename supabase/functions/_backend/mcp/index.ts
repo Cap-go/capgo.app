@@ -6,7 +6,7 @@ import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
 import { cloudlog } from '../utils/logging.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
-import { checkKey, supabaseAdmin } from '../utils/supabase.ts'
+import { checkKey } from '../utils/supabase.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
 
@@ -149,7 +149,7 @@ export function createMcpApp(dispatch: McpDispatch) {
     if (!token)
       return unauthorized(c, 'Authentication required', false)
 
-    const apikey = await checkKey(c, token, supabaseAdmin(c))
+    const apikey = await checkKey(c, token)
     if (!apikey) {
       await recordFailedAuth(c)
       return unauthorized(c, 'Invalid or expired Capgo API key', true)

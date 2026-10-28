@@ -5,10 +5,10 @@ import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { BRES, quickError, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
+import type { PgClient } from '../../../utils/pg.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getDrizzleClient, getPgClient, releasePgClient } from '../../../utils/pg.ts'
 import { checkPermission, checkPermissionPg } from '../../../utils/rbac.ts'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
-import { supabaseAdmin } from '../../../utils/supabase.ts'
 
 const deleteBodySchema = z.object({
   orgId: z.string(),
@@ -40,18 +40,21 @@ function priorityRank(value: number | string | null | undefined): number {
 }
 
 async function resolveMemberRemovalTargetUserId(
-  c: Context<MiddlewareKeyVariables>,
+  pgPool: PgClient,
   auth: AuthInfo,
   body: MemberRemovalRequest,
   canManageRoles: boolean,
 ): Promise<string> {
-  const adminClient = supabaseAdmin(c)
   if (canManageRoles) {
-    const { data: userData, error: userError } = await adminClient
-      .from('users')
-      .select('id')
-      .eq('email', body.email)
-      .single()
+    let userData: { id: string } | null = null
+    let userError: unknown = null
+    try {
+      const rows = (await pgPool.query<{ id: string }>('SELECT id FROM public.users WHERE email = $1 LIMIT 2', [body.email])).rows
+      userData = rows.length === 1 ? rows[0] : null
+    }
+    catch (error) {
+      userError = error
+    }
 
     if (userError || !userData)
       throw quickError(404, 'user_not_found', 'User not found', { error: userError })
@@ -61,13 +64,11 @@ async function resolveMemberRemovalTargetUserId(
   if (auth.authType !== 'jwt')
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
 
-  const { data: callerData, error: callerError } = await adminClient
-    .from('users')
-    .select('id, email')
-    .eq('id', auth.userId)
-    .single()
+  const callerData = await pgPool.query<{ id: string, email: string | null }>('SELECT id, email FROM public.users WHERE id = $1', [auth.userId])
+    .then(result => result.rows[0] ?? null)
+    .catch(() => null)
 
-  if (callerError || !callerData || callerData.email?.toLowerCase() !== body.email.toLowerCase())
+  if (!callerData || callerData.email?.toLowerCase() !== body.email.toLowerCase())
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
   return callerData.id
 }
@@ -195,30 +196,43 @@ export async function deleteMember(c: Context<MiddlewareKeyVariables>, bodyRaw: 
 
   // Arbitrary target lookup stays behind role-management permission to avoid user enumeration.
   const canManageRoles = await checkPermission(c, 'org.update_user_roles', { orgId: body.orgId })
-  const targetUserId = await resolveMemberRemovalTargetUserId(c, auth, body, canManageRoles)
-  const adminClient = supabaseAdmin(c)
+  const pgPool = await getPgClient(c)
+  try {
+    const targetUserId = await resolveMemberRemovalTargetUserId(pgPool, auth, body, canManageRoles)
 
-  const { data: existingMembership, error: membershipLookupError } = await adminClient
-    .from('org_users')
-    .select('org_id, user_id')
-    .eq('user_id', targetUserId)
-    .eq('org_id', body.orgId)
-    .is('app_id', null)
-    .is('channel_id', null)
-    .limit(1)
-    .maybeSingle()
+    let existingMembership: { org_id: string, user_id: string } | null = null
+    try {
+      existingMembership = (await pgPool.query<{ org_id: string, user_id: string }>(
+        `SELECT org_id, user_id
+         FROM public.org_users
+         WHERE user_id = $1::uuid
+           AND org_id = $2::uuid
+           AND app_id IS NULL
+           AND channel_id IS NULL
+         LIMIT 1`,
+        [targetUserId, body.orgId],
+      )).rows[0] ?? null
+    }
+    catch (membershipLookupError) {
+      throw simpleError('error_deleting_user_from_organization', 'Error finding user organization membership', { error: membershipLookupError })
+    }
 
-  if (membershipLookupError) {
-    throw simpleError('error_deleting_user_from_organization', 'Error finding user organization membership', { error: membershipLookupError })
+    if (!existingMembership) {
+      throw quickError(404, 'organization_member_not_found', 'User is not a member of this organization', { orgId: body.orgId, email: body.email })
+    }
+
+    await removeMember(c, pgPool, auth, body, targetUserId)
+  }
+  finally {
+    closeClient(c, pgPool)
   }
 
-  if (!existingMembership) {
-    throw quickError(404, 'organization_member_not_found', 'User is not a member of this organization', { orgId: body.orgId, email: body.email })
-  }
+  return c.json(BRES)
+}
 
+async function removeMember(c: Context<MiddlewareKeyVariables>, pgPool: PgClient, auth: AuthInfo, body: MemberRemovalRequest, targetUserId: string) {
   // Pin the transaction to one connection: rank read, cleanup, and membership deletion
   // must share the organization lock with every RBAC mutation trigger.
-  const pgPool = await getPgClient(c)
   let dbClient: PinnedPgClient | undefined
   let transactionOpen = false
   cloudlog({ requestId: c.get('requestId'), message: 'targetUserId', data: targetUserId })
@@ -265,9 +279,7 @@ export async function deleteMember(c: Context<MiddlewareKeyVariables>, bodyRaw: 
   }
   finally {
     releasePgClient(pgPool, dbClient)
-    closeClient(c, pgPool)
   }
 
   cloudlog({ requestId: c.get('requestId'), message: 'User deleted from organization', data: { user_id: targetUserId, org_id: body.orgId } })
-  return c.json(BRES)
 }

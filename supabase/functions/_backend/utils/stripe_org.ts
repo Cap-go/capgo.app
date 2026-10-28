@@ -2,11 +2,18 @@ import type { Context } from 'hono'
 import type { BillingAccount } from './stripe.ts'
 import type { Database } from './supabase.types.ts'
 import { resolveNewOrgTrialEnd } from './direct_offer.ts'
+import type { PgQueryClient } from './pg.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { createCustomer, getPlanProductId, normalizeBillingAccount, planProductIdOrFilter } from './stripe.ts'
+import { queryPlanByProductId } from './stripe_billing.ts'
 import { getDefaultPlan, getStripeCustomer, supabaseAdmin } from './supabase.ts'
 
 type OrgRow = Database['public']['Tables']['orgs']['Row']
+
+function adminQuery<T>(c: Context, run: (client: PgQueryClient) => Promise<T>) {
+  return withRlsContext(c, servicePrincipal, run)
+}
 
 /**
  * Org Stripe customer provisioning lives outside supabase.ts on purpose.
@@ -44,39 +51,52 @@ function isUniqueViolation(error: { code?: string, message?: string } | null | u
 }
 
 async function requireOrg(c: Context, orgId: string) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('*')
-    .eq('id', orgId)
-    .single()
-  if (error || !data) {
+  let data: OrgRow | null = null
+  let errorMessage: string | undefined
+  try {
+    data = (await adminQuery(c, client => queryJson<OrgRow>(client, 'SELECT * FROM public.orgs WHERE id = $1', [orgId])))[0] ?? null
+  }
+  catch (error) {
+    errorMessage = error instanceof Error ? error.message : String(error)
+  }
+  if (!data) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'createStripeCustomer org reload failed',
       orgId,
-      error: error?.message,
+      error: errorMessage,
     })
     throw new Error('createStripeCustomer org reload failed')
   }
   return data
 }
 
-async function linkOrgCustomer(c: Context, orgId: string, observedCustomerId: string | null, customerId: string) {
-  const query = supabaseAdmin(c)
-    .from('orgs')
-    .update({ customer_id: customerId })
-    .eq('id', orgId)
-  const filtered = observedCustomerId == null
-    ? query.is('customer_id', null)
-    : query.eq('customer_id', observedCustomerId)
-  return await filtered.select('customer_id').maybeSingle()
+// Compare-and-set on the customer_id we read, so a concurrent link wins cleanly.
+async function linkOrgCustomer(c: Context, orgId: string, observedCustomerId: string | null, customerId: string): Promise<{ data: { customer_id: string | null } | null, error: unknown }> {
+  try {
+    const result = await adminQuery(c, client => client.query<{ customer_id: string | null }>(
+      'UPDATE public.orgs SET customer_id = $2 WHERE id = $1 AND customer_id IS NOT DISTINCT FROM $3 RETURNING customer_id',
+      [orgId, customerId, observedCustomerId],
+    ))
+    return { data: result.rows[0] ?? null, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+}
+
+async function deleteStripeInfo(c: Context, customerId: string) {
+  try {
+    await adminQuery(c, client => client.query('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId]))
+    return null
+  }
+  catch (error) {
+    return error
+  }
 }
 
 async function deleteUnusedStripeInfo(c: Context, customerId: string) {
-  const { error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .delete()
-    .eq('customer_id', customerId)
+  const error = await deleteStripeInfo(c, customerId)
   if (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
@@ -92,14 +112,8 @@ async function resolveTrialPlan(c: Context, org: OrgRow, billingAccount: Billing
     ? await getStripeCustomer(c, org.customer_id).then(async (stripeInfo) => {
         if (!stripeInfo?.product_id)
           return null
-        const { data, error } = await supabaseAdmin(c)
-          .from('plans')
-          .select()
-          .or(planProductIdOrFilter(stripeInfo.product_id))
-          .maybeSingle()
-        if (error)
-          throw error
-        return data
+        const productId = stripeInfo.product_id
+        return await adminQuery(c, client => queryPlanByProductId(client, productId))
       })
     : null
   const plan = existingStripeInfoPlan ?? await getDefaultPlan(c)
@@ -123,11 +137,10 @@ async function resolveBillingAccountForCreate(c: Context, org: OrgRow): Promise<
 async function trialPlanNameForCustomer(c: Context, customerId: string, fallbackPlanName?: string | null) {
   const stripeInfo = await getStripeCustomer(c, customerId)
   if (stripeInfo?.product_id) {
-    const { data } = await supabaseAdmin(c)
-      .from('plans')
-      .select('name')
-      .or(planProductIdOrFilter(stripeInfo.product_id))
-      .maybeSingle()
+    const productId = stripeInfo.product_id
+    // An invalid product id threw before; only lookup errors fall through to the fallback.
+    planProductIdOrFilter(productId)
+    const data = await adminQuery(c, client => queryPlanByProductId(client, productId)).catch(() => null)
     if (data?.name)
       return data.name
   }
@@ -163,14 +176,16 @@ export async function createStripeCustomer(c: Context, org: OrgRow) {
   const customer = await createCustomer(c, current.management_email, current.created_by, current.id, current.name, billingAccount)
   cloudlog({ requestId: c.get('requestId'), message: 'createInfo', plan: selectedPlan, customer, billingAccount })
 
-  const { error: createInfoError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .insert({
-      product_id: selectedPlan.stripe_id,
-      customer_id: customer.id,
-      trial_at: trial_at.toISOString(),
-      billing_account: billingAccount,
-    })
+  let createInfoError: { code?: string, message?: string } | null = null
+  try {
+    await adminQuery(c, client => client.query(
+      'INSERT INTO public.stripe_info (product_id, customer_id, trial_at, billing_account) VALUES ($1, $2, $3, $4)',
+      [selectedPlan.stripe_id, customer.id, trial_at.toISOString(), billingAccount],
+    ))
+  }
+  catch (error) {
+    createInfoError = error as { code?: string, message?: string }
+  }
   if (createInfoError && !isUniqueViolation(createInfoError)) {
     cloudlog({ requestId: c.get('requestId'), message: 'createInfoError', createInfoError })
     return null
@@ -219,11 +234,8 @@ export async function finalizePendingStripeCustomer(c: Context, org: OrgRow) {
 
   const trialPlanName = await createStripeCustomer(c, org)
 
-  const { data: updatedOrg } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', org.id)
-    .single()
+  const updatedOrg = await adminQuery(c, client => client.query<{ customer_id: string | null }>('SELECT customer_id FROM public.orgs WHERE id = $1', [org.id]))
+    .then(result => result.rows[0] ?? null, () => null)
 
   const linkedCustomerId = updatedOrg?.customer_id
   if (!isProvisionedStripeCustomerId(linkedCustomerId) && !isLocalStripeCustomerId(linkedCustomerId)) {
@@ -235,10 +247,7 @@ export async function finalizePendingStripeCustomer(c: Context, org: OrgRow) {
     return
   }
 
-  const { error: deleteError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .delete()
-    .eq('customer_id', pendingCustomerId)
+  const deleteError = await deleteStripeInfo(c, pendingCustomerId)
   if (deleteError)
     cloudlogErr({ requestId: c.get('requestId'), message: 'finalizePendingStripeCustomer: orphan pending stripe_info', deleteError })
 

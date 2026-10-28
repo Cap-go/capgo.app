@@ -13,14 +13,17 @@ vi.mock('../supabase/functions/_backend/utils/discord.ts', () => ({
   sendDiscordAlert: sendDiscordAlertMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({ maybeSingle: maybeSingleMock }),
-      }),
-    }),
+// maybeSingleMock keeps its supabase-js `{ data, error }` shape; translate it to a pg query result.
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({
+    async query() {
+      const { data, error } = await maybeSingleMock()
+      if (error)
+        throw error
+      return { rows: data ? [data] : [] }
+    },
   }),
+  closeClient: () => {},
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({

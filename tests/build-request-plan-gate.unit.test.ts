@@ -2,16 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestBuild } from '../supabase/functions/_backend/public/build/request.ts'
 
 const {
-  mockSupabaseApikey,
-  mockSupabaseAdmin,
+  mockRlsQuery,
+  mockWithRlsContext,
+  mockGetPgClient,
   mockCheckPermission,
   mockGetEnv,
   mockSendEventToTracking,
   mockAssertNativeBuildConcurrencyAvailable,
   mockGetPlansUpgradeUrl,
 } = vi.hoisted(() => ({
-  mockSupabaseApikey: vi.fn(),
-  mockSupabaseAdmin: vi.fn(),
+  mockRlsQuery: vi.fn(),
+  mockWithRlsContext: vi.fn(),
+  mockGetPgClient: vi.fn(),
   mockCheckPermission: vi.fn(),
   mockGetEnv: vi.fn(),
   mockSendEventToTracking: vi.fn(),
@@ -19,10 +21,15 @@ const {
   mockGetPlansUpgradeUrl: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: mockSupabaseAdmin,
-  supabaseApikey: mockSupabaseApikey,
-}))
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return { ...actual, withRlsContext: mockWithRlsContext }
+})
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>()
+  return { ...actual, getPgClient: mockGetPgClient, closeClient: vi.fn() }
+})
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: mockCheckPermission,
@@ -57,8 +64,10 @@ describe('native build request plan gate', () => {
   }
 
   beforeEach(() => {
-    mockSupabaseApikey.mockReset()
-    mockSupabaseAdmin.mockReset()
+    mockRlsQuery.mockReset()
+    mockWithRlsContext.mockReset()
+    mockGetPgClient.mockReset()
+    mockWithRlsContext.mockImplementation(async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mockRlsQuery }))
     mockCheckPermission.mockReset()
     mockGetEnv.mockReset()
     mockSendEventToTracking.mockReset()
@@ -75,17 +84,18 @@ describe('native build request plan gate', () => {
     mockGetPlansUpgradeUrl.mockReturnValue('https://console.capgo.app/settings/organization/plans')
   })
 
+  function allowBuildTime(allowed: boolean) {
+    mockRlsQuery.mockImplementation(async (text: string) => text.includes('FROM public.apps')
+      ? { rows: [{ owner_org: orgId }] }
+      : { rows: [{ allowed }] })
+  }
+
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
   it('blocks builder job creation when build time action is over plan', async () => {
-    const single = vi.fn().mockResolvedValue({ data: { owner_org: orgId }, error: null })
-    const eq = vi.fn().mockReturnValue({ single })
-    const select = vi.fn().mockReturnValue({ eq })
-    const from = vi.fn().mockReturnValue({ select })
-    const rpc = vi.fn().mockResolvedValue({ data: false, error: null })
-    mockSupabaseApikey.mockReturnValue({ from, rpc })
+    allowBuildTime(false)
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 500 }))
 
@@ -109,15 +119,15 @@ describe('native build request plan gate', () => {
       })
 
       expect(mockCheckPermission).toHaveBeenCalledWith(expect.anything(), 'app.build_native', { appId })
-      expect(from).toHaveBeenCalledWith('apps')
-      expect(rpc).toHaveBeenCalledWith('is_allowed_action_org_action', {
-        orgid: orgId,
-        actions: ['build_time'],
-        appid: appId,
-      })
+      expect(mockWithRlsContext).toHaveBeenCalledWith(expect.anything(), { kind: 'apikey', apikey: 'api-key-build-plan' }, expect.any(Function))
+      expect(mockRlsQuery).toHaveBeenCalledWith('SELECT owner_org FROM public.apps WHERE app_id = $1', [appId])
+      expect(mockRlsQuery).toHaveBeenCalledWith(
+        expect.stringContaining('public.is_allowed_action_org_action(orgid => $1, actions => $2::public.action_type[], appid => $3)'),
+        [orgId, ['build_time'], appId],
+      )
       expect(mockAssertNativeBuildConcurrencyAvailable).not.toHaveBeenCalled()
       expect(fetchMock).not.toHaveBeenCalled()
-      expect(mockSupabaseAdmin).not.toHaveBeenCalled()
+      expect(mockGetPgClient).not.toHaveBeenCalled()
     }
     finally {
       fetchMock.mockRestore()
@@ -126,12 +136,7 @@ describe('native build request plan gate', () => {
 
   it('blocks builder job creation when native build concurrency is already at the plan limit', async () => {
     const { HTTPException } = await import('hono/http-exception')
-    const single = vi.fn().mockResolvedValue({ data: { owner_org: orgId }, error: null })
-    const eq = vi.fn().mockReturnValue({ single })
-    const select = vi.fn().mockReturnValue({ eq })
-    const from = vi.fn().mockReturnValue({ select })
-    const rpc = vi.fn().mockResolvedValue({ data: true, error: null })
-    mockSupabaseApikey.mockReturnValue({ from, rpc })
+    allowBuildTime(true)
     mockAssertNativeBuildConcurrencyAvailable.mockRejectedValue(new HTTPException(429, {
       message: 'Your Solo plan allows 2 concurrent native builds. You already have 2 active. Wait for a build to finish, or upgrade your plan: https://console.capgo.app/settings/organization/plans',
       cause: {
@@ -168,7 +173,7 @@ describe('native build request plan gate', () => {
         userId: 'user-native-build-plan',
       })
       expect(fetchMock).not.toHaveBeenCalled()
-      expect(mockSupabaseAdmin).not.toHaveBeenCalled()
+      expect(mockGetPgClient).not.toHaveBeenCalled()
     }
     finally {
       fetchMock.mockRestore()

@@ -6,7 +6,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createPortal } from '../utils/stripe.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
 interface PortalData {
   callbackUrl: string
@@ -25,21 +25,23 @@ app.post('/', middlewareAuth, async (c) => {
   if (!authorization)
     throw simpleError('not_authorized', 'Not authorized')
 
-  // Use authenticated client - RLS will enforce access based on JWT
-  const supabase = supabaseClient(c, authorization)
-
   // Get current user ID from JWT
   const authContext = c.get('auth')
   if (!authContext?.userId)
     throw simpleError('not_authorized', 'Not authorized')
 
   cloudlog({ requestId: c.get('requestId'), message: 'auth', auth: authContext.userId })
-  const { data: org, error: dbError } = await supabase
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', body.orgId)
-    .single()
-  if (dbError || !org)
+  // Authenticated context - RLS will enforce access based on JWT
+  let org: { customer_id: string | null } | null = null
+  try {
+    org = await withRlsContext(c, authPrincipal(c), client => queryJsonOne<{ customer_id: string | null }>(
+      client,
+      'SELECT customer_id FROM public.orgs WHERE id = $1',
+      [body.orgId],
+    ))
+  }
+  catch {}
+  if (!org)
     throw simpleError('not_authorized', 'Not authorized')
   if (!org.customer_id)
     throw simpleError('no_customer', 'No customer')

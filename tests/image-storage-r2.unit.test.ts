@@ -46,15 +46,22 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: () => ({
-    from: (table: string) => {
-      const query: Record<string, any> = {}
-      query.select = () => query
-      query.eq = () => query
-      query.maybeSingle = async () => (table === 'apps' ? mocks.app : { data: null, error: null })
-      return query
-    },
     storage: { from: () => mocks.supabaseStorage },
   }),
+}))
+
+// mocks.app keeps the supabase-js `{ data, error }` shape of the apps lookup.
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({
+    query: async (text: string) => {
+      expect(text).toContain('FROM public.apps')
+      const { data, error } = mocks.app as { data: unknown, error: unknown }
+      if (error)
+        throw error
+      return { rows: data ? [data] : [] }
+    },
+  }),
+  closeClient: () => {},
 }))
 
 const fetchMock = vi.fn()

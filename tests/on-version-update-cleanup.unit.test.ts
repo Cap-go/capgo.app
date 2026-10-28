@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
-  appVersionsMetaSelectEq,
-  appVersionsMetaUpdate,
-  appVersionsMetaUpdateEq,
+  versionMeta,
   callOrder,
   closeClient,
   createStatsMeta,
@@ -15,33 +13,9 @@ const {
   moveObjectToTrash,
   pgQuery,
   purgeFileReadCache,
-  supabaseAdmin,
-  channelsUpdate,
 } = vi.hoisted(() => {
   const callOrder: string[] = []
-  const appVersionsMetaSelectEq = vi.fn()
-  const appVersionsMetaSelect = vi.fn(() => ({ eq: appVersionsMetaSelectEq }))
-  const appVersionsMetaUpdateEq = vi.fn()
-  const appVersionsMetaUpdate = vi.fn(() => ({ eq: appVersionsMetaUpdateEq }))
-  const channelsUpdateEq = vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) }))
-  const channelsUpdate = vi.fn(() => ({ eq: channelsUpdateEq }))
-  const supabaseFrom = vi.fn((table: string) => {
-    if (table === 'app_versions_meta') {
-      return {
-        select: appVersionsMetaSelect,
-        update: appVersionsMetaUpdate,
-      }
-    }
-    if (table === 'channels') {
-      return {
-        update: channelsUpdate,
-      }
-    }
-    if (table === 'app_versions') {
-      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { manifest: null }, error: null }) }) }) }
-    }
-    return {}
-  })
+  const versionMeta: { value: { size: number } | null } = { value: null }
   const manifestSelectWhere = vi.fn(async (): Promise<any[]> => [])
   // Every suite installs its SQL behavior through mockCleanupPg().
   const pgQuery = vi.fn(async (_sql: string, _params?: any[]): Promise<any> => ({ rows: [], rowCount: 0 }))
@@ -78,11 +52,7 @@ const {
     return true
   })
   return {
-    appVersionsMetaSelectEq,
-    appVersionsMetaUpdate,
-    appVersionsMetaUpdateEq,
-    channelsUpdate,
-    channelsUpdateEq,
+    versionMeta,
     callOrder,
     closeClient: vi.fn(),
     createStatsMeta: vi.fn(),
@@ -97,12 +67,11 @@ const {
       execute: drizzleExecute,
       transaction: drizzleTransaction,
     })),
-    getPgClient: vi.fn(() => ({})),
+    getPgClient: vi.fn(async () => ({ query: pgQuery })),
     manifestSelectWhere,
     moveObjectToTrash,
     pgQuery,
     purgeFileReadCache: vi.fn(async () => {}),
-    supabaseAdmin: vi.fn(() => ({ from: supabaseFrom })),
   }
 })
 
@@ -125,10 +94,6 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
   createStatsMeta,
-}))
-
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
@@ -174,6 +139,8 @@ function mockCleanupPg() {
       return { rows: [{ deleted: true, deleted_at: null }] }
     if (query.includes('WITH prev AS'))
       callOrder.push('finalize')
+    if (query.includes('SELECT size FROM public.app_versions_meta'))
+      return { rows: versionMeta.value ? [{ row: versionMeta.value }] : [] }
     return { rows: [], rowCount: 0 }
   })
 }
@@ -184,8 +151,7 @@ beforeEach(() => {
   mockCleanupPg()
   moveObjectToTrash.mockResolvedValue(true)
   createStatsMeta.mockResolvedValue({ error: null })
-  appVersionsMetaSelectEq.mockReturnValue({ single: vi.fn(async () => ({ data: { size: 1234 }, error: null })) })
-  appVersionsMetaUpdateEq.mockResolvedValue({ error: null })
+  versionMeta.value = { size: 1234 }
 })
 
 describe('deleted version storage boundaries', () => {
@@ -195,9 +161,10 @@ describe('deleted version storage boundaries', () => {
     expect(callOrder).toContain('finalize')
     expect(moveObjectToTrash.mock.calls.map(args => args[1])).toEqual([createVersion().r2_path])
     expect(deleteObject).not.toHaveBeenCalled()
-    expect(channelsUpdate).toHaveBeenCalledTimes(2)
+    const statements = pgQuery.mock.calls.map(([sql]) => sql)
+    expect(statements.filter(sql => sql.startsWith('UPDATE public.channels'))).toHaveLength(2)
     expect(purgeFileReadCache).toHaveBeenCalledWith(createVersion().r2_path, createVersion().checksum)
-    expect(appVersionsMetaUpdate).toHaveBeenCalledWith({ size: 0 })
+    expect(pgQuery).toHaveBeenCalledWith('UPDATE public.app_versions_meta SET size = 0 WHERE id = $1', [123])
     expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), 'com.cleanup.test', 123, -1234)
   })
 
@@ -212,7 +179,7 @@ describe('deleted version storage boundaries', () => {
   })
 
   it('finalizes manifest counters even when metadata is missing', async () => {
-    appVersionsMetaSelectEq.mockReturnValue({ single: vi.fn(async () => ({ data: null, error: { message: 'not found' } })) })
+    versionMeta.value = null
     await deleteIt(createContext(), createVersion({ manifest_count: 1 }))
     expect(callOrder).toContain('finalize')
     expect(moveObjectToTrash).toHaveBeenCalledTimes(1)

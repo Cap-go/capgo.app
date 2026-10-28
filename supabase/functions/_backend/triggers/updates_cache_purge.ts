@@ -26,7 +26,7 @@ import { PLUGIN_ROUTE_HOSTS, PLUGIN_ROUTE_ZONE_NAMES } from '../plugin_runtime/u
 import { updatesCacheTagForScope } from '../plugin_runtime/utils/updatesCacheTag.ts'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 
 /** Cloudflare purge API accepts at most 100 tags per call on every plan. */
@@ -272,6 +272,40 @@ export async function drainUpdatesCachePurge(
   return { purgedApps }
 }
 
+const PURGE_RPC_SQL = {
+  claim_updates_cache_purge: 'SELECT public.claim_updates_cache_purge(p_limit => $1::integer) AS result',
+  ack_updates_cache_purge: 'SELECT public.ack_updates_cache_purge(p_lease_token => $1::uuid, p_success => $2::boolean, p_retry_after_seconds => $3::integer) AS result',
+} as const
+
+/** Drains on one service connection; RPC failures come back as `error` like supabase-js did. */
+async function drainUpdatesCachePurgeWithPg(c: Context) {
+  let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
+  try {
+    pg = await getPgClient(c)
+    const client = pg
+    return await drainUpdatesCachePurge(c, async (fn, args) => {
+      const values = fn === 'claim_updates_cache_purge'
+        ? [args.p_limit]
+        : [args.p_lease_token, args.p_success, args.p_retry_after_seconds]
+      try {
+        const result = await client.query<{ result: unknown }>(PURGE_RPC_SQL[fn], values)
+        return { data: result.rows[0]?.result ?? null, error: null }
+      }
+      catch (error) {
+        return { data: null, error }
+      }
+    })
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge claim failed', error: serializeError(error) })
+    return { purgedApps: 0 }
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
+}
+
 export function shouldForwardPurge(c: Context) {
   return !getPurgeToken(c)
     && !getEnv(c, 'UPDATES_CACHE_LOCAL_PURGE_URL')
@@ -305,6 +339,6 @@ app.post('/', middlewareAPISecret, async (c) => {
     return c.json({ ...BRES, forwarded: true })
   }
   // Answer the wake right away; draining runs in the background.
-  await backgroundTask(c, drainUpdatesCachePurge(c, (fn, args) => supabaseAdmin(c).rpc(fn, args as never)))
+  await backgroundTask(c, drainUpdatesCachePurgeWithPg(c))
   return c.json(BRES)
 })

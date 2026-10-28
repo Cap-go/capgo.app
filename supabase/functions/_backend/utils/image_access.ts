@@ -1,8 +1,8 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import { z } from 'zod'
+import { closeClient, getPgClient } from './pg.ts'
 import { checkPermission, checkPermissionInMemberOrgs } from './rbac.ts'
-import { supabaseAdmin } from './supabase.ts'
 
 // Image objects moved from the Supabase Storage `images` bucket to R2, so the
 // bucket's RLS policies no longer guard them. These checks carry the same rules
@@ -48,13 +48,20 @@ export function parseImagePath(path: string): ParsedImagePath | null {
 async function canWriteAppImage(c: Context<MiddlewareKeyVariables>, orgId: string, appId: string, fileName: string) {
   // Resolve the app with the admin client: an app hidden from the caller must
   // not look missing, or an org.create_app grant could overwrite its icon.
-  const { data: app, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('owner_org, need_onboarding')
-    .eq('app_id', appId)
-    .maybeSingle()
-  if (error)
+  let app: { owner_org: string, need_onboarding: boolean | null } | undefined
+  try {
+    const pg = await getPgClient(c)
+    try {
+      const result = await pg.query<{ owner_org: string, need_onboarding: boolean | null }>('SELECT owner_org, need_onboarding FROM public.apps WHERE app_id = $1 LIMIT 1', [appId])
+      app = result.rows[0]
+    }
+    finally {
+      closeClient(c, pg)
+    }
+  }
+  catch {
     return false
+  }
   if (app && app.owner_org !== orgId)
     return false
   if (app && await checkPermission(c, 'app.update_settings', { orgId, appId }))

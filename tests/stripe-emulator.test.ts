@@ -14,6 +14,35 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: mockedSupabaseAdmin,
 }))
 
+// stripe.ts / stripe_billing.ts now query Postgres directly; replay those reads on the
+// supabase-js style mockedSupabaseAdmin so each case keeps its fixture.
+async function replayOnSupabaseAdmin(text: string, values: unknown[] = []) {
+  const admin = mockedSupabaseAdmin()
+  const unwrap = ({ data, error }: { data: unknown, error: unknown }) => {
+    if (error)
+      throw error
+    return data ? [data] : []
+  }
+  if (text.includes('FROM public.stripe_info'))
+    return unwrap(await admin.from('stripe_info').select('billing_account').eq('customer_id', values[0]).maybeSingle())
+  if (text.includes('SELECT * FROM public.plans'))
+    return unwrap(await admin.from('plans').select('*').or(`stripe_id.eq.${values[0]},stripe_id_us.eq.${values[0]}`).maybeSingle())
+  if (text.includes('FROM public.plans'))
+    return unwrap(await admin.from('plans').select('price_m_id').or(`stripe_id.eq.${values[0]},stripe_id_us.eq.${values[0]}`).single())
+  throw new Error(`unexpected query ${text}`)
+}
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>(),
+  withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => Promise<unknown>) => run({
+    // queryJson wraps the statement in `WITH q AS (...)` and reads `row`.
+    query: async (text: string, values?: unknown[]) => {
+      const rows = await replayOnSupabaseAdmin(text, values)
+      return { rows: text.startsWith('WITH q AS') ? rows.map(row => ({ row })) : rows }
+    },
+  }),
+}))
+
 function createContext() {
   return {
     get: (key: string) => key === 'requestId' ? 'stripe-emulator-test' : undefined,

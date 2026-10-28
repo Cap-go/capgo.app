@@ -17,7 +17,7 @@ import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readStatsVersion } from '../utils/stats.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
 dayjs.extend(utc)
 
@@ -485,31 +485,40 @@ async function resolveChannelVersionFilter(
   if (!auth)
     throw simpleError('not_authenticated', 'Authentication required')
 
-  const supabase = supabaseWithAuth(c, auth)
-  const { data, error } = await supabase
-    .from('deploy_history')
-    .select('app_versions(name)')
-    .eq('channel_id', channelId)
-    .eq('app_id', appId)
+  const { data, channelData } = await withRlsContext(c, authPrincipal(c, auth), async (client) => {
+    let data: { app_versions: { name: string } | null }[]
+    try {
+      // PostgREST capped this read at max_rows (1000).
+      data = await queryJson<{ app_versions: { name: string } | null }>(
+        client,
+        `SELECT (SELECT pg_catalog.json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = dh.version_id) AS app_versions
+        FROM public.deploy_history dh
+        WHERE dh.channel_id = $1 AND dh.app_id = $2
+        LIMIT 1000`,
+        [channelId, appId],
+      )
+    }
+    catch (error) {
+      cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats deploy_history error', error })
+      throw simpleError('fetch_error', 'Failed to fetch channel deployment history')
+    }
 
-  if (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats deploy_history error', error })
-    throw simpleError('fetch_error', 'Failed to fetch channel deployment history')
-  }
+    const channelData = await queryJsonOne<{ name: string, version: { name: string } | null }>(
+      client,
+      `SELECT ch.name, (SELECT pg_catalog.json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = ch.version) AS version
+      FROM public.channels ch
+      WHERE ch.id = $1 AND ch.app_id = $2`,
+      [channelId, appId],
+    ).catch(() => null)
+    return { data, channelData }
+  })
 
   const versionNames = new Set<string>()
-  for (const row of data ?? []) {
-    const name = (row.app_versions as { name?: string } | null)?.name
+  for (const row of data) {
+    const name = row.app_versions?.name
     if (name)
       versionNames.add(name)
   }
-
-  const { data: channelData } = await supabase
-    .from('channels')
-    .select('name, version:app_versions(name)')
-    .eq('id', channelId)
-    .eq('app_id', appId)
-    .single()
 
   const currentName = (channelData?.version as { name?: string } | null)?.name
   if (currentName)
@@ -661,28 +670,28 @@ async function readBundleInstallStatsCF(
     if (!auth)
       throw simpleError('not_authenticated', 'Authentication required')
 
-    const supabase = supabaseWithAuth(c, auth)
     const startDate = start.format('YYYY-MM-DD')
     const endDate = endInclusive.format('YYYY-MM-DD')
 
-    let dailyQuery = supabase
-      .from('daily_version')
-      .select('version_name, install, fail')
-      .eq('app_id', appId)
-      .gte('date', startDate)
-      .lte('date', endDate)
-    if (versionNames?.length)
-      dailyQuery = dailyQuery.in('version_name', versionNames)
-
-    const { data: dailyRows, error } = await dailyQuery
-
-    if (error) {
+    let dailyRows: { version_name: string | null, install: number | null, fail: number | null }[]
+    try {
+      // PostgREST capped this read at max_rows (1000).
+      dailyRows = await withRlsContext(c, authPrincipal(c, auth), client => queryJson<{ version_name: string | null, install: number | null, fail: number | null }>(
+        client,
+        `SELECT version_name, install, fail FROM public.daily_version
+        WHERE app_id = $1 AND date >= $2 AND date <= $3
+          AND ($4::text[] IS NULL OR version_name = ANY($4::text[]))
+        LIMIT 1000`,
+        [appId, startDate, endDate, versionNames?.length ? versionNames : null],
+      ))
+    }
+    catch (error) {
       cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats daily_version error', error })
       throw simpleError('fetch_error', 'Failed to fetch bundle success rates')
     }
 
     const successByVersion = new Map<string, { install: number, fail: number }>()
-    for (const row of dailyRows ?? []) {
+    for (const row of dailyRows) {
       if (!row.version_name)
         continue
       const current = successByVersion.get(row.version_name) ?? { install: 0, fail: 0 }

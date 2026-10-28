@@ -30,7 +30,7 @@ import type { StoredObjectInfo } from '../../utils/s3.ts'
 import { s3, StorageObjectChangedError } from '../../utils/s3.ts'
 import { bundleStorage } from '../../utils/bundle_storage.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
+import { apikeyPrincipal, queryJsonOne, servicePrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { backgroundTask, getEnv, isValidAppId, isValidSemver } from '../../utils/utils.ts'
 import { post as postChannel } from '../channel/post.ts'
 import { getCurrentBundle } from '../channel/current_bundle.ts'
@@ -355,14 +355,17 @@ async function channelsAfterChecksumCheck(c: UploadContext, apikey: ApikeyRow, a
 
 async function findUploadTargetChannel(c: UploadContext, appId: string, channel: string): Promise<UploadTargetChannel | null> {
   // Caller-key read, like the CLI: hidden channels behave as missing.
-  const { data, error } = await supabaseApikey(c, c.get('capgkey') as string)
-    .from('channels')
-    .select('id, public, version, rollout_version, rollout_enabled, rollout_percentage_bps')
-    .eq('app_id', appId)
-    .eq('name', channel)
-    .maybeSingle()
-  if (error)
+  let data: Partial<UploadTargetChannel> | null = null
+  try {
+    data = await withRlsContext(c, apikeyPrincipal(c, c.get('capgkey')), client => queryJsonOne<Partial<UploadTargetChannel>>(
+      client,
+      'SELECT id, public, version, rollout_version, rollout_enabled, rollout_percentage_bps FROM public.channels WHERE app_id = $1 AND name = $2',
+      [appId, channel],
+    ))
+  }
+  catch (error) {
     throw simpleError('cannot_check_channel', `Cannot check channel ${channel}`, { error })
+  }
   if (!data?.id)
     return null
   return {
@@ -487,11 +490,17 @@ async function resolveChannels(c: UploadContext, body: PrepareUploadBody): Promi
       throw simpleError('missing_channel', 'Missing channel name, pass one channel or a list of channels')
     return channels
   }
-  const { data } = await supabaseApikey(c, c.get('capgkey') as string)
-    .from('apps')
-    .select('default_upload_channel')
-    .eq('app_id', body.app_id)
-    .maybeSingle()
+  let data: { default_upload_channel: string | null } | null = null
+  try {
+    data = await withRlsContext(c, apikeyPrincipal(c, c.get('capgkey')), client => queryJsonOne<{ default_upload_channel: string | null }>(
+      client,
+      'SELECT default_upload_channel FROM public.apps WHERE app_id = $1',
+      [body.app_id],
+    ))
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'default upload channel lookup failed', app_id: body.app_id, error })
+  }
   if (!data?.default_upload_channel)
     throw simpleError('missing_default_upload_channel', 'Cannot find default upload channel, pass channel or set it in the app settings', { app_id: body.app_id })
   return parseUploadChannels(data.default_upload_channel)
@@ -579,14 +588,17 @@ export async function prepareBundleUpload(c: UploadContext, rawBody: unknown, ap
   const warnings: string[] = []
   const channels = await resolveChannels(c, body)
 
-  const { data: existing, error: existingError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id, deleted')
-    .eq('app_id', body.app_id)
-    .eq('name', body.version)
-    .maybeSingle()
-  if (existingError)
+  let existing: { id: number, deleted: boolean } | null = null
+  try {
+    existing = await withRlsContext(c, servicePrincipal, client => queryJsonOne<{ id: number, deleted: boolean }>(
+      client,
+      'SELECT id, deleted FROM public.app_versions WHERE app_id = $1 AND name = $2',
+      [body.app_id, body.version],
+    ))
+  }
+  catch (existingError) {
     throw simpleError('cannot_check_version', 'Cannot check bundle version', { error: existingError })
+  }
   if (existing) {
     if (body.version_exists_ok)
       return c.json({ ...BRES, skipped: true, reason: 'VERSION_EXISTS', app_id: body.app_id, version: body.version })
@@ -805,13 +817,19 @@ async function readClaims(c: UploadContext, rawBody: unknown, apikey: ApikeyRow,
 }
 
 async function loadSessionVersion(c: UploadContext, claims: UploadSessionClaims) {
-  const { data: version, error } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id, name, app_id, owner_org, storage_provider, deleted, r2_path, session_key, checksum, native_packages, min_update_version, updated_at')
-    .eq('id', claims.version_id)
-    .maybeSingle()
-  if (error)
+  type VersionRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name' | 'app_id' | 'owner_org' | 'storage_provider' | 'deleted' | 'r2_path' | 'session_key' | 'checksum' | 'native_packages' | 'min_update_version' | 'updated_at'>
+  let version: VersionRow | null = null
+  try {
+    // JSON rows keep updated_at in PostgREST's text form; claimSession matches on it.
+    version = await withRlsContext(c, servicePrincipal, client => queryJsonOne<VersionRow>(
+      client,
+      'SELECT id, name, app_id, owner_org, storage_provider, deleted, r2_path, session_key, checksum, native_packages, min_update_version, updated_at FROM public.app_versions WHERE id = $1',
+      [claims.version_id],
+    ))
+  }
+  catch (error) {
     throw quickError(503, 'upstream_unavailable', 'Cannot load the upload session version', { error })
+  }
   if (!version || version.app_id !== claims.app_id || version.name !== claims.version || version.owner_org !== claims.owner_org)
     throw quickError(404, 'upload_session_not_found', 'The bundle version for this upload session no longer exists')
   return version
@@ -847,33 +865,44 @@ function sessionState(version: SessionVersion, claims: UploadSessionClaims, abor
 /** Atomically take the upload for this complete call; losers get 409 upload_in_progress. */
 async function claimSession(c: UploadContext, claims: UploadSessionClaims, version: SessionVersion) {
   const state = sessionState(version, claims)
-  let query = supabaseAdmin(c)
-    .from('app_versions')
-    .update({ r2_path: null })
-    .eq('id', claims.version_id)
-    .eq('storage_provider', 'r2-direct')
-    .eq('deleted', false)
-  query = state === 'open'
-    ? query.eq('r2_path', claims.bundle_path)
-    : query.is('r2_path', null).eq('updated_at', version.updated_at!)
-  const { data, error } = await query.select('id').maybeSingle()
-  if (error)
+  let claimed = false
+  try {
+    claimed = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = state === 'open'
+        ? await client.query(
+            `UPDATE public.app_versions SET r2_path = NULL
+            WHERE id = $1 AND storage_provider = 'r2-direct' AND deleted = false AND r2_path = $2
+            RETURNING id`,
+            [claims.version_id, claims.bundle_path],
+          )
+        : await client.query(
+            `UPDATE public.app_versions SET r2_path = NULL
+            WHERE id = $1 AND storage_provider = 'r2-direct' AND deleted = false AND r2_path IS NULL AND updated_at = $2::timestamptz
+            RETURNING id`,
+            [claims.version_id, version.updated_at!],
+          )
+      return result.rows.length === 1
+    })
+  }
+  catch (error) {
     throw quickError(503, 'upstream_unavailable', 'Cannot claim the upload session, retry complete', { error })
-  if (!data)
+  }
+  if (!claimed)
     throw quickError(409, 'upload_in_progress', 'Another call changed this upload session. Wait for it to return, then check the bundle.', { version: claims.version })
 }
 
 /** Give the claim back after a retryable failure so complete (or abort) can run again. */
 async function releaseClaim(c: UploadContext, claims: UploadSessionClaims) {
-  const { error } = await supabaseAdmin(c)
-    .from('app_versions')
-    .update({ r2_path: claims.bundle_path })
-    .eq('id', claims.version_id)
-    .eq('storage_provider', 'r2-direct')
-    .eq('deleted', false)
-    .is('r2_path', null)
-  if (error)
+  try {
+    await withRlsContext(c, servicePrincipal, client => client.query(
+      `UPDATE public.app_versions SET r2_path = $2
+      WHERE id = $1 AND storage_provider = 'r2-direct' AND deleted = false AND r2_path IS NULL`,
+      [claims.version_id, claims.bundle_path],
+    ))
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'bundle upload claim release failed', version_id: claims.version_id, error })
+  }
 }
 
 async function removeSessionObjects(c: UploadContext, claims: UploadSessionClaims, includeBundle: boolean) {
@@ -1096,12 +1125,17 @@ async function writeDeltaManifest(
 async function linkedVersionOf(c: UploadContext, appId: string, versionId: number | null) {
   if (!versionId)
     return null
-  const { data } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id, name, deleted')
-    .eq('app_id', appId)
-    .eq('id', versionId)
-    .maybeSingle()
+  let data: { id: number, name: string, deleted: boolean } | null = null
+  try {
+    data = await withRlsContext(c, servicePrincipal, client => queryJsonOne<{ id: number, name: string, deleted: boolean }>(
+      client,
+      'SELECT id, name, deleted FROM public.app_versions WHERE app_id = $1 AND id = $2',
+      [appId, versionId],
+    ))
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'linked version lookup failed', app_id: appId, version_id: versionId, error })
+  }
   return data && !data.deleted ? { id: data.id, name: data.name } : null
 }
 
@@ -1307,25 +1341,37 @@ async function finishClaimedUpload(c: UploadContext, claims: UploadSessionClaims
   await promoteStagedBundle(c, claims, staged)
 
   // Finalize by id, only while this call still holds the claim; legacy manifest jsonb stays null.
-  const { data: finalized, error: finalizeError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .update({
-      storage_provider: 'r2',
-      r2_path: claims.bundle_path,
-      ...(version.checksum ? {} : { checksum }),
-      ...(minUpdateVersion !== (version.min_update_version ?? null) ? { min_update_version: minUpdateVersion } : {}),
+  let finalized = false
+  try {
+    const setChecksum = !version.checksum
+    const setMinUpdateVersion = minUpdateVersion !== (version.min_update_version ?? null)
+    finalized = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = await client.query(
+        `UPDATE public.app_versions SET
+          storage_provider = 'r2',
+          r2_path = $2,
+          checksum = CASE WHEN $3::boolean THEN $4 ELSE checksum END,
+          min_update_version = CASE WHEN $5::boolean THEN $6 ELSE min_update_version END
+        WHERE id = $1 AND storage_provider = 'r2-direct' AND deleted = false AND r2_path IS NULL
+        RETURNING id`,
+        [claims.version_id, claims.bundle_path, setChecksum, setChecksum ? checksum : null, setMinUpdateVersion, setMinUpdateVersion ? minUpdateVersion : null],
+      )
+      return result.rows.length === 1
     })
-    .eq('id', claims.version_id)
-    .eq('storage_provider', 'r2-direct')
-    .eq('deleted', false)
-    .is('r2_path', null)
-    .select('id')
-    .maybeSingle()
-  if (finalizeError)
+  }
+  catch (finalizeError) {
     throw quickError(503, 'upstream_unavailable', 'Cannot finalize the bundle version, retry complete', { error: finalizeError })
+  }
   if (!finalized) {
     // The row was removed (or re-claimed) under us: the copied zip has no owner any more.
-    const { data: still } = await supabaseAdmin(c).from('app_versions').select('id').eq('id', claims.version_id).maybeSingle()
+    let still = false
+    try {
+      still = await withRlsContext(c, servicePrincipal, async client =>
+        (await client.query('SELECT id FROM public.app_versions WHERE id = $1', [claims.version_id])).rows.length === 1)
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'finalize version recheck failed', version_id: claims.version_id, error })
+    }
     if (!still)
       await removeSessionObjects(c, claims, true)
     throw quickError(409, 'upload_session_invalid', 'The bundle version changed while complete was running', { version: claims.version })

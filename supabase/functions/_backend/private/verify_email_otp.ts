@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import { z } from 'zod'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { createHono, parseBody, quickError, simpleError, simpleRateLimit, useCors } from '../utils/hono.ts'
@@ -5,7 +6,9 @@ import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { clearFailedAccountAuth, isAccountRateLimited, recordFailedAccountAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
-import { emptySupabase, supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { withRlsContext } from '../utils/pg_rls.ts'
+import { emptySupabase } from '../utils/supabase.ts'
 import { version } from '../utils/version.ts'
 
 const bodySchema = z.object({
@@ -18,12 +21,20 @@ export const app = createHono('', version)
 
 app.use('/', useCors)
 
-export async function verifyEmailOtpAuthSession(c: Parameters<typeof supabaseClient>[0], accessToken: string) {
-  const { data, error } = await supabaseClient(c, `Bearer ${accessToken}`).rpc('verify_email_otp_auth')
-
-  return {
-    verified: data === true,
-    error,
+// Runs verify_email_otp_auth as the OTP session itself, so auth.jwt() carries that session's amr claims.
+export async function verifyEmailOtpAuthSession(c: Context, accessToken: string): Promise<{ verified: boolean, error: { message: string } | null }> {
+  const claims = await getClaimsFromJWT(c, `Bearer ${accessToken}`)
+  if (!claims?.sub)
+    return { verified: false, error: { message: 'Invalid JWT' } }
+  try {
+    const verified = await withRlsContext(c, { kind: 'jwt', userId: claims.sub, claims }, async (client) => {
+      const { rows } = await client.query<{ verified: boolean | null }>('SELECT public.verify_email_otp_auth() AS verified')
+      return rows[0]?.verified
+    })
+    return { verified: verified === true, error: null }
+  }
+  catch (error) {
+    return { verified: false, error: error instanceof Error ? error : { message: String(error) } }
   }
 }
 
@@ -136,9 +147,17 @@ app.post('/', middlewareAuth, async (c) => {
   await clearFailedAccountAuth(c, auth.userId)
 
   const otpVerifiedAt = new Date().toISOString()
-  const { error: recordError } = await supabaseAdmin(c).rpc('record_email_otp_verified', {
-    p_user_id: verifyData.user.id,
-  })
+  let recordError: { message?: string } | null = null
+  const pg = await getPgClient(c)
+  try {
+    await pg.query('SELECT public.record_email_otp_verified(p_user_id => $1)', [verifyData.user.id])
+  }
+  catch (error) {
+    recordError = error instanceof Error ? error : { message: String(error) }
+  }
+  finally {
+    closeClient(c, pg)
+  }
 
   if (recordError) {
     cloudlog({ requestId: c.get('requestId'), context: 'verify_email_otp - record failed', error: recordError?.message })

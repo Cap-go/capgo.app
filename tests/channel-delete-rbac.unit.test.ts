@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const checkPermissionMock = vi.fn()
-const supabaseApikeyMock = vi.fn()
 const closeClientMock = vi.fn()
 const getPgClientMock = vi.fn()
 const logPgErrorMock = vi.fn()
@@ -21,30 +20,25 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => ({
   closeClient: (...args: unknown[]) => closeClientMock(...args),
   getPgClient: (...args: unknown[]) => getPgClientMock(...args),
   logPgError: (...args: unknown[]) => logPgErrorMock(...args),
+  getDrizzleClient: () => ({}),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: (...args: unknown[]) => supabaseApikeyMock(...args),
-}))
-
+const { jsonRows } = await import('./helpers/pg-checkout-release-mocks.ts')
 const { deleteChannel } = await import('../supabase/functions/_backend/public/channel/delete.ts')
 
-function createChannelBuilder() {
-  const deleteResult = {
-    data: [{ id: 42 }],
-    error: null,
+// Non-preview path: the lookup and the delete each run in their own API-key RLS transaction.
+function createChannelDeleteQuery(deletedRows: unknown[] = [{ id: 42 }]) {
+  return async (text: string) => {
+    if (text.includes('DELETE FROM public.channels'))
+      return jsonRows(deletedRows)
+    if (text.includes('SELECT id FROM public.channels'))
+      return jsonRows([{ id: 42 }])
+    return { rowCount: 0, rows: [] }
   }
-  const builder = {
-    delete: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    select: vi.fn(),
-    single: vi.fn().mockResolvedValue({
-      data: { id: 42 },
-      error: null,
-    }),
-  }
-  builder.select.mockImplementation(() => builder.delete.mock.calls.length > 0 ? Promise.resolve(deleteResult) : builder)
-  return { ...builder, deleteResult }
+}
+
+function channelDeleteCalls() {
+  return queryMock.mock.calls.filter(([text]) => String(text).includes('DELETE FROM public.channels'))
 }
 
 function context() {
@@ -102,7 +96,6 @@ function createPreviewDeleteQuery(appOwner = PREVIEW_ORG) {
 }
 
 describe('channel delete RBAC guard', () => {
-  let channelBuilder: ReturnType<typeof createChannelBuilder>
   let c: ReturnType<typeof context>
 
   beforeEach(() => {
@@ -110,16 +103,9 @@ describe('channel delete RBAC guard', () => {
     queryMock.mockReset()
     getPgClientMock.mockReturnValue(pgClientMock)
     connectMock.mockResolvedValue({ query: queryMock, release: releaseMock })
-    channelBuilder = createChannelBuilder()
+    queryMock.mockImplementation(createChannelDeleteQuery())
     c = context()
     checkPermissionMock.mockResolvedValue(true)
-    supabaseApikeyMock.mockReturnValue({
-      from: vi.fn((table: string) => {
-        if (table !== 'channels')
-          throw new Error(`Unexpected table: ${table}`)
-        return channelBuilder
-      }),
-    })
   })
 
   it('checks delete permission against the target channel', async () => {
@@ -134,19 +120,25 @@ describe('channel delete RBAC guard', () => {
       appId: 'com.example.app',
       channelId: 42,
     })
-    expect(channelBuilder.delete).toHaveBeenCalledTimes(1)
-    expect(channelBuilder.eq).toHaveBeenCalledWith('id', 42)
+    expect(channelDeleteCalls()).toHaveLength(1)
+    expect(channelDeleteCalls()[0][1]).toEqual([42, 'com.example.app', 'production'])
+    // Both reads run as the API key, like the supabaseApikey client did.
+    const contextCalls = queryMock.mock.calls.filter(([text]) => String(text).includes('request.headers'))
+    expect(contextCalls).toHaveLength(2)
+    for (const [, values] of contextCalls)
+      expect(values).toEqual([JSON.stringify({ role: 'anon' }), '', 'anon', JSON.stringify({ capgkey: 'test-apikey' }), 'anon'])
   })
 
   it('fails when channel deletion affects no rows', async () => {
-    channelBuilder.deleteResult.data = []
+    queryMock.mockImplementation(createChannelDeleteQuery([]))
 
     await expect(deleteChannel(c as any, {
       app_id: 'com.example.app',
       channel: 'production',
     }, { key: 'test-apikey' } as any)).rejects.toHaveProperty('status', 400)
 
-    expect(channelBuilder.select).toHaveBeenCalledWith('id')
+    expect(channelDeleteCalls()).toHaveLength(1)
+    expect(String(channelDeleteCalls()[0][0])).toContain('RETURNING id')
   })
 
   it('does not delete the channel when channel-scoped delete is denied', async () => {
@@ -162,7 +154,7 @@ describe('channel delete RBAC guard', () => {
       appId: 'com.example.app',
       channelId: 42,
     })
-    expect(channelBuilder.delete).not.toHaveBeenCalled()
+    expect(channelDeleteCalls()).toHaveLength(0)
   })
   it('locks the org and app before preview channel rows', async () => {
     queryMock.mockImplementation(createPreviewDeleteQuery())

@@ -2,6 +2,9 @@ import type { Context } from 'hono'
 import type Stripe from 'stripe'
 import type { MetricBreakdown } from '../utils/credits.ts'
 import type { AuthInfo, MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
+import type { RlsPrincipal } from '../utils/pg_rls.ts'
+import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import {
   getAutoTopUpSettings,
@@ -14,9 +17,10 @@ import { getFallbackCreditProductId, priceCreditTiers } from '../utils/credits.t
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { authPrincipal, queryJson, servicePrincipal, withRlsTransaction } from '../utils/pg_rls.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createOneTimeCheckout, getBillingAccountForCustomer, getCreditCheckoutDetails, getStripe, isStripeEmulatorEnabled, planProductIdOrFilter, resolvePlanCreditProductId } from '../utils/stripe.ts'
-import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface CreditStep {
@@ -77,6 +81,31 @@ const DEFAULT_TOP_UP_QUANTITY = 100
 const MAX_TOP_UP_QUANTITY = 100000
 
 type AppContext = Context<MiddlewareKeyVariables>
+type PlanRow = Database['public']['Tables']['plans']['Row']
+
+// One connection per request; each read runs in its own transaction as `principal`.
+interface CallerDb { pg: PgClient, principal: RlsPrincipal }
+
+function callerQuery<T>(db: CallerDb, text: string, values: unknown[] = []): Promise<T[]> {
+  return withRlsTransaction(db.pg, db.principal, client => queryJson<T>(client, text, values))
+}
+
+// `.single()`: exactly one row, otherwise PostgREST's PGRST116 error.
+function singleRow<T>(rows: T[]): T {
+  if (rows.length !== 1)
+    throw Object.assign(new Error('JSON object requested, multiple (or no) rows returned'), { code: 'PGRST116' })
+  return rows[0]!
+}
+
+async function withCallerDb<T>(c: AppContext, run: (db: CallerDb) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await run({ pg, principal: authPrincipal(c) })
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
 
 function sortCreditSteps(steps: CreditStep[]): CreditStep[] {
   return [...steps].sort((a, b) => {
@@ -167,6 +196,7 @@ async function requireOrgScopedPricingAccess(c: AppContext, orgId: string, autho
     authType: 'jwt',
     apikey: null,
     jwt: authorization,
+    claims,
   } satisfies AuthInfo)
 
   if (!await checkPermission(c, 'org.read', { orgId })) {
@@ -179,57 +209,57 @@ async function getScopedCreditSteps(c: AppContext, orgId?: string): Promise<Cred
     ?? c.req.header('Authorization')
     ?? c.get('authorization')
 
-  let pricingClient: ReturnType<typeof supabaseAdmin> | ReturnType<typeof supabaseClient> | undefined
+  let principal: RlsPrincipal
   if (orgId) {
     if (!authorization) {
       throw simpleError('not_authorized', 'Not authorized')
     }
 
     await requireOrgScopedPricingAccess(c, orgId, authorization)
-    pricingClient = supabaseClient(c, authorization)
+    principal = authPrincipal(c)
   }
   else {
-    pricingClient = supabaseAdmin(c)
+    principal = servicePrincipal
   }
 
-  if (!pricingClient)
-    throw simpleError('not_authorized', 'Not authorized')
-
-  const scopedPricingClient = pricingClient
-
-  const [globalCreditsResult, orgCreditsResult] = await Promise.all([
-    scopedPricingClient
-      .from('capgo_credits_steps')
-      .select()
-      .is('org_id', null),
-    orgId
-      ? scopedPricingClient
-          .from('capgo_credits_steps')
-          .select()
-          .eq('org_id', orgId)
-      : Promise.resolve({ data: [] as CreditStep[], error: null }),
-  ])
-
-  const { data: globalCredits, error: globalCreditsError } = globalCreditsResult
-  const { data: orgCredits, error: orgCreditsError } = orgCreditsResult
-
-  if (globalCreditsError || orgCreditsError)
+  let globalCredits: CreditStep[] = []
+  let orgCredits: CreditStep[] = []
+  const pg = await getPgClient(c)
+  try {
+    await withRlsTransaction(pg, principal, async (client) => {
+      globalCredits = await queryJson<CreditStep>(client, 'SELECT * FROM public.capgo_credits_steps WHERE org_id IS NULL LIMIT 1000')
+      if (orgId)
+        orgCredits = await queryJson<CreditStep>(client, 'SELECT * FROM public.capgo_credits_steps WHERE org_id = $1 LIMIT 1000', [orgId])
+    })
+  }
+  catch {
     throw simpleError('failed_to_fetch_pricing_data', 'Failed to fetch pricing data')
+  }
+  finally {
+    closeClient(c, pg)
+  }
 
   return preferScopedCreditSteps([
-    ...((globalCredits ?? []) as CreditStep[]),
-    ...((orgCredits ?? []) as CreditStep[]),
+    ...globalCredits,
+    ...orgCredits,
   ], orgId)
 }
 
-async function getCreditTopUpProductId(c: AppContext, customerId: string, token: string): Promise<{ productId: string }> {
+async function getCreditTopUpProductId(c: AppContext, db: CallerDb, customerId: string): Promise<{ productId: string }> {
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
-  const supabase = supabaseClient(c, token)
-  const { data: stripeInfo, error: stripeInfoError } = await supabase
-    .from('stripe_info')
-    .select('product_id')
-    .eq('customer_id', customerId)
-    .single()
+  const fetchSoloPlan = async () => {
+    const data = singleRow(await callerQuery<PlanRow>(db, 'SELECT * FROM public.plans WHERE name = $1 LIMIT 2', ['Solo']))
+    return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
+  }
+
+  let stripeInfo: { product_id: string | null } | null = null
+  let stripeInfoError: unknown = null
+  try {
+    stripeInfo = singleRow(await callerQuery<{ product_id: string | null }>(db, 'SELECT product_id FROM public.stripe_info WHERE customer_id = $1 LIMIT 2', [customerId]))
+  }
+  catch (error) {
+    stripeInfoError = error
+  }
 
   if (stripeInfoError || !stripeInfo?.product_id) {
     const log = stripeInfoError ? cloudlogErr : cloudlog
@@ -239,24 +269,19 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
       customerId,
       error: stripeInfoError,
     })
-    const productId = await getFallbackCreditProductId(c, customerId, async () => {
-      const { data, error } = await supabase
-        .from('plans')
-        .select('*')
-        .eq('name', 'Solo')
-        .single()
-      if (error)
-        throw error
-      return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
-    })
+    const productId = await getFallbackCreditProductId(c, customerId, fetchSoloPlan)
     return { productId }
   }
 
-  const { data: plan, error: planError } = await supabase
-    .from('plans')
-    .select('*')
-    .or(planProductIdOrFilter(stripeInfo.product_id))
-    .single()
+  planProductIdOrFilter(stripeInfo.product_id)
+  let plan: PlanRow | null = null
+  let planError: unknown = null
+  try {
+    plan = singleRow(await callerQuery<PlanRow>(db, 'SELECT * FROM public.plans WHERE stripe_id = $1 OR stripe_id_us = $1 LIMIT 2', [stripeInfo.product_id]))
+  }
+  catch (error) {
+    planError = error
+  }
 
   if (planError || !plan) {
     cloudlogErr({
@@ -266,38 +291,20 @@ async function getCreditTopUpProductId(c: AppContext, customerId: string, token:
       planStripeId: stripeInfo.product_id,
       error: planError,
     })
-    const productId = await getFallbackCreditProductId(c, customerId, async () => {
-      const { data, error } = await supabase
-        .from('plans')
-        .select('*')
-        .eq('name', 'Solo')
-        .single()
-      if (error)
-        throw error
-      return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
-    })
+    const productId = await getFallbackCreditProductId(c, customerId, fetchSoloPlan)
     return { productId }
   }
 
   const productId = resolvePlanCreditProductId(plan, billingAccount)
   if (!productId) {
-    const fallbackProductId = await getFallbackCreditProductId(c, customerId, async () => {
-      const { data, error } = await supabase
-        .from('plans')
-        .select('*')
-        .eq('name', 'Solo')
-        .single()
-      if (error)
-        throw error
-      return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
-    })
+    const fallbackProductId = await getFallbackCreditProductId(c, customerId, fetchSoloPlan)
     return { productId: fallbackProductId }
   }
 
   return { productId }
 }
 
-async function resolveOrgStripeContext(c: AppContext, orgId: string) {
+async function resolveOrgStripeContext(c: AppContext, db: CallerDb, orgId: string) {
   const rawAuthHeader = c.req.header('authorization')
     ?? c.req.header('Authorization')
     ?? c.get('authorization')
@@ -308,41 +315,43 @@ async function resolveOrgStripeContext(c: AppContext, orgId: string) {
   if (!await checkPermission(c, 'org.update_billing', { orgId }))
     throw simpleError('not_authorized', 'Not authorized')
 
-  // Use authenticated client - RLS will enforce access based on JWT
-  const supabase = supabaseClient(c, rawAuthHeader)
+  // Run as the caller - RLS will block if user doesn't have access to the org
+  let org: { customer_id: string | null } | undefined
+  try {
+    const rows = await callerQuery<{ customer_id: string | null }>(db, 'SELECT customer_id FROM public.orgs WHERE id = $1', [orgId])
+    org = rows.length === 1 ? rows[0] : undefined
+  }
+  catch {}
 
-  // Get org - RLS will block if user doesn't have access
-  const { data: org, error: orgError } = await supabase
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', orgId)
-    .single()
-
-  if (orgError || !org?.customer_id)
+  if (!org?.customer_id)
     throw simpleError('stripe_customer_missing', 'Organization does not have a Stripe customer or you don\'t have access')
 
-  return { customerId: org.customer_id, token: rawAuthHeader }
+  return { customerId: org.customer_id }
+}
+
+// `source_ref->>sessionId = $3 OR source_ref->>paymentIntentId = $4` for this org's purchases.
+function findTopUpTransactions<T>(db: CallerDb, columns: string, orgId: string, sessionId: string, paymentIntentId?: string | null) {
+  return callerQuery<T>(
+    db,
+    `SELECT ${columns} FROM public.usage_credit_transactions
+    WHERE org_id = $1 AND transaction_type = $2
+      AND (source_ref->>'sessionId' = $3${paymentIntentId ? ' OR source_ref->>\'paymentIntentId\' = $4' : ''})
+    LIMIT 1`,
+    paymentIntentId ? [orgId, 'purchase', sessionId, paymentIntentId] : [orgId, 'purchase', sessionId],
+  )
 }
 
 async function hasProcessedCreditTopUp(
-  supabase: ReturnType<typeof supabaseClient>,
+  db: CallerDb,
   orgId: string,
   sessionId: string,
   paymentIntentId?: string | null,
 ) {
-  const sourceMatchFilters = [`source_ref->>sessionId.eq.${sessionId}`]
-  if (paymentIntentId)
-    sourceMatchFilters.push(`source_ref->>paymentIntentId.eq.${paymentIntentId}`)
-
-  const { data, error } = await supabase
-    .from('usage_credit_transactions')
-    .select('id')
-    .eq('org_id', orgId)
-    .eq('transaction_type', 'purchase')
-    .or(sourceMatchFilters.join(','))
-    .limit(1)
-
-  if (error) {
+  let data: { id: number }[] = []
+  try {
+    data = await findTopUpTransactions<{ id: number }>(db, 'id', orgId, sessionId, paymentIntentId)
+  }
+  catch (error) {
     cloudlogErr({
       message: 'credit_top_up_candidate_check_failed',
       orgId,
@@ -352,7 +361,7 @@ async function hasProcessedCreditTopUp(
     throw simpleError('idempotency_check_failed', 'Failed to verify top-up status', { error })
   }
 
-  return Boolean(data?.length)
+  return Boolean(data.length)
 }
 
 function getCheckoutSessionPaymentIntentId(session: Stripe.Checkout.Session): string | null {
@@ -364,7 +373,7 @@ function getCheckoutSessionPaymentIntentId(session: Stripe.Checkout.Session): st
 async function resolveCheckoutSession(
   c: AppContext,
   stripe: ReturnType<typeof getStripe>,
-  supabase: ReturnType<typeof supabaseClient>,
+  db: CallerDb,
   orgId: string,
   customerId: string,
   sessionId?: string,
@@ -414,7 +423,7 @@ async function resolveCheckoutSession(
   let unresolvedSession: Stripe.Checkout.Session | null = null
   for (const candidateSession of candidateSessions) {
     const paymentIntentId = getCheckoutSessionPaymentIntentId(candidateSession)
-    if (await hasProcessedCreditTopUp(supabase, orgId, candidateSession.id, paymentIntentId))
+    if (await hasProcessedCreditTopUp(db, orgId, candidateSession.id, paymentIntentId))
       continue
 
     if (unresolvedSession) {
@@ -514,13 +523,15 @@ app.post('/start-top-up', middlewareAuth, async (c) => {
   if (!body.orgId)
     throw simpleError('missing_org_id', 'Organization id is required')
 
-  const { customerId, token } = await resolveOrgStripeContext(c, body.orgId)
+  const orgId = body.orgId
+  const { customerId, productId } = await withCallerDb(c, async (db) => {
+    const { customerId } = await resolveOrgStripeContext(c, db, orgId)
+    return { customerId, ...await getCreditTopUpProductId(c, db, customerId) }
+  })
 
   const baseUrl = getEnv(c, 'WEBAPP_URL')
   const successUrl = `${baseUrl}/settings/organization/credits?creditCheckout=success&session_id={CHECKOUT_SESSION_ID}`
   const cancelUrl = `${baseUrl}/settings/organization/credits?creditCheckout=cancelled`
-
-  const { productId } = await getCreditTopUpProductId(c, customerId, token)
 
   cloudlog({
     requestId: c.get('requestId'),
@@ -554,12 +565,15 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   if (!body.orgId)
     throw simpleError('missing_parameters', 'orgId is required')
 
-  const { customerId, token } = await resolveOrgStripeContext(c, body.orgId)
-  const supabase = supabaseClient(c, token)
+  return withCallerDb(c, db => completeTopUp(c, db, body))
+})
+
+async function completeTopUp(c: AppContext, db: CallerDb, body: CompleteTopUpRequest) {
+  const { customerId } = await resolveOrgStripeContext(c, db, body.orgId)
 
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
   const stripe = getStripe(c, billingAccount)
-  const session = await resolveCheckoutSession(c, stripe, supabase, body.orgId, customerId, body.sessionId)
+  const session = await resolveCheckoutSession(c, stripe, db, body.orgId, customerId, body.sessionId)
   const resolvedSessionId = session.id
 
   if (!session || session.customer !== customerId)
@@ -571,7 +585,7 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   if (session.payment_status !== 'paid' || session.status !== 'complete')
     throw simpleError('session_not_paid', 'Checkout session is not paid')
 
-  const { productId } = await getCreditTopUpProductId(c, customerId, token)
+  const { productId } = await getCreditTopUpProductId(c, db, customerId)
   const paymentIntentId = getCheckoutSessionPaymentIntentId(session)
 
   const { creditQuantity, itemsSummary } = await getCreditCheckoutDetails(c, session, productId, billingAccount)
@@ -579,19 +593,11 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   if (creditQuantity <= 0)
     throw simpleError('credit_product_not_found', 'Checkout session does not include the credit product')
 
-  const sourceMatchFilters = [`source_ref->>sessionId.eq.${resolvedSessionId}`]
-  if (paymentIntentId)
-    sourceMatchFilters.push(`source_ref->>paymentIntentId.eq.${paymentIntentId}`)
-
-  const { data: existingTx, error: existingTxError } = await supabase
-    .from('usage_credit_transactions')
-    .select('id, grant_id, balance_after')
-    .eq('org_id', body.orgId)
-    .eq('transaction_type', 'purchase')
-    .or(sourceMatchFilters.join(','))
-    .limit(1)
-
-  if (existingTxError) {
+  let existingTx: { id: number, grant_id: string | null, balance_after: number | null }[] = []
+  try {
+    existingTx = await findTopUpTransactions(db, 'id, grant_id, balance_after', body.orgId, resolvedSessionId, paymentIntentId)
+  }
+  catch (existingTxError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'credit_top_up_idempotency_check_failed',
@@ -603,14 +609,18 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
     throw simpleError('idempotency_check_failed', 'Failed to verify top-up status', { error: existingTxError })
   }
 
-  const matchedTx = existingTx?.[0]
+  const matchedTx = existingTx[0]
 
   if (matchedTx) {
-    const { data: balance } = await supabase
-      .from('usage_credit_balances')
-      .select('total_credits, available_credits, next_expiration')
-      .eq('org_id', body.orgId)
-      .single()
+    let balance: { total_credits: number | null, available_credits: number | null, next_expiration: string | null } | null = null
+    try {
+      balance = singleRow(await callerQuery<{ total_credits: number | null, available_credits: number | null, next_expiration: string | null }>(
+        db,
+        'SELECT total_credits, available_credits, next_expiration FROM public.usage_credit_balances WHERE org_id = $1 LIMIT 2',
+        [body.orgId],
+      ))
+    }
+    catch {}
 
     cloudlog({
       requestId: c.get('requestId'),
@@ -646,24 +656,25 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
     itemsSummary,
   }
 
-  // SECURITY: supabaseAdmin required — authenticated role lacks EXECUTE on
+  // SECURITY: connection role required — authenticated role lacks EXECUTE on
   // top_up_usage_credits. Auth enforced above (JWT + RBAC + Stripe verification).
-  const { data: grant, error: rpcError } = await supabaseAdmin(c)
-    .rpc('top_up_usage_credits', {
-      p_org_id: body.orgId,
-      p_amount: creditQuantity,
-      p_source: 'stripe_top_up',
-      p_notes: 'Stripe Checkout credit top-up',
-      p_source_ref: sourceRef,
-    })
-    .single()
-
-  if (rpcError) {
+  let grant: Database['public']['Functions']['top_up_usage_credits']['Returns'][number]
+  try {
+    grant = singleRow(await callerQuery<Database['public']['Functions']['top_up_usage_credits']['Returns'][number]>(
+      { pg: db.pg, principal: servicePrincipal },
+      `SELECT * FROM public.top_up_usage_credits(
+        p_org_id => $1, p_amount => $2, p_source => $3, p_notes => $4, p_source_ref => $5::jsonb
+      ) LIMIT 2`,
+      [body.orgId, creditQuantity, 'stripe_top_up', 'Stripe Checkout credit top-up', JSON.stringify(sourceRef)],
+    ))
+  }
+  catch (error) {
+    const rpcError = error as { code?: string, message?: string, detail?: string, hint?: string }
     const rpcErrorInfo = {
       code: rpcError.code ?? null,
       message: rpcError.message ?? null,
-      details: (rpcError as any)?.details ?? null,
-      hint: (rpcError as any)?.hint ?? null,
+      details: rpcError.detail ?? null,
+      hint: rpcError.hint ?? null,
     }
 
     cloudlogErr({
@@ -678,7 +689,7 @@ app.post('/complete-top-up', middlewareAuth, async (c) => {
   }
 
   return c.json({ grant })
-})
+}
 
 app.get('/auto-top-up', middlewareAuth, async (c) => {
   const orgId = c.req.query('orgId') ?? c.req.query('org_id')

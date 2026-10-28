@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
@@ -5,7 +6,8 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { createCheckout, EXTRA_MAU_UNIT, MAX_EXTRA_MAU } from '../utils/stripe.ts'
-import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface CheckoutData {
@@ -38,15 +40,19 @@ function parseExtraMau(value: unknown) {
 }
 
 // Only Enterprise sells extra MAU.
-async function getExtraMauCheckout(c: Parameters<typeof supabaseAdmin>[0], planId: string, extraMau: number) {
+async function getExtraMauCheckout(c: Context, planId: string, extraMau: number) {
   if (extraMau <= 0)
     return undefined
-  const { data: plan, error } = await supabaseAdmin(c)
-    .from('plans')
-    .select('name, mau')
-    .eq('stripe_id', planId)
-    .single()
-  if (error || plan?.name !== 'Enterprise')
+  let plan: { name: string, mau: number } | null = null
+  const pg = await getPgClient(c)
+  try {
+    plan = await queryJsonOne<{ name: string, mau: number }>(pg, 'SELECT name, mau FROM public.plans WHERE stripe_id = $1', [planId])
+  }
+  catch {}
+  finally {
+    closeClient(c, pg)
+  }
+  if (plan?.name !== 'Enterprise')
     throw simpleError('extra_mau_not_allowed', 'Extra MAU is only available on the Enterprise plan', { planId })
   return { includedMau: plan.mau, extraMau }
 }
@@ -72,16 +78,18 @@ app.post('/', middlewareAuth, async (c) => {
   if (!authContext?.userId)
     throw simpleError('not_authorized', 'Not authorized')
 
-  // Use authenticated client - RLS will enforce access based on JWT
-  const supabase = supabaseClient(c, authorization)
-
   cloudlog({ requestId: c.get('requestId'), message: 'auth', auth: authContext.userId })
-  const { data: org, error: dbError } = await supabase
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', body.orgId)
-    .single()
-  if (dbError || !org)
+  // Authenticated context - RLS will enforce access based on JWT
+  let org: { customer_id: string | null } | null = null
+  try {
+    org = await withRlsContext(c, authPrincipal(c), client => queryJsonOne<{ customer_id: string | null }>(
+      client,
+      'SELECT customer_id FROM public.orgs WHERE id = $1',
+      [body.orgId],
+    ))
+  }
+  catch {}
+  if (!org)
     throw simpleError('not_authorized', 'Not authorized')
   if (!org.customer_id)
     throw simpleError('no_customer', 'No customer')

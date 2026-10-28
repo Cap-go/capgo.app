@@ -106,18 +106,12 @@ describe('stripe billing account helpers', () => {
     const context = createContext()
     const lookupError = { message: 'connection refused', code: 'PGRST000' }
 
-    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
+    const pgRlsModule = await import('../supabase/functions/_backend/utils/pg_rls.ts')
     const billingModule = await import('../supabase/functions/_backend/utils/stripe_billing.ts')
 
-    const lookupErrorSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce({
-      from: () => ({
-        select: () => ({
-          eq: () => ({
-            maybeSingle: async () => ({ data: null, error: lookupError }),
-          }),
-        }),
-      }),
-    } as any)
+    const lookupErrorSpy = vi.spyOn(pgRlsModule, 'withRlsContext').mockImplementationOnce(async () => {
+      throw lookupError
+    })
     try {
       await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).rejects.toEqual(lookupError)
     }
@@ -127,10 +121,10 @@ describe('stripe billing account helpers', () => {
   })
 
   it('rejects US checkout for products missing from plans', async () => {
-    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
-    const spy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValue({
-      from: () => ({ select: () => ({ or: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
-    } as any)
+    const pgRlsModule = await import('../supabase/functions/_backend/utils/pg_rls.ts')
+    const spy = vi.spyOn(pgRlsModule, 'withRlsContext').mockImplementation(async (_c, _principal, run) => run({
+      query: async () => ({ rows: [] }),
+    } as any, {} as any))
     try {
       await expect(resolveCheckoutPlanProductId(createContext(), 'prod_unknown', 'us')).rejects.toBeInstanceOf(IncompleteUsPlanConfigError)
       await expect(resolveCheckoutPlanProductId(createContext(), 'prod_unknown', 'ee')).resolves.toBe('prod_unknown')
@@ -143,17 +137,11 @@ describe('stripe billing account helpers', () => {
   it('propagates plan lookup errors before selecting checkout product id', async () => {
     const context = createContext()
     const lookupError = { message: 'connection refused', code: 'PGRST000' }
-    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
+    const pgRlsModule = await import('../supabase/functions/_backend/utils/pg_rls.ts')
 
-    const lookupErrorSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValue({
-      from: () => ({
-        select: () => ({
-          or: () => ({
-            maybeSingle: async () => ({ data: null, error: lookupError }),
-          }),
-        }),
-      }),
-    } as any)
+    const lookupErrorSpy = vi.spyOn(pgRlsModule, 'withRlsContext').mockImplementation(async () => {
+      throw lookupError
+    })
     try {
       await expect(resolveCheckoutPlanProductId(context, 'prod_test', 'ee')).rejects.toEqual(lookupError)
     }

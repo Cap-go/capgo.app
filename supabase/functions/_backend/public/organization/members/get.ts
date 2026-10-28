@@ -5,9 +5,10 @@ import { z } from 'zod'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../../utils/pg_rls.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
 import { createSignedImageUrl } from '../../../utils/storage.ts'
-import { apikeyHasOrgRightWithPolicy, supabaseApikey } from '../../../utils/supabase.ts'
+import { apikeyHasOrgRightWithPolicy } from '../../../utils/supabase.ts'
 
 const bodySchema = z.object({
   orgId: z.string(),
@@ -35,8 +36,8 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
   }
 
-  const supabase = supabaseApikey(c, effectiveApikey.key)
-  const orgCheck = await apikeyHasOrgRightWithPolicy(c, effectiveApikey, body.orgId, supabase)
+  const principal = apikeyPrincipal(c, effectiveApikey.key)
+  const orgCheck = await apikeyHasOrgRightWithPolicy(c, effectiveApikey, body.orgId, principal)
   if (!orgCheck.valid) {
     if (orgCheck.error === 'org_requires_expiring_key') {
       throw quickError(401, 'org_requires_expiring_key', 'This organization requires API keys with an expiration date. Please use a different key or update this key with an expiration date.')
@@ -44,11 +45,19 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
   }
 
-  // Use authenticated client for data queries - RLS will enforce access
-  const { data, error } = await supabase
-    .rpc('get_org_members', {
-      guild_id: body.orgId,
-    })
+  // Run as the caller so RLS and the RPC's EXECUTE grant still apply
+  let data: unknown[] | null = null
+  let error: unknown = null
+  try {
+    data = await withRlsContext(c, principal, client => queryJson(
+      client,
+      'SELECT * FROM public.get_org_members(guild_id => $1::uuid)',
+      [body.orgId],
+    ))
+  }
+  catch (rpcError) {
+    error = rpcError
+  }
 
   cloudlog({ requestId: c.get('requestId'), message: 'data', data, error })
   if (error) {

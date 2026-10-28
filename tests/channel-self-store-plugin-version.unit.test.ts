@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-
 import { shouldSyncChannelSelfOverrideForPluginVersion, syncLegacyChannelSelfOverrideDeleteForDevice, syncLegacyChannelSelfOverrideForDevice } from '../supabase/functions/_backend/utils/channelSelfStore.ts'
 
 function createContext(store: { put: ReturnType<typeof vi.fn>, delete: ReturnType<typeof vi.fn> }) {
@@ -25,24 +24,23 @@ function createStore() {
   }
 }
 
+const deviceLookup = vi.hoisted(() => ({ pluginVersion: null as string | null }))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  withRlsContext: vi.fn(async (_c: unknown, principal: unknown, run: (client: unknown) => Promise<unknown>) => {
+    expect(principal).toEqual({ kind: 'apikey', apikey: 'test-key' })
+    return run({
+      query: vi.fn(async (text: string) => {
+        expect(text).toContain('FROM public.devices')
+        return { rows: deviceLookup.pluginVersion ? [{ plugin_version: deviceLookup.pluginVersion }] : [] }
+      }),
+    })
+  }),
+}))
+
 function createDeviceClient(pluginVersion: string | null) {
-  return {
-    from(table: string) {
-      expect(table).toBe('devices')
-      return {
-        select() {
-          return this
-        },
-        eq() {
-          return this
-        },
-        maybeSingle: vi.fn(async () => ({
-          data: pluginVersion ? { plugin_version: pluginVersion } : null,
-          error: null,
-        })),
-      }
-    },
-  }
+  deviceLookup.pluginVersion = pluginVersion
+  return { kind: 'apikey', apikey: 'test-key' }
 }
 
 const pluginVersionCases: [string | null, boolean][] = [

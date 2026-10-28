@@ -1,12 +1,14 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
 import { integerLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { createSignedImageUrl } from '../../utils/storage.ts'
-import { apikeyHasOrgRightWithPolicy, supabaseApikey } from '../../utils/supabase.ts'
+import { apikeyHasOrgRightWithPolicy } from '../../utils/supabase.ts'
 import { fetchLimit } from '../../utils/utils.ts'
 
 const bodySchema = z.object({
@@ -69,13 +71,13 @@ async function ensureOrgAccess(
   c: Context<MiddlewareKeyVariables>,
   apikey: Database['public']['Tables']['apikeys']['Row'],
   orgId: string,
-  supabase: ReturnType<typeof supabaseApikey>,
+  principal: RlsPrincipal,
 ) {
   if (!(await checkPermission(c, 'org.read', { orgId }))) {
     throw simpleError('invalid_org_id', 'You can\'t access this organization', { org_id: orgId })
   }
 
-  const orgCheck = await apikeyHasOrgRightWithPolicy(c, apikey, orgId, supabase)
+  const orgCheck = await apikeyHasOrgRightWithPolicy(c, apikey, orgId, principal)
   if (orgCheck.valid) {
     return
   }
@@ -86,31 +88,35 @@ async function ensureOrgAccess(
 }
 
 async function fetchOrg(
-  supabase: ReturnType<typeof supabaseApikey>,
+  c: Context<MiddlewareKeyVariables>,
+  principal: RlsPrincipal,
   orgId: string,
 ) {
-  const { data, error } = await supabase
-    .from('orgs')
-    .select('*')
-    .eq('id', orgId)
-    .single()
-  if (error) {
+  let data: unknown[]
+  try {
+    data = await withRlsContext(c, principal, client => queryJson(client, 'SELECT * FROM public.orgs WHERE id = $1', [orgId]))
+  }
+  catch (error) {
     throw simpleError('cannot_get_organization', 'Cannot get organization', { error })
   }
-  return parseOrg(data)
+  // single(): no visible row was an error too.
+  if (data.length !== 1) {
+    throw simpleError('cannot_get_organization', 'Cannot get organization', { error: null })
+  }
+  return parseOrg(data[0])
 }
 
 async function fetchOrgs(
-  supabase: ReturnType<typeof supabaseApikey>,
+  c: Context<MiddlewareKeyVariables>,
+  principal: RlsPrincipal,
   page = 0,
 ) {
   const from = page * fetchLimit
-  const to = (page + 1) * fetchLimit - 1
-  const { data, error } = await supabase
-    .from('orgs')
-    .select('*')
-    .range(from, to)
-  if (error) {
+  let data: unknown[]
+  try {
+    data = await withRlsContext(c, principal, client => queryJson(client, 'SELECT * FROM public.orgs LIMIT $1 OFFSET $2', [fetchLimit, from]))
+  }
+  catch (error) {
     throw simpleError('cannot_get_organizations', 'Cannot get organizations', { error })
   }
   return parseOrgs(data)
@@ -118,12 +124,12 @@ async function fetchOrgs(
 
 export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   const body = parseBody(bodyRaw)
-  const supabase = supabaseApikey(c, apikey.key)
+  const principal = apikeyPrincipal(c, apikey.key)
 
   // Auth context is already set by middlewareKey
   if (body.orgId) {
-    await ensureOrgAccess(c, apikey, body.orgId, supabase)
-    const org = await fetchOrg(supabase, body.orgId)
+    await ensureOrgAccess(c, apikey, body.orgId, principal)
+    const org = await fetchOrg(c, principal, body.orgId)
     if (org.logo) {
       const signedLogo = await createSignedImageUrl(c, org.logo, { orgId: org.id })
       org.logo = signedLogo ?? null
@@ -132,7 +138,7 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
     return c.json(org)
   }
 
-  const orgs = await fetchOrgs(supabase, body.page)
+  const orgs = await fetchOrgs(c, principal, body.page)
   const signedOrgs = await Promise.all(orgs.map(async (org) => {
     if (!org.logo)
       return org

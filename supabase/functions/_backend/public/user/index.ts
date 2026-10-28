@@ -5,10 +5,10 @@ import { z } from 'zod'
 import { getBodyOrQuery, honoFactory, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
+import { queryJsonOne } from '../../utils/pg_rls.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { emailPreferencesPatchSchema, USER_SETTINGS_EMAIL_PREFERENCE_KEYS } from '../../utils/settings_email_preferences.ts'
 import { createSignedImageUrl } from '../../utils/storage.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 
 /**
  * Account settings of the caller (Settings > Account).
@@ -43,14 +43,21 @@ function getCallerId(c: Context<MiddlewareKeyVariables>) {
 }
 
 async function loadProfile(c: Context<MiddlewareKeyVariables>, userId: string) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('users')
-    .select(PROFILE_COLUMNS)
-    .eq('id', userId)
-    .single()
+  const pgPool = await getPgClient(c)
+  let data: ProfileRow | null = null
+  let error: unknown = null
+  try {
+    data = await queryJsonOne<ProfileRow>(pgPool, `SELECT ${PROFILE_COLUMNS} FROM public.users WHERE id = $1`, [userId])
+  }
+  catch (lookupError) {
+    error = lookupError
+  }
+  finally {
+    closeClient(c, pgPool)
+  }
   if (error || !data)
     throw quickError(404, 'user_not_found', 'User not found', { error })
-  return data as unknown as ProfileRow
+  return data
 }
 
 async function withSignedImage(c: Context<MiddlewareKeyVariables>, profile: ProfileRow) {

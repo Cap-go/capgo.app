@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { Database } from '../utils/supabase.types.ts'
 import dayjs from 'dayjs'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
@@ -8,9 +9,10 @@ import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { authPrincipal, withRlsTransaction } from '../utils/pg_rls.ts'
 import { canCallerAssignOrgRole, checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 // Define the schema for the invite user request
@@ -28,6 +30,8 @@ const rbacInviteRoles = ['org_member', 'org_billing_admin', 'org_admin', 'org_su
 type RbacInviteRole = (typeof rbacInviteRoles)[number]
 
 const INVITE_RESEND_COOLDOWN_MINUTES = 5
+// PostgREST's PGRST116 message for `.single()` on zero or several rows.
+const SINGLE_ROW_ERROR_MESSAGE = 'JSON object requested, multiple (or no) rows returned'
 
 function generateInviteMagicString() {
   const bytes = new Uint8Array(128)
@@ -92,30 +96,51 @@ async function validateInvite(c: Context, rawBody: any) {
     await verifyCaptchaToken(c, body.captcha_token, captchaSecret)
   }
 
-  // Use authenticated client - RLS will enforce access based on JWT
-  const supabase = supabaseClient(c, authorization)
+  // Run as the caller - RLS will enforce access based on JWT
+  const principal = authPrincipal(c)
+  const pg = await getPgClient(c)
+  let existingUserCount = 0
+  let userError: unknown = null
+  let org: { id: string } | undefined
+  let orgError: unknown = null
+  try {
+    // Check if the user already exists
+    try {
+      existingUserCount = await withRlsTransaction(pg, principal, async (client) => {
+        const { rows } = await client.query<{ count: number }>('SELECT count(*)::int AS count FROM public.users WHERE email = $1', [body.email])
+        return rows[0].count
+      })
+    }
+    catch (error) {
+      userError = error
+    }
 
-  // Check if the user already exists
-  const { data: existingUser, error: userError } = await supabase
-    .from('users')
-    .select('*')
-    .eq('email', body.email)
-    .single()
+    // Create the invitation record in the database
+    if (existingUserCount === 1 && !userError) {
+      return { message: 'Failed to invite user', error: 'User already exists', status: 500 }
+    }
 
-  // Create the invitation record in the database
-  if (existingUser || !userError) {
-    return { message: 'Failed to invite user', error: 'User already exists', status: 500 }
+    // Get org - RLS will block if user doesn't have access
+    try {
+      const orgRows = await withRlsTransaction(pg, principal, async (client) => {
+        const { rows } = await client.query<{ id: string }>('SELECT id FROM public.orgs WHERE id = $1 LIMIT 2', [body.org_id])
+        return rows
+      })
+      if (orgRows.length === 1)
+        org = orgRows[0]
+      else
+        orgError = new Error(SINGLE_ROW_ERROR_MESSAGE)
+    }
+    catch (error) {
+      orgError = error
+    }
+  }
+  finally {
+    closeClient(c, pg)
   }
 
-  // Get org - RLS will block if user doesn't have access
-  const { data: org, error: orgError } = await supabase
-    .from('orgs')
-    .select('*')
-    .eq('id', body.org_id)
-    .single()
-
   if (orgError || !org) {
-    return { message: 'Failed to invite user', error: orgError?.message ?? 'Organization not found', status: 500 }
+    return { message: 'Failed to invite user', error: (orgError as Error | null)?.message ?? 'Organization not found', status: 500 }
   }
 
   const { rbacRoleName } = resolveInviteRoles(body.invite_type)
@@ -147,18 +172,35 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, 'Not authorized')
   }
 
-  // Use admin client for tmp_users operations since RLS blocks all access on that table
-  const supabaseAdminClient = supabaseAdmin(c)
+  // Connection role for tmp_users operations since RLS blocks all access on that table
+  const pg = await getPgClient(c)
+  try {
+    await upsertInvitation(pg, body, rbacRoleName, authContext.userId)
+  }
+  finally {
+    closeClient(c, pg)
+  }
 
-  const { data: existingInvitation, error: existingInvitationError } = await supabaseAdminClient
-    .from('tmp_users')
-    .select('*')
-    .eq('email', body.email)
-    .eq('org_id', body.org_id)
-    .maybeSingle()
+  return c.json(BRES)
+})
 
-  if (existingInvitationError) {
-    throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, existingInvitationError.message)
+type TmpUser = Database['public']['Tables']['tmp_users']['Row']
+
+async function upsertInvitation(
+  pg: Awaited<ReturnType<typeof getPgClient>>,
+  body: z.infer<typeof inviteUserSchema>,
+  rbacRoleName: RbacInviteRole,
+  inviterId: string,
+) {
+  let existingInvitation: TmpUser | undefined
+  try {
+    ({ rows: [existingInvitation] } = await pg.query<TmpUser>(
+      'SELECT * FROM public.tmp_users WHERE email = $1 AND org_id = $2',
+      [body.email, body.org_id],
+    ))
+  }
+  catch (existingInvitationError) {
+    throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, (existingInvitationError as Error).message)
   }
 
   if (existingInvitation) {
@@ -181,22 +223,18 @@ app.post('/', middlewareAuth, async (c) => {
       }
     }
 
-    const { error: updateInvitationError } = await supabaseAdminClient
-      .from('tmp_users')
-      .update({
-        cancelled_at: null,
-        first_name: body.first_name,
-        last_name: body.last_name,
-        rbac_role_name: rbacRoleName,
-        invited_by_user_id: authContext.userId,
-        invite_magic_string: generateInviteMagicString(),
-      })
-      .eq('email', body.email)
-      .eq('org_id', body.org_id)
-      .select('*')
-      .single()
-
-    if (updateInvitationError) {
+    let updatedCount = 0
+    try {
+      const { rowCount } = await pg.query(
+        `UPDATE public.tmp_users
+        SET cancelled_at = NULL, first_name = $3, last_name = $4, rbac_role_name = $5, invited_by_user_id = $6, invite_magic_string = $7
+        WHERE email = $1 AND org_id = $2`,
+        [body.email, body.org_id, body.first_name, body.last_name, rbacRoleName, inviterId, generateInviteMagicString()],
+      )
+      updatedCount = rowCount ?? 0
+    }
+    catch (error) {
+      const updateInvitationError = error as { code?: string, message: string }
       if (updateInvitationError.code === 'P0001' && updateInvitationError.message.includes('INVITE_EMAIL_COOLDOWN')) {
         throw simpleError('user_already_invited', 'User already invited recently. Please wait before resending.', {
           reason: 'invite_recently_sent',
@@ -205,21 +243,19 @@ app.post('/', middlewareAuth, async (c) => {
       }
       throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, updateInvitationError.message)
     }
+    if (updatedCount !== 1)
+      throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, SINGLE_ROW_ERROR_MESSAGE)
   }
   else {
-    const { error: createUserError } = await supabaseAdminClient.from('tmp_users').insert({
-      email: body.email,
-      org_id: body.org_id,
-      rbac_role_name: rbacRoleName,
-      first_name: body.first_name,
-      last_name: body.last_name,
-      invited_by_user_id: authContext.userId,
-    }).select('*').single()
-
-    if (createUserError) {
-      throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, createUserError.message)
+    try {
+      await pg.query(
+        `INSERT INTO public.tmp_users (email, org_id, rbac_role_name, first_name, last_name, invited_by_user_id)
+        VALUES ($1, $2, $3, $4, $5, $6)`,
+        [body.email, body.org_id, rbacRoleName, body.first_name, body.last_name, inviterId],
+      )
+    }
+    catch (createUserError) {
+      throw simpleError('failed_to_invite_user', 'Failed to invite user', {}, (createUserError as Error).message)
     }
   }
-
-  return c.json(BRES)
-})
+}

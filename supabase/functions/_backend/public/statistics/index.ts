@@ -1,16 +1,20 @@
 import type { Context } from 'hono'
 import type { ValidationIssue } from '../../utils/schema_validation.ts'
 import type { AuthInfo } from '../../utils/hono.ts'
+import type { PgClient } from '../../utils/pg.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { createSchema, makeIssue, safeParseSchema } from '../../utils/schema_validation.ts'
 import { honoFactory, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { isTransientPgError } from '../../utils/pg_errors.ts'
+import { apikeyPrincipal, authPrincipal, queryJson, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, retryWithBackoff } from '../../utils/retry.ts'
 import { readNativeActiveDevicesSummary, readNativeDailyPlatformActive, readNativeVersionUsage } from '../../utils/stats.ts'
-import { supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
 import { isStripeConfigured } from '../../utils/utils.ts'
 import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, fillMissingDailyCounts } from '../../utils/version_stats_helpers.ts'
 
@@ -183,22 +187,43 @@ interface AppOwnerOrgRow {
 
 const STATS_QUERY_RETRY_ATTEMPTS = 3
 const STATS_QUERY_RETRY_DELAY_MS = 250
-const STORAGE_BYTE_HOURS_PAGE_SIZE = 1000
-// PostgREST max_rows is 1000. Org dashboards return apps × days and must paginate
-// or bandwidth/MAU for later app_ids are silently dropped while /app/:id still works.
-const APP_METRICS_PAGE_SIZE = 1000
 
-// Helper to get authenticated supabase client based on auth type
-function getAuthenticatedSupabase(c: Context, auth: AuthInfo) {
+/** Runs one read as the caller and returns its rows as PostgREST would serialize them. */
+type StatsDb = <T>(text: string, values: unknown[]) => Promise<T[]>
+
+// Who the statistics reads run as: the API key, or the JWT of the authorization header.
+function getStatsPrincipal(c: Context, auth: AuthInfo): RlsPrincipal {
   if (auth.authType === 'apikey' && auth.apikey) {
-    return supabaseApikey(c, auth.apikey.key)
+    return apikeyPrincipal(c, auth.apikey.key)
   }
   // JWT auth
   const authorization = c.req.header('authorization')
   if (!authorization) {
     throw quickError(401, 'no_authorization', 'No authorization header')
   }
-  return supabaseClient(c, authorization)
+  return authPrincipal(c, auth)
+}
+
+// Each read is its own RLS transaction, like one PostgREST request. They share one connection,
+// and a Hyperdrive Client is the same connection for every checkout, so queue them rather than
+// letting concurrent reads interleave their BEGIN/COMMIT.
+function createStatsDb(pg: PgClient, principal: RlsPrincipal): StatsDb {
+  let tail: Promise<unknown> = Promise.resolve()
+  return <T>(text: string, values: unknown[]) => {
+    const run = tail.then(() => withRlsTransaction(pg, principal, client => queryJson<T>(client, text, values)))
+    tail = run.catch(() => {})
+    return run
+  }
+}
+
+async function withStatsDb<T>(c: Context, principal: RlsPrincipal, run: (db: StatsDb) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await run(createStatsDb(pg, principal))
+  }
+  finally {
+    closeClient(c, pg)
+  }
 }
 
 function isRetryableStatsError(error: unknown) {
@@ -217,7 +242,7 @@ function getMissingAppStatsError(errors: unknown[]) {
 }
 
 function isRetryableStatsResult(result: QueryResult<unknown>) {
-  return isRetryablePostgrestResult(result)
+  return isRetryablePostgrestResult(result) || isTransientPgError(result.error)
 }
 
 async function executeStatsQueryWithRetry<T>(
@@ -255,16 +280,12 @@ async function executeStatsQueryWithRetry<T>(
 async function resolveAppOwnerOrg(
   c: Context,
   appId: string,
-  supabase: ReturnType<typeof supabaseClient>,
+  db: StatsDb,
 ): Promise<{ ownerOrg: string | null, error: unknown, notFound: boolean }> {
   const { data, error } = await executeStatsQueryWithRetry<AppOwnerOrgRow>(
     c,
     'statistics_app_lookup',
-    async () => await supabase
-      .from('apps')
-      .select('owner_org')
-      .eq('app_id', appId)
-      .maybeSingle() as QueryResult<AppOwnerOrgRow>,
+    async () => ({ data: (await db<AppOwnerOrgRow>('SELECT owner_org FROM public.apps WHERE app_id = $1', [appId]))[0] ?? null, error: null }),
   )
 
   if (error)
@@ -280,9 +301,9 @@ async function getStatsAppOwnerOrgOrThrow(
   c: Context,
   auth: AuthInfo,
   appId: string,
-  supabase: ReturnType<typeof supabaseClient>,
+  db: StatsDb,
 ) {
-  const { ownerOrg, error, notFound } = await resolveAppOwnerOrg(c, appId, supabase)
+  const { ownerOrg, error, notFound } = await resolveAppOwnerOrg(c, appId, db)
 
   if (error)
     throw quickError(500, 'cannot_get_app_statistics', 'Cannot get app statistics', { error })
@@ -294,14 +315,14 @@ async function getStatsAppOwnerOrgOrThrow(
     throw quickError(404, 'app_not_found', 'App not found', { app_id: appId })
 
   if (ownerOrg && auth.authType !== 'jwt')
-    await checkOrganizationAccess(c, ownerOrg, supabase)
+    await checkOrganizationAccess(c, ownerOrg, db)
 
   return ownerOrg
 }
 
 async function fetchAppMetricsRows(
   c: Context,
-  supabase: ReturnType<typeof supabaseClient>,
+  db: StatsDb,
   params: {
     orgId: string
     appId?: string | null
@@ -309,45 +330,29 @@ async function fetchAppMetricsRows(
     endDate: string
   },
 ): Promise<QueryResult<AppMetricRow[]>> {
-  const rows: AppMetricRow[] = []
+  // Org dashboards return apps × days. Direct SQL has no PostgREST max_rows cap, so one ordered
+  // read returns every app_id instead of paging past the old 1000-row limit.
+  const { data, error, status } = await executeStatsQueryWithRetry<AppMetricRow[]>(
+    c,
+    params.appId ? 'get_app_metrics_for_app' : 'get_app_metrics_for_org',
+    async () => ({
+      data: params.appId
+        ? await db<AppMetricRow>(
+            'SELECT * FROM public.get_app_metrics(p_org_id => $1::uuid, p_app_id => $2::varchar, p_start_date => $3::date, p_end_date => $4::date) ORDER BY app_id ASC, date ASC',
+            [params.orgId, params.appId, params.startDate, params.endDate],
+          )
+        : await db<AppMetricRow>(
+            'SELECT * FROM public.get_app_metrics(org_id => $1::uuid, start_date => $2::date, end_date => $3::date) ORDER BY app_id ASC, date ASC',
+            [params.orgId, params.startDate, params.endDate],
+          ),
+      error: null,
+    }),
+  )
 
-  for (let pageStart = 0; ; pageStart += APP_METRICS_PAGE_SIZE) {
-    const { data, error, status } = await executeStatsQueryWithRetry<AppMetricRow[]>(
-      c,
-      params.appId ? 'get_app_metrics_for_app' : 'get_app_metrics_for_org',
-      async () => {
-        // Org dashboards return apps × days. Without range pagination, PostgREST
-        // max_rows (1000) silently drops later app_ids — single-app RPC still works
-        // because it filters inside SQL before the row limit applies.
-        const query = params.appId
-          ? supabase.rpc('get_app_metrics' as any, {
-              p_org_id: params.orgId,
-              p_app_id: params.appId,
-              p_start_date: params.startDate,
-              p_end_date: params.endDate,
-            })
-          : supabase.rpc('get_app_metrics', {
-              org_id: params.orgId,
-              start_date: params.startDate,
-              end_date: params.endDate,
-            })
+  if (error)
+    return { data: null, error, status }
 
-        return await (query as any)
-          .order('app_id', { ascending: true })
-          .order('date', { ascending: true })
-          .range(pageStart, pageStart + APP_METRICS_PAGE_SIZE - 1) as QueryResult<AppMetricRow[]>
-      },
-    )
-
-    if (error)
-      return { data: null, error, status }
-
-    rows.push(...(data ?? []))
-    if ((data?.length ?? 0) < APP_METRICS_PAGE_SIZE)
-      break
-  }
-
-  return { data: rows, error: null }
+  return { data: data ?? [], error: null }
 }
 
 function metricDayNumber(metricDate: string, from: Date, graphDays: number): number | null {
@@ -358,7 +363,6 @@ function metricDayNumber(metricDate: string, from: Date, graphDays: number): num
 }
 
 export const statisticsTestUtils = {
-  APP_METRICS_PAGE_SIZE,
   executeStatsQueryWithRetry,
   fetchAppMetricsRows,
   getMissingAppStatsError,
@@ -369,14 +373,20 @@ export const statisticsTestUtils = {
   resolveAppOwnerOrg,
 }
 
-async function checkOrganizationAccess(c: Context, orgId: string, supabase: ReturnType<typeof supabaseClient>) {
+async function checkOrganizationAccess(c: Context, orgId: string, db: StatsDb) {
   if (!isStripeConfigured(c)) {
     return { isPayingAndGoodPlan: true }
   }
   // Use the existing PostgreSQL function to check organization payment and plan status
-  const { data: isPayingAndGoodPlan, error } = await supabase
-    .rpc('is_paying_and_good_plan_org', { orgid: orgId })
-    .single()
+  let isPayingAndGoodPlan: boolean | null = null
+  let error: unknown = null
+  try {
+    const rows = await db<{ is_paying_and_good_plan_org: boolean | null }>('SELECT public.is_paying_and_good_plan_org(orgid => $1::uuid) AS is_paying_and_good_plan_org', [orgId])
+    isPayingAndGoodPlan = rows[0]?.is_paying_and_good_plan_org ?? null
+  }
+  catch (rpcError) {
+    error = rpcError
+  }
 
   if (error) {
     throw quickError(404, 'organization_not_found', 'Organization not found or error checking status', {
@@ -402,7 +412,7 @@ async function getStorageByteHoursByApp(
   from: Date,
   to: Date,
   graphDays: number,
-  supabase: ReturnType<typeof supabaseClient>,
+  db: StatsDb,
 ) {
   const storageByteHoursByApp = appIds.reduce((acc, appId) => {
     acc[appId] = Array.from({ length: graphDays }).fill(0) as number[]
@@ -412,39 +422,35 @@ async function getStorageByteHoursByApp(
   if (appIds.length === 0)
     return { data: storageByteHoursByApp, error: null }
 
-  const rows: StorageHourlyMetricRow[] = []
   const fromDay = dayjs(from).utc().format('YYYY-MM-DD')
   const toDay = dayjs(to).utc().format('YYYY-MM-DD')
-
-  for (let pageStart = 0; ; pageStart += STORAGE_BYTE_HOURS_PAGE_SIZE) {
-    let query = (supabase as any)
-      .from('daily_storage_hourly')
-      .select('app_id,date,storage_byte_hours')
-      .gte('date', fromDay)
-      .lt('date', toDay)
-      .order('date', { ascending: true })
-      .order('app_id', { ascending: true })
-      .range(pageStart, pageStart + STORAGE_BYTE_HOURS_PAGE_SIZE - 1)
-
-    if (ownerOrg)
-      query = query.eq('owner_org', ownerOrg)
-    if (appIds.length === 1)
-      query = query.eq('app_id', appIds[0])
-
-    const { data, error } = await executeStatsQueryWithRetry<StorageHourlyMetricRow[]>(
-      c,
-      'get_daily_storage_hourly_for_stats',
-      async () => await query as QueryResult<StorageHourlyMetricRow[]>,
-    )
-
-    if (error)
-      return { data: storageByteHoursByApp, error }
-
-    rows.push(...(data ?? []))
-    if ((data?.length ?? 0) < STORAGE_BYTE_HOURS_PAGE_SIZE)
-      break
+  const filters = ['date >= $1', 'date < $2']
+  const values: unknown[] = [fromDay, toDay]
+  if (ownerOrg) {
+    values.push(ownerOrg)
+    filters.push(`owner_org = $${values.length}::uuid`)
+  }
+  if (appIds.length === 1) {
+    values.push(appIds[0])
+    filters.push(`app_id = $${values.length}`)
   }
 
+  const { data, error } = await executeStatsQueryWithRetry<StorageHourlyMetricRow[]>(
+    c,
+    'get_daily_storage_hourly_for_stats',
+    async () => ({
+      data: await db<StorageHourlyMetricRow>(
+        `SELECT app_id, date, storage_byte_hours FROM public.daily_storage_hourly WHERE ${filters.join(' AND ')} ORDER BY date ASC, app_id ASC`,
+        values,
+      ),
+      error: null,
+    }),
+  )
+
+  if (error)
+    return { data: storageByteHoursByApp, error }
+
+  const rows = data ?? []
   for (const row of rows) {
     if (!storageByteHoursByApp[row.app_id])
       continue
@@ -459,13 +465,13 @@ async function getStorageByteHoursByApp(
   return { data: storageByteHoursByApp, error: null }
 }
 
-async function getNormalStats(c: Context, appId: string | null, ownerOrg: string | null, from: Date, to: Date, supabase: ReturnType<typeof supabaseClient>, isDashboard: boolean = false, includeBreakdown: boolean = false, noAccumulate: boolean = false) {
+async function getNormalStats(c: Context, appId: string | null, ownerOrg: string | null, from: Date, to: Date, db: StatsDb, isDashboard: boolean = false, includeBreakdown: boolean = false, noAccumulate: boolean = false) {
   if (!appId && !ownerOrg)
     return { data: null, error: 'Invalid appId or ownerOrg' }
 
   let ownerOrgId = ownerOrg
   if (appId && !ownerOrgId) {
-    const { ownerOrg: resolvedOwnerOrg, error, notFound } = await resolveAppOwnerOrg(c, appId, supabase)
+    const { ownerOrg: resolvedOwnerOrg, error, notFound } = await resolveAppOwnerOrg(c, appId, db)
     if (error)
       return { data: null, error }
     if (notFound) {
@@ -477,7 +483,7 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
   const startDate = dayjs(from).utc().format('YYYY-MM-DD')
   const endDate = dayjs(to).utc().format('YYYY-MM-DD')
 
-  const { data: rawMetrics, error: metricsError } = await fetchAppMetricsRows(c, supabase, {
+  const { data: rawMetrics, error: metricsError } = await fetchAppMetricsRows(c, db, {
     orgId: ownerOrgId!,
     appId,
     startDate,
@@ -529,7 +535,7 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
     from,
     to,
     graphDays,
-    supabase,
+    db,
   )
   if (storageByteHoursError)
     return { data: null, error: storageByteHoursError }
@@ -567,9 +573,12 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
     const { data: currentStorageBytes, error: storageError } = await executeStatsQueryWithRetry<number>(
       c,
       appId ? 'get_total_app_storage_size_orgs' : 'get_total_storage_size_org',
-      async () => await supabase
-        .rpc(appId ? 'get_total_app_storage_size_orgs' : 'get_total_storage_size_org', appId ? { org_id: ownerOrgId!, app_id: appId } : { org_id: ownerOrgId! })
-        .single() as QueryResult<number>,
+      async () => {
+        const rows = appId
+          ? await db<{ size: number | null }>('SELECT public.get_total_app_storage_size_orgs(org_id => $1::uuid, app_id => $2::varchar) AS size', [ownerOrgId!, appId])
+          : await db<{ size: number | null }>('SELECT public.get_total_storage_size_org(org_id => $1::uuid) AS size', [ownerOrgId!])
+        return { data: rows[0]?.size ?? null, error: null }
+      },
     )
     if (storageError)
       return { data: null, error: storageError }
@@ -686,21 +695,25 @@ async function getNormalStats(c: Context, appId: string | null, ownerOrg: string
   return { data: finalStats.filter(x => !!x), error: null }
 }
 
-async function getBundleUsage(appId: string, from: Date, to: Date, shouldGetLatestVersion: boolean, supabase: ReturnType<typeof supabaseClient>) {
-  // Query uses version_name column - cast needed because auto-generated types are stale
-  const { data: rawDailyVersion, error: dailyVersionError } = await supabase
-    .from('daily_version')
-    .select('date, app_id, version_name, get, install, uninstall')
-    .eq('app_id', appId)
-    .gte('date', from.toISOString())
-    .lte('date', to.toISOString())
-    .not('version_name', 'is', null)
-    .order('date', { ascending: true })
-  if (dailyVersionError)
+async function getBundleUsage(appId: string, from: Date, to: Date, shouldGetLatestVersion: boolean, db: StatsDb) {
+  let dailyVersion: AppUsageByVersion[]
+  try {
+    // PostgREST max_rows capped this read at 1000 rows; keep that bound.
+    dailyVersion = await db<AppUsageByVersion>(
+      `SELECT date, app_id, version_name, get, install, uninstall
+       FROM public.daily_version
+       WHERE app_id = $1
+         AND date >= $2::date
+         AND date <= $3::date
+         AND version_name IS NOT NULL
+       ORDER BY date ASC
+       LIMIT 1000`,
+      [appId, from.toISOString(), to.toISOString()],
+    )
+  }
+  catch (dailyVersionError) {
     return { data: null, error: dailyVersionError }
-
-  // Cast to our interface - the SQL table has version_name but types are stale
-  const dailyVersion = rawDailyVersion as unknown as AppUsageByVersion[]
+  }
 
   // Get unique version names from the data
   const versions = [...new Set(dailyVersion.map(d => d.version_name).filter(Boolean))] as string[]
@@ -870,20 +883,20 @@ function buildNativeVersionCounts(rows: NativeVersionUsageRow[], dates: string[]
   return counts
 }
 
-async function getAuthorizedStatsAppClient(c: Context, appId: string) {
+async function getAuthorizedStatsAppPrincipal(c: Context, appId: string) {
   const auth = c.get('auth') as AuthInfo
 
   if (!await checkPermission(c, 'app.read', { appId })) {
     throw quickError(401, 'no_access_to_app', 'No access to app', { data: auth?.userId ?? null })
   }
 
-  const supabase = getAuthenticatedSupabase(c, auth)
-  await getStatsAppOwnerOrgOrThrow(c, auth, appId, supabase)
+  const principal = getStatsPrincipal(c, auth)
+  await withStatsDb(c, principal, db => getStatsAppOwnerOrgOrThrow(c, auth, appId, db))
 
-  return supabase
+  return principal
 }
 
-async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: Date, supabase: ReturnType<typeof supabaseClient>) {
+async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: Date, principal: RlsPrincipal) {
   const dates = generateDateLabels(from, to)
   const startDate = dayjs(from).utc().startOf('day').format('YYYY-MM-DD')
   const endDate = dayjs(to).utc().startOf('day').add(1, 'day').format('YYYY-MM-DD')
@@ -899,10 +912,10 @@ async function getNativeVersionUsage(c: Context, appId: string, from: Date, to: 
   // query (timeout, rate limit) must not 500 the whole Native tab, so each read degrades
   // to empty data independently. Only the version usage read itself is fatal.
   const [usageResult, summaryResult, previousSummaryResult, dailyResult] = await Promise.allSettled([
-    readNativeVersionUsage(c, appId, startDate, endDate, supabase) as Promise<NativeVersionUsageRow[]>,
-    readNativeActiveDevicesSummary(c, appId, startDate, endDate, supabase),
-    readNativeActiveDevicesSummary(c, appId, previousStartDate, startDate, supabase),
-    readNativeDailyPlatformActive(c, appId, startDate, endDate, supabase),
+    readNativeVersionUsage(c, appId, startDate, endDate, principal) as Promise<NativeVersionUsageRow[]>,
+    readNativeActiveDevicesSummary(c, appId, startDate, endDate, principal),
+    readNativeActiveDevicesSummary(c, appId, previousStartDate, startDate, principal),
+    readNativeDailyPlatformActive(c, appId, startDate, endDate, principal),
   ])
   if (usageResult.status === 'rejected')
     return { data: null, error: usageResult.reason }
@@ -1086,12 +1099,13 @@ app.get('/app/:app_id', async (c) => {
     throw quickError(401, 'no_access_to_app', 'No access to app', { data: auth?.userId ?? null })
   }
 
-  // Use authenticated client - RLS will enforce access
-  const supabase = getAuthenticatedSupabase(c, auth)
+  // Read as the caller - RLS will enforce access
+  const principal = getStatsPrincipal(c, auth)
 
-  const ownerOrg = await getStatsAppOwnerOrgOrThrow(c, auth, appId, supabase)
-
-  const { data: finalStats, error: statsError } = await getNormalStats(c, appId, ownerOrg, body.from, body.to, supabase, c.get('auth')?.authType === 'jwt', false, body.noAccumulate ?? false)
+  const { data: finalStats, error: statsError } = await withStatsDb(c, principal, async (db) => {
+    const ownerOrg = await getStatsAppOwnerOrgOrThrow(c, auth, appId, db)
+    return getNormalStats(c, appId, ownerOrg, body.from, body.to, db, c.get('auth')?.authType === 'jwt', false, body.noAccumulate ?? false)
+  })
 
   if (statsError) {
     throw quickError(500, 'cannot_get_app_statistics', 'Cannot get app statistics', { error: statsError })
@@ -1115,14 +1129,16 @@ app.get('/org/:org_id', async (c) => {
   if (!(await checkPermission(c, 'org.read', { orgId }))) {
     throw quickError(401, 'no_access_to_organization', 'No access to organization', { data: auth?.userId ?? null })
   }
-  // Use authenticated client - RLS will enforce access
-  const supabase = getAuthenticatedSupabase(c, auth)
+  // Read as the caller - RLS will enforce access
+  const principal = getStatsPrincipal(c, auth)
 
-  // Check organization payment status before returning stats
-  if (auth.authType !== 'jwt')
-    await checkOrganizationAccess(c, orgId, supabase)
+  const { data: finalStats, error } = await withStatsDb(c, principal, async (db) => {
+    // Check organization payment status before returning stats
+    if (auth.authType !== 'jwt')
+      await checkOrganizationAccess(c, orgId, db)
 
-  const { data: finalStats, error } = await getNormalStats(c, null, orgId, body.from, body.to, supabase, c.get('auth')?.authType === 'jwt', body.breakdown ?? false, body.noAccumulate ?? false)
+    return getNormalStats(c, null, orgId, body.from, body.to, db, c.get('auth')?.authType === 'jwt', body.breakdown ?? false, body.noAccumulate ?? false)
+  })
 
   if (error) {
     throw quickError(500, 'cannot_get_organization_statistics', 'Cannot get organization statistics', { error })
@@ -1141,9 +1157,9 @@ app.get('/app/:app_id/bundle_usage', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
-  const supabase = await getAuthorizedStatsAppClient(c, appId)
+  const principal = await getAuthorizedStatsAppPrincipal(c, appId)
 
-  const { data, error } = await getBundleUsage(appId, body.from, body.to, useDashboard, supabase)
+  const { data, error } = await withStatsDb(c, principal, db => getBundleUsage(appId, body.from, body.to, useDashboard, db))
 
   if (error) {
     throw quickError(500, 'cannot_get_app_statistics', 'Cannot get app statistics', { error })
@@ -1161,9 +1177,9 @@ app.get('/app/:app_id/native_usage', async (c) => {
     throw simpleError('invalid_body', 'Invalid body', { error: bodyParsed.error })
   }
   const body = bodyParsed.data
-  const supabase = await getAuthorizedStatsAppClient(c, appId)
+  const principal = await getAuthorizedStatsAppPrincipal(c, appId)
 
-  const { data, error } = await getNativeVersionUsage(c, appId, body.from, body.to, supabase)
+  const { data, error } = await getNativeVersionUsage(c, appId, body.from, body.to, principal)
 
   if (error) {
     throw quickError(500, 'cannot_get_app_statistics', 'Cannot get app statistics', { error })
@@ -1174,8 +1190,8 @@ app.get('/app/:app_id/native_usage', async (c) => {
 
 app.get('/user', async (c) => {
   const auth = c.get('auth') as AuthInfo
-  // Use authenticated client - RLS will enforce access
-  const supabase = getAuthenticatedSupabase(c, auth)
+  // Read as the caller - RLS will enforce access
+  const principal = getStatsPrincipal(c, auth)
 
   const query = c.req.query()
   const bodyParsed = safeParseSchema(normalStatsSchema, query)
@@ -1184,40 +1200,41 @@ app.get('/user', async (c) => {
   }
   const body = bodyParsed.data
 
-  const { data: orgs, error: orgsError } = await supabase
-    .rpc('get_user_org_ids')
-
-  if (orgsError) {
-    throw quickError(404, 'user_not_found', 'User not found', { error: orgsError })
-  }
-
-  const orgIds = Array.from(new Set((orgs ?? []).map(org => org.org_id)))
-
-  cloudlog({ requestId: c.get('requestId'), message: 'orgs', data: orgIds })
-
-  if (orgIds.length === 0) {
-    throw quickError(401, 'no_organizations_found', 'No organizations found', { data: auth?.userId ?? null })
-  }
-
-  // Check organization payment status for each organization before returning stats
-  for (const orgId of orgIds) {
-    if (auth.authType !== 'jwt')
-      await checkOrganizationAccess(c, orgId, supabase)
-  }
-
-  let stats: Array<{ data: any, error: any }> = []
-  if (auth.authType === 'apikey') {
-    const { data: apps, error: appsError } = await supabase.rpc('get_accessible_apps_for_apikey_v2', {
-      apikey: c.get('capgkey') as string,
-    })
-    if (appsError) {
-      throw quickError(404, 'apps_not_found', 'Apps not found', { error: appsError })
+  const stats = await withStatsDb<Array<{ data: any, error: any }>>(c, principal, async (db) => {
+    let orgs: { org_id: string }[]
+    try {
+      orgs = await db<{ org_id: string }>('SELECT * FROM public.get_user_org_ids()', [])
     }
-    stats = await Promise.all((apps ?? []).map(app => getNormalStats(c, app.app_id, null, body.from, body.to, supabase, false, false, body.noAccumulate ?? false)))
-  }
-  else {
-    stats = await Promise.all(orgIds.map(orgId => getNormalStats(c, null, orgId, body.from, body.to, supabase, auth.authType === 'jwt', false, body.noAccumulate ?? false)))
-  }
+    catch (orgsError) {
+      throw quickError(404, 'user_not_found', 'User not found', { error: orgsError })
+    }
+
+    const orgIds = Array.from(new Set(orgs.map(org => org.org_id)))
+
+    cloudlog({ requestId: c.get('requestId'), message: 'orgs', data: orgIds })
+
+    if (orgIds.length === 0) {
+      throw quickError(401, 'no_organizations_found', 'No organizations found', { data: auth?.userId ?? null })
+    }
+
+    // Check organization payment status for each organization before returning stats
+    for (const orgId of orgIds) {
+      if (auth.authType !== 'jwt')
+        await checkOrganizationAccess(c, orgId, db)
+    }
+
+    if (auth.authType === 'apikey') {
+      let apps: { app_id: string }[]
+      try {
+        apps = await db<{ app_id: string }>('SELECT app_id FROM public.get_accessible_apps_for_apikey_v2(apikey => $1::text)', [c.get('capgkey') as string])
+      }
+      catch (appsError) {
+        throw quickError(404, 'apps_not_found', 'Apps not found', { error: appsError })
+      }
+      return await Promise.all(apps.map(app => getNormalStats(c, app.app_id, null, body.from, body.to, db, false, false, body.noAccumulate ?? false)))
+    }
+    return await Promise.all(orgIds.map(orgId => getNormalStats(c, null, orgId, body.from, body.to, db, auth.authType === 'jwt', false, body.noAccumulate ?? false)))
+  })
 
   const errors = stats.filter(stat => stat.error).map(stat => stat.error)
   if (errors.length > 0) {

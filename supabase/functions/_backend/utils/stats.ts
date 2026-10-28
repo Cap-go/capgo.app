@@ -1,8 +1,8 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
 import type { VersionUsageChannelFilterOptions } from './cloudflare.ts'
 import type { DeviceDataCollection } from './deviceDataCollection.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
+import type { RlsPrincipal } from './pg_rls.ts'
 import type { StatsLogDimensions, VersionAction } from './plugin_stats.ts'
 import type { Database } from './supabase.types.ts'
 import type { ChannelDeviceOverrideIds, DeviceRes, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, ReadDevicesParams, ReadDevicesResponse, ReadStatsInsightsParams, ReadStatsParams, StatsActions, StatsInsightAction, StatsInsightDaily, StatsInsightDevice, StatsInsightsResult, StatsInsightVersion, StatsMetadata, VersionCompareFilter, VersionUsage, VersionUsageChannel } from './types.ts'
@@ -13,6 +13,7 @@ import { normalizeDeviceCountryCode } from './deviceComparison.ts'
 import { applyDeviceDataCollectionToDevice, applyDeviceDataCollectionToLogDimensions, DEFAULT_DEVICE_DATA_COLLECTION } from './deviceDataCollection.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog } from './logging.ts'
+import { authPrincipal, withRlsContext } from './pg_rls.ts'
 import {
   createStatsBandwidth as createStatsBandwidthCF,
   createStatsLogs as createStatsLogsCF,
@@ -24,7 +25,7 @@ import {
   onPremStats,
 } from './plugin_stats.ts'
 import { normalizeStatsInsightDate, normalizeStatsInsightNumber, sortStatsInsightTotals } from './statsInsights.ts'
-import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, readBandwidthUsageSB, readChannelDefaultPlatformsSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, supabaseWithAuth, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
+import { countDevicesSB, countInstallSourcesSB, getAppsFromSB, readBandwidthUsageSB, readChannelDefaultPlatformsSB, readChannelDeviceOverrideIdsSB, readDevicesSB, readDeviceUsageSB, readDeviceVersionCountsSB, readNativeActiveDevicesSummarySB, readNativeDailyPlatformActiveSB, readNativeVersionUsageSB, readStatsInsightsSB, readStatsSB, readStatsStorageSB, readStatsVersionSB, trackBandwidthUsageSB, trackDevicesSB, trackDeviceUsageSB, trackLogsSB, trackMetaSB, trackVersionUsageSB } from './supabase.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { DEFAULT_LIMIT } from './types.ts'
 import { backgroundTask, getEnv, isInternalVersionName } from './utils.ts'
@@ -193,9 +194,9 @@ export function readStatsVersion(c: Context, app_id: string, start_date: string,
   return readStatsVersionCF(c, app_id, start_date, end_date, channel, options)
 }
 
-export function readNativeVersionUsage(c: Context, app_id: string, start_date: string, end_date: string, supabase: SupabaseClient<Database>): Promise<NativeVersionUsage[]> {
+export function readNativeVersionUsage(c: Context, app_id: string, start_date: string, end_date: string, principal: RlsPrincipal): Promise<NativeVersionUsage[]> {
   if (!c.env.DEVICE_USAGE)
-    return readNativeVersionUsageSB(c, app_id, start_date, end_date, supabase)
+    return readNativeVersionUsageSB(c, app_id, start_date, end_date, principal)
   return readNativeVersionUsageCF(c, app_id, start_date, end_date)
 }
 
@@ -204,10 +205,10 @@ export function readNativeActiveDevicesSummary(
   app_id: string,
   start_date: string,
   end_date: string,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<NativeActiveDevicesByPlatformRow[]> {
   if (!c.env.DEVICE_USAGE)
-    return readNativeActiveDevicesSummarySB(c, app_id, start_date, end_date, supabase)
+    return readNativeActiveDevicesSummarySB(c, app_id, start_date, end_date, principal)
   return readNativeActiveDevicesSummaryCF(c, app_id, start_date, end_date)
 }
 
@@ -216,10 +217,10 @@ export function readNativeDailyPlatformActive(
   app_id: string,
   start_date: string,
   end_date: string,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<Array<{ date: string, platform: string, devices: number }>> {
   if (!c.env.DEVICE_USAGE)
-    return readNativeDailyPlatformActiveSB(c, app_id, start_date, end_date, supabase)
+    return readNativeDailyPlatformActiveSB(c, app_id, start_date, end_date, principal)
   return readNativeDailyPlatformActiveCF(c, app_id, start_date, end_date)
 }
 function hasAnalyticsEngineReadConfig(c: Context): boolean {
@@ -300,14 +301,20 @@ async function generateDemoLogs(c: Context, params: ReadStatsParams): Promise<De
   const auth = c.get('auth')
   if (!auth)
     return []
-  const supabase = supabaseWithAuth(c, auth)
+  const principal = authPrincipal(c, auth)
 
   // Get the demo devices for this app
-  const { data: devices } = await supabase
-    .from('devices')
-    .select('device_id, version:app_versions(name)')
-    .eq('app_id', params.app_id)
-    .limit(10)
+  const devices = await withRlsContext(c, principal, async (client) => {
+    const result = await client.query<{ device_id: string, version: { name: string } | null }>(
+      `SELECT d.device_id, CASE WHEN av.id IS NULL THEN NULL ELSE pg_catalog.json_build_object('name', av.name) END AS version
+       FROM public.devices AS d
+       LEFT JOIN public.app_versions AS av ON av.id = d.version
+       WHERE d.app_id = $1
+       LIMIT 10`,
+      [params.app_id],
+    )
+    return result.rows
+  }).catch(() => null)
 
   if (!devices || devices.length === 0) {
     return []

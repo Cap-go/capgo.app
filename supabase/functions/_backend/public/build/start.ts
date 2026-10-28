@@ -6,8 +6,10 @@ import { emitBuildTransitionEvent } from '../../utils/build_tracking.ts'
 import { persistBuilderBuildOutcome } from '../../utils/builder_onboarding_checklist.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
+import type { PgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { isNativeBuildConcurrencyLimitError, reserveNativeBuildSlot } from './concurrency.ts'
 import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
@@ -98,13 +100,56 @@ async function markBuildAsFailed(
   // payload). Without this, marking a build failed here would silently miss
   // the `Build Failed` transition event, leaving the lifecycle funnel
   // incomplete for the builder-rejection and outer-catch paths.
-  const adminClient = supabaseAdmin(c)
-  const { data: row, error: selectError } = await adminClient
-    .from('build_requests')
-    .select('status, platform, build_mode, owner_org, requested_by')
-    .eq('builder_job_id', jobId)
-    .eq('app_id', appId)
-    .maybeSingle()
+  let pg: PgClient
+  try {
+    pg = await getPgClient(c)
+  }
+  catch (error) {
+    // supabase-js never threw here: DB failures were logged and swallowed.
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to update build_requests status to failed',
+      job_id: jobId,
+      error,
+    })
+    return
+  }
+  try {
+    await markBuildAsFailedWithClient(c, pg, jobId, appId, errorMessage)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
+type FailedBuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'status' | 'platform' | 'build_mode' | 'owner_org' | 'requested_by'>
+
+async function markBuildAsFailedWithClient(
+  c: Context,
+  pg: PgClient,
+  jobId: string,
+  appId: string,
+  errorMessage: string,
+): Promise<void> {
+  let row: FailedBuildRow | null = null
+  let selectError: Error | null = null
+  try {
+    const rows = await queryJson<FailedBuildRow>(
+      pg,
+      `SELECT status, platform, build_mode, owner_org, requested_by
+      FROM public.build_requests
+      WHERE builder_job_id = $1 AND app_id = $2
+      LIMIT 2`,
+      [jobId, appId],
+    )
+    // maybeSingle(): more than one row was an error under PostgREST
+    if (rows.length > 1)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    row = rows[0] ?? null
+  }
+  catch (error) {
+    selectError = error instanceof Error ? error : new Error(String(error))
+  }
 
   if (selectError || !row) {
     cloudlogErr({
@@ -115,26 +160,27 @@ async function markBuildAsFailed(
     })
     // Best-effort: still attempt the unguarded update so the user-facing status
     // is correct even when we can't capture pre-transition context.
-    const { data: updatedRows, error: updateError } = await adminClient
-      .from('build_requests')
-      .update({
-        status: 'failed',
-        last_error: errorMessage,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('builder_job_id', jobId)
-      .eq('app_id', appId)
-      .not('status', 'in', `(${[...TERMINAL_BUILD_STATUSES].join(',')})`)
-      .select('platform')
-    if (updateError) {
+    let platform: string | undefined
+    let updateError: unknown = null
+    try {
+      const result = await pg.query<{ platform: string }>(
+        `UPDATE public.build_requests
+        SET status = 'failed', last_error = $3, updated_at = $4
+        WHERE builder_job_id = $1 AND app_id = $2 AND NOT (status = ANY($5::text[]))
+        RETURNING platform`,
+        [jobId, appId, errorMessage, new Date().toISOString(), [...TERMINAL_BUILD_STATUSES]],
+      )
+      platform = result.rows[0]?.platform
+    }
+    catch (error) {
+      updateError = error
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'Failed to update build_requests status to failed',
         job_id: jobId,
-        error: updateError,
+        error,
       })
     }
-    const platform = updatedRows?.[0]?.platform
     if (!updateError && (platform === 'ios' || platform === 'android'))
       await persistBuilderBuildOutcome(c, { appId, platform, status: 'failed' })
     return
@@ -145,19 +191,18 @@ async function markBuildAsFailed(
   // Optimistic concurrency-control: only one writer wins the transition.
   // If another writer (cron, status poller, etc.) already advanced the row,
   // the affected-row set is empty and we skip both the log and the emission.
-  const { data: updatedRows, error: updateError } = await adminClient
-    .from('build_requests')
-    .update({
-      status: 'failed',
-      last_error: errorMessage,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('builder_job_id', jobId)
-    .eq('app_id', appId)
-    .eq('status', previousStatus)
-    .select('id')
-
-  if (updateError) {
+  let updatedCount: number
+  try {
+    const result = await pg.query(
+      `UPDATE public.build_requests
+      SET status = 'failed', last_error = $3, updated_at = $4
+      WHERE builder_job_id = $1 AND app_id = $2 AND status = $5
+      RETURNING id`,
+      [jobId, appId, errorMessage, new Date().toISOString(), previousStatus],
+    )
+    updatedCount = result.rowCount ?? 0
+  }
+  catch (updateError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to update build_requests status to failed',
@@ -167,7 +212,7 @@ async function markBuildAsFailed(
     return
   }
 
-  if (updatedRows && updatedRows.length > 0) {
+  if (updatedCount > 0) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Marked build_request as failed',
@@ -215,7 +260,7 @@ export async function startBuild(
 
     // Bind jobId to appId under RLS before calling the builder.
     // This prevents cross-app access by mixing an allowed app_id with another app's jobId.
-    const supabase = supabaseApikey(c, apikeyKey)
+    const principal = apikeyPrincipal(c, apikeyKey)
 
     // Security: Check if user has permission to manage builds for the supplied app
     // before validating builder job ownership.
@@ -231,19 +276,28 @@ export async function startBuild(
       throw simpleError('unauthorized', errorMsg)
     }
 
-    const { data: buildRequest, error: buildRequestError } = await supabase
-      .from('build_requests')
-      .select('id, app_id, owner_org, requested_by, status, platform, build_mode, uses_stored_credentials')
-      .eq('builder_job_id', jobId)
-      .eq('app_id', appId)
-      .maybeSingle()
-
-    if (buildRequestError) {
+    type StartBuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'id' | 'app_id' | 'owner_org' | 'requested_by' | 'status' | 'platform' | 'build_mode' | 'uses_stored_credentials'>
+    let buildRequest: StartBuildRow | null
+    try {
+      const rows = await withRlsContext(c, principal, client => queryJson<StartBuildRow>(
+        client,
+        `SELECT id, app_id, owner_org, requested_by, status, platform, build_mode, uses_stored_credentials
+        FROM public.build_requests
+        WHERE builder_job_id = $1 AND app_id = $2
+        LIMIT 2`,
+        [jobId, appId],
+      ))
+      // maybeSingle(): more than one row was an error under PostgREST
+      if (rows.length > 1)
+        throw new Error('JSON object requested, multiple (or no) rows returned')
+      buildRequest = rows[0] ?? null
+    }
+    catch (buildRequestError) {
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'Failed to fetch build_request for start build',
         job_id: jobId,
-        error: buildRequestError.message,
+        error: buildRequestError instanceof Error ? buildRequestError.message : String(buildRequestError),
       })
       throw simpleError('internal_error', 'Failed to fetch build request')
     }
@@ -339,27 +393,36 @@ export async function startBuild(
     // and emitted the transition event — skip emission to avoid double-firing.
     const previousStatus = buildRequest.status
 
-    const { data: updatedRows, error: updateError } = await supabaseAdmin(c)
-      .from('build_requests')
-      .update({
-        status: startedStatus,
-        // started_at is set later from the builder-reported run start (status/reconcile).
-        updated_at: new Date().toISOString(),
-      })
-      .eq('builder_job_id', jobId)
-      .eq('app_id', boundAppId)
-      .eq('status', previousStatus)
-      .select('id')
-
-    if (updateError) {
+    let updatedCount = 0
+    let updateFailed = false
+    let pg: PgClient | null = null
+    try {
+      pg = await getPgClient(c)
+      // started_at is set later from the builder-reported run start (status/reconcile).
+      const result = await pg.query(
+        `UPDATE public.build_requests
+        SET status = $4, updated_at = $5
+        WHERE builder_job_id = $1 AND app_id = $2 AND status = $3
+        RETURNING id`,
+        [jobId, boundAppId, previousStatus, startedStatus, new Date().toISOString()],
+      )
+      updatedCount = result.rowCount ?? 0
+    }
+    catch (updateError) {
+      updateFailed = true
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'Failed to update build_requests status to running',
         job_id: jobId,
-        error: updateError.message,
+        error: updateError instanceof Error ? updateError.message : String(updateError),
       })
     }
-    else if (updatedRows && updatedRows.length > 0) {
+    finally {
+      if (pg)
+        closeClient(c, pg)
+    }
+
+    if (!updateFailed && updatedCount > 0) {
       await emitBuildTransitionEvent(c, {
         previousStatus,
         effectiveStatus: startedStatus,

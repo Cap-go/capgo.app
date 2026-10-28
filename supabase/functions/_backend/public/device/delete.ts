@@ -2,8 +2,8 @@ import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import { syncLegacyChannelSelfOverrideDeleteForDevice } from '../../utils/channelSelfStore.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
+import { apikeyPrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 export interface DeviceLink {
@@ -27,16 +27,17 @@ export async function deleteOverride(c: Context, body: DeviceLink, apikey: Datab
     throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id })
   }
 
-  const supabase = supabaseApikey(c, apikey.key)
-  const { error: errorChannel } = await supabase
-    .from('channel_devices')
-    .delete()
-    .eq('app_id', body.app_id)
-    .eq('device_id', body.device_id)
-  if (errorChannel) {
+  const principal = apikeyPrincipal(c, apikey.key)
+  try {
+    await withRlsContext(c, principal, client => client.query(
+      'DELETE FROM public.channel_devices WHERE app_id = $1 AND device_id = $2',
+      [body.app_id, body.device_id],
+    ))
+  }
+  catch {
     throw simpleError('invalid_app_id', 'You can\'t access this app', { app_id: body.app_id })
   }
-  if (!(await syncLegacyChannelSelfOverrideDeleteForDevice(c, supabase, body.app_id, body.device_id))) {
+  if (!(await syncLegacyChannelSelfOverrideDeleteForDevice(c, principal, body.app_id, body.device_id))) {
     throw quickError(500, 'channel_self_store_error', 'Error syncing channel override store', { app_id: body.app_id, device_id: body.device_id })
   }
   return c.json(BRES)

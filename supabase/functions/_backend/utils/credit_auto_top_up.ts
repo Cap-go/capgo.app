@@ -1,11 +1,24 @@
 import type { Context } from 'hono'
+import type { PgQueryClient } from './pg.ts'
 import type { BillingAccount } from './stripe.ts'
+import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
 import { getFallbackCreditProductId } from './credits.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { getBillingAccountForCustomer, getOneTimePriceId, getStripe, isStripeConfiguredForAccount, planProductIdOrFilter, resolvePlanCreditProductId } from './stripe.ts'
-import { isAutomaticTaxEnabled } from './stripe_billing.ts'
-import { supabaseAdmin } from './supabase.ts'
+import { isAutomaticTaxEnabled, queryPlanByProductId, singleRowOrNull } from './stripe_billing.ts'
+
+type PlanRow = Database['public']['Tables']['plans']['Row']
+
+function adminQuery<T>(c: Context, run: (client: PgQueryClient) => Promise<T>) {
+  return withRlsContext(c, servicePrincipal, run)
+}
+
+/** `.maybeSingle()` read of the first matching row as PostgREST JSON. */
+async function adminMaybeSingle<T>(c: Context, text: string, values: unknown[]): Promise<T | null> {
+  return singleRowOrNull(await adminQuery(c, client => queryJson<T>(client, text, values)))
+}
 
 export const MIN_AUTO_TOP_UP_THRESHOLD = 10
 // orgs.auto_top_up_monthly_limit is numeric(18,6): 12 integer digits max.
@@ -79,27 +92,26 @@ export function normalizeAutoTopUpMonthlyLimit(value: unknown, threshold: number
 }
 
 async function getMonthlyAutoTopUpTotal(c: Context, orgId: string): Promise<number | null> {
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('get_credit_auto_top_up_month_total', { p_org_id: orgId })
-  if (error) {
+  try {
+    const row = await adminMaybeSingle<{ total: number | null }>(c, 'SELECT public.get_credit_auto_top_up_month_total(p_org_id => $1) AS total', [orgId])
+    return Number(row?.total ?? 0)
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_month_total_failed', orgId, error })
     // Report "unknown" instead of 0 so the UI never shows false usage, without failing the read or a committed save.
     return null
   }
-  return Number(data ?? 0)
 }
 
 async function getAvailableCredits(c: Context, orgId: string): Promise<number> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('usage_credit_balances')
-    .select('available_credits')
-    .eq('org_id', orgId)
-    .maybeSingle()
-  if (error) {
+  try {
+    const data = await adminMaybeSingle<{ available_credits: number | null }>(c, 'SELECT available_credits FROM public.usage_credit_balances WHERE org_id = $1 LIMIT 2', [orgId])
+    return Number(data?.available_credits ?? 0)
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_balance_failed', orgId, error })
     return 0
   }
-  return Number(data?.available_credits ?? 0)
 }
 
 export async function customerHasSavedPaymentMethod(c: Context, customerId: string): Promise<boolean> {
@@ -150,32 +162,22 @@ async function getCreditProductIdForCustomer(
 ): Promise<string> {
   const billingAccount = billingAccountOverride ?? await getBillingAccountForCustomer(c, customerId)
   const loadSoloPlan = async () => {
-    const { data, error } = await supabaseAdmin(c)
-      .from('plans')
-      .select('*')
-      .eq('name', 'Solo')
-      .maybeSingle()
-    if (error)
-      throw error
+    const data = await adminMaybeSingle<PlanRow>(c, 'SELECT * FROM public.plans WHERE name = $1 LIMIT 2', ['Solo'])
     return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
   }
 
-  const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('product_id')
-    .eq('customer_id', customerId)
-    .maybeSingle()
+  const stripeInfo = await adminMaybeSingle<{ product_id: string | null }>(c, 'SELECT product_id FROM public.stripe_info WHERE customer_id = $1 LIMIT 2', [customerId])
+    .catch(() => null)
 
-  if (stripeInfoError || !stripeInfo?.product_id)
+  if (!stripeInfo?.product_id)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
-  const { data: plan, error: planError } = await supabaseAdmin(c)
-    .from('plans')
-    .select('*')
-    .or(planProductIdOrFilter(stripeInfo.product_id))
-    .maybeSingle()
+  const productId = stripeInfo.product_id
+  // An invalid product id still throws, as the PostgREST filter builder did; lookup errors fall back.
+  planProductIdOrFilter(productId)
+  const plan = await adminQuery(c, client => queryPlanByProductId(client, productId)).catch(() => null)
 
-  if (planError || !plan)
+  if (!plan)
     return await getFallbackCreditProductId(c, customerId, loadSoloPlan)
 
   const creditProductId = resolvePlanCreditProductId(plan, billingAccount)
@@ -196,15 +198,25 @@ export async function grantCreditsFromAutoTopUpPayment(
     kind: AUTO_TOP_UP_KIND,
     quantity,
   }
-  const { error } = await supabaseAdmin(c)
-    .rpc('top_up_usage_credits', {
-      p_org_id: orgId,
-      p_amount: quantity,
-      p_source: AUTO_TOP_UP_SOURCE,
-      p_notes: 'Automatic credit top-up',
-      p_source_ref: sourceRef,
-    })
-    .single()
+  let error: unknown = null
+  try {
+    const result = await adminQuery(c, client => client.query(
+      `SELECT * FROM public.top_up_usage_credits(
+        p_org_id => $1,
+        p_amount => $2,
+        p_source => $3,
+        p_notes => $4,
+        p_source_ref => $5::jsonb
+      )`,
+      [orgId, quantity, AUTO_TOP_UP_SOURCE, 'Automatic credit top-up', JSON.stringify(sourceRef)],
+    ))
+    // `.single()` also failed when the function returned no row.
+    if (result.rowCount !== 1)
+      error = Object.assign(new Error('JSON object requested, multiple (or no) rows returned'), { code: 'PGRST116' })
+  }
+  catch (topUpError) {
+    error = topUpError
+  }
 
   if (error) {
     cloudlogErr({
@@ -343,11 +355,14 @@ async function chargeOffSessionCredits(
 }
 
 export async function getAutoTopUpSettings(c: Context, orgId: string): Promise<AutoTopUpSettings> {
-  const { data: org, error } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('auto_top_up_enabled, auto_top_up_threshold, auto_top_up_monthly_limit, customer_id')
-    .eq('id', orgId)
-    .maybeSingle()
+  let org: Pick<Database['public']['Tables']['orgs']['Row'], 'auto_top_up_enabled' | 'auto_top_up_threshold' | 'auto_top_up_monthly_limit' | 'customer_id'> | null = null
+  let error: unknown = null
+  try {
+    org = await adminMaybeSingle(c, 'SELECT auto_top_up_enabled, auto_top_up_threshold, auto_top_up_monthly_limit, customer_id FROM public.orgs WHERE id = $1 LIMIT 2', [orgId])
+  }
+  catch (lookupError) {
+    error = lookupError
+  }
 
   if (error || !org) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_settings_lookup_failed', orgId, error })
@@ -382,14 +397,14 @@ export async function saveAutoTopUpSettings(
   threshold: number,
   monthlyLimit?: number,
 ): Promise<AutoTopUpSettings> {
-  const { data: org, error: orgError } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('customer_id, auto_top_up_monthly_limit')
-    .eq('id', orgId)
-    .maybeSingle()
+  const org = await adminMaybeSingle<Pick<Database['public']['Tables']['orgs']['Row'], 'customer_id' | 'auto_top_up_monthly_limit'>>(
+    c,
+    'SELECT customer_id, auto_top_up_monthly_limit FROM public.orgs WHERE id = $1 LIMIT 2',
+    [orgId],
+  )
 
-  if (orgError || !org)
-    throw orgError ?? new Error('stripe_customer_missing')
+  if (!org)
+    throw new Error('stripe_customer_missing')
 
   // When the caller keeps the stored limit, it must still allow one top-up at the new threshold.
   if (monthlyLimit === undefined && normalizeAutoTopUpMonthlyLimit(Number(org.auto_top_up_monthly_limit ?? 0), threshold) === null)
@@ -403,14 +418,15 @@ export async function saveAutoTopUpSettings(
       throw new Error('payment_method_required')
   }
 
-  const { error: updateError } = await supabaseAdmin(c)
-    .from('orgs')
-    .update({
-      auto_top_up_enabled: enabled,
-      auto_top_up_threshold: threshold,
-      ...(monthlyLimit === undefined ? {} : { auto_top_up_monthly_limit: monthlyLimit }),
-    })
-    .eq('id', orgId)
+  let updateError: { code?: string, message?: string } | null = null
+  try {
+    await adminQuery(c, client => monthlyLimit === undefined
+      ? client.query('UPDATE public.orgs SET auto_top_up_enabled = $2, auto_top_up_threshold = $3 WHERE id = $1', [orgId, enabled, threshold])
+      : client.query('UPDATE public.orgs SET auto_top_up_enabled = $2, auto_top_up_threshold = $3, auto_top_up_monthly_limit = $4 WHERE id = $1', [orgId, enabled, threshold, monthlyLimit]))
+  }
+  catch (error) {
+    updateError = error as { code?: string, message?: string }
+  }
 
   if (updateError) {
     // A concurrent save can still break the limit >= threshold rule; the DB constraint rejects it.
@@ -426,13 +442,10 @@ export async function saveAutoTopUpSettings(
 }
 
 export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<void> {
-  const { data: org, error: orgError } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', orgId)
-    .maybeSingle()
+  const org = await adminMaybeSingle<{ customer_id: string | null }>(c, 'SELECT customer_id FROM public.orgs WHERE id = $1 LIMIT 2', [orgId])
+    .catch(() => null)
 
-  if (orgError || !org?.customer_id)
+  if (!org?.customer_id)
     return
 
   // DB-only lookups here; the Stripe price lookup waits until the claim succeeds.
@@ -449,11 +462,11 @@ export async function maybeAutoTopUpCredits(c: Context, orgId: string): Promise<
     return
   }
 
-  const { data: claim, error: claimError } = await supabaseAdmin(c)
-    .rpc('try_claim_credit_auto_top_up', { p_org_id: orgId })
-    .maybeSingle()
-
-  if (claimError) {
+  let claim: { claimed: boolean | null, auto_top_up_threshold: number | null, customer_id: string | null } | null
+  try {
+    claim = await adminMaybeSingle(c, 'SELECT * FROM public.try_claim_credit_auto_top_up(p_org_id => $1)', [orgId])
+  }
+  catch (claimError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'credit_auto_top_up_claim_failed', orgId, error: claimError })
     return
   }

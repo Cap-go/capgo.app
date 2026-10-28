@@ -6,18 +6,20 @@ const APP_ROW = { app_id: 'com.example.app', owner_org: ORG_ID }
 
 interface QueryCall {
   table: string
-  ops: [string, ...unknown[]][]
+  text: string
+  values: unknown[]
 }
 
 const mocks = vi.hoisted(() => ({
-  // Caller (API-key scoped) client: every query is recorded and resolves to `result`.
+  // Caller (API-key scoped) statements: every table query is recorded and resolves to `result`.
   calls: [] as QueryCall[],
   result: { data: null as unknown, error: null as unknown },
   rpc: vi.fn(),
   rpcResults: {} as Record<string, unknown>,
+  principals: [] as unknown[],
   checkPermission: vi.fn(),
-  // Admin client and R2 image store used by the icon upload.
-  adminMaybeSingle: vi.fn(),
+  // Connection-role client and R2 image store used by the icon upload.
+  adminQuery: vi.fn(),
   upload: vi.fn(),
   apikey: {
     id: 42,
@@ -26,21 +28,54 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-function createQuery(table: string) {
-  const call: QueryCall = { table, ops: [] }
-  mocks.calls.push(call)
-  const query: Record<string, unknown> = {}
-  for (const op of ['select', 'eq', 'in', 'or', 'order', 'limit', 'range', 'update', 'insert']) {
-    query[op] = (...args: unknown[]) => {
-      call.ops.push([op, ...args])
-      return query
-    }
-  }
-  query.maybeSingle = async () => mocks.result
-  query.single = async () => mocks.result
-  query.then = (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) => Promise.resolve(mocks.result).then(resolve, reject)
-  return query
+const CALLER_CLIENT = { caller: true }
+
+// Named RPC arguments (`name => $1`) back to the object supabase-js used to send.
+function rpcArgs(text: string, values: unknown[]) {
+  return Object.fromEntries([...text.matchAll(/(\w+) => \$(\d+)/g)].map(([, name, index]) => [name, values[Number(index) - 1]]))
 }
+
+async function runStatement(client: unknown, text: string, values: unknown[] = []): Promise<unknown> {
+  if (client !== CALLER_CLIENT)
+    throw new Error('caller statement ran outside withRlsContext')
+  const rpcName = text.match(/public\.(\w+)\(/)?.[1]
+  if (rpcName) {
+    const { data, error } = await mocks.rpc(rpcName, rpcArgs(text, values))
+    if (error)
+      throw error
+    return data
+  }
+  // The outermost table is the last FROM (embeds are subselects before it) or the UPDATE target.
+  const table = text.match(/UPDATE public\.(\w+)/)?.[1] ?? [...text.matchAll(/FROM public\.(\w+)/g)].at(-1)?.[1] ?? ''
+  mocks.calls.push({ table, text, values })
+  const { data, error } = mocks.result
+  if (error)
+    throw error
+  return data
+}
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({ query: (...args: unknown[]) => mocks.adminQuery(...args) }),
+  closeClient: () => {},
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  apikeyPrincipal: (_c: unknown, apikey: string) => ({ kind: 'apikey', apikey }),
+  withRlsContext: async (_c: unknown, principal: unknown, run: (client: unknown) => Promise<unknown>) => {
+    mocks.principals.push(principal)
+    return run(CALLER_CLIENT)
+  },
+  queryJson: async (client: unknown, text: string, values?: unknown[]) => {
+    const data = await runStatement(client, text, values)
+    return Array.isArray(data) ? data : data == null ? [] : [data]
+  },
+  queryJsonOne: async (client: unknown, text: string, values?: unknown[]) => {
+    const data = await runStatement(client, text, values)
+    if (/ AS value$/.test(text))
+      return { value: data }
+    return Array.isArray(data) ? (data[0] ?? null) : data
+  },
+}))
 
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
   middlewareKey: () => async (c: any, next: () => Promise<void>) => {
@@ -52,22 +87,6 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => mocks.checkPermission(...args),
-}))
-
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: () => ({
-    rpc: mocks.rpc,
-    from: (table: string) => createQuery(table),
-  }),
-  supabaseAdmin: () => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: mocks.adminMaybeSingle,
-        }),
-      }),
-    }),
-  }),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({
@@ -112,10 +131,11 @@ function requestIcon(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.calls.length = 0
+  mocks.principals.length = 0
   mocks.result = { data: APP_ROW, error: null }
   mocks.rpcResults = { ...DEFAULT_RPC_RESULTS }
   mocks.checkPermission.mockResolvedValue(true)
-  mocks.adminMaybeSingle.mockResolvedValue({ data: null, error: null })
+  mocks.adminQuery.mockResolvedValue({ rows: [] })
   mocks.upload.mockResolvedValue('ok')
   mocks.rpc.mockImplementation(async (name: string) => {
     if (name in mocks.rpcResults)
@@ -149,6 +169,7 @@ describe('private/cli routes', () => {
       has2fa: false,
       apikey_id: 42,
     })
+    expect(mocks.principals).toEqual([{ kind: 'apikey', apikey: 'test-api-key' }])
   })
 
   it('gET /organizations returns org rows', async () => {
@@ -283,19 +304,21 @@ describe('private/cli data routes', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual([{ id: 1, name: 'production', version_info: { id: 7, name: '1.0.0', deleted: false } }])
     expect(mocks.calls[0].table).toBe('channels')
-    const select = mocks.calls[0].ops.find(([op]) => op === 'select')?.[1]
-    expect(select).toContain('version_info:app_versions!channels_version_fkey')
-    expect(select).toContain('rollout_version_info:app_versions!channels_rollout_version_fkey')
-    expect(mocks.calls[0].ops).toContainEqual(['eq', 'app_id', 'com.example.app'])
-    expect(mocks.calls[0].ops).toContainEqual(['eq', 'name', 'production'])
-    expect(mocks.calls[0].ops).toContainEqual(['range', 0, 999])
+    const { text, values } = mocks.calls[0]
+    expect(text).toContain('av.id = ch.version) v) AS version_info')
+    expect(text).toContain('av.id = ch.rollout_version) v) AS rollout_version_info')
+    expect(text).toContain('ch.app_id = $1 AND ch.name = $2')
+    expect(text).toContain('ORDER BY ch.name, ch.id LIMIT 1000 OFFSET 0')
+    expect(values).toEqual(['com.example.app', 'production'])
+    expect(mocks.principals).toEqual([{ kind: 'apikey', apikey: 'test-api-key' }])
   })
 
   it('gET /channels filters channels linked to a version', async () => {
     mocks.result = { data: [], error: null }
     const response = await app.request('http://local/channels?app_id=com.example.app&linked_version_id=7')
     expect(response.status).toBe(200)
-    expect(mocks.calls[0].ops).toContainEqual(['or', 'version.eq.7,rollout_version.eq.7'])
+    expect(mocks.calls[0].text).toContain('(ch.version = $2 OR ch.rollout_version = $2)')
+    expect(mocks.calls[0].values).toEqual(['com.example.app', 7])
   })
 
   it('gET /channels pages past the PostgREST row cap', async () => {
@@ -312,7 +335,7 @@ describe('private/cli data routes', () => {
     try {
       const response = await app.request('http://local/channels?app_id=com.example.app')
       expect((await response.json() as unknown[]).length).toBe(1001)
-      expect(mocks.calls.map(entry => entry.ops.find(([op]) => op === 'range'))).toEqual([['range', 0, 999], ['range', 1000, 1999]])
+      expect(mocks.calls.map(entry => entry.text.match(/LIMIT \d+ OFFSET \d+/)?.[0])).toEqual(['LIMIT 1000 OFFSET 0', 'LIMIT 1000 OFFSET 1000'])
     }
     finally {
       Object.defineProperty(mocks, 'result', { configurable: true, writable: true, enumerable: true, value: original })
@@ -339,7 +362,8 @@ describe('private/cli data routes', () => {
     const response = await app.request('http://local/bundles/latest?app_id=com.example.app')
     expect(response.status).toBe(200)
     expect((await response.json() as { name: string }).name).toBe('2.0.0')
-    expect(mocks.calls[0].ops.some(([op, column]) => op === 'eq' && column === 'deleted')).toBe(false)
+    expect(mocks.calls[0].text).not.toContain('deleted =')
+    expect(mocks.calls[0].text).toContain('ORDER BY created_at DESC LIMIT 1')
   })
 
   it('pOST /bundles/deleted soft-deletes only live bundles', async () => {
@@ -351,10 +375,9 @@ describe('private/cli data routes', () => {
     })
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ updated: ['1.0.0'] })
-    expect(mocks.calls[0].ops).toContainEqual(['update', { deleted: true }])
-    expect(mocks.calls[0].ops).toContainEqual(['eq', 'app_id', 'com.example.app'])
-    expect(mocks.calls[0].ops).toContainEqual(['eq', 'deleted', false])
-    expect(mocks.calls[0].ops).toContainEqual(['in', 'name', ['1.0.0']])
+    expect(mocks.calls[0].text).toContain('UPDATE public.app_versions SET deleted = $1 WHERE app_id = $2 AND deleted = $3 AND name = ANY($4::text[]) RETURNING name')
+    expect(mocks.calls[0].values).toEqual([true, 'com.example.app', false, ['1.0.0']])
+    expect(mocks.principals).toEqual([{ kind: 'apikey', apikey: 'test-api-key' }])
   })
 
   it('gET /manifest requires a numeric version id', async () => {
@@ -364,7 +387,8 @@ describe('private/cli data routes', () => {
     mocks.result = { data: [{ file_name: 'index.html', file_hash: 'abc' }], error: null }
     const ok = await app.request('http://local/manifest?app_version_id=7')
     expect(await ok.json()).toEqual([{ file_name: 'index.html', file_hash: 'abc' }])
-    expect(mocks.calls.at(-1)?.ops).toContainEqual(['eq', 'app_version_id', 7])
+    expect(mocks.calls.at(-1)?.text).toContain('WHERE app_version_id = $1 ORDER BY id')
+    expect(mocks.calls.at(-1)?.values).toEqual([7])
   })
 
   it('gET /manifest pages past the PostgREST row cap', async () => {
@@ -380,7 +404,7 @@ describe('private/cli data routes', () => {
     try {
       const response = await app.request('http://local/manifest?app_version_id=7')
       expect((await response.json() as unknown[]).length).toBe(2001)
-      expect(mocks.calls.map(entry => entry.ops.find(([op]) => op === 'range'))).toEqual([['range', 0, 999], ['range', 1000, 1999], ['range', 2000, 2999]])
+      expect(mocks.calls.map(entry => entry.text.match(/LIMIT \d+ OFFSET \d+/)?.[0])).toEqual(['LIMIT 1000 OFFSET 0', 'LIMIT 1000 OFFSET 1000', 'LIMIT 1000 OFFSET 2000'])
     }
     finally {
       Object.defineProperty(mocks, 'result', { configurable: true, writable: true, enumerable: true, value: original })
@@ -397,6 +421,9 @@ describe('private/cli storage icon upload', () => {
     expect(body.path).toBe(`org/${ORG_ID}/com.example.app/icon`)
     expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), 'org.create_app', { orgId: ORG_ID })
     expect(mocks.upload).toHaveBeenCalled()
+    // Existence is resolved on the connection role, not through the caller key.
+    expect(mocks.adminQuery).toHaveBeenCalledWith('SELECT app_id, owner_org FROM public.apps WHERE app_id = $1', ['com.example.app'])
+    expect(mocks.principals).toEqual([])
   })
 
   it('returns 409 conflict when upsert is false and storage already has the object', async () => {
@@ -427,7 +454,7 @@ describe('private/cli storage icon upload', () => {
   })
 
   it('requires app.update_settings when the app already exists, even if hidden from the key', async () => {
-    mocks.adminMaybeSingle.mockResolvedValue({ data: { app_id: 'com.example.app', owner_org: ORG_ID }, error: null })
+    mocks.adminQuery.mockResolvedValue({ rows: [{ app_id: 'com.example.app', owner_org: ORG_ID }] })
     mocks.checkPermission.mockImplementation(async (_c: unknown, permission: string) => permission === 'org.create_app')
 
     const response = await requestIcon()
@@ -438,7 +465,7 @@ describe('private/cli storage icon upload', () => {
   })
 
   it('rejects uploads when the existing app belongs to another org', async () => {
-    mocks.adminMaybeSingle.mockResolvedValue({ data: { app_id: 'com.example.app', owner_org: '33333333-3333-4333-8333-333333333333' }, error: null })
+    mocks.adminQuery.mockResolvedValue({ rows: [{ app_id: 'com.example.app', owner_org: '33333333-3333-4333-8333-333333333333' }] })
 
     const response = await requestIcon()
     expect(response.status).toBe(403)

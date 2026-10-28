@@ -82,6 +82,18 @@ export async function applyRlsContext(client: QueryClient, principal: RlsPrincip
 }
 
 /**
+ * Sets only `request.headers.capgkey` for the open transaction, keeping the connection role, so
+ * audit triggers attribute writes to the API key (`get_apikey_header()`) on a path that already
+ * checked permissions and must still call functions revoked from anon. Must run inside BEGIN/COMMIT.
+ */
+export async function setRequestApikeyHeader(client: QueryClient, apikey: string): Promise<void> {
+  await client.query(
+    'SELECT pg_catalog.set_config(\'request.headers\', $1, true)',
+    [JSON.stringify({ capgkey: apikey })],
+  )
+}
+
+/**
  * Runs `text` (a SELECT, or INSERT/UPDATE/DELETE ... RETURNING) and returns each row as Postgres
  * serializes it to JSON (`to_json`, column order kept), which is what PostgREST returns: bigint as number, timestamptz as
  * `2024-01-01T00:00:00+00:00`, json columns as objects. Raw node-postgres rows instead carry

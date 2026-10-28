@@ -1,3 +1,5 @@
+import { setRequestApikeyHeader } from './pg_rls.ts'
+
 /**
  * Soft-deleting bundles from an open write transaction, shared by `DELETE /bundle` (by name)
  * and `POST /bundle/cleanup`, so the lock order and audit attribution live in one place.
@@ -29,7 +31,7 @@ export async function lockBundleLifecycles(tx: TxClient, ids: number[]) {
  * it: callers must have checked bundle.delete.
  */
 export async function softDeleteLockedBundles(tx: TxClient, effectiveApikey: string, appId: string, ids: number[], ignoreChannel: boolean): Promise<number[]> {
-  await tx.query('SELECT set_config(\'request.headers\', $1, true)', [JSON.stringify({ capgkey: effectiveApikey })])
+  await setRequestApikeyHeader(tx, effectiveApikey)
   const result = await tx.query<{ id: string | number }>(
     `UPDATE public.app_versions AS v
      SET deleted = true

@@ -6,7 +6,7 @@ const checkPermission = vi.fn()
 const checkPermissionPg = vi.fn()
 const assertCanPromoteChannelInTransaction = vi.fn()
 const setChannelInTransaction = vi.fn()
-const supabaseAdmin = vi.fn()
+const adminQuery = vi.fn()
 const isValidAppId = vi.fn()
 const getPgClient = vi.fn()
 const getDrizzleClient = vi.fn()
@@ -17,8 +17,10 @@ const dbClient = {
   query: vi.fn(),
   release: vi.fn(),
 }
+// Service connection: plain queries on the handler's client, transactions on a checkout.
 const pgClient = {
   connect: vi.fn(),
+  query: adminQuery,
 }
 const drizzle = {}
 
@@ -49,7 +51,6 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin,
   updateOrCreateChannel,
 }))
 
@@ -63,6 +64,10 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   isValidAppId,
 }))
 
+function jsonRows(rows: unknown[]) {
+  return { rowCount: rows.length, rows: rows.map(row => ({ row })) }
+}
+
 function buildAdminChain(body: {
   existingChannelId?: number | null
   existingChannelVersion?: number | null
@@ -71,57 +76,36 @@ function buildAdminChain(body: {
   ownerOrg?: string
   versionId?: number
   versionError?: { message: string } | null
-  eqCalls?: Array<[string, unknown]>
+  versionQueries?: Array<[string, unknown[]]>
   fromCalls?: string[]
 } = {}) {
-  return {
-    from(table: string) {
-      body.fromCalls?.push(table)
-      if (table === 'apps') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: async () => ({ data: { owner_org: body.ownerOrg ?? 'org-test' }, error: null }),
-            }),
-          }),
-        }
-      }
+  return async (text: string, values: unknown[] = []) => {
+    if (text.includes('FROM public.apps')) {
+      body.fromCalls?.push('apps')
+      return jsonRows([{ owner_org: body.ownerOrg ?? 'org-test' }])
+    }
 
-      if (table === 'channels') {
-        return {
-          select: () => ({
-            eq() {
-              return this
-            },
-            maybeSingle: async () => ({
-              data: body.existingChannelId == null
-                ? null
-                : {
-                    id: body.existingChannelId,
-                    version: body.existingChannelVersion ?? null,
-                    rollout_version: body.existingRolloutVersion ?? null,
-                    public: body.existingChannelPublic ?? false,
-                  },
-              error: null,
-            }),
-          }),
-        }
-      }
+    if (text.includes('FROM public.channels')) {
+      body.fromCalls?.push('channels')
+      return jsonRows(body.existingChannelId == null
+        ? []
+        : [{
+            id: body.existingChannelId,
+            version: body.existingChannelVersion ?? null,
+            rollout_version: body.existingRolloutVersion ?? null,
+            public: body.existingChannelPublic ?? false,
+          }])
+    }
 
-      if (table === 'app_versions') {
-        return {
-          select: () => ({
-            eq(column: string, value: unknown) {
-              body.eqCalls?.push([column, value])
-              return this
-            },
-            single: async () => body.versionError ? { data: null, error: body.versionError } : { data: { id: body.versionId ?? 123 }, error: null },
-          }),
-        }
-      }
+    if (text.includes('FROM public.app_versions')) {
+      body.fromCalls?.push('app_versions')
+      body.versionQueries?.push([text, values])
+      if (body.versionError)
+        throw new Error(body.versionError.message)
+      return jsonRows([{ id: body.versionId ?? 123 }])
+    }
 
-      throw new Error(`Unexpected admin table: ${table}`)
-    },
+    throw new Error(`Unexpected admin query: ${text}`)
   }
 }
 
@@ -191,7 +175,7 @@ describe('public channel post', () => {
       return { channelName: 'preview', versionName: '1.0.0' }
     })
     isValidAppId.mockReturnValue(true)
-    supabaseAdmin.mockImplementation(() => buildAdminChain())
+    adminQuery.mockImplementation(buildAdminChain())
     updateOrCreateChannel.mockResolvedValue({ data: { id: 99 }, error: null })
     getPgClient.mockReturnValue(pgClient)
     pgClient.connect.mockResolvedValue(dbClient)
@@ -280,7 +264,7 @@ describe('public channel post', () => {
   })
 
   it('requires app settings permission to make an existing private channel public', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingChannelPublic: false,
@@ -305,7 +289,7 @@ describe('public channel post', () => {
   })
 
   it('allows channel settings updates that retain an already-public channel', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingChannelPublic: true,
@@ -331,7 +315,7 @@ describe('public channel post', () => {
   })
 
   it('maps updatePackage onto the channel row', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingChannelPublic: true,
@@ -354,7 +338,7 @@ describe('public channel post', () => {
   })
 
   it('maps the metadata alias onto the version_number strategy', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingChannelPublic: true,
@@ -377,7 +361,7 @@ describe('public channel post', () => {
   })
 
   it('rejects an unknown disable auto update strategy with a readable error', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingChannelPublic: true,
@@ -397,7 +381,7 @@ describe('public channel post', () => {
   })
 
   it('maps zip package mismatches from the database', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingChannelPublic: true,
@@ -417,7 +401,7 @@ describe('public channel post', () => {
 
   it('preserves the stable version for a settings-only update without channel.read or bundle lookup', async () => {
     const fromCalls: string[] = []
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       fromCalls,
@@ -438,7 +422,7 @@ describe('public channel post', () => {
   })
   it('requires promote permission before explicit version lookup, even when the name is current', async () => {
     const fromCalls: string[] = []
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       fromCalls,
@@ -463,7 +447,7 @@ describe('public channel post', () => {
   })
 
   it('uses the admin version lookup after a scoped channel key proves settings and promote permissions', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       versionId: 456,
@@ -483,7 +467,7 @@ describe('public channel post', () => {
   })
 
   it('writes a rollout promotion as the stable version when body.version is omitted', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingRolloutVersion: 456,
@@ -502,7 +486,7 @@ describe('public channel post', () => {
   })
 
   it('keeps promoteToStable plus rolloutVersion as promote-and-clear', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingRolloutVersion: 456,
@@ -527,7 +511,7 @@ describe('public channel post', () => {
   })
 
   it('promotes the leftover rollout to stable and assigns a new rollout target in one write', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingRolloutVersion: 456,
@@ -554,7 +538,7 @@ describe('public channel post', () => {
   })
 
   it('unlinks the rollout bundle when progressive rollout is disabled', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingRolloutVersion: 456,
@@ -579,7 +563,7 @@ describe('public channel post', () => {
   })
 
   it('forces unlink on disable even when rolloutVersion is also sent', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingRolloutVersion: 456,
@@ -602,7 +586,7 @@ describe('public channel post', () => {
   })
 
   it('does not require promote when disabling with no linked rollout bundle', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       existingRolloutVersion: null,
@@ -732,7 +716,7 @@ describe('public channel post', () => {
   })
 
   it('requires promote bundle permission to explicitly clear a channel version', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({ existingChannelId: 42, existingChannelVersion: 123 }))
+    adminQuery.mockImplementation(buildAdminChain({ existingChannelId: 42, existingChannelVersion: 123 }))
     checkPermission
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false)
@@ -750,12 +734,12 @@ describe('public channel post', () => {
   })
 
   it('filters numeric rollout target ids to active bundles', async () => {
-    const eqCalls: Array<[string, unknown]> = []
-    supabaseAdmin.mockImplementation(() => buildAdminChain({
+    const versionQueries: Array<[string, unknown[]]> = []
+    adminQuery.mockImplementation(buildAdminChain({
       existingChannelId: 42,
       existingChannelVersion: 123,
       versionId: 456,
-      eqCalls,
+      versionQueries,
     }))
     const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
 
@@ -765,14 +749,15 @@ describe('public channel post', () => {
       rolloutVersion: 456,
     }, apiKey())
 
-    const rolloutIdCallIndex = eqCalls.findIndex(([column, value]) => column === 'id' && value === 456)
-    expect(rolloutIdCallIndex).toBeGreaterThanOrEqual(0)
-    expect(eqCalls.slice(rolloutIdCallIndex)).toContainEqual(['deleted', false])
+    const rolloutIdQuery = versionQueries.find(([, values]) => values.includes(456))
+    expect(rolloutIdQuery).toBeDefined()
+    expect(rolloutIdQuery![0]).toContain('id = $3')
+    expect(rolloutIdQuery![0]).toContain('deleted = false')
     expect(checkPermission).toHaveBeenCalledWith(expect.anything(), 'channel.promote_bundle', { appId: 'com.test.rollout-id', channelId: 42 })
   })
 
   it('rejects rollout target changes without channel promote permission', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({ existingChannelId: 42, existingChannelVersion: 123 }))
+    adminQuery.mockImplementation(buildAdminChain({ existingChannelId: 42, existingChannelVersion: 123 }))
     checkPermission
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false)
@@ -790,7 +775,7 @@ describe('public channel post', () => {
   })
 
   it('rejects rollout targets when a channel has no stable bundle', async () => {
-    supabaseAdmin.mockImplementation(() => buildAdminChain({ existingChannelId: 42, existingChannelVersion: null }))
+    adminQuery.mockImplementation(buildAdminChain({ existingChannelId: 42, existingChannelVersion: null }))
     const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
 
     await expect(post(context(), {

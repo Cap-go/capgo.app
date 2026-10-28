@@ -1,12 +1,15 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { PgClient, PgQueryClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { removeImageFolder } from '../../utils/image_storage.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJsonOne, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { s3 } from '../../utils/s3.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
+import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 const STORAGE_LIST_PAGE_SIZE = 100
@@ -71,6 +74,95 @@ async function removeSupabaseStorageFolder(
   }
 }
 
+// Version-related and app-related user-facing tables (have RLS)
+const APIKEY_DELETE_TABLES = ['app_versions_meta', 'channel_devices', 'channels', 'devices'] as const
+
+// Internal tables that need the service connection. Keep daily_mau / daily_bandwidth /
+// daily_build_time: they stay billable through deleted_apps for the rest of the cycle
+// (anti-fraud, so deleting and recreating an app cannot reset usage).
+// delete_old_deleted_apps purges them after 35 days, same as the dashboard deletion path.
+// An app_id recreated in that window, even by another org, shares these rows on purpose;
+// see docs/billing-usage-retention.md. App deletion is already authorized, so app-scoped
+// org_users cleanup is internal; deploy_history has a "Deny delete" policy.
+const ADMIN_DELETE_TABLES = ['daily_version', 'version_usage', 'bandwidth_usage', 'storage_usage', 'device_usage', 'daily_storage', 'stats', 'org_users', 'deploy_history'] as const
+
+// Each delete used to be its own PostgREST request whose error was ignored; a savepoint
+// keeps that isolation for statements sharing the API-key transaction.
+async function deleteAppRows(c: Context<MiddlewareKeyVariables>, client: PgClient | PgQueryClient, table: string, appId: string, inTransaction: boolean) {
+  try {
+    if (inTransaction)
+      await client.query('SAVEPOINT delete_app_rows')
+    await client.query(`DELETE FROM public.${table} WHERE app_id = $1`, [appId])
+    if (inTransaction)
+      await client.query('RELEASE SAVEPOINT delete_app_rows')
+  }
+  catch (error) {
+    if (inTransaction)
+      await client.query('ROLLBACK TO SAVEPOINT delete_app_rows')
+    cloudlogErr({ requestId: c.get('requestId'), message: `error deleting ${table}`, error, app_id: appId })
+  }
+}
+
+async function deleteAppData(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<string | null> {
+  const pg = await getPgClient(c)
+  try {
+    // Use the API key's RLS context for data queries - RLS will enforce access
+    const apikeyRls = apikeyPrincipal(c, apikey.key)
+
+    // Get the app's owner_org for image cleanup
+    const app = await withRlsTransaction(pg, apikeyRls, client => queryJsonOne<{ owner_org: string }>(
+      client,
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )).catch(() => null)
+    const appStoragePrefix = app?.owner_org ? `orgs/${app.owner_org}/apps/${appId}/` : null
+
+    // Legacy per-user Supabase storage folder used by older CLI uploads.
+    // The `apps` bucket stores objects under {user_id}/{app_id}/...
+    if (apikey.user_id)
+      await removeSupabaseStorageFolder(c, 'apps', `${apikey.user_id}/${appId}`, appId, 'legacy user-scoped app storage')
+
+    // Delete app icon from image storage (R2) before deleting the app
+    // App icons are stored at: images/org/{org_id}/{app_id}/icon
+    if (app?.owner_org) {
+      try {
+        const deleted = await removeImageFolder(c, `org/${app.owner_org}/${appId}`)
+        if (deleted > 0)
+          cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: deleted, app_id: appId })
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting app images', error, app_id: appId })
+      }
+    }
+
+    // User-facing tables (have RLS): deleted under the API key, each failure ignored like before
+    await withRlsTransaction(pg, apikeyRls, async (client) => {
+      for (const table of APIKEY_DELETE_TABLES)
+        await deleteAppRows(c, client, table, appId, true)
+    }).catch(error => cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting app rows', error, app_id: appId }))
+
+    // Internal stats tables have restrictive RLS policies: delete on the service connection
+    for (const table of ADMIN_DELETE_TABLES)
+      await deleteAppRows(c, pg, table, appId, false)
+
+    // Delete versions (last) - needs admin because no DELETE policy for anon role
+    await deleteAppRows(c, pg, 'app_versions', appId, false)
+
+    // Finally delete the app - needs admin because no DELETE policy for anon role
+    try {
+      await pg.query('DELETE FROM public.apps WHERE app_id = $1', [appId])
+    }
+    catch (dbError) {
+      throw simpleError('cannot_delete_app', 'Cannot delete app', { supabaseError: dbError })
+    }
+
+    return appStoragePrefix
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
 export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   if (!appId) {
     throw simpleError('missing_app_id', 'Missing app_id')
@@ -83,138 +175,7 @@ export async function deleteApp(c: Context<MiddlewareKeyVariables>, appId: strin
     throw simpleError('cannot_delete_app', 'You can\'t access this app', { app_id: appId })
   }
 
-  // Use authenticated client for data queries - RLS will enforce access
-  const supabase = supabaseApikey(c, apikey.key)
-
-  // Get the app's owner_org for image cleanup
-  const { data: app } = await supabase
-    .from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .single()
-  const appStoragePrefix = app?.owner_org ? `orgs/${app.owner_org}/apps/${appId}/` : null
-
-  // Legacy per-user Supabase storage folder used by older CLI uploads.
-  // The `apps` bucket stores objects under {user_id}/{app_id}/...
-  if (apikey.user_id)
-    await removeSupabaseStorageFolder(c, 'apps', `${apikey.user_id}/${appId}`, appId, 'legacy user-scoped app storage')
-
-  // Delete app icon from image storage (R2) before deleting the app
-  // App icons are stored at: images/org/{org_id}/{app_id}/icon
-  if (app?.owner_org) {
-    try {
-      const deleted = await removeImageFolder(c, `org/${app.owner_org}/${appId}`)
-      if (deleted > 0)
-        cloudlog({ requestId: c.get('requestId'), message: 'deleted app images', count: deleted, app_id: appId })
-    }
-    catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'error deleting app images', error, app_id: appId })
-    }
-  }
-
-  // Admin client for internal stats tables that have restrictive RLS policies
-  const admin = supabaseAdmin(c)
-
-  // Run most deletions in parallel
-  await Promise.all([
-    // Delete version related data (user-facing, has RLS)
-    supabase
-      .from('app_versions_meta')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete daily version stats (internal, needs admin - only has SELECT RLS)
-    admin
-      .from('daily_version')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete version usage (internal, needs admin)
-    admin
-      .from('version_usage')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete app related data
-    // Delete channel devices (user-facing, has RLS)
-    supabase
-      .from('channel_devices')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete channels (user-facing, has RLS)
-    supabase
-      .from('channels')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete devices (user-facing, has RLS)
-    supabase
-      .from('devices')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete usage stats (internal, needs admin - has "Disable for all" policy)
-    admin
-      .from('bandwidth_usage')
-      .delete()
-      .eq('app_id', appId),
-
-    admin
-      .from('storage_usage')
-      .delete()
-      .eq('app_id', appId),
-
-    admin
-      .from('device_usage')
-      .delete()
-      .eq('app_id', appId),
-
-    // Keep daily_mau / daily_bandwidth / daily_build_time: they stay billable
-    // through deleted_apps for the rest of the cycle (anti-fraud, so deleting and
-    // recreating an app cannot reset usage). delete_old_deleted_apps purges them
-    // after 35 days, same as the dashboard deletion path. An app_id recreated in
-    // that window, even by another org, shares these rows on purpose; see
-    // docs/billing-usage-retention.md.
-    admin
-      .from('daily_storage')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete stats (internal, needs admin)
-    admin
-      .from('stats')
-      .delete()
-      .eq('app_id', appId),
-
-    // App deletion is already authorized above; app-scoped membership cleanup is internal.
-    admin
-      .from('org_users')
-      .delete()
-      .eq('app_id', appId),
-
-    // Delete deploy_history (has "Deny delete" policy, needs admin)
-    admin
-      .from('deploy_history')
-      .delete()
-      .eq('app_id', appId),
-  ])
-
-  // Delete versions (last) - needs admin because no DELETE policy for anon role
-  await admin
-    .from('app_versions')
-    .delete()
-    .eq('app_id', appId)
-
-  // Finally delete the app - needs admin because no DELETE policy for anon role
-  const { error: dbError } = await admin
-    .from('apps')
-    .delete()
-    .eq('app_id', appId)
-
-  if (dbError) {
-    throw simpleError('cannot_delete_app', 'Cannot delete app', { supabaseError: dbError })
-  }
+  const appStoragePrefix = await deleteAppData(c, appId, apikey)
 
   if (appStoragePrefix) {
     try {

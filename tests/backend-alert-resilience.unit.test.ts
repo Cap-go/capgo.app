@@ -455,21 +455,13 @@ describe('backend alert resilience helpers', () => {
         },
       }
     })
-    vi.doMock('../supabase/functions/_backend/utils/supabase.ts', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/supabase.ts')>()
+    vi.doMock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>()
       return {
         ...actual,
-        supabaseAdmin: () => ({
-          from: () => ({
-            select: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({
-                  data: null,
-                  error: null,
-                }),
-              }),
-            }),
-          }),
+        closeClient: () => undefined,
+        getPgClient: async () => ({
+          query: async () => ({ rows: [] }),
         }),
       }
     })

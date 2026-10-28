@@ -7,9 +7,8 @@ const mocks = vi.hoisted(() => ({
   unlockOnboardingApp: vi.fn(),
   createSignedImageUrl: vi.fn(),
   updatePayload: vi.fn(),
-  channelSelect: vi.fn(),
   callerChannelSelect: vi.fn(),
-  adminChannelEq: vi.fn(),
+  channelPrincipal: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -32,79 +31,52 @@ vi.mock('../supabase/functions/_backend/utils/storage.ts', () => ({
   resolveWritableImageValue: () => undefined,
 }))
 
-function createSupabaseClientMock() {
+const UPDATED_APP = {
+  app_id: 'com.example.app',
+  owner_org: 'org-123',
+  name: 'Example app',
+  need_onboarding: false,
+  onboarding: {},
+  icon_url: '',
+  allow_preview: true,
+  build_timeout_seconds: 1800,
+  default_upload_channel: 'production',
+}
+
+// Direct Postgres under the caller's RLS context: route each statement by its SQL.
+function createRlsClientMock(principal: unknown) {
   return {
-    from: (table: string) => {
-      if (table === 'channels') {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          maybeSingle: mocks.callerChannelSelect,
-        }
+    query: vi.fn(async (text: string, values: unknown[] = []) => {
+      if (text.includes('FROM public.channels')) {
+        mocks.channelPrincipal(principal)
+        const { data } = await mocks.callerChannelSelect()
+        return { rows: data ? [{ row: data }] : [] }
       }
-      return {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({
-          data: {
-            app_id: 'com.example.app',
-            owner_org: 'org-123',
-            name: 'Example app',
-            need_onboarding: false,
-            onboarding: {},
-          },
-          error: null,
-        }),
-        update: (payload: unknown) => {
-          mocks.updatePayload(payload)
-          return {
-            eq: vi.fn().mockReturnThis(),
-            select: vi.fn().mockReturnThis(),
-            single: vi.fn().mockResolvedValue({
-              data: {
-                app_id: 'com.example.app',
-                owner_org: 'org-123',
-                name: 'Example app',
-                need_onboarding: false,
-                onboarding: {},
-                icon_url: '',
-                allow_preview: true,
-                build_timeout_seconds: 1800,
-                default_upload_channel: 'production',
-              },
-              error: null,
-            }),
-          }
-        },
+      if (text.includes('UPDATE public.apps')) {
+        mocks.updatePayload(JSON.parse(values[1] as string))
+        return { rows: [{ row: UPDATED_APP }] }
       }
-    },
+      if (text.includes('FROM public.apps')) {
+        return { rows: [{ row: {
+          app_id: 'com.example.app',
+          owner_org: 'org-123',
+          name: 'Example app',
+          need_onboarding: false,
+          onboarding: {},
+        } }] }
+      }
+      throw new Error(`unexpected query ${text}`)
+    }),
   }
 }
 
-function createAdminClientMock() {
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
   return {
-    from: (table: string) => {
-      if (table !== 'channels')
-        throw new Error(`unexpected admin table ${table}`)
-      const query = {
-        select: vi.fn(),
-        eq: vi.fn((...args: unknown[]) => {
-          mocks.adminChannelEq(...args)
-          return query
-        }),
-        maybeSingle: mocks.channelSelect,
-      }
-      query.select.mockReturnValue(query)
-      return query
-    },
+    ...actual,
+    withRlsContext: vi.fn(async (_c: unknown, principal: unknown, run: (client: unknown, drizzle: unknown) => Promise<unknown>) => run(createRlsClientMock(principal), {})),
   }
-}
-
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseWithAuth: vi.fn(() => createSupabaseClientMock()),
-  supabaseAdmin: vi.fn(() => createAdminClientMock()),
-  supabaseApikey: vi.fn(() => createSupabaseClientMock()),
-}))
+})
 
 const { put } = await import('../supabase/functions/_backend/public/app/put.ts')
 
@@ -123,7 +95,6 @@ describe('app put settings fields', () => {
     mocks.lockOnboardingApp.mockResolvedValue(null)
     mocks.unlockOnboardingApp.mockResolvedValue(undefined)
     mocks.createSignedImageUrl.mockResolvedValue('')
-    mocks.channelSelect.mockResolvedValue({ data: { id: 7 }, error: null })
     // Caller RLS hides channels (no channel.read); validation must not depend on it.
     mocks.callerChannelSelect.mockResolvedValue({ data: { id: 7 }, error: null })
   })
@@ -142,7 +113,7 @@ describe('app put settings fields', () => {
       default_upload_channel: 'production',
     }))
     expect(mocks.callerChannelSelect).toHaveBeenCalled()
-    expect(mocks.adminChannelEq).not.toHaveBeenCalled()
+    expect(mocks.channelPrincipal).toHaveBeenCalledWith({ kind: 'apikey', apikey: 'test-key' })
   })
 
   it('rejects a default_upload_channel that does not exist for the app', async () => {

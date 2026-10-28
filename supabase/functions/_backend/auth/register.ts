@@ -2,7 +2,7 @@ import type { User } from '@supabase/supabase-js'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
-import { checkRegistrationEmail, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, isLeakedPasswordError, isWeakPasswordError, provisionUserProfile } from '../utils/accountProvisioning.ts'
+import { checkRegistrationEmail, deleteUserProfile, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, isLeakedPasswordError, isWeakPasswordError, provisionUserProfile } from '../utils/accountProvisioning.ts'
 import { isDirectOfferMetadata, persistDirectOffer } from '../utils/direct_offer.ts'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -65,7 +65,7 @@ async function rollbackCreatedUser(c: Parameters<typeof supabaseAdmin>[0], userI
   const admin = supabaseAdmin(c)
   const requestId = c.get('requestId')
 
-  const { error: profileDeleteError } = await admin.from('users').delete().eq('id', userId)
+  const { error: profileDeleteError } = await deleteUserProfile(c, userId)
   if (profileDeleteError) {
     cloudlogErr({
       requestId,

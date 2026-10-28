@@ -8,6 +8,7 @@ import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { sendNotifToOrgMembers, sendNotifToOrgMembersOnce } from './org_email_notifications.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from './org_onboarding_intent.ts'
+import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { syncSubscriptionData } from './stripe.ts'
 import {
   getCurrentPlanNameOrg,
@@ -20,7 +21,6 @@ import {
   isOnboardedOrg,
   isOnboardingNeeded,
   isTrialOrg,
-  supabaseAdmin,
 } from './supabase.ts'
 import { sendEventToTracking } from './tracking.ts'
 import { isStripeConfigured } from './utils.ts'
@@ -185,15 +185,24 @@ function isCreditOnlyBillingOrg(org: Pick<OrgWithCustomerInfo, 'has_usage_credit
 // Overage/credit application is keyed by billing_cycle_start/end, so it must
 // only ever use the SQL cycle (get_cycle_info_org). Never substitute a guessed
 // range here: a different key re-debits credits for the same period.
-async function getBillingCycleRange(c: Context, orgId: string): Promise<BillingCycleRange | null> {
+type DrizzleClient = ReturnType<typeof getDrizzleClient>
+
+const SINGLE_ROW_ERROR = { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }
+
+/** Rows of `query` serialized like PostgREST (`to_json`): timestamps as ISO strings, bigint/numeric as numbers. */
+async function executeJson<T>(drizzleClient: DrizzleClient, query: ReturnType<typeof sql>): Promise<T[]> {
+  const result = await drizzleClient.execute<{ row: T }>(sql`WITH q AS (${query}) SELECT pg_catalog.to_json(q.*) AS row FROM q`)
+  return result.rows.map(r => r.row)
+}
+
+async function getBillingCycleRange(c: Context, orgId: string, drizzleClient: DrizzleClient): Promise<BillingCycleRange | null> {
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .rpc('get_cycle_info_org', { orgid: orgId })
-      .single()
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'getBillingCycleRange error', orgId, error })
+    const rows = await executeJson<BillingCycleRange>(drizzleClient, sql`SELECT * FROM public.get_cycle_info_org(orgid => ${orgId}::uuid)`)
+    if (rows.length !== 1) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'getBillingCycleRange error', orgId, error: SINGLE_ROW_ERROR })
       return null
     }
+    const data = rows[0]
     if (!data?.subscription_anchor_start || !data?.subscription_anchor_end) {
       cloudlogErr({
         requestId: c.get('requestId'),
@@ -220,6 +229,7 @@ async function applyCreditsForMetric(
   usage: number,
   limit: number | null | undefined,
   billingCycle: BillingCycleRange,
+  drizzleClient: DrizzleClient,
 ): Promise<CreditApplicationResult | null> {
   if (overageAmount <= 0)
     return null
@@ -234,24 +244,28 @@ async function applyCreditsForMetric(
     })
   }
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .rpc('apply_usage_overage', {
-        p_org_id: orgId,
-        p_metric: metric,
-        p_overage_amount: overageAmount,
-        p_billing_cycle_start: billingCycle.subscription_anchor_start,
-        p_billing_cycle_end: billingCycle.subscription_anchor_end,
-        p_details: {
-          usage,
-          limit: limit ?? 0,
-        },
-        // Tiers follow total usage: price the overage above the plan limit.
-        p_included_amount: Math.max(Number(limit ?? 0), 0),
-      })
-      .single()
+    const rows = await executeJson<{
+      overage_amount: number | null
+      credits_required: number | null
+      credits_applied: number | null
+      credits_remaining: number | null
+      overage_covered: number | null
+      overage_unpaid: number | null
+      credit_step_id: number | null
+    }>(drizzleClient, sql`SELECT * FROM public.apply_usage_overage(
+      p_org_id => ${orgId}::uuid,
+      p_metric => ${metric}::public.credit_metric_type,
+      p_overage_amount => ${overageAmount}::numeric,
+      p_billing_cycle_start => ${billingCycle.subscription_anchor_start}::timestamptz,
+      p_billing_cycle_end => ${billingCycle.subscription_anchor_end}::timestamptz,
+      p_details => ${JSON.stringify({ usage, limit: limit ?? 0 })}::jsonb,
+      p_included_amount => ${Math.max(Number(limit ?? 0), 0)}::numeric
+    )`)
+    // Tiers follow total usage: p_included_amount prices the overage above the plan limit.
+    const data = rows.length === 1 ? rows[0] : null
 
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'apply_usage_overage error', orgId, metric, overageAmount, error })
+    if (!data) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'apply_usage_overage error', orgId, metric, overageAmount, error: SINGLE_ROW_ERROR })
       return {
         overage_amount: overageAmount,
         credits_required: 0,
@@ -312,17 +326,19 @@ interface FindBestPlanArgs {
 export async function findBestPlan(c: Context, stats: Database['public']['Functions']['find_best_plan_v3']['Args'] | FindBestPlanArgs): Promise<string> {
   const buildTimeSeconds = 'build_time_unit' in stats ? stats.build_time_unit : 0
 
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('find_best_plan_v3', {
-      mau: stats.mau ?? 0,
-      bandwidth: stats.bandwidth,
-      storage: stats.storage,
-      build_time_unit: buildTimeSeconds ?? 0,
+  let data: string | null
+  try {
+    data = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = await client.query<{ plan: string | null }>(
+        'SELECT public.find_best_plan_v3(mau => $1::bigint, bandwidth => $2::double precision, storage => $3::double precision, build_time_unit => $4::bigint) AS plan',
+        [stats.mau ?? 0, stats.bandwidth, stats.storage, buildTimeSeconds ?? 0],
+      )
+      return result.rows[0]?.plan ?? null
     })
-    .single()
-  if (error) {
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'findBestPlan', error })
-    throw new Error(error.message)
+    throw new Error(error instanceof Error ? error.message : String(error))
   }
 
   return data ?? 'Team'
@@ -348,17 +364,18 @@ async function userAbovePlan(c: Context, org: {
 
   const currentPlanName = await getCurrentPlanNameOrg(c, orgId)
   let currentPlan: Database['public']['Tables']['plans']['Row'] | null = null
-  const { data, error: currentPlanError } = await supabaseAdmin(c)
-    .from('plans')
-    .select('*')
-    .eq('name', currentPlanName)
-    .single()
-  if (currentPlanError) {
+  try {
+    const plans = await executeJson<Database['public']['Tables']['plans']['Row']>(drizzleClient, sql`SELECT * FROM public.plans WHERE name = ${currentPlanName} LIMIT 2`)
+    if (plans.length === 1)
+      currentPlan = plans[0]
+    else
+      cloudlogErr({ requestId: c.get('requestId'), message: 'currentPlanError', error: SINGLE_ROW_ERROR })
+  }
+  catch (currentPlanError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'currentPlanError', error: currentPlanError })
   }
-  currentPlan = data ?? null
 
-  const billingCycle = await getBillingCycleRange(c, orgId)
+  const billingCycle = await getBillingCycleRange(c, orgId, drizzleClient)
   const planId = currentPlan?.id
   const extraMau = creditOnlyMode ? 0 : await getOrgExtraMau(c, orgId)
 
@@ -391,7 +408,7 @@ async function userAbovePlan(c: Context, org: {
         cloudlogErr({ requestId: c.get('requestId'), message: 'userAbovePlan skipped overage: billing cycle unavailable', orgId, metric: metric.key, overage })
         throw new Error(`billing_cycle_unavailable for org ${orgId}`)
       }
-      const creditResult = await applyCreditsForMetric(c, orgId, metric.key, overage, planId, metric.usage, metric.limit, billingCycle)
+      const creditResult = await applyCreditsForMetric(c, orgId, metric.key, overage, planId, metric.usage, metric.limit, billingCycle, drizzleClient)
       creditResults[metric.key] = creditResult
       const unpaid = creditResult?.overage_unpaid ?? overage
       exceededFlags[EXCEEDED_FLAG_BY_METRIC[metric.key]] = unpaid > 0
@@ -476,13 +493,31 @@ async function userIsAtPlanUsage(c: Context, orgId: string, percentUsage: PlanUs
 
 // Get org data with customer info
 export async function getOrgWithCustomerInfo(c: Context, orgId: string) {
-  const { data: org, error: userError } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('customer_id, has_usage_credits, name, website, onboarding, stripe_info(status, subscription_id, subscription_anchor_start, subscription_anchor_end, trial_at)')
-    .eq('id', orgId)
-    .maybeSingle()
-  if (userError)
+  let org: OrgWithCustomerInfo & { name: string, website: string | null, onboarding: Database['public']['Tables']['orgs']['Row']['onboarding'] } | null
+  try {
+    const rows = await withRlsContext(c, servicePrincipal, client => queryJson<NonNullable<typeof org>>(client, `
+      SELECT o.customer_id, o.has_usage_credits, o.name, o.website, o.onboarding,
+        (
+          SELECT pg_catalog.json_build_object(
+            'status', si.status,
+            'subscription_id', si.subscription_id,
+            'subscription_anchor_start', si.subscription_anchor_start,
+            'subscription_anchor_end', si.subscription_anchor_end,
+            'trial_at', si.trial_at
+          )
+          FROM public.stripe_info AS si
+          WHERE si.customer_id = o.customer_id
+        ) AS stripe_info
+      FROM public.orgs AS o
+      WHERE o.id = $1
+      LIMIT 2`, [orgId]))
+    if (rows.length > 1)
+      throw SINGLE_ROW_ERROR
+    org = rows[0] ?? null
+  }
+  catch (userError) {
     return quickError(500, 'cannot_get_org', 'Cannot get org', { orgId, userError })
+  }
   if (!org)
     return quickError(404, 'org_not_found', 'Org not found', { orgId })
   return org

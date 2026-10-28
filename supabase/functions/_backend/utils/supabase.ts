@@ -1,9 +1,9 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
 // @ts-types="npm:@types/pg"
 import type { BillingPlanBentoState } from './billing_bento_tags.ts'
 import type { AuthInfo } from './hono.ts'
-import type { PgQueryClient } from './pg.ts'
+import type { PgClient, PgQueryClient } from './pg.ts'
+import type { RlsPrincipal } from './pg_rls.ts'
 import type { Database } from './supabase.types.ts'
 import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceWithoutCreatedAt, NativeActiveDevicesByPlatformRow, NativeVersionUsage, Order, ReadDevicesParams, ReadStatsInsightsParams, ReadStatsParams, StatsInsightsResult, StatsMetadata, VersionUsage, VersionUsageChannel } from './types.ts'
 import { createClient } from '@supabase/supabase-js'
@@ -15,6 +15,8 @@ import { getDirectOfferStatus } from './direct_offer.ts'
 import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
+import { isTransientPgError } from './pg_errors.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from './pg_rls.ts'
 import { getPlanPriceInterval } from './plan_price_interval.ts'
 import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -23,21 +25,61 @@ import { getEnv, isStripeConfigured } from './utils.ts'
 import { buildVersionCompareSql } from './versionCompare.ts'
 
 const DEFAULT_LIMIT = 1000
-// Import Supabase client
 
-/**
- * Escape a string and wrap it in double quotes for safely embedding into PostgREST filter payloads.
- */
-function quotePostgrestFilterValue(value: string): string {
-  const escapedValue = value.replace(/\\/g, String.raw`\\`).replace(/"/g, String.raw`\"`)
-  return `"${escapedValue}"`
+/** Runs `run` on a service-role (RLS-bypassing) connection, like the old `supabaseAdmin(c)` calls. */
+async function withAdminPg<T>(c: Context, run: (pg: PgClient) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await run(pg)
+  }
+  finally {
+    closeClient(c, pg)
+  }
 }
 
-/**
- * Return a PostgREST `ilike` pattern that matches the provided value as a substring.
- */
-function buildIlikeContainsPattern(value: string): string {
-  return quotePostgrestFilterValue(`%${value}%`)
+const SQL_IDENTIFIER_RE = /^[a-z_][a-z0-9_]*$/
+
+/** Quotes a column name. Column names here come from typed rows, never from SQL text built from user input. */
+function quoteIdent(name: string): string {
+  if (!SQL_IDENTIFIER_RE.test(name))
+    throw new Error(`Invalid column name: ${name}`)
+  return `"${name}"`
+}
+
+/** Columns of `row` that PostgREST would have sent: JSON drops `undefined` values. */
+function definedColumns(row: object): { columns: string[], values: unknown[] } {
+  const entries = Object.entries(row).filter(([, value]) => value !== undefined)
+  return { columns: entries.map(([key]) => quoteIdent(key)), values: entries.map(([, value]) => value) }
+}
+
+/** `INSERT INTO table (...) VALUES (...)` for the defined columns of `row`, with placeholders starting at $1. */
+function buildInsertSql(table: string, row: object): { text: string, columns: string[], values: unknown[] } {
+  const { columns, values } = definedColumns(row)
+  const placeholders = values.map((_, index) => `$${index + 1}`)
+  return { text: `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders.join(', ')})`, columns, values }
+}
+
+/** PostgREST upsert (`merge-duplicates`): insert, or overwrite the provided columns on conflict. */
+function buildUpsertSql(table: string, row: object, conflictColumns: string[]): { text: string, values: unknown[] } {
+  const insert = buildInsertSql(table, row)
+  const updates = insert.columns.map(column => `${column} = EXCLUDED.${column}`)
+  return {
+    text: `${insert.text} ON CONFLICT (${conflictColumns.map(quoteIdent).join(', ')}) DO UPDATE SET ${updates.join(', ')}`,
+    values: insert.values,
+  }
+}
+
+/** Inserts `row` as service role and resolves `{ error }` instead of throwing, like the supabase-js builder did. */
+async function insertAdminRow(c: Context, table: string, row: object, logMessage: string): Promise<{ error: unknown | null }> {
+  try {
+    const { text, values } = buildInsertSql(table, row)
+    await withAdminPg(c, pg => pg.query(text, values))
+    return { error: null }
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: logMessage, error })
+    return { error }
+  }
 }
 
 /**
@@ -155,23 +197,25 @@ function buildDevicesSqlWhere(params: ReadDevicesParams, customIdMode: boolean) 
   return { values, where: clauses.join(' AND '), devicesOrder }
 }
 
+// Version-compare filters always read from the replica; plain filters keep the primary reads PostgREST did.
 async function readDevicesSBSql(c: Context, params: ReadDevicesParams, customIdMode: boolean) {
+  const versionCompare = hasDeviceVersionCompare(params)
   const limit = params.limit ?? DEFAULT_LIMIT
   const { values, where, devicesOrder } = buildDevicesSqlWhere(params, customIdMode)
   const orderBy = devicesOrder
     ? `updated_at ${devicesOrder.ascending ? 'ASC' : 'DESC'}, device_id ASC`
     : 'device_id ASC'
   values.push(limit + 1)
-  const pgClient = await getPgClient(c, true)
+  const pgClient = await getPgClient(c, versionCompare)
   try {
-    const result = await pgClient.query(
+    return await queryJson<Database['public']['Tables']['devices']['Row']>(
+      pgClient,
       `SELECT * FROM public.devices WHERE ${where} ORDER BY ${orderBy} LIMIT $${values.length}`,
       values,
     )
-    return result.rows ?? []
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device list with version compare', error })
+    cloudlogErr({ requestId: c.get('requestId'), message: versionCompare ? 'Error reading device list with version compare' : 'Error reading device list', error })
     return []
   }
   finally {
@@ -206,7 +250,8 @@ async function countDevicesSBSql(
     os_version_compare: options?.osVersionCompare,
     version_name_compare: options?.versionNameCompare,
   }, customIdMode)
-  const pgClient = await getPgClient(c, true)
+  const versionCompare = Boolean(options?.osVersionCompare || options?.versionNameCompare)
+  const pgClient = await getPgClient(c, versionCompare)
   try {
     const result = await pgClient.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total FROM public.devices WHERE ${where}`,
@@ -215,7 +260,7 @@ async function countDevicesSBSql(
     return Number(result.rows[0]?.total ?? 0)
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error counting devices with version compare', error })
+    cloudlogErr({ requestId: c.get('requestId'), message: versionCompare ? 'Error counting devices with version compare' : 'Error counting devices', error })
     return 0
   }
   finally {
@@ -332,65 +377,52 @@ export function supabaseApikey(c: Context, apikey: string | null | undefined) {
 export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<string[]> {
   const limit = 1000
   const createdBeforeIso = referenceDate?.toISOString()
-  let page = 0
   let apps: string[] = []
+  const pgClient = await getPgClient(c, false)
 
-  while (true) {
-    let query = supabaseAdmin(c)
-      .from('apps')
-      .select('app_id')
-      .range(page * limit, (page + 1) * limit - 1)
-
-    if (createdBeforeIso)
-      query = query.lt('created_at', createdBeforeIso)
-
-    const { data, error } = await query
-
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting apps from Supabase', error })
-      break
-    }
-
-    if (data.length === 0)
-      break
-
-    apps = [...apps, ...data.map(row => row.app_id)]
-    page++
-  }
-
-  if (createdBeforeIso) {
-    const pgClient = await getPgClient(c, false)
-
+  try {
     try {
-      page = 0
-      while (true) {
-        const { rows } = await pgClient.query<{ app_id: string }>(
-          `SELECT app_id
-          FROM public.deleted_apps
-          WHERE (
-            created_at < $1::timestamptz
-            -- Legacy rows used created_at=deleted_at before on_app_delete copied the original app timestamp.
-            OR created_at = deleted_at
-          )
-            AND deleted_at >= $1::timestamptz
-          ORDER BY app_id
-          LIMIT $2 OFFSET $3`,
-          [createdBeforeIso, limit, page * limit],
-        )
-
-        if (rows.length === 0)
-          break
-
-        apps = [...apps, ...rows.map(row => row.app_id)]
-        page++
-      }
+      const { rows } = createdBeforeIso
+        ? await pgClient.query<{ app_id: string }>('SELECT app_id FROM public.apps WHERE created_at < $1::timestamptz', [createdBeforeIso])
+        : await pgClient.query<{ app_id: string }>('SELECT app_id FROM public.apps')
+      apps = rows.map(row => row.app_id)
     }
     catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting deleted apps from Supabase', error })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting apps from Supabase', error })
     }
-    finally {
-      await closeClient(c, pgClient)
+
+    if (createdBeforeIso) {
+      try {
+        let page = 0
+        while (true) {
+          const { rows } = await pgClient.query<{ app_id: string }>(
+            `SELECT app_id
+            FROM public.deleted_apps
+            WHERE (
+              created_at < $1::timestamptz
+              -- Legacy rows used created_at=deleted_at before on_app_delete copied the original app timestamp.
+              OR created_at = deleted_at
+            )
+              AND deleted_at >= $1::timestamptz
+            ORDER BY app_id
+            LIMIT $2 OFFSET $3`,
+            [createdBeforeIso, limit, page * limit],
+          )
+
+          if (rows.length === 0)
+            break
+
+          apps = [...apps, ...rows.map(row => row.app_id)]
+          page++
+        }
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting deleted apps from Supabase', error })
+      }
     }
+  }
+  finally {
+    closeClient(c, pgClient)
   }
 
   return Array.from(new Set(apps))
@@ -413,27 +445,28 @@ export async function updateOrCreateChannel(
     throw new Error('missing request auth')
   }
 
-  const supabase = supabaseWithAuth(c, auth)
+  const principal = authPrincipal(c, auth)
   if (existingChannelId === null) {
-    return supabase
-      .from('channels')
-      .insert(update)
-      .select('id')
-      .single()
-      .throwOnError()
+    const insert = buildInsertSql('public.channels', update)
+    const data = await withRlsContext(c, principal, client => queryJsonOne<{ id: number }>(client, `${insert.text} RETURNING id`, insert.values))
+    if (!data)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    return { data, error: null }
   }
 
   // Keep the original creator immutable. Omitted stable versions are read only
   // for the response shape and must not overwrite a concurrent promotion.
   const { created_by: _createdBy, version, ...channelUpdate } = update
   const requestUpdate = preserveVersion ? channelUpdate : { ...channelUpdate, version }
-  return supabase
-    .from('channels')
-    .update(requestUpdate)
-    .eq('id', existingChannelId)
-    .eq('app_id', update.app_id)
-    .eq('name', update.name)
-    .throwOnError()
+  const { columns, values } = definedColumns(requestUpdate)
+  const assignments = columns.map((column, index) => `${column} = $${index + 1}`)
+  values.push(existingChannelId, update.app_id, update.name)
+  await withRlsContext(c, principal, client => client.query(
+    `UPDATE public.channels SET ${assignments.join(', ')}
+     WHERE id = $${values.length - 2} AND app_id = $${values.length - 1} AND name = $${values.length}`,
+    values,
+  ))
+  return { data: null, error: null }
 }
 
 export async function updateOrCreateChannelDevice(c: Context, update: Database['public']['Tables']['channel_devices']['Insert']) {
@@ -442,41 +475,46 @@ export async function updateOrCreateChannelDevice(c: Context, update: Database['
     cloudlog({ requestId: c.get('requestId'), message: 'missing device_id, channel_id, or app_id' })
     return Promise.resolve({ error: new Error('missing device_id, channel_id, or app_id') })
   }
-  const { data: existingChannelDevice } = await supabaseAdmin(c)
-    .from('channel_devices')
-    .select('*')
-    .eq('device_id', update.device_id)
-    .eq('channel_id', update.channel_id)
-    .eq('app_id', update.app_id)
-    .single()
+  const { device_id, channel_id, app_id } = update
+  try {
+    return await withAdminPg(c, async (pg) => {
+      // Lookup failures (like .single() with no row) just mean "no existing row": upsert anyway.
+      const existingChannelDevice = await queryJson<Database['public']['Tables']['channel_devices']['Row']>(
+        pg,
+        'SELECT * FROM public.channel_devices WHERE device_id = $1 AND channel_id = $2 AND app_id = $3',
+        [device_id, channel_id, app_id],
+      ).then(rows => rows.length === 1 ? rows[0] : null, () => null)
 
-  if (existingChannelDevice) {
-    const fieldsDiffer = Object.keys(update).some(key =>
-      (update as any)[key] !== (existingChannelDevice as any)[key] && key !== 'created_at' && key !== 'updated_at',
-    )
-    if (!fieldsDiffer) {
-      cloudlog({ requestId: c.get('requestId'), message: 'No fields differ, no update needed' })
-      return Promise.resolve({ error: null })
-    }
+      if (existingChannelDevice) {
+        const fieldsDiffer = Object.keys(update).some(key =>
+          (update as any)[key] !== (existingChannelDevice as any)[key] && key !== 'created_at' && key !== 'updated_at',
+        )
+        if (!fieldsDiffer) {
+          cloudlog({ requestId: c.get('requestId'), message: 'No fields differ, no update needed' })
+          return { error: null }
+        }
+      }
+
+      const upsert = buildUpsertSql('public.channel_devices', update, ['app_id', 'device_id'])
+      await pg.query(upsert.text, upsert.values)
+      return { error: null }
+    })
   }
-
-  return supabaseAdmin(c)
-    .from('channel_devices')
-    .upsert(update, { onConflict: 'app_id, device_id' })
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'updateOrCreateChannelDevice error', error })
+    return { error }
+  }
 }
 
 export async function checkAppOwner(c: Context, userId: string | undefined, appId: string | undefined): Promise<boolean> {
   if (!appId || !userId)
     return false
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .from('apps')
-      .select()
-      .eq('user_id', userId)
-      .eq('app_id', appId)
-    if (!data?.length || error)
-      return false
-    return true
+    const { rows } = await withAdminPg(c, pg => pg.query<{ owned: boolean }>(
+      'SELECT EXISTS (SELECT 1 FROM public.apps WHERE user_id = $1 AND app_id = $2) AS owned',
+      [userId, appId],
+    ))
+    return rows[0]?.owned === true
   }
   catch (error) {
     cloudlogErr(error)
@@ -519,13 +557,13 @@ export async function apikeyHasOrgRightWithPolicy(
   c: Context,
   key: Database['public']['Tables']['apikeys']['Row'],
   orgId: string,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<{ valid: boolean, error?: string }> {
   if (!(await apikeyHasOrgRight(c, key, orgId))) {
     return { valid: false, error: 'invalid_org_id' }
   }
 
-  const policyCheck = await checkApikeyMeetsOrgPolicy(c, key, orgId, supabase)
+  const policyCheck = await checkApikeyMeetsOrgPolicy(c, key, orgId, principal)
   if (!policyCheck.valid) {
     return policyCheck
   }
@@ -557,12 +595,23 @@ export async function getTotalStats(c: Context, orgId?: string): Promise<PlanTot
       uninstall: 0,
     }
   }
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('get_total_metrics', { org_id: orgId })
-    .single()
-  if (error)
-    throw new Error(error.message)
-  return data
+  return singleRpcRow<PlanTotal>(c, 'SELECT * FROM public.get_total_metrics(org_id => $1::uuid)', [orgId])
+}
+
+const SINGLE_ROW_ERROR_MESSAGE = 'JSON object requested, multiple (or no) rows returned'
+
+/** `.rpc(...).single()` as service role: the only row as PostgREST JSON, or an error when there is not exactly one. */
+async function singleRpcRow<T>(c: Context, text: string, values: unknown[]): Promise<T> {
+  const rows = await withAdminPg(c, pg => queryJson<T>(pg, text, values))
+  if (rows.length !== 1)
+    throw new Error(SINGLE_ROW_ERROR_MESSAGE)
+  return rows[0]!
+}
+
+/** Scalar `.rpc(...)` as service role: the function's value, aliased `result` in `text`. */
+async function scalarRpc<T>(c: Context, text: string, values: unknown[]): Promise<T | null> {
+  const { rows } = await withAdminPg(c, pg => pg.query<{ result: T | null }>(text, values))
+  return rows[0]?.result ?? null
 }
 
 export interface PlanUsage {
@@ -587,12 +636,11 @@ export async function getPlanUsagePercent(c: Context, orgId?: string): Promise<P
       build_time_percent: 0,
     }
   }
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('get_plan_usage_percent_detailed', { orgid: orgId })
-    .single()
-  if (error)
-    throw new Error(error.message)
-  return data
+  return singleRpcRow<PlanUsage>(c, 'SELECT * FROM public.get_plan_usage_percent_detailed(orgid => $1::uuid)', [orgId])
+}
+
+function readPlanUsageAndFit(c: Context, fn: 'get_plan_usage_and_fit' | 'get_plan_usage_and_fit_uncached', orgId: string): Promise<PlanUsageAndFit> {
+  return singleRpcRow<PlanUsageAndFit>(c, `SELECT * FROM public.${fn}(orgid => $1::uuid)`, [orgId])
 }
 
 export async function getPlanUsageAndFit(c: Context, orgId: string): Promise<PlanUsageAndFit> {
@@ -600,11 +648,7 @@ export async function getPlanUsageAndFit(c: Context, orgId: string): Promise<Pla
   // This avoids Stripe API calls while keeping plan enforcement deterministic for tests/on-prem.
   if (!isStripeConfigured(c)) {
     try {
-      const { data, error } = await supabaseAdmin(c)
-        .rpc('get_plan_usage_and_fit', { orgid: orgId })
-        .single()
-      if (error)
-        throw new Error(error.message)
+      const data = await readPlanUsageAndFit(c, 'get_plan_usage_and_fit', orgId)
       return { ...data, is_good_plan: data.total_percent <= 100 }
     }
     catch (error) {
@@ -615,12 +659,7 @@ export async function getPlanUsageAndFit(c: Context, orgId: string): Promise<Pla
   }
 
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .rpc('get_plan_usage_and_fit', { orgid: orgId })
-      .single()
-    if (error)
-      throw new Error(error.message)
-    return data
+    return await readPlanUsageAndFit(c, 'get_plan_usage_and_fit', orgId)
   }
   catch (error) {
     // Fallback when the RPC is unavailable or fails.
@@ -631,19 +670,20 @@ export async function getPlanUsageAndFit(c: Context, orgId: string): Promise<Pla
 }
 
 export async function getPlanUsageAndFitUncached(c: Context, orgId: string): Promise<PlanUsageAndFit> {
+  const isMissingFunction = (error: unknown) => {
+    const message = error instanceof Error ? error.message : ''
+    return message.includes('get_plan_usage_and_fit_uncached') || message.includes('schema cache')
+  }
+
   if (!isStripeConfigured(c)) {
     try {
-      const { data, error } = await supabaseAdmin(c)
-        .rpc('get_plan_usage_and_fit_uncached', { orgid: orgId })
-        .single()
-      if (error) {
-        const message = error.message ?? ''
-        const isMissingFunction = message.includes('get_plan_usage_and_fit_uncached')
-          || message.includes('schema cache')
-        if (isMissingFunction)
-          return getPlanUsageAndFit(c, orgId)
-        throw new Error(error.message)
-      }
+      const data = await readPlanUsageAndFit(c, 'get_plan_usage_and_fit_uncached', orgId).catch((error: unknown) => {
+        if (isMissingFunction(error))
+          return null
+        throw error
+      })
+      if (!data)
+        return getPlanUsageAndFit(c, orgId)
       return { ...data, is_good_plan: data.total_percent <= 100 }
     }
     catch (error) {
@@ -653,14 +693,11 @@ export async function getPlanUsageAndFitUncached(c: Context, orgId: string): Pro
     }
   }
 
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('get_plan_usage_and_fit_uncached', { orgid: orgId })
-    .single()
-  if (error) {
-    const message = error.message ?? ''
-    const isMissingFunction = message.includes('get_plan_usage_and_fit_uncached')
-      || message.includes('schema cache')
-    if (isMissingFunction) {
+  try {
+    return await readPlanUsageAndFit(c, 'get_plan_usage_and_fit_uncached', orgId)
+  }
+  catch (error) {
+    if (isMissingFunction(error)) {
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'getPlanUsageAndFitUncached unavailable, falling back to cached plan usage',
@@ -674,7 +711,6 @@ export async function getPlanUsageAndFitUncached(c: Context, orgId: string): Pro
     const percentUsage = await getPlanUsagePercent(c, orgId)
     return { is_good_plan: percentUsage.total_percent <= 100, ...percentUsage }
   }
-  return data
 }
 
 export async function isGoodPlanOrg(c: Context, orgId: string): Promise<boolean> {
@@ -690,10 +726,7 @@ export async function isGoodPlanOrg(c: Context, orgId: string): Promise<boolean>
   }
 
   try {
-    const { data } = await supabaseAdmin(c)
-      .rpc('is_good_plan_v5_org', { orgid: orgId })
-      .single()
-      .throwOnError()
+    const data = await scalarRpc<boolean>(c, 'SELECT public.is_good_plan_v5_org(orgid => $1::uuid) AS result', [orgId])
 
     // In local/on-prem or misconfigured environments, Stripe isn't available and the
     // RPC may conservatively return false due to missing stripe_info state. Fall back
@@ -720,16 +753,44 @@ export async function isGoodPlanOrg(c: Context, orgId: string): Promise<boolean>
 
 export async function isOnboardedOrg(c: Context, orgId: string): Promise<boolean> {
   try {
-    const { data } = await supabaseAdmin(c)
-      .rpc('is_onboarded_org', { orgid: orgId })
-      .single()
-      .throwOnError()
+    const data = await scalarRpc<boolean>(c, 'SELECT public.is_onboarded_org(orgid => $1::uuid) AS result', [orgId])
     return data ?? false
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'isOnboarded error', orgId, error })
   }
   return false
+}
+
+type StripeInfoExceededColumn = 'mau_exceeded' | 'storage_exceeded' | 'bandwidth_exceeded'
+
+async function setStripeInfoExceededFlag(
+  c: Context,
+  column: StripeInfoExceededColumn,
+  logName: string,
+  customerId: string,
+  disabled: boolean,
+  logOrgId?: string,
+): Promise<boolean> {
+  let rowCount: number | null
+  try {
+    // Return the updated row key so we can detect "0 rows affected".
+    rowCount = (await withAdminPg(c, pg => pg.query(
+      `UPDATE public.stripe_info SET ${quoteIdent(column)} = $1 WHERE customer_id = $2 RETURNING customer_id`,
+      [disabled, customerId],
+    ))).rowCount
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: `${logName} error`, orgId: logOrgId, customerId, disabled, error })
+    return false
+  }
+  // Treat "no row matched" as failure to avoid silently "succeeding" while not persisting the change.
+  // This also protects against accidental mismatched `customerId`.
+  if (!rowCount) {
+    cloudlogErr({ requestId: c.get('requestId'), message: `${logName} no stripe_info row matched`, orgId: logOrgId, customerId, disabled })
+    return false
+  }
+  return true
 }
 
 /**
@@ -740,24 +801,7 @@ export async function isOnboardedOrg(c: Context, orgId: string): Promise<boolean
 export async function set_mau_exceeded(c: Context, customerId: string | null, disabled: boolean, logOrgId?: string): Promise<boolean> {
   if (!customerId)
     return true
-  // Return the updated row key so we can detect "0 rows affected".
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .update({ mau_exceeded: disabled })
-    .eq('customer_id', customerId)
-    .select('customer_id')
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'set_mau_exceeded error', orgId: logOrgId, customerId, disabled, error })
-    return false
-  }
-  // If no row matched, PostgREST returns an empty array with no error.
-  // Treat as failure to avoid silently "succeeding" while not persisting the change.
-  // This also protects against accidental mismatched `customerId`.
-  if (!data?.length) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'set_mau_exceeded no stripe_info row matched', orgId: logOrgId, customerId, disabled })
-    return false
-  }
-  return true
+  return setStripeInfoExceededFlag(c, 'mau_exceeded', 'set_mau_exceeded', customerId, disabled, logOrgId)
 }
 
 /**
@@ -768,21 +812,7 @@ export async function set_mau_exceeded(c: Context, customerId: string | null, di
 export async function set_storage_exceeded(c: Context, customerId: string | null, disabled: boolean, logOrgId?: string): Promise<boolean> {
   if (!customerId)
     return true
-  // Return the updated row key so we can detect "0 rows affected".
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .update({ storage_exceeded: disabled })
-    .eq('customer_id', customerId)
-    .select('customer_id')
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'set_storage_exceeded error', orgId: logOrgId, customerId, disabled, error })
-    return false
-  }
-  if (!data?.length) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'set_storage_exceeded no stripe_info row matched', orgId: logOrgId, customerId, disabled })
-    return false
-  }
-  return true
+  return setStripeInfoExceededFlag(c, 'storage_exceeded', 'set_storage_exceeded', customerId, disabled, logOrgId)
 }
 
 /**
@@ -793,26 +823,14 @@ export async function set_storage_exceeded(c: Context, customerId: string | null
 export async function set_bandwidth_exceeded(c: Context, customerId: string | null, disabled: boolean, logOrgId?: string): Promise<boolean> {
   if (!customerId)
     return true
-  // Return the updated row key so we can detect "0 rows affected".
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .update({ bandwidth_exceeded: disabled })
-    .eq('customer_id', customerId)
-    .select('customer_id')
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'set_bandwidth_exceeded error', orgId: logOrgId, customerId, disabled, error })
-    return false
-  }
-  if (!data?.length) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'set_bandwidth_exceeded no stripe_info row matched', orgId: logOrgId, customerId, disabled })
-    return false
-  }
-  return true
+  return setStripeInfoExceededFlag(c, 'bandwidth_exceeded', 'set_bandwidth_exceeded', customerId, disabled, logOrgId)
 }
 
 export async function set_build_time_exceeded(c: Context, orgId: string, disabled: boolean): Promise<boolean> {
-  const { error } = await supabaseAdmin(c).rpc('set_build_time_exceeded_by_org', { org_id: orgId, disabled })
-  if (error) {
+  try {
+    await withAdminPg(c, pg => pg.query('SELECT public.set_build_time_exceeded_by_org(org_id => $1::uuid, disabled => $2::boolean)', [orgId, disabled]))
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'set_build_time_exceeded error', orgId, error })
     return false
   }
@@ -830,43 +848,49 @@ export async function recordBuildTime(
   appId: string,
 ): Promise<string | null> {
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .rpc('record_build_time', {
-        p_org_id: orgId,
-        p_user_id: userId,
-        p_build_id: buildId,
-        p_platform: platform,
-        p_build_time_unit: buildTimeSeconds,
-        p_app_id: appId,
-      })
-      .single()
-
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'recordBuildTime error', orgId, userId, buildId, error })
-      return null
-    }
-
-    if (completedAt) {
-      const completedAtIso = new Date(completedAt).toISOString()
-      const { error: updateError } = await supabaseAdmin(c)
-        .from('build_logs')
-        .update({ created_at: completedAtIso })
-        .eq('org_id', orgId)
-        .eq('build_id', buildId)
-
-      if (updateError) {
-        cloudlogErr({
-          requestId: c.get('requestId'),
-          message: 'recordBuildTime timestamp sync error',
-          orgId,
-          buildId,
-          completedAt: completedAtIso,
-          error: updateError,
-        })
+    return await withAdminPg(c, async (pg) => {
+      let data: string | null
+      try {
+        const { rows } = await pg.query<{ result: string | null }>(
+          `SELECT public.record_build_time(
+            p_org_id => $1::uuid,
+            p_user_id => $2::uuid,
+            p_build_id => $3::varchar,
+            p_platform => $4::varchar,
+            p_build_time_unit => $5::bigint,
+            p_app_id => $6::varchar
+          ) AS result`,
+          [orgId, userId, buildId, platform, buildTimeSeconds, appId],
+        )
+        data = rows[0]?.result ?? null
       }
-    }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'recordBuildTime error', orgId, userId, buildId, error })
+        return null
+      }
 
-    return data as string
+      if (completedAt) {
+        const completedAtIso = new Date(completedAt).toISOString()
+        try {
+          await pg.query(
+            'UPDATE public.build_logs SET created_at = $1::timestamptz WHERE org_id = $2 AND build_id = $3',
+            [completedAtIso, orgId, buildId],
+          )
+        }
+        catch (updateError) {
+          cloudlogErr({
+            requestId: c.get('requestId'),
+            message: 'recordBuildTime timestamp sync error',
+            orgId,
+            buildId,
+            completedAt: completedAtIso,
+            error: updateError,
+          })
+        }
+      }
+
+      return data
+    })
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'recordBuildTime error', orgId, userId, buildId, error })
@@ -881,20 +905,11 @@ export async function getOrgBuildTimeSeconds(
   endDate: string,
 ): Promise<{ total_build_time_unit: number, total_builds: number }> {
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .rpc('get_org_build_time_unit', {
-        p_org_id: orgId,
-        p_start_date: startDate,
-        p_end_date: endDate,
-      })
-      .single()
-
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'getOrgBuildTimeSeconds error', orgId, error })
-      return { total_build_time_unit: 0, total_builds: 0 }
-    }
-
-    return data as { total_build_time_unit: number, total_builds: number }
+    return await singleRpcRow<{ total_build_time_unit: number, total_builds: number }>(
+      c,
+      'SELECT * FROM public.get_org_build_time_unit(p_org_id => $1::uuid, p_start_date => $2::date, p_end_date => $3::date)',
+      [orgId, startDate, endDate],
+    )
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getOrgBuildTimeSeconds error', orgId, error })
@@ -904,10 +919,7 @@ export async function getOrgBuildTimeSeconds(
 
 export async function isOnboardingNeeded(c: Context, userId: string): Promise<boolean> {
   try {
-    const { data } = await supabaseAdmin(c)
-      .rpc('is_onboarding_needed_org', { orgid: userId })
-      .single()
-      .throwOnError()
+    const data = await scalarRpc<boolean>(c, 'SELECT public.is_onboarding_needed_org(orgid => $1::uuid) AS result', [userId])
     return data ?? false
   }
   catch (error) {
@@ -918,10 +930,7 @@ export async function isOnboardingNeeded(c: Context, userId: string): Promise<bo
 
 export async function isCanceledOrg(c: Context, orgId: string): Promise<boolean> {
   try {
-    const { data } = await supabaseAdmin(c)
-      .rpc('is_canceled_org', { orgid: orgId })
-      .single()
-      .throwOnError()
+    const data = await scalarRpc<boolean>(c, 'SELECT public.is_canceled_org(orgid => $1::uuid) AS result', [orgId])
     return data ?? false
   }
   catch (error) {
@@ -932,10 +941,7 @@ export async function isCanceledOrg(c: Context, orgId: string): Promise<boolean>
 
 export async function isPayingOrg(c: Context, orgId: string): Promise<boolean> {
   try {
-    const { data } = await supabaseAdmin(c)
-      .rpc('is_paying_org', { orgid: orgId })
-      .single()
-      .throwOnError()
+    const data = await scalarRpc<boolean>(c, 'SELECT public.is_paying_org(orgid => $1::uuid) AS result', [orgId])
     return data ?? false
   }
   catch (error) {
@@ -946,10 +952,7 @@ export async function isPayingOrg(c: Context, orgId: string): Promise<boolean> {
 
 export async function isTrialOrg(c: Context, orgId: string): Promise<number> {
   try {
-    const { data } = await supabaseAdmin(c)
-      .rpc('is_trial_org', { orgid: orgId })
-      .single()
-      .throwOnError()
+    const data = await scalarRpc<number>(c, 'SELECT public.is_trial_org(orgid => $1::uuid) AS result', [orgId])
     return data ?? 0
   }
   catch (error) {
@@ -960,10 +963,7 @@ export async function isTrialOrg(c: Context, orgId: string): Promise<number> {
 
 export async function isAllowedActionOrg(c: Context, orgId: string): Promise<boolean> {
   try {
-    const { data } = await supabaseAdmin(c)
-      .rpc('is_allowed_action_org', { orgid: orgId })
-      .single()
-      .throwOnError()
+    const data = await scalarRpc<boolean>(c, 'SELECT public.is_allowed_action_org(orgid => $1::uuid) AS result', [orgId])
     return data ?? false
   }
   catch (error) {
@@ -1200,23 +1200,28 @@ function processSegments(segmentsObj: any): { segments: string[], deleteSegments
 }
 
 export async function getStripeCustomer(c: Context, customerId: string) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('*')
-    .eq('customer_id', customerId)
-    .maybeSingle()
-  if (error)
-    throw error
-  return data
+  const rows = await withAdminPg(c, pg => queryJson<Database['public']['Tables']['stripe_info']['Row']>(
+    pg,
+    'SELECT * FROM public.stripe_info WHERE customer_id = $1',
+    [customerId],
+  ))
+  if (rows.length > 1)
+    throw new Error(SINGLE_ROW_ERROR_MESSAGE)
+  return rows[0] ?? null
 }
 
 export async function getDefaultPlan(c: Context) {
-  const { data: plan } = await supabaseAdmin(c)
-    .from('plans')
-    .select()
-    .eq('name', 'Solo')
-    .single()
-  return plan
+  try {
+    const rows = await withAdminPg(c, pg => queryJson<Database['public']['Tables']['plans']['Row']>(
+      pg,
+      'SELECT * FROM public.plans WHERE name = $1',
+      ['Solo'],
+    ))
+    return rows.length === 1 ? rows[0]! : null
+  }
+  catch {
+    return null
+  }
 }
 
 export function trackBandwidthUsageSB(
@@ -1225,15 +1230,11 @@ export function trackBandwidthUsageSB(
   appId: string,
   fileSize: number,
 ) {
-  return supabaseAdmin(c)
-    .from('bandwidth_usage')
-    .insert([
-      {
-        device_id: deviceId.toLowerCase(),
-        app_id: appId,
-        file_size: fileSize,
-      },
-    ])
+  return insertAdminRow(c, 'public.bandwidth_usage', {
+    device_id: deviceId.toLowerCase(),
+    app_id: appId,
+    file_size: fileSize,
+  }, 'trackBandwidthUsageSB error')
 }
 
 export function trackVersionUsageSB(
@@ -1245,17 +1246,13 @@ export function trackVersionUsageSB(
 ) {
   const channelName = typeof channel === 'string' ? channel : channel?.name
   const channelId = typeof channel === 'object' && channel ? channel.id : null
-  return supabaseAdmin(c)
-    .from('version_usage')
-    .insert([
-      {
-        version_name: versionName,
-        app_id: appId,
-        action,
-        channel_name: channelName ?? null,
-        channel_id: channelId ?? null,
-      },
-    ])
+  return insertAdminRow(c, 'public.version_usage', {
+    version_name: versionName,
+    app_id: appId,
+    action,
+    channel_name: channelName ?? null,
+    channel_id: channelId ?? null,
+  }, 'trackVersionUsageSB error')
 }
 
 export function trackDeviceUsageSB(
@@ -1266,47 +1263,63 @@ export function trackDeviceUsageSB(
   platform: string,
   versionBuild?: string | null,
 ) {
-  return supabaseAdmin(c)
-    .from('device_usage')
-    .insert([
-      {
-        device_id: deviceId.toLowerCase(),
-        app_id: appId,
-        org_id: orgId,
-        platform: platform || 'unknown',
-        version_build: versionBuild || 'unknown',
-      },
-    ])
+  return insertAdminRow(c, 'public.device_usage', {
+    device_id: deviceId.toLowerCase(),
+    app_id: appId,
+    org_id: orgId,
+    platform: platform || 'unknown',
+    version_build: versionBuild || 'unknown',
+  }, 'trackDeviceUsageSB error')
 }
 
-export function trackMetaSB(
+export async function trackMetaSB(
   c: Context,
   app_id: string,
   version_id: number,
   size: number,
-) {
+): Promise<{ data: boolean | null, error: unknown | null }> {
   cloudlog({ requestId: c.get('requestId'), message: 'createStatsMeta', app_id, version_id, size })
-  return supabaseAdmin(c)
-    .rpc('upsert_version_meta', {
-      p_app_id: app_id,
-      p_version_id: version_id,
-      p_size: size,
-    })
+  try {
+    const data = await scalarRpc<boolean>(
+      c,
+      'SELECT public.upsert_version_meta(p_app_id => $1::varchar, p_version_id => $2::bigint, p_size => $3::bigint) AS result',
+      [app_id, version_id, size],
+    )
+    return { data, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
 }
 
 export async function trackDevicesSB(c: Context, device: DeviceWithoutCreatedAt) {
   cloudlog({ requestId: c.get('requestId'), message: 'trackDevicesSB', device })
+  try {
+    // One connection for the lookup and the write.
+    return await withAdminPg(c, pg => trackDeviceWithPg(c, pg, device))
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'trackDevicesSB connection error', error })
+    return { error }
+  }
+}
 
-  const client = supabaseAdmin(c)
-
-  const { data: existingRow, error } = await client
-    .from('devices')
-    .select('version_name, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator, install_source, default_channel, key_id, country_code')
-    .eq('app_id', device.app_id)
-    .eq('device_id', device.device_id)
-    .maybeSingle()
-
-  if (error) {
+async function trackDeviceWithPg(c: Context, pg: PgClient, device: DeviceWithoutCreatedAt) {
+  type ExistingDeviceRow = Pick<Database['public']['Tables']['devices']['Row'], 'version_name' | 'platform' | 'plugin_version' | 'os_version' | 'version_build' | 'custom_id' | 'is_prod' | 'is_emulator' | 'install_source' | 'default_channel' | 'key_id' | 'country_code'>
+  let existingRow: ExistingDeviceRow | null = null
+  try {
+    const rows = await queryJson<ExistingDeviceRow>(
+      pg,
+      `SELECT version_name, platform, plugin_version, os_version, version_build, custom_id, is_prod, is_emulator, install_source, default_channel, key_id, country_code
+       FROM public.devices
+       WHERE app_id = $1 AND device_id = $2`,
+      [device.app_id, device.device_id],
+    )
+    if (rows.length > 1)
+      throw new Error(SINGLE_ROW_ERROR_MESSAGE)
+    existingRow = rows[0] ?? null
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error fetching existing device', error })
   }
 
@@ -1325,7 +1338,7 @@ export async function trackDevicesSB(c: Context, device: DeviceWithoutCreatedAt)
 
   if (existingRow && !hasComparableDeviceChanged(existingRow, deviceForWrite)) {
     cloudlog({ requestId: c.get('requestId'), message: 'No Supabase upsert needed for device', device_id: device.device_id })
-    return Promise.resolve()
+    return undefined
   }
 
   const normalizedDevice = buildNormalizedDeviceForWrite(deviceForWrite)
@@ -1350,42 +1363,57 @@ export async function trackDevicesSB(c: Context, device: DeviceWithoutCreatedAt)
     country_code: normalizedDevice.country_code ?? undefined,
   } as Database['public']['Tables']['devices']['Insert']
 
-  return client
-    .from('devices')
-    .upsert(payload, { onConflict: 'device_id,app_id' })
+  try {
+    const upsert = buildUpsertSql('public.devices', payload, ['device_id', 'app_id'])
+    await pg.query(upsert.text, upsert.values)
+    return { error: null }
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'trackDevicesSB upsert error', error })
+    return { error }
+  }
 }
 
 export function trackLogsSB(c: Context, app_id: string, device_id: string, action: Database['public']['Enums']['stats_action'], version_name: string, metadata?: StatsMetadata) {
-  return supabaseAdmin(c)
-    .from('stats')
-    .insert(
-      {
-        app_id,
-        created_at: new Date().toISOString(),
-        device_id,
-        action,
-        version_name,
-        metadata,
-      },
-    )
+  return insertAdminRow(c, 'public.stats', {
+    app_id,
+    created_at: new Date().toISOString(),
+    device_id,
+    action,
+    version_name,
+    metadata,
+  }, 'trackLogsSB error')
 }
 
-export async function readDeviceUsageSB(c: Context, app_id: string, period_start: string, period_end: string) {
-  const { data } = await supabaseAdmin(c)
-    .rpc('read_device_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
-  return data ?? []
+type UsageRpc = 'read_device_usage' | 'read_bandwidth_usage' | 'read_storage_usage' | 'read_version_usage'
+type UsageRpcRows<F extends UsageRpc> = Database['public']['Functions'][F]['Returns']
+
+/**
+ * Service-role read of a usage RPC's rows as PostgREST JSON. Errors were ignored by these callers
+ * (supabase-js `data ?? []`), so they still resolve to no rows; they are logged now.
+ */
+async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<string, unknown>): Promise<UsageRpcRows<F>> {
+  const entries = Object.entries(args)
+  const namedArgs = entries.map(([name], index) => `${quoteIdent(name)} => $${index + 1}`)
+  try {
+    return await withAdminPg(c, pg => queryJson(pg, `SELECT * FROM public.${fn}(${namedArgs.join(', ')})`, entries.map(([, value]) => value))) as UsageRpcRows<F>
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: `Error reading ${fn}`, app_id: args.p_app_id, error })
+    return [] as unknown as UsageRpcRows<F>
+  }
 }
 
-export async function readBandwidthUsageSB(c: Context, app_id: string, period_start: string, period_end: string) {
-  const { data } = await supabaseAdmin(c)
-    .rpc('read_bandwidth_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
-  return data ?? []
+export function readDeviceUsageSB(c: Context, app_id: string, period_start: string, period_end: string) {
+  return readUsageRpc(c, 'read_device_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 }
 
-export async function readStatsStorageSB(c: Context, app_id: string, period_start: string, period_end: string) {
-  const { data } = await supabaseAdmin(c)
-    .rpc('read_storage_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
-  return data ?? []
+export function readBandwidthUsageSB(c: Context, app_id: string, period_start: string, period_end: string) {
+  return readUsageRpc(c, 'read_bandwidth_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+}
+
+export function readStatsStorageSB(c: Context, app_id: string, period_start: string, period_end: string) {
+  return readUsageRpc(c, 'read_storage_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 }
 
 export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
@@ -1398,22 +1426,30 @@ export async function readStatsVersionSB(c: Context, app_id: string, period_star
     ...(channelName ? { p_channel_name: channelName } : {}),
     ...(channelId ? { p_channel_id: channelId } : {}),
   }
-  const { data } = await supabaseAdmin(c)
-    .rpc('read_version_usage', args)
+  const data = await readUsageRpc(c, 'read_version_usage', args)
   // Cast to VersionUsage[] - the SQL function returns version_name but auto-generated types are stale
-  return (data ?? []) as unknown as VersionUsage[]
+  return data as unknown as VersionUsage[]
 }
 
-export async function readNativeVersionUsageSB(c: Context, app_id: string, period_start: string, period_end: string, supabase: SupabaseClient<Database>): Promise<NativeVersionUsage[]> {
-  const { data, error } = await supabase
-    .rpc('read_native_version_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+type NativeUsageRpc = 'read_native_version_usage' | 'read_native_active_devices_summary' | 'read_native_daily_platform_active'
 
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native version usage', error })
+/** Native usage RPCs authorize the caller themselves, so they run as the request principal (RLS on). */
+async function readNativeUsageRpc<T>(c: Context, fn: NativeUsageRpc, principal: RlsPrincipal, app_id: string, period_start: string, period_end: string, logMessage: string): Promise<T[]> {
+  try {
+    return await withRlsContext(c, principal, client => queryJson<T>(
+      client,
+      `SELECT * FROM public.${fn}(p_app_id => $1::varchar, p_period_start => $2::timestamp, p_period_end => $3::timestamp)`,
+      [app_id, period_start, period_end],
+    ))
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: logMessage, error })
     throw error
   }
+}
 
-  return (data ?? []) as unknown as NativeVersionUsage[]
+export function readNativeVersionUsageSB(c: Context, app_id: string, period_start: string, period_end: string, principal: RlsPrincipal): Promise<NativeVersionUsage[]> {
+  return readNativeUsageRpc<NativeVersionUsage>(c, 'read_native_version_usage', principal, app_id, period_start, period_end, 'Error reading native version usage')
 }
 
 export async function readNativeActiveDevicesSummarySB(
@@ -1421,17 +1457,11 @@ export async function readNativeActiveDevicesSummarySB(
   app_id: string,
   period_start: string,
   period_end: string,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<NativeActiveDevicesByPlatformRow[]> {
-  const { data, error } = await supabase
-    .rpc('read_native_active_devices_summary', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+  const data = await readNativeUsageRpc<{ platform?: string | null, devices?: number | string | null }>(c, 'read_native_active_devices_summary', principal, app_id, period_start, period_end, 'Error reading native active devices summary')
 
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native active devices summary', error })
-    throw error
-  }
-
-  return (data ?? []).map((row: { platform?: string | null, devices?: number | string | null }) => ({
+  return data.map(row => ({
     platform: row.platform ?? 'unknown',
     devices: Math.max(0, Number(row.devices) || 0),
   }))
@@ -1442,17 +1472,11 @@ export async function readNativeDailyPlatformActiveSB(
   app_id: string,
   period_start: string,
   period_end: string,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<Array<{ date: string, platform: string, devices: number }>> {
-  const { data, error } = await supabase
-    .rpc('read_native_daily_platform_active', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
+  const data = await readNativeUsageRpc<{ date?: string | null, platform?: string | null, devices?: number | string | null }>(c, 'read_native_daily_platform_active', principal, app_id, period_start, period_end, 'Error reading native daily platform active')
 
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading native daily platform active', error })
-    throw error
-  }
-
-  return (data ?? []).map((row: { date?: string | null, platform?: string | null, devices?: number | string | null }) => ({
+  return data.map(row => ({
     date: row.date ?? '',
     platform: row.platform ?? 'unknown',
     devices: Math.max(0, Number(row.devices) || 0),
@@ -1466,8 +1490,6 @@ export async function readNativeDailyPlatformActiveSB(
  */
 export const MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS = 1000
 const CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT = 5000
-const DEVICE_ID_FILTER_CHUNK = 200
-const DEVICE_VERSION_PAGE_SIZE = 1000
 
 interface ChannelDeviceOverrideRow {
   device_id: string
@@ -1525,19 +1547,24 @@ export function partitionChannelDeviceOverrides(
  * Returns undefined on error so callers fall back to default_channel-only counts.
  */
 export async function readChannelDeviceOverrideIdsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDeviceOverrideIds | undefined> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('channel_devices')
-    .select('device_id, channel_id, channels(name)')
-    .eq('app_id', app_id)
-    .order('updated_at', { ascending: false })
-    .limit(CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT + 1)
-
-  if (error) {
+  let rows: ChannelDeviceOverrideRow[]
+  try {
+    rows = await withAdminPg(c, pg => queryJson<ChannelDeviceOverrideRow>(
+      pg,
+      `SELECT cd.device_id, cd.channel_id,
+        (SELECT json_build_object('name', ch.name) FROM public.channels ch WHERE ch.id = cd.channel_id) AS channels
+       FROM public.channel_devices cd
+       WHERE cd.app_id = $1
+       ORDER BY cd.updated_at DESC
+       LIMIT $2`,
+      [app_id, CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT + 1],
+    ))
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading channel_devices overrides for device counts', app_id, error })
     return undefined
   }
 
-  const rows = (data ?? []) as ChannelDeviceOverrideRow[]
   const partitioned = partitionChannelDeviceOverrides(rows.slice(0, CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT), channel)
   if (partitioned.truncated || rows.length > CHANNEL_DEVICE_OVERRIDES_SCAN_LIMIT) {
     cloudlog({
@@ -1584,19 +1611,21 @@ export function pickChannelDefaultPlatforms(rows: PublicChannelRow[], channel: V
  * channels. Returns none on error so counts fall back to reported channels.
  */
 export async function readChannelDefaultPlatformsSB(c: Context, app_id: string, channel: VersionUsageChannel | string): Promise<ChannelDevicePlatform[]> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('channels')
-    .select('id, name, ios, android, electron')
-    .eq('app_id', app_id)
-    .eq('public', true)
-    .order('name', { ascending: true })
-    .order('id', { ascending: true })
-
-  if (error) {
+  try {
+    const rows = await withAdminPg(c, pg => queryJson<PublicChannelRow>(
+      pg,
+      `SELECT id, name, ios, android, electron
+       FROM public.channels
+       WHERE app_id = $1 AND public = true
+       ORDER BY name ASC, id ASC`,
+      [app_id],
+    ))
+    return pickChannelDefaultPlatforms(rows, channel)
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading public channels for device counts', app_id, error })
     return []
   }
-  return pickChannelDefaultPlatforms(data ?? [], channel)
 }
 
 /**
@@ -1627,25 +1656,6 @@ export function countChannelScopedDeviceVersions(
 }
 
 interface DeviceVersionRow { device_id: string, version_name: string | null }
-type DeviceVersionPage = PromiseLike<{ data: DeviceVersionRow[] | null, error: unknown }>
-
-/**
- * Read every page of a device query. PostgREST caps responses at max_rows, so a
- * single request would silently undercount large apps. Callers must order the
- * query on a unique column to keep pages stable.
- */
-async function readAllDeviceVersionRows(fetchPage: (from: number, to: number) => DeviceVersionPage): Promise<{ rows: DeviceVersionRow[], error: unknown }> {
-  const rows: DeviceVersionRow[] = []
-  for (let from = 0; ; from += DEVICE_VERSION_PAGE_SIZE) {
-    const { data, error } = await fetchPage(from, from + DEVICE_VERSION_PAGE_SIZE - 1)
-    if (error)
-      return { rows, error }
-    const page = data ?? []
-    rows.push(...page)
-    if (page.length < DEVICE_VERSION_PAGE_SIZE)
-      return { rows, error: null }
-  }
-}
 
 /**
  * Device counts per version from the devices table, scoped to the effective
@@ -1656,127 +1666,130 @@ export async function readDeviceVersionCountsSB(
   app_id: string,
   channelName?: string,
   overrides?: ChannelDeviceOverrideIds,
-  supabase: SupabaseClient<Database> = supabaseAdmin(c),
 ): Promise<Record<string, number>> {
-  const reported = await readAllDeviceVersionRows((from, to) => {
-    let query = supabase
-      .from('devices')
-      .select('device_id, version_name')
-      .eq('app_id', app_id)
-    if (channelName)
-      query = query.eq('default_channel', channelName)
-    return query.order('id', { ascending: true }).range(from, to)
-  })
-  if (reported.error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device version counts', error: reported.error })
-    return {}
-  }
-
-  const defaultChannelRows = reported.rows
-  const defaultForPlatforms = channelName ? (overrides?.defaultForPlatforms ?? []) : []
-  if (defaultForPlatforms.length) {
-    const unreported = await readAllDeviceVersionRows((from, to) => supabase
-      .from('devices')
-      .select('device_id, version_name')
-      .eq('app_id', app_id)
-      .or('default_channel.is.null,default_channel.eq.')
-      .in('platform', defaultForPlatforms)
-      .order('id', { ascending: true })
-      .range(from, to))
-    if (unreported.error)
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading default channel devices for version counts', error: unreported.error })
-    else
-      defaultChannelRows.push(...unreported.rows)
-  }
-
-  const forcedIntoRows: DeviceVersionRow[] = []
-  const into = channelName ? (overrides?.into ?? []) : []
-  for (let index = 0; index < into.length; index += DEVICE_ID_FILTER_CHUNK) {
-    const { data: chunkRows, error: chunkError } = await supabase
-      .from('devices')
-      .select('device_id, version_name')
-      .eq('app_id', app_id)
-      .in('device_id', into.slice(index, index + DEVICE_ID_FILTER_CHUNK))
-    if (chunkError) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading forced channel devices for version counts', error: chunkError })
-      break
+  const pgClient = await getPgClient(c)
+  try {
+    let defaultChannelRows: DeviceVersionRow[]
+    try {
+      const result = channelName
+        ? await pgClient.query<DeviceVersionRow>('SELECT device_id, version_name FROM public.devices WHERE app_id = $1 AND default_channel = $2', [app_id, channelName])
+        : await pgClient.query<DeviceVersionRow>('SELECT device_id, version_name FROM public.devices WHERE app_id = $1', [app_id])
+      defaultChannelRows = result.rows
     }
-    forcedIntoRows.push(...(chunkRows ?? []))
-  }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device version counts', error })
+      return {}
+    }
 
-  return countChannelScopedDeviceVersions(defaultChannelRows, forcedIntoRows, channelName ? overrides : undefined)
+    const defaultForPlatforms = channelName ? (overrides?.defaultForPlatforms ?? []) : []
+    if (defaultForPlatforms.length) {
+      try {
+        const { rows } = await pgClient.query<DeviceVersionRow>(
+          `SELECT device_id, version_name FROM public.devices
+           WHERE app_id = $1 AND (default_channel IS NULL OR default_channel = '') AND platform::text = ANY($2::text[])`,
+          [app_id, defaultForPlatforms],
+        )
+        defaultChannelRows.push(...rows)
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading default channel devices for version counts', error })
+      }
+    }
+
+    let forcedIntoRows: DeviceVersionRow[] = []
+    const into = channelName ? (overrides?.into ?? []) : []
+    if (into.length) {
+      try {
+        forcedIntoRows = (await pgClient.query<DeviceVersionRow>(
+          'SELECT device_id, version_name FROM public.devices WHERE app_id = $1 AND device_id = ANY($2::text[])',
+          [app_id, into],
+        )).rows
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading forced channel devices for version counts', error })
+      }
+    }
+
+    return countChannelScopedDeviceVersions(defaultChannelRows, forcedIntoRows, channelName ? overrides : undefined)
+  }
+  finally {
+    closeClient(c, pgClient)
+  }
 }
 
 /**
  * Retrieve stats entries for the given app, honoring the optional filters and sorting provided in `params`.
  */
 export async function readStatsSB(c: Context, params: ReadStatsParams) {
-  const supabase = supabaseAdmin(c)
-
-  let query = supabase
-    .from('stats')
-    .select('*')
-    .eq('app_id', params.app_id)
-    .limit(params.limit ?? DEFAULT_LIMIT)
+  const values: unknown[] = [params.app_id]
+  const clauses = ['app_id = $1']
+  const addValue = (value: unknown) => {
+    values.push(value)
+    return `$${values.length}`
+  }
 
   if (params.start_date)
-    query = query.gte('created_at', new Date(params.start_date).toISOString())
+    clauses.push(`created_at >= ${addValue(new Date(params.start_date).toISOString())}::timestamptz`)
 
   if (params.end_date)
-    query = query.lt('created_at', new Date(params.end_date).toISOString())
+    clauses.push(`created_at < ${addValue(new Date(params.end_date).toISOString())}::timestamptz`)
 
   if (params.deviceIds?.length) {
     cloudlog({ requestId: c.get('requestId'), message: 'deviceIds', deviceIds: params.deviceIds })
-    if (params.deviceIds.length === 1)
-      query = query.eq('device_id', params.deviceIds[0])
-    else
-      query = query.in('device_id', params.deviceIds)
+    clauses.push(`device_id = ANY(${addValue(params.deviceIds)}::text[])`)
   }
 
   if (params.actions?.length) {
     cloudlog({ requestId: c.get('requestId'), message: 'actions filter', actions: params.actions })
-    if (params.actions.length === 1)
-      query = query.eq('action', params.actions[0] as Database['public']['Enums']['stats_action'])
-    else
-      query = query.in('action', params.actions as Database['public']['Enums']['stats_action'][])
+    clauses.push(`action = ANY(${addValue(params.actions)}::public.stats_action[])`)
   }
 
   if (params.version_name) {
     cloudlog({ requestId: c.get('requestId'), message: 'version_name', versionName: params.version_name })
-    query = query.eq('version_name', params.version_name)
+    clauses.push(`version_name = ${addValue(params.version_name)}`)
   }
 
   if (params.search) {
     cloudlog({ requestId: c.get('requestId'), message: 'search', search: params.search })
-    const searchPattern = buildIlikeContainsPattern(params.search)
+    const searchPattern = addValue(`%${params.search}%`)
     const orFilters = params.deviceIds?.length
-      ? [`version_name.ilike.${searchPattern}`]
-      : [`device_id.ilike.${searchPattern}`, `version_name.ilike.${searchPattern}`]
+      ? [`version_name ILIKE ${searchPattern}`]
+      : [`device_id ILIKE ${searchPattern}`, `version_name ILIKE ${searchPattern}`]
 
     const matchedActions = Constants.public.Enums.stats_action
       .filter(action => action.toLowerCase().includes(params.search!.toLowerCase()))
-      .map(action => `action.eq.${action}`)
+    if (matchedActions.length)
+      orFilters.push(`action = ANY(${addValue(matchedActions)}::public.stats_action[])`)
 
-    query = query.or([...orFilters, ...matchedActions].join(','))
+    clauses.push(`(${orFilters.join(' OR ')})`)
   }
 
-  if (params.order?.length) {
-    params.order.forEach((col: Order) => {
-      if (col.sortable && typeof col.sortable === 'string') {
-        cloudlog({ requestId: c.get('requestId'), message: 'order', key: col.key, sortable: col.sortable })
-        query = query.order(col.key as string, { ascending: col.sortable === 'asc' })
+  const orderBy: string[] = []
+  for (const col of params.order ?? []) {
+    if (col.sortable && typeof col.sortable === 'string') {
+      cloudlog({ requestId: c.get('requestId'), message: 'order', key: col.key, sortable: col.sortable })
+      // PostgREST rejected unknown order columns; an invalid name still yields the error branch below.
+      const key = String(col.key)
+      if (!SQL_IDENTIFIER_RE.test(key)) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading stats list', error: `Invalid order column: ${key}` })
+        return []
       }
-    })
+      orderBy.push(`${quoteIdent(key)} ${col.sortable === 'asc' ? 'ASC' : 'DESC'}`)
+    }
   }
 
-  const { data, error } = await query
-
-  if (error) {
+  const limit = addValue(params.limit ?? DEFAULT_LIMIT)
+  try {
+    return await withAdminPg(c, pg => queryJson<Database['public']['Tables']['stats']['Row']>(
+      pg,
+      `SELECT * FROM public.stats WHERE ${clauses.join(' AND ')}${orderBy.length ? ` ORDER BY ${orderBy.join(', ')}` : ''} LIMIT ${limit}`,
+      values,
+    ))
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading stats list', error })
     return []
   }
-
-  return data ?? []
 }
 
 export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsParams): Promise<StatsInsightsResult> {
@@ -1905,104 +1918,8 @@ export async function readStatsInsightsSB(c: Context, params: ReadStatsInsightsP
  * Query the devices table for an app with search, cursor pagination, and ordering helpers applied.
  */
 export async function readDevicesSB(c: Context, params: ReadDevicesParams, customIdMode: boolean) {
-  const supabase = supabaseAdmin(c)
-  const limit = params.limit ?? DEFAULT_LIMIT
-
   cloudlog({ requestId: c.get('requestId'), message: 'readDevicesSB', params })
-
-  if (hasDeviceVersionCompare(params))
-    return await readDevicesSBSql(c, params, customIdMode)
-
-  let query = supabase
-    .from('devices')
-    .select('*')
-    .eq('app_id', params.app_id)
-
-  if (customIdMode) {
-    query = query
-      .not('custom_id', 'is', null)
-      .neq('custom_id', '')
-  }
-
-  if (params.deviceIds?.length) {
-    cloudlog({ requestId: c.get('requestId'), message: 'deviceIds', deviceIds: params.deviceIds })
-    if (params.deviceIds.length === 1)
-      query = query.eq('device_id', params.deviceIds[0])
-    else
-      query = query.in('device_id', params.deviceIds)
-  }
-
-  if (params.customIds?.length) {
-    cloudlog({ requestId: c.get('requestId'), message: 'customIds', customIds: params.customIds })
-    if (params.customIds.length === 1)
-      query = query.eq('custom_id', params.customIds[0])
-    else
-      query = query.in('custom_id', params.customIds)
-  }
-
-  if (params.search) {
-    cloudlog({ requestId: c.get('requestId'), message: 'search', search: params.search })
-    const searchPattern = buildIlikeContainsPattern(params.search)
-    if (params.deviceIds?.length)
-      query = query.or(`custom_id.ilike.${searchPattern},version_name.ilike.${searchPattern}`)
-    else
-      query = query.or(`device_id.ilike.${searchPattern},custom_id.ilike.${searchPattern},version_name.ilike.${searchPattern}`)
-  }
-
-  if (params.version_name) {
-    const versionNames = (Array.isArray(params.version_name) ? params.version_name : [params.version_name])
-      .map(name => name.trim())
-      .filter(Boolean)
-    if (versionNames.length === 1)
-      query = query.eq('version_name', versionNames[0]!)
-    else if (versionNames.length > 1)
-      query = query.in('version_name', versionNames)
-  }
-
-  if (params.platform)
-    query = query.eq('platform', params.platform)
-
-  if (params.default_channel)
-    query = query.eq('default_channel', params.default_channel)
-
-  if (params.installSources?.length)
-    query = query.in('install_source', params.installSources)
-
-  if (params.updated_at_gt)
-    query = query.gt('updated_at', params.updated_at_gt)
-  if (params.updated_at_lte)
-    query = query.lte('updated_at', params.updated_at_lte)
-
-  const devicesOrder = getDevicesOrder(params.order)
-
-  if (params.cursor) {
-    // Cursor format: "updated_at|device_id"
-    const [cursorTime, cursorDeviceId] = params.cursor.split('|')
-    if (cursorTime && cursorDeviceId) {
-      const quotedCursorTime = quotePostgrestFilterValue(cursorTime)
-      const quotedCursorDeviceId = quotePostgrestFilterValue(cursorDeviceId)
-      if (!devicesOrder)
-        query = query.gt('device_id', cursorDeviceId)
-      else if (devicesOrder.ascending)
-        query = query.or(`updated_at.gt.${quotedCursorTime},and(updated_at.eq.${quotedCursorTime},device_id.gt.${quotedCursorDeviceId})`)
-      else
-        query = query.or(`updated_at.lt.${quotedCursorTime},and(updated_at.eq.${quotedCursorTime},device_id.gt.${quotedCursorDeviceId})`)
-    }
-  }
-
-  if (devicesOrder)
-    query = query.order('updated_at', { ascending: devicesOrder.ascending })
-  query = query.order('device_id', { ascending: true })
-    .limit(limit + 1) // Fetch one extra to check if there are more results
-
-  const { data, error } = await query
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading device list', error })
-    return []
-  }
-
-  return data ?? []
+  return await readDevicesSBSql(c, params, customIdMode)
 }
 
 export async function countInstallSourcesSB(c: Context, app_id: string): Promise<Record<string, number>> {
@@ -2049,88 +1966,39 @@ export async function countDevicesSB(
     versionNameCompare?: ReadDevicesParams['version_name_compare']
   },
 ) {
-  if (options?.osVersionCompare || options?.versionNameCompare) {
-    return countDevicesSBSql(c, app_id, customIdMode, deviceIds, versionName, search, options)
-  }
-
-  let req = supabaseAdmin(c)
-    .from('devices')
-    .select('device_id', { count: 'exact', head: true })
-    .eq('app_id', app_id)
-
-  if (customIdMode) {
-    req = req
-      .not('custom_id', 'is', null)
-      .neq('custom_id', '')
-  }
-
-  if (deviceIds.length) {
-    if (deviceIds.length === 1)
-      req = req.eq('device_id', deviceIds[0])
-    else
-      req = req.in('device_id', deviceIds)
-  }
-
-  if (search) {
-    const normalizedSearch = buildIlikeContainsPattern(search)
-    if (deviceIds.length)
-      req = req.or(`custom_id.ilike.${normalizedSearch},version_name.ilike.${normalizedSearch}`)
-    else
-      req = req.or(`device_id.ilike.${normalizedSearch},custom_id.ilike.${normalizedSearch},version_name.ilike.${normalizedSearch}`)
-  }
-
-  if (versionName) {
-    const versionNames = (Array.isArray(versionName) ? versionName : [versionName])
-      .map(name => name.trim())
-      .filter(Boolean)
-    if (versionNames.length === 1)
-      req = req.eq('version_name', versionNames[0]!)
-    else if (versionNames.length > 1)
-      req = req.in('version_name', versionNames)
-  }
-
-  if (options?.platform)
-    req = req.eq('platform', options.platform)
-  if (options?.defaultChannel)
-    req = req.eq('default_channel', options.defaultChannel)
-  if (options?.updatedAt?.gt)
-    req = req.gt('updated_at', options.updatedAt.gt)
-  if (options?.updatedAt?.lte)
-    req = req.lte('updated_at', options.updatedAt.lte)
-
-  const { count, error } = await req
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error counting devices', error })
-    return 0
-  }
-  return count ?? 0
+  return countDevicesSBSql(c, app_id, customIdMode, deviceIds, versionName, search, options)
 }
 
 const DEFAULT_PLAN_NAME = 'Solo'
 
 // Enterprise MAU slider: MAU bought on top of the plan allowance (part of the plan quota).
 export async function getOrgExtraMau(c: Context, orgId: string): Promise<number> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('stripe_info(extra_mau)')
-    .eq('id', orgId)
-    .maybeSingle()
-  if (error) {
+  try {
+    const { rows } = await withAdminPg(c, pg => pg.query<{ extra_mau: number | string | null }>(
+      `SELECT si.extra_mau
+       FROM public.orgs o
+       LEFT JOIN public.stripe_info si ON si.customer_id = o.customer_id
+       WHERE o.id = $1`,
+      [orgId],
+    ))
+    return Number(rows[0]?.extra_mau ?? 0)
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getOrgExtraMau', orgId, error })
     return 0
   }
-  return Number(data?.stripe_info?.extra_mau ?? 0)
 }
 
 export async function getCurrentPlanNameOrg(c: Context, orgId?: string): Promise<string> {
   if (!orgId)
     return DEFAULT_PLAN_NAME
-  const { data, error } = await supabaseAdmin(c)
-    .rpc('get_current_plan_name_org', { orgid: orgId })
-    .single()
-  if (error)
-    throw new Error(error.message)
+  let data: string | null
+  try {
+    data = await scalarRpc<string>(c, 'SELECT public.get_current_plan_name_org(orgid => $1::uuid) AS result', [orgId])
+  }
+  catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error))
+  }
 
   return data ?? DEFAULT_PLAN_NAME
 }
@@ -2140,29 +2008,34 @@ export async function getCurrentPlanNameOrg(c: Context, orgId?: string): Promise
  * Uses find_apikey_by_value SQL function to look up both plain-text and hashed keys
  * Expiration is checked after lookup
  */
-export async function checkKey(c: Context, authorization: string | undefined, supabase: SupabaseClient<Database>): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
+export async function checkKey(c: Context, authorization: string | undefined): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
   if (!authorization)
     return null
 
   try {
     // Use find_apikey_by_value SQL function to look up both plain-text and hashed keys
-    // RPC calls use parameterized queries, so SQL injection is not possible
-    const { data, error } = await supabase
-      .rpc('find_apikey_by_value', { key_value: authorization })
-      .single()
-
-    if (error) {
-      // Kong/PostgREST overload must not look like a bad key (flaky 401s in CI).
-      const message = error.message ?? ''
-      if (message.includes('invalid response was received from the upstream server')) {
+    let rows: Database['public']['Tables']['apikeys']['Row'][]
+    try {
+      rows = await withAdminPg(c, pg => queryJson<Database['public']['Tables']['apikeys']['Row']>(
+        pg,
+        'SELECT * FROM public.find_apikey_by_value(key_value => $1::text)',
+        [authorization],
+      ))
+    }
+    catch (error) {
+      // Database overload/connection loss must not look like a bad key (flaky 401s in CI).
+      if (isTransientPgError(error)) {
+        const message = error instanceof Error ? error.message : String(error)
         cloudlog({ requestId: c.get('requestId'), message: 'Apikey lookup upstream failure', authorizationPrefix: authorization?.substring(0, 8), error })
         throw quickError(503, 'upstream_unavailable', 'Upstream unavailable', { error: message })
       }
       cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), error })
       return null
     }
+    // Mirrors `.single()`: anything but exactly one match is an invalid key.
+    const data = rows.length === 1 ? rows[0]! : null
     if (!data) {
-      cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8), error })
+      cloudlog({ requestId: c.get('requestId'), message: 'Invalid apikey', authorizationPrefix: authorization?.substring(0, 8) })
       return null
     }
 
@@ -2189,25 +2062,24 @@ export async function checkKey(c: Context, authorization: string | undefined, su
 export async function checkKeyById(
   c: Context,
   id: number,
-  supabase: SupabaseClient<Database>,
   userId?: string,
 ): Promise<Database['public']['Tables']['apikeys']['Row'] | null> {
   if (!id)
     return null
   try {
     // Expiration check is done in SQL: expires_at IS NULL OR expires_at > now()
-    let query = supabase
-      .from('apikeys')
-      .select('*')
-      .eq('id', id)
-      .or('expires_at.is.null,expires_at.gt.now()')
+    const values: unknown[] = [id]
+    let userFilter = ''
     if (userId) {
-      query = query.eq('user_id', userId)
+      values.push(userId)
+      userFilter = ' AND user_id = $2'
     }
-    const { data, error } = await query.single()
-    if (!data || error)
-      return null
-    return data
+    const rows = await withAdminPg(c, pg => queryJson<Database['public']['Tables']['apikeys']['Row']>(
+      pg,
+      `SELECT * FROM public.apikeys WHERE id = $1 AND (expires_at IS NULL OR expires_at > now())${userFilter}`,
+      values,
+    ))
+    return rows.length === 1 ? rows[0]! : null
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'checkKeyById error', error })
@@ -2238,11 +2110,12 @@ export function validateExpirationDate(expiresAt: string | null | undefined): vo
  * App-scoped keys inherit expiration policy from the app owner organization.
  */
 export async function resolveApikeyPolicyOrgIds(
-  supabase: SupabaseClient<Database>,
+  c: Context,
+  principal: RlsPrincipal,
   options: {
     limitedToApps?: string[] | null
     limitedToOrgs?: string[] | null
-    policyLookupSupabase?: SupabaseClient<Database>
+    policyLookupPrincipal?: RlsPrincipal
   },
 ): Promise<string[]> {
   const orgIds = new Set((options.limitedToOrgs ?? []).filter(Boolean))
@@ -2254,21 +2127,23 @@ export async function resolveApikeyPolicyOrgIds(
 
   const resolvedAppIds = new Set<string>()
 
-  async function addResolvedApps(client: SupabaseClient<Database>, appIds: string[]) {
+  async function addResolvedApps(lookupPrincipal: RlsPrincipal, appIds: string[]) {
     if (appIds.length === 0) {
       return
     }
 
-    const { data: apps, error } = await client
-      .from('apps')
-      .select('app_id, owner_org')
-      .in('app_id', appIds)
-
-    if (error) {
+    let apps: { app_id: string | null, owner_org: string | null }[]
+    try {
+      apps = await withRlsContext(c, lookupPrincipal, async client => (await client.query<{ app_id: string | null, owner_org: string | null }>(
+        'SELECT app_id, owner_org FROM public.apps WHERE app_id = ANY($1::text[])',
+        [appIds],
+      )).rows)
+    }
+    catch (error) {
       throw simpleError('failed_to_resolve_apikey_policy_scope', 'Failed to resolve API key policy scope', { supabaseError: error })
     }
 
-    for (const app of apps ?? []) {
+    for (const app of apps) {
       if (!app.app_id || !app.owner_org)
         continue
       resolvedAppIds.add(app.app_id)
@@ -2276,12 +2151,12 @@ export async function resolveApikeyPolicyOrgIds(
     }
   }
 
-  await addResolvedApps(supabase, limitedToApps)
+  await addResolvedApps(principal, limitedToApps)
 
   let unresolvedAppIds = limitedToApps.filter(appId => !resolvedAppIds.has(appId))
-  if (unresolvedAppIds.length > 0 && options.policyLookupSupabase) {
+  if (unresolvedAppIds.length > 0 && options.policyLookupPrincipal) {
     // Hidden apps still need owner-org policy enforcement even when caller RLS cannot see them.
-    await addResolvedApps(options.policyLookupSupabase, unresolvedAppIds)
+    await addResolvedApps(options.policyLookupPrincipal, unresolvedAppIds)
     unresolvedAppIds = unresolvedAppIds.filter(appId => !resolvedAppIds.has(appId))
   }
 
@@ -2325,28 +2200,50 @@ export function assertExpirationMatchesOrgPolicies(
  * Throws simpleError if any org policy is violated.
  * @param orgIds - Array of org IDs to validate against
  * @param expiresAt - The expiration date string
- * @param supabase - Supabase client
+ * @param principal - Who reads the org policies (RLS applies unless it is the service principal)
  */
 export async function validateExpirationAgainstOrgPolicies(
+  c: Context,
   orgIds: string[],
   expiresAt: string | null,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<void> {
   if (orgIds.length === 0) {
     return
   }
 
-  // Fetch all org policies in a single query
-  const { data: orgs } = await supabase
-    .from('orgs')
-    .select('id, require_apikey_expiration, max_apikey_expiration_days')
-    .in('id', orgIds)
+  // Fetch all org policies in a single query. Lookup errors were ignored (no policies to enforce).
+  let orgs: ApiKeyExpirationPolicyRow[]
+  try {
+    orgs = await withRlsContext(c, principal, async client => (await client.query<ApiKeyExpirationPolicyRow>(
+      'SELECT id, require_apikey_expiration, max_apikey_expiration_days FROM public.orgs WHERE id = ANY($1::uuid[])',
+      [orgIds],
+    )).rows)
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'validateExpirationAgainstOrgPolicies: unable to load org policies', orgIds, error })
+    return
+  }
 
-  if (!orgs || orgs.length === 0) {
+  if (orgs.length === 0) {
     return
   }
 
   assertExpirationMatchesOrgPolicies(orgs, expiresAt)
+}
+
+/** `orgs.select(column).eq('id', orgId).single()` as `principal`: the row, or null unless exactly one is visible. */
+async function selectSingleOrgColumn<T>(
+  c: Context,
+  principal: RlsPrincipal,
+  column: 'require_apikey_expiration' | 'enforce_hashed_api_keys',
+  orgId: string,
+): Promise<T | null> {
+  const rows = await withRlsContext(c, principal, async client => (await client.query<T & object>(
+    `SELECT ${quoteIdent(column)} FROM public.orgs WHERE id = $1`,
+    [orgId],
+  )).rows)
+  return rows.length === 1 ? rows[0]! : null
 }
 
 /**
@@ -2356,13 +2253,16 @@ export async function checkApikeyMeetsOrgPolicy(
   c: Context,
   key: Database['public']['Tables']['apikeys']['Row'],
   orgId: string,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<{ valid: boolean, error?: string }> {
-  const { data: org, error } = await supabase
-    .from('orgs')
-    .select('require_apikey_expiration')
-    .eq('id', orgId)
-    .single()
+  let org: { require_apikey_expiration: boolean } | null = null
+  let error: unknown = null
+  try {
+    org = await selectSingleOrgColumn<{ require_apikey_expiration: boolean }>(c, principal, 'require_apikey_expiration', orgId)
+  }
+  catch (lookupError) {
+    error = lookupError
+  }
 
   if (error || !org) {
     cloudlogErr({
@@ -2389,17 +2289,14 @@ export async function checkKeyOrgEnforcement(
   c: Context,
   apikey: Database['public']['Tables']['apikeys']['Row'],
   orgId: string,
-  supabase: SupabaseClient<Database>,
+  principal: RlsPrincipal,
 ): Promise<boolean> {
   try {
     // Check if org enforces hashed keys
-    const { data: org, error } = await supabase
-      .from('orgs')
-      .select('enforce_hashed_api_keys')
-      .eq('id', orgId)
-      .single()
+    const org = await selectSingleOrgColumn<{ enforce_hashed_api_keys: boolean }>(c, principal, 'enforce_hashed_api_keys', orgId)
+      .catch(() => null)
 
-    if (error || !org) {
+    if (!org) {
       // Org not found or error - allow (will fail on other checks)
       return true
     }

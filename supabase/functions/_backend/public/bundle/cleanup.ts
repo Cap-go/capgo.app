@@ -9,7 +9,7 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { integerLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 const booleanLikeSchema = z.union([z.boolean(), z.enum(['true', 'false', '1', '0']).transform(value => value === 'true' || value === '1')])
@@ -46,9 +46,7 @@ export interface CleanupPlan {
 }
 
 const DEFAULT_KEEP = 4
-// PostgREST caps responses at max_rows (1000); page explicitly so large apps are not truncated.
-const SELECT_PAGE_SIZE = 1000
-// Keep `id=in.(...)` query strings well under URL length limits.
+// Keep each soft-delete transaction (and its lifecycle locks) bounded.
 const DELETE_BATCH_SIZE = 200
 // Placeholder bundles every app owns; never offer them for cleanup.
 const RESERVED_BUNDLE_NAMES = new Set(['builtin', 'unknown'])
@@ -89,54 +87,38 @@ export function planBundleCleanup(
   return { active: active.length, total: candidates.length, kept, removed }
 }
 
-async function fetchActiveVersions(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row'], appId: string) {
-  const supabase = supabaseApikey(c, apikey.key)
-  const rows: { id: number, name: string, created_at: string | null }[] = []
-  for (let from = 0; ; from += SELECT_PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from('app_versions')
-      .select('id, name, created_at')
-      .eq('app_id', appId)
-      .eq('deleted', false)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(from, from + SELECT_PAGE_SIZE - 1)
-    if (error)
-      quickError(500, 'cannot_get_bundle', 'Cannot list bundles', { supabaseError: error })
-    rows.push(...(data ?? []))
-    if (!data || data.length < SELECT_PAGE_SIZE)
-      return rows
-  }
-}
-
 /**
- * Bundle ids targeted by a channel (`version` or `rollout_version`). Pages by last seen id so
- * a concurrently deleted channel cannot shift a later page and hide a link.
+ * Active bundles (newest first) and the bundle ids targeted by a channel (`version` or
+ * `rollout_version`), read as the API key under RLS in one snapshot.
  */
-async function fetchLinkedVersionIds(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row'], appId: string) {
-  const supabase = supabaseApikey(c, apikey.key)
-  const linked = new Set<number>()
-  let lastId = 0
-  while (true) {
-    const { data, error } = await supabase
-      .from('channels')
-      .select('id, version, rollout_version')
-      .eq('app_id', appId)
-      .gt('id', lastId)
-      .order('id', { ascending: true })
-      .limit(SELECT_PAGE_SIZE)
-    if (error)
-      quickError(500, 'cannot_check_linked_channels', 'Cannot check linked channels', { supabaseError: error })
-    for (const channel of data ?? []) {
-      if (typeof channel.version === 'number')
-        linked.add(channel.version)
-      if (typeof channel.rollout_version === 'number')
-        linked.add(channel.rollout_version)
+async function fetchVersionsAndLinks(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row'], appId: string) {
+  return withRlsContext(c, apikeyPrincipal(c, apikey.key), async (client) => {
+    let versions: { id: number, name: string, created_at: string | null }[] = []
+    try {
+      versions = await queryJson(client, `SELECT id, name, created_at FROM public.app_versions
+        WHERE app_id = $1 AND deleted = false
+        ORDER BY created_at DESC, id DESC`, [appId])
     }
-    if (!data || data.length < SELECT_PAGE_SIZE)
-      return linked
-    lastId = data[data.length - 1].id
-  }
+    catch (error) {
+      quickError(500, 'cannot_get_bundle', 'Cannot list bundles', { supabaseError: error })
+    }
+
+    const linked = new Set<number>()
+    try {
+      const channels = await queryJson<{ version: number | null, rollout_version: number | null }>(client, `SELECT version, rollout_version FROM public.channels
+        WHERE app_id = $1`, [appId])
+      for (const channel of channels) {
+        if (typeof channel.version === 'number')
+          linked.add(channel.version)
+        if (typeof channel.rollout_version === 'number')
+          linked.add(channel.rollout_version)
+      }
+    }
+    catch (error) {
+      quickError(500, 'cannot_check_linked_channels', 'Cannot check linked channels', { supabaseError: error })
+    }
+    return { versions, linked }
+  })
 }
 
 /**
@@ -196,10 +178,7 @@ export async function cleanupBundles(c: Context<MiddlewareKeyVariables>, bodyRaw
     throw simpleError('cannot_delete_bundle', 'You can\'t access this app', { app_id: body.app_id })
 
   const ignoreChannel = body.ignore_channel === true
-  const [versions, linkedIds] = await Promise.all([
-    fetchActiveVersions(c, apikey, body.app_id),
-    fetchLinkedVersionIds(c, apikey, body.app_id),
-  ])
+  const { versions, linked: linkedIds } = await fetchVersionsAndLinks(c, apikey, body.app_id)
   const plan = planBundleCleanup(versions, linkedIds, { keep: body.keep ?? DEFAULT_KEEP, bundle: body.bundle, ignoreChannel })
   if (body.ids) {
     const confirmed = new Set(body.ids)

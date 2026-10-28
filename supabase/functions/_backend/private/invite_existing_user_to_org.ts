@@ -7,7 +7,6 @@ import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { canCallerAssignOrgRole, checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import { version } from '../utils/version.ts'
 
 const inviteExistingUserSchema = z.object({
@@ -86,99 +85,99 @@ app.post('/', middlewareAuth, async (c) => {
     },
   })
 
-  const supabaseAdminClient = supabaseAdmin(c)
-
-  cloudlog({ requestId, context: 'invite_existing_user_to_org fetch organization', orgId: body.org_id })
-  const { data: org, error: orgError } = await supabaseAdminClient
-    .from('orgs')
-    .select('id, name')
-    .eq('id', body.org_id)
-    .maybeSingle()
-
-  if (orgError) {
-    return quickError(500, 'failed_to_invite_user', 'Failed to fetch organization', { error: orgError.message })
-  }
-
-  if (!org) {
-    return quickError(404, 'organization_not_found', 'Organization not found')
-  }
-
-  cloudlog({
-    requestId,
-    context: 'invite_existing_user_to_org fetch invited user',
-    orgId: body.org_id,
-    invitedEmail: maskEmail(body.email),
-  })
-  const { data: invitedUser, error: invitedUserError } = await supabaseAdminClient
-    .from('users')
-    .select('id, email, first_name, last_name')
-    .eq('email', body.email)
-    .maybeSingle()
-
-  if (invitedUserError) {
-    return quickError(500, 'failed_to_invite_user', 'Failed to fetch invited user', { error: invitedUserError.message })
-  }
-
-  if (!invitedUser) {
-    return quickError(404, 'user_not_found', 'User not found')
-  }
-
-  cloudlog({
-    requestId,
-    context: 'invite_existing_user_to_org fetch membership',
-    orgId: body.org_id,
-    invitedUserId: invitedUser.id,
-  })
-  const { data: membership, error: membershipError } = await supabaseAdminClient
-    .from('org_users')
-    .select('id, is_invite, rbac_role_name')
-    .eq('org_id', body.org_id)
-    .eq('user_id', invitedUser.id)
-    .maybeSingle()
-
-  if (membershipError) {
-    return quickError(500, 'failed_to_invite_user', 'Failed to fetch organization membership', { error: membershipError.message })
-  }
-
-  if (!membership) {
-    return quickError(404, 'invite_not_found', 'Pending invitation not found')
-  }
-
-  if (!membership.is_invite) {
-    return quickError(409, 'invite_already_accepted', 'Invitation already accepted')
-  }
-
-  if (!membership.rbac_role_name) {
-    return quickError(500, 'failed_to_invite_user', 'Invitation has no RBAC role')
-  }
-
-  const missingPermission = getInviteResendRequiredPermission(
-    membership.rbac_role_name,
-    canInviteUser,
-    canUpdateUserRoles,
-  )
-
-  if (missingPermission) {
-    return quickError(403, 'not_authorized', 'Not authorized', {
-      requiredPermission: missingPermission,
-      orgId: body.org_id,
-    })
-  }
-
-  const canManageInviteRole = await canCallerAssignOrgRole(
-    c,
-    body.org_id,
-    membership.rbac_role_name,
-  )
-  if (!canManageInviteRole) {
-    return quickError(403, 'not_authorized', 'Not authorized', {
-      requiredPermission: 'org.update_user_roles',
-      orgId: body.org_id,
-    })
-  }
-
   const pgPool = await getPgClient(c)
   try {
+    cloudlog({ requestId, context: 'invite_existing_user_to_org fetch organization', orgId: body.org_id })
+    let org: { id: string, name: string } | undefined
+    try {
+      ({ rows: [org] } = await pgPool.query<{ id: string, name: string }>(
+        'SELECT id, name FROM public.orgs WHERE id = $1',
+        [body.org_id],
+      ))
+    }
+    catch (orgError) {
+      return quickError(500, 'failed_to_invite_user', 'Failed to fetch organization', { error: (orgError as Error).message })
+    }
+
+    if (!org) {
+      return quickError(404, 'organization_not_found', 'Organization not found')
+    }
+
+    cloudlog({
+      requestId,
+      context: 'invite_existing_user_to_org fetch invited user',
+      orgId: body.org_id,
+      invitedEmail: maskEmail(body.email),
+    })
+    let invitedUser: { id: string, email: string, first_name: string | null, last_name: string | null } | undefined
+    try {
+      ({ rows: [invitedUser] } = await pgPool.query<{ id: string, email: string, first_name: string | null, last_name: string | null }>(
+        'SELECT id, email, first_name, last_name FROM public.users WHERE email = $1 LIMIT 1',
+        [body.email],
+      ))
+    }
+    catch (invitedUserError) {
+      return quickError(500, 'failed_to_invite_user', 'Failed to fetch invited user', { error: (invitedUserError as Error).message })
+    }
+
+    if (!invitedUser) {
+      return quickError(404, 'user_not_found', 'User not found')
+    }
+
+    cloudlog({
+      requestId,
+      context: 'invite_existing_user_to_org fetch membership',
+      orgId: body.org_id,
+      invitedUserId: invitedUser.id,
+    })
+    let membership: { id: string, is_invite: boolean | null, rbac_role_name: string | null } | undefined
+    try {
+      ({ rows: [membership] } = await pgPool.query<{ id: string, is_invite: boolean | null, rbac_role_name: string | null }>(
+        'SELECT id, is_invite, rbac_role_name FROM public.org_users WHERE org_id = $1 AND user_id = $2 LIMIT 1',
+        [body.org_id, invitedUser.id],
+      ))
+    }
+    catch (membershipError) {
+      return quickError(500, 'failed_to_invite_user', 'Failed to fetch organization membership', { error: (membershipError as Error).message })
+    }
+
+    if (!membership) {
+      return quickError(404, 'invite_not_found', 'Pending invitation not found')
+    }
+
+    if (!membership.is_invite) {
+      return quickError(409, 'invite_already_accepted', 'Invitation already accepted')
+    }
+
+    if (!membership.rbac_role_name) {
+      return quickError(500, 'failed_to_invite_user', 'Invitation has no RBAC role')
+    }
+
+    const missingPermission = getInviteResendRequiredPermission(
+      membership.rbac_role_name,
+      canInviteUser,
+      canUpdateUserRoles,
+    )
+
+    if (missingPermission) {
+      return quickError(403, 'not_authorized', 'Not authorized', {
+        requiredPermission: missingPermission,
+        orgId: body.org_id,
+      })
+    }
+
+    const canManageInviteRole = await canCallerAssignOrgRole(
+      c,
+      body.org_id,
+      membership.rbac_role_name,
+    )
+    if (!canManageInviteRole) {
+      return quickError(403, 'not_authorized', 'Not authorized', {
+        requiredPermission: 'org.update_user_roles',
+        orgId: body.org_id,
+      })
+    }
+
     const { rows } = await pgPool.query<{ status: string }>(
       'SELECT public.queue_org_invitation_email($1, $2::bigint, $3::uuid) AS status',
       ['existing', membership.id, inviterId],
@@ -193,12 +192,12 @@ app.post('/', middlewareAuth, async (c) => {
       return quickError(409, 'invite_already_accepted', 'Invitation is no longer pending')
     if (rows[0]?.status !== 'QUEUED')
       return quickError(500, 'failed_to_send_invite_email', 'Failed to queue invitation email')
+
+    cloudlog({ requestId, context: 'invite_existing_user_to_org queued', orgId: body.org_id, invitationId: membership.id })
   }
   finally {
     closeClient(c, pgPool)
   }
-
-  cloudlog({ requestId, context: 'invite_existing_user_to_org queued', orgId: body.org_id, invitationId: membership.id })
 
   return c.json(BRES)
 })

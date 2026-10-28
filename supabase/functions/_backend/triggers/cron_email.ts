@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import { Hono } from 'hono/tiny'
 import {
   buildWeeklyEmailMetadata,
@@ -13,18 +14,32 @@ import {
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 import { findBestPlan } from '../utils/plans.ts'
 import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
-import { getCurrentPlanNameOrg, getOrgExtraMau, supabaseAdmin } from '../utils/supabase.ts'
+import { getCurrentPlanNameOrg, getOrgExtraMau } from '../utils/supabase.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-async function getOrgIdForApp(c: Context, appId: string): Promise<string> {
-  const { data: appData, error: appError } = await supabaseAdmin(c)
-    .from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .single()
+async function getOrgIdForApp(c: Context, appId: string, pg?: PgClient): Promise<string> {
+  const client = pg ?? await getPgClient(c)
+  let appData: { owner_org: string | null } | null = null
+  let appError: unknown = null
+  try {
+    const result = await client.query<{ owner_org: string | null }>('SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 2', [appId])
+    if (result.rows.length === 1)
+      appData = result.rows[0]
+    else
+      appError = { code: 'PGRST116', message: `Expected 1 app row, got ${result.rows.length}` }
+  }
+  catch (error) {
+    appError = error
+  }
+  finally {
+    if (!pg)
+      closeClient(c, client)
+  }
 
   if (appError || !appData?.owner_org)
     throw simpleError('org_not_found', 'Organization not found for app', { appError, appId })
@@ -131,11 +146,32 @@ app.post('/', middlewareAPISecret, async (c) => {
 })
 
 async function handleWeeklyInstallStats(c: Context, appId: string) {
-  const supabase = await supabaseAdmin(c)
+  const pg = await getPgClient(c)
+  try {
+    return await sendWeeklyInstallStats(c, pg, appId)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
 
-  const { data: weeklyStats, error: generateStatsError } = await supabase.rpc('get_weekly_stats', {
-    app_id: appId,
-  }).single()
+async function sendWeeklyInstallStats(c: Context, pg: PgClient, appId: string) {
+  let weeklyStats: { all_updates: number, failed_updates: number, open_app: number } | null = null
+  let generateStatsError: unknown = null
+  try {
+    const rows = await queryJson<{ all_updates: number, failed_updates: number, open_app: number }>(
+      pg,
+      'SELECT * FROM public.get_weekly_stats(app_id => $1)',
+      [appId],
+    )
+    if (rows.length === 1)
+      weeklyStats = rows[0]
+    else
+      generateStatsError = { code: 'PGRST116', message: `Expected 1 weekly stats row, got ${rows.length}` }
+  }
+  catch (error) {
+    generateStatsError = error
+  }
 
   if (!weeklyStats || generateStatsError) {
     throw simpleError('cannot_generate_stats', 'Cannot generate stats', { error: generateStatsError })
@@ -151,48 +187,55 @@ async function handleWeeklyInstallStats(c: Context, appId: string) {
 
   const metadata = buildWeeklyEmailMetadata(appId, stats)
 
-  await sendEmailToOrgMembers(c, 'user:weekly_stats', 'weekly_stats', metadata, await getOrgIdForApp(c, appId))
+  await sendEmailToOrgMembers(c, 'user:weekly_stats', 'weekly_stats', metadata, await getOrgIdForApp(c, appId, pg))
 
   return c.json(BRES)
 }
 
 async function handleMonthlyCreateStats(c: Context, appId: string) {
-  const supabase = await supabaseAdmin(c)
+  const pg = await getPgClient(c)
+  try {
+    return await sendMonthlyCreateStats(c, pg, appId)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
 
+async function sendMonthlyCreateStats(c: Context, pg: PgClient, appId: string) {
   // Previous calendar month in UTC: [start, nextMonthStart)
   const { startIso, endExclusiveIso, monthName } = getPreviousMonthUtcRange()
 
   // Fetch stats for bundle creation and publishing
-  const { data: appVersions, error: appVersionsError } = await supabase
-    .from('app_versions')
-    .select('id, created_at')
-    .eq('app_id', appId)
-    .gte('created_at', startIso)
-    .lt('created_at', endExclusiveIso)
-
-  if (appVersionsError) {
+  let bundleCount: number
+  try {
+    const result = await pg.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM public.app_versions WHERE app_id = $1 AND created_at >= $2 AND created_at < $3',
+      [appId, startIso, endExclusiveIso],
+    )
+    bundleCount = result.rows[0]?.count ?? 0
+  }
+  catch (appVersionsError) {
     throw simpleError('cannot_fetch_monthly_bundles', 'Cannot fetch monthly bundle stats', {
       error: appVersionsError,
       appId,
     })
   }
 
-  const { data: deployHistory, error: deployHistoryError } = await supabase
-    .from('deploy_history')
-    .select('id, deployed_at')
-    .eq('app_id', appId)
-    .gte('deployed_at', startIso)
-    .lt('deployed_at', endExclusiveIso)
-
-  if (deployHistoryError) {
+  let publishCount: number
+  try {
+    const result = await pg.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM public.deploy_history WHERE app_id = $1 AND deployed_at >= $2 AND deployed_at < $3',
+      [appId, startIso, endExclusiveIso],
+    )
+    publishCount = result.rows[0]?.count ?? 0
+  }
+  catch (deployHistoryError) {
     throw simpleError('cannot_fetch_monthly_publishes', 'Cannot fetch monthly publish stats', {
       error: deployHistoryError,
       appId,
     })
   }
-
-  const bundleCount = appVersions?.length ?? 0
-  const publishCount = deployHistory?.length ?? 0
 
   const metadata = {
     app_id: appId,
@@ -202,7 +245,7 @@ async function handleMonthlyCreateStats(c: Context, appId: string) {
   }
 
   if (bundleCount > 0 || publishCount > 0) {
-    await sendEmailToOrgMembers(c, 'org:monthly_create_stats', 'monthly_stats', metadata, await getOrgIdForApp(c, appId))
+    await sendEmailToOrgMembers(c, 'org:monthly_create_stats', 'monthly_stats', metadata, await getOrgIdForApp(c, appId, pg))
   }
 
   return c.json(BRES)
@@ -265,11 +308,22 @@ async function handleDeployInstallStats(
   let deployTime = deployedAt ? new Date(deployedAt) : null
   if (!deployTime || Number.isNaN(deployTime.getTime())) {
     if (deployId) {
-      const { data: deploy, error: deployError } = await supabaseAdmin(c)
-        .from('deploy_history')
-        .select('deployed_at')
-        .eq('id', deployId)
-        .single()
+      let deploy: { deployed_at: string | null } | null = null
+      let deployError: unknown = null
+      const pg = await getPgClient(c)
+      try {
+        const rows = await queryJson<{ deployed_at: string | null }>(pg, 'SELECT deployed_at FROM public.deploy_history WHERE id = $1', [deployId])
+        if (rows.length === 1)
+          deploy = rows[0]
+        else
+          deployError = { code: 'PGRST116', message: `Expected 1 deploy_history row, got ${rows.length}` }
+      }
+      catch (error) {
+        deployError = error
+      }
+      finally {
+        closeClient(c, pg)
+      }
       if (deployError || !deploy?.deployed_at) {
         throw simpleError('missing_deployed_at', 'Missing deployedAt', { appId, deployId, deployError })
       }
@@ -315,10 +369,17 @@ async function handleDeployInstallStats(
   // lagged or returned unusable counts, release the claim so cron can retry
   // while this deploy is still the latest within the retry window.
   if (deployId && shouldRetryDeployInstallStats(deployTime)) {
-    const { error: releaseError } = await supabaseAdmin(c)
-      .from('deploy_history')
-      .update({ install_stats_email_sent_at: null })
-      .eq('id', deployId)
+    let releaseError: unknown = null
+    const pg = await getPgClient(c)
+    try {
+      await pg.query('UPDATE public.deploy_history SET install_stats_email_sent_at = NULL WHERE id = $1', [deployId])
+    }
+    catch (error) {
+      releaseError = error
+    }
+    finally {
+      closeClient(c, pg)
+    }
     if (releaseError) {
       cloudlogErr({
         requestId: c.get('requestId'),
@@ -400,14 +461,29 @@ export const billingPeriodStatsTestUtils = {
 }
 
 async function handleBillingPeriodStats(c: Context, _email: string, orgId: string, cycleStart?: string, cycleEnd?: string) {
-  const supabase = await supabaseAdmin(c)
+  const pg = await getPgClient(c)
+  try {
+    return await sendBillingPeriodStats(c, pg, orgId, cycleStart, cycleEnd)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
 
+async function sendBillingPeriodStats(c: Context, pg: PgClient, orgId: string, cycleStart?: string, cycleEnd?: string) {
   // Get organization info
-  const { data: org, error: orgError } = await supabase
-    .from('orgs')
-    .select('id, name')
-    .eq('id', orgId)
-    .single()
+  let org: { id: string, name: string } | null = null
+  let orgError: unknown = null
+  try {
+    const result = await pg.query<{ id: string, name: string }>('SELECT id, name FROM public.orgs WHERE id = $1', [orgId])
+    if (result.rows.length === 1)
+      org = result.rows[0]
+    else
+      orgError = { code: 'PGRST116', message: `Expected 1 org row, got ${result.rows.length}` }
+  }
+  catch (error) {
+    orgError = error
+  }
 
   if (orgError || !org) {
     throw simpleError('org_not_found', 'Organization not found', { orgId, orgError })
@@ -425,9 +501,22 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
   }
   else {
     // Fallback: get cycle info from RPC (current cycle, same half-open bounds)
-    const { data: cycleInfo, error: cycleError } = await supabase
-      .rpc('get_cycle_info_org', { orgid: orgId })
-      .single()
+    let cycleInfo: { subscription_anchor_start: string, subscription_anchor_end: string } | null = null
+    let cycleError: unknown = null
+    try {
+      const rows = await queryJson<{ subscription_anchor_start: string, subscription_anchor_end: string }>(
+        pg,
+        'SELECT * FROM public.get_cycle_info_org(orgid => $1)',
+        [orgId],
+      )
+      if (rows.length === 1)
+        cycleInfo = rows[0]
+      else
+        cycleError = { code: 'PGRST116', message: `Expected 1 cycle info row, got ${rows.length}` }
+    }
+    catch (error) {
+      cycleError = error
+    }
 
     if (cycleError || !cycleInfo) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot get cycle info', error: cycleError, metadata: { orgId } })
@@ -453,13 +542,22 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
   }
 
   // Get total metrics for the completed billing period days
-  const { data: metrics, error: metricsError } = await supabase
-    .rpc('get_total_metrics', {
-      org_id: orgId,
-      start_date: periodStart,
-      end_date: metricsEndInclusive,
-    })
-    .single()
+  let metrics: { mau: number, bandwidth: number, storage: number, build_time_unit: number } | null = null
+  let metricsError: unknown = null
+  try {
+    const rows = await queryJson<{ mau: number, bandwidth: number, storage: number, build_time_unit: number }>(
+      pg,
+      'SELECT * FROM public.get_total_metrics(org_id => $1, start_date => $2::date, end_date => $3::date)',
+      [orgId, periodStart, metricsEndInclusive],
+    )
+    if (rows.length === 1)
+      metrics = rows[0]
+    else
+      metricsError = { code: 'PGRST116', message: `Expected 1 metrics row, got ${rows.length}` }
+  }
+  catch (error) {
+    metricsError = error
+  }
 
   if (metricsError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot get total metrics', error: metricsError, metadata: { orgId } })
@@ -469,14 +567,18 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
   // Half-open credit sum on the same timestamptz bounds as the cycle payload.
   // Cron path uses UTC midnight bounds so the 12:00 UTC job never under-counts
   // a still-open Stripe afternoon anchor.
-  const { data: creditsSum, error: creditsError } = await supabase.rpc(
-    'get_org_credits_used_in_period',
-    {
-      p_org_id: orgId,
-      p_start: cycleStartTs,
-      p_end: cycleEndTs,
-    },
-  )
+  let creditsSum: string | number | null = null
+  let creditsError: unknown = null
+  try {
+    const result = await pg.query<{ credits: string | null }>(
+      'SELECT public.get_org_credits_used_in_period(p_org_id => $1, p_start => $2::timestamptz, p_end => $3::timestamptz) AS credits',
+      [orgId, cycleStartTs, cycleEndTs],
+    )
+    creditsSum = result.rows[0]?.credits ?? null
+  }
+  catch (error) {
+    creditsError = error
+  }
 
   if (creditsError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot get credits used', error: creditsError, metadata: { orgId } })
@@ -494,11 +596,15 @@ async function handleBillingPeriodStats(c: Context, _email: string, orgId: strin
   const currentPlanName = await getCurrentPlanNameOrg(c, orgId)
 
   // Get current plan limits
-  const { data: currentPlan } = await supabase
-    .from('plans')
-    .select('mau, bandwidth, storage, build_time_unit')
-    .eq('name', currentPlanName)
-    .single()
+  const currentPlanRows = await queryJson<{ mau: number, bandwidth: number, storage: number, build_time_unit: number }>(
+    pg,
+    'SELECT mau, bandwidth, storage, build_time_unit FROM public.plans WHERE name = $1 LIMIT 2',
+    [currentPlanName],
+  ).catch((error: unknown) => {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot get current plan limits', error, metadata: { orgId, currentPlanName } })
+    return []
+  })
+  const currentPlan = currentPlanRows.length === 1 ? currentPlanRows[0] : null
 
   // Find the best plan for the actual usage
   const bestPlanName = await findBestPlan(c, {

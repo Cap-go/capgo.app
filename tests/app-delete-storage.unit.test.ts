@@ -29,25 +29,28 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   },
 }))
 
-function createTableMock() {
-  const query: Record<string, any> = {}
-  query.select = vi.fn(() => query)
-  query.delete = vi.fn(() => query)
-  query.eq = vi.fn(() => query)
-  query.single = vi.fn(async () => ({ data: { owner_org: ORG_ID }, error: null }))
-  // Awaiting a delete chain resolves to a successful PostgREST response.
-  query.then = (resolve: (value: unknown) => unknown) => resolve({ data: null, error: null })
-  return query
-}
-
 const ORG_ID = '22222222-2222-4222-8222-222222222222'
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 const APP_ID = 'com.example.app'
 
+// Direct Postgres: the owner_org lookup returns the org, every delete succeeds.
+const pgClient = {
+  query: vi.fn(async (text: string) => {
+    if (text.includes('SELECT owner_org FROM public.apps'))
+      return { rows: [{ row: { owner_org: ORG_ID } }] }
+    return { rows: [] }
+  }),
+}
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: vi.fn(),
+  getDrizzleClient: vi.fn(),
+  getPgClient: vi.fn(async () => pgClient),
+  withPgTransaction: async (_pg: unknown, run: (client: unknown) => Promise<unknown>) => run(pgClient),
+}))
+
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: () => ({ from: () => createTableMock() }),
   supabaseAdmin: () => ({
-    from: () => createTableMock(),
     storage: {
       from: (bucket: string) => ({
         list: (prefix: string, options: unknown) => mocks.list(bucket, prefix, options),
@@ -103,6 +106,7 @@ describe('app delete storage cleanup', () => {
     ])
     expect(mocks.cloudlog).toHaveBeenCalledWith(expect.objectContaining({ message: 'deleted app images', count: 2 }))
     expect(mocks.cloudlogErr).not.toHaveBeenCalled()
+    expect(pgClient.query).toHaveBeenCalledWith('DELETE FROM public.apps WHERE app_id = $1', [APP_ID])
   })
 
   it('logs R2 image errors instead of claiming success', async () => {

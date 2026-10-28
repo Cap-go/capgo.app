@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
+  skipQuery: vi.fn(),
   closeClient: vi.fn(),
   getPgClient: vi.fn(),
   sendEventToTracking: vi.fn(async () => undefined),
@@ -24,18 +25,6 @@ vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () =>
 vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({ sendEventToTracking: mocks.sendEventToTracking }))
 vi.mock('../supabase/functions/_backend/utils/cloudflare_cache_purge.ts', () => ({ purgeOnPremCache: mocks.purgeOnPremCache }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: vi.fn() }))
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    from: (table: string) => ({
-      select() { return this },
-      update() { return this },
-      eq() { return this },
-      then(resolve: (value: unknown) => unknown) { return Promise.resolve({ error: null }).then(resolve) },
-      maybeSingle: async () => ({ data: { need_onboarding: mocks.pending }, error: null }),
-      single: async () => ({ data: table === 'channels' ? { public: mocks.publicChannel } : { name: '1.0.0', owner_org: 'org-id' }, error: null }),
-    }),
-  }),
-}))
 
 const { app: versionApp } = await import('../supabase/functions/_backend/triggers/on_version_create.ts')
 const { app: deployApp } = await import('../supabase/functions/_backend/triggers/on_deploy_history_create.ts')
@@ -46,7 +35,16 @@ beforeEach(() => {
   mocks.pending = true
   mocks.publicChannel = true
   mocks.getPgClient.mockResolvedValue({ query: mocks.query })
-  mocks.query.mockResolvedValue({ rows: [{ skip_notifications: false }] })
+  mocks.query.mockImplementation(async (sql: string) => {
+    if (sql.startsWith('SELECT public FROM public.channels'))
+      return { rows: [{ public: mocks.publicChannel }] }
+    if (sql.startsWith('SELECT name, owner_org FROM public.app_versions'))
+      return { rows: [{ name: '1.0.0', owner_org: 'org-id' }] }
+    if (sql.startsWith('UPDATE public.apps'))
+      return { rows: [], rowCount: 1 }
+    return mocks.skipQuery(sql)
+  })
+  mocks.skipQuery.mockResolvedValue({ rows: [{ skip_notifications: false }] })
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -83,7 +81,7 @@ describe.each(['version', 'deploy'] as const)('%s notifications', (kind) => {
 
   it('suppresses a demo even after the onboarding flag clears', async () => {
     mocks.pending = false
-    mocks.query.mockResolvedValue({ rows: [{ skip_notifications: true }] })
+    mocks.skipQuery.mockResolvedValue({ rows: [{ skip_notifications: true }] })
     expect((await trigger(kind)).status).toBe(200)
     expect(mocks.sendEventToTracking).not.toHaveBeenCalled()
     expect(mocks.sendEmailToOrgMembers).not.toHaveBeenCalled()
@@ -91,17 +89,18 @@ describe.each(['version', 'deploy'] as const)('%s notifications', (kind) => {
   })
 
   it('suppresses stale events for versions already removed by demo cleanup', async () => {
-    mocks.query.mockResolvedValue({ rows: [] })
+    mocks.skipQuery.mockResolvedValue({ rows: [] })
     expect((await trigger(kind)).status).toBe(200)
     expect(mocks.sendEventToTracking).not.toHaveBeenCalled()
   })
 
   it('fails the request on a lookup error so the queue can retry', async () => {
-    mocks.query.mockRejectedValue(new Error('temporary database failure'))
+    mocks.skipQuery.mockRejectedValue(new Error('temporary database failure'))
     const response = await trigger(kind)
     expect(response.status).toBe(500)
     expect(mocks.sendEventToTracking).not.toHaveBeenCalled()
-    expect(mocks.closeClient).toHaveBeenCalledOnce()
+    // deploy closes its channel/version lookup client before the skip check.
+    expect(mocks.closeClient).toHaveBeenCalledTimes(kind === 'deploy' ? 2 : 1)
   })
 })
 

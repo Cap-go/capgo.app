@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const API_SECRET = 'testsecret'
 
 const mocks = vi.hoisted(() => ({
-  admin: vi.fn(),
+  query: vi.fn(),
   checklist: vi.fn(),
   cloudlogErr: vi.fn(),
   emit: vi.fn(),
@@ -15,7 +15,10 @@ vi.mock('../supabase/functions/_backend/utils/build_tracking.ts', () => ({ emitB
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: mocks.cloudlogErr }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   recordBuildTime: mocks.recordBuildTime,
-  supabaseAdmin: mocks.admin,
+}))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: vi.fn(),
+  getPgClient: vi.fn(async () => ({ query: mocks.query })),
 }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../supabase/functions/_backend/utils/utils.ts')>(),
@@ -39,38 +42,18 @@ function staleBuild(id: string, createdAt: number) {
 
 function configureSupabase(builds: ReturnType<typeof staleBuild>[]) {
   const updates: Array<{ id: string, values: Record<string, unknown> }> = []
-  const from = vi.fn((table: string) => {
-    if (table === 'apps') {
-      return { select: () => ({ in: async () => ({ data: [], error: null }) }) }
+  mocks.query.mockImplementation(async (text: string, values: unknown[] = []) => {
+    if (text.includes('FROM public.apps'))
+      return { rows: [] }
+    if (text.includes('FROM public.build_requests'))
+      return { rows: builds.map(row => ({ row })) }
+    if (text.includes('UPDATE public.build_requests')) {
+      const id = values[0] as string
+      updates.push({ id, values: { status: values[2], last_error: values[3] } })
+      return { rows: [{ id }] }
     }
-    return {
-      select: () => {
-        const query = {
-          not: () => query,
-          lt: () => query,
-          order: () => query,
-          limit: async () => ({ data: builds, error: null }),
-        }
-        return query
-      },
-      update: (values: Record<string, unknown>) => {
-        let id = ''
-        const cas = {
-          eq: (column: string, value: string) => {
-            if (column === 'id')
-              id = value
-            return cas
-          },
-          select: async () => {
-            updates.push({ id, values })
-            return { data: [{ id }], error: null }
-          },
-        }
-        return cas
-      },
-    }
+    throw new Error(`Unexpected query ${text}`)
   })
-  mocks.admin.mockReturnValue({ from })
   return updates
 }
 

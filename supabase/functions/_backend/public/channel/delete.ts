@@ -4,8 +4,8 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, setRequestApikeyHeader, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 export interface ChannelSet {
@@ -246,10 +246,7 @@ async function deletePreviewChannelAndBundle(
       }
     }
 
-    await dbClient.query(
-      'SELECT set_config(\'request.headers\', $1, true)',
-      [JSON.stringify({ capgkey: effectiveApikey })],
-    )
+    await setRequestApikeyHeader(dbClient, effectiveApikey)
 
     const deletedChannel = await dbClient.query<{ id: number }>(
       `DELETE FROM public.channels
@@ -317,30 +314,43 @@ export async function deleteChannel(c: Context<MiddlewareKeyVariables>, body: Ch
     return c.json(BRES)
   }
 
-  const supabase = supabaseApikey(c, apikey.key)
+  const principal = apikeyPrincipal(c, apikey.key)
 
   // Search for the exact channel before checking its channel-scoped permission.
-  const { data: dataChannel, error: dbError } = await supabase
-    .from('channels')
-    .select('id')
-    .eq('app_id', body.app_id)
-    .eq('name', body.channel)
-    .single()
+  let dataChannel: { id: number } | null = null
+  let dbError: unknown = null
+  try {
+    const rows = await withRlsContext(c, principal, client => queryJson<{ id: number }>(
+      client,
+      'SELECT id FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+      [body.app_id, body.channel],
+    ))
+    dataChannel = rows.length === 1 ? rows[0] : null
+  }
+  catch (error) {
+    dbError = error
+  }
   if (dbError || !dataChannel) {
     throw simpleError('cannot_find_channel', 'Cannot find channel', { supabaseError: dbError })
   }
+  const channelId = dataChannel.id
 
-  if (!(await checkPermission(c, 'channel.delete', { appId: body.app_id, channelId: dataChannel.id }))) {
-    throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel_id: dataChannel.id })
+  if (!(await checkPermission(c, 'channel.delete', { appId: body.app_id, channelId }))) {
+    throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel_id: channelId })
   }
 
-  const { data: deletedChannels, error: deleteError } = await supabase
-    .from('channels')
-    .delete()
-    .eq('id', dataChannel.id)
-    .eq('app_id', body.app_id)
-    .eq('name', body.channel)
-    .select('id')
+  let deletedChannels: { id: number }[] | null = null
+  let deleteError: unknown = null
+  try {
+    deletedChannels = await withRlsContext(c, principal, client => queryJson<{ id: number }>(
+      client,
+      'DELETE FROM public.channels WHERE id = $1 AND app_id = $2 AND name = $3 RETURNING id',
+      [channelId, body.app_id, body.channel],
+    ))
+  }
+  catch (error) {
+    deleteError = error
+  }
 
   if (deleteError || deletedChannels?.length !== 1) {
     throw simpleError('cannot_delete_channel', 'Cannot delete channel', { supabaseError: deleteError })

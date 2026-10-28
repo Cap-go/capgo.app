@@ -10,6 +10,7 @@ const {
   resolveSignupAttributionForUserMock,
   resolveSignupAttributionForOrgMock,
   orgSignupPluginUpdateMock,
+  pgQueryMock,
   syncBentoSubscriberTagsMock,
   creatorMetadata,
 } = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ const {
   resolveSignupAttributionForUserMock: vi.fn(async () => ({})),
   resolveSignupAttributionForOrgMock: vi.fn(async () => ({})),
   orgSignupPluginUpdateMock: vi.fn(),
+  pgQueryMock: vi.fn(async (_sql: string, _params?: unknown[]): Promise<{ rows: unknown[], rowCount?: number }> => ({ rows: [] })),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/stripe_org.ts', () => ({
@@ -34,6 +36,11 @@ vi.mock('../supabase/functions/_backend/utils/stripe_org.ts', () => ({
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: supabaseAdminMock,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: vi.fn(async () => ({ query: pgQueryMock })),
+  closeClient: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async () => {
@@ -102,34 +109,18 @@ function mockOrgReload(customerId: string | null) {
           : { data: { user: { app_metadata: creatorMetadata.value } }, error: null },
       },
     },
-    from: (table: string) => {
-      if (table === 'orgs') {
-        return {
-          select: () => ({
-            eq: () => ({
-              single: async () => ({ data: createOrg(customerId), error: null }),
-            }),
-          }),
-          update: (payload: { signup_plugin?: string }) => {
-            orgSignupPluginUpdateMock(payload)
-            return {
-              eq: async () => ({ error: null }),
-            }
-          },
-        }
-      }
-      if (table === 'users') {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: async () => ({ data: { email: 'owner@example.com' }, error: null }),
-            }),
-          }),
-        }
-      }
-      throw new Error(`unexpected table ${table}`)
-    },
   }))
+  pgQueryMock.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('FROM public.orgs WHERE id = $1'))
+      return { rows: [{ row: createOrg(customerId) }] }
+    if (sql.startsWith('UPDATE public.orgs SET signup_plugin')) {
+      orgSignupPluginUpdateMock({ signup_plugin: params[0] })
+      return { rows: [], rowCount: 1 }
+    }
+    if (sql.includes('FROM public.users WHERE id = $1'))
+      return { rows: [{ email: 'owner@example.com' }] }
+    throw new Error(`unexpected query ${sql}`)
+  })
 }
 
 describe('on_organization_create stripe bootstrap', () => {

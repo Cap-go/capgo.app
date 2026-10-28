@@ -1,16 +1,18 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, applyRlsContext, authPrincipal } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { emailPreferencesPatchSchema, ORG_SETTINGS_EMAIL_PREFERENCE_KEYS } from '../../utils/settings_email_preferences.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { getStripeCustomerName, isDeterministicStripeCustomerUpdateError, updateCustomerOrganizationName } from '../../utils/stripe.ts'
-import { apikeyHasOrgRightWithPolicy, supabaseAdmin, supabaseApikey, supabaseClient } from '../../utils/supabase.ts'
+import { apikeyHasOrgRightWithPolicy } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const passwordPolicyMinLengthSchema = z.number().int().min(6).refine(
@@ -139,40 +141,13 @@ function buildOrganizationUpdateQuery(
     : { query: `UPDATE public.orgs SET ${assignments.join(', ')} WHERE ${where} RETURNING *`, params }
 }
 
-async function setOrganizationUpdateAuditActor(
-  c: Context<MiddlewareKeyVariables>,
-  dbClient: PgTransactionClient,
-  auth: AuthInfo,
-) {
-  const isJwt = auth.authType === 'jwt'
-  const claims = isJwt ? auth.claims ?? { sub: auth.userId, role: 'authenticated' } : {}
-  const role = isJwt ? 'authenticated' : 'anon'
-  const subject = isJwt ? auth.userId : ''
-  await dbClient.query(
-    'SELECT set_config($1, $2, true)',
-    ['request.jwt.claim.sub', subject],
-  )
-  await dbClient.query(
-    'SELECT set_config($1, $2, true)',
-    ['request.jwt.claim.role', role],
-  )
-  await dbClient.query(
-    'SELECT set_config($1, $2, true)',
-    ['request.jwt.claims', JSON.stringify(claims)],
-  )
-
-  let requestHeaders: Record<string, string> = {}
-  if (auth.authType === 'apikey') {
-    const apikey = c.get('capgkey') ?? auth.apikey?.key
-    if (!apikey)
-      throw simpleError('cannot_access_organization', 'You can\'t access this organization')
-    requestHeaders = { capgkey: apikey }
-  }
-  await dbClient.query(
-    'SELECT set_config($1, $2, true)',
-    ['request.headers', JSON.stringify(requestHeaders)],
-  )
-  await dbClient.query(isJwt ? 'SET LOCAL ROLE authenticated' : 'SET LOCAL ROLE anon')
+function organizationUpdatePrincipal(c: Context<MiddlewareKeyVariables>, auth: AuthInfo): RlsPrincipal {
+  if (auth.authType === 'jwt')
+    return { kind: 'jwt', userId: auth.userId, claims: auth.claims }
+  const apikey = c.get('capgkey') ?? auth.apikey?.key
+  if (!apikey)
+    throw simpleError('cannot_access_organization', 'You can\'t access this organization')
+  return { kind: 'apikey', apikey }
 }
 
 function parseOrganizationBody(bodyRaw: unknown): OrganizationPutBody {
@@ -187,7 +162,7 @@ async function ensureOrgAccess(
   c: Context<MiddlewareKeyVariables>,
   apikey: Database['public']['Tables']['apikeys']['Row'] | null | undefined,
   orgId: string,
-  supabase: ReturnType<typeof supabaseApikey>,
+  principal: RlsPrincipal,
 ) {
   if (!(await checkPermission(c, 'org.update_settings', { orgId }))) {
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId })
@@ -197,7 +172,7 @@ async function ensureOrgAccess(
     return
   }
 
-  const orgCheck = await apikeyHasOrgRightWithPolicy(c, apikey, orgId, supabase)
+  const orgCheck = await apikeyHasOrgRightWithPolicy(c, apikey, orgId, principal)
   if (orgCheck.valid) {
     return
   }
@@ -317,11 +292,20 @@ async function sanitizeOrgNameForSync(
 }
 
 async function enforceSelf2faRequirement(authUserId: string, c: Context<MiddlewareKeyVariables>) {
-  const { data: has2faEnabled, error } = await supabaseAdmin(c)
-    .rpc('has_2fa_enabled', { user_id: authUserId })
-
-  if (error) {
-    throw quickError(500, 'cannot_check_2fa', 'Cannot verify your 2FA status', { error: error.message })
+  const pg = await getPgClient(c)
+  let has2faEnabled: boolean | null | undefined
+  try {
+    const result = await pg.query<{ has_2fa_enabled: boolean | null }>(
+      'SELECT public.has_2fa_enabled(user_id => $1::uuid) AS has_2fa_enabled',
+      [authUserId],
+    )
+    has2faEnabled = result.rows[0]?.has_2fa_enabled
+  }
+  catch (error) {
+    throw quickError(500, 'cannot_check_2fa', 'Cannot verify your 2FA status', { error: (error as Error).message })
+  }
+  finally {
+    closeClient(c, pg)
   }
   if (!has2faEnabled) {
     throw simpleError('requires_2fa_to_enforce_2fa', 'You must enable 2FA before enforcing it for your organization')
@@ -345,7 +329,7 @@ async function updateOrg(
     await beginWriteTransaction(dbClient)
     transactionStarted = true
     // Use the primary connection with the request role and claims so RLS and audit triggers remain authoritative.
-    await setOrganizationUpdateAuditActor(c, dbClient, auth)
+    await applyRlsContext(dbClient, organizationUpdatePrincipal(c, auth))
     const { query, params } = buildOrganizationUpdateQuery(orgId, updateFields, options)
     data = (await dbClient.query<OrgRow>(query, params)).rows[0]
     await dbClient.query('COMMIT')
@@ -454,14 +438,13 @@ export async function put(
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
   }
 
-  const rawApiKey = apikey?.key ?? c.get('capgkey')
-  const supabase = auth.authType === 'jwt' && auth.jwt
-    ? supabaseClient(c, auth.jwt)
-    : supabaseApikey(c, rawApiKey)
+  const principal = auth.authType === 'jwt' && auth.jwt
+    ? authPrincipal(c, auth)
+    : apikeyPrincipal(c, apikey?.key)
   const authUserId = auth.userId
 
   // Auth context is already set by middlewareAuth
-  await ensureOrgAccess(c, apikey, body.orgId, supabase)
+  await ensureOrgAccess(c, apikey, body.orgId, principal)
 
   if (body.enforcing_2fa) {
     await enforceSelf2faRequirement(authUserId, c)

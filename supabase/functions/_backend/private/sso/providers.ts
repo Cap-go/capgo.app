@@ -8,11 +8,11 @@ import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '.
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { createSSOProvider, deleteSSOProvider, ManagementAPIError, restoreSSOProvider, snapshotSSOProvider, updateSSOProvider } from '../../utils/supabase-management.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 import { getCallerMaxPriorityRank } from '../role_bindings.ts'
 import { PUBLIC_EMAIL_DOMAINS } from './prelink-shared.ts'
@@ -114,16 +114,24 @@ function parseAttributeMapping(value: unknown): Record<string, string> | undefin
 
 // Every app and group a mapping grants must belong to the provider's org.
 async function requireMappingTargetsInOrg(c: Context<MiddlewareKeyVariables>, orgId: string, mapping: SsoRoleMapping) {
-  const admin = supabaseAdmin(c)
   const groupIds = [...new Set(mapping.rules.map(rule => rule.group_id).filter((id): id is string => id !== null))]
   const appIds = [...new Set(mapping.rules.flatMap(rule => rule.apps.map(app => app.app_id)))]
-  const [groups, apps] = await Promise.all([
-    groupIds.length ? admin.from('groups').select('id').eq('org_id', orgId).in('id', groupIds) : { data: [], error: null },
-    appIds.length ? admin.from('apps').select('id').eq('owner_org', orgId).in('id', appIds) : { data: [], error: null },
-  ])
-  if (groups.error || apps.error)
+  let groupCount = 0
+  let appCount = 0
+  const pgPool = await getPgClient(c)
+  try {
+    if (groupIds.length)
+      groupCount = (await pgPool.query('select id from public.groups where org_id = $1 and id = any($2::uuid[])', [orgId, groupIds])).rows.length
+    if (appIds.length)
+      appCount = (await pgPool.query('select id from public.apps where owner_org = $1 and id = any($2::uuid[])', [orgId, appIds])).rows.length
+  }
+  catch {
     quickError(500, 'role_mapping_lookup_failed', 'Failed to validate role mapping targets')
-  if ((groups.data ?? []).length !== groupIds.length || (apps.data ?? []).length !== appIds.length)
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
+  if (groupCount !== groupIds.length || appCount !== appIds.length)
     throw simpleError('invalid_role_mapping', 'Role mapping references an app or group that does not belong to this organization')
 }
 
@@ -425,19 +433,24 @@ app.post('/', async (c) => {
   // Nothing is registered in Supabase Auth yet: the SAML provider is only
   // created on activation, once DNS ownership is proven, so a pending or
   // unverified domain can never be used to sign in.
-  const { data, error } = await supabaseAdmin(c)
-    .from('sso_providers')
-    .insert({
-      org_id: body.org_id,
-      domain,
-      status: 'pending_verification',
-      dns_verification_token: generateDnsVerificationToken(),
-      metadata_url: body.metadata_url ?? null,
-      metadata_xml: body.metadata_xml ?? null,
-      attribute_mapping: attributeMapping ?? null,
-    } as any)
-    .select('*')
-    .single()
+  let data: Record<string, unknown> | null = null
+  let error: { code?: string } | null = null
+  const pgPool = await getPgClient(c)
+  try {
+    data = await queryJsonOne<Record<string, unknown>>(
+      pgPool,
+      `insert into public.sso_providers (org_id, domain, status, dns_verification_token, metadata_url, metadata_xml, attribute_mapping)
+      values ($1, $2, 'pending_verification', $3, $4, $5, $6::jsonb)
+      returning *`,
+      [body.org_id, domain, generateDnsVerificationToken(), body.metadata_url ?? null, body.metadata_xml ?? null, attributeMapping == null ? null : JSON.stringify(attributeMapping)],
+    )
+  }
+  catch (insertError) {
+    error = insertError as { code?: string }
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
 
   if (error || !data) {
     if (error?.code === '23505')
@@ -462,18 +475,20 @@ app.get('/:orgId', async (c) => {
 
   await requireManageSsoPermission(c, orgId)
 
-  const supabase = supabaseWithAuth(c, auth) as any
-  const { data, error } = await supabase
-    .from('sso_providers')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false })
-
-  if (error) {
+  let data: Record<string, unknown>[] = []
+  try {
+    // PostgREST capped this read at max_rows (1000).
+    data = await withRlsContext(c, authPrincipal(c, auth), client => queryJson<Record<string, unknown>>(
+      client,
+      'select * from public.sso_providers where org_id = $1 order by created_at desc limit 1000',
+      [orgId],
+    ))
+  }
+  catch (error) {
     quickError(500, 'providers_list_failed', 'Failed to list SSO providers', { error })
   }
 
-  return c.json((data ?? []).map((provider: Record<string, unknown>) => sanitizeProvider(provider)))
+  return c.json(data.map(provider => sanitizeProvider(provider)))
 })
 
 app.patch('/:id', async (c) => {
@@ -503,14 +518,17 @@ app.patch('/:id', async (c) => {
   const body = validation.data
   const attributeMapping = parseAttributeMapping(body.attribute_mapping)
 
-  const supabase = supabaseWithAuth(c, auth) as any
-  const { data: provider, error: providerError } = await supabase
-    .from('sso_providers')
-    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping, role_mapping')
-    .eq('id', id)
-    .single()
+  let provider: any = null
+  try {
+    provider = await withRlsContext(c, authPrincipal(c, auth), client => queryJsonOne(
+      client,
+      'select id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping, role_mapping from public.sso_providers where id = $1',
+      [id],
+    ))
+  }
+  catch {}
 
-  if (providerError || !provider) {
+  if (!provider) {
     quickError(404, 'provider_not_found', 'SSO provider not found')
   }
 
@@ -677,14 +695,17 @@ app.delete('/:id', async (c) => {
     throw simpleError('invalid_provider_id', 'Invalid provider id')
   }
 
-  const supabase = supabaseWithAuth(c, auth) as any
-  const { data: provider, error: providerError } = await supabase
-    .from('sso_providers')
-    .select('id, org_id, provider_id, domain, status, enforce_sso')
-    .eq('id', id)
-    .single()
+  let provider: any = null
+  try {
+    provider = await withRlsContext(c, authPrincipal(c, auth), client => queryJsonOne(
+      client,
+      'select id, org_id, provider_id, domain, status, enforce_sso from public.sso_providers where id = $1',
+      [id],
+    ))
+  }
+  catch {}
 
-  if (providerError || !provider) {
+  if (!provider) {
     quickError(404, 'provider_not_found', 'SSO provider not found')
   }
 

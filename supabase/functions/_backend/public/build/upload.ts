@@ -1,9 +1,10 @@
 import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
@@ -51,16 +52,39 @@ export function assertBuildUploadWindowOpen(
   }
 }
 
+type TusBuildRequestRow = Pick<
+  Database['public']['Tables']['build_requests']['Row'],
+  'app_id' | 'owner_org' | 'builder_job_id' | 'upload_path' | 'upload_expires_at' | 'status' | 'uses_stored_credentials'
+>
+
+// Mirrors PostgREST `.single()`: anything other than exactly one row is an error.
+async function selectSingleBuildRequest<T>(
+  c: Context,
+  principal: RlsPrincipal,
+  columns: string,
+  jobId: string,
+): Promise<{ data: T | null, error: unknown }> {
+  try {
+    const rows = await withRlsContext(c, principal, client => queryJson<T>(
+      client,
+      `SELECT ${columns} FROM public.build_requests WHERE builder_job_id = $1 LIMIT 2`,
+      [jobId],
+    ))
+    if (rows.length !== 1)
+      return { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
+    return { data: rows[0], error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+}
+
 async function reassertBuildUploadWindowAtAcceptance(
   c: Context,
-  supabase: ReturnType<typeof supabaseApikey>,
+  principal: RlsPrincipal,
   jobId: string,
 ): Promise<void> {
-  const { data, error } = await supabase
-    .from('build_requests')
-    .select('status, upload_expires_at')
-    .eq('builder_job_id', jobId)
-    .single()
+  const { data, error } = await selectSingleBuildRequest<BuildUploadWindowRow>(c, principal, 'status, upload_expires_at', jobId)
 
   if (error || !data) {
     cloudlogErr({
@@ -108,14 +132,15 @@ export async function tusProxy(
   }
 
   // Use authenticated client for data queries - RLS will enforce access
-  const supabase = supabaseApikey(c, apikey.key)
+  const principal = apikeyPrincipal(c, apikey.key)
 
   // Get build request to verify ownership and that the upload window is still open
-  const { data: buildRequest, error: buildRequestError } = await supabase
-    .from('build_requests')
-    .select('app_id, owner_org, builder_job_id, upload_path, upload_expires_at, status, uses_stored_credentials')
-    .eq('builder_job_id', jobId)
-    .single()
+  const { data: buildRequest, error: buildRequestError } = await selectSingleBuildRequest<TusBuildRequestRow>(
+    c,
+    principal,
+    'app_id, owner_org, builder_job_id, upload_path, upload_expires_at, status, uses_stored_credentials',
+    jobId,
+  )
 
   if (buildRequestError || !buildRequest) {
     cloudlogErr({
@@ -368,7 +393,7 @@ export async function tusProxy(
 
   // Re-check the revocable upload lease immediately before builder byte acceptance.
   // /build/start can invalidate pending between the initial read above and this forward.
-  await reassertBuildUploadWindowAtAcceptance(c, supabase, jobId)
+  await reassertBuildUploadWindowAtAcceptance(c, principal, jobId)
 
   const builderResponse = await fetch(builderTusUrl, forwardInit)
 

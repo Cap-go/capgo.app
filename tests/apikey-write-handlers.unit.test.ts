@@ -87,6 +87,7 @@ vi.mock('../supabase/functions/_backend/public/apikey/global_permissions.ts', ()
 }))
 
 vi.mock('../supabase/functions/_backend/public/apikey/scope.ts', () => ({
+  apiKeyManagerPrincipal: vi.fn(() => ({ kind: 'service' })),
   assertApiKeyManagerCanAssignBindings: assertApiKeyManagerCanAssignBindingsMock,
   ensureApiKeyCanManageTargetOrgIds: vi.fn(),
   ensureApiKeyManagementAllowed: ensureApiKeyManagementAllowedMock,

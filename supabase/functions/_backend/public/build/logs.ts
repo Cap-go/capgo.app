@@ -2,8 +2,8 @@ import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 
 async function cancelBuildOnDisconnect(
@@ -77,19 +77,25 @@ export async function streamBuildLogs(
 
   // Bind jobId to appId under RLS before calling the builder.
   // This prevents cross-app access by mixing an allowed app_id with another app's jobId.
-  const supabase = supabaseApikey(c, apikey.key)
-  const { data: buildRequest, error: buildRequestError } = await supabase
-    .from('build_requests')
-    .select('app_id')
-    .eq('builder_job_id', jobId)
-    .maybeSingle()
-
-  if (buildRequestError) {
+  const principal = apikeyPrincipal(c, apikey.key)
+  let buildRequest: { app_id: string } | null
+  try {
+    const rows = await withRlsContext(c, principal, client => queryJson<{ app_id: string }>(
+      client,
+      'SELECT app_id FROM public.build_requests WHERE builder_job_id = $1 LIMIT 2',
+      [jobId],
+    ))
+    // maybeSingle(): more than one row was an error under PostgREST
+    if (rows.length > 1)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    buildRequest = rows[0] ?? null
+  }
+  catch (buildRequestError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to fetch build_request for logs',
       job_id: jobId,
-      error: buildRequestError.message,
+      error: buildRequestError instanceof Error ? buildRequestError.message : String(buildRequestError),
     })
     throw simpleError('internal_error', 'Failed to fetch build request')
   }

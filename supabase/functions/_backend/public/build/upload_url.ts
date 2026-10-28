@@ -2,8 +2,8 @@ import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { assertBuildUploadWindowOpen } from './upload.ts'
 import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
@@ -29,13 +29,19 @@ export async function getBuildUploadUrl(
   if (!(await checkPermission(c, 'app.build_native', { appId })))
     throw simpleError('unauthorized', 'You do not have permission to upload a build for this app', { app_id: appId })
 
-  const { data: buildRequest, error } = await supabaseApikey(c, apikey.key)
-    .from('build_requests')
-    .select('app_id, status, upload_expires_at, uses_stored_credentials')
-    .eq('builder_job_id', jobId)
-    .eq('app_id', appId)
-    .single()
-  if (error || !buildRequest)
+  type UploadUrlBuildRequest = Pick<Database['public']['Tables']['build_requests']['Row'], 'app_id' | 'status' | 'upload_expires_at' | 'uses_stored_credentials'>
+  const principal = apikeyPrincipal(c, apikey.key)
+  const rows = await withRlsContext(c, principal, client => queryJson<UploadUrlBuildRequest>(
+    client,
+    `SELECT app_id, status, upload_expires_at, uses_stored_credentials
+    FROM public.build_requests
+    WHERE builder_job_id = $1 AND app_id = $2
+    LIMIT 2`,
+    [jobId, appId],
+  )).catch(() => [])
+  // single(): zero or several rows was an error under PostgREST
+  const buildRequest = rows.length === 1 ? rows[0] : null
+  if (!buildRequest)
     throw simpleError('not_found', 'Build request not found', { job_id: jobId })
 
   assertBuildUploadWindowOpen(c, jobId, buildRequest)
