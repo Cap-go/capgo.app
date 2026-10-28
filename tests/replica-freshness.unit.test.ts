@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
-import { getReadReplicaBinding } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { edgeCacheTtlForReplicaLag, isReadReplicaSource, REPLICA_LAG_QUERY, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
+import { getDatabaseURL, getPgClient, getReadReplicaBinding, refreshReplicationLag } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { edgeCacheTtlForReplicaLag, isReadReplicaSource, getFreshReplicationLagMemoryEntry, READ_REPLICA_FALLBACK_LAG_SECONDS, REPLICA_LAG_QUERY, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 
 function contextFrom(source: string | undefined) {
   return {
@@ -102,6 +102,92 @@ describe('replica freshness', () => {
       vi.unstubAllEnvs()
       vi.stubEnv('ENV_NAME', 'capgo_plugin-local')
       expect(getReadReplicaBinding(contextFrom(undefined))).toBeNull()
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('reads from the EU replica while the regional one is more than 10 minutes behind', () => {
+    vi.stubEnv('SB_REGION', 'af-south-1')
+    const c = {
+      ...contextFrom(undefined),
+      env: {
+        HYPERDRIVE_CAPGO_READ_AF: { connectionString: 'postgresql://af' },
+        HYPERDRIVE_CAPGO_READ_EU: { connectionString: 'postgresql://eu' },
+      },
+      set: vi.fn(),
+    }
+    try {
+      expect(READ_REPLICA_FALLBACK_LAG_SECONDS).toBe(600)
+      // No figure (cold isolate, probe error): fail open to the regional replica.
+      expect(getDatabaseURL(c, true)).toBe('postgresql://af')
+
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 600 })
+      expect(getDatabaseURL(c, true)).toBe('postgresql://af')
+
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 601 })
+      expect(getDatabaseURL(c, true)).toBe('postgresql://eu')
+      // Answers cached from the regional replica keep its lag cap.
+      expect(getReadReplicaBinding(c)).toBe('HYPERDRIVE_CAPGO_READ_AF')
+      expect(c.set).toHaveBeenLastCalledWith('databaseSource', 'HYPERDRIVE_CAPGO_READ_EU')
+
+      // The figure expires after its TTL: the next read probes the regional replica again.
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 6000 }, Date.now() - 1)
+      expect(getDatabaseURL(c, true)).toBe('postgresql://af')
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('stores a lag probe under the source its own client connected to', async () => {
+    stubCaches()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-28T12:00:00Z'))
+    vi.stubEnv('SB_REGION', 'af-south-1')
+    let databaseSource: string | undefined
+    const c = {
+      ...contextFrom(undefined),
+      env: {
+        HYPERDRIVE_CAPGO_READ_AF: { connectionString: 'postgresql://u:p@af.invalid/db' },
+        HYPERDRIVE_CAPGO_READ_EU: { connectionString: 'postgresql://u:p@eu.invalid/db' },
+      },
+      get: (key: string) => key === 'databaseSource' ? databaseSource : undefined,
+      set: (key: string, value: string) => {
+        if (key === 'databaseSource')
+          databaseSource = value
+      },
+    }
+    try {
+      const regional = await getPgClient(c, true)
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 900 }, Date.now() + 1000)
+      const eu = await getPgClient(c, true)
+      expect(databaseSource).toBe('HYPERDRIVE_CAPGO_READ_EU')
+      vi.setSystemTime(new Date('2026-10-28T12:00:02Z'))
+
+      // The regional client is probed after the request context moved to EU.
+      ;(regional as any).query = vi.fn().mockResolvedValue({ rows: [{ lag_seconds: '1200' }] })
+      await refreshReplicationLag(c, regional)
+      expect(getFreshReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF')?.max_lag_seconds).toBe(1200)
+      expect(getFreshReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU')).toBeNull()
+      await Promise.all([(regional as any).end(), (eu as any).end()])
+    }
+    finally {
+      vi.useRealTimers()
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('never falls back from the EU replica, nor without an EU binding', () => {
+    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU', { status: 'lagging', max_lag_seconds: 6000 })
+    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_HK', { status: 'lagging', max_lag_seconds: 6000 })
+    try {
+      vi.stubEnv('SB_REGION', 'eu-west-3')
+      expect(getDatabaseURL({ ...contextFrom(undefined), set: vi.fn(), env: { HYPERDRIVE_CAPGO_READ_EU: { connectionString: 'postgresql://eu' } } }, true)).toBe('postgresql://eu')
+
+      vi.stubEnv('SB_REGION', 'hk-east-1')
+      expect(getDatabaseURL({ ...contextFrom(undefined), set: vi.fn(), env: { HYPERDRIVE_CAPGO_READ_HK: { connectionString: 'postgresql://hk' } } }, true)).toBe('postgresql://hk')
     }
     finally {
       vi.unstubAllEnvs()

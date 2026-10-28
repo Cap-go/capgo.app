@@ -19,7 +19,7 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
-import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
+import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
@@ -36,6 +36,17 @@ export type PluginPgClient = Client | Pool
 
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
+
+/**
+ * Database source each client connected to. A request can open several clients
+ * whose route selection differs (EU fallback on one side of a lag figure's
+ * expiry), so a lag probe is keyed by its own client, not the request context.
+ */
+const pgClientSources = new WeakMap<object, string>()
+
+function getClientReplicationLagCacheKey(c: Context, pool: PluginPgClient) {
+  return pgClientSources.get(pool) ?? getReplicationLagCacheKey(c)
+}
 
 const REPLICATION_LAG_THRESHOLD_SECONDS = 180
 export interface ChannelLookupResult { id: number, name: string, allow_device_self_set: boolean, public: boolean, owner_org: string }
@@ -179,7 +190,7 @@ async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<Replic
 }
 
 async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
-  const cacheKey = getReplicationLagCacheKey(c)
+  const cacheKey = getClientReplicationLagCacheKey(c, pool)
   const replicationLagInflight = getReplicationLagInflight(c)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry)
@@ -232,7 +243,7 @@ export function refreshReplicationLag(c: Context, pool: PluginPgClient) {
 export async function setReplicationLagHeader(c: Context, pool: PluginPgClient, options: { probeOnMiss?: boolean } = {}): Promise<void> {
   // Hot path: only use in-memory lag. Cold Cache API / DB probe runs in background
   // so a miss cannot add another Hyperdrive RTT to /updates P999.
-  const cacheKey = getReplicationLagCacheKey(c)
+  const cacheKey = getClientReplicationLagCacheKey(c, pool)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry) {
     safeSetResponseHeader(c, 'X-Replication-Lag', memoryEntry.status)
@@ -290,13 +301,30 @@ function setDatabaseSource(c: Context, source: string): void {
   safeSetResponseHeader(c, 'X-Database-Source', source)
 }
 
-function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+const EU_READ_REPLICA_ROUTE = READ_REPLICA_ROUTES.find(route => route.region === 'EU')!
+
+function findRegionalReadReplicaRoute(c: Context, dbRegion: string | undefined) {
   return READ_REPLICA_ROUTES.find(route => route.region === dbRegion && c.env[route.binding])
 }
 
-/** Read replica source this worker reads from, without selecting or connecting it. */
+/**
+ * Read replica for this region, or the EU replica while the regional one is
+ * measured more than READ_REPLICA_FALLBACK_LAG_SECONDS behind it.
+ */
+function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+  const route = findRegionalReadReplicaRoute(c, dbRegion)
+  if (!route || route === EU_READ_REPLICA_ROUTE || !c.env[EU_READ_REPLICA_ROUTE.binding] || !isReplicaTooFarBehind(route.binding))
+    return route
+  return EU_READ_REPLICA_ROUTE
+}
+
+/**
+ * This region's own read replica, without selecting or connecting it. Labels
+ * answers filled from it (read cache entries): it ignores the EU fallback, so
+ * their edge cache TTL keeps the regional replica's lag cap.
+ */
 export function getReadReplicaBinding(c: Context): string | null {
-  const route = findReadReplicaRoute(c, getClientDbRegionSB(c))
+  const route = findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
   if (route)
     return route.binding
   return isLocalWorkerEnv(c) && existInEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL')
@@ -309,6 +337,8 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
   if (!selectedRoute)
     return null
 
+  if (selectedRoute.region !== dbRegion)
+    cloudlog({ requestId: c.get('requestId'), message: 'Regional read replica too far behind, reading from EU replica', dbRegion })
   setDatabaseSource(c, selectedRoute.binding)
   return c.env[selectedRoute.binding].connectionString
 }
@@ -412,6 +442,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     })
     await client.connect()
     skipEndClients.add(client)
+    pgClientSources.set(client, dbName)
     return setPgAccessMode(client, readOnly)
   }
 
@@ -445,6 +476,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     })
   })
 
+  pgClientSources.set(pool, dbName)
   return setPgAccessMode(pool, readOnly)
 }
 
@@ -491,7 +523,12 @@ export function getLazyPgQueryCount(c: Context) {
 export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
   let inner: Promise<PluginPgClient> | null = null
   const ensure = () => {
-    inner ??= getPgClient(c, readOnly).catch((error: unknown) => {
+    inner ??= getPgClient(c, readOnly).then((db) => {
+      const source = pgClientSources.get(db)
+      if (source)
+        pgClientSources.set(client, source)
+      return db
+    }, (error: unknown) => {
       throw markLazyPgConnectError(error)
     })
     return inner
