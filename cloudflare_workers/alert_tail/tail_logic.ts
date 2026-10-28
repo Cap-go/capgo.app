@@ -197,15 +197,14 @@ export function processTailBatch(events: TailTraceEvent[]): AlertTailRecord[] {
 }
 
 export function capPostBodyAlerts(alerts: AlertTailRecord[]): AlertTailRecord[] {
+  const encoder = new TextEncoder()
   const capped: AlertTailRecord[] = []
-  let size = 2
   for (const alert of alerts) {
-    const encoded = JSON.stringify(alert)
-    const next = size + encoded.length + (capped.length ? 1 : 0)
-    if (next > MAX_POST_BODY_BYTES)
+    const candidate = [...capped, alert]
+    const body = JSON.stringify({ alerts: candidate })
+    if (encoder.encode(body).length > MAX_POST_BODY_BYTES)
       break
     capped.push(alert)
-    size = next
   }
   return capped
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  capPostBodyAlerts,
   dedupeAlertRecords,
   dedupeKey,
+  MAX_POST_BODY_BYTES,
   MAX_STACK_CHARS,
   normalizeTailEvent,
   processTailBatch,
@@ -138,6 +140,31 @@ describe('processTailBatch', () => {
 
     expect(alerts).toHaveLength(1)
     expect(alerts[0]?.count).toBe(2)
+  })
+})
+
+describe('capPostBodyAlerts', () => {
+  it.concurrent('caps using UTF-8 bytes of the full alerts envelope', () => {
+    const cjkStack = '错'.repeat(MAX_STACK_CHARS)
+    const alerts = Array.from({ length: 80 }, (_, index) => ({
+      functionName: 'capgo_plugin-na-prod',
+      errorName: 'Error',
+      message: `failure-${index}`,
+      stack: cjkStack,
+      method: 'POST',
+      url: 'https://plugin.na.capgo.app/updates',
+      requestId: null,
+      timestamp: '2026-10-27T22:00:00.000Z',
+      environment: 'capgo_plugin-na-prod',
+      userAgent: null,
+      body: null as null,
+      count: 1,
+    }))
+
+    const capped = capPostBodyAlerts(alerts)
+    const bodyBytes = new TextEncoder().encode(JSON.stringify({ alerts: capped })).length
+    expect(bodyBytes).toBeLessThanOrEqual(MAX_POST_BODY_BYTES)
+    expect(capped.length).toBeLessThan(alerts.length)
   })
 })
 
