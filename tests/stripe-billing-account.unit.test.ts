@@ -201,9 +201,9 @@ describe('new org billing account from location', () => {
   it('offers the US entity in the Americas and Asia-Pacific only', () => {
     mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
     mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
-    for (const country of ['US', 'CA', 'BR', 'MX', 'JP', 'AU', 'IN', 'SG'])
+    for (const country of ['US', 'CA', 'BR', 'MX', 'JP', 'AU', 'IN', 'SG', 'TK', 'PN'])
       expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(true)
-    for (const country of ['FR', 'DE', 'GB', 'CH', 'AE', 'ZA', 'NG', 'GF', 'CU', 'KP'])
+    for (const country of ['FR', 'DE', 'GB', 'CH', 'AE', 'ZA', 'NG', 'GF', 'CU', 'KP', 'AF'])
       expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(false)
     expect(canChooseUsBillingAccount(createGeoContext())).toBe(false)
     expect(isUsBillingCountry('ca')).toBe(true)
