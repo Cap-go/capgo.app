@@ -97,14 +97,29 @@ function isDeltaFileRecord(record: object): record is DeltaFileRecord {
   return 'entry_key' in record || 'path_key' in record
 }
 
+type DeltaFilePathColumns = Pick<DeltaFileRecord, 's3_path' | 'app_id' | 'file_name' | 'path_org' | 'path_session' | 'path_sha'>
+
+// PostgREST returns bytea as '\\x<hex>'.
+function byteaHex(value: string): string {
+  return value.startsWith('\\x') ? value.slice(2) : value
+}
+
+// Same rule as public.delta_file_s3_path: a compacted row stores its path as parts.
+export function deltaFileS3Path(row: DeltaFilePathColumns): string {
+  if (!row.path_sha || !row.path_org)
+    return row.s3_path
+  const session = row.path_session ? `${byteaHex(row.path_session)}/` : ''
+  return `orgs/${row.path_org}/apps/${row.app_id}/delta/${session}${byteaHex(row.path_sha)}_${row.file_name}`
+}
+
 // One R2 lookup per unique unsized delta file; versions share the row.
 export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, queue = getQueueLogMetadata(c)) {
-  if (!record.id || !record.s3_path)
+  if (!record.id)
     throw simpleError('no_s3_path', 'No s3 path', { record })
 
   const { data: current, error: currentError } = await supabaseAdmin(c)
     .from('delta_files')
-    .select('file_size')
+    .select('file_size, s3_path, app_id, file_name, path_org, path_session, path_sha')
     .eq('id', record.id)
     .maybeSingle()
   if (currentError)
@@ -114,12 +129,17 @@ export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, q
     return c.json(BRES)
   }
 
-  const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, record.s3_path)
+  // The queued record may predate the row's compaction: read the path from the row.
+  const s3Path = deltaFileS3Path(current)
+  if (!s3Path)
+    throw simpleError('no_s3_path', 'No s3 path', { record })
+
+  const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, s3Path)
   const size = diagnostics?.size ?? 0
   if (size <= 0) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: record.s3_path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: s3Path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
     // Non-2xx keeps the message under the 5-read queue budget.
-    throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: record.s3_path, storageDiagnostics: diagnostics }, lastError, { alert: false })
+    throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: s3Path, storageDiagnostics: diagnostics }, lastError, { alert: false })
   }
 
   await runManifestUpdateWithRetry(c, async () => await supabaseAdmin(c)
@@ -127,7 +147,7 @@ export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, q
     .update({ file_size: size })
     .eq('id', record.id)
     .eq('file_size', 0))
-  cloudlog({ requestId: c.get('requestId'), message: 'delta file file_size updated', id: record.id, s3_path: record.s3_path, size, attempts, queue })
+  cloudlog({ requestId: c.get('requestId'), message: 'delta file file_size updated', id: record.id, s3_path: s3Path, size, attempts, queue })
   return c.json(BRES)
 }
 
