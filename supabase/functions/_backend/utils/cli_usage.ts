@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { checkKey, supabaseAdmin } from './supabase.ts'
+import { checkKey } from './supabase.ts'
 
 export interface CliUsageEvent {
   cli_version: string
@@ -56,7 +56,7 @@ export async function resolveCliUsageIdentity(
     return { apikey_id: null, org_id: null }
 
   try {
-    const apikey = await checkKey(c, capgkey, supabaseAdmin(c))
+    const apikey = await checkKey(c, capgkey)
     if (!apikey)
       return { apikey_id: null, org_id: null }
     return {

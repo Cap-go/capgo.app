@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { PgQueryClient } from '../../utils/pg.ts'
 import type { Permission } from '../../utils/rbac.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
@@ -7,9 +8,9 @@ import { z } from 'zod'
 import { versionedRoute } from '../../utils/api_version.ts'
 import { parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { apikeyPrincipal, queryJson, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 import { MAX_MANIFEST_ENTRIES } from '../../utils/manifest_limits.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 import { uploadCliAppIcon } from './storage_icon.ts'
@@ -81,20 +82,35 @@ const setBundlesDeletedBodySchema = z.object({
   deleted: z.boolean(),
 })
 
-// Same columns + embeds the CLI used to read directly through PostgREST. Reads run
-// with the caller API key so RLS (preview keys, channel-scoped keys) stays identical.
-const CLI_CHANNEL_SELECT = `
-  *,
-  version_info:app_versions!channels_version_fkey(id, name, deleted),
-  rollout_version_info:app_versions!channels_rollout_version_fkey(id, name, deleted)
-`
+// Same columns + embeds the CLI used to read directly through PostgREST
+// (`*, version_info:app_versions!channels_version_fkey(id, name, deleted), rollout_version_info:...`).
+// Reads run with the caller API key so RLS (preview keys, channel-scoped keys) stays identical,
+// embedded versions included.
+const CLI_CHANNEL_SELECT = `ch.*,
+  (SELECT pg_catalog.to_json(v) FROM (SELECT av.id, av.name, av.deleted FROM public.app_versions av WHERE av.id = ch.version) v) AS version_info,
+  (SELECT pg_catalog.to_json(v) FROM (SELECT av.id, av.name, av.deleted FROM public.app_versions av WHERE av.id = ch.rollout_version) v) AS rollout_version_info`
 
 type CliContext = Context<MiddlewareKeyVariables>
-type CallerClient = ReturnType<typeof supabaseApikey>
+type CallerClient = PgQueryClient
 
-/** Supabase client bound to the caller API key: RLS and RBAC RPC checks apply. */
-function callerClient(c: CliContext): CallerClient {
-  return supabaseApikey(c, c.get('capgkey') as string)
+/** One transaction bound to the caller API key: RLS and RBAC RPC checks apply. */
+function withCaller<T>(c: CliContext, run: (client: CallerClient) => Promise<T>): Promise<T> {
+  return withRlsContext(c, apikeyPrincipal(c, c.get('capgkey') as string), client => run(client))
+}
+
+/** Statement result as supabase-js returned it: `{ data, error }` instead of a throw. */
+async function settle<T>(query: Promise<T>): Promise<{ data: T, error: null } | { data: null, error: unknown }> {
+  try {
+    return { data: await query, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+}
+
+/** `.rpc()` of a scalar function: `call` is a schema-qualified call with named arguments. */
+function rpc<T>(client: CallerClient, call: string, values: unknown[] = []) {
+  return settle(queryJsonOne<{ value: T }>(client, `SELECT ${call} AS value`, values).then(row => row?.value ?? null))
 }
 
 /** Validate selected query params; empty strings count as missing. */
@@ -125,7 +141,7 @@ function unwrap<T>(result: { data: T, error: unknown }, code: string, message: s
 
 /** The API key's user id, or null when the key does not resolve to a user. */
 async function actorUserId(supabase: CallerClient): Promise<string | null> {
-  const userId = unwrap(await supabase.rpc('request_actor_user_id'), 'cannot_resolve_identity', 'Cannot resolve CLI identity')
+  const userId = unwrap(await rpc<string>(supabase, 'public.request_actor_user_id()'), 'cannot_resolve_identity', 'Cannot resolve CLI identity')
   return userId || null
 }
 
@@ -159,8 +175,10 @@ function assertValidAppId(appId: string | undefined) {
 }
 
 async function planActionsAllowed(supabase: CallerClient, orgId: string, actions: CliPlanAction[], appId?: string): Promise<boolean> {
-  const args = appId ? { orgid: orgId, actions, appid: appId } : { orgid: orgId, actions }
-  const data = unwrap(await supabase.rpc('is_allowed_action_org_action', args), 'cannot_check_billing', 'Cannot check org plan actions')
+  const result = appId
+    ? await rpc<boolean>(supabase, 'public.is_allowed_action_org_action(orgid => $1, actions => $2::public.action_type[], appid => $3)', [orgId, actions, appId])
+    : await rpc<boolean>(supabase, 'public.is_allowed_action_org_action(orgid => $1, actions => $2::public.action_type[])', [orgId, actions])
+  const data = unwrap(result, 'cannot_check_billing', 'Cannot check org plan actions')
   return data === true
 }
 
@@ -171,7 +189,7 @@ async function planActionsAllowed(supabase: CallerClient, orgId: string, actions
  */
 async function meteredPlanStatus(supabase: CallerClient, orgId: string, plan: 'all' | 'upload', appId?: string): Promise<CliPlanStatus> {
   if (plan === 'all' && !appId) {
-    const data = unwrap(await supabase.rpc('is_allowed_action_org', { orgid: orgId }), 'cannot_check_billing', 'Cannot check org plan allowance')
+    const data = unwrap(await rpc<boolean>(supabase, 'public.is_allowed_action_org(orgid => $1)', [orgId]), 'cannot_check_billing', 'Cannot check org plan allowance')
     return data === true ? 'allowed' : 'billing_denied'
   }
   const actions: CliPlanAction[] = plan === 'upload' ? ['storage'] : ALL_PLAN_ACTIONS
@@ -186,9 +204,11 @@ async function meteredPlanStatus(supabase: CallerClient, orgId: string, plan: 'a
 /** Days left in an unpaid trial (no paid plan, no usage credits), else null. */
 async function unpaidTrialDaysLeft(supabase: CallerClient, orgId: string, appId?: string): Promise<number | null> {
   const [payingResult, trialResult, creditsResult] = await Promise.all([
-    supabase.rpc('is_paying_org', { orgid: orgId }),
-    supabase.rpc('is_trial_org', { orgid: orgId }),
-    supabase.rpc('has_usage_credits_org', appId ? { orgid: orgId, appid: appId } : { orgid: orgId }),
+    rpc<boolean>(supabase, 'public.is_paying_org(orgid => $1)', [orgId]),
+    rpc<number>(supabase, 'public.is_trial_org(orgid => $1)', [orgId]),
+    appId
+      ? rpc<boolean>(supabase, 'public.has_usage_credits_org(orgid => $1, appid => $2)', [orgId, appId])
+      : rpc<boolean>(supabase, 'public.has_usage_credits_org(orgid => $1)', [orgId]),
   ])
   const isPaying = unwrap(payingResult, 'cannot_check_billing', 'Cannot check paying org status')
   const trialDays = unwrap(trialResult, 'cannot_check_billing', 'Cannot check trial org status')
@@ -200,29 +220,26 @@ async function unpaidTrialDaysLeft(supabase: CallerClient, orgId: string, appId?
 
 async function rejectedBy2fa(supabase: CallerClient, scope: { app_id?: string, org_id?: string }): Promise<boolean> {
   if (scope.app_id) {
-    const data = unwrap(await supabase.rpc('reject_access_due_to_2fa_for_app', { app_id: scope.app_id }), 'cannot_check_2fa', 'Cannot check app 2FA access')
+    const data = unwrap(await rpc<boolean>(supabase, 'public.reject_access_due_to_2fa_for_app(app_id => $1)', [scope.app_id]), 'cannot_check_2fa', 'Cannot check app 2FA access')
     return data === true
   }
   if (scope.org_id) {
-    const data = unwrap(await supabase.rpc('reject_access_due_to_2fa_for_org', { org_id: scope.org_id }), 'cannot_check_2fa', 'Cannot check org 2FA access')
+    const data = unwrap(await rpc<boolean>(supabase, 'public.reject_access_due_to_2fa_for_org(org_id => $1)', [scope.org_id]), 'cannot_check_2fa', 'Cannot check org 2FA access')
     return data === true
   }
   return false
 }
 
 async function visibleApp(supabase: CallerClient, appId: string) {
-  return unwrap(await supabase
-    .from('apps')
-    .select('app_id, owner_org')
-    .eq('app_id', appId)
-    .maybeSingle(), 'cannot_get_app', 'Cannot get app')
+  return unwrap(await settle(queryJsonOne<{ app_id: string, owner_org: string }>(
+    supabase,
+    'SELECT app_id, owner_org FROM public.apps WHERE app_id = $1',
+    [appId],
+  )), 'cannot_get_app', 'Cannot get app')
 }
 
 async function cliWarnings(supabase: CallerClient, orgId: string, cliVersion: string): Promise<unknown[]> {
-  const data = unwrap(await supabase.rpc('get_organization_cli_warnings', {
-    orgid: orgId,
-    cli_version: cliVersion,
-  }), 'cannot_get_cli_warnings', 'Cannot get CLI warnings')
+  const data = unwrap(await rpc<unknown[]>(supabase, 'public.get_organization_cli_warnings(orgid => $1, cli_version => $2)', [orgId, cliVersion]), 'cannot_get_cli_warnings', 'Cannot get CLI warnings')
   return Array.isArray(data) ? data : []
 }
 
@@ -233,17 +250,19 @@ app.use('*', useCors)
 app.get('/identity', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-    const supabase = callerClient(c)
-    const userId = await actorUserId(supabase)
-    if (!userId)
-      return invalidApikey()
+    const { userId, email, has2fa } = await withCaller(c, async (supabase) => {
+      const userId = await actorUserId(supabase)
+      if (!userId)
+        return invalidApikey()
 
-    const [emailResult, has2faResult] = await Promise.all([
-      supabase.rpc('request_actor_email_adress'),
-      supabase.rpc('has_2fa_enabled'),
-    ])
-    const email = unwrap(emailResult, 'cannot_resolve_identity_email', 'Cannot resolve CLI identity email')
-    const has2fa = unwrap(has2faResult, 'cannot_resolve_identity_2fa', 'Cannot resolve CLI identity 2FA status')
+      const [emailResult, has2faResult] = await Promise.all([
+        rpc<string>(supabase, 'public.request_actor_email_adress()'),
+        rpc<boolean>(supabase, 'public.has_2fa_enabled()'),
+      ])
+      const email = unwrap(emailResult, 'cannot_resolve_identity_email', 'Cannot resolve CLI identity email')
+      const has2fa = unwrap(has2faResult, 'cannot_resolve_identity_2fa', 'Cannot resolve CLI identity 2FA status')
+      return { userId, email, has2fa }
+    })
 
     return c.json({
       userId,
@@ -257,11 +276,14 @@ app.get('/identity', middlewareKey(), versionedRoute<CliContext>({
 app.get('/organizations', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const { permission } = parseQuery(c, organizationsQuerySchema, ['permission'])
-    const supabase = callerClient(c)
-    if (!(await actorUserId(supabase)))
-      return invalidApikey()
+    type Organization = Database['public']['Functions']['get_orgs_v7']['Returns'][number]
+    const organizations = await withCaller(c, async (supabase) => {
+      if (!(await actorUserId(supabase)))
+        return invalidApikey()
 
-    const organizations = unwrap(await supabase.rpc('get_orgs_v7'), 'cannot_list_organizations', 'Cannot list organizations') ?? []
+      // PostgREST capped RPC results at max_rows (1000).
+      return unwrap(await settle(queryJson<Organization>(supabase, 'SELECT * FROM public.get_orgs_v7() LIMIT 1000')), 'cannot_list_organizations', 'Cannot list organizations') ?? []
+    })
     if (!permission)
       return c.json(organizations as unknown)
 
@@ -303,7 +325,10 @@ export interface CliPreflightResult {
 /** Shared by the CLI preflight route and server-side flows (bundle upload sessions); failures throw typed errors. */
 export async function runCliPreflight(c: CliContext, body: CliPreflightBody): Promise<CliPreflightResult> {
   assertValidAppId(body.app_id)
-  const supabase = callerClient(c)
+  return withCaller(c, supabase => runCliPreflightAsCaller(c, supabase, body))
+}
+
+async function runCliPreflightAsCaller(c: CliContext, supabase: CallerClient, body: CliPreflightBody): Promise<CliPreflightResult> {
   const userId = await actorUserId(supabase)
   if (!userId)
     return invalidApikey()
@@ -375,7 +400,7 @@ app.post('/preflight', middlewareKey(), versionedRoute<CliContext>({
 app.get('/members/2fa-status', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const { org_id: orgId } = parseQuery(c, orgIdQuerySchema, ['org_id'])
-    const data = unwrap(await callerClient(c).rpc('check_org_members_2fa_enabled', { org_id: orgId }), 'cannot_check_members_2fa', 'Cannot check org members 2FA status')
+    const data = unwrap(await withCaller(c, client => settle(queryJson(client, 'SELECT * FROM public.check_org_members_2fa_enabled(org_id => $1) LIMIT 1000', [orgId]))), 'cannot_check_members_2fa', 'Cannot check org members 2FA status')
     return c.json(data ?? [])
   },
 }))
@@ -383,7 +408,7 @@ app.get('/members/2fa-status', middlewareKey(), versionedRoute<CliContext>({
 app.get('/members/password-policy', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const { org_id: orgId } = parseQuery(c, orgIdQuerySchema, ['org_id'])
-    const data = unwrap(await callerClient(c).rpc('check_org_members_password_policy', { org_id: orgId }), 'cannot_check_members_password_policy', 'Cannot check org members password policy')
+    const data = unwrap(await withCaller(c, client => settle(queryJson(client, 'SELECT * FROM public.check_org_members_password_policy(org_id => $1) LIMIT 1000', [orgId]))), 'cannot_check_members_password_policy', 'Cannot check org members password policy')
     return c.json(data ?? [])
   },
 }))
@@ -398,11 +423,7 @@ app.post('/storage/icon', middlewareKey(), versionedRoute<CliContext>({
 app.get('/apps/visible', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const { app_id: appId } = parseQuery(c, appIdQuerySchema, ['app_id'])
-    const data = unwrap(await callerClient(c)
-      .from('apps')
-      .select('app_id, owner_org')
-      .eq('app_id', appId)
-      .maybeSingle(), 'cannot_get_app', 'Cannot get app')
+    const data = await withCaller(c, client => visibleApp(client, appId))
 
     return c.json({ visible: !!data, app_id: data?.app_id ?? null, owner_org: data?.owner_org ?? null })
   },
@@ -411,33 +432,38 @@ app.get('/apps/visible', middlewareKey(), versionedRoute<CliContext>({
 app.get('/channels', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const { app_id: appId, name, linked_version_id: linkedVersionId } = parseQuery(c, channelsQuerySchema, ['app_id', 'name', 'linked_version_id'])
-    const supabase = callerClient(c)
-    const rows: unknown[] = []
-    // PostgREST caps responses (1000 rows); page so callers never see a truncated list.
-    // One probe page past the cap: fail loudly instead of returning a silently truncated list.
-    for (let page = 0; page <= CHANNELS_MAX_PAGES; page++) {
-      let query = supabase
-        .from('channels')
-        .select(CLI_CHANNEL_SELECT)
-        .eq('app_id', appId)
-      if (name)
-        query = query.eq('name', name)
-      if (linkedVersionId)
-        query = query.or(`version.eq.${linkedVersionId},rollout_version.eq.${linkedVersionId}`)
-      const from = page * CHANNELS_PAGE_SIZE
-      const data = unwrap(await query
-        .order('name')
-        .order('id')
-        .range(from, from + CHANNELS_PAGE_SIZE - 1), 'cannot_get_channels', 'Cannot get channels') ?? []
-      if (page === CHANNELS_MAX_PAGES) {
-        if (data.length > 0)
-          throw simpleError('too_many_channels', 'Too many channels to list', { app_id: appId, limit: CHANNELS_MAX_PAGES * CHANNELS_PAGE_SIZE })
-        break
-      }
-      rows.push(...data)
-      if (data.length < CHANNELS_PAGE_SIZE)
-        break
+    const filters = ['ch.app_id = $1']
+    const values: unknown[] = [appId]
+    if (name) {
+      values.push(name)
+      filters.push(`ch.name = $${values.length}`)
     }
+    if (linkedVersionId) {
+      values.push(linkedVersionId)
+      filters.push(`(ch.version = $${values.length} OR ch.rollout_version = $${values.length})`)
+    }
+    const rows = await withCaller(c, async (supabase) => {
+      const rows: unknown[] = []
+      // Page like the PostgREST version (1000 rows per response) so callers never see a truncated list.
+      // One probe page past the cap: fail loudly instead of returning a silently truncated list.
+      for (let page = 0; page <= CHANNELS_MAX_PAGES; page++) {
+        const from = page * CHANNELS_PAGE_SIZE
+        const data = unwrap(await settle(queryJson(
+          supabase,
+          `SELECT ${CLI_CHANNEL_SELECT} FROM public.channels ch WHERE ${filters.join(' AND ')} ORDER BY ch.name, ch.id LIMIT ${CHANNELS_PAGE_SIZE} OFFSET ${from}`,
+          values,
+        )), 'cannot_get_channels', 'Cannot get channels') ?? []
+        if (page === CHANNELS_MAX_PAGES) {
+          if (data.length > 0)
+            throw simpleError('too_many_channels', 'Too many channels to list', { app_id: appId, limit: CHANNELS_MAX_PAGES * CHANNELS_PAGE_SIZE })
+          break
+        }
+        rows.push(...data)
+        if (data.length < CHANNELS_PAGE_SIZE)
+          break
+      }
+      return rows
+    })
 
     return c.json(rows)
   },
@@ -447,13 +473,11 @@ app.get('/bundles/latest', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const { app_id: appId } = parseQuery(c, appIdQuerySchema, ['app_id'])
     // Includes deleted bundles: callers use this for version name occupancy.
-    const data = unwrap(await callerClient(c)
-      .from('app_versions')
-      .select('id, name, deleted, created_at')
-      .eq('app_id', appId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(), 'cannot_get_bundle', 'Cannot get latest bundle')
+    const data = unwrap(await withCaller(c, client => settle(queryJsonOne(
+      client,
+      'SELECT id, name, deleted, created_at FROM public.app_versions WHERE app_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [appId],
+    ))), 'cannot_get_bundle', 'Cannot get latest bundle')
 
     return c.json(data ?? null)
   },
@@ -464,13 +488,11 @@ app.post('/bundles/deleted', middlewareKey(), versionedRoute<CliContext>({
     const body = await parseJson(c, setBundlesDeletedBodySchema)
     // Soft-delete / restore without the channel-link guard of DELETE /bundle:
     // channel cleanup soft-deletes linked bundles before the channel is removed.
-    const data = unwrap(await callerClient(c)
-      .from('app_versions')
-      .update({ deleted: body.deleted })
-      .eq('app_id', body.app_id)
-      .eq('deleted', !body.deleted)
-      .in('name', body.names)
-      .select('name'), 'cannot_update_bundle', 'Cannot update bundle deleted state')
+    const data = unwrap(await withCaller(c, client => settle(queryJson<{ name: string }>(
+      client,
+      'UPDATE public.app_versions SET deleted = $1 WHERE app_id = $2 AND deleted = $3 AND name = ANY($4::text[]) RETURNING name',
+      [body.deleted, body.app_id, !body.deleted, body.names],
+    ))), 'cannot_update_bundle', 'Cannot update bundle deleted state')
 
     return c.json({ updated: (data ?? []).map(row => row.name) })
   },
@@ -479,22 +501,25 @@ app.post('/bundles/deleted', middlewareKey(), versionedRoute<CliContext>({
 app.get('/manifest', middlewareKey(), versionedRoute<CliContext>({
   [CLI_API_2025_10_01]: async (c) => {
     const { app_version_id: appVersionId } = parseQuery(c, manifestQuerySchema, ['app_version_id'])
-    const supabase = callerClient(c)
-    const rows: { file_name: string | null, file_hash: string | null }[] = []
-    // A bundle can hold up to MAX_MANIFEST_ENTRIES files but PostgREST caps a response at
-    // 1000 rows: page explicitly so large bundles are never silently truncated.
-    for (let page = 0; page < MANIFEST_MAX_PAGES; page++) {
-      const from = page * MANIFEST_PAGE_SIZE
-      const data = unwrap(await supabase
-        .from('version_manifest')
-        .select('file_name, file_hash')
-        .eq('app_version_id', appVersionId)
-        .order('id')
-        .range(from, from + MANIFEST_PAGE_SIZE - 1), 'cannot_get_manifest', 'Cannot get manifest') ?? []
-      rows.push(...data)
-      if (data.length < MANIFEST_PAGE_SIZE)
-        return c.json(rows)
-    }
+    const rows = await withCaller(c, async (supabase) => {
+      const rows: { file_name: string | null, file_hash: string | null }[] = []
+      // A bundle can hold up to MAX_MANIFEST_ENTRIES files: page explicitly (1000 rows, as
+      // PostgREST capped responses) so large bundles are never silently truncated.
+      for (let page = 0; page < MANIFEST_MAX_PAGES; page++) {
+        const from = page * MANIFEST_PAGE_SIZE
+        const data = unwrap(await settle(queryJson<{ file_name: string | null, file_hash: string | null }>(
+          supabase,
+          `SELECT file_name, file_hash FROM public.version_manifest WHERE app_version_id = $1 ORDER BY id LIMIT ${MANIFEST_PAGE_SIZE} OFFSET ${from}`,
+          [appVersionId],
+        )), 'cannot_get_manifest', 'Cannot get manifest') ?? []
+        rows.push(...data)
+        if (data.length < MANIFEST_PAGE_SIZE)
+          return rows
+      }
+      return null
+    })
+    if (rows)
+      return c.json(rows)
 
     // Every page came back full: more rows than any valid bundle can hold. Fail loudly
     // rather than return a silently truncated manifest.

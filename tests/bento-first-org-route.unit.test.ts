@@ -2,22 +2,16 @@ import { readFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
+  pgQueryMock,
   syncBentoFirstOrgOnRoleBindingWriteMock,
   syncBentoFirstOrgOnUserCreateMock,
   syncBentoSubscriberTagsMock,
-  supabaseFromMock,
-} = vi.hoisted(() => {
-  const maybeSingle = vi.fn(async () => ({ data: { email: 'invitee@example.com' }, error: null }))
-  const eq = vi.fn(() => ({ maybeSingle }))
-  const select = vi.fn(() => ({ eq }))
-  const from = vi.fn(() => ({ select }))
-  return {
-    syncBentoFirstOrgOnRoleBindingWriteMock: vi.fn(async () => undefined),
-    syncBentoFirstOrgOnUserCreateMock: vi.fn(async () => undefined),
-    syncBentoSubscriberTagsMock: vi.fn(async () => true),
-    supabaseFromMock: { eq, from, maybeSingle, select },
-  }
-})
+} = vi.hoisted(() => ({
+  pgQueryMock: vi.fn(async (_sql: string, _params?: unknown[]) => ({ rows: [{ email: 'invitee@example.com' }] })),
+  syncBentoFirstOrgOnRoleBindingWriteMock: vi.fn(async () => undefined),
+  syncBentoFirstOrgOnUserCreateMock: vi.fn(async () => undefined),
+  syncBentoSubscriberTagsMock: vi.fn(async () => true),
+}))
 
 vi.mock('../supabase/functions/_backend/utils/bento_first_org.ts', () => ({
   syncBentoFirstOrgOnRoleBindingWrite: syncBentoFirstOrgOnRoleBindingWriteMock,
@@ -32,11 +26,12 @@ vi.mock('../supabase/functions/_backend/utils/bento.ts', async () => {
   }
 })
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', async () => {
-  const actual = await vi.importActual('../supabase/functions/_backend/utils/supabase.ts')
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => {
+  const actual = await vi.importActual('../supabase/functions/_backend/utils/pg.ts')
   return {
     ...actual,
-    supabaseAdmin: () => ({ from: supabaseFromMock.from }),
+    getPgClient: vi.fn(async () => ({ query: pgQueryMock })),
+    closeClient: vi.fn(),
   }
 })
 
@@ -104,7 +99,7 @@ describe('first-organization lifecycle trigger route', () => {
     vi.clearAllMocks()
     syncBentoFirstOrgOnRoleBindingWriteMock.mockResolvedValue(undefined)
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
-    supabaseFromMock.maybeSingle.mockResolvedValue({ data: { email: 'invitee@example.com' }, error: null })
+    pgQueryMock.mockResolvedValue({ rows: [{ email: 'invitee@example.com' }] })
   })
 
   afterEach(() => {
@@ -128,6 +123,7 @@ describe('first-organization lifecycle trigger route', () => {
       email: 'invitee@example.com',
       segments: ['org:invite_accepted'],
     })
+    expect(pgQueryMock).toHaveBeenCalledWith('SELECT email FROM public.users WHERE id = $1', [USER_ID])
   })
 
   it('skips invite-accepted tagging when reason is not Accepted invitation', async () => {

@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   cancelSubscriptionMock,
-  supabaseAdminMock,
+  pgQueryMock,
   syncBentoSubscriberTagsMock,
   unsubscribeBentoMock,
 } = vi.hoisted(() => ({
   cancelSubscriptionMock: vi.fn(async () => undefined as boolean | undefined),
-  supabaseAdminMock: vi.fn(),
+  pgQueryMock: vi.fn(async (_sql: string, _params?: unknown[]): Promise<{ rows: unknown[] }> => ({ rows: [] })),
   syncBentoSubscriberTagsMock: vi.fn<(
     c: unknown,
     update: unknown,
@@ -42,8 +42,9 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
   cancelSubscription: cancelSubscriptionMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: supabaseAdminMock,
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: vi.fn(async () => ({ query: pgQueryMock })),
+  closeClient: vi.fn(),
 }))
 
 const { app } = await import('../supabase/functions/_backend/triggers/on_user_delete.ts')
@@ -51,18 +52,9 @@ const { BENTO_DELETED_USER_OPERATION_TIMEOUT_MS } = await import('../supabase/fu
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
-function queryBuilder(data: unknown[] = [], error: unknown = null) {
-  const result = Promise.resolve({ data, error })
-  const builder = {
-    eq: vi.fn(),
-    in: vi.fn(),
-    select: vi.fn(),
-    then: result.then.bind(result),
-  }
-  builder.eq.mockReturnValue(builder)
-  builder.in.mockReturnValue(builder)
-  builder.select.mockReturnValue(builder)
-  return builder
+// queryJson wraps statements in `to_json`, so its rows arrive as `{ row }`.
+function jsonRows(rows: unknown[]) {
+  return { rows: rows.map(row => ({ row })) }
 }
 
 function configureSingleOrgCleanup() {
@@ -73,16 +65,13 @@ function configureSingleOrgCleanup() {
     [],
   ]
   let roleBindingRead = 0
-  const client = {
-    from: vi.fn((table: string) => {
-      if (table === 'role_bindings')
-        return queryBuilder(roleBindingResults[roleBindingRead++] ?? [])
-      if (table === 'orgs')
-        return queryBuilder([{ customer_id: 'cus_deleted_user', id: orgId, management_email: null }])
-      return queryBuilder()
-    }),
-  }
-  supabaseAdminMock.mockReturnValue(client)
+  pgQueryMock.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM public.role_bindings'))
+      return jsonRows(roleBindingResults[roleBindingRead++] ?? [])
+    if (sql.includes('FROM public.orgs'))
+      return { rows: [{ customer_id: 'cus_deleted_user', id: orgId, management_email: null }] }
+    return { rows: [] }
+  })
 }
 
 function deletedUserRecord() {
@@ -128,10 +117,7 @@ describe('user deletion Bento recovery safety', () => {
     cancelSubscriptionMock.mockResolvedValue(undefined)
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
     unsubscribeBentoMock.mockResolvedValue(true)
-    const emptyBuilder = queryBuilder()
-    supabaseAdminMock.mockReturnValue({
-      from: vi.fn(() => emptyBuilder),
-    })
+    pgQueryMock.mockResolvedValue({ rows: [] })
   })
 
   it('suppresses and unsubscribes a no-org user before organization cleanup returns', async () => {
@@ -163,7 +149,7 @@ describe('user deletion Bento recovery safety', () => {
     expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
     expect(syncBentoSubscriberTagsMock.mock.invocationCallOrder[0])
       .toBeLessThan(unsubscribeBentoMock.mock.invocationCallOrder[0])
-    expect(supabaseAdminMock).toHaveBeenCalled()
+    expect(pgQueryMock).toHaveBeenCalled()
   })
 
   it('completes subscription cleanup before returning a retryable Bento failure', async () => {
@@ -177,10 +163,7 @@ describe('user deletion Bento recovery safety', () => {
   })
 
   it('returns a retryable failure when an RBAC lookup fails', async () => {
-    const failedBuilder = queryBuilder([], new Error('Database unavailable'))
-    supabaseAdminMock.mockReturnValue({
-      from: vi.fn(() => failedBuilder),
-    })
+    pgQueryMock.mockRejectedValue(new Error('Database unavailable'))
 
     const response = await postDelete()
 
@@ -250,7 +233,7 @@ describe('user deletion Bento recovery safety', () => {
       const response = await responsePromise
       expect(response.status).toBe(500)
       expect(unsubscribeBentoMock).toHaveBeenCalledOnce()
-      expect(supabaseAdminMock).toHaveBeenCalled()
+      expect(pgQueryMock).toHaveBeenCalled()
       expect(lifecycleTrace).toEqual([
         'suppression:started',
         'suppression:aborted',

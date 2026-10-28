@@ -3,7 +3,8 @@ import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { z } from 'zod'
 import { numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { queryJson, queryJsonOne } from '../../utils/pg_rls.ts'
 import { fetchLimit } from '../../utils/utils.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 import { webhookPublicSchema, webhookPublicSelect, webhooksPublicSchema } from './response.ts'
@@ -23,67 +24,78 @@ export async function get(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
 
   await checkWebhookPermissionV2(c, body.orgId, auth)
   // Direct RLS access to webhook tables is intentionally denied; use service-role only after explicit permission checks.
-  const supabase = supabaseAdmin(c)
+  const pg = await getPgClient(c)
+  try {
+    // Get single webhook
+    if (body.webhookId) {
+      let data: unknown = null
+      try {
+        data = await queryJsonOne(pg, `SELECT ${webhookPublicSelect} FROM public.webhooks WHERE id = $1 AND org_id = $2`, [body.webhookId, body.orgId])
+      }
+      catch (error) {
+        throw simpleError('webhook_not_found', 'Webhook not found', { error })
+      }
+      if (!data) {
+        throw simpleError('webhook_not_found', 'Webhook not found', { error: null })
+      }
 
-  // Get single webhook
-  if (body.webhookId) {
-    const { data, error } = await supabase
-      .from('webhooks')
-      .select(webhookPublicSelect)
-      .eq('id', body.webhookId)
-      .eq('org_id', body.orgId)
-      .single()
+      const dataParsed = safeParseSchema(webhookPublicSchema, data)
+      if (!dataParsed.success) {
+        throw simpleError('cannot_parse_webhook', 'Cannot parse webhook', { error: dataParsed.error })
+      }
 
-    if (error) {
-      throw simpleError('webhook_not_found', 'Webhook not found', { error })
+      // Get recent delivery stats for this webhook. Counts only the first 1000 rows, the
+      // PostgREST max_rows this endpoint was bounded by.
+      const stats = await queryJsonOne<{ success: number, failed: number, pending: number }>(
+        pg,
+        `SELECT
+           count(*) FILTER (WHERE status = 'success')::int AS success,
+           count(*) FILTER (WHERE status = 'failed')::int AS failed,
+           count(*) FILTER (WHERE status = 'pending')::int AS pending
+         FROM (
+           SELECT status
+           FROM public.webhook_deliveries
+           WHERE webhook_id = $1
+             AND created_at >= $2
+           LIMIT 1000
+         ) recent`,
+        [body.webhookId, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()],
+      ).catch(() => null)
+
+      return c.json({
+        ...dataParsed.data,
+        stats_24h: {
+          success: stats?.success || 0,
+          failed: stats?.failed || 0,
+          pending: stats?.pending || 0,
+        },
+      })
     }
 
-    const dataParsed = safeParseSchema(webhookPublicSchema, data)
+    // List all webhooks for org
+    const fetchOffset = body.page ?? 0
+    const from = fetchOffset * fetchLimit
+
+    let data: unknown[]
+    try {
+      data = await queryJson(
+        pg,
+        `SELECT ${webhookPublicSelect} FROM public.webhooks WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+        [body.orgId, fetchLimit, from],
+      )
+    }
+    catch (error) {
+      throw simpleError('cannot_get_webhooks', 'Cannot get webhooks', { error })
+    }
+
+    const dataParsed = safeParseSchema(webhooksPublicSchema, data)
     if (!dataParsed.success) {
-      throw simpleError('cannot_parse_webhook', 'Cannot parse webhook', { error: dataParsed.error })
+      throw simpleError('cannot_parse_webhooks', 'Cannot parse webhooks', { error: dataParsed.error })
     }
 
-    // Get recent delivery stats for this webhook
-    const { data: stats } = await supabase
-      .from('webhook_deliveries')
-      .select('status', { count: 'exact' })
-      .eq('webhook_id', body.webhookId)
-      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-
-    const successCount = stats?.filter((s: any) => s.status === 'success').length || 0
-    const failedCount = stats?.filter((s: any) => s.status === 'failed').length || 0
-    const pendingCount = stats?.filter((s: any) => s.status === 'pending').length || 0
-
-    return c.json({
-      ...dataParsed.data,
-      stats_24h: {
-        success: successCount,
-        failed: failedCount,
-        pending: pendingCount,
-      },
-    })
+    return c.json(dataParsed.data)
   }
-
-  // List all webhooks for org
-  const fetchOffset = body.page ?? 0
-  const from = fetchOffset * fetchLimit
-  const to = (fetchOffset + 1) * fetchLimit - 1
-
-  const { data, error } = await supabase
-    .from('webhooks')
-    .select(webhookPublicSelect)
-    .eq('org_id', body.orgId)
-    .order('created_at', { ascending: false })
-    .range(from, to)
-
-  if (error) {
-    throw simpleError('cannot_get_webhooks', 'Cannot get webhooks', { error })
+  finally {
+    closeClient(c, pg)
   }
-
-  const dataParsed = safeParseSchema(webhooksPublicSchema, data)
-  if (!dataParsed.success) {
-    throw simpleError('cannot_parse_webhooks', 'Cannot parse webhooks', { error: dataParsed.error })
-  }
-
-  return c.json(dataParsed.data)
 }

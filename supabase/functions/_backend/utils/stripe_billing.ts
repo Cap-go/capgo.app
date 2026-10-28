@@ -1,9 +1,10 @@
 import type { Context } from 'hono'
 import type { PriceTier } from './country_price_tier.ts'
+import type { Database } from './supabase.types.ts'
 import { isPriceTier } from './country_price_tier.ts'
 import { isUsBillingCountry } from './us_billing_countries.ts'
 import { cloudlogErr } from './logging.ts'
-import { supabaseAdmin } from './supabase.ts'
+import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { getEnv } from './utils.ts'
 
 export type BillingAccount = 'ee' | 'us'
@@ -116,13 +117,17 @@ function requireUsPlanField(value: string | null | undefined, field: string): st
 }
 
 export async function getBillingAccountForCustomer(c: Context, customerId: string): Promise<BillingAccount> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('billing_account')
-    .eq('customer_id', customerId)
-    .maybeSingle()
-
-  if (error) {
+  try {
+    const billingAccount = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = await client.query<{ billing_account: string | null }>(
+        'SELECT billing_account FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        [customerId],
+      )
+      return singleRowOrNull(result.rows)?.billing_account
+    })
+    return normalizeBillingAccount(billingAccount)
+  }
+  catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'getBillingAccountForCustomer',
@@ -131,8 +136,13 @@ export async function getBillingAccountForCustomer(c: Context, customerId: strin
     })
     throw error
   }
+}
 
-  return normalizeBillingAccount(data?.billing_account)
+/** Like supabase-js `.maybeSingle()`: null for no row, PGRST116 error for several. */
+export function singleRowOrNull<T>(rows: T[]): T | null {
+  if (rows.length > 1)
+    throw Object.assign(new Error('JSON object requested, multiple (or no) rows returned'), { code: 'PGRST116' })
+  return rows[0] ?? null
 }
 
 export function getPlanProductId(plan: Pick<PlanStripeIds, 'stripe_id' | 'stripe_id_us'>, account: BillingAccount): string {
@@ -196,13 +206,19 @@ export function planProductIdOrFilter(productId: string): string {
   return `stripe_id.eq.${productId},stripe_id_us.eq.${productId}`
 }
 
-export async function findPlanByProductId(c: Context, productId: string) {
+type PlanRow = Database['public']['Tables']['plans']['Row']
+
+/** The plan whose EE or US product is `productId` (`.or(planProductIdOrFilter(id)).maybeSingle()`), as PostgREST JSON. */
+export async function queryPlanByProductId(client: Parameters<typeof queryJson>[0], productId: string): Promise<PlanRow | null> {
+  planProductIdOrFilter(productId)
+  const rows = await queryJson<PlanRow>(client, 'SELECT * FROM public.plans WHERE stripe_id = $1 OR stripe_id_us = $1 LIMIT 2', [productId])
+  return singleRowOrNull(rows)
+}
+
+export async function findPlanByProductId(c: Context, productId: string): Promise<{ data: PlanRow | null, error: unknown }> {
   try {
-    return await supabaseAdmin(c)
-      .from('plans')
-      .select('*')
-      .or(planProductIdOrFilter(productId))
-      .maybeSingle()
+    const data = await withRlsContext(c, servicePrincipal, client => queryPlanByProductId(client, productId))
+    return { data, error: null }
   }
   catch (error) {
     cloudlogErr({

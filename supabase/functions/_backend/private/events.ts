@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { AcceptedEventIdentity } from '../utils/event_identity.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import type { BentoTrackingPayload, SendEventToTrackingPayload, TrackOptions } from '../utils/tracking.ts'
 import { Hono } from 'hono/tiny'
 import { markAiOnboardingAgentConnected } from '../utils/ai_onboarding_agent.ts'
@@ -17,10 +18,11 @@ import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { APP_ONBOARDING_READY_EVENT, buildAppOnboardingReadyBentoEvent } from '../utils/onboarding_app_ready_tracking.ts'
 import { buildAiInstructionsCopiedBentoEvent } from '../utils/onboarding_copy_tracking.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { authPrincipal, queryJson, withRlsTransaction } from '../utils/pg_rls.ts'
 import { enqueuePostHog, PostHogQueueError, snapshotProperties } from '../utils/posthog_queue.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { broadcastCLIEvent } from '../utils/realtime_broadcast.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
 import { addAuthenticatedApiKeyIdToTrackingPayload, sendEventToTracking } from '../utils/tracking.ts'
 import { recordUserBentoEvent } from '../utils/user_bento_events.ts'
 import { backgroundTask } from '../utils/utils.ts'
@@ -54,6 +56,44 @@ export interface TrackEventBody extends TrackOptions {
   nonPersonTags?: Record<string, unknown>
 }
 
+interface CallerDb {
+  rows: <T>(text: string, values: unknown[]) => Promise<T[]>
+  close: () => Promise<void>
+}
+
+// Lookups run as the caller (RLS), each in its own transaction like the
+// PostgREST requests they replace. The connection opens on first use only.
+function createCallerDb(c: Context<MiddlewareKeyVariables>): CallerDb {
+  let pg: Promise<PgClient> | undefined
+  return {
+    async rows<T>(text: string, values: unknown[]) {
+      const principal = authPrincipal(c, c.get('auth')!)
+      pg ??= getPgClient(c)
+      return withRlsTransaction(await pg, principal, client => queryJson<T>(client, text, values))
+    },
+    async close() {
+      if (pg)
+        await pg.then(client => closeClient(c, client), () => {})
+    },
+  }
+}
+
+// `.single()`: exactly one row, otherwise an error like PostgREST's PGRST116.
+async function single<T>(db: CallerDb, text: string, values: unknown[]): Promise<{ data: T | null, error: unknown }> {
+  try {
+    const rows = await db.rows<T>(text, values)
+    if (rows.length !== 1)
+      return { data: null, error: Object.assign(new Error('JSON object requested, multiple (or no) rows returned'), { code: 'PGRST116' }) }
+    return { data: rows[0]!, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+}
+
+const ORG_ID_NAME_SQL = 'SELECT id, name FROM public.orgs WHERE id = $1 LIMIT 2'
+const APP_NAME_SQL = 'SELECT name FROM public.apps WHERE app_id = $1 LIMIT 2'
+
 function isTrackingV2(version: unknown) {
   return version === 2 || version === '2'
 }
@@ -70,6 +110,7 @@ function toIdString(value: unknown): string | undefined {
 
 async function resolveTrackingUserId(
   c: Context<MiddlewareKeyVariables>,
+  db: CallerDb,
   requestedUserId: string | undefined,
   requestedOrgId: string | undefined,
   appId: string | undefined,
@@ -93,12 +134,7 @@ async function resolveTrackingUserId(
         throw quickError(403, forbiddenError, 'You cannot send events for this organization')
       }
 
-      const supabase = supabaseWithAuth(c, c.get('auth')!)
-      const { data: app, error } = await supabase
-        .from('apps')
-        .select('owner_org')
-        .eq('app_id', appId)
-        .single()
+      const { data: app, error } = await single<{ owner_org: string }>(db, 'SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 2', [appId])
 
       if (error || app?.owner_org !== requestedOrgId) {
         throw quickError(403, forbiddenError, 'You cannot send events for this organization')
@@ -123,12 +159,7 @@ async function resolveTrackingUserId(
       throw quickError(403, forbiddenError, 'You cannot send events for this organization')
     }
 
-    const supabase = supabaseWithAuth(c, c.get('auth')!)
-    const { data: app, error } = await supabase
-      .from('apps')
-      .select('owner_org')
-      .eq('app_id', appId)
-      .single()
+    const { data: app, error } = await single<{ owner_org: string }>(db, 'SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 2', [appId])
 
     if (error || app?.owner_org !== requestedUserId) {
       throw quickError(403, forbiddenError, 'You cannot send events for this organization')
@@ -202,7 +233,7 @@ async function handleNotifyConsole(
 
 async function buildOnboardingBentoEvent(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   onboardingOrgId: string | undefined,
   appId: string | undefined,
   trackedBody: TrackOptions,
@@ -210,29 +241,18 @@ async function buildOnboardingBentoEvent(
   if (!onboardingOrgId || !appId || trackedBody.event !== 'onboarding-step-done')
     return undefined
 
-  return Promise.all([
-    supabase
-      .from('orgs')
-      .select('*')
-      .eq('id', onboardingOrgId)
-      .single(),
-    supabase
-      .from('apps')
-      .select('*')
-      .eq('app_id', appId)
-      .single(),
-  ]).then(([orgResult, appResult]) => {
-    if (orgResult.error || !orgResult.data || appResult.error || !appResult.data) {
-      throw simpleError('error_fetching_organization_or_app', 'Error fetching organization or app', { org: orgResult.error, app: appResult.error })
-    }
+  const orgResult = await single<{ id: string, name: string }>(db, ORG_ID_NAME_SQL, [onboardingOrgId])
+  const appResult = await single<{ name: string }>(db, APP_NAME_SQL, [appId])
+  if (orgResult.error || !orgResult.data || appResult.error || !appResult.data) {
+    throw simpleError('error_fetching_organization_or_app', 'Error fetching organization or app', { org: orgResult.error, app: appResult.error })
+  }
 
-    return buildAppUpdatedBentoEvent({ appId, orgId: orgResult.data.id, orgName: orgResult.data.name, appName: appResult.data.name })
-  })
+  return buildAppUpdatedBentoEvent({ appId, orgId: orgResult.data.id, orgName: orgResult.data.name, appName: appResult.data.name })
 }
 
 async function buildTrackedAppOnboardingReadyBentoEvent(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   onboardingOrgId: string | undefined,
   appId: string | undefined,
   trackedBody: TrackOptions,
@@ -240,18 +260,8 @@ async function buildTrackedAppOnboardingReadyBentoEvent(
   if (!onboardingOrgId || !appId || trackedBody.event !== APP_ONBOARDING_READY_EVENT)
     return undefined
 
-  const [orgResult, appResult] = await Promise.all([
-    supabase
-      .from('orgs')
-      .select('id, name, onboarding, website')
-      .eq('id', onboardingOrgId)
-      .single(),
-    supabase
-      .from('apps')
-      .select('app_id, existing_app, name, need_onboarding, onboarding')
-      .eq('app_id', appId)
-      .single(),
-  ])
+  const orgResult = await single<Parameters<typeof buildAppOnboardingReadyBentoEvent>[2]>(db, 'SELECT id, name, onboarding, website FROM public.orgs WHERE id = $1 LIMIT 2', [onboardingOrgId])
+  const appResult = await single<Parameters<typeof buildAppOnboardingReadyBentoEvent>[3]>(db, 'SELECT app_id, existing_app, name, need_onboarding, onboarding FROM public.apps WHERE app_id = $1 LIMIT 2', [appId])
 
   if (orgResult.error || !orgResult.data || appResult.error || !appResult.data) {
     cloudlog({
@@ -268,7 +278,7 @@ async function buildTrackedAppOnboardingReadyBentoEvent(
 
 async function buildBuilderBentoEvent(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   body: TrackEventBody,
   onboardingOrgId: string | undefined,
   appId: string | undefined,
@@ -284,10 +294,8 @@ async function buildBuilderBentoEvent(
     return undefined
   }
 
-  const [orgResult, appResult] = await Promise.all([
-    supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
-    supabase.from('apps').select('name').eq('app_id', appId).single(),
-  ])
+  const orgResult = await single<{ id: string, name: string }>(db, ORG_ID_NAME_SQL, [onboardingOrgId])
+  const appResult = await single<{ name: string }>(db, APP_NAME_SQL, [appId])
   if (orgResult.error || appResult.error) {
     // Best-effort recovery signal: never fail the wizard's request, and don't
     // emit a Bento event with empty org/app names. Log and skip instead.
@@ -308,7 +316,7 @@ async function buildBuilderBentoEvent(
 
 async function buildAppTooLargeTrackedBentoEvent(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   onboardingOrgId: string | undefined,
   appId: string | undefined,
   trackedBody: TrackOptions,
@@ -316,10 +324,8 @@ async function buildAppTooLargeTrackedBentoEvent(
   if (!onboardingOrgId || !appId || trackedBody.event !== APP_TOO_LARGE_EVENT)
     return undefined
 
-  const [orgResult, appResult] = await Promise.all([
-    supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
-    supabase.from('apps').select('name').eq('app_id', appId).single(),
-  ])
+  const orgResult = await single<{ id: string, name: string }>(db, ORG_ID_NAME_SQL, [onboardingOrgId])
+  const appResult = await single<{ name: string }>(db, APP_NAME_SQL, [appId])
   if (orgResult.error || appResult.error) {
     cloudlog({ requestId: c.get('requestId'), message: 'app too large bento lookup failed; skipping signal', org: orgResult.error, app: appResult.error })
     return undefined
@@ -349,18 +355,14 @@ function optionalTagNumber(value: unknown): number | undefined {
 
 async function buildPlanCheckoutStartedTrackedBentoEvent(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   onboardingOrgId: string | undefined,
   trackedBody: TrackOptions,
 ) {
   if (!onboardingOrgId || trackedBody.event !== PLAN_CHECKOUT_STARTED_EVENT)
     return undefined
 
-  const { data: orgData, error: orgError } = await supabase
-    .from('orgs')
-    .select('id, name')
-    .eq('id', onboardingOrgId)
-    .single()
+  const { data: orgData, error: orgError } = await single<{ id: string, name: string }>(db, ORG_ID_NAME_SQL, [onboardingOrgId])
 
   if (orgError || !orgData) {
     cloudlog({ requestId: c.get('requestId'), message: 'plan checkout bento lookup failed; skipping signal', org: orgError })
@@ -426,34 +428,25 @@ async function trackBundleIncompatibleEmail(
 }
 
 async function lookupChannelUpdateStrategy(
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   appId: string,
   channelName: string | undefined,
 ) {
   if (!channelName)
     return null
-  const { data: channelRow } = await supabase
-    .from('channels')
-    .select('disable_auto_update')
-    .eq('app_id', appId)
-    .eq('name', channelName)
-    .maybeSingle()
+  // `.maybeSingle()` with the error ignored: zero, several rows or a failure all read as null.
+  const { data: channelRow } = await single<{ disable_auto_update: string | null }>(db, 'SELECT disable_auto_update FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2', [appId, channelName])
   return channelRow?.disable_auto_update ?? null
 }
 
 async function lookupVersionMinUpdate(
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   appId: string,
   versionNewName: string | undefined,
 ): Promise<{ versionNewId: string | undefined, minUpdateVersion: string | null }> {
   if (!versionNewName)
     return { versionNewId: undefined, minUpdateVersion: null }
-  const { data: versionNewData } = await supabase
-    .from('app_versions')
-    .select('id, min_update_version')
-    .eq('app_id', appId)
-    .eq('name', versionNewName)
-    .maybeSingle()
+  const { data: versionNewData } = await single<{ id: number, min_update_version: string | null }>(db, 'SELECT id, min_update_version FROM public.app_versions WHERE app_id = $1 AND name = $2 LIMIT 2', [appId, versionNewName])
   return {
     versionNewId: toIdString(versionNewData?.id),
     minUpdateVersion: versionNewData?.min_update_version ?? null,
@@ -462,7 +455,7 @@ async function lookupVersionMinUpdate(
 
 async function buildBundleIncompatibleBentoEvent(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseWithAuth>,
+  db: CallerDb,
   onboardingOrgId: string | undefined,
   appId: string | undefined,
   trackedBody: TrackOptions,
@@ -494,10 +487,10 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
-  const updateStrategy = await lookupChannelUpdateStrategy(supabase, appId, incompatibleChannel)
+  const updateStrategy = await lookupChannelUpdateStrategy(db, appId, incompatibleChannel)
   const versionNewName = optionalNonEmptyTagString(tags.version_new_name)
   const versionOldName = optionalTagString(tags.version_old_name)
-  const { versionNewId, minUpdateVersion } = await lookupVersionMinUpdate(supabase, appId, versionNewName)
+  const { versionNewId, minUpdateVersion } = await lookupVersionMinUpdate(db, appId, versionNewName)
 
   // Gated by the channel strategy: devices on the previous (incompatible) native
   // build never receive this bundle, so the breaking change was done correctly.
@@ -508,10 +501,8 @@ async function buildBundleIncompatibleBentoEvent(
     minUpdateVersion,
   })
 
-  const [orgResult, appResult] = await Promise.all([
-    supabase.from('orgs').select('id, name').eq('id', onboardingOrgId).single(),
-    supabase.from('apps').select('name').eq('app_id', appId).single(),
-  ])
+  const orgResult = await single<{ id: string, name: string }>(db, ORG_ID_NAME_SQL, [onboardingOrgId])
+  const appResult = await single<{ name: string }>(db, APP_NAME_SQL, [appId])
   if (orgResult.error || appResult.error) {
     // Best-effort signal: never fail the CLI's request, and don't emit a Bento
     // event with empty org/app context. Log and skip instead.
@@ -617,6 +608,16 @@ app.post('/', middlewareAuth(), async (c) => {
  * (bundle upload sessions) call it so their events keep the same tracking side effects.
  */
 export async function acceptTrackEvent(c: Context<MiddlewareKeyVariables>, body: TrackEventBody): Promise<{ event_id: string }> {
+  const db = createCallerDb(c)
+  try {
+    return await acceptTrackEventWithDb(c, db, body)
+  }
+  finally {
+    await db.close()
+  }
+}
+
+async function acceptTrackEventWithDb(c: Context<MiddlewareKeyVariables>, db: CallerDb, body: TrackEventBody): Promise<{ event_id: string }> {
   const acceptedAt = Date.now()
   if (body.event === 'Org Created')
     throw quickError(400, 'server_owned_event', 'This event is recorded from committed database changes')
@@ -636,7 +637,7 @@ export async function acceptTrackEvent(c: Context<MiddlewareKeyVariables>, body:
   const requestedOrgId = getRequestedOrgId(body, trackingV2)
   const requestedUserId = typeof body.user_id === 'string' ? body.user_id : undefined
   const appId = getAppId(body)
-  const { trackingUserId, orgId: verifiedOrgId } = await resolveTrackingUserId(c, requestedUserId, requestedOrgId, appId, trackingV2, Boolean(body.notifyConsole))
+  const { trackingUserId, orgId: verifiedOrgId } = await resolveTrackingUserId(c, db, requestedUserId, requestedOrgId, appId, trackingV2, Boolean(body.notifyConsole))
   const identity = await acceptEventIdentity({
     actorId: c.get('auth')!.userId,
     orgId: verifiedOrgId,
@@ -674,30 +675,28 @@ export async function acceptTrackEvent(c: Context<MiddlewareKeyVariables>, body:
     groups: verifiedOrgId ? { organization: verifiedOrgId } : undefined,
   }, apikeyId))
 
-  const supabase = supabaseWithAuth(c, c.get('auth')!)
-
   // Resolve the org from the verified org id (v2) or the legacy user_id-as-org
   // value (v1 only). Under tracking v2, trackedBody.user_id is the authenticated
   // *user*, so it must never be used to look up the organization — a v2 event
   // without an org_id simply skips the Bento notification.
   const onboardingOrgId = verifiedOrgId
     ?? (!trackingV2 && typeof trackedBody.user_id === 'string' ? trackedBody.user_id : undefined)
-  const onboardingBentoEvent: BentoTrackingPayload | undefined = await buildOnboardingBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+  const onboardingBentoEvent: BentoTrackingPayload | undefined = await buildOnboardingBentoEvent(c, db, onboardingOrgId, appId, trackedBody)
 
   // The setup screen is the first point where the pending app is ready for CLI
   // work. Keep this separate from app:created, which remains a later completion
   // signal after the CLI clears need_onboarding.
-  const appOnboardingReadyBentoEvent: BentoTrackingPayload | undefined = await buildTrackedAppOnboardingReadyBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+  const appOnboardingReadyBentoEvent: BentoTrackingPayload | undefined = await buildTrackedAppOnboardingReadyBentoEvent(c, db, onboardingOrgId, appId, trackedBody)
 
   // Builder native-build onboarding (capgo build init): emit start/finish signal
   // events to Bento so a later automation can recover users who started but never
   // finished. Mirrors the onboarding-step-done block above. Only the milestone
   // steps trigger the org/app lookup.
-  const builderBentoEvent: BentoTrackingPayload | undefined = await buildBuilderBentoEvent(c, supabase, body, onboardingOrgId, appId, trackedBody)
+  const builderBentoEvent: BentoTrackingPayload | undefined = await buildBuilderBentoEvent(c, db, body, onboardingOrgId, appId, trackedBody)
 
   // Plan checkout start: the frontend emits this only when the user accepts the
   // Stripe navigation, not when the checkout URL is prefetched.
-  const planCheckoutBentoEvent: BentoTrackingPayload | undefined = await buildPlanCheckoutStartedTrackedBentoEvent(c, supabase, onboardingOrgId, trackedBody)
+  const planCheckoutBentoEvent: BentoTrackingPayload | undefined = await buildPlanCheckoutStartedTrackedBentoEvent(c, db, onboardingOrgId, trackedBody)
 
   // Bundle compatibility failure (capgo bundle upload / bundle compatibility):
   // when the CLI reports an incompatible bundle, emit a Bento signal so a
@@ -711,7 +710,7 @@ export async function acceptTrackEvent(c: Context<MiddlewareKeyVariables>, body:
   // build, the breaking change was done correctly and the calmer
   // `bundle_incompatible_expected` event is emitted instead of the crash warning.
   // All three outcomes are recorded in PostHog (sent vs sent_expected vs skipped_accepted).
-  const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody, identity)
+  const bundleIncompatibleBentoEvent: BentoTrackingPayload | undefined = await buildBundleIncompatibleBentoEvent(c, db, onboardingOrgId, appId, trackedBody, identity)
   const aiInstructionsCopiedBentoEvent = buildAiInstructionsCopiedBentoEvent({
     appId,
     event: trackedBody.event,
@@ -723,7 +722,7 @@ export async function acceptTrackEvent(c: Context<MiddlewareKeyVariables>, body:
   // and the zip is actually uploaded (`--delta-only` skips it).
   // PostHog already records `App Too Large`; this Bento signal lets a lifecycle
   // automation email org admins (gated by the `app_too_large` preference).
-  const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, supabase, onboardingOrgId, appId, trackedBody)
+  const appTooLargeBentoEvent: BentoTrackingPayload | undefined = await buildAppTooLargeTrackedBentoEvent(c, db, onboardingOrgId, appId, trackedBody)
 
   // Exactly one of these is ever set (distinct event names); `??` picks the active one.
   const bentoEvent = appOnboardingReadyBentoEvent ?? onboardingBentoEvent ?? builderBentoEvent ?? planCheckoutBentoEvent ?? bundleIncompatibleBentoEvent ?? aiInstructionsCopiedBentoEvent ?? appTooLargeBentoEvent

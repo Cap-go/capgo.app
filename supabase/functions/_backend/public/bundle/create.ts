@@ -3,9 +3,11 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
+import { cloudlog } from '../../utils/logging.ts'
+import { apikeyPrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { isValidAppId, isValidSemver } from '../../utils/utils.ts'
 import { checkEncryptedBundleEnforcement, getAppOrganization } from './encryption_policy.ts'
+import { writeAppVersionRow } from './upsert.ts'
 
 interface CreateBundleBody {
   app_id: string
@@ -133,13 +135,17 @@ function validateUrlFormat(url: string) {
 // }
 
 async function checkVersionExists(c: Context, appId: string, apikey: Database['public']['Tables']['apikeys']['Row'], version: string): Promise<void> {
-  const { data: existingVersion } = await supabaseApikey(c, apikey.key)
-    .from('app_versions')
-    .select('id')
-    .eq('app_id', appId)
-    .eq('name', version)
-    .eq('deleted', false)
-    .single()
+  let existingVersion = false
+  try {
+    existingVersion = await withRlsContext(c, apikeyPrincipal(c, apikey.key), async (client) => {
+      const result = await client.query('SELECT id FROM public.app_versions WHERE app_id = $1 AND name = $2 AND deleted = false', [appId, version])
+      return result.rows.length === 1
+    })
+  }
+  catch (error) {
+    // A failed lookup does not block the create; the insert enforces name uniqueness.
+    cloudlog({ requestId: c.get('requestId'), message: 'checkVersionExists failed', error })
+  }
 
   if (existingVersion) {
     throw simpleError('version_already_exists', 'Version already exists', { version })
@@ -147,9 +153,9 @@ async function checkVersionExists(c: Context, appId: string, apikey: Database['p
 }
 
 async function insertBundle(c: Context, body: CreateBundleBody, ownerOrg: string, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<any> {
-  const { data: newBundle, error: createError } = await supabaseApikey(c, apikey.key)
-    .from('app_versions')
-    .insert({
+  let newBundle: Awaited<ReturnType<typeof writeAppVersionRow>> = null
+  try {
+    newBundle = await withRlsContext(c, apikeyPrincipal(c, apikey.key), client => writeAppVersionRow(client, {
       app_id: body.app_id,
       checksum: body.checksum,
       name: body.version,
@@ -159,12 +165,13 @@ async function insertBundle(c: Context, body: CreateBundleBody, ownerOrg: string
       storage_provider: 'external',
       owner_org: ownerOrg,
       user_id: apikey.user_id,
-    })
-    .select()
-    .single()
-
-  if (createError) {
+    }, { upsert: false }))
+  }
+  catch (createError) {
     throw simpleError('cannot_create_bundle', 'Cannot create bundle', { supabaseError: createError })
+  }
+  if (!newBundle) {
+    throw simpleError('cannot_create_bundle', 'Cannot create bundle', { supabaseError: null })
   }
 
   return newBundle

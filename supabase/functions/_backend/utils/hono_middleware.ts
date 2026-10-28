@@ -13,7 +13,7 @@ import { isFreshPgClientRetryError } from './pg_errors.ts'
 import * as schema from './postgres_schema.ts'
 import { isAPIKeyRateLimited, isIPRateLimited, recordAPIKeyUsage, recordFailedAuth, setAPIKeyRateLimitHeaders, setFailedAuthRateLimitPolicyHeader } from './rate_limit.ts'
 import { buildRateLimitInfo } from './rateLimitInfo.ts'
-import { checkKey, checkKeyById, supabaseAdmin } from './supabase.ts'
+import { checkKey, checkKeyById } from './supabase.ts'
 
 // TODO: make universal middleware who
 //  Accept authorization header (JWT)
@@ -662,7 +662,7 @@ async function resolveApiKey(
   readOnly = true,
 ): Promise<PgAuthLookupResult<ApikeyRow>> {
   if (!usePostgres) {
-    const row = await checkKey(c, key, supabaseAdmin(c))
+    const row = await checkKey(c, key)
     if (!row)
       return { kind: 'not_found' }
     return { kind: 'ok', value: row }
@@ -722,7 +722,7 @@ async function resolveSubkey(
   readOnly = true,
 ): Promise<PgAuthLookupResult<ApikeyRow>> {
   if (!usePostgres) {
-    const row = await checkKeyById(c, subkeyId, supabaseAdmin(c), expectedUserId)
+    const row = await checkKeyById(c, subkeyId, expectedUserId)
     if (!row)
       return { kind: 'not_found' }
     return { kind: 'ok', value: row }

@@ -306,8 +306,7 @@ describe('organization put Stripe sync', () => {
     }, hashedApikey)
 
     expect(response.status).toBe(200)
-    expect(supabaseApikeyMock).toHaveBeenCalledWith(expect.anything(), rawKey)
-    expect(apikeyHasOrgRightWithPolicyMock).toHaveBeenCalledWith(expect.anything(), hashedApikey, 'org-123', rlsSupabase)
+    expect(apikeyHasOrgRightWithPolicyMock).toHaveBeenCalledWith(expect.anything(), hashedApikey, 'org-123', { kind: 'apikey', apikey: rawKey })
     expect(supabaseAdminMock).not.toHaveBeenCalled()
     expect(updateBuilder.update).toHaveBeenCalledWith({ enforce_hashed_api_keys: true })
   })
@@ -334,12 +333,15 @@ describe('organization put Stripe sync', () => {
     expect(updateBuilder.update).toHaveBeenCalledWith({ name: 'New Name' })
     expect(updateBuilder.eq).toHaveBeenCalledWith('name', 'Old Name')
     expect(updateBuilder.maybeSingle.mock.invocationCallOrder[0]).toBeLessThan(updateCustomerOrganizationNameMock.mock.invocationCallOrder[0])
-    expect(organizationUpdateQueryMock).toHaveBeenCalledWith('SELECT set_config($1, $2, true)', [
-      'request.jwt.claims',
+    // One pg_rls applyRlsContext round trip: claims, sub, claim role, request.headers, then the role switch.
+    const roleCallIndex = organizationUpdateQueryMock.mock.calls.findIndex(([text]) => typeof text === 'string' && text.includes('request.jwt.claims') && text.includes('set_config(\'role\''))
+    expect(organizationUpdateQueryMock.mock.calls[roleCallIndex]?.[1]).toEqual([
       JSON.stringify({ sub: 'user-123', role: 'authenticated', aal: 'aal2', amr: [{ method: 'totp' }] }),
+      'user-123',
+      'authenticated',
+      '{}',
+      'authenticated',
     ])
-    expect(organizationUpdateQueryMock).toHaveBeenCalledWith('SELECT set_config($1, $2, true)', ['request.headers', '{}'])
-    const roleCallIndex = organizationUpdateQueryMock.mock.calls.findIndex(([text]) => text === 'SET LOCAL ROLE authenticated')
     const updateCallIndex = organizationUpdateQueryMock.mock.calls.findIndex(([text]) => typeof text === 'string' && text.startsWith('UPDATE public.orgs'))
     expect(roleCallIndex).toBeGreaterThanOrEqual(0)
     expect(roleCallIndex).toBeLessThan(updateCallIndex)

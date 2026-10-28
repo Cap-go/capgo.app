@@ -3,11 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { extractDataEvent } from '../supabase/functions/_backend/utils/stripe_event.ts'
 import { AUTO_TOP_UP_KIND, handleAutoTopUpInvoicePaid, normalizeAutoTopUpMonthlyLimit, payAutoTopUpInvoice, shouldAttemptAutoTopUp } from '../supabase/functions/_backend/utils/credit_auto_top_up.ts'
 
-const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }))
+const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', async importOriginal => ({
-  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/supabase.ts')>(),
-  supabaseAdmin: () => ({ rpc: rpcMock }),
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>(),
+  withRlsContext: async (_c: unknown, principal: unknown, run: (client: unknown) => Promise<unknown>) => {
+    expect(principal).toEqual({ kind: 'service' })
+    return run({ query: queryMock })
+  },
 }))
 
 describe('credit auto top-up decision', () => {
@@ -163,13 +166,12 @@ describe('credit auto top-up invoice webhook', () => {
   })
 
   it('grants a balance-paid auto top-up from the invoice, keyed by the invoice id', async () => {
-    rpcMock.mockReturnValueOnce({ single: async () => ({ data: {}, error: null }) })
+    queryMock.mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
     const invoice = event({ metadata: { kind: AUTO_TOP_UP_KIND, orgId: 'org_1', intendedQuantity: '25' }, amount_paid: 0 })
     await expect(handleAutoTopUpInvoicePaid(context, invoice, 'org_1')).resolves.toBe(true)
-    expect(rpcMock).toHaveBeenCalledWith('top_up_usage_credits', expect.objectContaining({
-      p_org_id: 'org_1',
-      p_amount: 25,
-      p_source_ref: expect.objectContaining({ paymentIntentId: 'in_1', quantity: 25 }),
-    }))
+    const [text, values] = queryMock.mock.calls[0] as [string, unknown[]]
+    expect(text).toContain('public.top_up_usage_credits(')
+    expect(values.slice(0, 2)).toEqual(['org_1', 25])
+    expect(JSON.parse(values[4] as string)).toMatchObject({ paymentIntentId: 'in_1', quantity: 25 })
   })
 })

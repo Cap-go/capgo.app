@@ -7,7 +7,8 @@ import { getClaimsFromJWT, middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { emptySupabase, supabaseAdmin as useSupabaseAdmin, supabaseClient as useSupabaseClient } from '../utils/supabase.ts'
+import { authPrincipal, withRlsContext } from '../utils/pg_rls.ts'
+import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
 
 export const bodySchema = z.object({
   user_id: z.string().optional(),
@@ -227,12 +228,17 @@ app.post('/', middlewareAuth, async (c) => {
   }
 
   const supabaseAdmin = await useSupabaseAdmin(c)
-  const supabaseClient = useSupabaseClient(c, authToken)
 
   // Canonical platform-admin check for impersonation.
   // This endpoint must only use is_platform_admin for user-facing platform-rights.
-  const { data: isAdmin, error: adminError } = await supabaseClient.rpc('is_platform_admin')
-  if (adminError) {
+  let isAdmin: boolean | null = null
+  try {
+    isAdmin = await withRlsContext(c, authPrincipal(c), async (client) => {
+      const { rows } = await client.query<{ is_admin: boolean | null }>('SELECT public.is_platform_admin() AS is_admin')
+      return rows[0]?.is_admin ?? null
+    })
+  }
+  catch (adminError) {
     throw simpleError('is_admin_error', 'Is admin error', { adminError })
   }
 

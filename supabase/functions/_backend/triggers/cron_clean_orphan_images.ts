@@ -2,10 +2,11 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import type { ImageFolderEntry } from '../utils/image_storage.ts'
+import type { PgClient } from '../utils/pg.ts'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { listImageFolder, removeImageFolder, removeImages } from '../utils/image_storage.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -15,7 +16,7 @@ const CLEANUP_BUDGET_MS = 10_000
 const CLEANUP_CONCURRENCY = 8
 // App folders of one org, inside the org-level concurrency above.
 const APP_FOLDER_CONCURRENCY = 2
-// Keeps PostgREST `in.(...)` filters well under URL length limits.
+// Keeps each `= ANY(...)` lookup small.
 const LOOKUP_CHUNK_SIZE = 100
 // Folders listed per run, as before; shuffling spreads work across runs.
 const LIST_LIMIT = 1000
@@ -93,8 +94,6 @@ export async function runWithDeadline<T>(
   return next
 }
 
-type SupabaseAdmin = ReturnType<typeof supabaseAdmin>
-
 interface CleanupStats {
   deletedUserImages: number
   deletedOrgImages: number
@@ -105,16 +104,11 @@ interface CleanupStats {
   orgFoldersProcessed: number
 }
 
-async function fetchExisting<Row>(
-  ids: string[],
-  query: (ids: string[]) => PromiseLike<{ data: Row[] | null, error: unknown }>,
-) {
+async function fetchExisting<Row extends Record<string, unknown>>(pg: PgClient, ids: string[], queryText: string) {
   const rows: Row[] = []
   for (const idsChunk of chunk(ids, LOOKUP_CHUNK_SIZE)) {
-    const { data, error } = await query(idsChunk)
-    if (error)
-      throw error
-    rows.push(...(data ?? []))
+    const result = await pg.query<Row>(queryText, [idsChunk])
+    rows.push(...result.rows)
   }
   return rows
 }
@@ -165,7 +159,7 @@ async function cleanUserFolder(
 
 async function cleanOrgFolder(
   c: Context<MiddlewareKeyVariables>,
-  supabase: SupabaseAdmin,
+  pg: PgClient,
   stats: CleanupStats,
   orgId: string,
   org: { logo: string | null } | undefined,
@@ -214,10 +208,7 @@ async function cleanOrgFolder(
     if (appIds.length === 0)
       return
 
-    const existingApps = await fetchExisting<{ app_id: string }>(appIds, ids => supabase
-      .from('apps')
-      .select('app_id')
-      .in('app_id', ids))
+    const existingApps = await fetchExisting<{ app_id: string }>(pg, appIds, 'SELECT app_id FROM public.apps WHERE app_id = ANY($1::varchar[])')
     const existingAppIds = new Set(existingApps.map(row => row.app_id))
 
     const orphanedAppIds = appIds.filter(appId => !existingAppIds.has(appId))
@@ -241,7 +232,7 @@ async function cleanOrgFolder(
   }
 }
 
-async function cleanUserImages(c: Context<MiddlewareKeyVariables>, supabase: SupabaseAdmin, stats: CleanupStats, deadline: number) {
+async function cleanUserImages(c: Context<MiddlewareKeyVariables>, pg: PgClient, stats: CleanupStats, deadline: number) {
   // Top-level folders in image storage are user IDs, plus `org` (logos and icons)
   // and `public` (shared assets).
   const topLevelFolders = await listImageFolder(c, '', { limit: LIST_LIMIT })
@@ -251,10 +242,7 @@ async function cleanUserImages(c: Context<MiddlewareKeyVariables>, supabase: Sup
   if (userIds.length === 0)
     return
 
-  const users = await fetchExisting<{ id: string, image_url: string | null }>(userIds, ids => supabase
-    .from('users')
-    .select('id, image_url')
-    .in('id', ids))
+  const users = await fetchExisting<{ id: string, image_url: string | null }>(pg, userIds, 'SELECT id, image_url FROM public.users WHERE id = ANY($1::uuid[])')
   const usersById = new Map(users.map(user => [user.id, user]))
 
   stats.userFoldersProcessed = await runWithDeadline(
@@ -264,7 +252,7 @@ async function cleanUserImages(c: Context<MiddlewareKeyVariables>, supabase: Sup
   )
 }
 
-async function cleanOrgImages(c: Context<MiddlewareKeyVariables>, supabase: SupabaseAdmin, stats: CleanupStats, deadline: number) {
+async function cleanOrgImages(c: Context<MiddlewareKeyVariables>, pg: PgClient, stats: CleanupStats, deadline: number) {
   // List all folders under images/org/ (one per organization)
   const orgFolders = await listImageFolder(c, 'org', { limit: LIST_LIMIT })
   const orgIds = shuffle(orgFolders.filter(f => f.isFolder && UUID_REGEX.test(f.name)).map(f => f.name))
@@ -272,15 +260,12 @@ async function cleanOrgImages(c: Context<MiddlewareKeyVariables>, supabase: Supa
   if (orgIds.length === 0)
     return
 
-  const orgs = await fetchExisting<{ id: string, logo: string | null }>(orgIds, ids => supabase
-    .from('orgs')
-    .select('id, logo')
-    .in('id', ids))
+  const orgs = await fetchExisting<{ id: string, logo: string | null }>(pg, orgIds, 'SELECT id, logo FROM public.orgs WHERE id = ANY($1::uuid[])')
   const orgsById = new Map(orgs.map(org => [org.id, org]))
 
   stats.orgFoldersProcessed = await runWithDeadline(
     orgIds,
-    orgId => cleanOrgFolder(c, supabase, stats, orgId, orgsById.get(orgId), deadline),
+    orgId => cleanOrgFolder(c, pg, stats, orgId, orgsById.get(orgId), deadline),
     { concurrency: CLEANUP_CONCURRENCY, deadline },
   )
 }
@@ -307,18 +292,22 @@ app.post('/', middlewareAPISecret, async (c) => {
     orgFoldersProcessed: 0,
   }
 
-  const supabase = supabaseAdmin(c)
-
-  await Promise.all([
-    cleanUserImages(c, supabase, stats, deadline).catch((error) => {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'error in user cleanup phase', error })
-      stats.errors++
-    }),
-    cleanOrgImages(c, supabase, stats, deadline).catch((error) => {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'error in org cleanup phase', error })
-      stats.errors++
-    }),
-  ])
+  const pg = await getPgClient(c)
+  try {
+    await Promise.all([
+      cleanUserImages(c, pg, stats, deadline).catch((error) => {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'error in user cleanup phase', error })
+        stats.errors++
+      }),
+      cleanOrgImages(c, pg, stats, deadline).catch((error) => {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'error in org cleanup phase', error })
+        stats.errors++
+      }),
+    ])
+  }
+  finally {
+    closeClient(c, pg)
+  }
 
   cloudlog({
     requestId: c.get('requestId'),

@@ -36,8 +36,8 @@ import {
 import { quickError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { queryJson } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 
 type ApikeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -159,12 +159,25 @@ async function requireAppPermission(c: Context, permission: typeof READ_PERMISSI
   }
 }
 
+async function withAdminPg<T>(c: Context, run: (pg: Awaited<ReturnType<typeof getPgClient>>) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await run(pg)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
 async function getAppOwnerOrg(c: Context, appId: string): Promise<string> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .maybeSingle()
+  let data: { owner_org: string } | null = null
+  let error: unknown = null
+  try {
+    data = await withAdminPg(c, async pg => (await pg.query<{ owner_org: string }>('SELECT owner_org FROM public.apps WHERE app_id = $1', [appId])).rows[0] ?? null)
+  }
+  catch (err) {
+    error = err
+  }
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials app lookup failed', app_id: appId, error })
     quickError(503, 'database_unavailable', 'Cannot load app')
@@ -177,13 +190,20 @@ async function getAppOwnerOrg(c: Context, appId: string): Promise<string> {
 type StoredRow = Pick<Database['public']['Tables']['app_build_credentials']['Row'], 'id' | 'platform' | 'ciphertext' | 'key_version' | 'summary' | 'created_at' | 'updated_at' | 'created_by'>
 
 async function loadStoredRows(c: Context, appId: string, platform?: BuildPlatform): Promise<StoredRow[]> {
-  let query = supabaseAdmin(c)
-    .from('app_build_credentials')
-    .select('id, platform, ciphertext, key_version, summary, created_at, updated_at, created_by')
-    .eq('app_id', appId)
-  if (platform)
-    query = query.eq('platform', platform)
-  const { data, error } = await query
+  let data: StoredRow[] | null = null
+  let error: unknown = null
+  try {
+    data = await withAdminPg(c, pg => queryJson<StoredRow>(
+      pg,
+      `SELECT id, platform, ciphertext, key_version, summary, created_at, updated_at, created_by
+      FROM public.app_build_credentials
+      WHERE app_id = $1 AND ($2::text IS NULL OR platform = $2)`,
+      [appId, platform ?? null],
+    ))
+  }
+  catch (err) {
+    error = err
+  }
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials load failed', app_id: appId, platform, error })
     quickError(503, 'database_unavailable', 'Cannot load stored build credentials')
@@ -199,13 +219,15 @@ async function loadStoredRows(c: Context, appId: string, platform?: BuildPlatfor
 async function resealWithCurrentKey(c: Context, secret: string, appId: string, platform: BuildPlatform, row: StoredRow, credentials: CredentialRecord) {
   try {
     const sealed = await sealBuildCredentials({ secret, appId, platform, credentials })
-    const { error } = await supabaseAdmin(c)
-      .from('app_build_credentials')
-      .update({ ciphertext: sealed.ciphertext, key_version: sealed.keyVersion })
-      .eq('id', row.id)
-      .eq('key_version', row.key_version)
-    if (error)
+    try {
+      await withAdminPg(c, pg => pg.query(
+        'UPDATE public.app_build_credentials SET ciphertext = $3, key_version = $4 WHERE id = $1 AND key_version = $2',
+        [row.id, row.key_version, sealed.ciphertext, sealed.keyVersion],
+      ))
+    }
+    catch (error) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials reseal failed', app_id: appId, platform, error })
+    }
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials reseal failed', app_id: appId, platform, error: (error as Error)?.message })
@@ -251,22 +273,33 @@ async function writeAuditLog(c: Context, input: {
   oldSummary: Json | null
   newSummary: Json | null
 }) {
-  const { error } = await supabaseAdmin(c).from('audit_logs').insert({
-    table_name: 'app_build_credentials',
-    record_id: input.recordId,
-    operation: input.operation,
-    org_id: input.orgId,
-    user_id: input.actor.userId,
-    actor_type: input.actor.apikeyId ? 'apikey' : 'user',
-    actor_user_id: input.actor.userId,
-    actor_apikey_id: input.actor.apikeyId,
-    actor_apikey_name: input.actor.apikeyName,
-    old_record: input.oldSummary === null ? null : { app_id: input.appId, platform: input.platform, summary: input.oldSummary },
-    new_record: input.newSummary === null ? null : { app_id: input.appId, platform: input.platform, summary: input.newSummary },
-    changed_fields: input.operation === 'UPDATE' ? ['credentials'] : null,
-  })
-  if (error)
+  const oldRecord = input.oldSummary === null ? null : { app_id: input.appId, platform: input.platform, summary: input.oldSummary }
+  const newRecord = input.newSummary === null ? null : { app_id: input.appId, platform: input.platform, summary: input.newSummary }
+  try {
+    await withAdminPg(c, pg => pg.query(
+      `INSERT INTO public.audit_logs (
+        table_name, record_id, operation, org_id, user_id, actor_type, actor_user_id,
+        actor_apikey_id, actor_apikey_name, old_record, new_record, changed_fields
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::text[])`,
+      [
+        'app_build_credentials',
+        input.recordId,
+        input.operation,
+        input.orgId,
+        input.actor.userId,
+        input.actor.apikeyId ? 'apikey' : 'user',
+        input.actor.userId,
+        input.actor.apikeyId,
+        input.actor.apikeyName,
+        oldRecord === null ? null : JSON.stringify(oldRecord),
+        newRecord === null ? null : JSON.stringify(newRecord),
+        input.operation === 'UPDATE' ? ['credentials'] : null,
+      ],
+    ))
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials audit log insert failed', app_id: input.appId, platform: input.platform, error })
+  }
 }
 
 /** Validate + encrypt + upsert. Shared by the API-key PUT and the token upload PUT. */
@@ -335,12 +368,46 @@ async function storeBuildCredentials(c: Context, input: {
   // A merge is built on the row it read: write it only if that row is unchanged, so two
   // overlapping merges cannot silently drop each other's keys.
   // A first merge (nothing read) inserts only, so a concurrent first write is a conflict, not lost.
-  const table = () => supabaseAdmin(c).from('app_build_credentials')
-  const { data: row, error } = mode !== 'merge'
-    ? await table().upsert(values, { onConflict: 'app_id,platform' }).select('id, updated_at').single()
-    : existing
-      ? await table().update(values).eq('id', existing.id).eq('updated_at', existing.updated_at).select('id, updated_at').maybeSingle()
-      : await table().insert(values).select('id, updated_at').maybeSingle()
+  const params = [
+    values.app_id,
+    values.owner_org,
+    values.platform,
+    values.ciphertext,
+    values.key_version,
+    JSON.stringify(values.summary),
+    values.created_by,
+    values.updated_by,
+    values.updated_at,
+  ]
+  const insertSql = `INSERT INTO public.app_build_credentials
+      (app_id, owner_org, platform, ciphertext, key_version, summary, created_by, updated_by, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)`
+  let row: { id: string, updated_at: string } | null = null
+  let error: { code?: string } | null = null
+  try {
+    const rows = await withAdminPg(c, pg => mode !== 'merge'
+      ? queryJson<{ id: string, updated_at: string }>(pg, `${insertSql}
+      ON CONFLICT (app_id, platform) DO UPDATE SET
+        owner_org = EXCLUDED.owner_org,
+        ciphertext = EXCLUDED.ciphertext,
+        key_version = EXCLUDED.key_version,
+        summary = EXCLUDED.summary,
+        created_by = EXCLUDED.created_by,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, updated_at`, params)
+      : existing
+        ? queryJson<{ id: string, updated_at: string }>(pg, `UPDATE public.app_build_credentials SET
+          app_id = $1, owner_org = $2, platform = $3, ciphertext = $4, key_version = $5,
+          summary = $6::jsonb, created_by = $7, updated_by = $8, updated_at = $9
+        WHERE id = $10 AND updated_at = $11::timestamptz
+        RETURNING id, updated_at`, [...params, existing.id, existing.updated_at])
+        : queryJson<{ id: string, updated_at: string }>(pg, `${insertSql} RETURNING id, updated_at`, params))
+    row = rows[0] ?? null
+  }
+  catch (err) {
+    error = err as { code?: string }
+  }
   if (mode === 'merge' && ((!error && !row) || error?.code === '23505'))
     quickError(409, 'build_credentials_conflict', 'The stored credentials changed while merging; retry the merge. If you used a signed upload URL, request a new one: each URL works only once.', { app_id: appId, platform }, undefined, { alert: false })
   if (error || !row) {
@@ -408,12 +475,19 @@ export async function deleteBuildCredentials(c: Context, apikey: ApikeyRow): Pro
   const platform = parsePlatform(body.platform ?? query.platform)
   await requireAppPermission(c, WRITE_PERMISSION, appId)
 
-  const { data, error } = await supabaseAdmin(c)
-    .from('app_build_credentials')
-    .delete()
-    .eq('app_id', appId)
-    .eq('platform', platform)
-    .select('id, owner_org, summary')
+  type DeletedRow = Pick<Database['public']['Tables']['app_build_credentials']['Row'], 'id' | 'owner_org' | 'summary'>
+  let data: DeletedRow[] | null = null
+  let error: unknown = null
+  try {
+    data = await withAdminPg(c, pg => queryJson<DeletedRow>(
+      pg,
+      'DELETE FROM public.app_build_credentials WHERE app_id = $1 AND platform = $2 RETURNING id, owner_org, summary',
+      [appId, platform],
+    ))
+  }
+  catch (err) {
+    error = err
+  }
   if (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Build credentials delete failed', app_id: appId, platform, error })
     quickError(503, 'database_unavailable', 'Cannot delete build credentials')

@@ -4,14 +4,21 @@ import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const checkPermissionMock = vi.fn()
-const supabaseApikeyMock = vi.fn()
+const queryJsonMock = vi.fn()
+const withRlsContextMock = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => checkPermissionMock(...args),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: (...args: unknown[]) => supabaseApikeyMock(...args),
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  apikeyPrincipal: (_c: unknown, apikey: string) => ({ kind: 'apikey', apikey }),
+  withRlsContext: (c: unknown, principal: unknown, run: (client: unknown) => unknown) => {
+    withRlsContextMock(principal)
+    return run({})
+  },
+  queryJson: (_client: unknown, text: string, values: unknown[]) => queryJsonMock(text, values),
+  queryJsonOne: async (_client: unknown, text: string, values: unknown[]) => (await queryJsonMock(text, values))[0] ?? null,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async () => {
@@ -47,23 +54,16 @@ function createContext(auth?: { userId: string }) {
   } as unknown as Context<MiddlewareKeyVariables>
 }
 
-function makeSupabaseChain(result: { data?: unknown, error?: unknown }) {
-  const eqCalls: Array<[string, unknown]> = []
-  const chain: Record<string, any> = {}
-  const self = () => chain
-  chain.from = vi.fn(self)
-  chain.select = vi.fn(self)
-  chain.eq = vi.fn((column: string, value: unknown) => {
-    eqCalls.push([column, value])
-    return chain
-  })
-  chain.range = vi.fn(self)
-  chain.limit = vi.fn(self)
-  chain.order = vi.fn(self)
-  chain.maybeSingle = vi.fn(() => Promise.resolve(result))
-  chain.then = (resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) => Promise.resolve(result).then(resolve, reject)
-  chain.eqCalls = eqCalls
-  return chain
+function mockRows(rows: unknown[] | Error) {
+  if (rows instanceof Error)
+    queryJsonMock.mockRejectedValue(rows)
+  else
+    queryJsonMock.mockResolvedValue(rows)
+}
+
+function lastQuery() {
+  const [text, values] = queryJsonMock.mock.calls.at(-1) as [string, unknown[]]
+  return { text, values }
 }
 
 describe('bundle GET handler', () => {
@@ -81,7 +81,7 @@ describe('bundle GET handler', () => {
 
   it('returns 404 when permission is denied and the app is not visible', async () => {
     checkPermissionMock.mockResolvedValue(false)
-    supabaseApikeyMock.mockReturnValue(makeSupabaseChain({ data: null, error: null }))
+    mockRows([])
 
     const error = await get(createContext({ userId: 'user-1' }), { app_id: 'com.missing.app' }, apikey).catch(caught => caught) as HTTPException
     expect(error).toBeInstanceOf(HTTPException)
@@ -91,7 +91,7 @@ describe('bundle GET handler', () => {
 
   it('returns 403 when permission is denied but the app exists', async () => {
     checkPermissionMock.mockResolvedValue(false)
-    supabaseApikeyMock.mockReturnValue(makeSupabaseChain({ data: { app_id: 'com.example.app' }, error: null }))
+    mockRows([{ app_id: 'com.example.app' }])
 
     const error = await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app' }, apikey).catch(caught => caught) as HTTPException
     expect(error).toBeInstanceOf(HTTPException)
@@ -100,8 +100,7 @@ describe('bundle GET handler', () => {
   })
 
   it('returns 500 when bundle query fails', async () => {
-    const versionsChain = makeSupabaseChain({ data: null, error: { message: 'db down' } })
-    supabaseApikeyMock.mockReturnValue(versionsChain)
+    mockRows(new Error('db down'))
 
     const error = await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app' }, apikey).catch(caught => caught) as HTTPException
     expect(error).toBeInstanceOf(HTTPException)
@@ -113,60 +112,58 @@ describe('bundle GET handler', () => {
     ['bundle rows', [{ id: 1, name: '1.0.0', app_id: 'com.example.app' }]],
     ['an empty array when the app has no bundles', []],
   ])('returns %s on success', async (_label, rows) => {
-    supabaseApikeyMock.mockReturnValue(makeSupabaseChain({ data: rows, error: null }))
+    mockRows(rows)
 
     const response = await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app' }, apikey)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual(rows)
+    expect(withRlsContextMock).toHaveBeenCalledWith({ kind: 'apikey', apikey: 'test-apikey' })
   })
 
   it('excludes deleted bundles by default on version lookup', async () => {
-    const chain = makeSupabaseChain({ data: [], error: null })
-    supabaseApikeyMock.mockReturnValue(chain)
+    mockRows([])
 
     const response = await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app', version: '1.0.0' }, apikey)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual([])
-    expect(chain.eqCalls).toContainEqual(['deleted', false])
+    expect(lastQuery().text).toContain('deleted = false')
+    expect(lastQuery().values).toEqual(['com.example.app', '1.0.0'])
   })
 
   it('include_deleted matches soft-deleted bundles for name occupancy checks', async () => {
     const row = { id: 12, name: '1.0.0', checksum: 'abc', deleted: true, created_at: '2026-01-01T00:00:00.000Z' }
-    const chain = makeSupabaseChain({ data: [row], error: null })
-    supabaseApikeyMock.mockReturnValue(chain)
+    mockRows([row])
 
     const response = await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app', version: '1.0.0', include_deleted: '1' }, apikey)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual([row])
-    expect(chain.eqCalls).not.toContainEqual(['deleted', false])
-    expect(chain.eqCalls).toContainEqual(['name', '1.0.0'])
+    expect(lastQuery().text).not.toContain('deleted = false')
+    expect(lastQuery().text).toContain('name = $2')
+    expect(lastQuery().values).toEqual(['com.example.app', '1.0.0'])
   })
 
   it('returns full rows by default', async () => {
-    const chain = makeSupabaseChain({ data: [], error: null })
-    supabaseApikeyMock.mockReturnValue(chain)
+    mockRows([])
 
     await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app' }, apikey)
-    expect(chain.select).toHaveBeenCalledWith('*')
-    expect(chain.range).toHaveBeenCalledWith(0, 49)
+    expect(lastQuery().text).toMatch(/^SELECT \* FROM public\.app_versions /)
+    expect(lastQuery().values).toEqual(['com.example.app', 50, 0])
   })
 
   it('fields=summary skips manifest and native_packages', async () => {
-    const chain = makeSupabaseChain({ data: [], error: null })
-    supabaseApikeyMock.mockReturnValue(chain)
+    mockRows([])
 
     await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app', fields: 'summary' }, apikey)
-    expect(chain.select).toHaveBeenCalledWith(BUNDLE_SUMMARY_COLUMNS)
+    expect(lastQuery().text).toContain(`SELECT ${BUNDLE_SUMMARY_COLUMNS} FROM`)
     expect(BUNDLE_SUMMARY_COLUMNS).not.toMatch(/manifest,|native_packages/)
     expect(BUNDLE_SUMMARY_COLUMNS).toContain('manifest_count')
   })
 
   it('limit sets the page size and page counts in that size', async () => {
-    const chain = makeSupabaseChain({ data: [], error: null })
-    supabaseApikeyMock.mockReturnValue(chain)
+    mockRows([])
 
     await get(createContext({ userId: 'user-1' }), { app_id: 'com.example.app', limit: '1000', page: '2' }, apikey)
-    expect(chain.range).toHaveBeenCalledWith(2000, 2999)
+    expect(lastQuery().values).toEqual(['com.example.app', 1000, 2000])
   })
 
   it.each(['0', '1001', 'abc'])('rejects limit=%s', async (limit) => {

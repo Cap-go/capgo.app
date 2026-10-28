@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { NativePackage } from '../utils/bundle_compatibility.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import type {
   CompatibilityBundle,
@@ -14,8 +15,9 @@ import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { backgroundTask } from '../utils/utils.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJson, queryJsonOne } from '../utils/pg_rls.ts'
 import { retryWithBackoff } from '../utils/retry.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import {
   COMPATIBILITY_PLATFORMS,
   decideAutoResolves,
@@ -26,7 +28,7 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 const UPDATE_RETRY_ATTEMPTS = 3
 const UPDATE_RETRY_DELAY_MS = 300
-const COMPATIBILITY_DEDUP_CONFLICT = 'app_id,channel_id,platform,current_version_id,previous_version_id,change_occurred_at'
+const COMPATIBILITY_DEDUP_CONFLICT = 'app_id, channel_id, platform, current_version_id, previous_version_id, change_occurred_at'
 // Upper bound on unresolved events scanned per auto-resolve pass: bounds the
 // in-memory result set and the per-row UPDATE blast radius for busy apps. Far
 // above any realistic count of distinct unresolved (version × platform) events;
@@ -37,19 +39,18 @@ type ChannelPlatformScope = 'ios' | 'android' | 'electron'
 
 async function updateChannelsWithRetry(
   c: Context<MiddlewareKeyVariables>,
-  operation: () => Promise<{ error: unknown }>,
+  operation: () => Promise<unknown>,
   context: Record<string, unknown>,
 ) {
-  const { result, lastError } = await retryWithBackoff(operation, {
+  const { lastError } = await retryWithBackoff(operation, {
     attempts: UPDATE_RETRY_ATTEMPTS,
     baseDelayMs: UPDATE_RETRY_DELAY_MS,
-    shouldRetry: result => Boolean(result?.error),
   })
-  if (result?.error || lastError) {
+  if (lastError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'on_channel_update failed after retries',
-      error: result?.error ?? lastError,
+      error: lastError,
       ...context,
     })
   }
@@ -57,15 +58,17 @@ async function updateChannelsWithRetry(
 
 async function getCurrentChannel(
   c: Context<MiddlewareKeyVariables>,
+  pg: PgClient,
   channelId: number,
 ): Promise<Pick<ChannelRow, 'id' | 'app_id' | 'public' | 'ios' | 'android' | 'electron' | 'updated_at' | 'created_at'> | null> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('channels')
-    .select('id, app_id, public, ios, android, electron, updated_at, created_at')
-    .eq('id', channelId)
-    .maybeSingle()
-
-  if (error) {
+  try {
+    return await queryJsonOne<Pick<ChannelRow, 'id' | 'app_id' | 'public' | 'ios' | 'android' | 'electron' | 'updated_at' | 'created_at'>>(
+      pg,
+      'SELECT id, app_id, public, ios, android, electron, updated_at, created_at FROM public.channels WHERE id = $1',
+      [channelId],
+    )
+  }
+  catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to reload current channel state',
@@ -74,32 +77,31 @@ async function getCurrentChannel(
     })
     return null
   }
-
-  return data
 }
 
 async function getCurrentPublicWinner(
   c: Context<MiddlewareKeyVariables>,
+  pg: PgClient,
   record: Pick<ChannelRow, 'id' | 'app_id'>,
   scope: ChannelPlatformScope,
 ) {
-  const currentRecord = await getCurrentChannel(c, record.id)
+  const currentRecord = await getCurrentChannel(c, pg, record.id)
   if (!currentRecord?.public || !currentRecord[scope])
     return null
 
-  const { data: winner, error } = await supabaseAdmin(c)
-    .from('channels')
-    .select('id')
-    .eq('app_id', currentRecord.app_id)
-    .eq('public', true)
-    .eq(scope, true)
-    .order('updated_at', { ascending: false })
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (error) {
+  let winner: { id: number } | null
+  try {
+    // scope is one of the fixed platform column names, never request input.
+    winner = await queryJsonOne<{ id: number }>(
+      pg,
+      `SELECT id FROM public.channels
+      WHERE app_id = $1 AND public = true AND ${scope} = true
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+      LIMIT 1`,
+      [currentRecord.app_id],
+    )
+  }
+  catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to resolve current public channel winner',
@@ -123,28 +125,31 @@ async function getCurrentPublicWinner(
  */
 async function loadCompatibilityBundle(
   c: Context<MiddlewareKeyVariables>,
+  pg: PgClient,
   versionId: number | null | undefined,
 ): Promise<CompatibilityBundle | null> {
   if (versionId == null)
     return null
 
-  const { data, error } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id, name, native_packages')
-    .eq('id', versionId)
-    .maybeSingle()
-
-  if (error || !data) {
-    if (error) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'Failed to load bundle for compatibility event',
-        error,
-        versionId,
-      })
-    }
+  let data: { id: number, name: string, native_packages: unknown } | null
+  try {
+    data = await queryJsonOne<{ id: number, name: string, native_packages: unknown }>(
+      pg,
+      'SELECT id, name, native_packages FROM public.app_versions WHERE id = $1',
+      [versionId],
+    )
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to load bundle for compatibility event',
+      error,
+      versionId,
+    })
     return null
   }
+  if (!data)
+    return null
 
   return {
     id: data.id,
@@ -187,24 +192,22 @@ function sanitizeNativePackages(raw: unknown): NativePackage[] | null {
  */
 async function getPreviousDefaultChannel(
   c: Context<MiddlewareKeyVariables>,
+  pg: PgClient,
   appId: string,
   scope: ChannelPlatformScope,
   excludeChannelId: number,
 ): Promise<{ id: number, version: number | null } | null> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('channels')
-    .select('id, version')
-    .eq('app_id', appId)
-    .eq('public', true)
-    .eq(scope, true)
-    .neq('id', excludeChannelId)
-    .order('updated_at', { ascending: false })
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (error) {
+  try {
+    return await queryJsonOne<{ id: number, version: number | null }>(
+      pg,
+      `SELECT id, version FROM public.channels
+      WHERE app_id = $1 AND public = true AND ${scope} = true AND id <> $2
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+      LIMIT 1`,
+      [appId, excludeChannelId],
+    )
+  }
+  catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to resolve previous default channel for compatibility event',
@@ -214,8 +217,6 @@ async function getPreviousDefaultChannel(
     })
     return null
   }
-
-  return data ?? null
 }
 
 /**
@@ -230,9 +231,12 @@ async function persistCompatibilityEvents(
   oldRecord: ChannelRow | undefined,
   previousDefaultChannelByPlatform: Partial<Record<CompatibilityPlatform, { id: number, version: number | null } | null>>,
 ): Promise<void> {
+  let pg: PgClient | undefined
   try {
+    const db = await getPgClient(c)
+    pg = db
     // The new default's current bundle (candidate shipped OTA).
-    const currentBundle = await loadCompatibilityBundle(c, record.version)
+    const currentBundle = await loadCompatibilityBundle(c, db, record.version)
 
     // Resolve a previous-default candidate per platform the channel is default on.
     // Switch-aware: a platform only contributes when the record is the CURRENT
@@ -254,7 +258,7 @@ async function persistCompatibilityEvents(
           previousDefaults.push({
             platform,
             source: 'default_channel_version_changed',
-            bundle: await loadCompatibilityBundle(c, oldRecord.version),
+            bundle: await loadCompatibilityBundle(c, db, oldRecord.version),
           })
         }
       }
@@ -267,7 +271,7 @@ async function persistCompatibilityEvents(
           previousDefaults.push({
             platform,
             source: 'default_channel_changed',
-            bundle: await loadCompatibilityBundle(c, demotedChannel.version),
+            bundle: await loadCompatibilityBundle(c, db, demotedChannel.version),
           })
         }
       }
@@ -275,15 +279,19 @@ async function persistCompatibilityEvents(
 
     // Unresolved events for this channel, so the decision layer can recognize a
     // revert to a known baseline and skip raising a mirror event for it.
-    const { data: channelUnresolved, error: channelUnresolvedError } = await supabaseAdmin(c)
-      .from('compatibility_events')
-      .select('id, platform, channel_id, previous_version_id, previous_version_name, current_version_id')
-      .eq('app_id', record.app_id)
-      .eq('channel_id', record.id)
-      .is('resolved_at', null)
-      .order('id', { ascending: false })
-      .limit(COMPATIBILITY_AUTO_RESOLVE_SCAN_LIMIT)
-    if (channelUnresolvedError) {
+    let channelUnresolved: UnresolvedCompatibilityEvent[] | null = null
+    try {
+      channelUnresolved = await queryJson<UnresolvedCompatibilityEvent>(
+        db,
+        `SELECT id, platform, channel_id, previous_version_id, previous_version_name, current_version_id
+        FROM public.compatibility_events
+        WHERE app_id = $1 AND channel_id = $2 AND resolved_at IS NULL
+        ORDER BY id DESC
+        LIMIT $3`,
+        [record.app_id, record.id, COMPATIBILITY_AUTO_RESOLVE_SCAN_LIMIT],
+      )
+    }
+    catch (channelUnresolvedError) {
       cloudlogErr({
         requestId: c.get('requestId'),
         message: 'Failed to load unresolved compatibility events for revert detection',
@@ -298,20 +306,18 @@ async function persistCompatibilityEvents(
       currentBundle,
       previousDefaults,
       changeOccurredAt: record.updated_at ?? new Date().toISOString(),
-      unresolvedEvents: (channelUnresolved ?? []) as UnresolvedCompatibilityEvent[],
+      unresolvedEvents: channelUnresolved ?? [],
     })
 
     for (const event of events) {
       await updateChannelsWithRetry(
         c,
-        async () => await supabaseAdmin(c)
-          .from('compatibility_events')
-          .upsert(event as CompatibilityEventInsert, { onConflict: COMPATIBILITY_DEDUP_CONFLICT }),
+        async () => await upsertCompatibilityEvent(db, event),
         { app_id: event.app_id, channel_id: event.channel_id, platform: event.platform, op: 'compatibility_event_upsert' },
       )
     }
 
-    await autoResolveCompatibilityEvents(c, record, currentBundle, previousDefaults)
+    await autoResolveCompatibilityEvents(c, db, record, currentBundle, previousDefaults)
   }
   catch (error) {
     cloudlogErr({
@@ -322,6 +328,41 @@ async function persistCompatibilityEvents(
       channel_id: record.id,
     })
   }
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
+}
+
+function upsertCompatibilityEvent(pg: PgClient, event: CompatibilityEventInsert) {
+  return pg.query(
+    `INSERT INTO public.compatibility_events (
+      org_id, app_id, source, platform, channel_id, channel_name, current_version_id, current_version_name,
+      previous_version_id, previous_version_name, offenders, change_occurred_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+    ON CONFLICT (${COMPATIBILITY_DEDUP_CONFLICT}) DO UPDATE SET
+      org_id = EXCLUDED.org_id,
+      source = EXCLUDED.source,
+      channel_name = EXCLUDED.channel_name,
+      current_version_name = EXCLUDED.current_version_name,
+      previous_version_name = EXCLUDED.previous_version_name,
+      offenders = EXCLUDED.offenders`,
+    [
+      event.org_id,
+      event.app_id,
+      event.source,
+      event.platform,
+      event.channel_id,
+      event.channel_name,
+      event.current_version_id,
+      event.current_version_name,
+      event.previous_version_id,
+      event.previous_version_name,
+      JSON.stringify(event.offenders),
+      event.change_occurred_at,
+    ],
+  )
 }
 
 /**
@@ -331,6 +372,7 @@ async function persistCompatibilityEvents(
  */
 async function autoResolveCompatibilityEvents(
   c: Context<MiddlewareKeyVariables>,
+  pg: PgClient,
   record: ChannelRow,
   currentBundle: CompatibilityBundle | null,
   previousDefaults: readonly PreviousDefault[],
@@ -346,25 +388,29 @@ async function autoResolveCompatibilityEvents(
   if (currentDefaultByPlatform.length === 0)
     return
 
-  const { data: unresolved, error } = await supabaseAdmin(c)
-    .from('compatibility_events')
-    .select('id, platform, channel_id, previous_version_id, previous_version_name, current_version_id')
-    .eq('app_id', record.app_id)
-    .is('resolved_at', null)
-    .order('id', { ascending: false })
-    .limit(COMPATIBILITY_AUTO_RESOLVE_SCAN_LIMIT)
-
-  if (error || !unresolved || unresolved.length === 0) {
-    if (error) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'Failed to load unresolved compatibility events for auto-resolve',
-        error,
-        app_id: record.app_id,
-      })
-    }
+  let unresolved: UnresolvedCompatibilityEvent[]
+  try {
+    unresolved = await queryJson<UnresolvedCompatibilityEvent>(
+      pg,
+      `SELECT id, platform, channel_id, previous_version_id, previous_version_name, current_version_id
+      FROM public.compatibility_events
+      WHERE app_id = $1 AND resolved_at IS NULL
+      ORDER BY id DESC
+      LIMIT $2`,
+      [record.app_id, COMPATIBILITY_AUTO_RESOLVE_SCAN_LIMIT],
+    )
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'Failed to load unresolved compatibility events for auto-resolve',
+      error,
+      app_id: record.app_id,
+    })
     return
   }
+  if (unresolved.length === 0)
+    return
 
   // Resolve baseline bundles referenced by the unresolved events.
   const bundlesById = new Map<number, CompatibilityBundle>()
@@ -374,10 +420,10 @@ async function autoResolveCompatibilityEvents(
     if (previous.bundle)
       bundlesById.set(previous.bundle.id, previous.bundle)
   }
-  const events = unresolved as UnresolvedCompatibilityEvent[]
+  const events = unresolved
   for (const event of events) {
     if (event.previous_version_id != null && !bundlesById.has(event.previous_version_id)) {
-      const loaded = await loadCompatibilityBundle(c, event.previous_version_id)
+      const loaded = await loadCompatibilityBundle(c, pg, event.previous_version_id)
       if (loaded)
         bundlesById.set(loaded.id, loaded)
     }
@@ -388,16 +434,12 @@ async function autoResolveCompatibilityEvents(
   for (const resolve of resolves) {
     await updateChannelsWithRetry(
       c,
-      async () => await supabaseAdmin(c)
-        .from('compatibility_events')
-        .update({
-          resolved_at: new Date().toISOString(),
-          resolved_by: null,
-          resolution_kind: 'auto_compatible',
-          resolution_note: resolve.note,
-        })
-        .eq('id', resolve.id)
-        .is('resolved_at', null),
+      async () => await pg.query(
+        `UPDATE public.compatibility_events
+        SET resolved_at = $1, resolved_by = NULL, resolution_kind = 'auto_compatible', resolution_note = $2
+        WHERE id = $3 AND resolved_at IS NULL`,
+        [new Date().toISOString(), resolve.note, resolve.id],
+      ),
       { event_id: resolve.id, op: 'compatibility_event_auto_resolve' },
     )
   }
@@ -421,55 +463,27 @@ app.post('/', middlewareAPISecret, triggerValidator('channels', 'UPDATE'), async
   // demotion update runs. After demotion it would no longer be `public = true`.
   const previousDefaultChannelByPlatform: Partial<Record<CompatibilityPlatform, { id: number, version: number | null } | null>> = {}
 
-  if (record.public && record.ios) {
-    const currentWinner = await getCurrentPublicWinner(c, record, 'ios')
-    if (currentWinner) {
-      previousDefaultChannelByPlatform.ios = await getPreviousDefaultChannel(c, currentWinner.app_id, 'ios', record.id)
-      await updateChannelsWithRetry(
-        c,
-        async () => await supabaseAdmin(c)
-          .from('channels')
-          .update({ public: false })
-          .eq('app_id', currentWinner.app_id)
-          .eq('ios', true)
-          .neq('id', record.id),
-        { app_id: currentWinner.app_id, record_id: record.id, scope: 'ios' },
-      )
+  const pg = await getPgClient(c)
+  try {
+    for (const scope of ['ios', 'android', 'electron'] as const) {
+      if (!record.public || !record[scope])
+        continue
+      const currentWinner = await getCurrentPublicWinner(c, pg, record, scope)
+      if (currentWinner) {
+        previousDefaultChannelByPlatform[scope] = await getPreviousDefaultChannel(c, pg, currentWinner.app_id, scope, record.id)
+        await updateChannelsWithRetry(
+          c,
+          async () => await pg.query(
+            `UPDATE public.channels SET public = false WHERE app_id = $1 AND ${scope} = true AND id <> $2`,
+            [currentWinner.app_id, record.id],
+          ),
+          { app_id: currentWinner.app_id, record_id: record.id, scope },
+        )
+      }
     }
   }
-
-  if (record.public && record.android) {
-    const currentWinner = await getCurrentPublicWinner(c, record, 'android')
-    if (currentWinner) {
-      previousDefaultChannelByPlatform.android = await getPreviousDefaultChannel(c, currentWinner.app_id, 'android', record.id)
-      await updateChannelsWithRetry(
-        c,
-        async () => await supabaseAdmin(c)
-          .from('channels')
-          .update({ public: false })
-          .eq('app_id', currentWinner.app_id)
-          .eq('android', true)
-          .neq('id', record.id),
-        { app_id: currentWinner.app_id, record_id: record.id, scope: 'android' },
-      )
-    }
-  }
-
-  if (record.public && record.electron) {
-    const currentWinner = await getCurrentPublicWinner(c, record, 'electron')
-    if (currentWinner) {
-      previousDefaultChannelByPlatform.electron = await getPreviousDefaultChannel(c, currentWinner.app_id, 'electron', record.id)
-      await updateChannelsWithRetry(
-        c,
-        async () => await supabaseAdmin(c)
-          .from('channels')
-          .update({ public: false })
-          .eq('app_id', currentWinner.app_id)
-          .eq('electron', true)
-          .neq('id', record.id),
-        { app_id: currentWinner.app_id, record_id: record.id, scope: 'electron' },
-      )
-    }
+  finally {
+    closeClient(c, pg)
   }
 
   // Compatibility work can scan hundreds of rows; run after the demotion updates

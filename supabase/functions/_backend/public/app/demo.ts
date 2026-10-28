@@ -5,8 +5,8 @@ import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { beginWriteTransaction, closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { queryJson } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 
 /** Request body for creating a demo app */
 export interface CreateDemoApp {
@@ -765,30 +765,45 @@ async function seedOnboardingDemoDataInTransaction(
   }
 }
 
+type AppRow = Database['public']['Tables']['apps']['Row']
+
+async function queryApps<T>(c: Context<MiddlewareKeyVariables>, text: string, values: unknown[]): Promise<{ data: T[] | null, error: unknown }> {
+  let pgClient: PgClient | undefined
+  try {
+    pgClient = await getPgClient(c)
+    return { data: await queryJson<T>(pgClient, text, values), error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+  finally {
+    if (pgClient)
+      await closeClient(c, pgClient)
+  }
+}
+
 async function getExistingPendingApp(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseAdmin>,
   ownerOrg: string,
   appId: string,
 ) {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('*')
-    .eq('owner_org', ownerOrg)
-    .eq('app_id', appId)
-    .eq('need_onboarding', true)
-    .single()
+  // LIMIT 2 keeps .single()/.maybeSingle(): more than one row was an error
+  const { data: pendingApps, error } = await queryApps<AppRow>(
+    c,
+    'SELECT * FROM public.apps WHERE owner_org = $1 AND app_id = $2 AND need_onboarding = true LIMIT 2',
+    [ownerOrg, appId],
+  )
 
-  if (!error && data) {
-    return data
+  if (!error && pendingApps?.length === 1) {
+    return pendingApps[0]
   }
 
-  const { data: existingApp, error: existingAppError } = await supabase
-    .from('apps')
-    .select('id, need_onboarding')
-    .eq('owner_org', ownerOrg)
-    .eq('app_id', appId)
-    .maybeSingle()
+  const { data: existingApps, error: existingAppError } = await queryApps<Pick<AppRow, 'id' | 'need_onboarding'>>(
+    c,
+    'SELECT id, need_onboarding FROM public.apps WHERE owner_org = $1 AND app_id = $2 LIMIT 2',
+    [ownerOrg, appId],
+  )
+  const existingApp = existingApps?.length === 1 ? existingApps[0] : null
 
   if (!existingAppError && existingApp && existingApp.need_onboarding !== true) {
     cloudlog({ requestId: c.get('requestId'), message: 'Attempted demo seeding on completed app', app_id: appId })
@@ -801,16 +816,13 @@ async function getExistingPendingApp(
 
 async function getLatestPendingAppForOrg(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseAdmin>,
   ownerOrg: string,
 ) {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('*')
-    .eq('owner_org', ownerOrg)
-    .eq('need_onboarding', true)
-    .order('created_at', { ascending: false })
-    .limit(2)
+  const { data, error } = await queryApps<AppRow>(
+    c,
+    'SELECT * FROM public.apps WHERE owner_org = $1 AND need_onboarding = true ORDER BY created_at DESC LIMIT 2',
+    [ownerOrg],
+  )
 
   if (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'Error loading pending onboarding app for org', error, owner_org: ownerOrg })
@@ -869,16 +881,15 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { org_id: body.owner_org })
   }
 
-  const supabase = supabaseAdmin(c)
   const requestedAppId = body.app_id?.trim()
   const resolvedApp = requestedAppId
     ? { app_id: requestedAppId }
-    : await getLatestPendingAppForOrg(c, supabase, body.owner_org)
+    : await getLatestPendingAppForOrg(c, body.owner_org)
   const lockedAppId = resolvedApp.app_id
   const onboardingLock = await lockOnboardingApp(c, lockedAppId)
 
   try {
-    const appData = await getExistingPendingApp(c, supabase, body.owner_org, lockedAppId)
+    const appData = await getExistingPendingApp(c, body.owner_org, lockedAppId)
     if (!appData.id) {
       throw simpleError('cannot_find_app', 'Cannot find app for demo onboarding', { owner_org: body.owner_org, app_id: lockedAppId })
     }

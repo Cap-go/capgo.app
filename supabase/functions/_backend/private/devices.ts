@@ -12,7 +12,7 @@ import { appIdSchema, cursorSchema, deviceIdSchema, hasInvalidQueryLimitInput, h
 import { checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { countDevices, countInstallSources, readDevices } from '../utils/stats.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
+import { authPrincipal, withRlsContext } from '../utils/pg_rls.ts'
 import { Constants } from '../utils/supabase.types.ts'
 import { parseVersionCompareFilter, VERSION_COMPARE_OPS } from '../utils/versionCompare.ts'
 
@@ -165,22 +165,29 @@ async function parseAuthorizedDevicesBody(c: Context<MiddlewareKeyVariables>, sc
 async function resolveOverrideDeviceIds(c: Context<MiddlewareKeyVariables>, body: DataDevice): Promise<string[] | undefined> {
   if (!body.overrides && body.overrideChannelId === undefined)
     return undefined
-  let query = supabaseWithAuth(c, c.get('auth')!)
-    .from('channel_devices')
-    .select('device_id')
-    .eq('app_id', body.appId)
-  if (body.overrideChannelId !== undefined)
-    query = query.eq('channel_id', body.overrideChannelId)
   const requested = body.devicesId ?? body.deviceIds
-  if (requested?.length)
-    query = query.in('device_id', requested)
-  // One row past the ceiling tells "exactly at the limit" from "over it".
-  const { data, error } = await query.order('device_id').limit(MAX_OVERRIDE_DEVICE_IDS + 1)
-  if (error)
+  let data: { device_id: string }[]
+  try {
+    data = await withRlsContext(c, authPrincipal(c, c.get('auth')!), async (client) => {
+      // One row past the ceiling tells "exactly at the limit" from "over it".
+      const { rows } = await client.query<{ device_id: string }>(
+        `SELECT device_id FROM public.channel_devices
+        WHERE app_id = $1
+          AND ($2::bigint IS NULL OR channel_id = $2::bigint)
+          AND ($3::text[] IS NULL OR device_id = ANY($3::text[]))
+        ORDER BY device_id
+        LIMIT $4`,
+        [body.appId, body.overrideChannelId ?? null, requested?.length ? requested : null, MAX_OVERRIDE_DEVICE_IDS + 1],
+      )
+      return rows
+    })
+  }
+  catch (error) {
     throw simpleError('cannot_read_device_overrides', 'Cannot read device overrides', { error })
-  if ((data?.length ?? 0) > MAX_OVERRIDE_DEVICE_IDS)
+  }
+  if (data.length > MAX_OVERRIDE_DEVICE_IDS)
     throw simpleError('too_many_device_overrides', `Filtering by forced devices supports up to ${MAX_OVERRIDE_DEVICE_IDS} devices`, { app_id: body.appId })
-  return (data ?? []).map(row => row.device_id)
+  return data.map(row => row.device_id)
 }
 
 function toReadDevicesParams(body: z.infer<typeof devicesBodySchema>, limit?: number): { params: ReadDevicesParams, customIdMode: boolean } {

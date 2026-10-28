@@ -245,36 +245,22 @@ describe('rollout auto-pause channel loading', () => {
     const rangeCalls: Array<[number, number]> = []
     const pages = [pageOne, pageTwo]
 
-    const gtCalls: Array<[string, number]> = []
-    const supabase = {
-      from: () => {
-        const query = {
-          select: () => query,
-          eq: () => query,
-          gt: (column: string, value: number) => {
-            gtCalls.push([column, value])
-            return query
-          },
-          not: () => query,
-          is: () => query,
-          order: () => query,
-          range: (from: number, to: number) => {
-            rangeCalls.push([from, to])
-            return Promise.resolve({ data: pages.shift() ?? [], error: null })
-          },
-        }
-        return query
+    const queries: string[] = []
+    const pg = {
+      query: async (text: string, values: unknown[] = []) => {
+        queries.push(text)
+        rangeCalls.push([values[1] as number, (values[1] as number) + (values[0] as number) - 1])
+        return { rows: (pages.shift() ?? []).map(row => ({ row })) }
       },
     }
 
-    const result = await __rolloutAutoPauseTestUtils__.loadAutoPauseChannels(supabase as any)
+    const result = await __rolloutAutoPauseTestUtils__.loadAutoPauseChannels(pg)
 
     expect(result.error).toBeNull()
     expect(result.data).toHaveLength(1002)
-    expect(gtCalls).toEqual([
-      ['rollout_percentage_bps', 0],
-      ['rollout_percentage_bps', 0],
-    ])
+    expect(queries).toHaveLength(2)
+    for (const query of queries)
+      expect(query).toContain('ch.rollout_percentage_bps > 0')
     expect(rangeCalls).toEqual([[0, 999], [1000, 1999]])
   })
 })

@@ -77,17 +77,25 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', async () => {
 vi.mock('../supabase/functions/_backend/utils/pg.ts', async () => ({
   ...(await import('./helpers/pg-checkout-release-mocks.ts')),
   closeClient: closeClientMock,
-  getPgClient: getPgClientMock,
+  // on_user_create reads trial plan names with its own client; keep that out of the lifecycle query mocks.
+  getPgClient: (...args: unknown[]) => {
+    const client = getPgClientMock(...(args as []))
+    const query = client.query
+    client.query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql === 'SELECT name FROM public.plans') {
+        bentoState.plansLookups++
+        return { rows: [{ name: 'Solo' }, { name: 'Team' }] }
+      }
+      return query(sql, params)
+    })
+    return client
+  },
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   createApiKey: createApiKeyMock,
   supabaseAdmin: vi.fn(() => ({
     auth: { admin: { getUserById: getUserByIdMock } },
-    from: () => ({ select: async () => {
-      bentoState.plansLookups++
-      return { data: [{ name: 'Solo' }, { name: 'Team' }], error: null }
-    } }),
   })),
 }))
 

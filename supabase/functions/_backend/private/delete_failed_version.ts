@@ -6,12 +6,19 @@ import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { s3 } from '../utils/s3.ts'
-import { supabaseAdmin, supabaseApikey } from '../utils/supabase.ts'
+import type { Database } from '../utils/supabase.types.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../utils/pg_rls.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 
 interface DataUpload {
   app_id: string
   name: string
+}
+
+// Same shape as the PostgREST `.single()` error.
+function singleRowError(rows: number) {
+  return { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned', details: `The result contains ${rows} rows` }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -34,11 +41,19 @@ app.delete('/', middlewareKey(), async (c) => {
     return quickError(401, 'not_authorized', 'You can\'t access this app', { app_id: body.app_id })
   }
 
-  const { error: errorApp } = await supabaseApikey(c, capgkey)
-    .from('apps')
-    .select('app_id, owner_org')
-    .eq('app_id', body.app_id)
-    .single()
+  let errorApp: unknown = null
+  try {
+    const apps = await withRlsContext(c, apikeyPrincipal(c, capgkey), client => queryJson<{ app_id: string, owner_org: string }>(
+      client,
+      'SELECT app_id, owner_org FROM public.apps WHERE app_id = $1 LIMIT 2',
+      [body.app_id],
+    ))
+    if (apps.length !== 1)
+      errorApp = singleRowError(apps.length)
+  }
+  catch (error) {
+    errorApp = error
+  }
   if (errorApp) {
     return quickError(404, 'app_not_found', 'Error App not found', { errorApp })
   }
@@ -50,15 +65,25 @@ app.delete('/', middlewareKey(), async (c) => {
     return quickError(400, 'error_bundle_name_missing', 'Error bundle name missing', { body })
   }
 
-  const { data: version, error: errorVersion } = await supabaseApikey(c, capgkey)
-    .from('app_versions')
-    .select('*')
-    .eq('name', body.name)
-    .eq('app_id', body.app_id)
-    .eq('storage_provider', 'r2-direct')
-    .eq('deleted', false)
-    .single()
-  if (errorVersion) {
+  let version: Database['public']['Tables']['app_versions']['Row'] | undefined
+  let errorVersion: unknown = null
+  try {
+    const versions = await withRlsContext(c, apikeyPrincipal(c, capgkey), client => queryJson<Database['public']['Tables']['app_versions']['Row']>(
+      client,
+      `SELECT * FROM public.app_versions
+      WHERE name = $1 AND app_id = $2 AND storage_provider = 'r2-direct' AND deleted = false
+      LIMIT 2`,
+      [body.name, body.app_id],
+    ))
+    if (versions.length === 1)
+      version = versions[0]
+    else
+      errorVersion = singleRowError(versions.length)
+  }
+  catch (error) {
+    errorVersion = error
+  }
+  if (errorVersion || !version) {
     throw simpleError('error_already_deleted', 'Already deleted', { errorVersion })
   }
   await deleteFailedVersionRow(c, version)
@@ -95,20 +120,26 @@ export async function deleteFailedVersionRow(
   }
 
   // Hard delete after upload-flow checks; upload keys lack bundle.delete RLS
-  let query = supabaseAdmin(c)
-    .from('app_versions')
-    .delete()
-    .eq('id', version.id)
-    .eq('storage_provider', 'r2-direct')
-    .eq('deleted', false)
-  query = version.r2_path ? query.eq('r2_path', version.r2_path) : query.is('r2_path', null)
-  if (options.expectedUpdatedAt)
-    query = query.eq('updated_at', options.expectedUpdatedAt)
-  const { data: deletedRows, error: errorDelete } = await query.select('id')
-  if (errorDelete) {
+  let deletedCount = 0
+  const pg = await getPgClient(c)
+  try {
+    const result = await pg.query(
+      `DELETE FROM public.app_versions
+      WHERE id = $1 AND storage_provider = 'r2-direct' AND deleted = false
+        AND r2_path IS NOT DISTINCT FROM $2::text
+        AND ($3::timestamptz IS NULL OR updated_at = $3::timestamptz)
+      RETURNING id`,
+      [version.id, version.r2_path || null, options.expectedUpdatedAt || null],
+    )
+    deletedCount = result.rowCount ?? 0
+  }
+  catch (errorDelete) {
     throw simpleError('error_deleting_version', 'Error deleting version', { errorDelete })
   }
-  if (!deletedRows?.length) {
+  finally {
+    closeClient(c, pg)
+  }
+  if (!deletedCount) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'delete failed version skipped: no unfinished upload row matched',

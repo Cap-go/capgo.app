@@ -30,29 +30,48 @@ vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({ midd
   await next()
 } }))
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: mocks.permission, checkPermissionPg: mocks.permissionPg }))
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseWithAuth: () => ({ from: mocks.from }) }))
+// Caller reads run through withRlsContext / withRlsTransaction; the fake client records the
+// SQL, values and principal, and answers by table like the PostgREST mock it replaces.
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async original => ({
+  ...await original<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>(),
+  withRlsTransaction: async (_pg: unknown, principal: unknown, run: (client: any) => unknown) => run(callerClient(principal)),
+  withRlsContext: async (_c: unknown, principal: unknown, run: (client: any, drizzle: any) => unknown) => run(callerClient(principal), {}),
+}))
 vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({ readDevices: mocks.devices, readStats: mocks.logs }))
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: () => ({}), getDrizzleClient: () => ({ transaction: mocks.transaction }), closeClient: mocks.close }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', async original => ({ ...await original<typeof import('../supabase/functions/_backend/utils/utils.ts')>(), backgroundTask: async (_c: any, task: any) => await task }))
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: mocks.track }))
 
-function query(table: string) {
-  const calls: any[] = []
-  mocks.queries.push({ table, calls })
-  const builder: any = {}
-  for (const method of ['select', 'eq', 'neq', 'not', 'or', 'gt', 'in', 'limit']) {
-    builder[method] = (...args: any[]) => {
-      calls.push([method, ...args])
-      return builder
-    }
+async function answer(table: string, sql: string): Promise<any[]> {
+  if (table === 'orgs') {
+    const { data, error } = await mocks.billingRead()
+    if (error)
+      throw error
+    return data ? [data] : []
   }
-  builder.single = async () => ({ data: mocks.row, error: mocks.errors[table] ? new Error('Unavailable') : null })
-  builder.maybeSingle = () => mocks.billingRead()
-  builder.then = (resolve: any, reject: any) => Promise.resolve({
-    data: table === 'channels' ? mocks.channels : calls.some(call => String(call[1]).includes('!inner')) ? mocks.archive : mocks.versions,
-    error: mocks.errors[table] ? new Error('Unavailable') : null,
-  }).then(resolve, reject)
-  return builder
+  if (mocks.errors[table])
+    throw new Error('Unavailable')
+  if (table === 'apps')
+    return [mocks.row]
+  if (table === 'channels')
+    return mocks.channels
+  return sql.includes('app_versions_meta') ? mocks.archive : mocks.versions
+}
+function callerClient(principal: unknown) {
+  return {
+    async query(text: string, values: unknown[] = []) {
+      // queryJson wraps the statement in `WITH q AS (...) SELECT to_json(q.*) AS row FROM q`.
+      const wrapped = text.match(/^WITH q AS \(([\s\S]*)\) SELECT pg_catalog\.to_json\(q\.\*\) AS row FROM q$/)
+      const sql = wrapped ? wrapped[1] : text
+      // The billing read embeds stripe_info in a subselect; the outer table is orgs.
+      const tables = [...sql.matchAll(/FROM public\.(\w+)/g)].map(match => match[1])
+      const table = tables.includes('orgs') ? 'orgs' : tables[0]
+      mocks.queries.push({ table, sql, values, principal })
+      mocks.from(table)
+      const rows = await answer(table, sql)
+      return { rows: wrapped ? rows.map(row => ({ row })) : rows }
+    },
+  }
 }
 function lockedRow(onboarding: unknown, ownerOrg = 'org') {
   mocks.execute.mockResolvedValueOnce({ rows: [{ owner_org: ownerOrg }] })
@@ -80,7 +99,6 @@ describe('onboarding progress endpoint', () => {
     mocks.archive = []
     mocks.errors = {}
     mocks.queries = []
-    mocks.from.mockImplementation(query)
     mocks.permission.mockResolvedValue(true)
     mocks.permissionPg.mockResolvedValue(true)
     mocks.devices.mockResolvedValue({ data: [] })
@@ -90,7 +108,9 @@ describe('onboarding progress endpoint', () => {
   })
   it.each([0, 1, 2, 3, 4, 5, 9])('always reads the exact app at N=%s and rotates extra checks', async (N) => {
     expect((await request(N)).status).toBe(200)
-    expect(mocks.queries[0]).toMatchObject({ table: 'apps', calls: [['select', 'onboarding, created_at, owner_org'], ['eq', 'app_id', 'com.test.onboarding']] })
+    expect(mocks.queries[0]).toMatchObject({ table: 'apps', values: ['com.test.onboarding'], principal: { kind: 'jwt', userId: mocks.auth.userId } })
+    expect(mocks.queries[0].sql).toContain('SELECT onboarding, created_at, owner_org FROM public.apps WHERE app_id = $1')
+    expect(mocks.queries.every(q => q.principal.kind === 'jwt')).toBe(true)
     expect(mocks.from.mock.calls.filter(call => call[0] === 'channels')).toHaveLength(N % 5 === 0 ? 1 : 0)
     expect(mocks.devices).toHaveBeenCalledTimes(N % 5 === 1 ? 1 : 0)
     expect(mocks.logs).toHaveBeenCalledTimes(N % 5 === 3 ? 1 : 0)
@@ -100,10 +120,10 @@ describe('onboarding progress endpoint', () => {
     expect((await request(0, true)).status).toBe(200)
     expect(mocks.devices).toHaveBeenCalledWith(expect.anything(), { app_id: 'com.test.onboarding', limit: 1 }, false)
     expect(mocks.logs).toHaveBeenCalledWith(expect.anything(), { app_id: 'com.test.onboarding', actions: ['set'], start_date: mocks.row.created_at, limit: 10 }, false)
-    expect(mocks.queries.some(q => q.calls.some((call: any[]) => call.includes('add_code')))).toBe(false)
+    expect(mocks.queries.some(q => q.sql.includes('add_code') || q.values.includes('add_code'))).toBe(false)
   })
   it.each([3, 4])('avoids the write transaction for unchanged v%s CLI progress', async (version) => {
-    mocks.auth.authType = 'apikey'
+    mocks.auth = { ...mocks.auth, authType: 'apikey', apikey: { key: 'fixture-key' } }
     const steps = { login_cli_mcp: { status: 'done' }, add_channel: { status: 'done' }, add_code: { status: 'done' }, run_device: { status: 'done' }, upload_bundle: { status: 'done' }, test_update: { status: 'done' } }
     mocks.row.onboarding = { setup: { todo_list_version: version, source: 'cli', ...(version === 4 ? { ota_todo_list_version: '1' } : {}), steps: version === 4 ? { ota: steps } : steps } }
     mocks.channels = [{ id: 'channel' }]
@@ -142,7 +162,7 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.transaction).not.toHaveBeenCalled()
   })
   it('persists a source-only promotion when CLI login was already done', async () => {
-    mocks.auth.authType = 'apikey'
+    mocks.auth = { ...mocks.auth, authType: 'apikey', apikey: { key: 'fixture-key' } }
     mocks.row.onboarding = { setup: { todo_list_version: 3, source: 'ai', steps: { login_cli_mcp: { status: 'done', at: 'old' } } } }
     lockedRow(mocks.row.onboarding)
     const result = await (await request(4)).json() as any
@@ -151,7 +171,7 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.transaction).toHaveBeenCalledOnce()
   })
   it('still persists source promotion and deleted channels after the preflight', async () => {
-    mocks.auth.authType = 'apikey'
+    mocks.auth = { ...mocks.auth, authType: 'apikey', apikey: { key: 'fixture-key' } }
     mocks.row.onboarding = { setup: { todo_list_version: 3, source: 'ai', steps: { login_cli_mcp: { status: 'done', at: 'old' }, add_channel: { status: 'done' } } } }
     lockedRow(mocks.row.onboarding)
     const result = await (await request(0)).json() as any
@@ -188,7 +208,8 @@ describe('onboarding progress endpoint', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store')
     expect((await response.json() as any).billing).toEqual({ status: 'available', orgId: mocks.row.owner_org, orgCreatedAt: '2026-10-01T09:00:00Z', trialEndsAt: '2026-11-01T12:34:56Z', hasPaid, isPaying, hasCredits })
     expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), 'org.read_billing', { orgId: mocks.row.owner_org })
-    expect(mocks.queries.at(-1)).toEqual({ table: 'orgs', calls: [['select', 'created_at, has_usage_credits, stripe_info(status, trial_at, paid_at)'], ['eq', 'id', mocks.row.owner_org]] })
+    expect(mocks.queries.at(-1)).toMatchObject({ table: 'orgs', values: [mocks.row.owner_org], principal: { kind: 'jwt', userId: mocks.auth.userId } })
+    expect(mocks.queries.at(-1).sql).toMatch(/SELECT o\.created_at, o\.has_usage_credits,[\s\S]*si\.status, si\.trial_at, si\.paid_at FROM public\.stripe_info si WHERE si\.customer_id = o\.customer_id[\s\S]*WHERE o\.id = \$1/)
     expect(mocks.transaction).not.toHaveBeenCalled()
   })
   it('returns no trial explicitly instead of inventing an expiry', async () => {
@@ -259,8 +280,8 @@ describe('onboarding progress endpoint', () => {
     expect(mocks.from).not.toHaveBeenCalledWith('app_versions')
     mocks.logs.mockResolvedValue([{ action: 'set', device_id: 'device', version_name: '1.0' }])
     await request(3)
-    expect(mocks.queries.at(-1).calls).toContainEqual(['in', 'name', ['1.0']])
-    expect(mocks.queries.at(-1).calls).toContainEqual(['eq', 'app_id', 'com.test.onboarding'])
+    expect(mocks.queries.at(-1)).toMatchObject({ table: 'app_versions', values: ['com.test.onboarding', ['1.0']] })
+    expect(mocks.queries.at(-1).sql).toContain('name = ANY($2::text[])')
   })
   it('does not infer new milestones for a control app', async () => {
     mocks.row.onboarding.setup.todo_list_version = 2
@@ -288,6 +309,7 @@ describe('onboarding progress endpoint', () => {
     const result = await response.json() as any
     const steps = todoListVersion === 4 ? result.onboarding.setup.steps.ota : result.onboarding.setup.steps
     expect(steps.login_cli_mcp.status).toBe('done')
+    expect(mocks.queries[0].principal).toEqual({ kind: 'apikey', apikey: 'fixture-key' })
     if (todoListVersion === 4) {
       expect(steps.add_channel).toEqual({ status: 'pending' })
       expect(result.onboarding.setup.steps.login_cli_mcp).toBeUndefined()

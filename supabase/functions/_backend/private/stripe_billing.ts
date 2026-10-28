@@ -25,7 +25,7 @@ import {
   scheduleSubscriptionCancel,
 } from '../utils/stripe_in_app.ts'
 import { cancelTrialPlan, getTrialPlanSummary, listSchedulableTrialPlans, scheduleTrialPlan, startTrialPlanNow } from '../utils/stripe_trial_plan.ts'
-import { supabaseClient } from '../utils/supabase.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
 // In-app billing: replaces the Stripe billing portal and hosted invoice page.
 
@@ -72,12 +72,16 @@ async function resolveBillingContext(c: AppContext, orgId: string | undefined, p
     throw simpleError('not_authorized', 'Not authorized')
 
   // Authenticated client: RLS only returns orgs the caller belongs to.
-  const { data: org, error } = await supabaseClient(c, authorization)
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', orgId)
-    .single()
-  if (error || !org)
+  let org: { customer_id: string | null } | null = null
+  try {
+    org = await withRlsContext(c, authPrincipal(c), client => queryJsonOne<{ customer_id: string | null }>(
+      client,
+      'SELECT customer_id FROM public.orgs WHERE id = $1',
+      [orgId],
+    ))
+  }
+  catch {}
+  if (!org)
     throw simpleError('not_authorized', 'Not authorized')
   if (!await checkPermission(c, permission, { orgId }))
     throw simpleError('not_authorized', 'Not authorized')

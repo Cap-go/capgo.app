@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
 
 const mocks = vi.hoisted(() => ({
-  admin: vi.fn(),
-  apikey: vi.fn(),
+  adminQuery: vi.fn(),
+  rlsQuery: vi.fn(),
   checklist: vi.fn(),
   emit: vi.fn(),
   permission: vi.fn(),
@@ -15,9 +15,18 @@ vi.mock('../supabase/functions/_backend/utils/build_tracking.ts', () => ({ emitB
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: mocks.permission }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   recordBuildTime: mocks.recordBuildTime,
-  supabaseAdmin: mocks.admin,
-  supabaseApikey: mocks.apikey,
 }))
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({ query: mocks.adminQuery }),
+  closeClient: () => {},
+}))
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mocks.rlsQuery }),
+  }
+})
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: (_c: unknown, key: string) => key === 'BUILDER_URL' ? 'https://builder.test' : key === 'BUILDER_API_KEY' ? 'builder-key' : '',
 }))
@@ -33,11 +42,7 @@ function context() {
 }
 
 function configureCas(data: Array<{ id: string }>) {
-  const update = {
-    eq: vi.fn().mockReturnThis(),
-    select: vi.fn().mockResolvedValue({ data, error: null }),
-  }
-  mocks.admin.mockReturnValue({ from: vi.fn().mockReturnValue({ update: vi.fn().mockReturnValue(update) }) })
+  mocks.adminQuery.mockResolvedValue({ rows: data, rowCount: data.length })
 }
 
 beforeEach(() => {
@@ -54,26 +59,10 @@ beforeEach(() => {
     status: 'running',
     build_mode: 'release',
   }
-  mocks.apikey.mockReturnValue({
-    from: vi.fn().mockImplementation((table: string) => {
-      if (table === 'build_requests') {
-        return {
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnThis(),
-            maybeSingle: vi.fn().mockResolvedValue({ data: buildRequest, error: null }),
-          }),
-        }
-      }
-      return {
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnThis(),
-          single: vi.fn().mockResolvedValue({
-            data: { app_id: appId, build_timeout_seconds: 900, build_timeout_updated_at: new Date().toISOString() },
-            error: null,
-          }),
-        }),
-      }
-    }),
+  mocks.rlsQuery.mockImplementation(async (text: string) => {
+    if (text.includes('FROM public.build_requests'))
+      return { rows: [{ row: buildRequest }] }
+    return { rows: [{ row: { build_timeout_seconds: 900, build_timeout_updated_at: new Date().toISOString() } }] }
   })
   configureCas([{ id: 'row-id' }])
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({

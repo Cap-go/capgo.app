@@ -15,11 +15,21 @@ import {
   settleTrialPlanFirstInvoice,
 } from '../supabase/functions/_backend/utils/stripe_trial_plan.ts'
 
-const supabaseAdmin = vi.hoisted(() => ({ override: null as null | (() => unknown) }))
+// When set, answers the direct-Postgres reads (as the rows of each statement).
+const adminRows = vi.hoisted(() => ({ override: null as null | ((text: string) => unknown[]) }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../supabase/functions/_backend/utils/supabase.ts')>()
-  return { ...original, supabaseAdmin: (...args: Parameters<typeof original.supabaseAdmin>) => (supabaseAdmin.override ? supabaseAdmin.override() : original.supabaseAdmin(...args)) }
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...original,
+    withRlsContext: ((...args: Parameters<typeof original.withRlsContext>) => {
+      const override = adminRows.override
+      if (!override)
+        return original.withRlsContext(...args)
+      const [, , run] = args
+      return run({ query: async (text: string) => ({ rows: override(text) }) } as any, {} as any)
+    }) as typeof original.withRlsContext,
+  }
 })
 
 const context = { get: () => 'request-id' } as any
@@ -305,7 +315,10 @@ describe('schedulable trial plans', () => {
 
   it('charges the trial a regional price only in its region\'s currency, or USD where Stripe lacks it', async () => {
     const plans = [{ regional_price_ids: { p50: { price_m_id: 'price_solo_m_p50' }, p70: { price_m_id: 'price_solo_m_p70' } } }]
-    supabaseAdmin.override = () => ({ from: () => ({ select: () => ({ in: async () => ({ data: plans, error: null }) }) }) })
+    adminRows.override = (text) => {
+      expect(text).toContain('FROM public.plans WHERE name = ANY')
+      return plans.map(row => ({ row }))
+    }
     const tierFor = (country: string, currency: string | null) => {
       const stripe = {
         customers: { retrieve: vi.fn(async () => ({ id: 'cus_1', currency, address: null, invoice_settings: { default_payment_method: null } })) },
@@ -324,7 +337,7 @@ describe('schedulable trial plans', () => {
       await expect(tierFor('GH', 'eur')).resolves.toBe('p100')
     }
     finally {
-      supabaseAdmin.override = null
+      adminRows.override = null
     }
   })
 

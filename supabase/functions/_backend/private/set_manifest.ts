@@ -9,13 +9,19 @@ import { MAX_FILE_HASH_LENGTH, MAX_FILE_NAME_LENGTH, MAX_MANIFEST_ENTRIES, MAX_S
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { getManifestReceiptBucket, verifyManifestSizeReceiptFacts } from '../utils/manifest_size_receipt.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../utils/pg_rls.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface DataSetManifest {
   app_id: string
   name: string
   manifest?: ManifestPersistEntry[]
+}
+
+// Same shape as the PostgREST `.single()` error.
+function singleRowError(rows: number) {
+  return { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned', details: `The result contains ${rows} rows` }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -49,23 +55,29 @@ app.post('/', middlewareKey(), async (c) => {
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     return quickError(401, 'not_authorized', 'You can\'t access this app', { app_id: body.app_id })
 
-  const { data: appRow, error: errorApp } = await supabaseApikey(c, capgkey)
-    .from('apps')
-    .select('app_id, owner_org')
-    .eq('app_id', body.app_id)
-    .single()
-  if (errorApp || !appRow)
-    return quickError(404, 'app_not_found', 'Error App not found', { errorApp })
-
-  const { data: version, error: errorVersion } = await supabaseApikey(c, capgkey)
-    .from('app_versions')
-    .select('id, app_id, name, storage_provider, deleted, owner_org')
-    .eq('name', body.name)
-    .eq('app_id', body.app_id)
-    .eq('deleted', false)
-    .single()
-  if (errorVersion || !version)
-    return quickError(404, 'error_version_not_found', 'Error Version not found', { errorVersion })
+  // Both reads run as the API key; a failed read ends the lookup (nothing is written here).
+  const lookup = await withRlsContext(c, apikeyPrincipal(c, capgkey), async (client) => {
+    const apps = await queryJson<{ app_id: string, owner_org: string }>(client, 'SELECT app_id, owner_org FROM public.apps WHERE app_id = $1 LIMIT 2', [body.app_id])
+      .catch((error: unknown) => ({ error }))
+    if ('error' in apps || apps.length !== 1)
+      return { errorApp: 'error' in apps ? apps.error : singleRowError(apps.length) }
+    const versions = await queryJson<{ id: number, app_id: string, name: string, storage_provider: string, deleted: boolean, owner_org: string }>(
+      client,
+      `SELECT id, app_id, name, storage_provider, deleted, owner_org FROM public.app_versions
+      WHERE name = $1 AND app_id = $2 AND deleted = false
+      LIMIT 2`,
+      [body.name, body.app_id],
+    ).catch((error: unknown) => ({ error }))
+    if ('error' in versions || versions.length !== 1)
+      return { appRow: apps[0], errorVersion: 'error' in versions ? versions.error : singleRowError(versions.length) }
+    return { appRow: apps[0], version: versions[0] }
+  })
+  const appRow = lookup.appRow
+  if (!appRow)
+    return quickError(404, 'app_not_found', 'Error App not found', { errorApp: lookup.errorApp })
+  const version = lookup.version
+  if (!version)
+    return quickError(404, 'error_version_not_found', 'Error Version not found', { errorVersion: lookup.errorVersion })
 
   const s3PathPrefix = `orgs/${appRow.owner_org}/apps/${appRow.app_id}/`
   const invalidEntry = body.manifest.find(entry =>
@@ -98,14 +110,19 @@ app.post('/', middlewareKey(), async (c) => {
 
   // After storage_provider flips to r2, only idempotent retries are allowed.
   if (version.storage_provider === 'r2') {
-    const { data: existingEntries, error: existingError } = await supabaseAdmin(c)
-      .from('version_manifest')
-      .select('id')
-      .eq('app_version_id', version.id)
-      .limit(1)
-    if (existingError)
+    let hasExistingEntries = false
+    const pg = await getPgClient(c)
+    try {
+      const existing = await pg.query('SELECT 1 FROM public.version_manifest WHERE app_version_id = $1 LIMIT 1', [version.id])
+      hasExistingEntries = existing.rows.length > 0
+    }
+    catch (existingError) {
       throw simpleError('error_set_manifest', 'Failed to check existing manifest', { existingError })
-    if (!existingEntries?.length) {
+    }
+    finally {
+      closeClient(c, pg)
+    }
+    if (!hasExistingEntries) {
       return quickError(400, 'error_version_already_finalized', 'Version upload already finalized without a direct manifest write window', {
         storage_provider: version.storage_provider,
       })

@@ -1,7 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { Database } from '../utils/supabase.types.ts'
 import { z } from 'zod'
 import { Hono } from 'hono/tiny'
 import { safeParseSchema } from '../utils/schema_validation.ts'
@@ -10,7 +8,11 @@ import { cloudlog } from '../utils/logging.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
 import { clearFailedAccountAuth, isAccountRateLimited, isIPRateLimited, recordFailedAccountAuth, recordFailedAuth } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
-import { emptySupabase, supabaseClient, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
+import type { RlsPrincipal } from '../utils/pg_rls.ts'
+import { getClaimsFromJWT } from '../utils/hono_jwt.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { withRlsTransaction } from '../utils/pg_rls.ts'
+import { emptySupabase } from '../utils/supabase.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface ValidatePasswordCompliance {
@@ -20,7 +22,9 @@ interface ValidatePasswordCompliance {
   captcha_token?: string
 }
 
-type RpcClient = Pick<SupabaseClient<Database>, 'rpc'>
+interface QueryClient {
+  query: <R extends Record<string, unknown> = Record<string, unknown>>(text: string, values?: unknown[]) => Promise<{ rows: R[] }>
+}
 
 interface OrgReadAccessResult {
   allowed: boolean
@@ -110,20 +114,25 @@ const bodySchema = z.object({
 
 /**
  * Resolve whether the authenticated user has `org.read` access for the org.
+ * `client` must already run as that user (see withRlsTransaction).
  */
 export async function checkOrgReadAccess(
-  supabase: RpcClient,
+  client: QueryClient,
   orgId: string,
   requestId: string,
 ): Promise<OrgReadAccessResult> {
-  const { data, error } = await supabase.rpc('rbac_check_permission_no_password_policy', {
-    p_permission_key: 'org.read',
-    p_org_id: orgId,
-  })
-
-  if (error) {
-    cloudlog({ requestId, context: 'validate_password_compliance - org membership lookup failed', error: error.message })
-    return { allowed: false, error: error.message }
+  let data: boolean | null | undefined
+  try {
+    const { rows } = await client.query<{ allowed: boolean | null }>(
+      'SELECT public.rbac_check_permission_no_password_policy(p_permission_key => $1, p_org_id => $2) AS allowed',
+      ['org.read', orgId],
+    )
+    data = rows[0]?.allowed
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    cloudlog({ requestId, context: 'validate_password_compliance - org membership lookup failed', error: message })
+    return { allowed: false, error: message }
   }
 
   return { allowed: data === true }
@@ -156,8 +165,6 @@ app.post('/', async (c) => {
 
   const { password: _password, captcha_token: _captchaToken, ...bodyWithoutPassword } = body
   cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance raw body', rawBody: bodyWithoutPassword })
-
-  const adminClient = useSupabaseAdmin(c)
 
   // Authenticate first to avoid leaking org existence to unauthenticated callers.
   const loginClient = emptySupabase(c)
@@ -193,90 +200,117 @@ app.post('/', async (c) => {
   await clearFailedAccountAuth(c, body.email)
 
   const userId = signInData.user.id
-  const userClient = supabaseClient(c, `Bearer ${signInData.session.access_token}`)
+  // Same claims PostgREST would read from the session's access token.
+  const sessionClaims = await getClaimsFromJWT(c, `Bearer ${signInData.session.access_token}`)
+  const userPrincipal: RlsPrincipal | null = sessionClaims?.sub ? { kind: 'jwt', userId: sessionClaims.sub, claims: sessionClaims } : null
 
-  // Check org membership/rights first. For non-members (and for non-existent orgs),
-  // this returns the same not_member response to avoid an existence oracle.
-  const orgAccess = await checkOrgReadAccess(userClient, body.org_id, c.get('requestId'))
-  if (orgAccess.error) {
-    return quickError(500, 'org_membership_lookup_failed', 'Failed to verify organization membership', { error: orgAccess.error })
+  const pg = await getPgClient(c)
+  try {
+    // Check org membership/rights first. For non-members (and for non-existent orgs),
+    // this returns the same not_member response to avoid an existence oracle.
+    const orgAccess = userPrincipal
+      ? await withRlsTransaction(pg, userPrincipal, client => checkOrgReadAccess(client, body.org_id, c.get('requestId')))
+      : { allowed: false, error: 'Invalid JWT' }
+    if (orgAccess.error) {
+      return quickError(500, 'org_membership_lookup_failed', 'Failed to verify organization membership', { error: orgAccess.error })
+    }
+
+    if (!orgAccess.allowed) {
+      return quickError(403, 'not_member', 'You are not a member of this organization')
+    }
+
+    // Fetch the org's password policy after membership verification.
+    //
+    // IMPORTANT: do not read as the user here. org reads enforce password-policy
+    // compliance, creating a circular dependency for users who are non-compliant
+    // (this endpoint is their remediation path).
+    let org: { id: string, password_policy_config: unknown } | undefined
+    let orgError: string | undefined
+    try {
+      const orgResult = await pg.query<{ id: string, password_policy_config: unknown }>('SELECT id, password_policy_config FROM public.orgs WHERE id = $1', [body.org_id])
+      org = orgResult.rows[0]
+    }
+    catch (error) {
+      orgError = error instanceof Error ? error.message : String(error)
+    }
+
+    if (orgError || !org) {
+      cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance - org lookup failed', error: orgError })
+      return quickError(500, 'org_lookup_failed', 'Failed to load organization password policy', { error: orgError })
+    }
+
+    // Check if org has password policy enabled
+    const policy = org.password_policy_config as {
+      enabled?: boolean
+      min_length?: number
+      require_uppercase?: boolean
+      require_number?: boolean
+      require_special?: boolean
+    } | null
+
+    if (!policy?.enabled) {
+      return quickError(400, 'no_policy', 'Organization does not have a password policy enabled')
+    }
+
+    // Check if the password meets the policy requirements
+    const policyErrors = getPasswordPolicyValidationErrors(body.password, policy)
+    const effectiveMinLength = getEffectivePasswordMinLength(policy.min_length)
+
+    if (policyErrors.length > 0) {
+      throw simpleError('password_does_not_meet_policy', 'Your current password does not meet the organization requirements', {
+        errors: policyErrors,
+        policy: {
+          min_length: effectiveMinLength,
+          require_uppercase: policy.require_uppercase,
+          require_number: policy.require_number,
+          require_special: policy.require_special,
+        },
+      })
+    }
+
+    // Password is valid! Create or update the compliance record
+    // Get the policy hash from the SQL function (matches the validation logic)
+    let policyHash: string | null = null
+    let hashError: string | undefined
+    try {
+      policyHash = await withRlsTransaction(pg, userPrincipal!, async (client) => {
+        const { rows } = await client.query<{ policy_hash: string | null }>(
+          'SELECT public.get_password_policy_hash(policy_config => $1::jsonb) AS policy_hash',
+          [JSON.stringify(org.password_policy_config)],
+        )
+        return rows[0]?.policy_hash ?? null
+      })
+    }
+    catch (error) {
+      hashError = error instanceof Error ? error.message : String(error)
+    }
+
+    if (hashError || !policyHash) {
+      cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance - hash error', error: hashError })
+      return quickError(500, 'hash_failed', 'Failed to compute policy hash', { error: hashError })
+    }
+
+    // Upsert the compliance record (connection role bypasses RLS)
+    try {
+      const now = new Date().toISOString()
+      await pg.query(
+        `INSERT INTO public.user_password_compliance (user_id, org_id, policy_hash, validated_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id, org_id) DO UPDATE SET
+          policy_hash = EXCLUDED.policy_hash,
+          validated_at = EXCLUDED.validated_at,
+          updated_at = EXCLUDED.updated_at`,
+        [userId, body.org_id, policyHash, now, now],
+      )
+    }
+    catch (error) {
+      const upsertError = error instanceof Error ? error.message : String(error)
+      cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance - upsert error', error: upsertError })
+      return quickError(500, 'compliance_update_failed', 'Failed to update compliance record', { error: upsertError })
+    }
   }
-
-  if (!orgAccess.allowed) {
-    return quickError(403, 'not_member', 'You are not a member of this organization')
-  }
-
-  // Fetch the org's password policy after membership verification.
-  //
-  // IMPORTANT: do not use userClient here. org reads enforce password-policy
-  // compliance, creating a circular dependency for users who are non-compliant
-  // (this endpoint is their remediation path).
-  const { data: org, error: orgError } = await adminClient
-    .from('orgs')
-    .select('id, password_policy_config')
-    .eq('id', body.org_id)
-    .single()
-
-  if (orgError || !org) {
-    cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance - org lookup failed', error: orgError?.message })
-    return quickError(500, 'org_lookup_failed', 'Failed to load organization password policy', { error: orgError?.message })
-  }
-
-  // Check if org has password policy enabled
-  const policy = org.password_policy_config as {
-    enabled?: boolean
-    min_length?: number
-    require_uppercase?: boolean
-    require_number?: boolean
-    require_special?: boolean
-  } | null
-
-  if (!policy?.enabled) {
-    return quickError(400, 'no_policy', 'Organization does not have a password policy enabled')
-  }
-
-  // Check if the password meets the policy requirements
-  const policyErrors = getPasswordPolicyValidationErrors(body.password, policy)
-  const effectiveMinLength = getEffectivePasswordMinLength(policy.min_length)
-
-  if (policyErrors.length > 0) {
-    throw simpleError('password_does_not_meet_policy', 'Your current password does not meet the organization requirements', {
-      errors: policyErrors,
-      policy: {
-        min_length: effectiveMinLength,
-        require_uppercase: policy.require_uppercase,
-        require_number: policy.require_number,
-        require_special: policy.require_special,
-      },
-    })
-  }
-
-  // Password is valid! Create or update the compliance record
-  // Get the policy hash from the SQL function (matches the validation logic)
-  const { data: policyHash, error: hashError } = await userClient
-    .rpc('get_password_policy_hash', { policy_config: org.password_policy_config })
-
-  if (hashError || !policyHash) {
-    cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance - hash error', error: hashError?.message })
-    return quickError(500, 'hash_failed', 'Failed to compute policy hash', { error: hashError?.message })
-  }
-
-  // Upsert the compliance record (service role bypasses RLS)
-  const { error: upsertError } = await adminClient
-    .from('user_password_compliance')
-    .upsert({
-      user_id: userId,
-      org_id: body.org_id,
-      policy_hash: policyHash,
-      validated_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }, {
-      onConflict: 'user_id,org_id',
-    })
-
-  if (upsertError) {
-    cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance - upsert error', error: upsertError.message })
-    return quickError(500, 'compliance_update_failed', 'Failed to update compliance record', { error: upsertError.message })
+  finally {
+    closeClient(c, pg)
   }
 
   cloudlog({ requestId: c.get('requestId'), context: 'validate_password_compliance - success', userId, orgId: body.org_id })

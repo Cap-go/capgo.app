@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const insertMock = vi.fn(async () => ({ error: null }))
+const pgQuery = vi.fn(async (_sql: string, _params?: unknown[]) => ({ rows: [], rowCount: 0 }))
 const cleanupStarted = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -13,16 +13,13 @@ vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
   },
 }))
 
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: vi.fn(async () => ({ query: pgQuery })),
+  closeClient: vi.fn(),
+}))
+
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: () => ({
-    from: (table: string) => {
-      if (table === 'deleted_apps') {
-        return { insert: insertMock }
-      }
-      return {
-        delete: () => ({ eq: async () => ({ error: null }) }),
-      }
-    },
     storage: {
       from: () => ({
         list: async () => ({ data: [] }),
@@ -81,7 +78,14 @@ describe('on_app_delete trigger', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(insertMock).toHaveBeenCalledOnce()
+    const statements = pgQuery.mock.calls.map(([sql]) => sql)
+    const inserts = statements.filter(sql => sql.includes('INSERT INTO public.deleted_apps'))
+    expect(inserts).toHaveLength(1)
+    expect(pgQuery.mock.calls.find(([sql]) => sql.includes('INSERT INTO public.deleted_apps'))?.[1])
+      .toEqual(['com.test.delete', '2026-01-01T00:00:00.000Z', 'org-1', '[]'])
     expect(cleanupStarted).toHaveBeenCalledOnce()
+    expect(statements.indexOf(inserts[0])).toBe(0)
+    expect(statements.at(-1)).toBe('DELETE FROM public.app_versions WHERE app_id = $1')
+    expect(statements.filter(sql => sql.startsWith('DELETE FROM public.'))).toHaveLength(9)
   })
 })

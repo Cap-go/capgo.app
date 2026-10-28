@@ -1,8 +1,18 @@
 import type { Context } from 'hono'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as pluginRuntimeCloudflare from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
 import { buildDeviceChannelScopeCF, buildDeviceVersionCountsCFQuery, buildVersionUsageChannelFilterCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import { countChannelScopedDeviceVersions, MAX_CHANNEL_DEVICE_OVERRIDES_FOR_COUNTS, partitionChannelDeviceOverrides, pickChannelDefaultPlatforms, readDeviceVersionCountsSB } from '../supabase/functions/_backend/utils/supabase.ts'
+
+const pgMocks = vi.hoisted(() => ({
+  getPgClient: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>(),
+  getPgClient: pgMocks.getPgClient,
+  closeClient: vi.fn(),
+}))
 
 describe('version_usage channel filter', () => {
   it.concurrent('matches channel id with a legacy name fallback', () => {
@@ -145,53 +155,34 @@ interface FakeDevice {
   version_name: string
 }
 
-// Minimal PostgREST builder over an in-memory devices table. Records the
-// filters of every request so tests can assert the queries that were sent.
-function createFakeDevicesClient(devices: FakeDevice[], maxRows = 1000) {
-  const requests: string[][] = []
+// Minimal node-postgres client over an in-memory devices table. Records a
+// label for every query so tests can assert the queries that were sent.
+function createFakeDevicesClient(devices: FakeDevice[]) {
+  const requests: string[] = []
+  const pick = (rows: FakeDevice[]) => ({ rows: rows.map(row => ({ device_id: row.device_id, version_name: row.version_name })) })
   const client = {
-    from(table: string) {
-      expect(table).toBe('devices')
-      const filters: string[] = []
-      let rows = [...devices]
-      let range: [number, number] | null = null
-      const builder = {
-        select: () => builder,
-        eq(column: keyof FakeDevice, value: unknown) {
-          filters.push(`${column}=eq.${value}`)
-          rows = rows.filter(row => row[column] === value)
-          return builder
-        },
-        in(column: keyof FakeDevice, values: unknown[]) {
-          filters.push(`${column}=in.(${values.join(',')})`)
-          rows = rows.filter(row => values.includes(row[column]))
-          return builder
-        },
-        or(expression: string) {
-          expect(expression).toBe('default_channel.is.null,default_channel.eq.')
-          filters.push(`or=(${expression})`)
-          rows = rows.filter(row => row.default_channel === null || row.default_channel === '')
-          return builder
-        },
-        order(column: keyof FakeDevice) {
-          rows.sort((left, right) => Number(left[column]) - Number(right[column]))
-          return builder
-        },
-        range(from: number, to: number) {
-          range = [from, to]
-          return builder
-        },
-        then(resolve: (value: { data: Array<{ device_id: string, version_name: string }>, error: null }) => unknown) {
-          requests.push(filters)
-          const [from, to] = range ?? [0, maxRows - 1]
-          const page = rows.slice(from, Math.min(to + 1, from + maxRows))
-          return Promise.resolve({ data: page.map(row => ({ device_id: row.device_id, version_name: row.version_name })), error: null }).then(resolve)
-        },
+    async query(text: string, values: unknown[]) {
+      expect(text).toContain('FROM public.devices')
+      const appRows = devices.filter(row => row.app_id === values[0])
+      if (text.includes('default_channel IS NULL OR default_channel = \'\'')) {
+        const platforms = values[1] as string[]
+        requests.push(`unreported:${platforms.join(',')}`)
+        return pick(appRows.filter(row => (row.default_channel === null || row.default_channel === '') && platforms.includes(row.platform)))
       }
-      return builder
+      if (text.includes('device_id = ANY')) {
+        const ids = values[1] as string[]
+        requests.push(`forced:${ids.join(',')}`)
+        return pick(appRows.filter(row => ids.includes(row.device_id)))
+      }
+      if (text.includes('default_channel = $2')) {
+        requests.push(`channel:${values[1]}`)
+        return pick(appRows.filter(row => row.default_channel === values[1]))
+      }
+      requests.push('all')
+      return pick(appRows)
     },
   }
-  return { client: client as unknown as Parameters<typeof readDeviceVersionCountsSB>[4], requests }
+  return { client, requests }
 }
 
 describe('readDeviceVersionCountsSB', () => {
@@ -200,7 +191,7 @@ describe('readDeviceVersionCountsSB', () => {
   const device = (device_id: string, platform: string, default_channel: string | null, version_name: string, app_id = 'com.app'): FakeDevice =>
     ({ id: nextId++, device_id, app_id, platform, default_channel, version_name })
 
-  it.concurrent('adds devices without a reported channel on the default platforms', async () => {
+  it('adds devices without a reported channel on the default platforms', async () => {
     const { client, requests } = createFakeDevicesClient([
       device('pinned', 'android', 'production', '1.0.0'),
       device('implicit-android', 'android', null, '1.0.0'),
@@ -209,30 +200,47 @@ describe('readDeviceVersionCountsSB', () => {
       device('other-channel', 'android', 'beta', '1.0.0'),
       device('other-app', 'android', null, '1.0.0', 'com.other'),
     ])
+    pgMocks.getPgClient.mockResolvedValueOnce(client)
 
-    const counts = await readDeviceVersionCountsSB(c, 'com.app', 'production', { into: [], elsewhere: [], defaultForPlatforms: ['android'] }, client)
+    const counts = await readDeviceVersionCountsSB(c, 'com.app', 'production', { into: [], elsewhere: [], defaultForPlatforms: ['android'] })
 
     expect(counts).toEqual({ '1.0.0': 2, '1.1.0': 1 })
-    expect(requests).toContainEqual(['app_id=eq.com.app', 'or=(default_channel.is.null,default_channel.eq.)', 'platform=in.(android)'])
+    expect(requests).toEqual(['channel:production', 'unreported:android'])
   })
 
-  it.concurrent('skips the unreported query when the channel is no platform default', async () => {
+  it('skips the unreported query when the channel is no platform default', async () => {
     const { client, requests } = createFakeDevicesClient([
       device('pinned', 'android', 'production', '1.0.0'),
       device('implicit-android', 'android', null, '1.0.0'),
     ])
+    pgMocks.getPgClient.mockResolvedValueOnce(client)
 
-    expect(await readDeviceVersionCountsSB(c, 'com.app', 'production', { into: [], elsewhere: [] }, client)).toEqual({ '1.0.0': 1 })
-    expect(requests).toEqual([['app_id=eq.com.app', 'default_channel=eq.production']])
+    expect(await readDeviceVersionCountsSB(c, 'com.app', 'production', { into: [], elsewhere: [] })).toEqual({ '1.0.0': 1 })
+    expect(requests).toEqual(['channel:production'])
   })
 
-  it.concurrent('pages past the PostgREST row limit', async () => {
+  it('reads devices forced into the channel and drops devices forced elsewhere', async () => {
+    const { client, requests } = createFakeDevicesClient([
+      device('pinned', 'android', 'production', '1.0.0'),
+      device('moved-away', 'android', 'production', '1.0.0'),
+      device('forced-in', 'ios', 'beta', '2.0.0'),
+    ])
+    pgMocks.getPgClient.mockResolvedValueOnce(client)
+
+    const counts = await readDeviceVersionCountsSB(c, 'com.app', 'production', { into: ['forced-in'], elsewhere: ['moved-away'] })
+
+    expect(counts).toEqual({ '1.0.0': 1, '2.0.0': 1 })
+    expect(requests).toEqual(['channel:production', 'forced:forced-in'])
+  })
+
+  it('counts every matching device without a row cap', async () => {
     const devices = Array.from({ length: 2500 }, (_, index) => device(`implicit-${index}`, 'android', null, index < 1000 ? '1.0.0' : '1.1.0'))
     const { client, requests } = createFakeDevicesClient(devices)
+    pgMocks.getPgClient.mockResolvedValueOnce(client)
 
-    const counts = await readDeviceVersionCountsSB(c, 'com.app', 'production', { into: [], elsewhere: [], defaultForPlatforms: ['android'] }, client)
+    const counts = await readDeviceVersionCountsSB(c, 'com.app', 'production', { into: [], elsewhere: [], defaultForPlatforms: ['android'] })
 
     expect(counts).toEqual({ '1.0.0': 1000, '1.1.0': 1500 })
-    expect(requests.filter(filters => filters.includes('platform=in.(android)'))).toHaveLength(3)
+    expect(requests.filter(request => request.startsWith('unreported:'))).toHaveLength(1)
   })
 })

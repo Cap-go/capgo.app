@@ -35,6 +35,167 @@ export type PgQueryClient = PoolClient | Client
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
 
+/**
+ * Outside workerd, one request shares one Pool per database URL: each helper
+ * that calls getPgClient/closeClient takes a reference, and the Pool ends when
+ * the last one closes. A Pool hands every checkout its own connection, so
+ * transactions stay isolated; without sharing, every helper call opened its own
+ * Pool and a busy request could exhaust Postgres connections.
+ */
+interface SharedPool { pool: Pool, refs: number }
+const sharedPoolsByRequest = new WeakMap<object, Map<string, SharedPool>>()
+const sharedPoolKeys = new WeakMap<Pool, { request: object, key: string }>()
+
+function acquireSharedPool(c: Context, key: string): Pool | null {
+  const entry = sharedPoolsByRequest.get(c)?.get(key)
+  if (!entry)
+    return null
+  entry.refs++
+  return entry.pool
+}
+
+function registerSharedPool(c: Context, key: string, pool: Pool) {
+  let pools = sharedPoolsByRequest.get(c)
+  if (!pools) {
+    pools = new Map()
+    sharedPoolsByRequest.set(c, pools)
+  }
+  pools.set(key, { pool, refs: 1 })
+  sharedPoolKeys.set(pool, { request: c, key })
+}
+
+/**
+ * On workerd, Hyperdrive wants a fresh `pg.Client` per request and never `end()`, so before this
+ * every getPgClient call paid a new connection handshake. Within one request, a Client whose holder
+ * called closeClient while it was idle outside a transaction goes back to an idle list and the next
+ * getPgClient with the same key reuses it.
+ *
+ * Holders get a Proxy handle, never the Client: closing revokes the handle, so a holder that keeps
+ * querying after closeClient gets its own dedicated connection instead of sharing the reused one.
+ * Two holders therefore never run on the same connection at once, and transaction-local RLS
+ * settings cannot cross between them.
+ */
+interface HyperdriveLease { client: Client, key: string, request: object, revoked: boolean, detached?: Promise<Client> }
+const idleHyperdriveClients = new WeakMap<object, Map<string, Client[]>>()
+const hyperdriveLeases = new WeakMap<object, HyperdriveLease>()
+const brokenHyperdriveClients = new WeakSet<Client>()
+
+function isReusableHyperdriveClient(client: Client): boolean {
+  const status = (client as Client & { getTransactionStatus?: () => string | null }).getTransactionStatus?.()
+  return status === 'I' && (client as Client & { readyForQuery?: boolean }).readyForQuery === true && !brokenHyperdriveClients.has(client)
+}
+
+function takeIdleHyperdriveClient(c: Context, key: string): Client | null {
+  const idle = idleHyperdriveClients.get(c)?.get(key)
+  while (idle?.length) {
+    const client = idle.pop()!
+    if (isReusableHyperdriveClient(client))
+      return client
+  }
+  return null
+}
+
+function leaseHyperdriveClient(c: Context, key: string, client: Client, connect: () => Promise<Client>): Client {
+  const lease: HyperdriveLease = { client, key, request: c, revoked: false }
+  const handle = new Proxy(client, {
+    get(target, prop) {
+      if (lease.revoked && prop === 'query') {
+        // Use after closeClient: never touch the Client another holder may now own.
+        return async (...args: unknown[]) => {
+          lease.detached ??= connect()
+          const detached = await lease.detached
+          return (detached.query as (...queryArgs: unknown[]) => unknown).apply(detached, args)
+        }
+      }
+      // Methods run with the handle as `this`; pg.Client has no private fields and every
+      // property read or write goes through these traps to the Client.
+      return Reflect.get(target, prop, target)
+    },
+    set(target, prop, value) {
+      return Reflect.set(target, prop, value, target)
+    },
+  })
+  hyperdriveLeases.set(handle, lease)
+  skipEndClients.add(handle)
+  return handle
+}
+
+/** Hyperdrive handle closed: hand the Client back to this request's idle list when it is clean. */
+function releaseHyperdriveLease(db: PgClient): boolean {
+  const lease = hyperdriveLeases.get(db)
+  if (!lease)
+    return false
+  if (lease.revoked)
+    return true
+  lease.revoked = true
+  if (!isReusableHyperdriveClient(lease.client))
+    return true
+  let byKey = idleHyperdriveClients.get(lease.request)
+  if (!byKey) {
+    byKey = new Map()
+    idleHyperdriveClients.set(lease.request, byKey)
+  }
+  const idle = byKey.get(lease.key) ?? []
+  idle.push(lease.client)
+  byKey.set(lease.key, idle)
+  return true
+}
+
+/**
+ * Postgres refuses new connections with 53300 when max_connections is reached. PostgREST queued
+ * requests on its own fixed pool instead, so on a direct connection (no Hyperdrive or pooler in
+ * front) back off and retry the checkout briefly rather than failing the request. pg-pool creates
+ * a fresh Client per attempt, and `pool.query` checks out through `connect`, so both are covered.
+ */
+const TOO_MANY_CONNECTIONS_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1000]
+
+function isTooManyConnectionsError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '53300'
+}
+
+function retryPoolConnectOnTooManyConnections(pool: Pool) {
+  if (typeof pool.connect !== 'function')
+    return
+  const rawConnect = pool.connect.bind(pool) as () => Promise<PoolClient>
+  const connectWithRetry = async (): Promise<PoolClient> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await rawConnect()
+      }
+      catch (error) {
+        const delay = TOO_MANY_CONNECTIONS_RETRY_DELAYS_MS[attempt]
+        if (delay === undefined || !isTooManyConnectionsError(error))
+          throw error
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+  }
+  pool.connect = ((callback?: (error: Error | undefined, client?: PoolClient, done?: (release?: boolean | Error) => void) => void) => {
+    const result = connectWithRetry()
+    if (!callback)
+      return result
+    result.then(client => callback(undefined, client, client.release.bind(client)), error => callback(error))
+    return undefined
+  }) as Pool['connect']
+}
+
+/** Drops one reference; true while other callers in the request still use the Pool. */
+function releaseSharedPool(db: PgClient): boolean {
+  const owner = sharedPoolKeys.get(db as Pool)
+  if (!owner)
+    return false
+  const pools = sharedPoolsByRequest.get(owner.request)
+  const entry = pools?.get(owner.key)
+  if (!entry || entry.pool !== db)
+    return false
+  entry.refs--
+  if (entry.refs > 0)
+    return true
+  pools!.delete(owner.key)
+  sharedPoolKeys.delete(db as Pool)
+  return false
+}
+
 export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
   if (skipEndClients.has(pg))
     return pg as Client
@@ -44,8 +205,15 @@ export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
 }
 
 export function releasePgClient(pg: PgClient | null | undefined, client: object | null | undefined, error?: boolean | Error): void {
-  if (!pg || !client || skipEndClients.has(pg))
+  if (!pg || !client)
     return
+  if (skipEndClients.has(pg)) {
+    // A failed release may leave session state (an advisory lock): never reuse that connection.
+    const lease = hyperdriveLeases.get(pg)
+    if (error && lease)
+      brokenHyperdriveClients.add(lease.client)
+    return
+  }
   if ('release' in client && typeof client.release === 'function')
     client.release(error)
 }
@@ -454,19 +622,32 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
   const isWorkerd = getRuntimeKey() === 'workerd'
   // Match on the actual connection string so the Hyperdrive Client contract cannot
   // silently become Pool+end() if c.set is missed.
+  const sharedPoolKey = `${readOnly ? 'ro' : 'rw'}|${appName}-${dbName}|${dbUrl}`
   if (isWorkerd && isHyperdriveConnectionString(c, dbUrl)) {
-    const client = new Client({
-      connectionString: dbUrl,
-      application_name: `${appName}-${dbName}`,
-      connectionTimeoutMillis: 10000,
-      options: readOnlyOptions,
-    })
-    client.on('error', (err: Error) => {
-      cloudlogErr({ requestId, message: 'PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
-    })
-    await client.connect()
-    skipEndClients.add(client)
-    return setPgAccessMode(client, readOnly)
+    const connect = async () => {
+      const client = new Client({
+        connectionString: dbUrl,
+        application_name: `${appName}-${dbName}`,
+        connectionTimeoutMillis: 10000,
+        options: readOnlyOptions,
+      })
+      client.on('error', (err: Error) => {
+        brokenHyperdriveClients.add(client)
+        cloudlogErr({ requestId, message: 'PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
+      })
+      client.on('end', () => brokenHyperdriveClients.add(client))
+      await client.connect()
+      skipEndClients.add(client)
+      return client
+    }
+    const client = takeIdleHyperdriveClient(c, sharedPoolKey) ?? await connect()
+    return setPgAccessMode(leaseHyperdriveClient(c, sharedPoolKey, client, connect), readOnly)
+  }
+
+  if (!isWorkerd) {
+    const shared = acquireSharedPool(c, sharedPoolKey)
+    if (shared)
+      return shared
   }
 
   const pool = new Pool({
@@ -503,7 +684,12 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
     })
   })
 
-  return setPgAccessMode(pool, readOnly)
+  const modedPool = setPgAccessMode(pool, readOnly)
+  if (!isWorkerd) {
+    retryPoolConnectOnTooManyConnections(pool)
+    registerSharedPool(c, sharedPoolKey, modedPool)
+  }
+  return modedPool
 }
 
 // Transactions must run on one checked-out connection: BEGIN/COMMIT issued on
@@ -571,7 +757,12 @@ export function logPgError(c: Context, functionName: string, error: unknown) {
 export function closeClient(c: Context, db: PgClient) {
   // Hyperdrive: do not end() — connection-lifecycle docs say GC cleans the edge hop.
   // https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
-  if (skipEndClients.has(db))
+  if (skipEndClients.has(db)) {
+    releaseHyperdriveLease(db)
+    return
+  }
+  // Another helper in this request still uses the shared Pool.
+  if (releaseSharedPool(db))
     return
 
   // Non-Hyperdrive Pool: must end() or we leak sockets (the old workerd sawtooth).

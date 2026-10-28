@@ -15,9 +15,12 @@ import { isoFromBuilderTimestamp } from '../../utils/builder_capacity.ts'
 import { getBuilderXcodeVersion } from '../../utils/builder_machine.ts'
 import { persistBuilderBuildOutcome } from '../../utils/builder_onboarding_checklist.ts'
 import { simpleError } from '../../utils/hono.ts'
+import type { PgClient } from '../../utils/pg.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { recordBuildTime, supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
+import { recordBuildTime } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 
 export interface BuildStatusParams {
@@ -97,22 +100,32 @@ export async function getBuildStatus(
   const { job_id, app_id, platform } = params
 
   // Use authenticated client for data queries - RLS will enforce access
-  const supabase = supabaseApikey(c, apikey.key)
+  const principal = apikeyPrincipal(c, apikey.key)
 
   // Bind job_id to app_id under RLS before calling the builder.
   // This prevents cross-app access by mixing an allowed app_id with another app's job_id.
-  const { data: buildRequest, error: buildRequestError } = await supabase
-    .from('build_requests')
-    .select('app_id, owner_org, requested_by, platform, status, build_mode')
-    .eq('builder_job_id', job_id)
-    .maybeSingle()
-
-  if (buildRequestError) {
+  type StatusBuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'app_id' | 'owner_org' | 'requested_by' | 'platform' | 'status' | 'build_mode'>
+  let buildRequest: StatusBuildRow | null
+  try {
+    const rows = await withRlsContext(c, principal, client => queryJson<StatusBuildRow>(
+      client,
+      `SELECT app_id, owner_org, requested_by, platform, status, build_mode
+      FROM public.build_requests
+      WHERE builder_job_id = $1
+      LIMIT 2`,
+      [job_id],
+    ))
+    // maybeSingle(): more than one row was an error under PostgREST
+    if (rows.length > 1)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    buildRequest = rows[0] ?? null
+  }
+  catch (buildRequestError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to fetch build_request for status',
       job_id,
-      error: buildRequestError.message,
+      error: buildRequestError instanceof Error ? buildRequestError.message : String(buildRequestError),
     })
     throw simpleError('internal_error', 'Failed to fetch build request')
   }
@@ -127,18 +140,31 @@ export async function getBuildStatus(
     throw simpleError('unauthorized', 'You do not have permission to view builds for this app')
   }
 
-  const { data: appSettings, error: appSettingsError } = await supabase
-    .from('apps')
-    .select('build_timeout_seconds, build_timeout_updated_at')
-    .eq('app_id', buildRequest.app_id)
-    .single()
+  type AppTimeoutRow = Pick<Database['public']['Tables']['apps']['Row'], 'build_timeout_seconds' | 'build_timeout_updated_at'>
+  let appSettings: AppTimeoutRow | null = null
+  let appSettingsError: string | undefined
+  try {
+    const rows = await withRlsContext(c, principal, client => queryJson<AppTimeoutRow>(
+      client,
+      'SELECT build_timeout_seconds, build_timeout_updated_at FROM public.apps WHERE app_id = $1 LIMIT 2',
+      [buildRequest.app_id],
+    ))
+    // single(): zero or several rows was an error under PostgREST
+    if (rows.length === 1)
+      appSettings = rows[0]
+    else
+      appSettingsError = 'JSON object requested, multiple (or no) rows returned'
+  }
+  catch (error) {
+    appSettingsError = error instanceof Error ? error.message : String(error)
+  }
 
   if (appSettingsError || !appSettings) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to fetch app build timeout for status',
       app_id: buildRequest.app_id,
-      error: appSettingsError?.message,
+      error: appSettingsError,
     })
     throw simpleError('internal_error', 'Failed to fetch app build timeout')
   }
@@ -223,31 +249,54 @@ export async function getBuildStatus(
   // (or will) emit the lifecycle event — skip emission here to avoid double-firing.
   const previousStatus = buildRequest.status
 
-  const { data: updatedRows, error: updateError } = await supabaseAdmin(c)
-    .from('build_requests')
-    .update({
-      status: effectiveStatus,
-      last_error: effectiveError,
-      runner_wait_seconds: runnerWaitSeconds,
-      started_at: isoFromBuilderTimestamp(builderJob.job.started_at) ?? undefined,
-      completed_at: isoFromBuilderTimestamp(effectiveCompletedAt) ?? undefined,
-      xcode_version: getBuilderXcodeVersion(builderJob.machine) ?? undefined,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('builder_job_id', job_id)
-    .eq('app_id', buildRequest.app_id)
-    .eq('status', previousStatus)
-    .select('id')
-
-  if (updateError) {
+  let updatedCount = 0
+  let updateFailed = false
+  let pg: PgClient | null = null
+  try {
+    pg = await getPgClient(c)
+    // Null builder timestamps/xcode leave the stored value untouched, as the omitted
+    // supabase-js update fields did.
+    const result = await pg.query(
+      `UPDATE public.build_requests
+      SET status = $4,
+        last_error = $5,
+        runner_wait_seconds = $6,
+        started_at = COALESCE($7::timestamptz, started_at),
+        completed_at = COALESCE($8::timestamptz, completed_at),
+        xcode_version = COALESCE($9::text, xcode_version),
+        updated_at = $10
+      WHERE builder_job_id = $1 AND app_id = $2 AND status = $3
+      RETURNING id`,
+      [
+        job_id,
+        buildRequest.app_id,
+        previousStatus,
+        effectiveStatus,
+        effectiveError,
+        runnerWaitSeconds,
+        isoFromBuilderTimestamp(builderJob.job.started_at) ?? null,
+        isoFromBuilderTimestamp(effectiveCompletedAt) ?? null,
+        getBuilderXcodeVersion(builderJob.machine) ?? null,
+        new Date().toISOString(),
+      ],
+    )
+    updatedCount = result.rowCount ?? 0
+  }
+  catch (updateError) {
+    updateFailed = true
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to update build_requests status',
       job_id,
-      error: updateError.message,
+      error: updateError instanceof Error ? updateError.message : String(updateError),
     })
   }
-  else if (updatedRows && updatedRows.length > 0) {
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
+
+  if (!updateFailed && updatedCount > 0) {
     await persistBuilderBuildOutcome(c, { appId: buildRequest.app_id, platform: resolvedPlatform, status: effectiveStatus })
     await emitBuildTransitionEvent(c, {
       jobId: job_id,

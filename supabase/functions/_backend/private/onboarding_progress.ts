@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import type { AppOnboardingPatch, AppOnboardingState, AppOnboardingStepId } from '../utils/appOnboarding.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
+import type { RlsPrincipal } from '../utils/pg_rls.ts'
 import type { Permission } from '../utils/rbac.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
@@ -14,9 +16,10 @@ import { cloudlogErr, serializeError } from '../utils/logging.ts'
 import { isActiveBuilderChecklistSetup } from '../utils/builder_onboarding_checklist.ts'
 import { BUILDER_STEP_IDS, isOpenOnboardingStepStatus } from '../utils/onboardingMissedSteps.ts'
 import { appIdSchema } from '../utils/privateAnalyticsValidation.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext, withRlsTransaction } from '../utils/pg_rls.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDevices, readStats } from '../utils/stats.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
 
 const bodySchema = z.object({ appId: appIdSchema, N: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), initial: z.boolean().optional(), includeBilling: z.boolean().optional() })
 const skipStepBodySchema = z.object({
@@ -26,18 +29,24 @@ const skipStepBodySchema = z.object({
   reason: z.string().trim().min(3).max(500),
 })
 type Observations = Partial<Record<'login_cli_mcp' | 'add_channel' | 'run_device' | 'upload_bundle' | 'test_update', boolean>>
-type AuthenticatedClient = ReturnType<typeof supabaseWithAuth>
+// Runs one statement as the caller, like a supabase-js call made with supabaseWithAuth.
+interface CallerDb { pg: PgClient, principal: RlsPrincipal }
 type BillingSummary = { status: 'available', orgId: string, orgCreatedAt: string | null, trialEndsAt: string | null, hasPaid: boolean, isPaying: boolean, hasCredits: boolean } | { status: 'unavailable' }
 
-async function readBilling(c: Context<MiddlewareKeyVariables>, client: AuthenticatedClient, orgId: string): Promise<BillingSummary> {
+async function readBilling(c: Context<MiddlewareKeyVariables>, principal: RlsPrincipal, orgId: string): Promise<BillingSummary> {
   try {
     if (!(await checkPermission(c, 'org.read_billing', { orgId })))
       return { status: 'unavailable' }
     // Use the caller's RLS context and the existing org/customer foreign key.
     // No Stripe call or credit-ledger aggregation is needed for CLI notices.
-    const { data, error } = await client.from('orgs').select('created_at, has_usage_credits, stripe_info(status, trial_at, paid_at)').eq('id', orgId).maybeSingle()
-    if (error)
-      throw error
+    // Own connection: this runs concurrently with the progress checks.
+    const data = await withRlsContext(c, principal, client => queryJsonOne<{ created_at: string | null, has_usage_credits: boolean | null, stripe_info: { status: string | null, trial_at: string | null, paid_at: string | null } | null }>(
+      client,
+      `SELECT o.created_at, o.has_usage_credits,
+        (SELECT pg_catalog.to_json(s) FROM (SELECT si.status, si.trial_at, si.paid_at FROM public.stripe_info si WHERE si.customer_id = o.customer_id) s) AS stripe_info
+      FROM public.orgs o WHERE o.id = $1`,
+      [orgId],
+    ))
     if (!data?.stripe_info)
       return { status: 'unavailable' }
     return {
@@ -59,29 +68,26 @@ async function readBilling(c: Context<MiddlewareKeyVariables>, client: Authentic
   }
 }
 
-async function hasPublishedBundle(client: AuthenticatedClient, appId: string) {
-  // A version/r2_path can exist before its upload. Require final manifest,
-  // a registered external bundle, or positive archive metadata instead.
-  const delta = await client.from('app_versions').select('id').eq('app_id', appId).eq('deleted', false).not('name', 'in', '(builtin,unknown)').neq('storage_provider', 'revert_to_builtin').or('manifest_count.gt.0,external_url.neq.').limit(1)
-  if (delta.error)
-    throw delta.error
-  if (delta.data?.length)
-    return true
-  const archive = await client.from('app_versions').select('id,app_versions_meta!inner(size)').eq('app_id', appId).eq('deleted', false).not('name', 'in', '(builtin,unknown)').neq('storage_provider', 'revert_to_builtin').gt('app_versions_meta.size', 0).limit(1)
-  if (archive.error)
-    throw archive.error
-  return !!archive.data?.length
+async function hasRow(db: CallerDb, text: string, values: unknown[]) {
+  return withRlsTransaction(db.pg, db.principal, async client => (await client.query(text, values)).rows.length > 0)
 }
 
-async function hasAppliedBundle(c: Context<MiddlewareKeyVariables>, client: AuthenticatedClient, appId: string, createdAt: string | null) {
+async function hasPublishedBundle(db: CallerDb, appId: string) {
+  // A version/r2_path can exist before its upload. Require final manifest,
+  // a registered external bundle, or positive archive metadata instead.
+  const published = `SELECT v.id FROM public.app_versions v
+    WHERE v.app_id = $1 AND v.deleted = false AND NOT (v.name IN ('builtin', 'unknown')) AND v.storage_provider <> 'revert_to_builtin'`
+  if (await hasRow(db, `${published} AND (v.manifest_count > 0 OR v.external_url <> '') LIMIT 1`, [appId]))
+    return true
+  return hasRow(db, `${published} AND EXISTS (SELECT 1 FROM public.app_versions_meta m WHERE m.id = v.id AND m.size > 0) LIMIT 1`, [appId])
+}
+
+async function hasAppliedBundle(c: Context<MiddlewareKeyVariables>, db: CallerDb, appId: string, createdAt: string | null) {
   const logs = await readStats(c, { app_id: appId, actions: ['set'], start_date: createdAt ?? undefined, limit: 10 }, false)
   const names = [...new Set(logs.filter(log => log.action === 'set' && log.device_id && log.version_name && !['builtin', 'unknown'].includes(log.version_name)).map(log => log.version_name!))]
   if (!names.length)
     return false
-  const versions = await client.from('app_versions').select('id').eq('app_id', appId).in('name', names).neq('storage_provider', 'revert_to_builtin').limit(1)
-  if (versions.error)
-    throw versions.error
-  return !!versions.data?.length
+  return hasRow(db, `SELECT id FROM public.app_versions WHERE app_id = $1 AND name = ANY($2::text[]) AND storage_provider <> 'revert_to_builtin' LIMIT 1`, [appId, names])
 }
 
 // Evidence is gathered outside the lock; merge only the observed milestones into
@@ -164,7 +170,11 @@ function skipStepPatch(currentValue: unknown, current: AppOnboardingState, step:
 async function canWriteOnboarding(c: Context<MiddlewareKeyVariables>, appId: string) {
   if (await checkPermission(c, 'app.update_settings', { appId }))
     return true
-  const { data } = await supabaseWithAuth(c, c.get('auth')!).from('apps').select('owner_org').eq('app_id', appId).maybeSingle()
+  let data: { owner_org: string } | undefined
+  try {
+    data = await withRlsContext(c, authPrincipal(c, c.get('auth')!), async client => (await client.query<{ owner_org: string }>('SELECT owner_org FROM public.apps WHERE app_id = $1', [appId])).rows[0])
+  }
+  catch {}
   return !!data && checkPermission(c, 'org.create_app', { orgId: data.owner_org })
 }
 
@@ -177,14 +187,33 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   const { appId, N, initial, includeBilling } = parsed.data
   if (!(await checkPermission(c, 'app.read', { appId })))
     throw quickError(403, 'app_access_denied', 'You cannot access this app')
-  const client = supabaseWithAuth(c, c.get('auth')!)
+  const principal = authPrincipal(c, c.get('auth')!)
+  const pg = await getPgClient(c)
+  try {
+    return await readProgress(c, { pg, principal }, appId, N, initial, includeBilling)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+})
+
+async function readProgress(c: Context<MiddlewareKeyVariables>, db: CallerDb, appId: string, N: number, initial: boolean | undefined, includeBilling: boolean | undefined) {
   // Always load this exact app, on every N, even when no extra check is due.
-  const { data: row, error } = await client.from('apps').select('onboarding, created_at, owner_org').eq('app_id', appId).single()
-  if (error || !row)
+  let rows: { onboarding: unknown, created_at: string | null, owner_org: string }[] = []
+  try {
+    rows = await withRlsTransaction(db.pg, db.principal, client => queryJson<{ onboarding: unknown, created_at: string | null, owner_org: string }>(
+      client,
+      'SELECT onboarding, created_at, owner_org FROM public.apps WHERE app_id = $1 LIMIT 2',
+      [appId],
+    ))
+  }
+  catch {}
+  const row = rows.length === 1 ? rows[0] : null
+  if (!row)
     throw quickError(404, 'app_not_found', 'App not found')
   // Start optional billing immediately; it shares neither the observations nor
   // the onboarding write transaction and must not delay progress persistence.
-  const billing = includeBilling ? readBilling(c, client, row.owner_org) : undefined
+  const billing = includeBilling ? readBilling(c, db.principal, row.owner_org) : undefined
   const current = parseAppOnboarding(row.onboarding)
   const observations: Observations = {}
   const checkErrors: string[] = []
@@ -204,10 +233,7 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
   }
   if (due(0)) {
     await check('add_channel', 'app.read', async () => {
-      const result = await client.from('channels').select('id').eq('app_id', appId).limit(1)
-      if (result.error)
-        throw result.error
-      return !!result.data?.length
+      return hasRow(db, 'SELECT id FROM public.channels WHERE app_id = $1 LIMIT 1', [appId])
     })
   }
   const observeMilestones = hasSupportedOtaTodoList(current) && current.outcome !== 'skipped'
@@ -217,9 +243,9 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
     })
   }
   if (observeMilestones && due(2) && current.steps.upload_bundle?.status !== 'done')
-    await check('upload_bundle', 'app.read', () => hasPublishedBundle(client, appId))
+    await check('upload_bundle', 'app.read', () => hasPublishedBundle(db, appId))
   if (observeMilestones && due(3) && current.steps.test_update?.status !== 'done')
-    await check('test_update', 'app.read_logs', () => hasAppliedBundle(c, client, appId, row.created_at))
+    await check('test_update', 'app.read_logs', () => hasAppliedBundle(c, db, appId, row.created_at))
   // Conservatively assume all observed steps are writable for this no-op test.
   // Real changes still recheck permissions and rebuild against the locked row.
   const observedSteps = new Set(Object.keys(observations).map(id => `ota.${id}`))
@@ -232,7 +258,7 @@ app.post('/', middlewareAuth({ preferApiKey: true }), async (c) => {
     : row.onboarding
   c.header('Cache-Control', 'no-store')
   return c.json({ onboarding, ...(observations.add_channel !== undefined ? { hasChannel: observations.add_channel } : {}), checkErrors, ...(billing ? { billing: await billing } : {}) })
-})
+}
 
 app.post('/skip_step', middlewareAuth({ preferApiKey: true }), async (c) => {
   const parsed = skipStepBodySchema.safeParse(await parseBody(c))

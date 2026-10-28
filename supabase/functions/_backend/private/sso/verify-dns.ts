@@ -7,7 +7,6 @@ import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 
 const bodySchema = z.object({
@@ -34,13 +33,22 @@ app.post('/', middlewareAuth, async (c) => {
   const { provider_id } = validation.data
   const requestId = c.get('requestId')
 
-  const admin = supabaseAdmin(c)
-
-  const { data: provider, error: providerError } = await (admin as any)
-    .from('sso_providers')
-    .select('id, org_id, domain, dns_verification_token, status')
-    .eq('id', provider_id)
-    .single()
+  let provider: { id: string, org_id: string, domain: string, dns_verification_token: string, status: string } | undefined
+  let providerError: unknown = null
+  const providerClient = await getPgClient(c)
+  try {
+    const providerResult = await providerClient.query<{ id: string, org_id: string, domain: string, dns_verification_token: string, status: string }>(
+      'SELECT id, org_id, domain, dns_verification_token, status FROM public.sso_providers WHERE id = $1',
+      [provider_id],
+    )
+    provider = providerResult.rows[0]
+  }
+  catch (error) {
+    providerError = error
+  }
+  finally {
+    await closeClient(c, providerClient)
+  }
 
   if (providerError || !provider) {
     cloudlog({ requestId, context: 'verify-dns - provider not found', provider_id })

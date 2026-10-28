@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   checkPermission: vi.fn(),
   apikeyHasOrgRightWithPolicy: vi.fn(),
   createSignedImageUrl: vi.fn(),
-  from: vi.fn(),
+  queryJson: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
@@ -12,10 +12,13 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: () => ({
-    from: (...args: unknown[]) => mocks.from(...args),
-  }),
   apikeyHasOrgRightWithPolicy: (...args: unknown[]) => mocks.apikeyHasOrgRightWithPolicy(...args),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  apikeyPrincipal: (_c: unknown, apikey: string) => ({ kind: 'apikey', apikey }),
+  withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({}),
+  queryJson: (_client: unknown, text: string, values: unknown[]) => mocks.queryJson(text, values),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/storage.ts', () => ({
@@ -54,12 +57,7 @@ function createContext() {
 }
 
 function mockOrgSelect(data: unknown) {
-  mocks.from.mockReturnValue({
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({ data, error: null }),
-    range: vi.fn().mockResolvedValue({ data: [data], error: null }),
-  })
+  mocks.queryJson.mockResolvedValue([data])
 }
 
 describe('organization get security fields', () => {
@@ -80,6 +78,13 @@ describe('organization get security fields', () => {
     expect(body.max_apikey_expiration_days).toBe(90)
     expect(body.enforce_hashed_api_keys).toBe(false)
     expect(body.password_policy_config).toEqual(orgRow.password_policy_config)
+    expect(mocks.queryJson).toHaveBeenCalledWith('SELECT * FROM public.orgs WHERE id = $1', [orgRow.id])
+    expect(mocks.apikeyHasOrgRightWithPolicy).toHaveBeenCalledWith(expect.anything(), { key: 'test-key' }, orgRow.id, { kind: 'apikey', apikey: 'test-key' })
+  })
+
+  it('reports an org hidden by RLS as not found', async () => {
+    mocks.queryJson.mockResolvedValue([])
+    await expect(get(createContext(), { orgId: orgRow.id }, { key: 'test-key' } as any)).rejects.toMatchObject({ status: 400 })
   })
 
   it('accepts a stored partial password policy', async () => {

@@ -1,13 +1,25 @@
+import type { Context } from 'hono'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { createHono, parseBody, quickError, useCors } from '../../utils/hono.ts'
 import { getClaimsFromJWT, middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog } from '../../utils/logging.ts'
-import { supabaseClient, supabaseWithAuth } from '../../utils/supabase.ts'
+import { authPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { version } from '../../utils/version.ts'
 
 const SPOOF_ADMIN_AUTHORIZATION_HEADER = 'x-capgo-spoof-admin-authorization'
 
 function toBearerAuthorization(authorization: string) {
   return authorization.startsWith('Bearer ') ? authorization : `Bearer ${authorization}`
+}
+
+// supabase-js style result: a failed query becomes `error` so each lookup keeps its own error branch.
+async function callAsPrincipal(c: Context, principal: RlsPrincipal, text: string, values: unknown[] = []): Promise<{ data: Record<string, any>[], error: null } | { data: null, error: Error }> {
+  try {
+    return { data: await withRlsContext(c, principal, client => queryJson<Record<string, any>>(client, text, values)), error: null }
+  }
+  catch (error) {
+    return { data: null, error: error instanceof Error ? error : new Error(String(error)) }
+  }
 }
 
 export const app = createHono('', version)
@@ -58,10 +70,10 @@ app.post('/', middlewareAuth, async (c) => {
     return quickError(400, 'invalid_email', 'Email must contain a domain')
   }
 
-  const supabase = supabaseWithAuth(c, auth)
+  const principal = authPrincipal(c, auth)
 
   try {
-    const { data: providerData, error: providerError } = await (supabase.rpc as any)('check_domain_sso', { p_domain: domain })
+    const { data: providerData, error: providerError } = await callAsPrincipal(c, principal, 'SELECT * FROM public.check_domain_sso(p_domain => $1)', [domain])
     if (providerError) {
       cloudlog({ requestId, context: 'check_enforcement - provider query error', error: providerError.message, domain })
       return quickError(500, 'query_error', 'Failed to check SSO enforcement')
@@ -72,9 +84,7 @@ app.post('/', middlewareAuth, async (c) => {
       return c.json({ allowed: true })
     }
 
-    const { data: enforcementData, error: enforcementError } = await (supabase.rpc as any)('get_sso_enforcement_by_domain', {
-      p_domain: domain,
-    })
+    const { data: enforcementData, error: enforcementError } = await callAsPrincipal(c, principal, 'SELECT * FROM public.get_sso_enforcement_by_domain(p_domain => $1)', [domain])
 
     if (enforcementError) {
       cloudlog({ requestId, context: 'check_enforcement - enforcement query error', error: enforcementError.message, domain })
@@ -86,7 +96,7 @@ app.post('/', middlewareAuth, async (c) => {
       return c.json({ allowed: true })
     }
 
-    const enforcementRow = Array.isArray(enforcementData) ? enforcementData[0] : enforcementData
+    const enforcementRow = enforcementData[0] as { org_id: string, enforce_sso: boolean }
     const orgId = enforcementRow.org_id
 
     // If enforcement is not enabled, allow password auth
@@ -109,8 +119,8 @@ app.post('/', middlewareAuth, async (c) => {
         cloudlog({ requestId, context: 'check_enforcement - spoof admin token matches target user', orgId, userId })
       }
       else {
-        const adminSupabase = supabaseClient(c, adminAuthorization)
-        const { data: isPlatformAdmin, error: platformAdminError } = await (adminSupabase.rpc as any)('is_platform_admin')
+        const { data: platformAdminRows, error: platformAdminError } = await callAsPrincipal(c, { kind: 'jwt', userId: adminUserId, claims: adminClaims }, 'SELECT public.is_platform_admin() AS result')
+        const isPlatformAdmin = platformAdminRows?.[0]?.result
 
         if (platformAdminError) {
           cloudlog({ requestId, context: 'check_enforcement - spoof admin check error', error: platformAdminError.message, orgId, userId, adminUserId })
@@ -123,10 +133,8 @@ app.post('/', middlewareAuth, async (c) => {
     }
 
     // SSO is enforced - check RBAC super-admin-only permission for break-glass bypass
-    const { data: isSuperAdmin, error: roleError } = await (supabase.rpc as any)('rbac_check_permission', {
-      p_permission_key: 'org.update_billing',
-      p_org_id: orgId,
-    })
+    const { data: superAdminRows, error: roleError } = await callAsPrincipal(c, principal, 'SELECT public.rbac_check_permission(p_permission_key => $1, p_org_id => $2::uuid) AS result', ['org.update_billing', orgId])
+    const isSuperAdmin = superAdminRows?.[0]?.result
 
     if (roleError) {
       cloudlog({ requestId, context: 'check_enforcement - role query error', error: roleError.message, orgId, userId })

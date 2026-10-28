@@ -1,18 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const checkPermissionMock = vi.fn()
-function queryBuilderFactory() {
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({
-      data: { id: 123, app_id: 'com.example.app' },
-      error: null,
-    }),
-    update: vi.fn().mockReturnThis(),
-  }
-}
-const supabaseApikeyMock = vi.fn()
+const queryMock = vi.fn()
+const withRlsContextMock = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/hono_middleware.ts', () => ({
   middlewareKey: () => async (c: any, next: () => Promise<void>) => {
@@ -26,8 +16,12 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => checkPermissionMock(...args),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: (...args: unknown[]) => supabaseApikeyMock(...args),
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  apikeyPrincipal: (_c: unknown, apikey: string) => ({ kind: 'apikey', apikey }),
+  withRlsContext: (_c: unknown, principal: unknown, run: (client: unknown) => unknown) => {
+    withRlsContextMock(principal)
+    return run({ query: queryMock })
+  },
 }))
 
 const { app } = await import('../supabase/functions/_backend/public/bundle/update_metadata.ts')
@@ -46,9 +40,9 @@ describe('bundle metadata RBAC guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     checkPermissionMock.mockResolvedValue(true)
-    supabaseApikeyMock.mockReturnValue({
-      from: vi.fn().mockReturnValue(queryBuilderFactory()),
-    })
+    queryMock.mockImplementation(async (text: string) => text.startsWith('SELECT')
+      ? { rows: [{ id: 123 }] }
+      : { rows: [] })
   })
 
   it('rejects metadata writes when upload permission is denied', async () => {
@@ -63,7 +57,7 @@ describe('bundle metadata RBAC guard', () => {
     expect(response.status).toBe(400)
     expect(await response.text()).toContain('You can\'t update metadata for this app')
     expect(checkPermissionMock).toHaveBeenCalledWith(expect.anything(), 'app.upload_bundle', { appId: 'com.example.app' })
-    expect(supabaseApikeyMock).not.toHaveBeenCalled()
+    expect(withRlsContextMock).not.toHaveBeenCalled()
   })
 
   it('allows metadata writes when upload permission is granted', async () => {
@@ -78,6 +72,10 @@ describe('bundle metadata RBAC guard', () => {
       status: 'ok',
     })
     expect(checkPermissionMock).toHaveBeenCalledWith(expect.anything(), 'app.upload_bundle', { appId: 'com.example.app' })
-    expect(supabaseApikeyMock).toHaveBeenCalled()
+    expect(withRlsContextMock).toHaveBeenCalledWith({ kind: 'apikey', apikey: 'test-apikey' })
+    expect(queryMock).toHaveBeenLastCalledWith(
+      'UPDATE public.app_versions SET comment = $3 WHERE app_id = $1 AND id = $2',
+      ['com.example.app', 123, 'allowed update'],
+    )
   })
 })

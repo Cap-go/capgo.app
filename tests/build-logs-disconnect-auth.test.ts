@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { streamBuildLogs } from '../supabase/functions/_backend/public/build/logs.ts'
 
-const { mockSupabaseApikey, mockCheckPermission, mockGetEnv } = vi.hoisted(() => ({
-  mockSupabaseApikey: vi.fn(),
+const { mockRlsQuery, mockCheckPermission, mockGetEnv } = vi.hoisted(() => ({
+  mockRlsQuery: vi.fn(),
   mockCheckPermission: vi.fn(),
   mockGetEnv: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: mockSupabaseApikey,
-}))
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mockRlsQuery }),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: mockCheckPermission,
@@ -49,25 +53,13 @@ describe('build log disconnect authorization', () => {
   }
 
   beforeEach(() => {
-    mockSupabaseApikey.mockReset()
+    mockRlsQuery.mockReset()
     mockCheckPermission.mockReset()
     mockGetEnv.mockReset()
 
-    const selectBuilder = {
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({
-        data: { app_id: appId },
-        error: null,
-      }),
-    }
-
-    mockSupabaseApikey.mockReturnValue({
-      from: vi.fn().mockImplementation((table: string) => {
-        expect(table).toBe('build_requests')
-        return {
-          select: vi.fn().mockReturnValue(selectBuilder),
-        }
-      }),
+    mockRlsQuery.mockImplementation(async (text: string) => {
+      expect(text).toContain('FROM public.build_requests')
+      return { rows: [{ row: { app_id: appId } }] }
     })
 
     mockGetEnv.mockImplementation((_, key: string) => {

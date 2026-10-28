@@ -285,35 +285,31 @@ async function ensureOrgMembership(
 }
 
 async function ensurePublicUserRowExists(
-  admin: ReturnType<typeof supabaseAdmin>,
+  pgPool: Awaited<ReturnType<typeof getPgClient>>,
   requestId: string,
   user: PublicUserSeed,
 ): Promise<void> {
-  const { data: existingUser, error: existingUserError } = await (admin as any)
-    .from('users')
-    .select('id, email')
-    .eq('id', user.id)
-    .maybeSingle()
-
-  if (existingUserError) {
+  let existingUser: { id: string, email: string } | undefined
+  try {
+    const existing = await pgPool.query<{ id: string, email: string }>('select id, email from public.users where id = $1', [user.id])
+    existingUser = existing.rows[0]
+  }
+  catch (existingUserError) {
     cloudlogErr({ requestId, message: 'Failed to check public.users row during SSO provisioning', userId: user.id, error: existingUserError })
     throw new Error('public_user_lookup_failed')
   }
 
   if (!existingUser) {
-    const { error: insertError } = await (admin as any)
-      .from('users')
-      .insert({
-        id: user.id,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        enable_notifications: true,
-        opt_for_newsletters: true,
-      })
-
-    if (insertError) {
-      const isDuplicate = insertError.code === '23505' || insertError.message?.toLowerCase().includes('duplicate')
+    try {
+      await pgPool.query(
+        `insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters)
+        values ($1, $2, $3, $4, true, true)`,
+        [user.id, user.email, user.first_name, user.last_name],
+      )
+    }
+    catch (insertError) {
+      const pgError = insertError as { code?: string, message?: string }
+      const isDuplicate = pgError.code === '23505' || pgError.message?.toLowerCase().includes('duplicate')
       if (!isDuplicate) {
         cloudlogErr({ requestId, message: 'Failed to create public.users row during SSO provisioning', userId: user.id, email: user.email, error: insertError })
         throw new Error('public_user_insert_failed')
@@ -322,12 +318,10 @@ async function ensurePublicUserRowExists(
   }
 
   if (existingUser?.email !== user.email) {
-    const { error: updateError } = await (admin as any)
-      .from('users')
-      .update({ email: user.email })
-      .eq('id', user.id)
-
-    if (updateError) {
+    try {
+      await pgPool.query('update public.users set email = $1 where id = $2', [user.email, user.id])
+    }
+    catch (updateError) {
       cloudlogErr({ requestId, message: 'Failed to sync public.users email during SSO provisioning', userId: user.id, email: user.email, error: updateError })
       throw new Error('public_user_update_failed')
     }
@@ -833,12 +827,18 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
       }
 
       // Step 1: Resolve the SSO provider org so we can ensure the original user is a member
-      const { data: mergeProvider, error: mergeProviderError } = await (admin as any)
-        .from('sso_providers')
-        .select('id, org_id, provider_id, role_mapping')
-        .eq('domain', userDomain)
-        .eq('status', 'active')
-        .maybeSingle()
+      let mergeProvider: { id: string, org_id: string, provider_id: string | null, role_mapping: unknown } | undefined
+      let mergeProviderError: unknown = null
+      try {
+        const mergeProviderResult = await (await getSharedPgClient()).query<{ id: string, org_id: string, provider_id: string | null, role_mapping: unknown }>(
+          `select id, org_id, provider_id, role_mapping from public.sso_providers where domain = $1 and status = 'active'`,
+          [userDomain],
+        )
+        mergeProvider = mergeProviderResult.rows[0]
+      }
+      catch (error) {
+        mergeProviderError = error
+      }
 
       if (mergeProviderError) {
         cloudlogErr({ requestId, message: 'Failed to resolve SSO provider during merge', originalUserId, domain: userDomain, error: mergeProviderError })
@@ -905,12 +905,18 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     }
 
     // Resolve the provider from the user's email domain server-side
-    const { data: provider, error: providerError } = await (admin as any)
-      .from('sso_providers')
-      .select('id, org_id, domain, status, provider_id, role_mapping')
-      .eq('domain', userDomain)
-      .eq('status', 'active')
-      .maybeSingle()
+    let provider: { id: string, org_id: string, domain: string, status: string, provider_id: string | null, role_mapping: unknown } | undefined
+    let providerError: unknown = null
+    try {
+      const providerResult = await (await getSharedPgClient()).query<{ id: string, org_id: string, domain: string, status: string, provider_id: string | null, role_mapping: unknown }>(
+        `select id, org_id, domain, status, provider_id, role_mapping from public.sso_providers where domain = $1 and status = 'active'`,
+        [userDomain],
+      )
+      provider = providerResult.rows[0]
+    }
+    catch (error) {
+      providerError = error
+    }
 
     if (providerError) {
       cloudlogErr({ requestId, message: 'Failed to resolve SSO provider for domain', userId, domain: userDomain, error: providerError })
@@ -929,7 +935,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     }
 
     try {
-      await ensurePublicUserRowExists(admin, requestId, publicUserSeed)
+      await ensurePublicUserRowExists(await getSharedPgClient(), requestId, publicUserSeed)
     }
     catch {
       return quickError(500, 'public_user_sync_failed', 'Failed to create user profile for SSO account')

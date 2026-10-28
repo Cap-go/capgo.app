@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm'
 import { cloudlog } from './logging.ts'
 import { isPostgresSafeText, normalizeLegacyEncodedManifestFileName } from './manifest_encoding.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
-import { supabaseAdmin } from './supabase.ts'
 
 export interface ManifestPersistEntry {
   file_name?: string | null
@@ -102,12 +101,18 @@ async function persistDeltaStorageRows(
 }
 
 async function clearLegacyAppVersionManifest(c: Context, versionId: number) {
-  const { error: deleteError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .update({ manifest: null })
-    .eq('id', versionId)
-  if (deleteError)
+  try {
+    const pg = await getPgClient(c)
+    try {
+      await pg.query('UPDATE public.app_versions SET manifest = NULL WHERE id = $1', [versionId])
+    }
+    finally {
+      closeClient(c, pg)
+    }
+  }
+  catch (deleteError) {
     cloudlog({ requestId: c.get('requestId'), message: 'error delete manifest in app_versions', error: deleteError })
+  }
 }
 
 /**

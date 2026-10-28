@@ -2,13 +2,20 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { simpleError } from '../../utils/hono.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 interface GetCurrentBundleBody {
   app_id: string
   channel: string
+}
+
+interface ChannelRow {
+  id: number
+  disable_auto_update: Database['public']['Enums']['disable_update']
+  version: number | null
 }
 
 type ChannelVersionRow = {
@@ -35,13 +42,24 @@ export async function getCurrentBundle(
     throw simpleError('missing_channel', 'Missing channel', { body })
   }
 
-  const supabase = supabaseApikey(c, apikey.key)
-  const { data: channelRow, error: channelError } = await supabase
-    .from('channels')
-    .select('id, disable_auto_update, version')
-    .eq('app_id', body.app_id)
-    .eq('name', body.channel)
-    .maybeSingle()
+  const principal = apikeyPrincipal(c, apikey.key)
+  let channelRow: ChannelRow | null = null
+  let channelError: unknown = null
+  try {
+    const channelRows = await withRlsContext(c, principal, client => queryJson<ChannelRow>(
+      client,
+      'SELECT id, disable_auto_update, version FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+      [body.app_id, body.channel],
+    ))
+    // maybeSingle(): more than one match was an error, not a pick.
+    if (channelRows.length > 1)
+      channelError = { message: 'multiple channels match' }
+    else
+      channelRow = channelRows[0] ?? null
+  }
+  catch (error) {
+    channelError = error
+  }
 
   if (channelError || !channelRow) {
     throw simpleError('cannot_find_channel', 'Cannot find channel', { supabaseError: channelError, app_id: body.app_id, channel: body.channel })
@@ -53,19 +71,23 @@ export async function getCurrentBundle(
 
   // The app_versions embed would be filtered by app_versions RLS (app.read_bundles),
   // so channel.read-only callers would get a null bundle. channel.read was verified
-  // above; load the linked version with the admin client scoped to this app.
+  // above; load the linked version on the service connection scoped to this app.
   let version: ChannelVersionRow | null = null
   if (channelRow.version !== null && channelRow.version !== undefined) {
-    const { data: versionRow, error: versionError } = await supabaseAdmin(c)
-      .from('app_versions')
-      .select('id, name, min_update_version, checksum, deleted, native_packages')
-      .eq('app_id', body.app_id)
-      .eq('id', channelRow.version)
-      .maybeSingle()
-    if (versionError) {
+    const pg = await getPgClient(c)
+    try {
+      version = await queryJsonOne<ChannelVersionRow>(
+        pg,
+        'SELECT id, name, min_update_version, checksum, deleted, native_packages FROM public.app_versions WHERE app_id = $1 AND id = $2',
+        [body.app_id, channelRow.version],
+      )
+    }
+    catch (versionError) {
       throw simpleError('cannot_find_bundle', 'Cannot load channel bundle', { supabaseError: versionError, app_id: body.app_id, channel: body.channel })
     }
-    version = versionRow as ChannelVersionRow | null
+    finally {
+      closeClient(c, pg)
+    }
   }
 
   return c.json({

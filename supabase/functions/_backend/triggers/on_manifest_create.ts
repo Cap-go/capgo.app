@@ -5,9 +5,11 @@ import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, quickError, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { isTransientDatabaseError } from '../utils/pg_errors.ts'
+import { queryJsonOne } from '../utils/pg_rls.ts'
 import { isRetryablePostgrestResult, retryWithBackoff } from '../utils/retry.ts'
 import { s3 } from '../utils/s3.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 
 const SIZE_RETRY_ATTEMPTS = 1
 const SIZE_RETRY_DELAY_MS = 500
@@ -56,7 +58,7 @@ async function runManifestUpdateWithRetry(
   }, {
     attempts: MANIFEST_UPDATE_RETRY_ATTEMPTS,
     baseDelayMs: MANIFEST_UPDATE_RETRY_DELAY_MS,
-    shouldRetry: result => isRetryablePostgrestResult(result),
+    shouldRetry: result => isRetryablePostgrestResult(result) || isTransientDatabaseError(result?.error),
   })
 
   if (!result) {
@@ -117,38 +119,48 @@ export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, q
   if (!record.id)
     throw simpleError('no_s3_path', 'No s3 path', { record })
 
-  const { data: current, error: currentError } = await supabaseAdmin(c)
-    .from('delta_files')
-    .select('file_size, s3_path, app_id, file_name, path_org, path_session, path_sha')
-    .eq('id', record.id)
-    .maybeSingle()
-  if (currentError)
-    throw simpleError('delta_file_read_failed', 'Failed to read delta file', { id: record.id }, currentError)
-  if (!current || current.file_size > 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'delta file gone or already sized', id: record.id, queue })
+  const pg = await getPgClient(c)
+  try {
+    let current: ({ file_size: number } & DeltaFilePathColumns) | null
+    try {
+      current = await queryJsonOne<{ file_size: number } & DeltaFilePathColumns>(
+        pg,
+        'SELECT file_size, s3_path, app_id, file_name, path_org, path_session, path_sha FROM public.delta_files WHERE id = $1',
+        [record.id],
+      )
+    }
+    catch (currentError) {
+      throw simpleError('delta_file_read_failed', 'Failed to read delta file', { id: record.id }, currentError)
+    }
+    if (!current || current.file_size > 0) {
+      cloudlog({ requestId: c.get('requestId'), message: 'delta file gone or already sized', id: record.id, queue })
+      return c.json(BRES)
+    }
+
+    // The queued record may predate the row's compaction: read the path from the row.
+    // queryJson uses to_json, so bytea arrives as '\\x<hex>', the same shape PostgREST returned.
+    const s3Path = deltaFileS3Path(current)
+    if (!s3Path)
+      throw simpleError('no_s3_path', 'No s3 path', { record })
+
+    const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, s3Path)
+    const size = diagnostics?.size ?? 0
+    if (size <= 0) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: s3Path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
+      // Non-2xx keeps the message under the 5-read queue budget.
+      throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: s3Path, storageDiagnostics: diagnostics }, lastError, { alert: false })
+    }
+
+    await runManifestUpdateWithRetry(c, async () => {
+      await pg.query('UPDATE public.delta_files SET file_size = $1 WHERE id = $2 AND file_size = 0', [size, record.id])
+      return { error: null }
+    })
+    cloudlog({ requestId: c.get('requestId'), message: 'delta file file_size updated', id: record.id, s3_path: s3Path, size, attempts, queue })
     return c.json(BRES)
   }
-
-  // The queued record may predate the row's compaction: read the path from the row.
-  const s3Path = deltaFileS3Path(current)
-  if (!s3Path)
-    throw simpleError('no_s3_path', 'No s3 path', { record })
-
-  const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, s3Path)
-  const size = diagnostics?.size ?? 0
-  if (size <= 0) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: s3Path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
-    // Non-2xx keeps the message under the 5-read queue budget.
-    throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: s3Path, storageDiagnostics: diagnostics }, lastError, { alert: false })
+  finally {
+    closeClient(c, pg)
   }
-
-  await runManifestUpdateWithRetry(c, async () => await supabaseAdmin(c)
-    .from('delta_files')
-    .update({ file_size: size })
-    .eq('id', record.id)
-    .eq('file_size', 0))
-  cloudlog({ requestId: c.get('requestId'), message: 'delta file file_size updated', id: record.id, s3_path: s3Path, size, attempts, queue })
-  return c.json(BRES)
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()

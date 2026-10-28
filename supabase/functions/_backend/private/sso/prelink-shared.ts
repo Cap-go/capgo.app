@@ -3,7 +3,6 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 
 export interface PrelinkUsersRequest {
@@ -204,13 +203,22 @@ export async function runPrelinkUsers(
     quickError(400, 'public_domain_blocked', 'Cannot prelink users on public email domains')
   }
 
-  const admin = supabaseAdmin(c)
-
-  const { data: providerCheck, error: providerCheckError } = await (admin as any)
-    .from('sso_providers')
-    .select('id, org_id, domain, status')
-    .eq('id', provider_id)
-    .single()
+  let providerCheck: { id: string, org_id: string, domain: string | null, status: string } | undefined
+  let providerCheckError: unknown = null
+  const pgClient = await getPgClient(c)
+  try {
+    const result = await pgClient.query<{ id: string, org_id: string, domain: string | null, status: string }>(
+      'SELECT id, org_id, domain, status FROM public.sso_providers WHERE id = $1',
+      [provider_id],
+    )
+    providerCheck = result.rows[0]
+  }
+  catch (error) {
+    providerCheckError = error
+  }
+  finally {
+    await closeClient(c, pgClient)
+  }
 
   if (providerCheckError || !providerCheck) {
     cloudlogErr({ requestId, message: 'Provider not found for prelink', providerId: provider_id, error: providerCheckError })

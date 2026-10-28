@@ -1,6 +1,8 @@
 import type { Context } from 'hono'
 import type { CreateBindingParams } from '../../private/role_bindings.ts'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { PgClient } from '../../utils/pg.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { ClientBindingInput } from './scope.ts'
 import { sql } from 'drizzle-orm'
@@ -10,11 +12,12 @@ import { honoFactory, parseBody, quickError, simpleError } from '../../utils/hon
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { schema } from '../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseWithAuth, validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
+import { validateExpirationAgainstOrgPolicies, validateExpirationDate } from '../../utils/supabase.ts'
 import { apiKeyBindingsAllowOrgCreate, assertApiKeyCanKeepOrgCreateGrant, parseApiKeyGlobalPermissions, replaceApiKeyGlobalPermissions, validateApiKeyGlobalPermissionsForBindings } from './global_permissions.ts'
-import { assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { apiKeyManagerPrincipal, assertApiKeyManagerCanAssignBindings, assertApiKeyManagerCanRotateTarget, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, requireJwtMfaForPrivilegedAction, sanitizeClientBindings, selectOwnedApiKeyByIdentifier } from './scope.ts'
 
 const app = honoFactory.createApp()
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
@@ -278,6 +281,60 @@ async function replaceApiKeyGlobalPermissionsForExistingBindings(
   }
 }
 
+const PUBLIC_SELECT_SQL = APIKEY_PUBLIC_COLUMNS.split(', ').map(column => `"${column}"`).join(', ')
+
+async function selectPublicApiKey(c: Context<MiddlewareKeyVariables>, principal: RlsPrincipal, apikeyId: number, userId: string): Promise<{ data: ApiKeyPublicSelectRow | null, error: unknown }> {
+  try {
+    const data = await withRlsContext(c, principal, client => queryJsonOne<ApiKeyPublicSelectRow>(
+      client,
+      `SELECT ${PUBLIC_SELECT_SQL} FROM public.apikeys WHERE id = $1 AND user_id = $2::uuid`,
+      [apikeyId, userId],
+    ))
+    return { data, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+}
+
+async function runServiceQuery<T>(c: Context<MiddlewareKeyVariables>, run: (pgClient: PgClient) => Promise<T | null>): Promise<{ data: T | null, error: unknown }> {
+  let pgClient: PgClient | undefined
+  try {
+    pgClient = await getPgClient(c)
+    return { data: await run(pgClient), error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
+function updateOwnedApiKey<T>(
+  c: Context<MiddlewareKeyVariables>,
+  apikeyId: number,
+  userId: string,
+  values: ApiKeyUpdateData,
+) {
+  const entries = Object.entries(values).filter(([, value]) => value !== undefined)
+  const setSql = entries.map(([column], index) => `"${column}" = $${index + 3}`).join(', ')
+  return runServiceQuery<T>(c, pgClient => queryJsonOne<T>(
+    pgClient,
+    `UPDATE public.apikeys SET ${setSql} WHERE id = $1 AND user_id = $2::uuid RETURNING ${PUBLIC_SELECT_SQL}`,
+    [apikeyId, userId, ...entries.map(([, value]) => value)],
+  ))
+}
+
+function regenerateHashedApiKey(c: Context<MiddlewareKeyVariables>, apikeyId: number, userId: string) {
+  return runServiceQuery<ApiKeyRow>(c, pgClient => queryJsonOne<ApiKeyRow>(
+    pgClient,
+    'SELECT r.* FROM public.regenerate_hashed_apikey_for_user(p_apikey_id => $1, p_user_id => $2::uuid) AS r',
+    [apikeyId, userId],
+  ))
+}
+
 async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
   const requestId = c.get('requestId')
   const auth = requireApiKeyManagementAuth(c, 'not_authorized', 'API key management requires authentication', { requestId })
@@ -334,15 +391,12 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
     throw simpleError('no_valid_fields_provided_for_update', 'No valid fields provided for update. Provide name, expires_at, bindings, global_permissions, or regenerate.', { requestId })
   }
 
-  const supabase = supabaseWithAuth(c, auth)
-  const dataSupabase = auth.authType === 'apikey' ? supabaseAdmin(c) : supabase
-
   // Check if the API key to update exists. JWT callers rely on RLS.
   const { data: existingApikey, error: fetchError } = await selectOwnedApiKeyByIdentifier<ApiKeyLookupRow>(c, auth, resolvedId, 'id, rbac_id, expires_at, key, key_hash')
 
   if (fetchError) {
-    // RLS might return an error or just no data if not found/accessible
-    throw quickError(fetchError.code === 'PGRST116' ? 404 : 500, 'api_key_not_found_or_access_denied', 'API key not found or access denied', { requestId, supabaseError: fetchError })
+    // Not found/inaccessible comes back as no data below; an error here is a DB failure
+    throw quickError(500, 'api_key_not_found_or_access_denied', 'API key not found or access denied', { requestId, supabaseError: fetchError })
   }
   if (!existingApikey) {
     throw quickError(404, 'api_key_not_found_or_access_denied', 'API key not found or access denied', { requestId })
@@ -369,12 +423,10 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
       ? [...new Set(bindings.map(binding => binding.org_id))]
       : currentBindingOrgIds
     const expiresAtForValidation = expires_at === undefined ? existingApikey.expires_at : expires_at
-    await validateExpirationAgainstOrgPolicies(orgsToValidate, expiresAtForValidation, dataSupabase)
+    await validateExpirationAgainstOrgPolicies(c, orgsToValidate, expiresAtForValidation, apiKeyManagerPrincipal(c, auth))
   }
 
   const isHashedKey = existingApikey.key_hash !== null
-
-  const writeSupabase = supabaseAdmin(c)
 
   let updatedApikey: ApiKeyPublicRow | null = null
   if (hasBindingUpdates) {
@@ -383,12 +435,7 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
       rbac_id: existingApikey.rbac_id,
     }, currentBindingOrgIds, bindings, globalPermissions, hasUpdates ? updateData : undefined)
 
-    const { data: updatedData, error: fetchUpdatedError } = await supabase
-      .from('apikeys')
-      .select(APIKEY_PUBLIC_COLUMNS)
-      .eq('id', existingApikey.id)
-      .eq('user_id', auth.userId)
-      .single()
+    const { data: updatedData, error: fetchUpdatedError } = await selectPublicApiKey(c, authPrincipal(c, auth), existingApikey.id, auth.userId)
 
     if (fetchUpdatedError || !updatedData) {
       throw quickError(500, 'failed_to_update_apikey', 'Failed to load updated API key', { requestId, supabaseError: fetchUpdatedError })
@@ -401,12 +448,7 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
       rbac_id: existingApikey.rbac_id,
     }, currentBindingOrgIds, globalPermissions, hasUpdates ? updateData : undefined)
 
-    const { data: updatedData, error: fetchUpdatedError } = await dataSupabase
-      .from('apikeys')
-      .select(APIKEY_PUBLIC_COLUMNS)
-      .eq('id', existingApikey.id)
-      .eq('user_id', auth.userId)
-      .single()
+    const { data: updatedData, error: fetchUpdatedError } = await selectPublicApiKey(c, apiKeyManagerPrincipal(c, auth), existingApikey.id, auth.userId)
 
     if (fetchUpdatedError || !updatedData) {
       throw quickError(500, 'failed_to_update_apikey', 'Failed to load updated API key', { requestId, supabaseError: fetchUpdatedError })
@@ -414,13 +456,8 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
     updatedApikey = toApiKeyPublicRow(updatedData as ApiKeyPublicSelectRow)
   }
   else if (hasUpdates) {
-    const { data: updatedData, error: updateError } = await writeSupabase
-      .from('apikeys')
-      .update(updateData)
-      .eq('id', existingApikey.id) // Use the fetched ID to ensure we update the correct record
-      .eq('user_id', auth.userId)
-      .select(APIKEY_PUBLIC_COLUMNS)
-      .single()
+    // Use the fetched ID to ensure we update the correct record
+    const { data: updatedData, error: updateError } = await updateOwnedApiKey<ApiKeyPublicSelectRow>(c, existingApikey.id, auth.userId, updateData)
 
     if (updateError || !updatedData) {
       throw quickError(500, 'failed_to_update_apikey', 'Failed to update API key', { requestId, supabaseError: updateError })
@@ -430,27 +467,20 @@ async function handlePut(c: Context<MiddlewareKeyVariables>, idParam?: string) {
 
   if (regenerate) {
     if (isHashedKey) {
-      const { data: regeneratedApikey, error: regenerateError } = await supabaseAdmin(c).rpc('regenerate_hashed_apikey_for_user', {
-        p_apikey_id: existingApikey.id,
-        p_user_id: auth.userId,
-      })
+      const { data: regeneratedApikey, error: regenerateError } = await regenerateHashedApiKey(c, existingApikey.id, auth.userId)
       if (regenerateError || !regeneratedApikey) {
         throw quickError(500, 'failed_to_update_apikey', 'Failed to regenerate API key', { requestId, supabaseError: regenerateError })
       }
       return c.json({ ...regeneratedApikey, is_hashed_key: true })
     }
 
-    const { data: updatedData, error: updateError } = await writeSupabase
-      .from('apikeys')
-      // Any non-null value different from the current key will trigger the
-      // `apikeys_force_server_key()` database trigger to regenerate the key.
-      // We use the literal string 'regenerate' here purely as a placeholder;
-      // the final key returned below is the value generated by the trigger.
-      .update({ key: 'regenerate' })
-      .eq('id', existingApikey.id)
-      .eq('user_id', auth.userId)
-      .select()
-      .single()
+    // Under PostgREST a placeholder key made `apikeys_force_server_key()` generate the new
+    // key, but that trigger skips the postgres session user, so generate it the same way here.
+    const { data: updatedData, error: updateError } = await runServiceQuery<ApiKeyRow>(c, pgClient => queryJsonOne<ApiKeyRow>(
+      pgClient,
+      'UPDATE public.apikeys SET key = pg_catalog.gen_random_uuid()::text, key_hash = NULL WHERE id = $1 AND user_id = $2::uuid RETURNING *',
+      [existingApikey.id, auth.userId],
+    ))
 
     if (updateError || !updatedData) {
       throw quickError(500, 'failed_to_update_apikey', 'Failed to regenerate API key', { requestId, supabaseError: updateError })
