@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { ref, watchEffect } from 'vue'
+import type { AiAgentKeyTask } from '~/services/aiAgentKey'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconBot from '~icons/lucide/bot'
 import IconCheck from '~icons/lucide/check'
 import IconCopy from '~icons/lucide/copy'
 import IconLoader from '~icons/lucide/loader-2'
-import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
-import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiUploadBundlePrompt } from '~/services/cliAiPrompt'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
+import { canPrepareAgentKey, loadAgentKey } from '~/services/aiAgentKey'
+import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiRequestBuildPrompt, buildAiUploadBundlePrompt } from '~/services/cliAiPrompt'
 import { useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { checkPermissions } from '~/services/permissions'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -19,16 +20,17 @@ import { useOrganizationStore } from '~/stores/organization'
  * the agent's Capgo CLI in and performs the task. The prompt holds an API key, so it is never
  * shown on screen; it only goes to the clipboard.
  */
-type AiAgentTask = 'add-app' | 'upload-bundle' | 'create-channel'
 
 const props = defineProps<{
-  task: AiAgentTask
+  task: AiAgentKeyTask
   /** Required for every task except `add-app`. */
   appId?: string
   channelName?: string
+  /** `request-build` only: the platform to build. */
+  platform?: 'ios' | 'android'
   compact?: boolean
-  /** Shows an "or" line above the card, for use under a manual form. */
-  orSeparator?: boolean
+  /** Shows an "or" line next to the card: `before` under a manual form, `after` above one. */
+  orSeparator?: 'before' | 'after'
 }>()
 
 const emit = defineEmits<{ copied: [] }>()
@@ -37,43 +39,39 @@ const { t } = useI18n()
 const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
+const { rememberSetupMethod } = useSetupMethodPreference()
 
 const isCopying = ref(false)
 const copied = ref(false)
-// The prompt carries an API key; without the right to create one the copy would always fail,
-// so the card stays hidden and the manual path remains.
-const canCreateKey = ref(false)
-watchEffect(async () => {
-  const appId = props.appId
-  const orgId = organizationStore.currentOrganization?.gid
-  const allowed = props.task === 'add-app'
-    ? !!orgId && await checkPermissions('org.manage_apikeys', { orgId }).catch(() => false)
-    : !!appId && await checkPermissions('app.manage_apikeys', { appId }).catch(() => false)
-  canCreateKey.value = allowed
-})
+// The prompt carries an API key; when the user has no suitable key and may not create one,
+// the copy would always fail, so the card stays hidden and the manual path remains.
+const canPrepareKey = ref(false)
 
-// App roles whose key can finish each app task. Uploading to a channel needs
-// app.upload_bundle and channel.promote_bundle; creating a channel with --default or
-// --self-assign also needs channel.update_settings, which only app_admin grants.
-const APP_TASK_ROLES: Record<Exclude<AiAgentTask, 'add-app'>, readonly string[]> = {
-  'upload-bundle': ['app_admin', 'app_developer', 'app_uploader'],
-  'create-channel': ['app_admin'],
+// App pages can show a different current organization: app tasks use the app's own.
+async function appOwnerOrg(appId: string) {
+  const { data, error } = await capgo.from('apps').select('name, owner_org').eq('app_id', appId).maybeSingle()
+  return error || !data?.owner_org ? null : data
 }
 
-// Reuses a key the user already owns when it can do the task. A new key for an app task is
-// bound to that app only (app_admin), so app administrators without organization rights can use it.
-async function loadApiKey(userId: string, orgId: string, appId: string | null) {
-  const appRoles = props.task === 'add-app' ? undefined : APP_TASK_ROLES[props.task]
-  return shareInFlightApiKeyLoad({ userId, orgId, appId, appRoles }, async () => {
-    const existing = await findUsablePlainApiKey(capgo, userId, orgId, appId, { appRoles })
-    if (existing)
-      return existing
-    const { data, error } = await createDefaultApiKey(capgo, t('api-key'), appId ? { appId } : { orgId })
-    if (error)
-      throw error
-    return typeof data?.key === 'string' ? data.key : findUsablePlainApiKey(capgo, userId, orgId, appId, { appRoles })
+// Saving the setup preference replaces main.user: only a different user re-runs the check.
+const currentUserId = computed(() => main.user?.id ?? main.auth?.id)
+
+watchEffect(async (onCleanup) => {
+  // A newer run (task, app, user or organization changed) supersedes this one.
+  let stale = false
+  onCleanup(() => {
+    stale = true
   })
-}
+  // Read every reactive input before awaiting, so a change re-runs this check.
+  const task = props.task
+  const appId = props.appId ?? null
+  const userId = currentUserId.value
+  const currentOrgId = organizationStore.currentOrganization?.gid ?? null
+  const orgId = task === 'add-app' ? currentOrgId : appId ? (await appOwnerOrg(appId))?.owner_org ?? null : null
+  const allowed = !!userId && !!orgId && await canPrepareAgentKey(capgo, { userId, orgId, appId: task === 'add-app' ? null : appId, task })
+  if (!stale)
+    canPrepareKey.value = allowed
+})
 
 async function buildPrompt(): Promise<string | null> {
   const userId = main.user?.id ?? main.auth?.id
@@ -83,25 +81,26 @@ async function buildPrompt(): Promise<string | null> {
     const org = organizationStore.currentOrganization
     if (!org)
       return null
-    const apiKey = await loadApiKey(userId, org.gid, null)
+    const apiKey = await loadAgentKey(capgo, { userId, orgId: org.gid, appId: null, task: 'add-app' }, t('api-key'))
     return apiKey ? buildAiAddAppPrompt({ apiKey, organization: { id: org.gid, name: org.name } }) : null
   }
   const appId = props.appId
   if (!appId)
     return null
-  // App pages can show a different current organization: use the app's own.
-  const { data: app, error } = await capgo.from('apps').select('name, owner_org').eq('app_id', appId).maybeSingle()
-  if (error || !app?.owner_org)
+  const app = await appOwnerOrg(appId)
+  if (!app)
     return null
   const orgId = app.owner_org
   const organization = { id: orgId, name: organizationStore.organizations.find(org => org.gid === orgId)?.name ?? orgId }
-  const apiKey = await loadApiKey(userId, orgId, appId)
+  const apiKey = await loadAgentKey(capgo, { userId, orgId, appId, task: props.task }, t('api-key'))
   if (!apiKey)
     return null
   const appInfo = { appId, name: app.name }
-  return props.task === 'upload-bundle'
-    ? buildAiUploadBundlePrompt({ apiKey, organization, app: appInfo })
-    : buildAiCreateChannelPrompt({ apiKey, organization, app: appInfo, channelName: props.channelName })
+  if (props.task === 'upload-bundle')
+    return buildAiUploadBundlePrompt({ apiKey, organization, app: appInfo })
+  if (props.task === 'request-build')
+    return buildAiRequestBuildPrompt({ apiKey, organization, app: appInfo, platform: props.platform ?? 'ios' })
+  return buildAiCreateChannelPrompt({ apiKey, organization, app: appInfo, channelName: props.channelName })
 }
 
 /**
@@ -149,6 +148,7 @@ async function copyPrompt() {
       org_id: organizationStore.currentOrganization?.gid ?? '',
       app_id: props.appId ?? '',
     })
+    void rememberSetupMethod('ai')
     emit('copied')
   }
   finally {
@@ -158,8 +158,8 @@ async function copyPrompt() {
 </script>
 
 <template>
-  <div v-if="canCreateKey" class="space-y-4">
-    <p v-if="orSeparator" class="text-center text-xs font-medium uppercase tracking-wide text-slate-400">
+  <div v-if="canPrepareKey" class="space-y-4">
+    <p v-if="orSeparator === 'before'" class="text-center text-xs font-medium uppercase tracking-wide text-slate-400">
       {{ t('ai-task-or') }}
     </p>
     <div
@@ -196,5 +196,8 @@ async function copyPrompt() {
         {{ t('ai-task-key-note') }}
       </p>
     </div>
+    <p v-if="orSeparator === 'after'" class="text-center text-xs font-medium uppercase tracking-wide text-slate-400">
+      {{ t('ai-task-or') }}
+    </p>
   </div>
 </template>

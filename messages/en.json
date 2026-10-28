@@ -3671,6 +3671,7 @@
   "ai-task-add-app-desc": "Copy a prompt for Claude Code, Cursor, Codex or Windsurf. It installs Capgo MCP and registers the app from your project.",
   "ai-task-copy-failed": "Couldn't copy the prompt. Allow clipboard access for this site and try again.",
   "ai-task-create-channel-desc": "Copy a prompt for your coding agent. It creates the channel with the Capgo CLI and asks you how to configure it.",
+  "ai-task-request-build-desc": "Copy a prompt for your coding agent. It requests the native build with the Capgo CLI, or sets up signing first through Capgo MCP for a new platform. This page updates when the build starts.",
   "ai-task-key-note": "The copied prompt contains an API key so your agent can log in. Only paste it into an agent you trust.",
   "ai-task-or": "or",
   "ai-task-title": "Let your AI agent do it",

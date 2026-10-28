@@ -6,6 +6,7 @@ import arrowBack from '~icons/ion/arrow-back?width=2em&height=2em'
 import IconLoader from '~icons/lucide/loader-2'
 import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
 import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
@@ -33,6 +34,8 @@ const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
+// The AI agent card comes first unless the user last picked the manual way.
+const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 
 interface Step {
   title: string
@@ -109,6 +112,8 @@ function scrollToElement(id: string) {
 async function copyToast(allowed: boolean, id: string, text?: string) {
   if (!allowed || !text)
     return
+  if (step.value === 0)
+    void rememberSetupMethod('manual')
   try {
     await navigator.clipboard.writeText(text)
     console.log('displayStore.messageToast', displayStore.messageToast)
@@ -295,6 +300,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="mx-auto mt-12 max-w-6xl sm:px-10">
+        <AiAgentTaskCard v-if="!manualFirst && step === 0" class="mb-6" task="upload-bundle" :app-id="appId" or-separator="after" @copied="waitForDelegatedUpload" />
         <template v-for="(s, i) in steps" :key="i">
           <div v-if="i > 0" class="mx-auto w-1 h-10 bg-gray-200" :class="[step !== i ? 'opacity-30' : '']" />
 
@@ -328,7 +334,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div v-if="i === 0" class="pt-6 border-t border-gray-200">
-              <AiAgentTaskCard class="mb-6" task="upload-bundle" :app-id="appId" @copied="waitForDelegatedUpload" />
+              <AiAgentTaskCard v-if="manualFirst" class="mb-6" task="upload-bundle" :app-id="appId" @copied="waitForDelegatedUpload" />
               <h3 class="text-lg font-semibold text-gray-900 font-pj">
                 {{ t('onboarding-invite-option-title') }}
               </h3>

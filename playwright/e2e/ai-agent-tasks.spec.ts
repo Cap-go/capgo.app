@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
 import { expect, test } from '../support/commands'
-import { consoleQueryFromResponse, consoleQueryJson, routeConsoleQuery } from '../support/consoleQuery'
+import { consoleQueryFromResponse, consoleQueryJson, consoleQueryMethod, routeConsoleQuery } from '../support/consoleQuery'
 
 function localAdminClient() {
   const { ports } = getSupabaseWorktreeConfig()
@@ -27,6 +27,11 @@ test.describe('AI agent alternatives to manual actions', () => {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.login('test@capgo.app', 'testtest')
     await page.evaluate(() => navigator.clipboard.writeText(''))
+    // The shared demo account must keep its saved setup preference: AI or manual picks in these
+    // tests only reorder future choices, so drop their profile writes instead of persisting them.
+    await routeConsoleQuery(page, 'users', (route, query) => consoleQueryMethod(query) === 'GET'
+      ? route.fallback()
+      : route.fulfill(consoleQueryJson([])))
   })
 
   test('add app offers the AI agent or the manual wizard', async ({ page }) => {
@@ -104,13 +109,18 @@ test.describe('AI agent alternatives to manual actions', () => {
   })
 
   test('hides the AI options from users who cannot create the API key they need', async ({ page }) => {
-    // Answer "no" only for API key management; every other permission keeps its real result.
+    // No usable key of their own, and no right to create one: answer "no" for key management and
+    // role assignment; every other permission keeps its real result.
+    const deniedPermissions = new Set(['org.manage_apikeys', 'app.manage_apikeys', 'org.update_user_roles'])
     await routeConsoleQuery(page, 'rbac_check_permission', (route, query) => {
       const key = (query.args[0] as { p_permission_key?: string } | undefined)?.p_permission_key
-      return key === 'org.manage_apikeys' || key === 'app.manage_apikeys'
+      return key && deniedPermissions.has(key)
         ? route.fulfill(consoleQueryJson(false))
         : route.fallback()
     })
+    await routeConsoleQuery(page, 'apikeys', (route, query) => consoleQueryMethod(query) === 'GET'
+      ? route.fulfill(consoleQueryJson([]))
+      : route.fallback())
 
     await page.goto('/app/new')
     await expect(page.getByRole('textbox', { name: 'App name' })).toBeVisible()
@@ -122,5 +132,51 @@ test.describe('AI agent alternatives to manual actions', () => {
     await keyCheck
     await expect(page.getByRole('button', { name: 'Invite a technical teammate' })).toBeVisible()
     await expect(page.locator('[data-test="ai-task-upload-bundle"]')).toHaveCount(0)
+  })
+
+  test('native builds offer the AI agent first, plus a teammate invite', async ({ page }) => {
+    // The demo app has no builds in the seed: add one so the Builds tab shows its table and "Add".
+    const admin = localAdminClient()
+    const { data: app } = await admin.from('apps').select('owner_org').eq('app_id', 'com.demo.app').single()
+    const { data: user } = await admin.from('users').select('id').eq('email', 'test@capgo.app').single()
+    const now = new Date().toISOString()
+    const { data: build, error } = await admin.from('build_requests').insert({
+      app_id: 'com.demo.app',
+      owner_org: app!.owner_org,
+      requested_by: user!.id,
+      platform: 'android',
+      build_mode: 'release',
+      build_config: {},
+      status: 'succeeded',
+      builder_job_id: `job-e2e-${Date.now()}`,
+      upload_session_key: `e2e-${Date.now()}`,
+      upload_path: 'e2e/build.zip',
+      upload_url: 'https://builder.example.com/upload/e2e',
+      upload_expires_at: now,
+      created_at: now,
+      updated_at: now,
+    }).select('id').single()
+    expect(error).toBeNull()
+    try {
+      await page.goto('/app/com.demo.app/builds')
+      await page.getByRole('button', { name: 'Add', exact: true }).first().click()
+      const card = page.locator('[data-test="ai-task-request-build"]')
+      await expect(card).toBeVisible()
+      await expect(page.locator('[data-test="build-invite-teammate"]')).toBeVisible()
+      // AI first: the card sits above the manual CLI steps.
+      const cardBox = await card.boundingBox()
+      const firstStep = await page.locator('#build_step_0').boundingBox()
+      expect(cardBox!.y).toBeLessThan(firstStep!.y)
+
+      // Android already built, so the agent requests the build directly.
+      await page.getByRole('button', { name: /Android/ }).first().click()
+      await card.locator('[data-test="ai-task-copy-prompt"]').click()
+      expect(await readClipboard(page)).toContain('{CAPGO_CLI_RUNNER} build request com.demo.app --platform android --use-stored-credentials')
+      // The page now waits for the build the agent requests.
+      await expect(card).toHaveCount(0)
+    }
+    finally {
+      await admin.from('build_requests').delete().eq('id', build!.id)
+    }
   })
 })
