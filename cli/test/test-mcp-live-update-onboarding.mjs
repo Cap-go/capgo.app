@@ -157,6 +157,16 @@ await test('test change: asks manual or agent before touching files', async () =
   eq(calls.length, 0, 'nothing may happen before the user chooses')
 })
 
+await test('test change: readiness sent before the choice is ignored', async () => {
+  const calls = []
+  const deps = resumedDeps({ applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } } })
+  const early = await runAdvance(deps, { testChangeReady: true })
+  eq(early.state, 'test-change-choice')
+  const gate = await runAdvance(deps, { testChangeChoice: 'manual' })
+  eq(gate.state, 'make-test-change-manual', 'the manual gate still waits for the user')
+  eq(calls.length, 0)
+})
+
 await test('test change: manual waits for the user, then only bumps the version', async () => {
   const calls = []
   const deps = resumedDeps({ applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } } })

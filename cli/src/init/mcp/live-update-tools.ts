@@ -210,6 +210,9 @@ export function buildDeps(
     applyTestChange: async (_appId: string, baseVersion?: string) => {
       try {
         const version = getInitSuggestedOtaVersion(baseVersion || getBundleVersion(undefined, getPackageJsonPath()) || '1.0.0')
+        // Rebuild the web assets so the upload contains the test change; no cap sync, it must arrive through Capgo.
+        const pm = getPMAndCommand()
+        execSync(`${pm.pm} run build`, { cwd: getProjectDir(), stdio: 'pipe' })
         return { ok: true as const, version }
       }
       catch (error) {

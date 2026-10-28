@@ -238,7 +238,8 @@ export async function decideAdvance(facts: LiveUpdateFacts, deps: EngineDeps, in
   if (input?.testChangeChoice)
     mergeSession(appId, { testChangeChoice: input.testChangeChoice })
 
-  if (input?.testChangeReady)
+  // Readiness only counts at the change gate of a chosen mode, never before the user picks who edits.
+  if (input?.testChangeReady && getSession(appId).testChangeChoice && stepNumberFromProgress(deps.loadProgress()) === 9)
     mergeSession(appId, { testChangeReady: true, testChangeFiles: input.testChangeFiles, testChangeDescription: input.testChangeDescription })
 
   if (input?.testChangeRevertedConfirmed) {

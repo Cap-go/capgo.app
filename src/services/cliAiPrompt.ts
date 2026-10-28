@@ -474,7 +474,7 @@ Before editing any file, ask me how I want to make the test change, and wait for
 - **I make it myself**: I edit something I will recognize, such as a heading text or a button color, and tell you when it is saved. Do not edit application files for me in this case.
 - **You make it**: you change exactly one thing I will see on the first screen right after launch, such as a heading, label, or button text (for example append “(Capgo test)” to the main title). Match the app's existing style; no banners, overlays, or new components. Then tell me exactly what to look for.
 
-If you make the change, record exactly which file was modified and remove the change yourself once the update is confirmed, then tell me that devices keep showing the test bundle until the next upload. Avoid native code, dependencies, Capacitor configuration, or unrelated refactoring.
+If you make the change, record exactly which file was modified so you can restore it later. Avoid native code, dependencies, Capacitor configuration, or unrelated refactoring.
 
 Choose a new unique bundle version by incrementing the previous uploaded bundle according to the project's existing versioning strategy. Normally this is the next patch version:
 
@@ -566,7 +566,7 @@ The test succeeds when:
 - The application calls \`notifyAppReady()\` without subsequently rolling back.
 - No \`cap sync\`, \`cap copy\`, or equivalent synchronization occurred after the test change was created.
 
-After the test succeeds, if you made the test change, revert it in the source and confirm the file is back to its previous content.`
+After the test succeeds, if you made the test change, revert it in the source and confirm the file is back to its previous content. If I made it, remind me to revert it if it was temporary. Either way, tell me that devices keep showing the test bundle until the next upload.`
 
 function otaChecklistProtocol(appIds: string[]): string {
   return `## OTA todo list progress checks
