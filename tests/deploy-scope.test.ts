@@ -52,6 +52,7 @@ describe('deploy scope matching', () => {
     ['the shared TUS file utility deploys API and files workers', ['supabase/functions/_backend/files/util.ts'], { api: true, files: true, supabase: true }],
     ['package dependency changes deploy Cloudflare workers without forcing Supabase', ['package.json'], { alert_tail: true, api: true, files: true, plugins: true, translation: true }],
     ['alert tail worker changes deploy only the tail worker', ['cloudflare_workers/alert_tail/tail_logic.ts'], { alert_tail: true }],
+    ['alert tail throttle module deploys tail worker only', ['cloudflare_workers/alert_tail/throttle_logic.ts'], { alert_tail: true }],
   ] as const)('%s', (_name, files, deploys) => {
     expect(resolveDeployScopeFromFiles([...files])).toEqual({ ...noBackendDeploys, ...deploys })
   })
