@@ -141,6 +141,42 @@ function releaseHyperdriveLease(db: PgClient): boolean {
   return true
 }
 
+/**
+ * Postgres refuses new connections with 53300 when max_connections is reached. PostgREST queued
+ * requests on its own fixed pool instead, so on a direct connection (no Hyperdrive or pooler in
+ * front) back off and retry the checkout briefly rather than failing the request. pg-pool creates
+ * a fresh Client per attempt, and `pool.query` checks out through `connect`, so both are covered.
+ */
+const TOO_MANY_CONNECTIONS_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1000]
+
+function isTooManyConnectionsError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '53300'
+}
+
+function retryPoolConnectOnTooManyConnections(pool: Pool) {
+  const rawConnect = pool.connect.bind(pool) as () => Promise<PoolClient>
+  const connectWithRetry = async (): Promise<PoolClient> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await rawConnect()
+      }
+      catch (error) {
+        const delay = TOO_MANY_CONNECTIONS_RETRY_DELAYS_MS[attempt]
+        if (delay === undefined || !isTooManyConnectionsError(error))
+          throw error
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+  }
+  pool.connect = ((callback?: (error: Error | undefined, client?: PoolClient, done?: (release?: boolean | Error) => void) => void) => {
+    const result = connectWithRetry()
+    if (!callback)
+      return result
+    result.then(client => callback(undefined, client, client.release.bind(client)), error => callback(error))
+    return undefined
+  }) as Pool['connect']
+}
+
 /** Drops one reference; true while other callers in the request still use the Pool. */
 function releaseSharedPool(db: PgClient): boolean {
   const owner = sharedPoolKeys.get(db as Pool)
@@ -647,8 +683,10 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
   })
 
   const modedPool = setPgAccessMode(pool, readOnly)
-  if (!isWorkerd)
+  if (!isWorkerd) {
+    retryPoolConnectOnTooManyConnections(pool)
     registerSharedPool(c, sharedPoolKey, modedPool)
+  }
   return modedPool
 }
 

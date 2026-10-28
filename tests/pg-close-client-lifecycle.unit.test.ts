@@ -10,6 +10,7 @@ const { getRuntimeKeyMock, PoolMock, ClientMock, poolOnMock, clientOnMock, clien
   ) {
     this.on = poolOnMock
     this.end = vi.fn(async () => undefined)
+    ;(this as any).connect = vi.fn(async () => ({ release: vi.fn() }))
     return this
   })
   const ClientMock = vi.fn(function ClientMock(
@@ -193,6 +194,34 @@ describe('main pg.ts Hyperdrive pg Client lifecycle', () => {
     expect(closeClient(c, reader)).toBeUndefined()
     expect(query).not.toHaveBeenCalled()
     expect(reader.end).not.toHaveBeenCalled()
+  })
+
+  it('retries a direct Pool checkout refused with 53300, for promise and callback callers', async () => {
+    getRuntimeKeyMock.mockReturnValue('node')
+    const client = { release: vi.fn() }
+    const tooMany = Object.assign(new Error('sorry, too many clients already'), { code: '53300' })
+    const rawConnect = vi.fn()
+      .mockRejectedValueOnce(tooMany)
+      .mockRejectedValueOnce(tooMany)
+      .mockResolvedValue(client)
+    PoolMock.mockImplementationOnce(function (this: any) {
+      this.on = poolOnMock
+      this.end = vi.fn(async () => undefined)
+      this.connect = rawConnect
+      return this
+    })
+    const { getPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+    const pool = await getPgClient(createContext({ HYPERDRIVE_CAPGO_READ_EU: undefined }), false) as any
+
+    await expect(pool.connect()).resolves.toBe(client)
+    expect(rawConnect).toHaveBeenCalledTimes(3)
+
+    const other = Object.assign(new Error('password authentication failed'), { code: '28P01' })
+    rawConnect.mockRejectedValueOnce(other)
+    const callback = vi.fn()
+    pool.connect(callback)
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledWith(other))
+    expect(rawConnect).toHaveBeenCalledTimes(4)
   })
 
   describe('per-request Hyperdrive Client reuse', () => {
