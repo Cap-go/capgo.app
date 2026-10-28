@@ -132,7 +132,7 @@ watchEffect(async () => {
       <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
         {{ t('bundle-not-found') }}
       </h2>
-      <p class="mt-2 text-slate-500 dark:text-slate-400">
+      <p class="mt-2 text-slate-600 dark:text-slate-400">
         {{ t('bundle-not-found-description') }}
       </p>
       <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
@@ -146,7 +146,7 @@ watchEffect(async () => {
       <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
         {{ t('preview-disabled') }}
       </h2>
-      <p class="mt-2 text-center text-slate-500 dark:text-slate-400 max-w-md">
+      <p class="mt-2 text-center text-slate-600 dark:text-slate-400 max-w-md">
         {{ t('preview-disabled-description') }}
       </p>
       <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
