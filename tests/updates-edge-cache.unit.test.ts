@@ -587,9 +587,22 @@ describe('edge-cached plugin reads', () => {
     const c = makeContext()
     const { drizzle } = fakeDrizzle(new Error('statement timeout'))
     await expect(getAppVersionWithEdgeCache(c, 'com.example.app', '1.0.0', drizzle)).resolves.toBeNull()
-    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', drizzle, ['mau'])).resolves.toEqual({ value: null, hit: false, lookupFailed: true })
+    // A missing owner is answered as a cached on_premise_app 429, so a failed
+    // owner read must fail the request instead.
+    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', drizzle, ['mau'])).rejects.toMatchObject({ cause: { message: 'statement timeout' } })
     await expect(getChannelByNameWithEdgeCache(c, 'com.example.app', 'production', drizzle)).resolves.toBeNull()
     await expect(getCompatibleChannelsWithEdgeCache(c, 'com.example.app', 'ios', false, true, drizzle)).resolves.toEqual([])
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it.concurrent.each([
+    ['53300', 'remaining connection slots are reserved for roles with privileges of the "pg_use_reserved_connections" role'],
+    ['40001', 'canceling statement due to conflict with recovery'],
+  ])('never reports a missing app when a replica answers %s', async (code, message) => {
+    const { cache } = stubCaches()
+    const c = makeContext()
+    const { drizzle } = fakeDrizzle(Object.assign(new Error(message), { code }))
+    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', drizzle, ['mau'])).rejects.toMatchObject({ cause: { message, code } })
     expect(cache.put).not.toHaveBeenCalled()
   })
 
