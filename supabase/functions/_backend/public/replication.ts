@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { sql } from 'drizzle-orm'
+import { logicalSubscriberApplyLagCaseSql } from '../plugin_runtime/utils/replicaFreshness.ts'
 import { CacheHelper } from '../utils/cache.ts'
 import { honoFactory, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
@@ -319,8 +320,9 @@ async function querySubscriptionHealth(
       s.subenabled,
       COALESCE(bool_or(ss.pid IS NOT NULL), false) AS has_apply_worker,
       COALESCE(bool_or(ss.last_msg_receipt_time IS NOT NULL), false) AS has_recent_receipt,
-      MAX(EXTRACT(EPOCH FROM (now() - ss.last_msg_receipt_time)))
-        FILTER (WHERE ss.last_msg_receipt_time IS NOT NULL) AS apply_lag_seconds,
+      MAX(
+        ${sql.raw(logicalSubscriberApplyLagCaseSql('ss.'))}
+      ) AS apply_lag_seconds,
       MAX(ss.last_msg_receipt_time) AS last_msg_receipt_time
     FROM pg_subscription s
     LEFT JOIN pg_stat_subscription ss ON ss.subname = s.subname

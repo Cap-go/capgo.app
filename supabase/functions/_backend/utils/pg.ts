@@ -10,6 +10,7 @@ import { Client, Pool } from 'pg'
 import { BEGIN_WRITE_TRANSACTION_SQL, configureTransactionAccessMode, getPgAccessMode, inheritPgAccessMode, readOnlyStartupOptions, setPgAccessMode, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
 export { BEGIN_WRITE_TRANSACTION_SQL, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
 import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
+import { REPLICA_LAG_QUERY, REPLICATION_LAG_APPLY_THRESHOLD_SECONDS } from '../plugin_runtime/utils/replicaFreshness.ts'
 import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
 import { CacheHelper } from './cache.ts'
 import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelfStore.ts'
@@ -50,7 +51,6 @@ export function releasePgClient(pg: PgClient | null | undefined, client: object 
     client.release(error)
 }
 
-const REPLICATION_LAG_THRESHOLD_SECONDS = 180
 const REPLICATION_LAG_CACHE_TTL_SECONDS = 60
 const REPLICATION_LAG_CACHE_TTL_MS = REPLICATION_LAG_CACHE_TTL_SECONDS * 1000
 
@@ -201,33 +201,8 @@ function toReplicationLagSeconds(value: unknown): number | null {
 }
 
 /**
- * Replica lag SQL: logical subscriber (pg_stat_subscription) or physical
- * standby (replay position / timestamp). Same query as
- * plugin_runtime/utils/replicaFreshness.ts, duplicated on purpose (runtime
- * isolation, see plugin_runtime/README.md): keep both in sync.
- */
-const REPLICA_LAG_QUERY = `
-  SELECT CASE
-    WHEN pg_is_in_recovery() THEN
-      CASE
-        WHEN pg_last_wal_receive_lsn() IS NOT NULL
-          AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
-          AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
-          THEN 0
-        ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
-      END
-    ELSE (
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
-      FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
-    )
-  END AS lag_seconds
-`
-
-/**
- * Query replication lag from the REPLICA database (see REPLICA_LAG_QUERY:
- * logical subscriber and physical standbys). Uses the existing pool - no new
- * connections.
+ * Query replication lag from the REPLICA database (see REPLICA_LAG_QUERY in
+ * plugin_runtime/utils/replicaFreshness.ts).
  */
 async function queryReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagStatus> {
   try {
@@ -236,7 +211,7 @@ async function queryReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagSt
 
     let status: ReplicationStatus = 'unknown'
     if (lagSeconds !== null) {
-      status = lagSeconds > REPLICATION_LAG_THRESHOLD_SECONDS ? 'lagging' : 'ok'
+      status = lagSeconds > REPLICATION_LAG_APPLY_THRESHOLD_SECONDS ? 'lagging' : 'ok'
     }
 
     cloudlog({ requestId: c.get('requestId'), message: 'Replica lag queried', status, lagSeconds })

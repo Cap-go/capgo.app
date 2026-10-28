@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { getReadReplicaBinding } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { edgeCacheTtlForReplicaLag, isReadReplicaSource, REPLICA_LAG_QUERY, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
+import { computeLogicalSubscriberApplyLagSeconds, edgeCacheTtlForReplicaLag, isReadReplicaSource, LOGICAL_SUBSCRIBER_APPLY_LAG_PROBE_SQL, maxLogicalSubscriberApplyLagSeconds, pgLsnGreaterThan, REPLICA_LAG_QUERY, REPLICATION_LAG_APPLY_THRESHOLD_SECONDS, replicationLagCacheRequest, replicationLagStatusFromSeconds, resetReplicationLagMemory, setReplicationLagMemoryEntry, UNAPPLIED_LOGICAL_SUBSCRIBER_WAL_LAG_SECONDS } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 
 function contextFrom(source: string | undefined) {
   return {
@@ -128,7 +128,74 @@ describe('replica freshness', () => {
     expect(REPLICA_LAG_QUERY).toContain('pg_is_in_recovery()')
     expect(REPLICA_LAG_QUERY).toContain('pg_last_xact_replay_timestamp()')
     expect(REPLICA_LAG_QUERY).toContain('pg_stat_subscription')
-    // Readable without pg_read_all_stats (status is NULL then).
+    expect(REPLICA_LAG_QUERY).toContain('latest_end_time')
+    expect(REPLICA_LAG_QUERY).toContain('::pg_lsn >')
+    expect(REPLICA_LAG_QUERY).toContain(String(UNAPPLIED_LOGICAL_SUBSCRIBER_WAL_LAG_SECONDS))
     expect(REPLICA_LAG_QUERY).toContain('status IS NULL')
+    expect(LOGICAL_SUBSCRIBER_APPLY_LAG_PROBE_SQL).toContain('::pg_lsn AS received_lsn')
+  })
+
+  it('compares pg LSN hex segments numerically', () => {
+    expect(pgLsnGreaterThan('0/1000', '0/900')).toBe(true)
+    expect(pgLsnGreaterThan('0/900', '0/1000')).toBe(false)
+    expect(pgLsnGreaterThan('0/1000', '0/1000')).toBe(false)
+  })
+
+  it('uses strict greater-than threshold at 180 and 181 seconds', () => {
+    expect(replicationLagStatusFromSeconds(180)).toBe('ok')
+    expect(replicationLagStatusFromSeconds(181)).toBe('lagging')
+    expect(replicationLagStatusFromSeconds(REPLICATION_LAG_APPLY_THRESHOLD_SECONDS)).toBe('ok')
+    expect(replicationLagStatusFromSeconds(REPLICATION_LAG_APPLY_THRESHOLD_SECONDS + 1)).toBe('lagging')
+  })
+
+  it('treats unapplied WAL with null latest_end_time as lagging even with fresh receipt', () => {
+    const now = Date.parse('2026-10-28T12:00:00.000Z')
+    const receiptFresh = new Date(now - 5_000)
+    const row = {
+      last_msg_receipt_time: receiptFresh,
+      latest_end_time: null,
+      received_lsn: '0/1000',
+      latest_end_lsn: '0/900',
+    }
+    const receiptOnlyLag = (now - receiptFresh.getTime()) / 1000
+    expect(receiptOnlyLag).toBeLessThan(REPLICATION_LAG_APPLY_THRESHOLD_SECONDS)
+
+    const applyLag = computeLogicalSubscriberApplyLagSeconds(row, now)
+    expect(applyLag).toBe(UNAPPLIED_LOGICAL_SUBSCRIBER_WAL_LAG_SECONDS)
+    expect(replicationLagStatusFromSeconds(applyLag)).toBe('lagging')
+  })
+
+  it('treats a stuck subscriber with fresh receipt but stale apply time as lagging', () => {
+    const now = Date.parse('2026-10-28T12:00:00.000Z')
+    const receiptFresh = new Date(now - 5_000)
+    const applyStale = new Date(now - 400_000)
+    const row = {
+      last_msg_receipt_time: receiptFresh,
+      latest_end_time: applyStale,
+      received_lsn: '0/300',
+      latest_end_lsn: '0/100',
+    }
+    const receiptOnlyLag = (now - receiptFresh.getTime()) / 1000
+    expect(receiptOnlyLag).toBeLessThan(REPLICATION_LAG_APPLY_THRESHOLD_SECONDS)
+
+    const applyLag = computeLogicalSubscriberApplyLagSeconds(row, now)
+    expect(applyLag).toBeGreaterThan(REPLICATION_LAG_APPLY_THRESHOLD_SECONDS)
+    expect(replicationLagStatusFromSeconds(applyLag)).toBe('lagging')
+
+    const aggregate = maxLogicalSubscriberApplyLagSeconds([row], now)
+    expect(aggregate).toBe(applyLag)
+  })
+
+  it('keeps a healthy subscriber with fresh apply at ok lag', () => {
+    const now = Date.parse('2026-10-28T12:00:00.000Z')
+    const fresh = new Date(now - 2_000)
+    const lag = computeLogicalSubscriberApplyLagSeconds({
+      last_msg_receipt_time: fresh,
+      latest_end_time: fresh,
+      received_lsn: '0/100',
+      latest_end_lsn: '0/100',
+    }, now)
+    expect(lag).toBeLessThanOrEqual(2)
+    expect(replicationLagStatusFromSeconds(lag)).toBe('ok')
   })
 })
