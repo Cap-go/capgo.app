@@ -1,0 +1,39 @@
+{
+  "name": "capgo_alert_tail",
+  "compatibility_date": "2026-04-21",
+  "main": "./index.ts",
+  "workers_dev": false,
+  "upload_source_maps": true,
+  "env": {
+    "prod": {
+      "name": "capgo_alert_tail-prod",
+      "vars": {
+        "ENV_NAME": "capgo_alert_tail-prod"
+      },
+      "observability": {
+        "enabled": true,
+        "issues": { "enabled": true }
+      }
+    },
+    "preprod": {
+      "name": "capgo_alert_tail-preprod",
+      "vars": {
+        "ENV_NAME": "capgo_alert_tail-preprod"
+      },
+      "observability": {
+        "enabled": true,
+        "issues": { "enabled": true }
+      }
+    },
+    "alpha": {
+      "name": "capgo_alert_tail-alpha",
+      "vars": {
+        "ENV_NAME": "capgo_alert_tail-alpha"
+      },
+      "observability": {
+        "enabled": true,
+        "issues": { "enabled": true }
+      }
+    }
+  }
+}

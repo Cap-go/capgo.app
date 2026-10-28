@@ -7,6 +7,7 @@ import {
 } from '../scripts/deploy-scope.ts'
 
 const noBackendDeploys = {
+  alert_tail: false,
   api: false,
   files: false,
   plugins: false,
@@ -26,6 +27,7 @@ describe('deploy scope matching', () => {
       files: [],
       head: 'HEAD',
       scope: {
+        alert_tail: true,
         api: true,
         files: true,
         plugins: true,
@@ -48,7 +50,8 @@ describe('deploy scope matching', () => {
     ['the Deno-only plugin stats bridge stays off the Cloudflare plugin deploy', ['supabase/functions/shared/plugin_deno_stats_fallbacks.ts'], { supabase: true }],
     ['the shared preview subdomain helper deploys the files worker', ['supabase/functions/shared/preview-subdomain.ts'], { files: true, supabase: true }],
     ['the shared TUS file utility deploys API and files workers', ['supabase/functions/_backend/files/util.ts'], { api: true, files: true, supabase: true }],
-    ['package dependency changes deploy Cloudflare workers without forcing Supabase', ['package.json'], { api: true, files: true, plugins: true, translation: true }],
+    ['package dependency changes deploy Cloudflare workers without forcing Supabase', ['package.json'], { alert_tail: true, api: true, files: true, plugins: true, translation: true }],
+    ['alert tail worker changes deploy the tail worker and producer workers', ['cloudflare_workers/alert_tail/tail_logic.ts'], { alert_tail: true, api: true, files: true, plugins: true }],
   ] as const)('%s', (_name, files, deploys) => {
     expect(resolveDeployScopeFromFiles([...files])).toEqual({ ...noBackendDeploys, ...deploys })
   })
@@ -100,6 +103,7 @@ describe('deploy scope matching', () => {
       files: ['supabase/functions/_backend/plugin_runtime/plugins/updates.ts'],
       head: 'feature-head',
       scope: {
+        alert_tail: false,
         api: false,
         files: false,
         plugins: true,
@@ -131,6 +135,7 @@ describe('deploy scope matching', () => {
       files: ['cloudflare_workers/translation/index.ts'],
       head: 'feature-head',
       scope: {
+        alert_tail: false,
         api: false,
         files: false,
         plugins: false,
@@ -160,6 +165,7 @@ describe('deploy scope matching', () => {
       files: [],
       head: 'HEAD',
       scope: {
+        alert_tail: true,
         api: true,
         files: true,
         plugins: true,
@@ -175,6 +181,7 @@ describe('deploy scope matching', () => {
     ['translation', 'cloudflare_workers/translation/index.ts'],
     ['files', 'cloudflare_workers/files/index.ts'],
     ['plugins', 'cloudflare_workers/plugin/index.ts'],
+    ['alert_tail', 'cloudflare_workers/alert_tail/index.ts'],
   ] as const)('deploys %s when a matched file is deleted', (target, file) => {
     const run = (args: string[]) => {
       const key = args.join(' ')
@@ -191,14 +198,24 @@ describe('deploy scope matching', () => {
       throw new Error(`Unexpected git call: ${key}`)
     }
 
+    const scope = target === 'alert_tail'
+      ? {
+          ...noBackendDeploys,
+          alert_tail: true,
+          api: true,
+          files: true,
+          plugins: true,
+        }
+      : {
+          ...noBackendDeploys,
+          [target]: true,
+        }
+
     expect(resolveDeployScopeFromGit('HEAD', run)).toEqual({
       base: 'capgo-11.0.0',
       files: [file],
       head: 'HEAD',
-      scope: {
-        ...noBackendDeploys,
-        [target]: true,
-      },
+      scope,
     })
   })
 })

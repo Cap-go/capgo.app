@@ -74,19 +74,22 @@ describe('production read-replica release gate', () => {
 
       for (const job of [
         'deploy_webapp',
-        'deploy_api',
         'deploy_translation_worker',
-        'deploy_files',
-        'deploy_plugin_regions',
       ]) {
         expect(workflow).toMatch(
           new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema(?:, read_replica_subscription)?\\]`),
         )
       }
-      // Workers that read the replica wait for its initial copy of new tables.
-      for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions']) {
+      expect(workflow).toMatch(
+        /\n  deploy_alert_tail:\n    needs: \[changes, supabase_deploy, read_replica_schema, read_replica_subscription\]/,
+      )
+      for (const job of [
+        'deploy_api',
+        'deploy_files',
+        'deploy_plugin_regions',
+      ]) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema, read_replica_subscription\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema, read_replica_subscription, deploy_alert_tail\\]`),
         )
       }
     },

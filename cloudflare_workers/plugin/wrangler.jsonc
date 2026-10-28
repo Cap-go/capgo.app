@@ -16,6 +16,7 @@
   "env": {
     "prod_eu": {
       "name": "capgo_plugin-eu-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         // UPDATES_EDGE_CACHE (edge cache of /updates, /stats and /channel_self:
         // off | on | share of devices like 1%) is a worker secret so it changes
@@ -176,6 +177,7 @@
     },
     "prod_me": {
       "name": "capgo_plugin-me-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-me-prod"
       },
@@ -268,6 +270,7 @@
     },
     "prod_hk": {
       "name": "capgo_plugin-hk-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-hk-prod"
       },
@@ -360,6 +363,7 @@
     },
     "prod_jp": {
       "name": "capgo_plugin-jp-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-jp-prod"
       },
@@ -452,6 +456,7 @@
     },
     "prod_as": {
       "name": "capgo_plugin-as-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-as-prod"
       },
@@ -544,6 +549,7 @@
     },
     "prod_na": {
       "name": "capgo_plugin-na-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-na-prod"
       },
@@ -636,6 +642,7 @@
     },
     "prod_af": {
       "name": "capgo_plugin-af-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-af-prod"
       },
@@ -728,6 +735,7 @@
     },
     "prod_oc": {
       "name": "capgo_plugin-oc-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-oc-prod"
       },
@@ -820,6 +828,7 @@
     },
     "prod_sa": {
       "name": "capgo_plugin-sa-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "vars": {
         "ENV_NAME": "capgo_plugin-sa-prod"
       },
