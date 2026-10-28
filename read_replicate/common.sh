@@ -200,6 +200,9 @@ build_source_connection_parts() {
   fi
 
   SOURCE_SSLMODE='require'
+  # The Supabase postgres role has statement_timeout=2min. The subscription's
+  # initial table copy (COPY over this connection) can run longer, and a
+  # timeout restarts the copy from zero forever, so disable it here.
   SOURCE_DB_URL="postgresql://${SOURCE_USER}:${source_password_encoded}@${SOURCE_HOST}:${SOURCE_PORT}/${SOURCE_DB}?sslmode=${SOURCE_SSLMODE}"
   SOURCE_CONNECTION_STRING="host=$(libpq_escape_value "$SOURCE_HOST")
             port=$(libpq_escape_value "$SOURCE_PORT")
@@ -211,7 +214,8 @@ build_source_connection_parts() {
             keepalives=1
             keepalives_idle=10
             keepalives_interval=5
-            keepalives_count=3"
+            keepalives_count=3
+            options='-c statement_timeout=0'"
 }
 
 load_source() {
