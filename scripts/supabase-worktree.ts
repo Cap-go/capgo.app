@@ -565,7 +565,9 @@ async function runSupabaseStartWithRetry(args: string[], repoRoot: string): Prom
       edge_runtime_health_check: 'edge runtime health check',
     }[transientFailure]
     console.error(`Supabase start hit a transient ${reason} failure (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
-    runSupabase(['stop', '--no-backup'], repoRoot)
+    // The edge runtime fails after the database is up and may be reusing a
+    // developer's volumes: keep them. Docker failures happen before any data.
+    runSupabase(transientFailure === 'edge_runtime_health_check' ? ['stop'] : ['stop', '--no-backup'], repoRoot)
     removeLeftoverWorktreeContainers(cfg.projectId)
     freeHostPorts(ports)
     // Back off so docker-proxy / TIME_WAIT can release before the next bind.
