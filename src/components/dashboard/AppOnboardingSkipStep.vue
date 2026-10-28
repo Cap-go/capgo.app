@@ -46,7 +46,7 @@ function submit() {
       <span>{{ t('setup-checklist-skip-prompt') }}</span>
       <button
         type="button"
-        class="inline-flex min-h-11 items-center rounded-sm font-medium text-slate-700 underline underline-offset-4 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-slate-200 dark:hover:text-white"
+        class="d-btn d-btn-link h-auto min-h-11 rounded-sm border-0 px-0 text-sm font-medium text-slate-700 underline underline-offset-4 shadow-none hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-slate-200 dark:hover:text-white"
         :data-test="`${testId}-skip-step`"
         @click="ask"
       >
