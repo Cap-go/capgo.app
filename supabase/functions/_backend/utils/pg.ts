@@ -35,6 +35,52 @@ export type PgQueryClient = PoolClient | Client
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
 
+/**
+ * Outside workerd, one request shares one Pool per database URL: each helper
+ * that calls getPgClient/closeClient takes a reference, and the Pool ends when
+ * the last one closes. A Pool hands every checkout its own connection, so
+ * transactions stay isolated; without sharing, every helper call opened its own
+ * Pool and a busy request could exhaust Postgres connections.
+ */
+interface SharedPool { pool: Pool, refs: number }
+const sharedPoolsByRequest = new WeakMap<object, Map<string, SharedPool>>()
+const sharedPoolKeys = new WeakMap<Pool, { request: object, key: string }>()
+
+function acquireSharedPool(c: Context, key: string): Pool | null {
+  const entry = sharedPoolsByRequest.get(c)?.get(key)
+  if (!entry)
+    return null
+  entry.refs++
+  return entry.pool
+}
+
+function registerSharedPool(c: Context, key: string, pool: Pool) {
+  let pools = sharedPoolsByRequest.get(c)
+  if (!pools) {
+    pools = new Map()
+    sharedPoolsByRequest.set(c, pools)
+  }
+  pools.set(key, { pool, refs: 1 })
+  sharedPoolKeys.set(pool, { request: c, key })
+}
+
+/** Drops one reference; true while other callers in the request still use the Pool. */
+function releaseSharedPool(db: PgClient): boolean {
+  const owner = sharedPoolKeys.get(db as Pool)
+  if (!owner)
+    return false
+  const pools = sharedPoolsByRequest.get(owner.request)
+  const entry = pools?.get(owner.key)
+  if (!entry || entry.pool !== db)
+    return false
+  entry.refs--
+  if (entry.refs > 0)
+    return true
+  pools!.delete(owner.key)
+  sharedPoolKeys.delete(db as Pool)
+  return false
+}
+
 export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
   if (skipEndClients.has(pg))
     return pg as Client
@@ -469,6 +515,13 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
     return setPgAccessMode(client, readOnly)
   }
 
+  const sharedPoolKey = `${readOnly ? 'ro' : 'rw'}|${appName}-${dbName}|${dbUrl}`
+  if (!isWorkerd) {
+    const shared = acquireSharedPool(c, sharedPoolKey)
+    if (shared)
+      return shared
+  }
+
   const pool = new Pool({
     connectionString: dbUrl,
     max: isWorkerd ? 1 : 4,
@@ -503,7 +556,10 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
     })
   })
 
-  return setPgAccessMode(pool, readOnly)
+  const modedPool = setPgAccessMode(pool, readOnly)
+  if (!isWorkerd)
+    registerSharedPool(c, sharedPoolKey, modedPool)
+  return modedPool
 }
 
 // Transactions must run on one checked-out connection: BEGIN/COMMIT issued on
@@ -572,6 +628,9 @@ export function closeClient(c: Context, db: PgClient) {
   // Hyperdrive: do not end() — connection-lifecycle docs say GC cleans the edge hop.
   // https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
   if (skipEndClients.has(db))
+    return
+  // Another helper in this request still uses the shared Pool.
+  if (releaseSharedPool(db))
     return
 
   // Non-Hyperdrive Pool: must end() or we leak sockets (the old workerd sawtooth).

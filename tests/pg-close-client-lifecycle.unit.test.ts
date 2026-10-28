@@ -120,7 +120,7 @@ describe('main pg.ts Hyperdrive pg Client lifecycle', () => {
     expect(first.end).not.toHaveBeenCalled()
   })
 
-  it('uses Pool + end() outside workerd (non-Hyperdrive contract)', async () => {
+  it('shares one Pool per request outside workerd and ends it after the last close', async () => {
     getRuntimeKeyMock.mockReturnValue('node')
     const { getPgClient, closeClient } = await import('../supabase/functions/_backend/utils/pg.ts')
     const c = createContext()
@@ -128,13 +128,22 @@ describe('main pg.ts Hyperdrive pg Client lifecycle', () => {
     const first = await getPgClient(c, true)
     const second = await getPgClient(c, true)
 
-    expect(first).not.toBe(second)
-    expect(PoolMock).toHaveBeenCalledTimes(2)
+    expect(first).toBe(second)
+    expect(PoolMock).toHaveBeenCalledTimes(1)
     expect(ClientMock).not.toHaveBeenCalled()
     expect(PoolMock.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ max: 4 }))
 
     await closeClient(c, first)
+    expect(first.end).not.toHaveBeenCalled()
+    await closeClient(c, second)
     expect(first.end).toHaveBeenCalledTimes(1)
+
+    // Once ended, the next call opens a fresh Pool; other requests never share it.
+    const third = await getPgClient(c, true)
+    const otherRequest = await getPgClient(createContext(), true)
+    expect(third).not.toBe(first)
+    expect(otherRequest).not.toBe(third)
+    expect(PoolMock).toHaveBeenCalledTimes(3)
   })
 
   it('ends non-Hyperdrive workerd Pools and logs end failures without throwing', async () => {
