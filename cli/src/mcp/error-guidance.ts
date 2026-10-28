@@ -1,7 +1,7 @@
 /**
  * Every local MCP error must leave the agent a way out: what to change and retry, which tool to
  * call, what to ask the user, or, when the failure is not expected, how to reach support.
- * Mirrors supabase/functions/_backend/mcp/error_guidance.ts for the hosted server, with steps that
+ * Mirrors the hosted MCP server's error guidance (backend mcp/error_guidance.ts), with steps that
  * use the local tools (capgo_login, capgo_set_project_dir, capgo_doctor).
  */
 
