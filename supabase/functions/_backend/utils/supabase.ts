@@ -25,6 +25,8 @@ import { getEnv, isStripeConfigured } from './utils.ts'
 import { buildVersionCompareSql } from './versionCompare.ts'
 
 const DEFAULT_LIMIT = 1000
+/** PostgREST `max_rows`: reads that went through PostgREST on main never returned more rows. */
+const POSTGREST_MAX_ROWS = 1000
 
 /** Runs `run` on a service-role (RLS-bypassing) connection, like the old `supabaseAdmin(c)` calls. */
 async function withAdminPg<T>(c: Context, run: (pg: PgClient) => Promise<T>): Promise<T> {
@@ -205,7 +207,8 @@ async function readDevicesSBSql(c: Context, params: ReadDevicesParams, customIdM
   const orderBy = devicesOrder
     ? `updated_at ${devicesOrder.ascending ? 'ASC' : 'DESC'}, device_id ASC`
     : 'device_id ASC'
-  values.push(limit + 1)
+  // Plain reads went through PostgREST on main, which capped them at max_rows.
+  values.push(versionCompare ? limit + 1 : Math.min(limit + 1, POSTGREST_MAX_ROWS))
   const pgClient = await getPgClient(c, versionCompare)
   try {
     return await queryJson<Database['public']['Tables']['devices']['Row']>(
@@ -1778,7 +1781,8 @@ export async function readStatsSB(c: Context, params: ReadStatsParams) {
     }
   }
 
-  const limit = addValue(params.limit ?? DEFAULT_LIMIT)
+  // PostgREST capped this list at max_rows on main.
+  const limit = addValue(Math.min(params.limit ?? DEFAULT_LIMIT, POSTGREST_MAX_ROWS))
   try {
     return await withAdminPg(c, pg => queryJson<Database['public']['Tables']['stats']['Row']>(
       pg,

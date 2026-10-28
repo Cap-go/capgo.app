@@ -30,7 +30,7 @@ import type { StoredObjectInfo } from '../../utils/s3.ts'
 import { s3, StorageObjectChangedError } from '../../utils/s3.ts'
 import { bundleStorage } from '../../utils/bundle_storage.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
-import { apikeyPrincipal, queryJsonOne, servicePrincipal, withRlsContext } from '../../utils/pg_rls.ts'
+import { apikeyPrincipal, queryJson, queryJsonOne, servicePrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { backgroundTask, getEnv, isValidAppId, isValidSemver } from '../../utils/utils.ts'
 import { post as postChannel } from '../channel/post.ts'
 import { getCurrentBundle } from '../channel/current_bundle.ts'
@@ -357,11 +357,16 @@ async function findUploadTargetChannel(c: UploadContext, appId: string, channel:
   // Caller-key read, like the CLI: hidden channels behave as missing.
   let data: Partial<UploadTargetChannel> | null = null
   try {
-    data = await withRlsContext(c, apikeyPrincipal(c, c.get('capgkey')), client => queryJsonOne<Partial<UploadTargetChannel>>(
+    // LIMIT 2 + length check keeps maybeSingle(): (app_id, name) is not unique, and a duplicate
+    // name must stop the upload rather than promote onto an arbitrary one of the channels.
+    const rows = await withRlsContext(c, apikeyPrincipal(c, c.get('capgkey')), client => queryJson<Partial<UploadTargetChannel>>(
       client,
-      'SELECT id, public, version, rollout_version, rollout_enabled, rollout_percentage_bps FROM public.channels WHERE app_id = $1 AND name = $2',
+      'SELECT id, public, version, rollout_version, rollout_enabled, rollout_percentage_bps FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
       [appId, channel],
     ))
+    if (rows.length > 1)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    data = rows[0] ?? null
   }
   catch (error) {
     throw simpleError('cannot_check_channel', `Cannot check channel ${channel}`, { error })
