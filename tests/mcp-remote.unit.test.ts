@@ -292,6 +292,61 @@ describe('hosted MCP protocol', () => {
   })
 })
 
+describe('hosted MCP app creation conflicts', () => {
+  const orgId = '7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601'
+
+  function conflictContext(getApp: { ok: boolean, status: number, data: unknown }) {
+    const calls: McpApiRequest[] = []
+    const ctx: McpToolContext = {
+      call: async (request) => {
+        calls.push(request)
+        if (request.method === 'POST')
+          return { ok: false, status: 409, data: { error: 'app_id_already_exists', message: 'App ID already exists' } }
+        return getApp
+      },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    return { ctx, calls }
+  }
+
+  async function addApp(ctx: McpToolContext) {
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'capgo_add_app', arguments: { appId: 'com.example.app', name: 'Example', orgId } },
+    }, ctx)
+    const result = response?.result as { content: Array<{ text: string }>, isError?: boolean }
+    return { result, body: JSON.parse(result.content[0].text) }
+  }
+
+  it.concurrent('reports an app already in the target organization as usable, not as an error', async () => {
+    const { ctx, calls } = conflictContext({ ok: true, status: 200, data: { app_id: 'com.example.app', owner_org: orgId } })
+    const { result, body } = await addApp(ctx)
+    expect(calls.map(call => `${call.method} ${call.path}`)).toEqual(['POST /app', 'GET /app/com.example.app'])
+    expect(result.isError).toBeUndefined()
+    expect(body.status).toBe('already_exists')
+  })
+
+  it.concurrent('offers solutions and alternative IDs when another account owns the app ID', async () => {
+    const { ctx } = conflictContext({ ok: false, status: 404, data: { error: 'app_not_found' } })
+    const { result, body } = await addApp(ctx)
+    expect(result.isError).toBe(true)
+    expect(body.error).toBe('app_id_already_exists')
+    expect(body.suggested_app_ids).toEqual(['com.example.app.mobile', 'com.example.app.capgo', 'com.example.app.live'])
+    expect(body.solutions.join(' ')).toContain('plugins.CapacitorUpdater.appId')
+    expect(body.solutions.join(' ')).toContain('Transfer app ownership')
+  })
+
+  it.concurrent('explains an app ID used by another organization the caller can access', async () => {
+    const { ctx } = conflictContext({ ok: true, status: 200, data: { app_id: 'com.example.app', owner_org: 'other-org' } })
+    const { result, body } = await addApp(ctx)
+    expect(result.isError).toBe(true)
+    expect(body.owner_org).toBe('other-org')
+    expect(body.suggested_app_ids.length).toBeGreaterThan(0)
+  })
+})
+
 describe('hosted MCP signed-URL upload and build tools', () => {
   it.concurrent('prepares a bundle upload with the CLI packer metadata', async () => {
     const { ctx, calls } = fakeContext({ upload_token: 't' })
