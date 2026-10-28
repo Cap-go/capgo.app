@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { PriceTier } from './country_price_tier.ts'
 import type { Database } from './supabase.types.ts'
 import { isPriceTier } from './country_price_tier.ts'
+import { isUsBillingCountry } from './us_billing_countries.ts'
 import { cloudlogErr } from './logging.ts'
 import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { getEnv } from './utils.ts'
@@ -32,12 +33,11 @@ export function getRequestCountry(c: Context): string | null {
   return /^[A-Z]{2}$/.test(country) ? country : null
 }
 
-// The US entity is only offered to US visitors: it bills without automatic tax.
 export function canChooseUsBillingAccount(c: Context): boolean {
-  return getRequestCountry(c) === 'US' && isStripeAccountReadyForNewCustomers(c, 'us')
+  return isUsBillingCountry(getRequestCountry(c)) && isStripeAccountReadyForNewCustomers(c, 'us')
 }
 
-// US visitors default to the US entity once it is ready; everyone else stays on EE.
+// Visitors offered the US entity default to it once it is ready; everyone else stays on EE.
 export function getSuggestedBillingAccount(c: Context): BillingAccount {
   return canChooseUsBillingAccount(c) ? 'us' : 'ee'
 }

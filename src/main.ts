@@ -328,15 +328,17 @@ posthogLoader(config.apiHost)
 captureConsoleAttributionFromLocation()
 
 // install all modules under `modules/`
-type UserModule = (ctx: { app: typeof app, router: Router }) => void
+type UserModule = (ctx: { app: typeof app, router: Router }) => void | Promise<void>
 
-Object.values(import.meta.glob<{ install: UserModule }>('./modules/*.ts', { eager: true }))
-  .forEach(i => i.install?.({ app, router }))
+// Modules may return a promise (i18n loads the user's locale) that must settle before mount.
+// allSettled: a failing module must never keep the app from mounting.
+const moduleSetup = Promise.allSettled(Object.values(import.meta.glob<{ install: UserModule }>('./modules/*.ts', { eager: true }))
+  .map(i => i.install?.({ app, router })))
 
 app.use(router)
 void installDeepLinkHandler(router)
 
-router.isReady().then(async () => {
+void Promise.all([router.isReady(), moduleSetup]).then(async () => {
   if (isDocumentNavigationPending())
     return
 

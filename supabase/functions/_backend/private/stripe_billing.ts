@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Permission } from '../utils/rbac.ts'
 import { Hono } from 'hono/tiny'
+import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
@@ -52,6 +53,13 @@ interface TrialPlanBody extends OrgBody {
 interface CancelBody extends OrgBody {
   reason?: unknown
   comment?: unknown
+  // The save offer shown before this cancel, recorded as declined.
+  offerId?: unknown
+}
+
+interface CancelOfferBody extends OrgBody {
+  reason?: unknown
+  offerId?: unknown
 }
 
 type AppContext = Context<MiddlewareKeyVariables>
@@ -170,11 +178,37 @@ app.post('/remove-backup-card', middlewareAuth, async (c) => {
   return c.json(await removeBackupCard(c, ctx, body.paymentMethodId))
 })
 
+// Before canceling: the discount offered to stay, or null when not eligible.
+app.post('/cancel-offer', middlewareAuth, async (c) => {
+  const body = await parseBody<CancelOfferBody>(c)
+  const feedback = parseCancelFeedback(body.reason)
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  const offer = await prepareCancelSaveOffer(c, ctx, body.orgId!, feedback).catch((error) => {
+    // The offer is optional: the customer can always cancel.
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer failed', orgId: body.orgId, error })
+    return null
+  })
+  return c.json({ offer })
+})
+
+app.post('/cancel-offer/accept', middlewareAuth, async (c) => {
+  const body = await parseBody<CancelOfferBody>(c)
+  const offerId = parseOfferId(body.offerId)
+  if (!offerId)
+    throw simpleError('invalid_offer_id', 'Missing offerId')
+  const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  const { discountEnd } = await acceptCancelSaveOffer(c, ctx, offerId)
+  return c.json({ discountEnd, subscription: await getSubscriptionSummary(c, ctx) })
+})
+
 app.post('/cancel', middlewareAuth, async (c) => {
   const body = await parseBody<CancelBody>(c)
   const feedback = parseCancelFeedback(body.reason)
   const comment = parseCancelComment(body.comment)
+  const offerId = parseOfferId(body.offerId)
   const ctx = await resolveBillingContext(c, body.orgId, 'org.update_billing')
+  if (offerId)
+    await declineCancelSaveOffer(c, ctx, offerId)
   return c.json({ subscription: await scheduleSubscriptionCancel(c, ctx, feedback, comment) })
 })
 

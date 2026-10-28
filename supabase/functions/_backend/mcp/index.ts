@@ -118,7 +118,7 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
       data = text ? JSON.parse(text) : null
     }
     catch {}
-    return { ok: response.ok, status: response.status, data }
+    return { ok: response.ok, status: response.status, data, requestId: response.headers.get('x-request-id') ?? undefined }
   }
 }
 
@@ -133,37 +133,37 @@ export function createMcpApp(dispatch: McpDispatch) {
   // Stateless server: no server-initiated SSE stream and no sessions to terminate.
   app.get(MCP_PATH, (c) => {
     c.header('Allow', 'POST, OPTIONS')
-    return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless)'), 405)
+    return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL https://api.capgo.app/mcp and the HTTP transport.'), 405)
   })
   app.delete(MCP_PATH, (c) => {
     c.header('Allow', 'POST, OPTIONS')
-    return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'This server does not use sessions'), 405)
+    return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'This server does not use sessions, so there is nothing to close. Keep sending POST requests.'), 405)
   })
 
   app.post(MCP_PATH, async (c) => {
     const ipLimit = await isIPRateLimited(c)
     if (ipLimit.limited)
-      return c.json(jsonRpcError(null, -32002, 'Too many failed authentication attempts'), 429)
+      return c.json(jsonRpcError(null, -32002, 'Too many failed authentication attempts from this IP. Wait 15 minutes, then reconnect the Capgo MCP with a valid API key (create one at https://console.capgo.app/apikeys) or sign in again through OAuth.'), 429)
 
     const token = extractToken(c)
     if (!token)
-      return unauthorized(c, 'Authentication required', false)
+      return unauthorized(c, 'Authentication required: sign in to the Capgo MCP through OAuth, or send Authorization: Bearer <Capgo API key> (create one at https://console.capgo.app/apikeys)', false)
 
     const apikey = await checkKey(c, token)
     if (!apikey) {
       await recordFailedAuth(c)
-      return unauthorized(c, 'Invalid or expired Capgo API key', true)
+      return unauthorized(c, 'Invalid or expired Capgo API key: sign in to the Capgo MCP again through OAuth, or create a new key at https://console.capgo.app/apikeys and update the connection', true)
     }
 
     const raw = await c.req.text()
     if (raw.length > MAX_BODY_BYTES)
-      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Request body too large'), 413)
+      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Request body too large (max 1 MB). Send files through the signed upload URL tools (capgo_prepare_bundle_upload, capgo_request_build) instead of inline.'), 413)
     let payload: unknown
     try {
       payload = JSON.parse(raw)
     }
     catch {
-      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.parseError, 'Parse error'), 400)
+      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.parseError, 'Parse error: the body must be one JSON-RPC 2.0 message (or a small batch) in valid JSON.'), 400)
     }
 
     const caller: McpCaller = {

@@ -32,6 +32,7 @@ export async function shouldSkipVersionNotifications(c: Context, appId: string, 
             FROM (
               SELECT m.s3_path FROM public.manifest m WHERE m.app_version_id = v.id
               UNION ALL
+              -- A compacted row stores '' (its path is under orgs/, never demo/).
               SELECT df.s3_path
               FROM public.version_files vf
               CROSS JOIN LATERAL pg_catalog.unnest(vf.file_ids) AS entry(file_id)

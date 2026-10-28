@@ -42,6 +42,11 @@ describe('console content security policy', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain('https://*.preview.preprod.capgo.app')
   })
 
+  it.concurrent('allows the assistant ChatGPT sign-in and OpenAI API hosts in connect-src', () => {
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toMatch(/connect-src[^;]*https:\/\/auth\.openai\.com/)
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toMatch(/connect-src[^;]*https:\/\/api\.openai\.com/)
+  })
+
   it.concurrent('allows localhost only in dev mode', () => {
     const devPolicy = buildConsoleContentSecurityPolicy({ dev: true })
     expect(devPolicy).toContain('http://localhost:*')

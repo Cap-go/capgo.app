@@ -40,6 +40,62 @@ Plugin reads (`/updates`, `/updates/manifest_size`) serve a version's list only
 when its `version_files` row and all of its `delta_files` rows are visible on
 the replica. The response format is unchanged.
 
+## Compact rows
+
+About 70% of a `delta_files` row used to be two hex strings: `s3_path` repeats
+the org, the app id, the upload session (encrypted bundles, up to ~470
+characters) and the file name, and `file_hash` is hex text (64 or ~512
+characters). A row in the usual shape is stored as parts:
+
+```
+s3_path   = 'orgs/<path_org>/apps/<app_id>/delta/[<hex path_session>/]<hex path_sha>_<file_name>'
+file_hash = encode(file_hash_bin, 'hex')
+```
+
+with `s3_path` / `file_hash` set to `''`. Every other shape keeps its text:
+legacy `orgs/<org>/apps/<app>/<version>/<file>` paths, `demo/` paths, a file
+name that does not end the path, upper-case hex, base64 hashes. A row is only
+compacted when the rebuilt value equals the stored one, so the rule is
+lossless for any path. On production data (3% sample) 99.6% of paths and
+99.95% of hashes compact, and the two columns shrink from about 688 to 316
+bytes per row.
+
+Readers always go through the rebuild: `public.delta_file_s3_path(...)` and
+`public.delta_file_hash(...)` on the primary (views `version_manifest` and
+`manifest`, GC, restore and compatibility triggers), and the same expressions
+inlined in `utils/version_manifest_sql.ts` on the replicas, which have no
+functions. The size lookup worker reads the path from the row, not from the
+queued message.
+
+Writers keep inserting text. The `delta_files_compact` cron task (every
+10 seconds, 2,000 rows) compacts new rows in id order once they are 10 minutes
+old; its cursor is `backfill_progress` (`job_name = 'delta_files_compact'`).
+The rows that already exist are compacted once by
+`CALL public.delta_files_compact_all()`: batches of 20,000, each committed.
+Nothing runs until the Vault switch is on, because workers of the previous
+release, and their plugin reads on the replicas, read `s3_path` directly.
+
+After the release that adds it (every api, files and plugin worker replaced):
+
+1. `SELECT vault.create_secret('true', 'CAPGO_DELTA_FILES_COMPACT_ENABLED');`
+2. Catch up the existing rows with psql as `postgres` (not in a transaction
+   block: the procedure commits each batch):
+   `SET statement_timeout = 0; CALL public.delta_files_compact_all();`
+   On a laptop it rewrites 1M production-shaped rows in about 80 seconds, so
+   the 5.1M production rows take minutes. It prints the cursor after each
+   batch and can be stopped and called again at any time. If the Google
+   subscriber falls behind, call it with a pause between batches:
+   `CALL public.delta_files_compact_all(20000, 500);`
+   Progress:
+   `SELECT last_processed_id, (SELECT max(id) FROM public.delta_files) FROM public.backfill_progress WHERE job_name = 'delta_files_compact';`
+3. Once caught up, rebuild the indexes the updates bloated, on the primary
+   and on the Google subscriber (pkey only there), without blocking writes:
+   `REINDEX TABLE CONCURRENTLY public.delta_files;`
+   Vacuum reuses the freed heap space for new rows. Returning it to the disk
+   needs a rewrite (`pg_repack`, or `VACUUM FULL` in a maintenance window: it
+   locks the table, and on the subscriber it blocks the regional replicas'
+   plugin reads while it runs).
+
 ## Deletion, restore and GC
 
 - Deleting a version keeps its `version_files` row; only its counters change.

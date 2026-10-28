@@ -1655,7 +1655,7 @@ async function handleInviteNewUserSubmit() {
                   type="radio"
                   name="permission"
                   :value="option.value"
-                  class="radio radio-primary"
+                  class="d-radio d-radio-primary"
                   @change="handleFormKitPermissionSelection(option.value)"
                 >
                 <span class="text-base label-text">{{ option.label }}</span>
@@ -1699,7 +1699,7 @@ async function handleInviteNewUserSubmit() {
                       name="app-access-app"
                       :value="app.id"
                       :disabled="isSsoManagedApp(app.id)"
-                      class="mt-1 checkbox checkbox-primary"
+                      class="mt-1 d-checkbox d-checkbox-primary"
                     >
                     <div class="flex flex-col">
                       <span class="text-sm font-medium">
@@ -1775,7 +1775,7 @@ async function handleInviteNewUserSubmit() {
               type="text"
               :placeholder="t('search-by-name-or-email')"
               :disabled="isLoading"
-              class="w-full pl-10 rounded-full input input-bordered"
+              class="w-full pl-10 rounded-full d-input"
             >
             <IconSearch class="absolute w-4 h-4 text-gray-400 transform -translate-y-1/2 left-3 top-1/2" />
           </div>
@@ -1789,7 +1789,7 @@ async function handleInviteNewUserSubmit() {
                   type="radio"
                   name="admin-delegation"
                   :value="option.value"
-                  class="mr-2 radio radio-primary"
+                  class="mr-2 d-radio d-radio-primary"
                   @change="delegateSuperAdmin(option.value)"
                 >
                 <span class="label-text">{{ option.label }}</span>
