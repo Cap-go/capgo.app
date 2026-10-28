@@ -191,8 +191,12 @@ await test('test change: agent gets guidelines, then reverts its own change afte
   eq(done.state, 'completion')
   ok(/revert the temporary test change you made in src\/pages\/Home.vue/.test(done.summary))
   eq(done.context.testChange.revertNow, true)
-  const again = await runAdvance(deps, {})
-  ok(!/revert the temporary/.test(again.summary), 'revert request is shown once')
+  eq(done.next.with.testChangeRevertedConfirmed, true)
+  const lost = await runAdvance(deps, {})
+  ok(/revert the temporary/.test(lost.summary), 'revert request repeats until confirmed')
+  const confirmed = await runAdvance(deps, { testChangeRevertedConfirmed: true })
+  ok(!/revert the temporary/.test(confirmed.summary), 'revert request stops after confirmation')
+  eq(deps.loadProgress().testChangeReverted, true)
 })
 
 await test('test change: the user\'s manual edit does not reopen the dirty-git check', async () => {

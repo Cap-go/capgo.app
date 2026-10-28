@@ -241,6 +241,12 @@ export async function decideAdvance(facts: LiveUpdateFacts, deps: EngineDeps, in
   if (input?.testChangeReady)
     mergeSession(appId, { testChangeReady: true, testChangeFiles: input.testChangeFiles, testChangeDescription: input.testChangeDescription })
 
+  if (input?.testChangeRevertedConfirmed) {
+    const p = deps.loadProgress()
+    if (p?.testChangeMode === 'agent' && !p.testChangeReverted)
+      mergeProgress(deps, p, { testChangeReverted: true })
+  }
+
   if (input?.deviceRunConfirmed) {
     mergeSession(appId, { deviceRunConfirmed: true })
     const p = deps.loadProgress()
@@ -430,6 +436,7 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
         nextUpload,
         ...(testChange ? { testChange: testChange.context } : {}),
       },
+      ...(testChange?.next ? { next: testChange.next } : {}),
     })
   }
 
@@ -454,7 +461,7 @@ function testChangeLookFor(progress: LiveUpdateProgress | null): string {
   return 'Look for the visible change you made.'
 }
 
-function testChangeFollowUp(deps: EngineDeps, nextUpload: string): { summary: string, context: Record<string, unknown> } | undefined {
+function testChangeFollowUp(deps: EngineDeps, nextUpload: string): { summary: string, context: Record<string, unknown>, next?: NextStepResult['next'] } | undefined {
   const progress = deps.loadProgress()
   const redeploy = `Devices keep showing the test bundle until the next upload: rebuild your web app and upload a new, higher version (${nextUpload}).`
   if (progress?.testChangeMode === 'manual') {
@@ -468,10 +475,15 @@ function testChangeFollowUp(deps: EngineDeps, nextUpload: string): { summary: st
   const files = progress.testChangeFiles ?? []
   if (progress.testChangeReverted)
     return { summary: redeploy, context: { mode: 'agent', files, reverted: true, redeploy: nextUpload } }
-  mergeProgress(deps, progress, { testChangeReverted: true })
+  // Only mark the revert done once the assistant confirms it, so a lost response still repeats the request.
   return {
     summary: `AI assistant: revert the temporary test change you made${files.length ? ` in ${files.join(', ')}` : ''} now, restoring the previous content exactly, then tell the user it is removed. ${redeploy}`,
     context: { mode: 'agent', files, revertNow: true, redeploy: nextUpload },
+    next: nextAction(
+      'After reverting the test change, call next_step with testChangeRevertedConfirmed: true.',
+      { testChangeRevertedConfirmed: true },
+      `${NEXT_STEP_TOOL}({ testChangeRevertedConfirmed: true })`,
+    ),
   }
 }
 

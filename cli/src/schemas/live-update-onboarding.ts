@@ -23,6 +23,7 @@ export const liveUpdateNextStepSchema = z.object({
   testChangeReady: z.boolean().describe('Set true once the visible test change is saved (make-test-change-manual or make-test-change-agent step)').optional(),
   testChangeFiles: z.array(z.string().min(1).max(500)).max(10).describe('At make-test-change-agent: project-relative paths of the files you changed for the test, so you can revert them after the update is confirmed').optional(),
   testChangeDescription: z.string().min(1).max(300).describe('At make-test-change-agent: what the user should look for on the device, e.g. "the home title now reads Hello from Capgo"').optional(),
+  testChangeRevertedConfirmed: z.boolean().describe('At completion: set true after you (the AI assistant) reverted the temporary test change you made').optional(),
   deviceRunConfirmed: z.boolean().describe('Set true after the user ran the app on a device/simulator (run-on-device step)').optional(),
   otaReceivedConfirmed: z.boolean().describe('Set true after the user confirms the OTA update appeared on device (test-update step)').optional(),
 })
