@@ -31,12 +31,33 @@ export function getRequestCountry(c: Context): string | null {
   return /^[A-Z]{2}$/.test(country) ? country : null
 }
 
-// The US entity is only offered to US visitors: it bills without automatic tax.
-export function canChooseUsBillingAccount(c: Context): boolean {
-  return getRequestCountry(c) === 'US' && isStripeAccountReadyForNewCustomers(c, 'us')
+// The US entity bills without automatic tax, so it is only offered in the Americas and Asia-Pacific.
+// Europe, the Middle East and Africa stay on EE (EU VAT goes through the Estonian entity). French and
+// Danish overseas territories follow their EU country; Cuba and North Korea are sanctioned.
+const US_BILLING_COUNTRIES = new Set([
+  // North America and US territories
+  'US', 'CA', 'MX', 'BM', 'PR', 'VI', 'GU', 'AS', 'MP', 'UM',
+  // Central America and the Caribbean
+  'BZ', 'CR', 'SV', 'GT', 'HN', 'NI', 'PA', 'AG', 'AI', 'AW', 'BB', 'BQ', 'BS', 'CW', 'DM', 'DO', 'GD', 'HT', 'JM', 'KN', 'KY', 'LC', 'MS', 'SX', 'TC', 'TT', 'VC', 'VG',
+  // South America
+  'AR', 'BO', 'BR', 'CL', 'CO', 'EC', 'FK', 'GY', 'PE', 'PY', 'SR', 'UY', 'VE',
+  // East and Southeast Asia
+  'JP', 'KR', 'CN', 'HK', 'MO', 'TW', 'MN', 'SG', 'MY', 'TH', 'VN', 'PH', 'ID', 'BN', 'KH', 'LA', 'MM', 'TL',
+  // South Asia
+  'IN', 'PK', 'BD', 'LK', 'NP', 'BT', 'MV',
+  // Oceania
+  'AU', 'NZ', 'CX', 'CC', 'NF', 'FJ', 'PG', 'SB', 'VU', 'WS', 'TO', 'KI', 'TV', 'NR', 'FM', 'MH', 'PW', 'CK', 'NU',
+])
+
+export function isUsBillingCountry(country: string | null | undefined): boolean {
+  return !!country && US_BILLING_COUNTRIES.has(country.toUpperCase())
 }
 
-// US visitors default to the US entity once it is ready; everyone else stays on EE.
+export function canChooseUsBillingAccount(c: Context): boolean {
+  return isUsBillingCountry(getRequestCountry(c)) && isStripeAccountReadyForNewCustomers(c, 'us')
+}
+
+// Visitors offered the US entity default to it once it is ready; everyone else stays on EE.
 export function getSuggestedBillingAccount(c: Context): BillingAccount {
   return canChooseUsBillingAccount(c) ? 'us' : 'ee'
 }

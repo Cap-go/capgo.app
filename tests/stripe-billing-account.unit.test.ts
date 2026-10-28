@@ -11,6 +11,7 @@ import {
   getSuggestedBillingAccount,
   IncompleteUsPlanConfigError,
   isAutomaticTaxEnabled,
+  isUsBillingCountry,
   normalizeBillingAccount,
   planProductIdOrFilter,
   resolveCheckoutPlanProductId,
@@ -188,7 +189,7 @@ describe('new org billing account from location', () => {
     expect(resolveNewOrgBillingAccount(createGeoContext('US'), 'us')).toBe('us')
   })
 
-  it('defaults US visitors to us and everyone else to ee', () => {
+  it('defaults offered visitors to us and everyone else to ee', () => {
     expect(resolveNewOrgBillingAccount(createGeoContext('US'))).toBe('ee')
     mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
     mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
@@ -197,14 +198,20 @@ describe('new org billing account from location', () => {
     expect(resolveNewOrgBillingAccount(createGeoContext())).toBe('ee')
   })
 
-  it('only offers the US entity to US visitors', () => {
+  it('offers the US entity in the Americas and Asia-Pacific only', () => {
     mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
     mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
-    expect(canChooseUsBillingAccount(createGeoContext('US'))).toBe(true)
-    expect(canChooseUsBillingAccount(createGeoContext('FR'))).toBe(false)
+    for (const country of ['US', 'CA', 'BR', 'MX', 'JP', 'AU', 'IN', 'SG'])
+      expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(true)
+    for (const country of ['FR', 'DE', 'GB', 'CH', 'AE', 'ZA', 'NG', 'GF', 'CU', 'KP'])
+      expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(false)
     expect(canChooseUsBillingAccount(createGeoContext())).toBe(false)
-    // US bills without automatic tax, so a non-US caller cannot pick it through the API.
+    expect(isUsBillingCountry('ca')).toBe(true)
+    expect(isUsBillingCountry(null)).toBe(false)
+    expect(getSuggestedBillingAccount(createGeoContext('JP'))).toBe('us')
+    // US bills without automatic tax, so a European caller cannot pick it through the API.
     expect(resolveNewOrgBillingAccount(createGeoContext('FR'), 'us')).toBe('ee')
+    expect(resolveNewOrgBillingAccount(createGeoContext('BR'), 'us')).toBe('us')
   })
 
   it('falls back to ee when us is requested but not configured', () => {
