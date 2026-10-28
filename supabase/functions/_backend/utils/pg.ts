@@ -154,6 +154,8 @@ function isTooManyConnectionsError(error: unknown): boolean {
 }
 
 function retryPoolConnectOnTooManyConnections(pool: Pool) {
+  if (typeof pool.connect !== 'function')
+    return
   const rawConnect = pool.connect.bind(pool) as () => Promise<PoolClient>
   const connectWithRetry = async (): Promise<PoolClient> => {
     for (let attempt = 0; ; attempt++) {
