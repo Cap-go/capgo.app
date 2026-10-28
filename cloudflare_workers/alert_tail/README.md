@@ -32,12 +32,6 @@ Each POST body is JSON `{ "alerts": [ ... ] }`. Entries include `functionName`, 
 
 ## Volume
 
-Cloudflare invokes `tail()` once per producer Worker invocation. Within each batch, alerts are deduped and capped (`MAX_BATCH_ALERTS`, `MAX_POST_BODY_BYTES`). **Cross-call throttling** uses the `ALERT_THROTTLE_STORE` KV binding: the first alert per signature in a window is POSTed immediately; repeats increment a suppressed counter and are rolled into periodic summary alerts (see `ALERT_THROTTLE_WINDOW_SEC` and `ALERT_THROTTLE_SUMMARY_INTERVAL_SEC` in Wrangler vars). Create the KV namespace before the first prod deploy:
+Cloudflare invokes `tail()` once per producer Worker invocation. Within each batch, alerts are deduped and capped (`MAX_BATCH_ALERTS`, `MAX_POST_BODY_BYTES`). **Cross-call throttling** uses the `ALERT_THROTTLE` Durable Object: the first alert per signature in a window is POSTed immediately; repeats increment a suppressed counter and are rolled into periodic summary alerts (see `ALERT_THROTTLE_WINDOW_SEC` and `ALERT_THROTTLE_SUMMARY_INTERVAL_SEC` in Wrangler vars). The DO applies the POST body byte cap before returning so throttle state matches the outbound payload.
 
-```bash
-bunx wrangler kv namespace create ALERT_THROTTLE_STORE --config cloudflare_workers/alert_tail/wrangler.jsonc --env=prod
-```
-
-Update the namespace `id` in `wrangler.jsonc` if it differs from the repo value.
-
-Webhook delivery requires `https://` in `ALERT_WEBHOOK_URL`. Message and stack fields redact emails and common token patterns before POST.
+Webhook delivery requires `https://` in `ALERT_WEBHOOK_URL`. Message, stack, URL, and user-agent fields redact emails and common token patterns before POST.

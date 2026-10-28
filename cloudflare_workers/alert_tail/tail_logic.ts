@@ -1,4 +1,4 @@
-import { redactSensitiveText } from './redact.ts'
+import { redactOptionalText, redactSensitiveText } from './redact.ts'
 
 export const MAX_STACK_CHARS = 4096
 export const MAX_BATCH_ALERTS = 100
@@ -156,17 +156,20 @@ export function normalizeTailEvent(event: TailTraceEvent): AlertTailRecord | nul
   const message = redactSensitiveText(resolveMessage(event))
   const stackRaw = truncateStack(first?.stack ?? null)
 
+  const rawUrl = stripUrlQuery(event.event?.request?.url)
+  const rawUserAgent = getHeaderFromRequest(event.event?.request, 'user-agent')
+
   return {
     functionName,
     errorName: resolveErrorName(event),
     message,
     stack: stackRaw ? redactSensitiveText(stackRaw) : null,
     method: event.event?.request?.method ?? null,
-    url: stripUrlQuery(event.event?.request?.url),
+    url: redactOptionalText(rawUrl),
     requestId: resolveRequestId(event),
     timestamp: new Date(tsMs).toISOString(),
     environment: functionName,
-    userAgent: getHeaderFromRequest(event.event?.request, 'user-agent'),
+    userAgent: redactOptionalText(rawUserAgent),
     body: null,
     count: 1,
   }

@@ -4,6 +4,10 @@
   "main": "./index.ts",
   "workers_dev": false,
   "upload_source_maps": true,
+  "durable_objects": {
+    "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+  },
+  "migrations": [{ "tag": "alert-throttle-v1", "new_sqlite_classes": ["AlertThrottle"] }],
   "env": {
     "prod": {
       "name": "capgo_alert_tail-prod",
@@ -12,12 +16,9 @@
         "ALERT_THROTTLE_WINDOW_SEC": "300",
         "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
       },
-      "kv_namespaces": [
-        {
-          "binding": "ALERT_THROTTLE_STORE",
-          "id": "7f3c8a2b9d1e4f50618293ab4c5d6e7f"
-        }
-      ],
+      "durable_objects": {
+        "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+      },
       "observability": {
         "enabled": true,
         "issues": { "enabled": true }
@@ -30,12 +31,9 @@
         "ALERT_THROTTLE_WINDOW_SEC": "300",
         "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
       },
-      "kv_namespaces": [
-        {
-          "binding": "ALERT_THROTTLE_STORE",
-          "id": "8e4d9b3c0a2f5e61729384bc5d6e7f80"
-        }
-      ],
+      "durable_objects": {
+        "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+      },
       "observability": {
         "enabled": true,
         "issues": { "enabled": true }
@@ -48,12 +46,9 @@
         "ALERT_THROTTLE_WINDOW_SEC": "300",
         "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
       },
-      "kv_namespaces": [
-        {
-          "binding": "ALERT_THROTTLE_STORE",
-          "id": "local-alert-throttle-store"
-        }
-      ],
+      "durable_objects": {
+        "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+      },
       "observability": {
         "enabled": true,
         "issues": { "enabled": true }

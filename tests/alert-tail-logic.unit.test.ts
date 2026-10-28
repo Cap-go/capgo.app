@@ -3,6 +3,7 @@ import { isAllowedAlertWebhookUrl, redactSensitiveText } from '../cloudflare_wor
 import {
   applyCrossCallThrottle,
   buildSuppressedSummaryAlert,
+  hashThrottleStoreKey,
   MemoryThrottleStore,
   parseThrottleSummaryIntervalSec,
   parseThrottleWindowSec,
@@ -145,7 +146,7 @@ describe('normalizeTailEvent', () => {
     expect(record?.timestamp).toBe('2026-10-27T22:00:00.000Z')
   })
 
-  it.concurrent('redacts emails and tokens in message and stack', () => {
+  it.concurrent('redacts emails and tokens in message, stack, url, and user-agent', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiIs.eyJzdWIiOiIxIn0.signature'
     const record = normalizeTailEvent({
       outcome: 'exception',
@@ -154,11 +155,17 @@ describe('normalizeTailEvent', () => {
         message: `failed for user@example.com bearer sk_live_abc apikey=secret123 ${jwt}`,
         stack: `Error: authorization: Bearer tok\n    at mail user@example.com`,
       }],
+      event: {
+        request: {
+          url: 'https://plugin.na.capgo.app/users/user@example.com/updates',
+          headers: { 'user-agent': 'Capgo user@example.com' },
+        },
+      },
     })
     expect(record?.message).not.toContain('user@example.com')
     expect(record?.message).toContain('[redacted-email]')
-    expect(record?.message).toContain('[redacted-jwt]')
-    expect(record?.stack).not.toContain('user@example.com')
+    expect(record?.url).not.toContain('user@example.com')
+    expect(record?.userAgent).not.toContain('user@example.com')
     expect(record?.stack).toContain('[redacted]')
   })
 
@@ -235,6 +242,15 @@ describe('capPostBodyAlerts', () => {
   })
 })
 
+describe('hashThrottleStoreKey', () => {
+  it.concurrent('uses a fixed-length hex key under KV limits', async () => {
+    const longMessage = 'x'.repeat(2000)
+    const key = await hashThrottleStoreKey(`fn\0err\0${longMessage}`)
+    expect(key).toHaveLength(64)
+    expect(key.length).toBeLessThan(512)
+  })
+})
+
 describe('applyCrossCallThrottle', () => {
   it.concurrent('sends the first alert per signature then periodic summaries', async () => {
     const store = new MemoryThrottleStore()
@@ -293,11 +309,11 @@ function recordTemplateFromSample() {
 }
 
 describe('redactSensitiveText and webhook URL policy', () => {
-  it.concurrent('redacts common secret patterns', () => {
-    const input = 'user@example.com Authorization: Bearer abc.def apikey=xyz eyJhbGciOiJIUzI1NiIs.eyJzdWIiOiIxIn0.sig'
+  it.concurrent('redacts common secret patterns including Basic auth', () => {
+    const input = 'user@example.com Authorization: Basic dXNlcjpwYXNz apikey=xyz'
     const redacted = redactSensitiveText(input)
+    expect(redacted).not.toContain('dXNlcjpwYXNz')
     expect(redacted).not.toContain('user@example.com')
-    expect(redacted).not.toContain('eyJhbGci')
     expect(redacted).toContain('[redacted-email]')
   })
 

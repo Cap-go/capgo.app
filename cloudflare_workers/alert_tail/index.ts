@@ -1,27 +1,53 @@
 import { isAllowedAlertWebhookUrl } from './redact.ts'
 import {
-  capPostBodyAlerts,
   processTailBatch,
   type TailTraceEvent,
 } from './tail_logic.ts'
+import { AlertThrottle } from './throttle_do.ts'
 import {
-  applyCrossCallThrottle,
-  kvThrottleStore,
   parseThrottleSummaryIntervalSec,
   parseThrottleWindowSec,
 } from './throttle_logic.ts'
+
+export { AlertThrottle }
 
 export interface Env {
   ALERT_WEBHOOK_URL?: string
   ALERT_WEBHOOK_AUTH?: string
   ENV_NAME?: string
-  ALERT_THROTTLE_STORE?: KVNamespace
+  ALERT_THROTTLE?: DurableObjectNamespace
   ALERT_THROTTLE_WINDOW_SEC?: string
   ALERT_THROTTLE_SUMMARY_INTERVAL_SEC?: string
 }
 
 let warnedMissingWebhookSecrets = false
 let warnedInsecureWebhookUrl = false
+
+async function applyDurableThrottle(
+  namespace: DurableObjectNamespace,
+  envName: string,
+  records: Awaited<ReturnType<typeof processTailBatch>>,
+  env: Env,
+): Promise<Awaited<ReturnType<typeof processTailBatch>>> {
+  const id = namespace.idFromName(envName)
+  const stub = namespace.get(id)
+  const response = await stub.fetch('https://alert-throttle/apply', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      records,
+      nowMs: Date.now(),
+      windowSec: parseThrottleWindowSec(env.ALERT_THROTTLE_WINDOW_SEC),
+      summaryIntervalSec: parseThrottleSummaryIntervalSec(env.ALERT_THROTTLE_SUMMARY_INTERVAL_SEC),
+    }),
+  })
+  if (!response.ok) {
+    console.error('alert tail throttle DO failed', response.status)
+    return []
+  }
+  const body = await response.json() as { alerts?: Awaited<ReturnType<typeof processTailBatch>> }
+  return body.alerts ?? []
+}
 
 export default {
   async tail(events: TailTraceEvent[], env: Env): Promise<void> {
@@ -48,25 +74,16 @@ export default {
       if (batch.length === 0)
         return
 
-      const windowSec = parseThrottleWindowSec(env.ALERT_THROTTLE_WINDOW_SEC)
-      const summarySec = parseThrottleSummaryIntervalSec(env.ALERT_THROTTLE_SUMMARY_INTERVAL_SEC)
-      const windowMs = windowSec * 1000
-      const summaryIntervalMs = summarySec * 1000
-      const nowMs = Date.now()
-
       let alerts = batch
-      if (env.ALERT_THROTTLE_STORE) {
-        const store = kvThrottleStore(
-          env.ALERT_THROTTLE_STORE,
-          Math.max(windowSec * 2, 600),
+      if (env.ALERT_THROTTLE) {
+        alerts = await applyDurableThrottle(
+          env.ALERT_THROTTLE,
+          env.ENV_NAME ?? 'capgo_alert_tail',
+          batch,
+          env,
         )
-        alerts = await applyCrossCallThrottle(batch, store, nowMs, {
-          windowMs,
-          summaryIntervalMs,
-        })
       }
 
-      alerts = capPostBodyAlerts(alerts)
       if (alerts.length === 0)
         return
 

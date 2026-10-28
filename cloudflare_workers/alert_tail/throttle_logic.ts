@@ -59,6 +59,11 @@ function shouldEmitPeriodicSummary(state: ThrottleState, nowMs: number, summaryI
   return state.suppressed > 0 && nowMs - state.lastSummaryMs >= summaryIntervalMs
 }
 
+export async function hashThrottleStoreKey(dedupeKeyStr: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dedupeKeyStr))
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 export async function applyCrossCallThrottle(
   records: AlertTailRecord[],
   store: ThrottleStore,
@@ -69,7 +74,7 @@ export async function applyCrossCallThrottle(
   const toSend: AlertTailRecord[] = []
 
   for (const record of records) {
-    const key = dedupeKey(record)
+    const key = await hashThrottleStoreKey(dedupeKey(record))
     const existing = await store.get(key)
     const windowExpired = !existing || nowMs >= existing.windowStartMs + windowMs
 
@@ -127,16 +132,5 @@ export class MemoryThrottleStore implements ThrottleStore {
 
   async put(key: string, state: ThrottleState): Promise<void> {
     this.map.set(key, state)
-  }
-}
-
-export function kvThrottleStore(kv: KVNamespace, expirationTtlSec: number): ThrottleStore {
-  return {
-    async get(key: string) {
-      return await kv.get<ThrottleState>(key, 'json')
-    },
-    async put(key: string, state: ThrottleState) {
-      await kv.put(key, JSON.stringify(state), { expirationTtl: expirationTtlSec })
-    },
   }
 }
