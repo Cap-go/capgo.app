@@ -32,6 +32,6 @@ Each POST body is JSON `{ "alerts": [ ... ] }`. Entries include `functionName`, 
 
 ## Volume
 
-Cloudflare invokes `tail()` once per producer Worker invocation. Within each batch, alerts are deduped and capped (`MAX_BATCH_ALERTS`, `MAX_POST_BODY_BYTES`). **Cross-call throttling** uses the `ALERT_THROTTLE` Durable Object: the first alert per signature in a window is POSTed immediately; repeats increment a suppressed counter and are rolled into periodic summary alerts (see `ALERT_THROTTLE_WINDOW_SEC` and `ALERT_THROTTLE_SUMMARY_INTERVAL_SEC` in Wrangler vars). Each `/apply` returns a `planId`; the tail handler sends `/ack` or `/rollback` with that id after the webhook attempt (including suppression-only plans with no POST body).
+Cloudflare invokes `tail()` once per producer Worker invocation. Within each batch, alerts are deduped and capped (`MAX_BATCH_ALERTS`, `MAX_POST_BODY_BYTES`). **Cross-call throttling** uses the `ALERT_THROTTLE` Durable Object: the first alert per signature in a window is POSTed immediately; repeats increment a suppressed counter and are rolled into periodic summary alerts (see `ALERT_THROTTLE_WINDOW_SEC` and `ALERT_THROTTLE_SUMMARY_INTERVAL_SEC` in Wrangler vars). Each `/apply` returns a `planId`. The tail handler calls `/ack` or `/rollback` with that id after the webhook attempt, including suppression-only plans that produce no POST body.
 
 Webhook delivery requires `https://` in `ALERT_WEBHOOK_URL`. Message, stack, URL, and user-agent fields redact emails and common token patterns before POST.
