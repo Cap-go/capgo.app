@@ -323,6 +323,8 @@ BEGIN
     ('e5f6a7b8-c9d0-4e1f-9a2b-3c4d5e6f7a82', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Private Error Test Org', 'test@capgo.app', NULL),
     ('f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a50', 'd0f1a2b3-c4d5-4e6f-8a90-b1c2d3e4f506', NOW(), NOW(), '', 'API Key Management Test Org', 'apikey-management@capgo.app', 'cus_apikey_management_test_123'),
     ('a9b8c7d6-e5f4-4321-9876-543210fedcba', 'f8e7d6c5-b4a3-4291-8f7e-6d5c4b3a2910', NOW(), NOW(), '', 'JWT MFA Edge Test Org', 'jwt-mfa-edge-apikey@capgo.app', NULL),
+    -- Dedicated org for supabase/tests/95_test_audit_logs_app_metrics_performance.sql (writes its daily_* rows and metrics cache)
+    ('95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'App Metrics Seed Test Org', 'test@capgo.app', NULL),
     ('b8c9d0e1-f2a3-4b4c-9d5e-6f7a8b9c0dc7', '6aa76066-55ef-4238-ade6-0b32334a4097', NOW(), NOW(), '', 'Credit Auto Top-Up Test Org', 'test@capgo.app', NULL);
     ALTER TABLE public.orgs ENABLE TRIGGER generate_org_user_stripe_info_on_org_create;
 
@@ -634,7 +636,9 @@ BEGIN
     (NOW(), 'com.stats.app', '', 'Stats Test App', '1.0.0', NOW(), 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d'),
     (NOW(), 'com.rls.app', '', 'RLS Test App', '1.0.0', NOW(), 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e'),
     (NOW(), 'com.encrypted.app', '', 'Encrypted Test App', '1.0.0', NOW(), 'a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193'),
-    (NOW(), 'com.test2.app', '', 'Test2 App', '1.0.0', NOW(), '34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5');
+    (NOW(), 'com.test2.app', '', 'Test2 App', '1.0.0', NOW(), '34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5'),
+    (NOW(), 'com.test.appmetrics.seed', '', 'App Metrics Seed Test App', '1.0.0', NOW(), '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b', '6aa76066-55ef-4238-ade6-0b32334a4097'),
+    (NOW(), 'com.test.appmetrics.seed2', '', 'App Metrics Seed Test App 2', '1.0.0', NOW(), '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b', '6aa76066-55ef-4238-ade6-0b32334a4097');
 
     WITH seed_key_roles (id, org_role_name) AS (
       VALUES
