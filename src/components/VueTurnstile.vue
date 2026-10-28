@@ -23,7 +23,8 @@ const props = withDefaults(defineProps<{
   theme: 'auto',
   language: 'auto',
   action: '',
-  appearance: 'always',
+  // Most visitors pass Turnstile without interacting, so only show the widget when Cloudflare needs a click.
+  appearance: 'interaction-only',
   renderOnMount: true,
 })
 
