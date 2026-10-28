@@ -459,6 +459,110 @@ const accountTools: McpTool[] = [
 // ---------------------------------------------------------------------------
 // Apps
 // ---------------------------------------------------------------------------
+const ALTERNATIVE_APP_ID_SUFFIXES = ['app', 'mobile', 'capgo', 'live']
+
+/** Capgo app IDs close to a taken one, for the agent to offer the user. */
+export function buildAlternativeAppIds(takenAppId: string): string[] {
+  const base = takenAppId.replace(/\.+$/, '')
+  return ALTERNATIVE_APP_ID_SUFFIXES
+    .filter(suffix => !base.toLowerCase().endsWith(`.${suffix}`))
+    .map(suffix => `${base}.${suffix}`)
+}
+
+function isAppIdConflict(response: McpApiResponse): boolean {
+  if (response.status === 409)
+    return true
+  const data = response.data as { error?: unknown } | null
+  return typeof data === 'object' && data?.error === 'app_id_already_exists'
+}
+
+/**
+ * Explain a duplicate app ID instead of returning a bare 409: either the caller can already use the
+ * app (nothing to create), or another account owns it and the agent gets concrete ways forward.
+ */
+async function appIdConflictResult(id: string, orgIdInput: string, ctx: McpToolContext): Promise<McpToolResult> {
+  const existing = await ctx.call({ method: 'GET', path: `/app/${enc(id)}` })
+  const existingOrg = existing.ok ? (existing.data as { owner_org?: unknown } | null)?.owner_org : undefined
+  const suggested = buildAlternativeAppIds(id)
+  if (existing.ok && existingOrg === orgIdInput) {
+    return textResult({
+      status: 'already_exists',
+      app_id: id,
+      owner_org: orgIdInput,
+      message: `App ${id} is already registered in this organization. Nothing to create: keep using it.`,
+      next_steps: [
+        `Read its settings with capgo_get_app (appId: ${id}) or change them with capgo_update_app.`,
+        `Upload a bundle with capgo_prepare_bundle_upload or capgo_get_upload_command for ${id}.`,
+      ],
+    })
+  }
+  if (existing.ok) {
+    return textResult({
+      error: 'app_id_already_exists',
+      app_id: id,
+      owner_org: typeof existingOrg === 'string' ? existingOrg : undefined,
+      message: `App ${id} already exists in another organization you can access (owner_org above), so it cannot be created again in ${orgIdInput}.`,
+      solutions: [
+        'Use the existing app as is: pass its appId to the other tools; it stays in its current organization.',
+        'Move it to the requested organization: an admin of both organizations can transfer it in the Capgo console under App settings > Transfer app ownership.',
+        `Register a separate app with a different Capgo app ID, e.g. ${suggested[0]}, then set plugins.CapacitorUpdater.appId to it in capacitor.config and run npx cap sync. The native bundle ID does not change.`,
+      ],
+      suggested_app_ids: suggested,
+    }, true)
+  }
+  return textResult({
+    error: 'app_id_already_exists',
+    app_id: id,
+    message: `App ID ${id} is already registered in Capgo by an organization this connection cannot access. Ask the user which solution they want; do not pick one silently.`,
+    solutions: [
+      `If the user (or their team) owns ${id} in another Capgo organization or account: ask an admin of that organization to invite them (capgo_invite_organization_member from that account), or connect this MCP with that account, then use the existing app instead of creating it.`,
+      `If the app should live in this organization: an admin of the owning organization can transfer it in the Capgo console under App settings > Transfer app ownership.`,
+      `Otherwise register the app under a different Capgo app ID with capgo_add_app, e.g. ${suggested[0]}. The native bundle ID / applicationId does not change: set plugins.CapacitorUpdater.appId to the new ID in capacitor.config (ts or json), run npx cap sync, and use the new ID for uploads (npx @capgo/cli@latest bundle upload <new id>).`,
+      'If nobody on the team created it and the user owns the store listing for this bundle ID, they can contact support@capgo.app to reclaim it.',
+    ],
+    suggested_app_ids: suggested,
+  }, true)
+}
+
+const addAppTool: McpTool = {
+  name: 'capgo_add_app',
+  title: 'Create app',
+  description: 'Register a new app in an organization. If the app ID is already taken, the result says whether the caller can already use it '
+    + 'and lists solutions (use the existing app, transfer it, or register an alternative ID via plugins.CapacitorUpdater.appId) to offer the user.',
+  inputSchema: z.object({
+    appId,
+    name: z.string().min(1),
+    orgId,
+    ios_store_url: z.string().optional(),
+    android_store_url: z.string().optional(),
+  }) as unknown as z.ZodObject<z.ZodRawShape>,
+  annotations: { title: 'Create app', ...WRITE },
+  run: async (input, ctx) => {
+    const { appId: id, name, orgId: ownerOrg, ios_store_url, android_store_url } = input as {
+      appId: string
+      name: string
+      orgId: string
+      ios_store_url?: string
+      android_store_url?: string
+    }
+    const response = await ctx.call({
+      method: 'POST',
+      path: '/app',
+      body: compact({
+        app_id: id,
+        name,
+        owner_org: ownerOrg,
+        ios_store_url,
+        android_store_url,
+        onboarding: { source: 'mcp' },
+      }),
+    })
+    if (!response.ok && isAppIdConflict(response))
+      return appIdConflictResult(id, ownerOrg, ctx)
+    return apiResult(response)
+  },
+}
+
 const appTools: McpTool[] = [
   apiTool({
     name: 'capgo_list_apps',
@@ -476,31 +580,7 @@ const appTools: McpTool[] = [
     annotations: READ,
     request: input => ({ method: 'GET', path: `/app/${enc(input.appId)}` }),
   }),
-  apiTool({
-    name: 'capgo_add_app',
-    title: 'Create app',
-    description: 'Register a new app in an organization.',
-    input: {
-      appId,
-      name: z.string().min(1),
-      orgId,
-      ios_store_url: z.string().optional(),
-      android_store_url: z.string().optional(),
-    },
-    annotations: WRITE,
-    request: input => ({
-      method: 'POST',
-      path: '/app',
-      body: compact({
-        app_id: input.appId,
-        name: input.name,
-        owner_org: input.orgId,
-        ios_store_url: input.ios_store_url,
-        android_store_url: input.android_store_url,
-        onboarding: { source: 'mcp' },
-      }),
-    }),
-  }),
+  addAppTool,
   apiTool({
     name: 'capgo_update_app',
     title: 'Update app',

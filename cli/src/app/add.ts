@@ -118,6 +118,19 @@ export function isDuplicateAppCreateError(error: unknown, httpStatus?: number) {
   return message.includes('app_id_already_exists') || message.includes('app id already exists')
 }
 
+/** Error text for an app ID registered by another organization, with the ways forward (shown by the CLI and the MCP). */
+export function buildAppIdTakenMessage(appId: string) {
+  const alternative = appId.toLowerCase().endsWith('.app') ? `${appId}.mobile` : `${appId}.app`
+  return [
+    `App ID ${appId} already exists in another Capgo organization.`,
+    'Solutions:',
+    '- If you or your team own it: ask an admin of that organization to invite you, or log in with that account, and use the existing app.',
+    '- To move it here: an admin of the owning organization can transfer it in the Capgo console (App settings > Transfer app ownership).',
+    `- Or register a different Capgo app ID, e.g. ${alternative}, and set plugins.CapacitorUpdater.appId to it in capacitor.config (your native bundle ID stays the same), then run npx cap sync.`,
+    '- If nobody on your team created it and you own the store listing, contact support@capgo.app.',
+  ].join('\n')
+}
+
 export type AppAddDuplicateOutcome = 'duplicate_owned' | 'duplicate_taken' | 'not_duplicate'
 
 type AppListRow = { app_id?: string }
@@ -440,7 +453,7 @@ export async function addAppInternal(
       appAlreadyExists = true
     }
     else if (duplicateOutcome === 'duplicate_taken') {
-      const takenMessage = `App ID ${appId} already exists`
+      const takenMessage = buildAppIdTakenMessage(appId)
       if (!silent)
         log.error(`Could not add app: ${takenMessage}`)
       throw new CliUserError(`Could not add app: ${takenMessage}`)

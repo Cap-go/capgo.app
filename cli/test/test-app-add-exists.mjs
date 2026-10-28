@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import {
+  buildAppIdTakenMessage,
   isDuplicateAppCreateError,
   resolveAppAddDuplicateOutcome,
 } from '../src/app/add.ts'
@@ -9,6 +10,12 @@ console.log('🧪 Testing app add duplicate handling...\n')
 
 assert.equal(isDuplicateAppCreateError(new Error('app_id_already_exists | App ID already exists')), true)
 assert.equal(isDuplicateAppCreateError(new Error('App ID already exists'), 409), true)
+
+const takenMessage = buildAppIdTakenMessage('com.example.app')
+assert.match(takenMessage, /App ID com\.example\.app already exists/)
+assert.match(takenMessage, /plugins\.CapacitorUpdater\.appId/)
+assert.match(takenMessage, /com\.example\.app\.mobile/)
+assert.match(buildAppIdTakenMessage('com.example'), /com\.example\.app/)
 assert.equal(isDuplicateAppCreateError(new Error('HTTP 409'), 409), true)
 assert.equal(isDuplicateAppCreateError(new Error('network unavailable')), false)
 assert.equal(isDuplicateAppCreateError(new Error('insufficient permissions')), false)
