@@ -3,7 +3,7 @@ import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
 import type { NotificationAudience } from '../utils/org_email_notifications.ts'
 import type { OpenSubscriptionInvoiceSummary, StripeData, StripeWebhookStatus } from '../utils/stripe.ts'
-import type { PgClient } from '../utils/pg.ts'
+import type { PgClient, PgQueryClient } from '../utils/pg.ts'
 import type { BillingAccount } from '../utils/stripe_billing.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
@@ -18,7 +18,7 @@ import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { getOpenAIFirstPaymentAt, trackOpenAIFirstPayment } from '../utils/openai_ads_first_payment.ts'
 import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications.ts'
-import { beginWriteTransaction, closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { beginWriteTransaction, checkoutPgClient, closeClient, getDrizzleClient, getPgClient, releasePgClient } from '../utils/pg.ts'
 import { isTransientDatabaseError } from '../utils/pg_errors.ts'
 import { queryJson } from '../utils/pg_rls.ts'
 import { tierPricePercent } from '../utils/country_price_tier.ts'
@@ -801,9 +801,13 @@ async function persistStripeInfoAndRevenueMovement(
   if (Object.keys(transactionUpdateData).length === 0 && !shouldRecordMovement)
     return { status: 'applied', firstPaidAt: null }
 
-  const pgClient = await getPgClient(c, false)
+  // Pin one connection: BEGIN/COMMIT on the request-shared Pool could land on different ones.
+  const pg = await getPgClient(c, false)
+  let pgClient: PgQueryClient | undefined
+  let rollbackFailed = false
 
   try {
+    pgClient = await checkoutPgClient(pg)
     await beginWriteTransaction(pgClient)
 
     // Lock the row so concurrent retries serialize before we classify
@@ -876,15 +880,17 @@ async function persistStripeInfoAndRevenueMovement(
   }
   catch (error) {
     try {
-      await pgClient.query('ROLLBACK')
+      await pgClient?.query('ROLLBACK')
     }
     catch {
-      // Ignore rollback failures and rethrow the original error.
+      // Rethrow the original error; the connection is discarded below.
+      rollbackFailed = true
     }
     throw error
   }
   finally {
-    closeClient(c, pgClient)
+    releasePgClient(pg, pgClient, rollbackFailed)
+    closeClient(c, pg)
   }
 }
 
@@ -924,9 +930,13 @@ async function persistInvoicePayment(
   invoiceSubscriptionId: string,
   eventOccurredAtIso: string,
 ): Promise<InvoicePaymentResult> {
-  const pgClient = await getPgClient(c, false)
+  // Pin one connection: BEGIN/COMMIT on the request-shared Pool could land on different ones.
+  const pg = await getPgClient(c, false)
+  let pgClient: PgQueryClient | undefined
+  let rollbackFailed = false
 
   try {
+    pgClient = await checkoutPgClient(pg)
     await beginWriteTransaction(pgClient)
     const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id'> & { paid_at: string | Date | null }>(
       'SELECT last_stripe_event_at, status, subscription_id, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
@@ -957,15 +967,17 @@ async function persistInvoicePayment(
   }
   catch (error) {
     try {
-      await pgClient.query('ROLLBACK')
+      await pgClient?.query('ROLLBACK')
     }
     catch {
-      // Ignore rollback failures and rethrow the original error.
+      // Rethrow the original error; the connection is discarded below.
+      rollbackFailed = true
     }
     throw error
   }
   finally {
-    closeClient(c, pgClient)
+    releasePgClient(pg, pgClient, rollbackFailed)
+    closeClient(c, pg)
   }
 }
 

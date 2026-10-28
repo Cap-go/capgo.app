@@ -11,6 +11,11 @@ import { closeClient, getDrizzleClient, getPgClient, withPgTransaction } from '.
  * - `apikey`: `anon` with `request.headers.capgkey` set, like `supabaseApikey`. RLS policies
  *   and RBAC functions read the key back through `get_apikey_header()`.
  * - `anon`: plain `anon`, like `emptySupabase`.
+ *
+ * `session_user` stays `postgres` on every direct connection, even after the role switch (it was
+ * `authenticator` under PostgREST). SQL that detects internal callers through `session_user`
+ * (`apikeys_force_server_key`, `upsert_version_meta`) treats every principal here as internal, so
+ * do not reach those from a caller principal without checking `current_request_role()` instead.
  */
 export type RlsPrincipal
   = | { kind: 'service' }
