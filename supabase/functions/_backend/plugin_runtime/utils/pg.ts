@@ -37,6 +37,17 @@ export type PluginPgClient = Client | Pool
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
 
+/**
+ * Database source each client connected to. A request can open several clients
+ * whose route selection differs (EU fallback on one side of a lag figure's
+ * expiry), so a lag probe is keyed by its own client, not the request context.
+ */
+const pgClientSources = new WeakMap<object, string>()
+
+function getClientReplicationLagCacheKey(c: Context, pool: PluginPgClient) {
+  return pgClientSources.get(pool) ?? getReplicationLagCacheKey(c)
+}
+
 const REPLICATION_LAG_THRESHOLD_SECONDS = 180
 export interface ChannelLookupResult { id: number, name: string, allow_device_self_set: boolean, public: boolean, owner_org: string }
 export type PlanAction = 'mau' | 'storage' | 'bandwidth'
@@ -179,7 +190,7 @@ async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<Replic
 }
 
 async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
-  const cacheKey = getReplicationLagCacheKey(c)
+  const cacheKey = getClientReplicationLagCacheKey(c, pool)
   const replicationLagInflight = getReplicationLagInflight(c)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry)
@@ -232,7 +243,7 @@ export function refreshReplicationLag(c: Context, pool: PluginPgClient) {
 export async function setReplicationLagHeader(c: Context, pool: PluginPgClient, options: { probeOnMiss?: boolean } = {}): Promise<void> {
   // Hot path: only use in-memory lag. Cold Cache API / DB probe runs in background
   // so a miss cannot add another Hyperdrive RTT to /updates P999.
-  const cacheKey = getReplicationLagCacheKey(c)
+  const cacheKey = getClientReplicationLagCacheKey(c, pool)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry) {
     safeSetResponseHeader(c, 'X-Replication-Lag', memoryEntry.status)
@@ -431,6 +442,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     })
     await client.connect()
     skipEndClients.add(client)
+    pgClientSources.set(client, dbName)
     return setPgAccessMode(client, readOnly)
   }
 
@@ -464,6 +476,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     })
   })
 
+  pgClientSources.set(pool, dbName)
   return setPgAccessMode(pool, readOnly)
 }
 
@@ -510,7 +523,12 @@ export function getLazyPgQueryCount(c: Context) {
 export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
   let inner: Promise<PluginPgClient> | null = null
   const ensure = () => {
-    inner ??= getPgClient(c, readOnly).catch((error: unknown) => {
+    inner ??= getPgClient(c, readOnly).then((db) => {
+      const source = pgClientSources.get(db)
+      if (source)
+        pgClientSources.set(client, source)
+      return db
+    }, (error: unknown) => {
       throw markLazyPgConnectError(error)
     })
     return inner

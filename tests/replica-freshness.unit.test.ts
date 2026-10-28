@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
-import { getDatabaseURL, getReadReplicaBinding } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { edgeCacheTtlForReplicaLag, isReadReplicaSource, READ_REPLICA_FALLBACK_LAG_SECONDS, REPLICA_LAG_QUERY, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
+import { getDatabaseURL, getPgClient, getReadReplicaBinding, refreshReplicationLag } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { edgeCacheTtlForReplicaLag, isReadReplicaSource, getFreshReplicationLagMemoryEntry, READ_REPLICA_FALLBACK_LAG_SECONDS, REPLICA_LAG_QUERY, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 
 function contextFrom(source: string | undefined) {
   return {
@@ -135,6 +135,41 @@ describe('replica freshness', () => {
       // The figure expires after its TTL: the next read probes the regional replica again.
       setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 6000 }, Date.now() - 1)
       expect(getDatabaseURL(c, true)).toBe('postgresql://af')
+    }
+    finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('stores a lag probe under the source its own client connected to', async () => {
+    stubCaches()
+    vi.stubEnv('SB_REGION', 'af-south-1')
+    let databaseSource: string | undefined
+    const c = {
+      ...contextFrom(undefined),
+      env: {
+        HYPERDRIVE_CAPGO_READ_AF: { connectionString: 'postgresql://u:p@af.invalid/db' },
+        HYPERDRIVE_CAPGO_READ_EU: { connectionString: 'postgresql://u:p@eu.invalid/db' },
+      },
+      get: (key: string) => key === 'databaseSource' ? databaseSource : undefined,
+      set: (key: string, value: string) => {
+        if (key === 'databaseSource')
+          databaseSource = value
+      },
+    }
+    try {
+      const regional = await getPgClient(c, true)
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF', { status: 'lagging', max_lag_seconds: 900 }, Date.now() + 5)
+      const eu = await getPgClient(c, true)
+      expect(databaseSource).toBe('HYPERDRIVE_CAPGO_READ_EU')
+      await new Promise(resolve => setTimeout(resolve, 10))
+
+      // The regional client is probed after the request context moved to EU.
+      ;(regional as any).query = vi.fn().mockResolvedValue({ rows: [{ lag_seconds: '1200' }] })
+      await refreshReplicationLag(c, regional)
+      expect(getFreshReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_AF')?.max_lag_seconds).toBe(1200)
+      expect(getFreshReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU')).toBeNull()
+      await Promise.all([(regional as any).end(), (eu as any).end()])
     }
     finally {
       vi.unstubAllEnvs()
