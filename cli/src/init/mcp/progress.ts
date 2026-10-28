@@ -5,6 +5,11 @@ import { join } from 'node:path'
 import tmp from 'tmp'
 import { getConfigWriteTarget } from '../../config'
 
+export interface AutoTestChange {
+  filePath: string
+  kind: 'html-banner' | 'vue-banner' | 'css-background'
+}
+
 export interface LiveUpdateProgress {
   step_done: number
   appId?: string
@@ -13,6 +18,9 @@ export interface LiveUpdateProgress {
   currentVersion?: string
   delta?: boolean
   encryptionEnabled?: boolean
+  testChangeMode?: 'auto' | 'manual'
+  /** Temporary banner Capgo added for the guided test, kept so it can be removed afterward. */
+  autoTestChange?: AutoTestChange
 }
 
 function progressPath(): string {

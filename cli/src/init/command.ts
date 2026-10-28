@@ -411,6 +411,19 @@ export function getInitSuggestedOtaVersion(pkgVersion: string) {
   }
 }
 
+// Web files the guided test may edit, in priority order. Only ONE is changed.
+export const initAutoTestChangeCandidates = [
+  'src/index.html',
+  'public/index.html',
+  'index.html',
+  'src/App.vue',
+  'src/app/app.component.html',
+  'src/app/home/home.page.html',
+  'src/main.css',
+  'src/style.css',
+  'public/style.css',
+] as const
+
 export function applyInitAutoTestChange(filePath: string, content: string): { kind: InitAutoTestChangeKind, content: string } | undefined {
   if (filePath.endsWith('.html')) {
     if (content.includes('<body>') && !content.includes('capgo-test-banner')) {
@@ -4742,20 +4755,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
 
     let changed = false
 
-    // Try to find and modify ONE file only, prioritizing HTML files
-    const possibleFiles = [
-      'src/index.html',
-      'public/index.html',
-      'index.html',
-      'src/App.vue',
-      'src/app/app.component.html',
-      'src/app/home/home.page.html',
-      'src/main.css',
-      'src/style.css',
-      'public/style.css',
-    ]
-
-    for (const relativeFilePath of possibleFiles) {
+    for (const relativeFilePath of initAutoTestChangeCandidates) {
       const filePath = join(projectDir, relativeFilePath)
       if (existsSync(filePath) && !changed) {
         try {
