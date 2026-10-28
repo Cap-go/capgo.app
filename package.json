@@ -33,6 +33,7 @@
     "env:hard-setup": "bun run supabase:stop && bun run supabase:start && bun run supabase:db:reset",
     "readreplicate:add-table": "bash read_replicate/replicate_add_table.sh",
     "readreplicate:repair": "bash read_replicate/replicate_repair.sh",
+    "readreplicate:set-connection": "bash read_replicate/replicate_set_connection.sh",
     "preview": "vite preview",
     "preview:https": "serve dist",
     "build": "vite build",

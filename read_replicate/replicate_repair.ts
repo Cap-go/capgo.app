@@ -8,8 +8,9 @@
 // - different: overwritten with the source row (updates the stream missed);
 // - only on the replica: deleted (deletes the stream missed).
 //
-// Tables are compared page by page in primary-key order (keyset pagination on
-// typed keys), so memory holds one page plus the differences. Differences are
+// Each server returns one checksum per bucket of rows (4,096 buckets by md5 of
+// the key) from one sequential scan; only rows of differing buckets are then
+// compared, so memory and transfer stay proportional to the differences. Differences are
 // then re-read on the source, the source WAL position is recorded, and the
 // repair waits until the subscriber has applied that position before
 // re-reading the replica. A row still missing after that was committed before
@@ -25,7 +26,6 @@ import type { ClientConfig } from 'pg'
 import { Client } from 'pg'
 
 const DEFAULT_SKIP = ['delta_files', 'version_files']
-const PAGE = 20_000
 const BATCH = 1000
 const CATCH_UP_TIMEOUT_MS = 120_000
 
@@ -120,11 +120,6 @@ function id(client: Client, name: string) {
   return client.escapeIdentifier(name)
 }
 
-// Text keys sort with the C collation on both sides: the two servers may use
-// different default collations, and paging must see the same order.
-function keyTerm(client: Client, column: KeyColumn, expression = id(client, column.name)) {
-  return column.collatable ? `${expression} COLLATE "C"` : expression
-}
 
 function selectList(client: Client, info: TableInfo) {
   const key = `ARRAY[${info.pk.map(column => `${id(client, column.name)}::text`).join(', ')}]`
@@ -132,36 +127,8 @@ function selectList(client: Client, info: TableInfo) {
   return `${key} AS k, md5(${row}) AS h`
 }
 
-// (pk...) compared to $offset.. as typed values, usable by the primary key index.
-function keyCompare(client: Client, info: TableInfo, op: string, offset: number) {
-  const left = info.pk.map(column => keyTerm(client, column)).join(', ')
-  const right = info.pk.map((column, index) => keyTerm(client, column, `$${offset + index}::${column.type}`)).join(', ')
-  return `(${left}) ${op} (${right})`
-}
 
-function orderBy(client: Client, info: TableInfo) {
-  return info.pk.map(column => keyTerm(client, column)).join(', ')
-}
 
-async function page(client: Client, info: TableInfo, after: Key | null, upTo: Key | null, limit: number | null): Promise<Row[]> {
-  const where: string[] = []
-  const params: string[] = []
-  if (after) {
-    where.push(keyCompare(client, info, '>', params.length + 1))
-    params.push(...after)
-  }
-  if (upTo) {
-    where.push(keyCompare(client, info, '<=', params.length + 1))
-    params.push(...upTo)
-  }
-  const result = await client.query<Row>(
-    `SELECT ${selectList(client, info)} FROM public.${id(client, info.table)}
-     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-     ORDER BY ${orderBy(client, info)} ${limit ? `LIMIT ${limit}` : ''}`,
-    params,
-  )
-  return result.rows
-}
 
 // Rows for an explicit key list, joined through the primary key index.
 function keyJoin(client: Client, info: TableInfo, alias: string) {
@@ -200,33 +167,54 @@ function compare(source: Row[], replica: Row[], differing: Key[]) {
     differing.push(JSON.parse(key) as Key)
 }
 
-// Every key whose row differs or exists on one side only.
+const BUCKETS = 4096
+
+// Same bucket for a key on both servers: derived from md5 of its text.
+function bucketSql(client: Client, info: TableInfo) {
+  const key = `ROW(${info.pk.map(column => id(client, column.name)).join(', ')})::text`
+  return `(('x' || substr(md5(${key}), 1, 8))::bit(32)::bigint % ${BUCKETS})::int`
+}
+
+// One sequential scan: row count and an order-independent checksum per bucket.
+async function bucketSums(client: Client, info: TableInfo): Promise<Map<number, string>> {
+  const row = `ROW(${info.columns.map(column => id(client, column)).join(', ')})::text`
+  const result = await client.query<{ b: number, n: string, s: string }>(
+    `SELECT b, count(*)::text AS n, sum(('x' || substr(h, 1, 15))::bit(60)::bigint::numeric)::text AS s
+     FROM (SELECT ${bucketSql(client, info)} AS b, md5(${row}) AS h FROM public.${id(client, info.table)}) AS rows
+     GROUP BY b`,
+  )
+  return new Map(result.rows.map(r => [r.b, `${r.n}:${r.s}`]))
+}
+
+async function bucketRows(client: Client, info: TableInfo, buckets: number[]): Promise<Row[]> {
+  const result = await client.query<Row>(
+    `SELECT ${selectList(client, info)} FROM public.${id(client, info.table)} WHERE ${bucketSql(client, info)} = ANY ($1::int[])`,
+    [buckets],
+  )
+  return result.rows
+}
+
+// Every key whose row differs or exists on one side only: compare bucket
+// checksums from both servers in parallel, then rows of differing buckets only.
 async function differingKeys(source: Client, replica: Client, info: TableInfo): Promise<Key[]> {
-  const differing: Key[] = []
-  let after: Key | null = null
-  let compared = 0
-  for (;;) {
-    const sourceRows = await page(source, info, after, null, PAGE)
-    if (sourceRows.length < PAGE) {
-      // Last page: the replica tail beyond it, paged as well.
-      let replicaAfter = after
-      const tail: Row[] = []
-      for (;;) {
-        const replicaRows = await page(replica, info, replicaAfter, null, PAGE)
-        tail.push(...replicaRows)
-        if (replicaRows.length < PAGE)
-          break
-        replicaAfter = replicaRows.at(-1)!.k
-      }
-      compare(sourceRows, tail, differing)
-      return differing
-    }
-    const upTo = sourceRows.at(-1)!.k
-    compare(sourceRows, await page(replica, info, after, upTo, null), differing)
-    after = upTo
-    compared += sourceRows.length
-    console.log(`[${info.table}] compared ${compared} rows, ${differing.length} differ so far`)
+  const [sourceSums, replicaSums] = await Promise.all([bucketSums(source, info), bucketSums(replica, info)])
+  const buckets = new Set<number>()
+  for (const [bucket, sum] of sourceSums) {
+    if (replicaSums.get(bucket) !== sum)
+      buckets.add(bucket)
   }
+  for (const bucket of replicaSums.keys()) {
+    if (!sourceSums.has(bucket))
+      buckets.add(bucket)
+  }
+  console.log(`[${info.table}] ${buckets.size} of ${BUCKETS} buckets differ`)
+  if (!buckets.size)
+    return []
+  const list = [...buckets]
+  const [sourceRows, replicaRows] = await Promise.all([bucketRows(source, info, list), bucketRows(replica, info, list)])
+  const differing: Key[] = []
+  compare(sourceRows, replicaRows, differing)
+  return differing
 }
 
 async function waitForSubscriber(source: Client, replica: Client, lsn: string) {
