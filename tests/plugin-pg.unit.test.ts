@@ -1,6 +1,6 @@
 import { Hono } from 'hono/tiny'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getAppByIdPg, isRecoveryConflictError, logPgError, retryOnRecoveryConflict } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
+import { getAppByIdPg, getAppOwnerPostgres, isRecoveryConflictError, logPgError, retryOnRecoveryConflict } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { serializePostgresError } from '../supabase/functions/_backend/plugin_runtime/utils/postgres_error.ts'
 
 const { cloudlogErrMock } = vi.hoisted(() => ({
@@ -411,6 +411,30 @@ describe('plugin getAppByIdPg', () => {
     await app.request('/')
 
     expect(thrown).toBe(failure)
+  })
+})
+
+// Any query builder chain that rejects when awaited.
+function failingDrizzle(failure: Error): any {
+  const chain: any = new Proxy(() => chain, {
+    get: (_target, property) => property === 'then'
+      ? (onFulfilled?: (value: unknown) => unknown, onRejected?: (error: unknown) => unknown) => Promise.reject(failure).then(onFulfilled, onRejected)
+      : () => chain,
+    apply: () => chain,
+  })
+  return chain
+}
+
+describe('plugin getAppOwnerPostgres', () => {
+  // A null owner is answered as a publicly cached on_premise_app 429 for an
+  // hour, so no database error may be reported as a missing app.
+  it.concurrent.each([
+    ['53300', 'remaining connection slots are reserved for roles with privileges of the "pg_use_reserved_connections" role'],
+    ['40001', 'canceling statement due to conflict with recovery'],
+    ['57014', 'canceling statement due to statement timeout'],
+  ])('rethrows %s instead of reporting a missing app', async (code, message) => {
+    const failure = Object.assign(new Error(message), { code })
+    await expect(getAppOwnerPostgres(createContext(), 'com.demo.app', failingDrizzle(failure), ['mau'])).rejects.toBe(failure)
   })
 })
 

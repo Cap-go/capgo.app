@@ -12,7 +12,7 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getClientDbRegionSB } from './geolocation.ts'
 import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
+import { isDatabaseOriginError, isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
 import { configureTransactionAccessMode, readOnlyStartupOptions, setPgAccessMode } from './pg_transaction_mode.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
@@ -1441,7 +1441,11 @@ export async function getAppOwnerPostgres(
       appId,
       planActions: actions,
     })
-    if (options?.rethrowReadOnlyConnectionErrors && isReadOnlyPgConnectionRetryError(e))
+    // A failed lookup is never "app missing": null makes callers answer a
+    // publicly cached on_premise_app 429 for an hour. Any database error
+    // (lost connection, no free connection slot, recovery conflict on a
+    // replica) is rethrown so the request fails as a retryable 503 instead.
+    if (isDatabaseOriginError(e) || (options?.rethrowReadOnlyConnectionErrors && isReadOnlyPgConnectionRetryError(e)))
       throw e
     return null
   }

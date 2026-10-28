@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import type { ChannelLookupResult, CompatibleChannelRow, getDrizzleClient, PlanAction } from './pg.ts'
 import { isLazyPgConnectError, logPgError, queryAppOwnerPostgres, queryAppVersionPostgres, queryChannelByNamePg, queryCompatibleChannelsPg } from './pg.ts'
-import { isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
+import { isDatabaseOriginError, isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
 
 export type EdgeCacheOwnerOptions = { rethrowReadOnlyConnectionErrors?: boolean }
 import { getCachedAppOwner, getCachedAppVersion, getCachedChannelLookup } from './updatesEdgeCache.ts'
@@ -44,6 +44,12 @@ export async function getAppOwnerWithEdgeCache(
     rethrowConnectError(error)
     if (options?.rethrowReadOnlyConnectionErrors)
       rethrowReadOnlyPgConnectionError(error)
+    // Never "app missing" on a database error (see getAppOwnerPostgres): a
+    // null owner is answered as a cached on_premise_app 429.
+    if (isDatabaseOriginError(error)) {
+      logPgError(c, 'getAppOwnerPostgres', error, { appId, planActions: actions })
+      throw error
+    }
     logPgError(c, 'getAppOwnerPostgres', error, { appId, planActions: actions })
     return { value: null, hit: false, lookupFailed: true }
   }
