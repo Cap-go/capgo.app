@@ -288,7 +288,11 @@ CREATE TABLE public.delta_files (
     file_size bigint DEFAULT 0 NOT NULL,
     path_key bytea NOT NULL,
     entry_key bytea NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    path_org uuid,
+    path_session bytea,
+    path_sha bytea,
+    file_hash_bin bytea
 );
 
 

@@ -1091,6 +1091,46 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "path_org",
+      "notNull": false,
+      "position": 10,
+      "table": "delta_files",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "path_session",
+      "notNull": false,
+      "position": 11,
+      "table": "delta_files",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "path_sha",
+      "notNull": false,
+      "position": 12,
+      "table": "delta_files",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "file_hash_bin",
+      "notNull": false,
+      "position": 13,
+      "table": "delta_files",
+      "type": "bytea"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",

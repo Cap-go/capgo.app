@@ -1595,10 +1595,14 @@ export type Database = {
           created_at: string
           entry_key: string
           file_hash: string
+          file_hash_bin: string | null
           file_name: string
           file_size: number
           id: number
           path_key: string
+          path_org: string | null
+          path_session: string | null
+          path_sha: string | null
           s3_path: string
         }
         Insert: {
@@ -1606,10 +1610,14 @@ export type Database = {
           created_at?: string
           entry_key: string
           file_hash: string
+          file_hash_bin?: string | null
           file_name: string
           file_size?: number
           id?: number
           path_key: string
+          path_org?: string | null
+          path_session?: string | null
+          path_sha?: string | null
           s3_path: string
         }
         Update: {
@@ -1617,10 +1625,14 @@ export type Database = {
           created_at?: string
           entry_key?: string
           file_hash?: string
+          file_hash_bin?: string | null
           file_name?: string
           file_size?: number
           id?: number
           path_key?: string
+          path_org?: string | null
+          path_session?: string | null
+          path_sha?: string | null
           s3_path?: string
         }
         Relationships: [
@@ -4538,6 +4550,22 @@ export type Database = {
         Args: { p_file_hash: string; p_file_name: string; p_s3_path: string }
         Returns: string
       }
+      delta_file_hash: {
+        Args: { p_file_hash: string; p_file_hash_bin: string }
+        Returns: string
+      }
+      delta_file_s3_path: {
+        Args: {
+          p_app_id: string
+          p_file_name: string
+          p_path_org: string
+          p_path_session: string
+          p_path_sha: string
+          p_s3_path: string
+        }
+        Returns: string
+      }
+      delta_files_compact: { Args: { p_batch_size?: number }; Returns: number }
       delta_gc_begin_delete: {
         Args: { p_app_id: string; p_lease_ms?: number; p_paths: string[] }
         Returns: string[]

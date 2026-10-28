@@ -65,6 +65,7 @@ async function versionFiles(versionId: number) {
 
 const SWITCHES = {
   gc_enabled: 'CAPGO_DELTA_STORAGE_GC_ENABLED',
+  compact_enabled: 'CAPGO_DELTA_FILES_COMPACT_ENABLED',
 } as const
 
 async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof SWITCHES, value: boolean) {
@@ -74,7 +75,7 @@ async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof S
 
 // The Vault switches stay untouched for parallel test files: each case sets
 // them inside its own transaction and rolls back.
-async function withConfig<T>(settings: { gc_enabled?: boolean }, run: (client: PoolClient) => Promise<T>) {
+async function withConfig<T>(settings: { gc_enabled?: boolean, compact_enabled?: boolean }, run: (client: PoolClient) => Promise<T>) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -614,6 +615,57 @@ describe('delta storage v2 legacy guards', () => {
       await client.query('SELECT public.delta_gc_end_delete($1)', [APP_ID])
       const ended = await client.query('SELECT lease_until FROM public.delta_gc_state WHERE app_id = $1', [APP_ID])
       expect(ended.rows[0].lease_until).toBeNull()
+    })
+  })
+})
+
+describe('delta storage v2 compacted rows', () => {
+  it('serves the original paths and hashes once rows are stored as parts', async () => {
+    const versionId = await insertVersion(pool)
+    const sha = 'ab'.repeat(32)
+    const hash = 'cd'.repeat(128)
+    const entries = [
+      { file_name: 'assets/main_1.js', file_hash: hash, s3_path: deltaPath(`5476a39b3d/${sha}_assets/main_1.js`) },
+      { file_name: 'index.html', file_hash: 'ef'.repeat(32), s3_path: deltaPath(`${sha}_index.html`) },
+      { file_name: 'svg/rainy.svg', file_hash: 'uhAeBLCA==', s3_path: `orgs/${ORG_ID}/apps/${APP_ID}/1.0.0/svg/rainy.svg` },
+    ]
+    await withConfig({ compact_enabled: true }, async (client) => {
+      // delta_files_compact scans ids globally: explicit negative ids keep rows
+      // inserted by parallel test files out of this batch.
+      const ids = entries.map((_, index) => -9_690_000 - entries.length + index)
+      await client.query(
+        `INSERT INTO public.delta_files (id, app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key, created_at)
+         SELECT e.id, $1, e.s3_path, e.file_name, e.file_hash, 10, public.delta_path_key(e.s3_path),
+           public.delta_entry_key(e.s3_path, e.file_name, e.file_hash), now() - interval '1 hour'
+         FROM jsonb_to_recordset($2::jsonb) AS e(id bigint, s3_path text, file_name text, file_hash text)`,
+        [APP_ID, JSON.stringify(entries.map((entry, index) => ({ ...entry, id: ids[index] })))],
+      )
+      await client.query('INSERT INTO public.version_files (app_version_id, file_ids) VALUES ($1, $2::bigint[])', [versionId, ids])
+      await client.query(
+        `INSERT INTO public.backfill_progress (job_name, scope_key, cutover_at, last_processed_id)
+         VALUES ('delta_files_compact', 'all', now(), $1)
+         ON CONFLICT (job_name, scope_key) DO UPDATE SET last_processed_id = EXCLUDED.last_processed_id`,
+        [ids[0] - 1],
+      )
+      const compacted = await client.query<{ count: number }>('SELECT public.delta_files_compact($1) AS count', [ids.length])
+      expect(compacted.rows[0].count).toBe(2)
+      const stored = await client.query<{ s3_path: string, file_hash: string }>('SELECT s3_path, file_hash FROM public.delta_files WHERE id = ANY($1::bigint[]) ORDER BY id', [ids])
+      expect(stored.rows.filter(row => row.s3_path === '')).toHaveLength(2)
+      expect(stored.rows.filter(row => row.file_hash === '')).toHaveLength(2)
+
+      const database = drizzle({ client })
+      const rows = await database.execute(versionManifestRowsSql(sql`${versionId}::bigint`))
+      const json = await database.execute(sql`SELECT ${versionManifestJsonSql(sql`${versionId}::bigint`)} AS entries`)
+      expect(completeVersionManifest(rows.rows as never)).toEqual(entries)
+      expect(json.rows[0].entries).toEqual(entries)
+
+      const view = await client.query('SELECT file_name, file_hash, s3_path FROM public.version_manifest WHERE app_version_id = $1 ORDER BY id', [versionId])
+      expect(view.rows).toEqual(entries)
+
+      const [{ name }] = (await client.query<{ name: string }>('SELECT name FROM public.app_versions WHERE id = $1', [versionId])).rows
+      const lookup = buildManifestSizeLookupQuery(APP_ID, name, undefined, normalizeManifestSizeFiles([{ file_name: 'index.html', file_hash: 'ef'.repeat(32) }]))
+      const sizes = await client.query<{ file_hash: string, file_size: string }>(lookup!.text, lookup!.values)
+      expect(sizes.rows.map(row => [row.file_hash, Number(row.file_size)])).toEqual([['ef'.repeat(32), 10]])
     })
   })
 })
