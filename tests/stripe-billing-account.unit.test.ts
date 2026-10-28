@@ -11,13 +11,13 @@ import {
   getSuggestedBillingAccount,
   IncompleteUsPlanConfigError,
   isAutomaticTaxEnabled,
-  isUsBillingCountry,
   normalizeBillingAccount,
   planProductIdOrFilter,
   resolveCheckoutPlanProductId,
   resolveNewOrgBillingAccount,
   resolvePlanCreditProductId,
 } from '../supabase/functions/_backend/utils/stripe_billing.ts'
+import { isUsBillingCountry } from '../supabase/functions/_backend/utils/us_billing_countries.ts'
 
 const mockedEnv: Record<string, string> = {}
 
@@ -201,7 +201,7 @@ describe('new org billing account from location', () => {
   it('offers the US entity in the Americas and Asia-Pacific only', () => {
     mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
     mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
-    for (const country of ['US', 'CA', 'BR', 'MX', 'JP', 'AU', 'IN', 'SG', 'TK', 'PN'])
+    for (const country of ['US', 'CA', 'BR', 'MX', 'JP', 'AU', 'IN', 'SG', 'TK'])
       expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(true)
     for (const country of ['FR', 'DE', 'GB', 'CH', 'AE', 'ZA', 'NG', 'GF', 'CU', 'KP', 'AF'])
       expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(false)

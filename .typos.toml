@@ -59,6 +59,7 @@ extend-exclude = [
   # ISO 3166 country code table (BA, FO, PN... are country codes, not typos)
   "supabase/functions/_backend/utils/country_currency.ts",
   "supabase/functions/_backend/utils/country_price_tier.ts",
+  "supabase/functions/_backend/utils/us_billing_countries.ts",
 
   # Mobile platforms
   "ios/",
