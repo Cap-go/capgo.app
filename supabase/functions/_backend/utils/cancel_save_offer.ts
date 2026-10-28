@@ -4,7 +4,7 @@ import Stripe from 'stripe'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
-import { getActiveSubscriptionId, syncSubscriptionData } from './stripe.ts'
+import { getActiveSubscriptionId, lookupActiveSubscriptionId, syncSubscriptionData } from './stripe.ts'
 
 // Cancel flow save offer: a monthly customer who starts to cancel is offered a
 // discount on the next months instead. Each offer and its outcome is stored in
@@ -244,17 +244,19 @@ export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext
   if (offer.outcome === 'accepted' && offer.discount_end)
     return { discountEnd: offer.discount_end }
 
-  const subscriptionId = await getActiveSubscriptionId(c, ctx.customerId)
-  if (offer.subscription_id !== subscriptionId) {
-    await releaseOffer(c, ctx.customerId, offerId)
-    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-  }
+  const { subscriptionId: activeSubscriptionId, known } = await lookupActiveSubscriptionId(c, ctx.customerId)
+  // Billing state unreadable: keep the reservation, a retry picks it up.
+  if (!known)
+    throw simpleError('cancel_offer_failed', 'The discount could not be applied')
+  const subscriptionId = offer.subscription_id
   let discount: Stripe.Discount | null
   try {
+    if (activeSubscriptionId !== subscriptionId)
+      throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
     discount = discountFor(await applyDiscount(ctx, subscriptionId, offerId))
   }
   catch (error) {
-    // The update may have reached Stripe even though the call failed: look before releasing.
+    // An earlier attempt, or this failed call, may have applied the discount: look before releasing.
     const after = await retrieveSubscription(ctx, subscriptionId).then(subscription => ({ discount: discountFor(subscription) })).catch(() => null)
     // Stripe unreadable: the offer stays reserved and a retry reconciles it.
     if (!after)
