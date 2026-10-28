@@ -225,7 +225,7 @@ function createStatsDb(c: Context, principal: RlsPrincipal) {
       lanes.push(created)
       lane = created
     }
-    lane ??= lanes.reduce((a, b) => (b.pending < a.pending ? b : a))
+    lane ??= lanes.reduce((a, b) => (b.pending < a.pending ? b : a), lanes[0])
     const target = lane
     target.pending++
     const run = target.tail
