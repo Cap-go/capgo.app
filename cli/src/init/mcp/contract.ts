@@ -54,7 +54,7 @@ export const LIVE_UPDATE_RULES: string[] = [
   'Do exactly what the result\'s `next` says — never improvise the order or call other tools mid-flow.',
   'If kind is "human_gate", show `human.instruction` to the user, wait, then call `next.tool` with the values in `collect`.',
   'If kind is "choice", present `options` and call `next.tool` with the user\'s pick.',
-  'Never edit the user\'s app files yourself during onboarding (for example adding a test banner or test text): the onboarding tools change files only after the user picks an option.',
+  'Never edit the user\'s app files yourself during onboarding unless a result explicitly asks you to (only after the user chose that option), and then change only what it describes.',
   'Never tell the user a step succeeded unless a result confirms it.',
   'If the user is confused, asks what a step means, or does not understand the options, call capgo_live_update_onboarding_explain for a plain-language explanation — do not guess.',
   'Log in with `npx @capgo/cli@latest login` in the terminal. Never ask the user to paste their API key into chat.',

@@ -69,7 +69,6 @@ function fakeDeps(o = {}) {
     setupEncryption: async (_a, enable) => ({ ok: true, enabled: enable }),
     buildProject: async () => ({ ok: true }),
     applyTestChange: async () => ({ ok: true, version: '1.0.1' }),
-    revertTestChange: async () => ({ ok: true, reverted: true }),
     uploadBundle: async () => ({ ok: true }),
     getRunDeviceCommand: () => ({ command: 'npx cap run ios' }),
     getGitStatus: () => ({ inRepo: true, clean: true, entries: [] }),
@@ -148,14 +147,14 @@ function resumedDeps(o, progress = afterDeviceRun) {
   return deps
 }
 
-await test('test change: asks manual or auto before touching files', async () => {
+await test('test change: asks manual or agent before touching files', async () => {
   const calls = []
   const deps = resumedDeps({ applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } } })
   const r = await runAdvance(deps, {})
   eq(r.state, 'test-change-choice')
   eq(r.kind, 'choice')
-  eq(r.options.map(o => o.value).join(','), 'manual,auto')
-  eq(calls.length, 0, 'no file may be edited before the user chooses')
+  eq(r.options.map(o => o.value).join(','), 'manual,agent')
+  eq(calls.length, 0, 'nothing may happen before the user chooses')
 })
 
 await test('test change: manual waits for the user, then only bumps the version', async () => {
@@ -167,7 +166,6 @@ await test('test change: manual waits for the user, then only bumps the version'
   eq(calls.length, 0)
   const next = await runAdvance(deps, { testChangeReady: true })
   eq(calls.length, 1)
-  eq(calls[0][2], 'manual')
   eq(next.state, 'test-update')
   ok(/change you made/.test(next.human.instruction))
   eq(deps.loadProgress().testChangeMode, 'manual')
@@ -176,33 +174,25 @@ await test('test change: manual waits for the user, then only bumps the version'
   ok(/manual test change/.test(done.summary))
 })
 
-await test('test change: auto falls back to manual when no web file can be edited', async () => {
-  const deps = resumedDeps({ applyTestChange: async () => ({ ok: true, version: '0.0.1' }) })
-  const r = await runAdvance(deps, { testChangeChoice: 'auto' })
-  eq(r.state, 'make-test-change-manual')
-  ok(/could not find a web file/.test(r.human.instruction))
-  eq(deps.loadProgress().step_done, 8)
-})
-
-await test('test change: auto banner is removed once the update is confirmed', async () => {
-  const change = { filePath: '/tmp/app/index.html', kind: 'html-banner' }
-  const reverted = []
-  const deps = resumedDeps({
-    applyTestChange: async () => ({ ok: true, version: '0.0.1', autoTestChange: change }),
-    revertTestChange: async (c) => { reverted.push(c); return { ok: true, reverted: true } },
-  })
-  const r = await runAdvance(deps, { testChangeChoice: 'auto' })
-  eq(r.state, 'test-update')
-  ok(/Capgo Update Test/.test(r.human.instruction))
-  eq(deps.loadProgress().autoTestChange.filePath, change.filePath)
+await test('test change: agent gets guidelines, then reverts its own change after confirmation', async () => {
+  const deps = resumedDeps()
+  const task = await runAdvance(deps, { testChangeChoice: 'agent' })
+  eq(task.state, 'make-test-change-agent')
+  eq(task.kind, 'info')
+  ok(/first screen/.test(task.next.instruction))
+  ok(/No banners/.test(task.next.instruction))
+  ok(/cap sync/.test(task.next.instruction))
+  eq(deps.loadProgress().step_done, 8, 'no step completes before the change is saved')
+  const next = await runAdvance(deps, { testChangeReady: true, testChangeFiles: ['src/pages/Home.vue'], testChangeDescription: 'the home title ends with (Capgo test)' })
+  eq(next.state, 'test-update')
+  ok(/the home title ends with \(Capgo test\)/.test(next.human.instruction))
+  eq(deps.loadProgress().testChangeFiles[0], 'src/pages/Home.vue')
   const done = await runAdvance(deps, { otaReceivedConfirmed: true })
   eq(done.state, 'completion')
-  eq(reverted.length, 1)
-  ok(/Removed the temporary Capgo test change/.test(done.summary))
-  eq(done.context.testChange.removed, true)
-  eq(deps.loadProgress().autoTestChange, undefined)
-  await runAdvance(deps, {})
-  eq(reverted.length, 1, 'cleanup runs once')
+  ok(/revert the temporary test change you made in src\/pages\/Home.vue/.test(done.summary))
+  eq(done.context.testChange.revertNow, true)
+  const again = await runAdvance(deps, {})
+  ok(!/revert the temporary/.test(again.summary), 'revert request is shown once')
 })
 
 await test('test change: the user\'s manual edit does not reopen the dirty-git check', async () => {
@@ -218,27 +208,6 @@ await test('test change: the user\'s manual edit does not reopen the dirty-git c
   const next = await runAdvance(deps, { testChangeReady: true })
   eq(calls.length, 1)
   eq(next.state, 'test-update')
-})
-
-await test('test change: auto CSS fallback asks for the background change, not a banner', async () => {
-  const deps = resumedDeps({
-    applyTestChange: async () => ({ ok: true, version: '0.0.1', autoTestChange: { filePath: '/tmp/app/src/style.css', kind: 'css-background' } }),
-  })
-  const r = await runAdvance(deps, { testChangeChoice: 'auto' })
-  eq(r.state, 'test-update')
-  ok(/purple gradient background/.test(r.human.instruction))
-  ok(!/banner/.test(r.human.instruction))
-})
-
-await test('test change: failed banner removal tells the user what to delete', async () => {
-  const deps = resumedDeps(
-    { revertTestChange: async () => ({ ok: false, reverted: false, error: 'the banner was edited or moved' }) },
-    { ...afterDeviceRun, step_done: 11, testChangeMode: 'auto', autoTestChange: { filePath: '/tmp/app/index.html', kind: 'html-banner' } },
-  )
-  const done = await runAdvance(deps, {})
-  eq(done.state, 'completion')
-  ok(/capgo-test-banner/.test(done.summary))
-  eq(done.context.testChange.removed, false)
 })
 
 const { buildDeps, registerLiveUpdateTools, resolveLiveUpdateProjectTarget } = await import('../src/init/mcp/live-update-tools.ts')
@@ -371,36 +340,6 @@ await test('MCP monorepo targets keep project work scoped to the selected app', 
   finally {
     process.chdir(previousCwd)
     setConfigWriteTarget(previousTarget)
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-await test('buildDeps applies the test banner to a web file and removes it', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'capgo-live-update-banner-'))
-  try {
-    mkdirSync(join(root, 'src'), { recursive: true })
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'app', version: '1.0.0' }))
-    writeFileSync(join(root, 'src', 'main.ts'), 'export {}\n')
-    const html = '<html>\n<body>\n  <div id="app"></div>\n</body>\n</html>\n'
-    const htmlPath = join(root, 'index.html')
-    writeFileSync(htmlPath, html)
-    const deps = buildDeps({}, root, () => ({ packageJsonPath: join(root, 'package.json') }))
-
-    const manual = await deps.applyTestChange('com.acme.app', '0.0.0', 'manual')
-    eq(manual.version, '0.0.1')
-    eq(manual.autoTestChange, undefined)
-    eq(readFileSync(htmlPath, 'utf8'), html, 'manual mode must not edit files')
-
-    const auto = await deps.applyTestChange('com.acme.app', '0.0.0', 'auto')
-    eq(auto.autoTestChange.filePath, htmlPath)
-    ok(readFileSync(htmlPath, 'utf8').includes('capgo-test-banner'))
-    eq(readFileSync(join(root, 'src', 'main.ts'), 'utf8'), 'export {}\n')
-
-    const removed = await deps.revertTestChange(auto.autoTestChange)
-    eq(removed.reverted, true)
-    eq(readFileSync(htmlPath, 'utf8'), html)
-  }
-  finally {
     rmSync(root, { recursive: true, force: true })
   }
 })

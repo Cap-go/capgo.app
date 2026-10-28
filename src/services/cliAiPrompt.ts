@@ -472,7 +472,7 @@ This installed application is the baseline for the OTA test. Keep it installed.
 Before editing any file, ask me how I want to make the test change, and wait for my answer:
 
 - **I make it myself**: I edit something I will recognize, such as a heading text or a button color, and tell you when it is saved. Do not edit application files for me in this case.
-- **You make it**: you make one small, temporary, clearly visible change, such as changing a heading, label, or color, or adding a short “Capgo update test” marker.
+- **You make it**: you change exactly one thing I will see on the first screen right after launch, such as a heading, label, or button text (for example append “(Capgo test)” to the main title). Match the app's existing style; no banners, overlays, or new components. Then tell me exactly what to look for.
 
 If you make the change, record exactly which file was modified and remove the change yourself once the update is confirmed, then tell me that devices keep showing the test bundle until the next upload. Avoid native code, dependencies, Capacitor configuration, or unrelated refactoring.
 

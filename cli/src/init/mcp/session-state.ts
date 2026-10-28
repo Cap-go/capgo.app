@@ -10,10 +10,10 @@ export interface LiveUpdateSessionState {
   delta?: boolean
   resumeResolved?: boolean
   dirtyGitResolved?: boolean
-  testChangeChoice?: 'auto' | 'manual'
+  testChangeChoice?: 'agent' | 'manual'
   testChangeReady?: boolean
-  /** Set when "auto" was picked but no web file could be edited. */
-  autoTestUnavailable?: boolean
+  testChangeFiles?: string[]
+  testChangeDescription?: string
   deviceRunConfirmed?: boolean
   otaReceivedConfirmed?: boolean
 }

@@ -1,7 +1,7 @@
 // src/init/mcp/engine.ts
 import type { LiveUpdateNextStepInput } from '../../schemas/live-update-onboarding.js'
 import type { ChoiceOption, LiveUpdatePhase, NextStepResult, Platform } from './contract.js'
-import type { AutoTestChange, LiveUpdateProgress } from './progress.js'
+import type { LiveUpdateProgress } from './progress.js'
 import { LIVE_UPDATE_ROADMAP, LIVE_UPDATE_RULES, NEXT_STEP_TOOL } from './contract.js'
 import { explainForState } from './explanations.js'
 import { withMonorepoUploadRetryHint } from '../upload-recovery.js'
@@ -11,8 +11,6 @@ import { clearSession, getSession, mergeSession } from './session-state.js'
 const TOTAL_STEPS = initOnboardingSteps.length
 const MAX_AUTO_STEPS = 8
 const DEFAULT_CHANNEL = 'production'
-
-export type TestChangeMode = 'auto' | 'manual'
 
 export interface GitRepoStatus {
   inRepo: boolean
@@ -35,14 +33,8 @@ export interface EngineDeps {
   addIntegrationCode: (appId: string) => Promise<{ ok: boolean, error?: string }>
   setupEncryption: (appId: string, enable: boolean) => Promise<{ ok: boolean, enabled: boolean, error?: string }>
   buildProject: (appId: string, platform: Platform) => Promise<{ ok: boolean, error?: string }>
-  /**
-   * Prepare the guided test bundle version. With mode "auto", also add Capgo's
-   * temporary test banner to one web file; no `autoTestChange` means no file
-   * could be edited and the user has to make the change themselves.
-   */
-  applyTestChange: (appId: string, baseVersion: string | undefined, mode: TestChangeMode) => Promise<{ ok: boolean, version?: string, autoTestChange?: AutoTestChange, error?: string }>
-  /** Remove the temporary test banner added by applyTestChange. */
-  revertTestChange: (change: AutoTestChange) => Promise<{ ok: boolean, reverted: boolean, error?: string }>
+  /** Pick the guided test bundle version. The visible change itself is made by the user or their AI assistant. */
+  applyTestChange: (appId: string, baseVersion?: string) => Promise<{ ok: boolean, version?: string, error?: string }>
   uploadBundle: (appId: string, opts: { channelName: string, version: string, delta?: boolean, encrypt?: boolean }) => Promise<{ ok: boolean, error?: string }>
   getRunDeviceCommand: (platform: Platform) => { command: string, cwd?: string }
   getGitStatus: (cwd?: string) => GitRepoStatus
@@ -244,10 +236,10 @@ export async function decideAdvance(facts: LiveUpdateFacts, deps: EngineDeps, in
     mergeSession(appId, { dirtyGitResolved: true })
 
   if (input?.testChangeChoice)
-    mergeSession(appId, { testChangeChoice: input.testChangeChoice, autoTestUnavailable: false })
+    mergeSession(appId, { testChangeChoice: input.testChangeChoice })
 
   if (input?.testChangeReady)
-    mergeSession(appId, { testChangeReady: true })
+    mergeSession(appId, { testChangeReady: true, testChangeFiles: input.testChangeFiles, testChangeDescription: input.testChangeDescription })
 
   if (input?.deviceRunConfirmed) {
     mergeSession(appId, { deviceRunConfirmed: true })
@@ -370,23 +362,20 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
       return baseResult(stepNumber, 'test-change-choice', 'choice', `${title} — how do you want to make the visible change for the test update?`, {
         options: [
           { value: 'manual', label: 'I\'ll make the change myself', note: 'edit a text, color or element you will recognize, then revert it whenever you want' },
-          { value: 'auto', label: 'Let Capgo add a temporary test banner', note: 'adds a "Capgo Update Test" banner to one web file and removes it from your source automatically once the update is confirmed' },
+          { value: 'agent', label: 'Let my AI assistant make it', note: 'your assistant makes one small change that fits your app, tells you what to look for, and reverts it once the update is confirmed' },
         ],
         next: nextAction(
-          'Ask the user which option they prefer — do not pick for them and do not edit any app file yourself. Then call next_step with testChangeChoice.',
-          { testChangeChoice: '<manual|auto>' },
+          'Ask the user which option they prefer — do not pick for them and do not edit any app file before they answer. Then call next_step with testChangeChoice.',
+          { testChangeChoice: '<manual|agent>' },
           `${NEXT_STEP_TOOL}({ testChangeChoice: "manual" })`,
         ),
       })
     }
 
     if (session.testChangeChoice === 'manual' && !session.testChangeReady) {
-      const intro = session.autoTestUnavailable
-        ? 'Capgo could not find a web file it knows how to edit (index.html, App.vue, a page template or a main stylesheet), so please make the change yourself.\n\n'
-        : ''
       return baseResult(stepNumber, 'make-test-change-manual', 'human_gate', `${title} — make one small visible change in your web code.`, {
         human: {
-          instruction: `${intro}Make one small change you will easily recognize on the device, for example change a heading text or a button color. Keep it in your web code only (no native files, plugins or Capacitor config) and do not run \`cap sync\` or \`cap run\` afterward: the change must reach the installed app through Capgo. Tell me when the change is saved.`,
+          instruction: `Make one small change you will easily recognize on the device, for example change a heading text or a button color. ${TEST_CHANGE_LIMITS} Tell me when the change is saved.`,
           resourceUri: 'https://capgo.app/docs/getting-started/onboarding/',
         },
         collect: [{ field: 'testChangeReady', desc: 'set true once the user saved their visible change' }],
@@ -396,6 +385,17 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
           `${NEXT_STEP_TOOL}({ testChangeReady: true })`,
         ),
         context: { appId: facts.appId },
+      })
+    }
+
+    if (session.testChangeChoice === 'agent' && !session.testChangeReady) {
+      return baseResult(stepNumber, 'make-test-change-agent', 'info', `${title} — you (the AI assistant) make one small, temporary visible change.`, {
+        context: { appId: facts.appId, guidelines: AGENT_TEST_CHANGE_GUIDELINES },
+        next: nextAction(
+          `Make the change yourself now, following these guidelines:\n${AGENT_TEST_CHANGE_GUIDELINES.map(line => `- ${line}`).join('\n')}\nThen tell the user in one sentence what you changed and call next_step with testChangeReady: true, testChangeFiles (the paths you edited) and testChangeDescription (what to look for on the device).`,
+          { testChangeReady: true, testChangeFiles: ['<path>'], testChangeDescription: '<what to look for>' },
+          `${NEXT_STEP_TOOL}({ testChangeReady: true, testChangeFiles: ["src/pages/Home.vue"], testChangeDescription: "the home title now ends with (Capgo test)" })`,
+        ),
       })
     }
   }
@@ -420,7 +420,7 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
       mergeProgress(deps, progress, { step_done: TOTAL_STEPS, appId: facts.appId })
     const channel = progress?.channelName ?? session.channelName ?? DEFAULT_CHANNEL
     const nextUpload = `npx @capgo/cli@latest bundle upload --bundle <version> --channel ${channel}`
-    const testChange = await cleanUpTestChange(deps, nextUpload)
+    const testChange = testChangeFollowUp(deps, nextUpload)
     return baseResult(stepNumber, 'completion', 'done', `${facts.appId} is wired for Capgo OTA updates.${testChange ? `\n\n${testChange.summary}` : ''}`, {
       progress: 100,
       phase: 'done',
@@ -438,38 +438,40 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
   })
 }
 
+const TEST_CHANGE_LIMITS = 'Keep it in your web code only (no native files, plugins or Capacitor config) and do not run `cap sync` or `cap run` afterward: the change must reach the installed app through Capgo.'
+
+const AGENT_TEST_CHANGE_GUIDELINES = [
+  'Change exactly one thing the user sees on the first screen right after launch, such as a heading, a label or a button text (for example append " (Capgo test)" to the main title). No banners, overlays or new components.',
+  'Match the app\'s existing style and code conventions; it should look like a normal edit, not injected content.',
+  'Edit only web source files (no native ios/ or android/ files, plugins, dependencies or Capacitor config) and keep the diff to a few lines.',
+  'Do not run `cap sync`, `cap copy` or `cap run` afterward: the change must reach the installed app through Capgo.',
+  'Remember the exact original content so you can restore it after the update is confirmed.',
+]
+
 function testChangeLookFor(progress: LiveUpdateProgress | null): string {
-  if (progress?.testChangeMode !== 'auto')
-    return 'Look for the visible change you made.'
-  if (progress.autoTestChange?.kind === 'css-background')
-    return 'Look for the purple gradient background Capgo added to the app — Capgo removes it from your source right after.'
-  return 'Look for the green "Capgo Update Test" banner at the top of the screen — Capgo removes it from your source right after.'
+  if (progress?.testChangeMode === 'agent')
+    return progress.testChangeDescription ? `Look for this change: ${progress.testChangeDescription}.` : 'Look for the change your AI assistant made.'
+  return 'Look for the visible change you made.'
 }
 
-async function cleanUpTestChange(deps: EngineDeps, nextUpload: string): Promise<{ summary: string, context: Record<string, unknown> } | undefined> {
+function testChangeFollowUp(deps: EngineDeps, nextUpload: string): { summary: string, context: Record<string, unknown> } | undefined {
   const progress = deps.loadProgress()
-  const change = progress?.autoTestChange
   const redeploy = `Devices keep showing the test bundle until the next upload: rebuild your web app and upload a new, higher version (${nextUpload}).`
-  if (!change) {
-    if (progress?.testChangeMode !== 'manual')
-      return undefined
+  if (progress?.testChangeMode === 'manual') {
     return {
       summary: `Your manual test change is still in your code. Revert it if it was temporary. ${redeploy}`,
       context: { mode: 'manual', redeploy: nextUpload },
     }
   }
-
-  const res = await deps.revertTestChange(change)
-  if (!res.ok) {
-    return {
-      summary: `Could not remove the temporary Capgo test change from ${change.filePath} automatically (${res.error ?? 'unknown error'}). Remove the block marked "capgo-test-banner", "capgo-test-vue" or "capgo-test-background" from that file. ${redeploy}`,
-      context: { mode: 'auto', file: change.filePath, removed: false, redeploy: nextUpload },
-    }
-  }
-  mergeProgress(deps, progress, { autoTestChange: undefined })
+  if (progress?.testChangeMode !== 'agent')
+    return undefined
+  const files = progress.testChangeFiles ?? []
+  if (progress.testChangeReverted)
+    return { summary: redeploy, context: { mode: 'agent', files, reverted: true, redeploy: nextUpload } }
+  mergeProgress(deps, progress, { testChangeReverted: true })
   return {
-    summary: `${res.reverted ? 'Removed' : 'Nothing left to remove for'} the temporary Capgo test change in ${change.filePath}. ${redeploy}`,
-    context: { mode: 'auto', file: change.filePath, removed: true, redeploy: nextUpload },
+    summary: `AI assistant: revert the temporary test change you made${files.length ? ` in ${files.join(', ')}` : ''} now, restoring the previous content exactly, then tell the user it is removed. ${redeploy}`,
+    context: { mode: 'agent', files, revertNow: true, redeploy: nextUpload },
   }
 }
 
@@ -549,16 +551,17 @@ async function runAutoEffect(deps: EngineDeps, facts: LiveUpdateFacts, state: st
     case 'make-test-change': {
       const base = progress?.currentVersion ?? session.currentVersion
       const mode = session.testChangeChoice ?? 'manual'
-      const res = await deps.applyTestChange(appId, base, mode)
+      const res = await deps.applyTestChange(appId, base)
       if (!res.ok)
         return { ok: false, error: res.error ?? 'Test change failed' }
-      if (mode === 'auto' && !res.autoTestChange) {
-        // No known web file to edit: hand the change to the user instead.
-        mergeSession(appId, { testChangeChoice: 'manual', autoTestUnavailable: true })
-        return { ok: true }
-      }
       mergeSession(appId, { currentVersion: res.version })
-      mergeProgress(deps, progress, { step_done: 9, appId, currentVersion: res.version, testChangeMode: mode, autoTestChange: res.autoTestChange })
+      mergeProgress(deps, progress, {
+        step_done: 9,
+        appId,
+        currentVersion: res.version,
+        testChangeMode: mode,
+        ...(mode === 'agent' ? { testChangeFiles: session.testChangeFiles, testChangeDescription: session.testChangeDescription } : {}),
+      })
       return { ok: true }
     }
     case 'upload-bundle': {

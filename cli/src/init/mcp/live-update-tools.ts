@@ -13,14 +13,11 @@ import { getPlatformDirFromCapacitorConfig } from '../../build/platform-paths.js
 import { createKeyInternal } from '../../key.js'
 import { isAppAlreadyExistsError } from '../app-conflict.js'
 import {
-  applyInitAutoTestChange,
   getGitRepoStatus,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
-  initAutoTestChangeCandidates,
   resolveCompatibleUpdaterInstall,
   resolveInitTargetPath,
-  revertInitAutoTestChangeContent,
 } from '../command.js'
 import { getUpdaterInstallState } from '../updater.js'
 import { initOnboardingSteps } from '../ui.js'
@@ -32,7 +29,7 @@ import { uploadBundleInternal } from '../../bundle/upload.js'
 import { execSync, spawnSync } from 'node:child_process'
 import type { NextStepResult, Platform } from './contract.js'
 import { renderResult } from './contract.js'
-import type { EngineDeps, TestChangeMode } from './engine.js'
+import type { EngineDeps } from './engine.js'
 import { explainLiveUpdateOnboarding, runAdvance, runStart } from './engine.js'
 import { clearLiveUpdateProgress, loadLiveUpdateProgress, saveLiveUpdateProgress } from './progress.js'
 
@@ -210,41 +207,13 @@ export function buildDeps(
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
       }
     },
-    applyTestChange: async (_appId: string, baseVersion: string | undefined, mode: TestChangeMode) => {
+    applyTestChange: async (_appId: string, baseVersion?: string) => {
       try {
         const version = getInitSuggestedOtaVersion(baseVersion || getBundleVersion(undefined, getPackageJsonPath()) || '1.0.0')
-        if (mode === 'manual')
-          return { ok: true as const, version }
-        // Same web files as the interactive `init`: the JS entry file cannot hold a visible banner.
-        const projectDir = getProjectDir()
-        for (const relativeFilePath of initAutoTestChangeCandidates) {
-          const filePath = join(projectDir, relativeFilePath)
-          if (!existsSync(filePath))
-            continue
-          const changed = applyInitAutoTestChange(relativeFilePath, await readFile(filePath, 'utf8'))
-          if (!changed)
-            continue
-          await writeFile(filePath, changed.content, 'utf8')
-          return { ok: true as const, version, autoTestChange: { filePath, kind: changed.kind } }
-        }
         return { ok: true as const, version }
       }
       catch (error) {
         return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
-      }
-    },
-    revertTestChange: async (change) => {
-      try {
-        if (!existsSync(change.filePath))
-          return { ok: true as const, reverted: false }
-        const reverted = revertInitAutoTestChangeContent(change.kind, await readFile(change.filePath, 'utf8'))
-        if (!reverted)
-          return { ok: false as const, reverted: false, error: 'the banner was edited or moved' }
-        await writeFile(change.filePath, reverted, 'utf8')
-        return { ok: true as const, reverted: true }
-      }
-      catch (error) {
-        return { ok: false as const, reverted: false, error: error instanceof Error ? error.message : String(error) }
       }
     },
     uploadBundle: async (appId: string, opts) => {
