@@ -204,25 +204,48 @@ function getStatsPrincipal(c: Context, auth: AuthInfo): RlsPrincipal {
   return authPrincipal(c, auth)
 }
 
-// Each read is its own RLS transaction, like one PostgREST request. They share one connection,
-// and a Hyperdrive Client is the same connection for every checkout, so queue them rather than
-// letting concurrent reads interleave their BEGIN/COMMIT.
-function createStatsDb(pg: PgClient, principal: RlsPrincipal): StatsDb {
-  let tail: Promise<unknown> = Promise.resolve()
-  return <T>(text: string, values: unknown[]) => {
-    const run = tail.then(() => withRlsTransaction(pg, principal, client => queryJson<T>(client, text, values)))
-    tail = run.catch(() => {})
+// Each read is its own RLS transaction, like one PostgREST request. A Hyperdrive Client is one
+// connection, so reads on the same client must not interleave their BEGIN/COMMIT. Spread them over
+// a few lanes, each with its own client and queue, so organizations still load concurrently (as
+// their PostgREST requests did) without opening one connection per read.
+const STATS_DB_LANES = 4
+
+function createStatsDb(c: Context, principal: RlsPrincipal) {
+  const lanes: { pg: Promise<PgClient>, tail: Promise<unknown>, pending: number }[] = []
+  const db: StatsDb = <T>(text: string, values: unknown[]) => {
+    let lane = lanes.find(l => l.pending === 0)
+    if (!lane && lanes.length < STATS_DB_LANES) {
+      lane = { pg: getPgClient(c), tail: Promise.resolve(), pending: 0 }
+      lanes.push(lane)
+    }
+    lane ??= lanes.reduce((a, b) => (b.pending < a.pending ? b : a))
+    const target = lane
+    target.pending++
+    const run = target.tail
+      .then(() => target.pg)
+      .then(pg => withRlsTransaction(pg, principal, client => queryJson<T>(client, text, values)))
+      .finally(() => { target.pending-- })
+    target.tail = run.catch(() => {})
     return run
   }
+  const close = async () => {
+    await Promise.all(lanes.map(async (lane) => {
+      await lane.tail
+      const pg = await lane.pg.catch(() => null)
+      if (pg)
+        closeClient(c, pg)
+    }))
+  }
+  return { db, close }
 }
 
 async function withStatsDb<T>(c: Context, principal: RlsPrincipal, run: (db: StatsDb) => Promise<T>): Promise<T> {
-  const pg = await getPgClient(c)
+  const { db, close } = createStatsDb(c, principal)
   try {
-    return await run(createStatsDb(pg, principal))
+    return await run(db)
   }
   finally {
-    closeClient(c, pg)
+    await close()
   }
 }
 
@@ -363,6 +386,7 @@ function metricDayNumber(metricDate: string, from: Date, graphDays: number): num
 }
 
 export const statisticsTestUtils = {
+  withStatsDb,
   executeStatsQueryWithRetry,
   fetchAppMetricsRows,
   getMissingAppStatsError,
