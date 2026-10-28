@@ -334,8 +334,8 @@ describe('hosted MCP app creation conflicts', () => {
     expect(result.isError).toBe(true)
     expect(body.error).toBe('app_id_already_exists')
     expect(body.suggested_app_ids).toEqual(['com.example.app.mobile', 'com.example.app.capgo', 'com.example.app.live'])
-    expect(body.solutions.join(' ')).toContain('plugins.CapacitorUpdater.appId')
-    expect(body.solutions.join(' ')).toContain('Transfer app ownership')
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('plugins.CapacitorUpdater.appId')
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('Transfer app ownership')
   })
 
   it.concurrent('explains an app ID used by another organization the caller can access', async () => {
@@ -471,5 +471,88 @@ describe('hosted MCP OAuth helpers', () => {
       .toEqual(['https://mcp.so/api/mcp-servers/oauth/callback'])
     expect(getPinnedClientMetadata('https://app.example/oauth/client.json')).toBeNull()
     expect(base64UrlEncode(new Uint8Array([251, 255]))).toBe('-_8')
+  })
+})
+
+describe('hosted MCP errors always give a way out', () => {
+  function failingContext(status: number, data: unknown, requestId?: string): McpToolContext {
+    return {
+      call: async () => ({ ok: false, status, data, requestId }),
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+  }
+
+  async function callTool(name: string, args: Record<string, unknown>, ctx: McpToolContext) {
+    const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, ctx)
+    return response?.result as { content: Array<{ text: string }>, isError?: boolean }
+  }
+
+  function guidanceOf(result: { content: Array<{ text: string }> }) {
+    const text = result.content.map(part => part.text).join('\n')
+    try {
+      return (JSON.parse(text) as { how_to_fix?: { kind: string, next_steps: string[] } }).how_to_fix
+    }
+    catch {
+      return text.includes('how_to_fix') ? { kind: 'text', next_steps: [text] } : undefined
+    }
+  }
+
+  it.concurrent('adds how_to_fix to every error of every tool', async () => {
+    const failures = [
+      [400, { error: 'invalid_body', message: 'Invalid body' }],
+      [401, { error: 'invalid_apikey', message: 'Invalid API key' }],
+      [404, { error: 'app_not_found', message: 'App not found' }],
+      [500, '<html>Internal Server Error</html>'],
+    ] as const
+    for (const tool of MCP_TOOLS) {
+      for (const [status, data] of failures) {
+        const result = await callTool(tool.name, {}, failingContext(status, data, 'req-1'))
+        if (!result.isError)
+          continue
+        const guidance = guidanceOf(result)
+        expect(guidance, `${tool.name} → ${status}`).toBeDefined()
+        expect(guidance!.next_steps.length, `${tool.name} → ${status}`).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it.concurrent('classifies API errors and ends with a support escape hatch', async () => {
+    const cases = [
+      [400, 'invalid_body', 'fix_input'],
+      [401, 'invalid_apikey', 'authentication'],
+      [400, 'not_authorized', 'permission'],
+      [404, 'app_not_found', 'not_found'],
+      [409, 'version_already_exists', 'conflict'],
+      [429, 'api_key_rate_limit_exceeded', 'rate_limited'],
+      [400, 'need_plan_upgrade', 'plan_limit'],
+      [400, 'org_requires_expiring_key', 'security_policy'],
+      [400, 'upload_token_expired', 'expired'],
+      [500, 'internal_error', 'unexpected'],
+    ] as const
+    for (const [status, error, kind] of cases) {
+      const result = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(status, { error, message: error }, 'req-42'))
+      const body = JSON.parse(result.content[0].text)
+      expect(body.how_to_fix.kind, error).toBe(kind)
+      expect(body.request_id).toBe('req-42')
+      expect(body.how_to_fix.next_steps.join(' '), error).toContain('support@capgo.app')
+    }
+  })
+
+  it.concurrent('guides the agent when a tool throws or gets invalid arguments', async () => {
+    const throwing: McpToolContext = {
+      call: async () => { throw new Error('socket hang up') },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const thrown = await callTool('capgo_get_app', { appId: 'com.example.app' }, throwing)
+    expect(thrown.isError).toBe(true)
+    expect(guidanceOf(thrown)?.kind).toBe('unexpected')
+
+    const invalid = await callTool('capgo_get_app', {}, throwing)
+    expect(guidanceOf(invalid)?.kind).toBe('fix_input')
+  })
+
+  it.concurrent('points to tools/list for an unknown tool', async () => {
+    const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_nope', arguments: {} } }, failingContext(500, null))
+    expect(response?.error?.message).toContain('tools/list')
   })
 })

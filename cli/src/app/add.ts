@@ -123,7 +123,7 @@ export function buildAppIdTakenMessage(appId: string) {
   const alternative = appId.toLowerCase().endsWith('.app') ? `${appId}.mobile` : `${appId}.app`
   return [
     `App ID ${appId} already exists in another Capgo organization.`,
-    'Solutions:',
+    'How to fix:',
     '- If you or your team own it: ask an admin of that organization to invite you, or log in with that account, and use the existing app.',
     '- To move it here: an admin of the owning organization can transfer it in the Capgo console (App settings > Transfer app ownership).',
     `- Or register a different Capgo app ID, e.g. ${alternative}, and set plugins.CapacitorUpdater.appId to it in capacitor.config (your native bundle ID stays the same), then run npx cap sync.`,
