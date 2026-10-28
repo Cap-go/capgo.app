@@ -1,5 +1,5 @@
 -- Delta storage v2, step 1 of 2: create delta_files / version_files and fill
--- them from every legacy public.manifest row in one pass.
+-- them from every legacy public.manifest row, in batches of versions.
 --
 -- This step only reads app_versions and public.manifest, so uploads keep
 -- running while it copies millions of rows. Foreign keys, triggers, RLS and
@@ -39,11 +39,15 @@ GRANT EXECUTE ON FUNCTION public.delta_entry_key(text, text, text) TO service_ro
 -- between them by encoding or decoding segments, so references are matched
 -- on the path decoded until it no longer changes: every spelling it accepts
 -- reaches the same text. Matching a few more spellings only keeps more files.
+--
+-- PARALLEL RESTRICTED, not SAFE: on PostgreSQL 17, once the EXCEPTION branch
+-- has run inside a parallel worker, later calls in that worker return the
+-- path undecoded, so a parallel scan would store wrong path keys.
 CREATE FUNCTION public.delta_canonical_path(p_s3_path text)
 RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
-PARALLEL SAFE
+PARALLEL RESTRICTED
 SET search_path = ''
 AS $$
 DECLARE
@@ -77,12 +81,13 @@ ALTER FUNCTION public.delta_canonical_path(text) OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.delta_canonical_path(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.delta_canonical_path(text) TO service_role;
 
--- Same key for every spelling of one object (delta_canonical_path).
+-- Same key for every spelling of one object (delta_canonical_path), and
+-- PARALLEL RESTRICTED for the same reason.
 CREATE FUNCTION public.delta_path_key(p_s3_path text)
 RETURNS bytea
 LANGUAGE plpgsql
 IMMUTABLE
-PARALLEL SAFE
+PARALLEL RESTRICTED
 SET search_path = ''
 AS $$
 BEGIN
@@ -124,40 +129,101 @@ ALTER TABLE public.version_files ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.delta_files FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON TABLE public.version_files FROM PUBLIC, anon, authenticated;
 
--- Keys are computed once per legacy row.
-CREATE TEMP TABLE delta_backfill ON COMMIT DROP AS
-SELECT
-  m.id,
-  m.app_version_id,
-  av.app_id,
-  m.s3_path,
-  m.file_name,
-  m.file_hash,
-  COALESCE(m.file_size, 0) AS file_size,
-  public.delta_path_key(m.s3_path) AS path_key,
-  public.delta_entry_key(m.s3_path, m.file_name, m.file_hash) AS entry_key
-FROM public.manifest AS m
-INNER JOIN public.app_versions AS av ON av.id = m.app_version_id
-WHERE m.s3_path IS NOT NULL AND m.file_name IS NOT NULL AND m.file_hash IS NOT NULL;
+-- The copy runs in batches of versions inside one DO block, with a NOTICE per
+-- batch. A single multi-minute statement sends nothing to the client while it
+-- runs, and the deploy runner's connection to the pooler is dropped after
+-- about 4 idle minutes (first production attempt: reset after 261 s on 9.7M
+-- rows). Each batch is a few short statements, and statement-level memory is
+-- freed between them.
+CREATE UNIQUE INDEX delta_files_entry_key_idx ON public.delta_files (entry_key);
 
--- One row per unique entry; the largest known size wins.
-INSERT INTO public.delta_files (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
-SELECT DISTINCT ON (b.entry_key)
-  b.app_id, b.s3_path, b.file_name, b.file_hash, b.file_size, b.path_key, b.entry_key
-FROM delta_backfill AS b
-ORDER BY b.entry_key, b.file_size DESC;
+-- Keys are computed once per legacy row of the current batch.
+CREATE TEMP TABLE delta_backfill (
+  id bigint NOT NULL,
+  app_version_id bigint NOT NULL,
+  app_id character varying NOT NULL,
+  s3_path character varying NOT NULL,
+  file_name character varying NOT NULL,
+  file_hash character varying NOT NULL,
+  file_size bigint NOT NULL,
+  path_key bytea NOT NULL,
+  entry_key bytea NOT NULL
+) ON COMMIT DROP;
+
+DO $$
+DECLARE
+  v_version_ids bigint[];
+  v_batch bigint[];
+  v_batch_size constant integer := 50;
+  v_total integer;
+  v_rows bigint := 0;
+  v_batch_rows bigint;
+  v_started timestamptz := pg_catalog.clock_timestamp();
+BEGIN
+  SELECT pg_catalog.array_agg(av.id ORDER BY av.id)
+  INTO v_version_ids
+  FROM public.app_versions AS av
+  WHERE EXISTS (SELECT 1 FROM public.manifest AS m WHERE m.app_version_id = av.id);
+  v_total := COALESCE(pg_catalog.cardinality(v_version_ids), 0);
+  RAISE NOTICE 'delta storage backfill: % versions with manifest rows', v_total;
+
+  FOR v_offset IN 0 .. v_total - 1 BY v_batch_size LOOP
+    v_batch := v_version_ids[v_offset + 1 : v_offset + v_batch_size];
+
+    -- Created in this transaction, so TRUNCATE empties it in place.
+    TRUNCATE delta_backfill;
+    INSERT INTO delta_backfill
+    SELECT
+      m.id,
+      m.app_version_id,
+      av.app_id,
+      m.s3_path,
+      m.file_name,
+      m.file_hash,
+      COALESCE(m.file_size, 0),
+      public.delta_path_key(m.s3_path),
+      public.delta_entry_key(m.s3_path, m.file_name, m.file_hash)
+    FROM public.manifest AS m
+    INNER JOIN public.app_versions AS av ON av.id = m.app_version_id
+    WHERE m.app_version_id = ANY (v_batch)
+      AND m.s3_path IS NOT NULL AND m.file_name IS NOT NULL AND m.file_hash IS NOT NULL;
+    GET DIAGNOSTICS v_batch_rows = ROW_COUNT;
+    v_rows := v_rows + v_batch_rows;
+
+    -- One row per unique entry; the largest known size wins, also against
+    -- rows written by earlier batches.
+    INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
+    SELECT DISTINCT ON (b.entry_key)
+      b.app_id, b.s3_path, b.file_name, b.file_hash, b.file_size, b.path_key, b.entry_key
+    FROM delta_backfill AS b
+    ORDER BY b.entry_key, b.file_size DESC
+    ON CONFLICT (entry_key) DO UPDATE
+    SET file_size = EXCLUDED.file_size
+    WHERE df.file_size < EXCLUDED.file_size;
+
+    -- The ordered file list of each version, in legacy row order. The id is
+    -- a unique-index lookup per row: delta_files has no statistics yet, so a
+    -- join could be planned as a scan of the whole table on every batch.
+    INSERT INTO public.version_files (app_version_id, file_ids)
+    SELECT
+      b.app_version_id,
+      pg_catalog.array_agg(
+        (SELECT df.id FROM public.delta_files AS df WHERE df.entry_key = b.entry_key)
+        ORDER BY b.id
+      )
+    FROM delta_backfill AS b
+    GROUP BY b.app_version_id;
+
+    RAISE NOTICE 'delta storage backfill: % of % versions, % rows, % s',
+      LEAST(v_offset + v_batch_size, v_total), v_total, v_rows,
+      pg_catalog.round(EXTRACT(EPOCH FROM pg_catalog.clock_timestamp() - v_started));
+  END LOOP;
+END;
+$$;
 
 -- Indexes are built once the rows are in.
-CREATE UNIQUE INDEX delta_files_entry_key_idx ON public.delta_files (entry_key);
 CREATE INDEX delta_files_path_key_idx ON public.delta_files (path_key);
 CREATE INDEX delta_files_app_id_idx ON public.delta_files (app_id);
-
--- The ordered file list of each version, in legacy row order.
-INSERT INTO public.version_files (app_version_id, file_ids)
-SELECT b.app_version_id, pg_catalog.array_agg(df.id ORDER BY b.id)
-FROM delta_backfill AS b
-INNER JOIN public.delta_files AS df ON df.entry_key = b.entry_key
-GROUP BY b.app_version_id;
 
 -- Versions whose list only lives in the inline app_versions.manifest (no
 -- legacy rows): same treatment, in list order.

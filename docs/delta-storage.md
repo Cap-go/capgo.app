@@ -132,8 +132,12 @@ Five migrations, one release, each its own short transaction so no slow work
 runs while `apps` or `app_versions` are locked:
 
 1. `delta_storage_backfill` creates `delta_files` and `version_files`,
-   copies every `public.manifest` row in one pass and analyzes both tables.
-   It only reads `app_versions` and `manifest`, so uploads keep running.
+   copies every `public.manifest` row in batches of 50 versions and analyzes
+   both tables. It only reads `app_versions` and `manifest`, so uploads keep
+   running. Each batch ends with a progress `NOTICE`: the deploy runner drops a
+   pooler connection that stays silent for about 4 minutes, which is how the
+   first production attempt (one multi-minute statement over 9.7M rows) failed
+   and rolled back.
 2. `delta_storage_v2` drops the PlanetScale replication of the old inventory
    (`capgo_planetscale_r2_pub` and the `capgo_planetscale_r2_slot` slot; it
    terminates the slot's walsender and fails rather than leave a slot that
@@ -154,7 +158,13 @@ functions are plpgsql: as SQL-language functions they kept about 1 kB per row
 until the statement ended, and the backfill ran out of memory. On that data,
 reading one 633-file version for `/updates` takes 29 ms, an upload's two
 writes 43 ms, and GC's reference check of a 1,000-object page 18 ms (52 s
-before the tables had statistics, hence the `ANALYZE`).
+before the tables had statistics, hence the `ANALYZE`). Batched, a local copy
+of 5M rows converts in 34 s with a notice about every 0.4 s.
+
+`delta_canonical_path` and `delta_path_key` are `PARALLEL RESTRICTED`: on
+PostgreSQL 17 a parallel worker that has taken the function's `EXCEPTION`
+branch (a path that is not valid UTF-8 once decoded) returns later paths
+undecoded, so a parallel scan would store wrong path keys.
 
 Size lookups queued for the view's rows are delayed 30 minutes so the new
 workers, which know `delta_files`, process them; size updates through the view
