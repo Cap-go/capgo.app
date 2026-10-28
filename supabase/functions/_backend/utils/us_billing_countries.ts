@@ -1,5 +1,6 @@
 // The US entity bills without automatic tax, so it is only offered in the Americas and Asia-Pacific.
-// Europe, the Middle East and Africa stay on EE (EU VAT goes through the Estonian entity). French and
+// Europe, the Middle East, Africa and Central Asia (KZ, KG, TJ, TM, UZ) stay on EE (EU VAT goes through
+// the Estonian entity). French and
 // Danish overseas territories follow their EU country; Cuba, North Korea and Afghanistan are
 // sanctioned. Local tax thresholds (e.g. Australian GST) are tracked outside the code.
 const US_BILLING_COUNTRIES = new Set([

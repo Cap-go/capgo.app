@@ -3915,7 +3915,7 @@
   "billing-region-label": "Billing entity",
   "billing-region-us-detected": "You seem to be in the United States, so we'll bill you from our US company. Is that OK?",
   "billing-region-option-us": "Yes, bill me from the US",
-  "billing-region-option-us-desc": "CodepushGo, LLC (Delaware) · US invoices and sales tax",
+  "billing-region-option-us-desc": "CodepushGo, LLC (Delaware) · US invoices",
   "billing-region-option-ee": "No, bill me from Europe",
   "billing-region-option-ee-desc": "Digital Shift OÜ (Estonia) · EU VAT invoices",
   "past-due-banner-detail": "Access is limited until this payment goes through. You can pay with another card or payment method.",

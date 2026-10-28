@@ -203,7 +203,7 @@ describe('new org billing account from location', () => {
     mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
     for (const country of ['US', 'CA', 'BR', 'MX', 'JP', 'AU', 'IN', 'SG', 'TK'])
       expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(true)
-    for (const country of ['FR', 'DE', 'GB', 'CH', 'AE', 'ZA', 'NG', 'GF', 'CU', 'KP', 'AF'])
+    for (const country of ['FR', 'DE', 'GB', 'CH', 'AE', 'ZA', 'NG', 'GF', 'CU', 'KP', 'AF', 'KZ', 'UZ'])
       expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(false)
     expect(canChooseUsBillingAccount(createGeoContext())).toBe(false)
     expect(isUsBillingCountry('ca')).toBe(true)
