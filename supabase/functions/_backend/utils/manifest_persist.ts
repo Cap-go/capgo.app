@@ -56,16 +56,27 @@ async function persistDeltaStorageRows(
   trustFileSizes: boolean,
 ) {
   // Unique by entry key; the largest trusted size wins inside one request.
+  // Entries already stored with a size (or without a new one) are skipped
+  // before the insert: ON CONFLICT DO UPDATE locks every conflicting row even
+  // when its WHERE rejects the update, which dirtied and WAL-logged one old
+  // heap page per file reused from an earlier version. GC deletes rows only
+  // under the exclusive per-app lock this transaction holds the shared side
+  // of, so those row locks protected nothing. ON CONFLICT still resolves
+  // concurrent uploads of the same file.
   await tx.execute(sql`
     INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
     SELECT DISTINCT ON (keyed.entry_key)
-      ${record.app_id}, keyed.s3_path, keyed.file_name, keyed.file_hash, keyed.file_size, keyed.path_key, keyed.entry_key
+      ${record.app_id}, keyed.s3_path, keyed.file_name, keyed.file_hash, keyed.file_size, public.delta_path_key(keyed.s3_path), keyed.entry_key
     FROM (
       SELECT entry.s3_path, entry.file_name, entry.file_hash, COALESCE(entry.file_size, 0) AS file_size,
-        public.delta_path_key(entry.s3_path) AS path_key,
         public.delta_entry_key(entry.s3_path, entry.file_name, entry.file_hash) AS entry_key
       FROM jsonb_to_recordset(${rowsJson}::jsonb) AS entry(file_name text, s3_path text, file_hash text, file_size bigint)
     ) AS keyed
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.delta_files AS existing
+      WHERE existing.entry_key = keyed.entry_key
+        AND (existing.file_size > 0 OR keyed.file_size = 0)
+    )
     ORDER BY keyed.entry_key, keyed.file_size DESC
     ON CONFLICT (entry_key) DO UPDATE SET file_size = EXCLUDED.file_size
     WHERE df.file_size = 0 AND EXCLUDED.file_size > 0
