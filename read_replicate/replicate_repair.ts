@@ -20,7 +20,7 @@ import { Client } from 'pg'
 
 const DEFAULT_SKIP = ['delta_files', 'version_files']
 const BATCH = 1000
-const SETTLE_MS = 5000
+const SETTLE_MS = 3000
 
 interface TableInfo { columns: string[], pk: string[] }
 type Hashes = Map<string, string>
@@ -154,9 +154,25 @@ async function repair(source: Client, replica: Client, table: string, apply: boo
   console.log(`[${table}] repaired; ${after.upsert.length + after.remove.length} rows still differ (changed during the repair; rerun to settle)`)
 }
 
+const CONCURRENCY = 6
+
+// Each table gets its own pair of connections so tables repair in parallel.
+async function repairTable(table: string, apply: boolean) {
+  const source = await connect(process.env.SOURCE_DB_URL, 'SOURCE_DB_URL')
+  const replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL')
+  const started = Date.now()
+  try {
+    await repair(source, replica, table, apply)
+    console.log(`[${table}] done in ${((Date.now() - started) / 1000).toFixed(1)} s`)
+  }
+  finally {
+    await source.end()
+    await replica.end()
+  }
+}
+
 async function main() {
   const apply = process.argv.includes('--apply')
-  const source = await connect(process.env.SOURCE_DB_URL, 'SOURCE_DB_URL')
   const replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL')
   try {
     const requested = list(arg('--tables'))
@@ -171,16 +187,27 @@ async function main() {
     )
     const readyTables = ready.rows.map(row => row.relname)
     const tables = (requested.length ? requested : readyTables).filter(table => !skip.has(table))
-    for (const table of tables) {
-      if (!process.argv.includes('--unsubscribed') && !readyTables.includes(table)) {
-        console.log(`[${table}] skipped: not a subscribed table in state r`)
-        continue
+    const queue = tables.filter((table) => {
+      if (process.argv.includes('--unsubscribed') || readyTables.includes(table))
+        return true
+      console.log(`[${table}] skipped: not a subscribed table in state r`)
+      return false
+    })
+    const started = Date.now()
+    const failures: string[] = []
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+      for (let table = queue.shift(); table; table = queue.shift()) {
+        await repairTable(table, apply).catch((error: unknown) => {
+          failures.push(table)
+          console.error(`[${table}] failed: ${error instanceof Error ? error.message : String(error)}`)
+        })
       }
-      await repair(source, replica, table, apply)
-    }
+    }))
+    console.log(`All tables in ${((Date.now() - started) / 1000).toFixed(1)} s${failures.length ? `; failed: ${failures.join(', ')}` : ''}`)
+    if (failures.length)
+      process.exitCode = 1
   }
   finally {
-    await source.end()
     await replica.end()
   }
 }
