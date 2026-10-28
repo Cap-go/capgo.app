@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { retryTransientSqlError } from './sql-retry.ts'
 import { POSTGRES_URL, USER_ID, USER_PASSWORD_HASH, withAuthenticatedUser } from './test-utils.ts'
 
 const fixtureId = randomUUID()
@@ -195,16 +196,20 @@ beforeAll(async () => {
 afterAll(async () => {
   const client = await pool.connect()
   try {
-    await client.query('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
-    await client.query('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
-    await client.query('DELETE FROM public.roles WHERE id = $1::uuid', [noBillingRoleId])
-    await client.query('DELETE FROM public.users WHERE id = ANY($1::uuid[])', [[
+    // Org delete takes the org advisory lock, then locks apps. Another session can
+    // already hold the app row and be waiting for that lock (40P01). The victim
+    // statement is rolled back, so retrying it is safe.
+    const run = (text: string, values?: unknown[]) => retryTransientSqlError(() => client.query(text, values))
+    await run('DELETE FROM public.orgs WHERE id = $1::uuid', [orgId])
+    await run('DELETE FROM public.stripe_info WHERE customer_id = $1', [customerId])
+    await run('DELETE FROM public.roles WHERE id = $1::uuid', [noBillingRoleId])
+    await run('DELETE FROM public.users WHERE id = ANY($1::uuid[])', [[
       memberWithDefaultId,
       memberWithoutBillingId,
       appOnlyBackfillId,
       alreadyHasBillingId,
     ]])
-    await client.query('DELETE FROM auth.users WHERE id = ANY($1::uuid[])', [[
+    await run('DELETE FROM auth.users WHERE id = ANY($1::uuid[])', [[
       memberWithDefaultId,
       memberWithoutBillingId,
       appOnlyBackfillId,
