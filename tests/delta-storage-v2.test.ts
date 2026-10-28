@@ -1,8 +1,11 @@
 import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
+import { sql } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/node-postgres'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildManifestSizeLookupQuery, normalizeManifestSizeFiles } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { completeVersionManifest, versionManifestJsonSql, versionManifestRowsSql } from '../supabase/functions/_backend/plugin_runtime/utils/version_manifest_sql.ts'
 import { ORG_ID, POSTGRES_URL, resetAndSeedAppData, resetAppData, USER_ID } from './test-utils.ts'
 
 const id = randomUUID()
@@ -141,6 +144,34 @@ describe('delta storage v2 compatibility view', () => {
 
     const view = await pool.query('SELECT file_name FROM public.version_manifest WHERE app_version_id = $1 ORDER BY id', [second])
     expect(view.rows.map(row => row.file_name)).toEqual(['b.js', 'c.js'])
+  })
+
+  it('serves a version\'s files only once every delta_files row is visible', async () => {
+    const database = drizzle({ client: pool })
+    const versionId = await insertVersion(pool)
+    await insertLegacyRows(versionId, ['b.js', 'a.js'])
+    const read = async () => {
+      const rows = await database.execute(versionManifestRowsSql(sql`${versionId}::bigint`))
+      const json = await database.execute(sql`SELECT ${versionManifestJsonSql(sql`${versionId}::bigint`)} AS entries`)
+      return { rows: completeVersionManifest(rows.rows as never), json: json.rows[0].entries }
+    }
+
+    // Upload order, the three fields /updates serves.
+    const complete = [
+      { file_name: 'b.js', file_hash: 'hash-b.js', s3_path: deltaPath('b.js') },
+      { file_name: 'a.js', file_hash: 'hash-a.js', s3_path: deltaPath('a.js') },
+    ]
+    expect(await read()).toEqual({ rows: complete, json: complete })
+
+    // A replica that has the version_files row but not yet one of its
+    // delta_files rows must serve nothing rather than a partial list.
+    await pool.query(
+      `UPDATE public.version_files
+       SET file_ids = file_ids || (SELECT max(id) + 1000000 FROM public.delta_files)
+       WHERE app_version_id = $1`,
+      [versionId],
+    )
+    expect(await read()).toEqual({ rows: [], json: [] })
   })
 
 
