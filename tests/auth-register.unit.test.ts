@@ -269,16 +269,28 @@ describe('pOST /auth/register unit', () => {
     expect(body.error).toBe('captcha_failed')
   })
 
-  it('does not map weak_password 422 to email_exists', async () => {
+  it('returns weak_password with the GoTrue reason instead of a generic 500', async () => {
     signUpMock.mockResolvedValueOnce({
       data: { user: null, session: null },
       error: { code: 'weak_password', message: 'Password is too weak', status: 422 },
     } as unknown as Awaited<ReturnType<typeof signUpMock>>)
     const response = await postRegister(validBody)
-    expect(response.status).toBe(500)
-    const body = await response.json() as { error: string }
-    expect(body.error).not.toBe('email_exists')
-    expect(body.error).toBe('registration_failed')
+    expect(response.status).toBe(422)
+    const body = await response.json() as { error: string, message: string }
+    expect(body.error).toBe('weak_password')
+    expect(body.message).toBe('Password is too weak')
+  })
+
+  it('tells the user to pick another password when GoTrue finds it in a breach list', async () => {
+    signUpMock.mockResolvedValueOnce({
+      data: { user: null, session: null },
+      error: { code: 'weak_password', message: 'Password is known to be weak and easy to guess, please choose a different one.', status: 422, reasons: ['pwned'] },
+    } as unknown as Awaited<ReturnType<typeof signUpMock>>)
+    const response = await postRegister(validBody)
+    expect(response.status).toBe(422)
+    const body = await response.json() as { error: string, message: string }
+    expect(body.error).toBe('weak_password')
+    expect(body.message).toBe('This password appeared in a data breach. Choose a different one.')
   })
 
   it('returns 429 when GoTrue reports a rate limit', async () => {

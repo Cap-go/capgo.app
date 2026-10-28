@@ -2,7 +2,7 @@ import type { User } from '@supabase/supabase-js'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
-import { checkRegistrationEmail, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, provisionUserProfile } from '../utils/accountProvisioning.ts'
+import { checkRegistrationEmail, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, isLeakedPasswordError, isWeakPasswordError, provisionUserProfile } from '../utils/accountProvisioning.ts'
 import { isDirectOfferMetadata, persistDirectOffer } from '../utils/direct_offer.ts'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -41,6 +41,7 @@ const registerSchema = z.object({
 
 const ACCOUNT_DELETED_MESSAGE = 'Account is in error, please contact support at support@capgo.app'
 const EMAIL_EXISTS_MESSAGE = 'User already registered'
+const LEAKED_PASSWORD_MESSAGE = 'This password appeared in a data breach. Choose a different one.'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -172,6 +173,10 @@ app.post('/', async (c) => {
     }
     if (isUserAlreadyRegisteredError(signupError)) {
       return simpleErrorWithStatus(c, 409, 'email_exists', EMAIL_EXISTS_MESSAGE)
+    }
+    // A fixable input error: answering with a generic 500 left people retrying the same password.
+    if (isWeakPasswordError(signupError)) {
+      return simpleErrorWithStatus(c, 422, 'weak_password', isLeakedPasswordError(signupError) ? LEAKED_PASSWORD_MESSAGE : signupError.message)
     }
     return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
   }
