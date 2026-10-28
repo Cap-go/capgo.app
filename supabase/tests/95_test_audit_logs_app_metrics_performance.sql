@@ -67,6 +67,9 @@ INSERT INTO public.daily_storage (app_id, date, storage) VALUES
 INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES
 ('com.test.appmetrics.seed', DATE '2023-03-02', 19),
 ('com.test.appmetrics.seed', DATE '2023-03-03', 41);
+INSERT INTO public.daily_build_time (app_id, date, build_time_unit, build_count) VALUES
+('com.test.appmetrics.seed', DATE '2023-03-02', 29, 1),
+('com.test.appmetrics.seed', DATE '2023-03-03', 43, 2);
 INSERT INTO public.daily_version (app_id, date, version_name, get, fail, install, uninstall) VALUES
 ('com.test.appmetrics.seed', DATE '2023-03-02', '1.0.0', 3, 1, 2, 0),
 ('com.test.appmetrics.seed', DATE '2023-03-02', '1.0.1', 4, 2, 9, 5),
@@ -113,22 +116,22 @@ SELECT
 
 SELECT
     is(
-        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-02'),
-        ARRAY[13, 17, 19, 7, 3, 11, 5]::bigint[],
+        (SELECT ARRAY[mau, storage, bandwidth, build_time_unit, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-02'),
+        ARRAY[13, 17, 19, 29, 7, 3, 11, 5]::bigint[],
         'daily_version is summed across versions for the day'
     );
 
 SELECT
     is(
-        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-03'),
-        ARRAY[31, 37, 41, 20, 21, 22, 23]::bigint[],
+        (SELECT ARRAY[mau, storage, bandwidth, build_time_unit, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-03'),
+        ARRAY[31, 37, 41, 43, 20, 21, 22, 23]::bigint[],
         'each day keeps its own metrics'
     );
 
 SELECT
     is(
-        (SELECT ARRAY[mau, storage, bandwidth, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-01'),
-        ARRAY[0, 0, 0, 0, 0, 0, 0]::bigint[],
+        (SELECT ARRAY[mau, storage, bandwidth, build_time_unit, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-01'),
+        ARRAY[0, 0, 0, 0, 0, 0, 0, 0]::bigint[],
         'days without stats are zero-filled'
     );
 
@@ -141,7 +144,7 @@ SELECT
 
 SELECT
     is(
-        (SELECT sum(mau + storage + bandwidth + get + fail + install + uninstall) FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed2'),
+        (SELECT sum(mau + storage + bandwidth + build_time_unit + get + fail + install + uninstall) FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed2'),
         0::numeric,
         'metrics of one app do not leak into another app of the org'
     );
