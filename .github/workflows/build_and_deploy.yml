@@ -400,6 +400,14 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Write alert tail deploy summary
+        if: always()
+        run: |
+          {
+            echo "### Alert tail worker deploy"
+            echo "- environment: ${{ env.ENV }}"
+            echo "- outcome: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   deploy_api:
     needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription, deploy_alert_tail]

@@ -10,12 +10,17 @@ export interface Env {
   ENV_NAME?: string
 }
 
+let warnedMissingWebhookSecrets = false
+
 export default {
   async tail(events: TailTraceEvent[], env: Env): Promise<void> {
     const webhookUrl = env.ALERT_WEBHOOK_URL
     const webhookAuth = env.ALERT_WEBHOOK_AUTH
     if (!webhookUrl || !webhookAuth) {
-      console.warn('alert tail webhook secrets missing, skipping delivery')
+      if (!warnedMissingWebhookSecrets) {
+        console.warn('alert tail webhook secrets missing, skipping delivery')
+        warnedMissingWebhookSecrets = true
+      }
       return
     }
 

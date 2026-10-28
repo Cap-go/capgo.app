@@ -164,7 +164,13 @@ describe('capPostBodyAlerts', () => {
     const capped = capPostBodyAlerts(alerts)
     const bodyBytes = new TextEncoder().encode(JSON.stringify({ alerts: capped })).length
     expect(bodyBytes).toBeLessThanOrEqual(MAX_POST_BODY_BYTES)
+    expect(capped.length).toBeGreaterThan(0)
     expect(capped.length).toBeLessThan(alerts.length)
+    if (capped.length < alerts.length) {
+      const withNext = [...capped, alerts[capped.length]!]
+      const nextBytes = new TextEncoder().encode(JSON.stringify({ alerts: withNext })).length
+      expect(nextBytes).toBeGreaterThan(MAX_POST_BODY_BYTES)
+    }
   })
 })
 
