@@ -120,7 +120,7 @@ export async function prepareCancelSaveOffer(c: Context, ctx: InAppBillingContex
 
   return await withPg(c, async (pg) => {
     const { rows: accepted } = await pg.query(
-      `SELECT 1 FROM public.cancel_save_offers WHERE customer_id = $1 AND outcome = 'accepted' LIMIT 1`,
+      `SELECT 1 FROM public.cancel_save_offers WHERE customer_id = $1 AND outcome IN ('accepting', 'accepted') LIMIT 1`,
       [ctx.customerId],
     )
     if (accepted.length > 0)
@@ -170,42 +170,102 @@ function addMonths(seconds: number, months: number) {
   return date.toISOString()
 }
 
-/** Applies the discount to the subscription; the plan keeps renewing. */
-export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string) {
-  const offer = await withPg(c, async (pg) => {
-    const { rows } = await pg.query<OfferRow>(
-      `SELECT id::text, subscription_id, monthly_amount, currency, percent_off, duration_months
-       FROM public.cancel_save_offers WHERE id = $1 AND customer_id = $2 AND outcome = 'offered'`,
-      [offerId, ctx.customerId],
-    )
-    return rows[0] ?? null
-  })
-  const subscriptionId = await getActiveSubscriptionId(c, ctx.customerId)
-  if (!offer || offer.subscription_id !== subscriptionId)
-    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
+const UNIQUE_VIOLATION = '23505'
 
+interface AcceptRow extends OfferRow {
+  outcome: 'offered' | 'accepting' | 'accepted' | 'declined'
+  discount_end: string | null
+}
+
+/**
+ * Reserves the customer's one save before Stripe is touched: the partial unique
+ * index on (customer_id) for accepting/accepted rejects a second reservation, even
+ * from an older unanswered offer. Returns the offer in its current state.
+ */
+async function reserveOffer(c: Context, customerId: string, offerId: string): Promise<AcceptRow | null> {
+  return await withPg(c, async (pg) => {
+    const select = () => pg.query<AcceptRow>(
+      `SELECT id::text, subscription_id, monthly_amount, currency, percent_off, duration_months, outcome,
+         to_char(discount_end AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS discount_end
+       FROM public.cancel_save_offers WHERE id = $1 AND customer_id = $2`,
+      [offerId, customerId],
+    )
+    const row = (await select()).rows[0]
+    if (row?.outcome !== 'offered')
+      return row ?? null
+    try {
+      await pg.query(
+        `UPDATE public.cancel_save_offers SET outcome = 'accepting', responded_at = now()
+         WHERE id = $1 AND customer_id = $2 AND outcome = 'offered'`,
+        [offerId, customerId],
+      )
+    }
+    catch (error) {
+      // The customer already took (or is taking) the discount with another offer.
+      if ((error as { code?: unknown })?.code === UNIQUE_VIOLATION)
+        return null
+      throw error
+    }
+    // A concurrent request may have moved it on; report what is stored now.
+    return (await select()).rows[0] ?? null
+  })
+}
+
+async function releaseOffer(c: Context, customerId: string, offerId: string) {
+  await withPg(c, pg => pg.query(
+    `UPDATE public.cancel_save_offers SET outcome = 'offered', responded_at = NULL
+     WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
+    [offerId, customerId],
+  )).catch((error) => {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'cancel save offer release failed', customerId, error })
+  })
+}
+
+async function applyDiscount(ctx: InAppBillingContext, subscriptionId: string, offerId: string) {
   const current = await retrieveSubscription(ctx, subscriptionId)
   // A retried accept finds the discount it already applied.
-  let subscription = current
-  if (!discountFor(current)) {
-    if (!getSaveableMonthlyAmount(current))
+  if (discountFor(current))
+    return current
+  if (!getSaveableMonthlyAmount(current))
+    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
+  await ensureCoupon(ctx.stripe)
+  return await ctx.stripe.subscriptions.update(subscriptionId, {
+    discounts: [{ coupon: CANCEL_SAVE_COUPON_ID }],
+    expand: ['discounts'],
+  }, { idempotencyKey: `cancel_save_offer:${offerId}` })
+}
+
+/** Applies the discount to the subscription; the plan keeps renewing. Safe to retry. */
+export async function acceptCancelSaveOffer(c: Context, ctx: InAppBillingContext, offerId: string) {
+  const offer = await reserveOffer(c, ctx.customerId, offerId)
+  if (!offer || offer.outcome === 'offered' || offer.outcome === 'declined')
+    throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
+  // Already saved: a retry after a lost response returns the recorded result.
+  if (offer.outcome === 'accepted' && offer.discount_end)
+    return { discountEnd: offer.discount_end }
+
+  const subscriptionId = await getActiveSubscriptionId(c, ctx.customerId)
+  let discountStart: string
+  let discountEnd: string
+  try {
+    if (offer.subscription_id !== subscriptionId)
       throw simpleError('cancel_offer_unavailable', 'This offer is no longer available')
-    await ensureCoupon(ctx.stripe)
-    subscription = await ctx.stripe.subscriptions.update(subscriptionId, {
-      discounts: [{ coupon: CANCEL_SAVE_COUPON_ID }],
-      expand: ['discounts'],
-    }, { idempotencyKey: `cancel_save_offer:${offerId}` })
+    const discount = discountFor(await applyDiscount(ctx, subscriptionId, offerId))
+    if (!discount)
+      throw simpleError('cancel_offer_failed', 'The discount could not be applied')
+    discountStart = new Date(discount.start * 1000).toISOString()
+    discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months)
   }
-  const discount = discountFor(subscription)
-  if (!discount)
-    throw simpleError('cancel_offer_failed', 'The discount could not be applied')
-  const discountStart = new Date(discount.start * 1000).toISOString()
-  const discountEnd = discount.end ? new Date(discount.end * 1000).toISOString() : addMonths(discount.start, offer.duration_months)
+  catch (error) {
+    // Nothing was applied: give the reservation back so the customer can try again.
+    await releaseOffer(c, ctx.customerId, offerId)
+    throw error
+  }
 
   await withPg(c, pg => pg.query(
     `UPDATE public.cancel_save_offers
-     SET outcome = 'accepted', responded_at = now(), discount_start = $3, discount_end = $4
-     WHERE id = $1 AND customer_id = $2 AND outcome = 'offered'`,
+     SET outcome = 'accepted', discount_start = $3, discount_end = $4
+     WHERE id = $1 AND customer_id = $2 AND outcome = 'accepting'`,
     [offerId, ctx.customerId, discountStart, discountEnd],
   ))
   cloudlog({ requestId: c.get('requestId'), message: 'cancel save offer accepted', customerId: ctx.customerId, subscriptionId, discountEnd })
