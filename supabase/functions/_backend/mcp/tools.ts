@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.ts'
+import { guidanceForError } from './error_guidance.ts'
 
 /**
  * Hosted Capgo MCP tools.
@@ -24,6 +25,8 @@ export interface McpApiResponse {
   ok: boolean
   status: number
   data: unknown
+  /** X-Request-Id of the API response, quoted to support when an error is unexpected. */
+  requestId?: string
 }
 
 export interface McpCaller {
@@ -62,7 +65,7 @@ export interface McpTool {
   run: (input: Record<string, unknown>, ctx: McpToolContext) => Promise<McpToolResult>
 }
 
-const MAX_RESULT_CHARS = 100_000
+export const MAX_RESULT_CHARS = 100_000
 
 export function textResult(value: unknown, isError = false): McpToolResult {
   let text = typeof value === 'string' ? value : JSON.stringify(value, null, 1)
@@ -76,7 +79,11 @@ export function textResult(value: unknown, isError = false): McpToolResult {
 export function apiResult(response: McpApiResponse): McpToolResult {
   if (response.ok)
     return textResult(response.data)
-  return textResult({ status: response.status, ...(typeof response.data === 'object' && response.data !== null ? response.data : { error: response.data }) }, true)
+  return textResult({
+    status: response.status,
+    ...(typeof response.data === 'object' && response.data !== null ? response.data : { error: response.data }),
+    ...(response.requestId ? { request_id: response.requestId } : {}),
+  }, true)
 }
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } satisfies McpToolAnnotations
@@ -177,7 +184,17 @@ const uploadCommandTool: McpTool = {
       deltaOnly?: boolean
     }
     if (!ctx.apikey)
-      return textResult({ error: 'no_apikey', message: 'This connection has no API key to hand to the CLI. Run: bunx @capgo/cli@latest login' }, true)
+      return textResult({
+        error: 'no_apikey',
+        message: 'This connection has no API key to hand to the CLI.',
+        how_to_fix: {
+          kind: 'authentication',
+          next_steps: [
+            'Upload without the CLI instead: package the build with npx @capgo/cli@latest bundle zip --for-upload --json (no login needed), then call capgo_prepare_bundle_upload and capgo_complete_bundle_upload.',
+            'Or log the CLI in yourself with bunx @capgo/cli@latest login (the user creates a key at https://console.capgo.app/apikeys) and run bunx @capgo/cli@latest bundle upload.',
+          ],
+        },
+      }, true)
 
     // Fail early when the key cannot see the app; upload rights are enforced again by the upload endpoints.
     const app = await ctx.call({ method: 'GET', path: `/app/${enc(id)}` })
@@ -502,11 +519,13 @@ async function appIdConflictResult(id: string, orgIdInput: string, ctx: McpToolC
       app_id: id,
       owner_org: typeof existingOrg === 'string' ? existingOrg : undefined,
       message: `App ${id} already exists in another organization you can access (owner_org above), so it cannot be created again in ${orgIdInput}.`,
-      solutions: [
+      how_to_fix: {
+        kind: 'conflict',
+        next_steps: [
         'Use the existing app as is: pass its appId to the other tools; it stays in its current organization.',
         'Move it to the requested organization: an admin of both organizations can transfer it in the Capgo console under App settings > Transfer app ownership.',
         `Register a separate app with a different Capgo app ID, e.g. ${suggested[0]}, then set plugins.CapacitorUpdater.appId to it in capacitor.config and run npx cap sync. The native bundle ID does not change.`,
-      ],
+      ] },
       suggested_app_ids: suggested,
     }, true)
   }
@@ -514,12 +533,12 @@ async function appIdConflictResult(id: string, orgIdInput: string, ctx: McpToolC
     error: 'app_id_already_exists',
     app_id: id,
     message: `App ID ${id} is already registered in Capgo by an organization this connection cannot access. Ask the user which solution they want; do not pick one silently.`,
-    solutions: [
+    how_to_fix: { kind: 'conflict', next_steps: [
       `If the user (or their team) owns ${id} in another Capgo organization or account: ask an admin of that organization to invite them (capgo_invite_organization_member from that account), or connect this MCP with that account, then use the existing app instead of creating it.`,
       `If the app should live in this organization: an admin of the owning organization can transfer it in the Capgo console under App settings > Transfer app ownership.`,
       `Otherwise register the app under a different Capgo app ID with capgo_add_app, e.g. ${suggested[0]}. The native bundle ID / applicationId does not change: set plugins.CapacitorUpdater.appId to the new ID in capacitor.config (ts or json), run npx cap sync, and use the new ID for uploads (npx @capgo/cli@latest bundle upload <new id>).`,
       'If nobody on the team created it and the user owns the store listing for this bundle ID, they can contact support@capgo.app to reclaim it.',
-    ],
+    ] },
     suggested_app_ids: suggested,
   }, true)
 }
@@ -974,9 +993,49 @@ const requestBuildTool: McpTool = {
     const job = requested.data as { job_id: string, upload_expires_at?: string }
     const signed = await ctx.call({ method: 'POST', path: `/build/upload_url/${enc(job.job_id)}`, body: { app_id: id } })
     if (!signed.ok)
-      return textResult({ job_id: job.job_id, upload_error: signed.data, note: 'The build was requested but no signed URL could be issued. Retry with capgo_get_build_upload_url or cancel with capgo_cancel_build.' }, true)
+      return textResult({
+        // Guidance before the error body, which is also bounded, so the finish/cancel steps for this job always fit.
+        how_to_fix: buildUploadUrlGuidance(job.job_id, signed),
+        job_id: job.job_id,
+        status: signed.status,
+        upload_error: boundedErrorBody(signed.data),
+        ...(signed.requestId ? { request_id: signed.requestId } : {}),
+      }, true)
     return textResult({ job_id: job.job_id, upload: signed.data, next_step: 'PUT the archive to upload.upload_url, then call capgo_start_build with this job_id.' })
   },
+}
+
+const MAX_EMBEDDED_ERROR_CHARS = 4_000
+
+/** Keep an upstream error body small enough that the steps around it are never truncated. */
+function boundedErrorBody(data: unknown): unknown {
+  const text = typeof data === 'string' ? data : JSON.stringify(data)
+  if (text === undefined || text.length <= MAX_EMBEDDED_ERROR_CHARS)
+    return data
+  return `${text.slice(0, MAX_EMBEDDED_ERROR_CHARS)}… (truncated)`
+}
+
+/** The build exists but has no upload URL: say what blocked it, and how to finish or cancel this job. */
+function buildUploadUrlGuidance(jobId: string, signed: McpApiResponse) {
+  const data = typeof signed.data === 'object' && signed.data !== null ? signed.data as { error?: unknown, message?: unknown } : {}
+  const guidance = guidanceForError({
+    status: signed.status,
+    code: typeof data.error === 'string' ? data.error : undefined,
+    message: typeof data.message === 'string' ? data.message : typeof signed.data === 'string' ? signed.data : undefined,
+    tool: 'capgo_request_build',
+    requestId: signed.requestId,
+  })
+  const jobSteps = guidance.kind === 'unexpected'
+    ? [`Build ${jobId} was requested but no signed upload URL could be issued. Call capgo_get_build_upload_url with this job_id, then PUT the archive and call capgo_start_build.`]
+    : [`Build ${jobId} was requested but no signed upload URL could be issued because of the error above. Fix that first, then call capgo_get_build_upload_url with this job_id, PUT the archive and call capgo_start_build.`]
+  return {
+    kind: guidance.kind,
+    next_steps: [
+      ...jobSteps,
+      ...guidance.next_steps,
+      `If the build will not go ahead, cancel it with capgo_cancel_build (job_id ${jobId}) so it does not stay pending.`,
+    ],
+  }
 }
 
 const buildTools: McpTool[] = [
@@ -1227,7 +1286,17 @@ const docsTools: McpTool[] = [
         return textResult(results.length ? results : { results: [], message: `No documentation matches "${query}". Try broader terms.` })
       }
       catch (error) {
-        return textResult({ error: 'docs_search_failed', message: error instanceof Error ? error.message : String(error) }, true)
+        return textResult({
+          error: 'docs_search_failed',
+          message: error instanceof Error ? error.message : String(error),
+          how_to_fix: {
+            kind: 'unexpected',
+            next_steps: [
+              'The docs search service did not answer. Retry once with a shorter query.',
+              'Otherwise read the docs directly at https://capgo.app/docs/ (fetch the page or search it with your own web tools) and carry on.',
+            ],
+          },
+        }, true)
       }
     },
   },
