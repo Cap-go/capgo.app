@@ -635,7 +635,7 @@
   "builder-checklist-mcp-copy-failed": "Couldn’t copy the command. Select it above and copy it manually.",
   "builder-checklist-mcp-restart": "Restart your AI tool if the Capgo MCP tools do not appear after installation.",
   "builder-checklist-mcp-start-title": "Connect your account and start Builder",
-  "builder-checklist-terminal-title": "Or use your terminal",
+  "builder-checklist-terminal-title": "Use your terminal",
   "builder-checklist-platform-title": "Choose a platform",
   "builder-checklist-platform-helper": "Each platform keeps its own progress.",
   "builder-checklist-platform-ios": "iOS",

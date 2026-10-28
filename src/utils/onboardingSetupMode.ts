@@ -154,6 +154,17 @@ export function checklistTaskListMode(onboarding: Json | unknown): ChecklistTask
 }
 
 /**
+ * Whether the task list starts expanded. Below the `lg` breakpoint the list stacks
+ * above the current task, so the default list starts collapsed there: the user reads
+ * the task to do first and can still open every step. AI setup keeps it open.
+ */
+export function initialChecklistOpen(mode: ChecklistTaskListMode, wideScreen: boolean): boolean {
+  if (mode === 'hidden')
+    return false
+  return mode === 'open' || wideScreen
+}
+
+/**
  * Whether the user last chose their AI agent or the manual way for a setup task (the
  * onboarding choice, add app, bundle upload, channel creation, native build). Every choice
  * proposes the AI agent first unless the user last picked the manual way.
