@@ -24,10 +24,10 @@ export function isBeginTransactionSql(sql: unknown): boolean {
 }
 
 /** Mirrors production withPgTransaction (checkout, BEGIN, COMMIT or ROLLBACK, release) on the doubles above. */
-export async function withPgTransaction<T>(pg: { connect: () => Promise<unknown> }, run: (client: any) => Promise<T>): Promise<T> {
+export async function withPgTransaction<T>(pg: { connect: () => Promise<unknown> }, run: (client: any) => Promise<T>, options?: { appendSql?: string }): Promise<T> {
   const client = await checkoutPgClient(pg) as { query: (queryText: string) => Promise<unknown>, release?: (error?: boolean | Error) => void }
   try {
-    await client.query('BEGIN')
+    await client.query(options?.appendSql ? `BEGIN; ${options.appendSql}` : 'BEGIN')
     const result = await run(client)
     await client.query('COMMIT')
     return result

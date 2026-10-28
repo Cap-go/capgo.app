@@ -113,12 +113,42 @@ export async function queryJsonOne<T>(client: QueryClient, text: string, values:
   return (await queryJson<T>(client, text, values))[0] ?? null
 }
 
-/** Runs `run` in a transaction on `pg` with the principal's RLS context applied. */
+/**
+ * Quotes `value` as a Postgres string literal, like node-postgres `escapeLiteral`: quotes and
+ * backslashes are doubled, and an `E` prefix is added when a backslash is present so the literal
+ * means the same with any `standard_conforming_strings`. NUL is rejected because the simple query
+ * protocol would cut the statement there and Postgres text cannot hold it anyway.
+ */
+export function quotePgLiteral(value: string): string {
+  if (value.includes('\0'))
+    throw new Error('Postgres literal cannot contain NUL')
+  const quoted = `'${value.replaceAll('\'', '\'\'').replaceAll('\\', '\\\\')}'`
+  return value.includes('\\') ? ` E${quoted}` : quoted
+}
+
+/**
+ * `applyRlsContext` as literal SQL, so it can ride on the BEGIN round trip of `withPgTransaction`
+ * (simple query protocol, no bind parameters). Every value is quoted with `quotePgLiteral`.
+ */
+export function rlsContextSql(principal: RlsPrincipal): string {
+  const settings = rlsContextSettings(principal)
+  const parts = [
+    `pg_catalog.set_config('request.jwt.claims', ${quotePgLiteral(settings.claims)}, true)`,
+    `pg_catalog.set_config('request.jwt.claim.sub', ${quotePgLiteral(settings.sub)}, true)`,
+    `pg_catalog.set_config('request.jwt.claim.role', ${quotePgLiteral(settings.claimRole)}, true)`,
+    `pg_catalog.set_config('request.headers', ${quotePgLiteral(settings.headers)}, true)`,
+  ]
+  if (settings.role)
+    parts.push(`pg_catalog.set_config('role', ${quotePgLiteral(settings.role)}, true)`)
+  return `SELECT ${parts.join(', ')}`
+}
+
+/**
+ * Runs `run` in a transaction on `pg` with the principal's RLS context applied. The context is
+ * sent with BEGIN in one round trip, so a ported call costs BEGIN, its queries and COMMIT.
+ */
 export function withRlsTransaction<T>(pg: PgClient, principal: RlsPrincipal, run: (client: PgQueryClient) => Promise<T>): Promise<T> {
-  return withPgTransaction(pg, async (client) => {
-    await applyRlsContext(client, principal)
-    return run(client)
-  })
+  return withPgTransaction(pg, run, { appendSql: rlsContextSql(principal) })
 }
 
 /**

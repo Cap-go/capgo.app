@@ -122,11 +122,14 @@ describe('channel delete RBAC guard', () => {
     })
     expect(channelDeleteCalls()).toHaveLength(1)
     expect(channelDeleteCalls()[0][1]).toEqual([42, 'com.example.app', 'production'])
-    // Both reads run as the API key, like the supabaseApikey client did.
+    // Both reads run as the API key, like the supabaseApikey client did: the context rides on BEGIN.
     const contextCalls = queryMock.mock.calls.filter(([text]) => String(text).includes('request.headers'))
     expect(contextCalls).toHaveLength(2)
-    for (const [, values] of contextCalls)
-      expect(values).toEqual([JSON.stringify({ role: 'anon' }), '', 'anon', JSON.stringify({ capgkey: 'test-apikey' }), 'anon'])
+    for (const [text] of contextCalls) {
+      expect(text).toMatch(/^BEGIN; SELECT /)
+      expect(text).toContain(`set_config('request.headers', '${JSON.stringify({ capgkey: 'test-apikey' })}', true)`)
+      expect(text).toContain('set_config(\'role\', \'anon\', true)')
+    }
   })
 
   it('fails when channel deletion affects no rows', async () => {
