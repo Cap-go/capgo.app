@@ -69,4 +69,16 @@ describe('statistics db lanes', () => {
     expect(clients).toHaveLength(1)
     expect(closeClientMock).toHaveBeenCalledTimes(1)
   })
+
+  it('opens a fresh connection after one fails to connect', async () => {
+    getPgClientMock.mockRejectedValueOnce(new Error('connect failed'))
+    const c = {} as any
+    await statisticsTestUtils.withStatsDb(c, { kind: 'service' }, async (db) => {
+      await expect(db('SELECT 1', [])).rejects.toThrow('connect failed')
+      await expect(db('SELECT 2', [])).resolves.toEqual([{ ok: true }])
+    })
+
+    expect(getPgClientMock).toHaveBeenCalledTimes(2)
+    expect(closeClientMock).toHaveBeenCalledTimes(1)
+  })
 })

@@ -215,8 +215,15 @@ function createStatsDb(c: Context, principal: RlsPrincipal) {
   const db: StatsDb = <T>(text: string, values: unknown[]) => {
     let lane = lanes.find(l => l.pending === 0)
     if (!lane && lanes.length < STATS_DB_LANES) {
-      lane = { pg: getPgClient(c), tail: Promise.resolve(), pending: 0 }
-      lanes.push(lane)
+      const created = { pg: getPgClient(c), tail: Promise.resolve() as Promise<unknown>, pending: 0 }
+      // A lane whose connection failed is dropped, so a retry opens a fresh one.
+      created.pg.catch(() => {
+        const index = lanes.indexOf(created)
+        if (index >= 0)
+          lanes.splice(index, 1)
+      })
+      lanes.push(created)
+      lane = created
     }
     lane ??= lanes.reduce((a, b) => (b.pending < a.pending ? b : a))
     const target = lane
