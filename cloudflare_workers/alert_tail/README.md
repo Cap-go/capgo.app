@@ -24,7 +24,7 @@ If either secret is missing, the tail handler no-ops.
 bun run deploy:cloudflare:alert_tail:prod
 ```
 
-Deploy the tail worker before redeploying producers that reference it in `tail_consumers`.
+Deploy the tail worker (includes the `alert-throttle-v1` Durable Object migration) before redeploying producers that reference it in `tail_consumers`.
 
 ## Payload
 
