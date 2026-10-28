@@ -14,10 +14,18 @@ load_replica_target
 load_source
 discover_subscription "capgo_google_$(replica_region_name)"
 
+# ALTER SUBSCRIPTION only parses the string; it does not connect. Log in with
+# the same credentials first so a stale password in .env never replaces a
+# working one.
+echo "==> Checking the source login..."
+psql-17 "$SOURCE_DB_URL" -v ON_ERROR_STOP=1 -tAc 'SELECT 1' >/dev/null
+
 SAFE_CONNECTION_STRING="$(sql_literal_escape "$SOURCE_CONNECTION_STRING")"
 echo "==> Updating connection of ${REPLICA_SUBSCRIPTION_NAME}..."
-psql-17 "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 \
-  -c "ALTER SUBSCRIPTION ${REPLICA_SUBSCRIPTION_NAME} CONNECTION '${SAFE_CONNECTION_STRING}';"
+# Through stdin: the password never appears in process arguments.
+psql-17 "$REPLICA_TARGET_DB_URL" -v ON_ERROR_STOP=1 <<SQL
+ALTER SUBSCRIPTION ${REPLICA_SUBSCRIPTION_NAME} CONNECTION '${SAFE_CONNECTION_STRING}';
+SQL
 psql-17 "$REPLICA_TARGET_DB_URL" -P pager=off -c "
   SELECT c.relname, r.srsubstate
   FROM pg_subscription_rel r JOIN pg_class c ON c.oid = r.srrelid

@@ -15,8 +15,8 @@
 // repair waits until the subscriber has applied that position before
 // re-reading the replica. A row still missing after that was committed before
 // the recorded position, so the stream will never deliver it: inserting it
-// cannot collide with a later streamed INSERT. Fixes commit in batches of
-// BATCH keys; readers never see an empty table.
+// cannot collide with a later streamed INSERT. Each table's fixes commit in
+// one transaction; readers never see an empty table.
 //
 // Dry run by default. Usage (via read_replicate/replicate_repair.sh):
 //   bun run readreplicate:repair [--apply] [--tables a,b] [--skip a,b]
@@ -29,7 +29,7 @@ const DEFAULT_SKIP = ['delta_files', 'version_files']
 const BATCH = 1000
 const CATCH_UP_TIMEOUT_MS = 120_000
 
-interface KeyColumn { name: string, type: string, collatable: boolean }
+interface KeyColumn { name: string, type: string }
 interface TableInfo { table: string, columns: string[], pk: KeyColumn[] }
 // Primary-key values as text, in key order.
 type Key = string[]
@@ -68,7 +68,8 @@ export function connectionConfig(url: string): ClientConfig {
     const equals = pair.indexOf('=')
     return [pair.slice(0, equals), decode(pair.slice(equals + 1))] as const
   }))
-  const sslmode = params.get('sslmode') ?? 'prefer'
+  // libpq treats sslrootcert=system without sslmode as verify-full.
+  const sslmode = params.get('sslmode') ?? (params.get('sslrootcert') === 'system' ? 'verify-full' : 'prefer')
   return {
     user: decode(colon >= 0 ? credentials.slice(0, colon) : credentials),
     password: colon >= 0 ? decode(credentials.slice(colon + 1)) : undefined,
@@ -85,9 +86,15 @@ async function connect(url: string | undefined, label: string): Promise<Client> 
     throw new Error(`${label} URL is not set`)
   const client = new Client({ ...connectionConfig(url), application_name: 'capgo_replica_repair' })
   await client.connect()
-  // Same text output on both sides, so row hashes compare.
-  await client.query(`SET TimeZone = 'UTC'; SET DateStyle = 'ISO, YMD'; SET IntervalStyle = 'postgres';
-    SET extra_float_digits = 1; SET bytea_output = 'hex'; SET statement_timeout = 0`)
+  try {
+    // Same text output on both sides, so row hashes compare.
+    await client.query(`SET TimeZone = 'UTC'; SET DateStyle = 'ISO, YMD'; SET IntervalStyle = 'postgres';
+      SET extra_float_digits = 1; SET bytea_output = 'hex'; SET statement_timeout = 0`)
+  }
+  catch (error) {
+    await client.end().catch(() => {})
+    throw error
+  }
   return client
 }
 
@@ -102,9 +109,11 @@ async function columns(client: Client, table: string): Promise<string[]> {
 
 async function tableInfo(source: Client, replica: Client, table: string): Promise<TableInfo> {
   const replicaColumns = new Set(await columns(replica, table))
-  const shared = (await columns(source, table)).filter(column => replicaColumns.has(column)).sort()
-  const pk = await source.query<{ name: string, type: string, collatable: boolean }>(
-    `SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type, a.attcollation <> 0 AS collatable
+  const shared = (await columns(source, table))
+    .filter(column => replicaColumns.has(column))
+    .sort((a, b) => a.localeCompare(b))
+  const pk = await source.query<KeyColumn>(
+    `SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
      FROM pg_catalog.pg_index i
      JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
      WHERE i.indrelid = $1::regclass AND i.indisprimary
@@ -120,42 +129,61 @@ function id(client: Client, name: string) {
   return client.escapeIdentifier(name)
 }
 
-
-function selectList(client: Client, info: TableInfo) {
-  const key = `ARRAY[${info.pk.map(column => `${id(client, column.name)}::text`).join(', ')}]`
-  const row = `ROW(${info.columns.map(column => id(client, column)).join(', ')})::text`
-  return `${key} AS k, md5(${row}) AS h`
+function ids(client: Client, names: string[], prefix = '') {
+  return names.map(name => prefix + id(client, name)).join(', ')
 }
 
+function pkNames(info: TableInfo) {
+  return info.pk.map(column => column.name)
+}
 
+function tableSql(client: Client, info: TableInfo) {
+  return `public.${id(client, info.table)}`
+}
 
+function rowTextSql(client: Client, names: string[]) {
+  return `ROW(${ids(client, names)})::text`
+}
+
+function selectList(client: Client, info: TableInfo) {
+  const keyText = pkNames(info).map(name => `${id(client, name)}::text`).join(', ')
+  return `ARRAY[${keyText}] AS k, md5(${rowTextSql(client, info.columns)}) AS h`
+}
 
 // Rows for an explicit key list, joined through the primary key index.
 function keyJoin(client: Client, info: TableInfo, alias: string) {
   const definition = info.pk.map(column => `${id(client, column.name)} ${column.type}`).join(', ')
-  const columnsList = info.pk.map(column => `${alias}.${id(client, column.name)}`).join(', ')
-  const keyColumns = info.pk.map(column => `keys.${id(client, column.name)}`).join(', ')
-  return `(${columnsList}) IN (SELECT ${keyColumns} FROM json_to_recordset($1::json) AS keys (${definition}))`
+  const tableKeys = ids(client, pkNames(info), `${alias}.`)
+  const listKeys = ids(client, pkNames(info), 'keys.')
+  return `(${tableKeys}) IN (SELECT ${listKeys} FROM json_to_recordset($1::json) AS keys (${definition}))`
 }
 
 function keysJson(info: TableInfo, keys: Key[]) {
   return JSON.stringify(keys.map(key => Object.fromEntries(info.pk.map((column, index) => [column.name, key[index]]))))
 }
 
-async function rowsFor(client: Client, info: TableInfo, keys: Key[]): Promise<Map<string, string>> {
-  const found = new Map<string, string>()
-  for (let offset = 0; offset < keys.length; offset += BATCH) {
-    const result = await client.query<Row>(
-      `SELECT ${selectList(client, info)} FROM public.${id(client, info.table)} AS t WHERE ${keyJoin(client, info, 't')}`,
-      [keysJson(info, keys.slice(offset, offset + BATCH))],
-    )
-    for (const row of result.rows)
-      found.set(JSON.stringify(row.k), row.h)
-  }
-  return found
+function batches<T>(items: T[]): T[][] {
+  const result: T[][] = []
+  for (let offset = 0; offset < items.length; offset += BATCH)
+    result.push(items.slice(offset, offset + BATCH))
+  return result
 }
 
-function compare(source: Row[], replica: Row[], differing: Key[]) {
+async function rowsForBatch(client: Client, info: TableInfo, keys: Key[]): Promise<Row[]> {
+  const result = await client.query<Row>(
+    `SELECT ${selectList(client, info)} FROM ${tableSql(client, info)} AS t WHERE ${keyJoin(client, info, 't')}`,
+    [keysJson(info, keys)],
+  )
+  return result.rows
+}
+
+async function rowsFor(client: Client, info: TableInfo, keys: Key[]): Promise<Map<string, string>> {
+  const pages = await Promise.all(batches(keys).map(batch => rowsForBatch(client, info, batch)))
+  return new Map(pages.flat().map(row => [JSON.stringify(row.k), row.h]))
+}
+
+function compare(source: Row[], replica: Row[]): Key[] {
+  const differing: Key[] = []
   const replicaHashes = new Map(replica.map(row => [JSON.stringify(row.k), row.h]))
   for (const row of source) {
     const key = JSON.stringify(row.k)
@@ -165,22 +193,23 @@ function compare(source: Row[], replica: Row[], differing: Key[]) {
   }
   for (const key of replicaHashes.keys())
     differing.push(JSON.parse(key) as Key)
+  return differing
 }
 
 const BUCKETS = 4096
 
 // Same bucket for a key on both servers: derived from md5 of its text.
 function bucketSql(client: Client, info: TableInfo) {
-  const key = `ROW(${info.pk.map(column => id(client, column.name)).join(', ')})::text`
-  return `(('x' || substr(md5(${key}), 1, 8))::bit(32)::bigint % ${BUCKETS})::int`
+  const keyHash = `md5(${rowTextSql(client, pkNames(info))})`
+  return `(('x' || substr(${keyHash}, 1, 8))::bit(32)::bigint % ${BUCKETS})::int`
 }
 
 // One sequential scan: row count and an order-independent checksum per bucket.
 async function bucketSums(client: Client, info: TableInfo): Promise<Map<number, string>> {
-  const row = `ROW(${info.columns.map(column => id(client, column)).join(', ')})::text`
+  const rowHash = `md5(${rowTextSql(client, info.columns)})`
   const result = await client.query<{ b: number, n: string, s: string }>(
     `SELECT b, count(*)::text AS n, sum(('x' || substr(h, 1, 15))::bit(60)::bigint::numeric)::text AS s
-     FROM (SELECT ${bucketSql(client, info)} AS b, md5(${row}) AS h FROM public.${id(client, info.table)}) AS rows
+     FROM (SELECT ${bucketSql(client, info)} AS b, ${rowHash} AS h FROM ${tableSql(client, info)}) AS rows
      GROUP BY b`,
   )
   return new Map(result.rows.map(r => [r.b, `${r.n}:${r.s}`]))
@@ -188,7 +217,7 @@ async function bucketSums(client: Client, info: TableInfo): Promise<Map<number, 
 
 async function bucketRows(client: Client, info: TableInfo, buckets: number[]): Promise<Row[]> {
   const result = await client.query<Row>(
-    `SELECT ${selectList(client, info)} FROM public.${id(client, info.table)} WHERE ${bucketSql(client, info)} = ANY ($1::int[])`,
+    `SELECT ${selectList(client, info)} FROM ${tableSql(client, info)} WHERE ${bucketSql(client, info)} = ANY ($1::int[])`,
     [buckets],
   )
   return result.rows
@@ -212,27 +241,92 @@ async function differingKeys(source: Client, replica: Client, info: TableInfo): 
     return []
   const list = [...buckets]
   const [sourceRows, replicaRows] = await Promise.all([bucketRows(source, info, list), bucketRows(replica, info, list)])
-  const differing: Key[] = []
-  compare(sourceRows, replicaRows, differing)
-  return differing
+  return compare(sourceRows, replicaRows)
+}
+
+async function subscriberCaughtUp(source: Client, slot: string, lsn: string) {
+  const state = await source.query<{ caught_up: boolean | null }>(
+    'SELECT confirmed_flush_lsn >= $1::pg_lsn AS caught_up FROM pg_catalog.pg_replication_slots WHERE slot_name = $2',
+    [lsn, slot],
+  )
+  return state.rows[0]?.caught_up === true
 }
 
 async function waitForSubscriber(source: Client, replica: Client, lsn: string) {
-  const subscription = await replica.query<{ slot: string }>(`SELECT subslotname AS slot FROM pg_catalog.pg_subscription WHERE subenabled LIMIT 1`)
+  const subscription = await replica.query<{ slot: string }>('SELECT subslotname AS slot FROM pg_catalog.pg_subscription WHERE subenabled LIMIT 1')
   const slot = subscription.rows[0]?.slot
   if (!slot)
     throw new Error('no enabled subscription on the replica')
   const deadline = Date.now() + CATCH_UP_TIMEOUT_MS
-  for (;;) {
-    const state = await source.query<{ caught_up: boolean | null }>(
-      `SELECT confirmed_flush_lsn >= $1::pg_lsn AS caught_up FROM pg_catalog.pg_replication_slots WHERE slot_name = $2`,
-      [lsn, slot],
-    )
-    if (state.rows[0]?.caught_up)
-      return
+  while (!(await subscriberCaughtUp(source, slot, lsn))) {
     if (Date.now() > deadline)
       throw new Error(`subscriber did not apply ${lsn} within ${CATCH_UP_TIMEOUT_MS / 1000} s`)
     await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+}
+
+// Classify candidates after the subscriber has applied everything the source
+// had committed when it was read: what still differs is what the stream lost.
+async function lostChanges(source: Client, replica: Client, info: TableInfo, candidates: Key[]) {
+  const sourceHashes = await rowsFor(source, info, candidates)
+  if (!unsubscribed) {
+    const position = await source.query<{ lsn: string }>('SELECT pg_catalog.pg_current_wal_lsn()::text AS lsn')
+    await waitForSubscriber(source, replica, position.rows[0].lsn)
+  }
+  const replicaHashes = await rowsFor(replica, info, candidates)
+  const replace: Key[] = []
+  const remove: Key[] = []
+  for (const key of candidates) {
+    const text = JSON.stringify(key)
+    const sourceHash = sourceHashes.get(text)
+    if (sourceHash === undefined && replicaHashes.has(text))
+      remove.push(key)
+    else if (sourceHash !== undefined && replicaHashes.get(text) !== sourceHash)
+      replace.push(key)
+  }
+  return { replace, remove }
+}
+
+// Current source rows as JSON text: parsed into JavaScript, numeric and bigint
+// values would lose precision. Keys deleted since are absent.
+async function sourceRowsJson(source: Client, info: TableInfo, keys: Key[]): Promise<string | null> {
+  const result = await source.query<{ rows: string | null }>(
+    `SELECT json_agg(t)::text AS rows FROM (SELECT ${ids(source, info.columns, 't.')}
+     FROM ${tableSql(source, info)} AS t WHERE ${keyJoin(source, info, 't')}) AS t`,
+    [keysJson(info, keys)],
+  )
+  return result.rows[0]?.rows ?? null
+}
+
+// One transaction per table. Stale versions of replaced rows are deleted
+// before the current ones are inserted, so a unique value moving between two
+// rows (for example the public channel of an app) is released first.
+// Readers keep seeing the old rows until COMMIT.
+async function writeFixes(source: Client, replica: Client, info: TableInfo, replace: Key[], remove: Key[]) {
+  // Still absent on the source right now: a key re-inserted meanwhile is left
+  // to the stream.
+  const present = await rowsFor(source, info, remove)
+  const gone = remove.filter(key => !present.has(JSON.stringify(key)))
+  const rowsJson = await Promise.all(batches(replace).map(batch => sourceRowsJson(source, info, batch)))
+  const target = tableSql(replica, info)
+  const columnList = ids(replica, info.columns)
+
+  await replica.query('BEGIN')
+  try {
+    for (const batch of batches([...gone, ...replace]))
+      await replica.query(`DELETE FROM ${target} AS t WHERE ${keyJoin(replica, info, 't')}`, [keysJson(info, batch)])
+    for (const json of rowsJson.filter(Boolean)) {
+      await replica.query(
+        `INSERT INTO ${target} (${columnList}) OVERRIDING SYSTEM VALUE
+         SELECT ${columnList} FROM json_populate_recordset(NULL::${target}, $1::json)`,
+        [json],
+      )
+    }
+    await replica.query('COMMIT')
+  }
+  catch (error) {
+    await replica.query('ROLLBACK')
+    throw error
   }
 }
 
@@ -243,70 +337,14 @@ async function repair(source: Client, replica: Client, table: string, apply: boo
     console.log(`[${table}] in sync`)
     return
   }
-
-  // Source first, then its WAL position: every row it returned was committed
-  // before that position. Once the subscriber has applied it, whatever still
-  // differs is a change the stream lost.
-  const sourceHashes = await rowsFor(source, info, candidates)
-  if (!unsubscribed) {
-    const position = await source.query<{ lsn: string }>('SELECT pg_catalog.pg_current_wal_lsn()::text AS lsn')
-    await waitForSubscriber(source, replica, position.rows[0].lsn)
-  }
-  const replicaHashes = await rowsFor(replica, info, candidates)
-  const upsert: Key[] = []
-  const remove: Key[] = []
-  for (const key of candidates) {
-    const text = JSON.stringify(key)
-    const sourceHash = sourceHashes.get(text)
-    if (sourceHash === undefined) {
-      if (replicaHashes.has(text))
-        remove.push(key)
-    }
-    else if (replicaHashes.get(text) !== sourceHash) {
-      upsert.push(key)
-    }
-  }
-  console.log(`[${table}] ${upsert.length} rows to insert or overwrite, ${remove.length} rows to delete${apply ? '' : ' (dry run)'}`)
-  if (!apply)
+  const { replace, remove } = await lostChanges(source, replica, info, candidates)
+  const mode = apply ? '' : ' (dry run)'
+  console.log(`[${table}] ${replace.length} rows to insert or overwrite, ${remove.length} rows to delete${mode}`)
+  if (!apply || (!replace.length && !remove.length))
     return
 
-  const quotedTable = `public.${id(replica, table)}`
-  const columnList = info.columns.map(column => id(replica, column)).join(', ')
-  const pkList = info.pk.map(column => id(replica, column.name)).join(', ')
-  const updates = info.columns.filter(column => !info.pk.some(key => key.name === column))
-  const onConflict = updates.length
-    ? `DO UPDATE SET ${updates.map(column => `${id(replica, column)} = EXCLUDED.${id(replica, column)}`).join(', ')}`
-    : 'DO NOTHING'
-
-  for (let offset = 0; offset < remove.length; offset += BATCH) {
-    const keys = remove.slice(offset, offset + BATCH)
-    // Still absent on the source right now: a key re-inserted meanwhile is
-    // left to the stream.
-    const present = await rowsFor(source, info, keys)
-    const gone = keys.filter(key => !present.has(JSON.stringify(key)))
-    if (gone.length)
-      await replica.query(`DELETE FROM ${quotedTable} AS t WHERE ${keyJoin(replica, info, 't')}`, [keysJson(info, gone)])
-  }
-  for (let offset = 0; offset < upsert.length; offset += BATCH) {
-    const keys = upsert.slice(offset, offset + BATCH)
-    // Current source rows, as text: parsed into JavaScript, numeric and bigint
-    // values would lose precision. Keys deleted since are skipped.
-    const rows = await source.query<{ rows: string | null }>(
-      `SELECT json_agg(t)::text AS rows FROM (SELECT ${info.columns.map(column => `t.${id(source, column)}`).join(', ')}
-       FROM public.${id(source, table)} AS t WHERE ${keyJoin(source, info, 't')}) AS t`,
-      [keysJson(info, keys)],
-    )
-    if (!rows.rows[0]?.rows)
-      continue
-    await replica.query(
-      `INSERT INTO ${quotedTable} (${columnList}) OVERRIDING SYSTEM VALUE
-       SELECT ${columnList} FROM json_populate_recordset(NULL::${quotedTable}, $1::json)
-       ON CONFLICT (${pkList}) ${onConflict}`,
-      [rows.rows[0].rows],
-    )
-  }
-
-  const touched = [...upsert, ...remove]
+  await writeFixes(source, replica, info, replace, remove)
+  const touched = [...replace, ...remove]
   const [sourceAfter, replicaAfter] = await Promise.all([rowsFor(source, info, touched), rowsFor(replica, info, touched)])
   const still = touched.filter(key => sourceAfter.get(JSON.stringify(key)) !== replicaAfter.get(JSON.stringify(key))).length
   console.log(`[${table}] repaired; ${still} rows still differ (changed during the repair; rerun to settle)`)
@@ -316,16 +354,17 @@ const CONCURRENCY = 6
 
 // Each table gets its own pair of connections so tables repair in parallel.
 async function repairTable(table: string, apply: boolean) {
-  const source = await connect(process.env.SOURCE_DB_URL, 'SOURCE_DB_URL')
-  const replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL')
   const started = Date.now()
+  let source: Client | undefined
+  let replica: Client | undefined
   try {
+    source = await connect(process.env.SOURCE_DB_URL, 'SOURCE_DB_URL')
+    replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL')
     await repair(source, replica, table, apply)
     console.log(`[${table}] done in ${((Date.now() - started) / 1000).toFixed(1)} s`)
   }
   finally {
-    await source.end()
-    await replica.end()
+    await Promise.all([source?.end(), replica?.end()])
   }
 }
 
@@ -361,7 +400,8 @@ async function main() {
         })
       }
     }))
-    console.log(`All tables in ${((Date.now() - started) / 1000).toFixed(1)} s${failures.length ? `; failed: ${failures.join(', ')}` : ''}`)
+    const failed = failures.length ? `; failed: ${failures.join(', ')}` : ''
+    console.log(`All tables in ${((Date.now() - started) / 1000).toFixed(1)} s${failed}`)
     if (failures.length)
       process.exitCode = 1
   }
