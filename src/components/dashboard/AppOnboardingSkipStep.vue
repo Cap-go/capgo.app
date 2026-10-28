@@ -40,23 +40,21 @@ function submit() {
 </script>
 
 <template>
-  <!-- Do the step is the main panel content; Skip is a clear secondary choice that asks why. -->
-  <div class="mt-6 border-t border-slate-200 pt-5 dark:border-white/10" :data-test="`${testId}-missed-step`">
-    <template v-if="!asking">
-      <p class="text-sm leading-6 text-slate-600 dark:text-slate-400">
-        {{ t('setup-checklist-skip-prompt') }}
-      </p>
+  <!-- Do the step is the main panel content; Skip is a quiet escape hatch that asks why. -->
+  <div class="mt-2" :data-test="`${testId}-missed-step`">
+    <p v-if="!asking" class="flex flex-wrap items-center gap-x-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+      <span>{{ t('setup-checklist-skip-prompt') }}</span>
       <button
         type="button"
-        class="d-btn mt-3 h-auto min-h-11 border-slate-300 bg-white px-4 text-slate-800 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-white/5"
+        class="d-btn d-btn-link h-auto min-h-11 rounded-sm border-0 px-0 text-sm font-medium text-slate-700 underline underline-offset-4 shadow-none hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-slate-200 dark:hover:text-white"
         :data-test="`${testId}-skip-step`"
         @click="ask"
       >
         {{ t('setup-checklist-skip-step') }}
       </button>
-    </template>
+    </p>
 
-    <form v-else @submit.prevent="submit">
+    <form v-else class="border-t border-slate-200 pt-5 dark:border-white/10" @submit.prevent="submit">
       <label :for="fieldId" class="block text-sm font-medium text-slate-800 dark:text-slate-200">
         {{ t('setup-checklist-skip-reason-label') }}
       </label>
