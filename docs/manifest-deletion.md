@@ -1,26 +1,18 @@
 # Deleted-version manifest cleanup
 
-`on_version_update` removes the deleted version's `public.manifest` rows without
-checking other versions or touching delta objects in R2. Both shared objects and
-objects with no remaining manifest references stay physically intact. Orphaned
-delta storage therefore accumulates until a separately implemented collector is
-enabled. Row deletions continue to replicate normally. Inventory, notifications,
-upload protocols and queue configuration are unchanged.
+Deleting a version keeps its `version_files` row, so its delta files survive
+the 7-day restore window; delta storage GC reclaims the R2 objects afterwards
+(see [delta storage](delta-storage.md)). `on_version_update` only finalizes the
+version's counters: one short transaction on one write pool sets
+`manifest_count` to 0 and decrements `apps.manifest_bundle_count` once
+(retries cannot double-decrement). An inline `app_versions.manifest` is cleared
+only when the version has a `version_files` row; otherwise it is the only
+reference GC sees, so it stays. Statements have a 15-second timeout and lock
+waits a two-second timeout. There are no per-file connections or network calls.
 
-One write pool runs sequential Drizzle transactions of at most 1,000 rows,
-starting from `idx_manifest_app_version_id_file_hash`. A pass stops after 20
-batches or ten seconds between batches; statements have a five-second timeout
-and lock waits a two-second timeout. Incomplete passes raise the existing cleanup
-error; committed batches survive retries and the existing 15-minute sweeper
-requeues remaining work. Queue reads remain capped at five. A 5,000-file bundle
-needs five deletion transactions, with no per-file connections or network calls.
-
-The last row deletion and version/app counter finalization commit together.
-Retries cannot double-decrement `manifest_bundle_count`, including legacy rows
-whose version count was zero. JSON manifests are cleared during finalization.
 Cleanup and manifest persistence take the existing per-version advisory lock and
 lock the version row. Persistence rechecks deletion while locked, so an upload
-that passed its earlier route check cannot insert into a deleted version.
+that passed its earlier route check cannot add references to a deleted version.
 
 The manifest-file trash/delete/restore system is fully removed, including its
 restore helper and `manifest_trash_restore_pending` table. The migration drops

@@ -39,81 +39,6 @@ export type Database = {
   }
   public: {
     Tables: {
-      r2_inventory_checkpoints: {
-        Row: {
-          bucket_name: string
-          job_name: string
-          partition_key: string
-          accepted_event_floor: string | null
-          checkpoint: Json
-          updated_at: string
-        }
-        Insert: {
-          bucket_name: string
-          job_name: string
-          partition_key?: string
-          accepted_event_floor?: string | null
-          checkpoint?: Json
-          updated_at?: string
-        }
-        Update: {
-          bucket_name?: string
-          job_name?: string
-          partition_key?: string
-          accepted_event_floor?: string | null
-          checkpoint?: Json
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      r2_objects: {
-        Row: {
-          bucket_name: string
-          r2_key: string
-          r2_state: Database["public"]["Enums"]["r2_object_state"]
-          size_bytes: number | null
-          etag: string | null
-          r2_last_modified_at: string | null
-          last_event_at: string | null
-          last_reconciled_at: string | null
-          tombstone_expires_at: string | null
-          cleanup_requested_at: string | null
-          first_seen_at: string
-          updated_at: string
-          revision: number
-        }
-        Insert: {
-          bucket_name: string
-          r2_key: string
-          r2_state: Database["public"]["Enums"]["r2_object_state"]
-          size_bytes?: number | null
-          etag?: string | null
-          r2_last_modified_at?: string | null
-          last_event_at?: string | null
-          last_reconciled_at?: string | null
-          tombstone_expires_at?: string | null
-          cleanup_requested_at?: string | null
-          first_seen_at?: string
-          updated_at?: string
-          revision?: number
-        }
-        Update: {
-          bucket_name?: string
-          r2_key?: string
-          r2_state?: Database["public"]["Enums"]["r2_object_state"]
-          size_bytes?: number | null
-          etag?: string | null
-          r2_last_modified_at?: string | null
-          last_event_at?: string | null
-          last_reconciled_at?: string | null
-          tombstone_expires_at?: string | null
-          cleanup_requested_at?: string | null
-          first_seen_at?: string
-          updated_at?: string
-          revision?: number
-        }
-        Relationships: []
-      }
       apikey_global_permissions: {
         Row: {
           apikey_rbac_id: string
@@ -1464,6 +1389,145 @@ export type Database = {
         }
         Relationships: []
       }
+      delta_files: {
+        Row: {
+          app_id: string
+          created_at: string
+          entry_key: string
+          file_hash: string
+          file_name: string
+          file_size: number
+          id: number
+          path_key: string
+          s3_path: string
+        }
+        Insert: {
+          app_id: string
+          created_at?: string
+          entry_key: string
+          file_hash: string
+          file_name: string
+          file_size?: number
+          id?: number
+          path_key: string
+          s3_path: string
+        }
+        Update: {
+          app_id?: string
+          created_at?: string
+          entry_key?: string
+          file_hash?: string
+          file_name?: string
+          file_size?: number
+          id?: number
+          path_key?: string
+          s3_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_files_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
+      delta_gc_orphan_prefixes: {
+        Row: {
+          app_id: string
+          claimed_until: string | null
+          created_at: string
+          lease_until: string | null
+          list_cursor: string | null
+          org: string
+          prefix: string
+        }
+        Insert: {
+          app_id: string
+          claimed_until?: string | null
+          created_at?: string
+          lease_until?: string | null
+          list_cursor?: string | null
+          org: string
+          prefix: string
+        }
+        Update: {
+          app_id?: string
+          claimed_until?: string | null
+          created_at?: string
+          lease_until?: string | null
+          list_cursor?: string | null
+          org?: string
+          prefix?: string
+        }
+        Relationships: []
+      }
+      delta_gc_state: {
+        Row: {
+          app_id: string
+          known_orgs: string[]
+          last_error: string | null
+          last_run_at: string | null
+          lease_until: string | null
+          list_cursor: string | null
+          list_org: string | null
+          next_run_at: string
+          pending_orgs: string[] | null
+        }
+        Insert: {
+          app_id: string
+          known_orgs?: string[]
+          last_error?: string | null
+          last_run_at?: string | null
+          lease_until?: string | null
+          list_cursor?: string | null
+          list_org?: string | null
+          next_run_at?: string
+          pending_orgs?: string[] | null
+        }
+        Update: {
+          app_id?: string
+          known_orgs?: string[]
+          last_error?: string | null
+          last_run_at?: string | null
+          lease_until?: string | null
+          list_cursor?: string | null
+          list_org?: string | null
+          next_run_at?: string
+          pending_orgs?: string[] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_gc_state_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
+      delta_gc_unsettled_deletes: {
+        Row: {
+          app_id: string
+          checks: number
+          path: string
+          recorded_at: string
+        }
+        Insert: {
+          app_id: string
+          checks?: number
+          path: string
+          recorded_at?: string
+        }
+        Update: {
+          app_id?: string
+          checks?: number
+          path?: string
+          recorded_at?: string
+        }
+        Relationships: []
+      }
       deploy_history: {
         Row: {
           app_id: string
@@ -1696,36 +1760,48 @@ export type Database = {
           },
         ]
       }
-      manifest: {
+      manifest_per_version: {
         Row: {
-          app_version_id: number
-          file_hash: string
-          file_name: string
-          file_size: number | null
-          id: number
-          s3_path: string
+          created_at: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          manifest_size: string | null
+          manifest_size_payload_hash: string | null
+          payload_hash: string
+          size_receipts_provided: boolean
+          total_file_size: number
+          version_id: number
         }
         Insert: {
-          app_version_id: number
-          file_hash: string
-          file_name: string
-          file_size?: number | null
-          id?: number
-          s3_path: string
+          created_at?: string
+          entry_count: number
+          format_version: number
+          manifest: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
+          payload_hash: string
+          size_receipts_provided?: boolean
+          total_file_size: number
+          version_id: number
         }
         Update: {
-          app_version_id?: number
-          file_hash?: string
-          file_name?: string
-          file_size?: number | null
-          id?: number
-          s3_path?: string
+          created_at?: string
+          entry_count?: number
+          format_version?: number
+          manifest?: string
+          manifest_size?: string | null
+          manifest_size_payload_hash?: string | null
+          payload_hash?: string
+          size_receipts_provided?: boolean
+          total_file_size?: number
+          version_id?: number
         }
         Relationships: [
           {
-            foreignKeyName: "manifest_app_version_id_fkey"
-            columns: ["app_version_id"]
-            isOneToOne: false
+            foreignKeyName: "manifest_per_version_version_id_fkey"
+            columns: ["version_id"]
+            isOneToOne: true
             referencedRelation: "app_versions"
             referencedColumns: ["id"]
           },
@@ -3221,6 +3297,32 @@ export type Database = {
         }
         Relationships: []
       }
+      version_files: {
+        Row: {
+          app_version_id: number
+          created_at: string
+          file_ids: number[]
+        }
+        Insert: {
+          app_version_id: number
+          created_at?: string
+          file_ids: number[]
+        }
+        Update: {
+          app_version_id?: number
+          created_at?: string
+          file_ids?: number[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       version_meta: {
         Row: {
           app_id: string
@@ -3406,6 +3508,25 @@ export type Database = {
       }
     }
     Views: {
+      manifest: {
+        Row: {
+          app_version_id: number | null
+          file_hash: string | null
+          file_name: string | null
+          file_size: number | null
+          id: number | null
+          s3_path: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       usage_credit_balances: {
         Row: {
           available_credits: number | null
@@ -3444,6 +3565,25 @@ export type Database = {
             | null
         }
         Relationships: []
+      }
+      version_manifest: {
+        Row: {
+          app_version_id: number | null
+          file_hash: string | null
+          file_name: string | null
+          file_size: number | null
+          id: number | null
+          s3_path: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
@@ -3732,6 +3872,94 @@ export type Database = {
         Returns: string
       }
       delete_user: { Args: never; Returns: undefined }
+      delta_app_has_unconverted_references: {
+        Args: { p_app_id: string }
+        Returns: boolean
+      }
+      delta_app_has_upload_in_progress: {
+        Args: { p_app_id: string }
+        Returns: boolean
+      }
+      delta_canonical_path: { Args: { p_s3_path: string }; Returns: string }
+      delta_entry_key: {
+        Args: { p_file_hash: string; p_file_name: string; p_s3_path: string }
+        Returns: string
+      }
+      delta_gc_begin_delete: {
+        Args: { p_app_id: string; p_lease_ms?: number; p_paths: string[] }
+        Returns: string[]
+      }
+      delta_gc_begin_orphan_delete: {
+        Args: { p_lease_ms?: number; p_paths: string[]; p_prefix: string }
+        Returns: string[]
+      }
+      delta_gc_claim: {
+        Args: { p_limit?: number }
+        Returns: {
+          app_id: string
+          list_cursor: string
+          list_org: string
+        }[]
+      }
+      delta_gc_claim_orphan_prefixes: {
+        Args: { p_limit?: number }
+        Returns: {
+          list_cursor: string
+          prefix: string
+        }[]
+      }
+      delta_gc_claim_unsettled: {
+        Args: { p_limit?: number }
+        Returns: {
+          path: string
+          referenced: boolean
+        }[]
+      }
+      delta_gc_confirm_deleted: {
+        Args: { p_paths: string[] }
+        Returns: undefined
+      }
+      delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
+      delta_gc_end_orphan_delete: {
+        Args: { p_prefix: string }
+        Returns: undefined
+      }
+      delta_gc_finish: {
+        Args: {
+          p_app_id: string
+          p_error?: string
+          p_list_cursor: string
+          p_page_done?: boolean
+        }
+        Returns: undefined
+      }
+      delta_gc_finish_orphan_prefix: {
+        Args: { p_list_cursor: string; p_page_done?: boolean; p_prefix: string }
+        Returns: undefined
+      }
+      delta_gc_lock_key: { Args: { p_app_id: string }; Returns: number }
+      delta_gc_settle: {
+        Args: { p_path: string; p_referenced?: boolean }
+        Returns: undefined
+      }
+      delta_gc_unreferenced_paths: {
+        Args: { p_paths: string[] }
+        Returns: string[]
+      }
+      delta_path_key: { Args: { p_s3_path: string }; Returns: string }
+      delta_storage_gc_enabled: { Args: never; Returns: boolean }
+      delta_storage_setting: {
+        Args: { p_default: boolean; p_name: string }
+        Returns: boolean
+      }
+      delta_version_has_entry: {
+        Args: { p_file_hash: string; p_s3_path: string; p_version_id: number }
+        Returns: boolean
+      }
+      delta_version_keeps_files: {
+        Args: { p_deleted: boolean; p_deleted_at: string; p_updated_at: string }
+        Returns: boolean
+      }
       dismiss_getting_started: { Args: { p_app_id: string }; Returns: Json }
       exist_app: { Args: { appid: string }; Returns: boolean }
       exist_app_v2: { Args: { appid: string }; Returns: boolean }
@@ -5078,7 +5306,6 @@ export type Database = {
       verify_mfa: { Args: never; Returns: boolean }
     }
     Enums: {
-      r2_object_state: "to_be_uploaded" | "present" | "to_be_deleted" | "deleted"
       action_type: "mau" | "storage" | "bandwidth" | "build_time"
       channel_update_package:
         | "all"
@@ -5360,7 +5587,6 @@ export const Constants = {
   },
   public: {
     Enums: {
-      r2_object_state: ["to_be_uploaded", "present", "to_be_deleted", "deleted"],
       action_type: ["mau", "storage", "bandwidth", "build_time"],
       channel_update_package: [
         "all",

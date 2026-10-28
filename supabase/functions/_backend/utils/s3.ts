@@ -569,6 +569,76 @@ async function getObject(c: Context, fileId: string): Promise<Response | null> {
   }
 }
 
+export interface ListedObject { key: string, lastModified: Date }
+
+/** One listing page (at most 1,000 keys) plus the token for the next page. */
+async function listObjectPage(c: Context, prefix: string, continuationToken: string | null, pageSize = 1_000) {
+  const client = initS3(c)
+  const iterator = client.listObjectsGrouped({ prefix, pageSize, maxResults: pageSize, continuationToken: continuationToken ?? undefined })
+  const objects: ListedObject[] = []
+  let result = await iterator.next()
+  while (!result.done) {
+    if (result.value.type === 'Object')
+      objects.push({ key: result.value.key, lastModified: result.value.lastModified })
+    result = await iterator.next()
+  }
+  return { objects, nextToken: result.value ?? null }
+}
+
+/** Server-side copy into the lifecycle trash; the source stays in place. */
+async function copyObjectToTrash(c: Context, fileId: string) {
+  if (fileId.startsWith(R2_TRASH_PREFIX))
+    return true
+  try {
+    await initS3(c).copyObject({ sourceKey: fileId }, getTrashPath(fileId))
+    return true
+  }
+  catch (error) {
+    if (isMissingObjectError(error))
+      return false
+    cloudlogErr({ requestId: c.get('requestId'), message: 'copy R2 object to trash failed', fileId, error: serializeStorageError(error) })
+    return false
+  }
+}
+
+/** Bounded delete: the request is aborted after `timeoutMs`. */
+/**
+ * Restores `fileId` from its lifecycle-trash copy when it is definitely
+ * missing. 'unknown' means presence could not be established; retry later.
+ */
+async function restoreFromTrashIfMissing(c: Context, fileId: string): Promise<'present' | 'restored' | 'unknown' | 'failed'> {
+  const presence = await getObjectPresence(c, fileId)
+  if (presence === 'present')
+    return 'present'
+  if (presence === 'unknown')
+    return 'unknown'
+  try {
+    await initS3(c).copyObject({ sourceKey: getTrashPath(fileId) }, fileId)
+    cloudlog({ requestId: c.get('requestId'), message: 'restored R2 object from trash after unsettled delete', fileId })
+    return 'restored'
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'restore R2 object from trash failed', fileId, error: serializeStorageError(error) })
+    return 'failed'
+  }
+}
+
+async function deleteObjectKey(c: Context, fileId: string, timeoutMs = 10_000) {
+  try {
+    const url = await initS3(c).getPresignedUrl('DELETE', fileId)
+    const response = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(timeoutMs) })
+    await response.body?.cancel()
+    if ((response.status >= 200 && response.status < 300) || response.status === 404)
+      return true
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delete R2 object failed', fileId, status: response.status })
+    return false
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delete R2 object failed', fileId, error: serializeStorageError(error) })
+    return false
+  }
+}
+
 export interface StoredObjectInfo {
   size: number
   etag: string | null
@@ -716,6 +786,10 @@ async function removeObject(c: Context, fileId: string): Promise<void> {
 }
 
 export const s3 = {
+  copyObjectToTrash,
+  restoreFromTrashIfMissing,
+  deleteObjectKey,
+  listObjectPage,
   getSize,
   deleteObject,
   statObject,

@@ -2,7 +2,7 @@ import type { ManifestEntry } from '../supabase/functions/_backend/utils/downloa
 
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { createAppVersions, getBaseData, getSupabaseClient, ORG_ID, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { createAppVersions, getBaseData, getSupabaseClient, ORG_ID, PLUGIN_BASE_URL, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint,   deleteVersionManifests,   insertManifestRows, } from './test-utils.ts'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
 
 const id = randomUUID()
@@ -27,17 +27,14 @@ interface UpdateRes {
 async function insertManifestEntries(appVersionId: number) {
   const supabase = getSupabaseClient()
   // First, delete any existing manifest entries for this version
-  await supabase.from('manifest').delete().eq('app_version_id', appVersionId)
-  // Insert the manifest entry
-  const { error } = await supabase.from('manifest').insert({
+  await deleteVersionManifests([appVersionId])
+  await insertManifestRows([{
     app_version_id: appVersionId,
     file_name: manifestData.file_name,
     s3_path: manifestData.s3_path,
     file_hash: manifestData.file_hash,
     file_size: 100,
-  })
-  if (error)
-    throw new Error(`Failed to insert manifest entry: ${error.message}`)
+  }])
 
   // Update the manifest_count on the version
   await supabase.from('app_versions').update({ manifest_count: 1 }).eq('id', appVersionId)
@@ -52,7 +49,7 @@ async function insertManifestEntries(appVersionId: number) {
 // Helper to remove manifest entries
 async function removeManifestEntries(appVersionId: number) {
   const supabase = getSupabaseClient()
-  await supabase.from('manifest').delete().eq('app_version_id', appVersionId)
+  await deleteVersionManifests([appVersionId])
   await supabase.from('app_versions').update({ manifest_count: 0 }).eq('id', appVersionId)
 }
 
@@ -161,6 +158,29 @@ describe('update manifest scenarios', () => {
     expect(response.status).toBe(200)
     const json = await response.json<UpdateRes>()
     expect(json.manifest).toBeDefined()
+    expect(json.manifest?.[0].file_name).toBe('test')
+    expect(json.manifest?.[0].download_url).toContain('/test_file.html')
+    expect(json.manifest?.[0].file_hash).toBe('1234567890')
+  })
+
+  it('serves a manifest stored only in version_files/delta_files', async () => {
+    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 2000}`
+    const version = await createAppVersions(versionName, APPNAME, {
+      checksum: 'delta-storage-v2',
+      r2_path: getCanonicalAppVersionR2Path(ORG_ID, APPNAME, versionName),
+    })
+    createdVersionIds.push(version.id)
+    await insertManifestEntries(version.id)
+    await setProductionVersion(version.id)
+
+    const baseData = getBaseData(APPNAME)
+    baseData.version_name = '1.1.0'
+    baseData.plugin_version = '6.25.0'
+    const response = await postUpdate(baseData)
+    expect(response.status).toBe(200)
+    const json = await response.json<UpdateRes>()
+    expect(json.version).toBe(version.name)
+    expect(json.manifest).toHaveLength(1)
     expect(json.manifest?.[0].file_name).toBe('test')
     expect(json.manifest?.[0].download_url).toContain('/test_file.html')
     expect(json.manifest?.[0].file_hash).toBe('1234567890')

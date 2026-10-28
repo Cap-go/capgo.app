@@ -445,7 +445,7 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
   ]
 
   const { data: manifestEntries, error: manifestError } = await supabase
-    .from('manifest')
+    .from('version_manifest')
     .select('s3_path, file_name')
     .eq('app_version_id', previewVersionId)
     .in('file_name', possiblePaths)
@@ -456,7 +456,10 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     throw simpleError('file_not_found', 'File not found in bundle', { filePath })
   }
 
-  const manifestEntry = manifestEntries[0]
+  const found = manifestEntries[0]
+  if (!found.file_name || !found.s3_path)
+    throw simpleError('file_not_found', 'File not found in bundle', { filePath })
+  const manifestEntry = { file_name: found.file_name, s3_path: found.s3_path }
   const isBrotli = manifestEntry.file_name.endsWith('.br')
   // For MIME type detection, use the original filename without .br extension
   const actualFileName = isBrotli ? manifestEntry.file_name.slice(0, -3) : manifestEntry.file_name

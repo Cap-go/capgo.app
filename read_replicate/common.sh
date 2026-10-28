@@ -23,9 +23,10 @@ REPLICA_TABLES=(
   "app_versions"
   "channels"
   "channel_devices"
-  "manifest"
+  "delta_files"
   "notifications"
   "onboarding_demo_data"
+  "version_files"
 )
 
 REPLICA_PRIORITY_TABLES=(
@@ -41,7 +42,8 @@ REPLICA_PRIORITY_TABLES=(
 
 REPLICA_DEFERRED_TABLES=(
   "channel_devices"
-  "manifest"
+  "delta_files"
+  "version_files"
 )
 
 ensure_env_file() {

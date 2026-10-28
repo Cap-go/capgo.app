@@ -82,6 +82,7 @@ import { app as canceled_org_retention_alerts } from '../../supabase/functions/_
 import { app as credit_usage_alerts } from '../../supabase/functions/_backend/triggers/credit_usage_alerts.ts'
 import { app as credit_usage_posthog } from '../../supabase/functions/_backend/triggers/credit_usage_posthog.ts'
 import { app as cron_clean_orphan_images } from '../../supabase/functions/_backend/triggers/cron_clean_orphan_images.ts'
+import { app as cron_delta_storage_gc } from '../../supabase/functions/_backend/triggers/cron_delta_storage_gc.ts'
 import { app as cron_clear_versions } from '../../supabase/functions/_backend/triggers/cron_clear_versions.ts'
 import { app as cron_email } from '../../supabase/functions/_backend/triggers/cron_email.ts'
 import { app as cron_onboarding_refresh_apps } from '../../supabase/functions/_backend/triggers/cron_onboarding_refresh_apps.ts'
@@ -115,7 +116,6 @@ import { app as updates_cache_purge } from '../../supabase/functions/_backend/tr
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
 import { BRES, createAllCatch, createHono } from '../../supabase/functions/_backend/utils/hono.ts'
-import { runScheduledManifestPlaceholderExpiry } from '../../supabase/functions/_backend/utils/manifest_placeholder_expiry.ts'
 import { flushQueuedPluginNotifications } from '../../supabase/functions/_backend/utils/plugin_notification_flush.ts'
 import { version } from '../../supabase/functions/_backend/utils/version.ts'
 import { processApiQueueBatch } from './queue.ts'
@@ -227,6 +227,7 @@ appTriggers.route('/ok', ok)
 appTriggers.route('/cron_email', cron_email)
 appTriggers.route('/cron_clear_versions', cron_clear_versions)
 appTriggers.route('/cron_clean_orphan_images', cron_clean_orphan_images)
+appTriggers.route('/cron_delta_storage_gc', cron_delta_storage_gc)
 appTriggers.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appTriggers.route('/canceled_org_retention_alerts', canceled_org_retention_alerts)
 appTriggers.route('/credit_usage_alerts', credit_usage_alerts)
@@ -309,9 +310,6 @@ export default {
     ctx.waitUntil(runScheduledPluginNotificationFlush(env, ctx))
     ctx.waitUntil(ensureQueueDispatcher(env).catch((error) => {
       console.error(JSON.stringify({ event: 'queue_dispatcher_ensure_failed', error: error instanceof Error ? error.message : 'Unknown error' }))
-    }))
-    ctx.waitUntil(runScheduledManifestPlaceholderExpiry(env).catch((error) => {
-      console.error(JSON.stringify({ event: 'r2_manifest_expiry_failed', error: error instanceof Error ? error.message : 'Unknown error' }))
     }))
   },
 }

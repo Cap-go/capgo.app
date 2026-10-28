@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
-import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
+import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint,   deleteVersionManifests,   insertManifestRows, } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_UPDATE = `${APP_NAME}.${id}`
@@ -709,7 +709,7 @@ describe('manifest bundle count gating', () => {
 
   afterEach(async () => {
     if (insertedManifestIds.length > 0) {
-      await supabase.from('manifest').delete().in('id', insertedManifestIds)
+      await deleteVersionManifests([baseVersionId])
       insertedManifestIds.length = 0
     }
     await supabase.from('apps').update({ manifest_bundle_count: 0 }).eq('app_id', APP_NAME_UPDATE)
@@ -718,18 +718,14 @@ describe('manifest bundle count gating', () => {
   async function seedManifestEntry() {
     const suffix = randomUUID().slice(0, 8)
     const fileName = `manifest-test-${suffix}.js`
-    const { data, error } = await supabase
-      .from('manifest')
-      .insert({
-        app_version_id: baseVersionId,
-        file_name: fileName,
-        s3_path: `tests/${fileName}`,
-        file_hash: `hash-${suffix}`,
-      })
-      .select('id')
-      .single()
-    if (error || !data)
-      throw error ?? new Error('Failed to seed manifest entry')
+    const [data] = await insertManifestRows([{
+      app_version_id: baseVersionId,
+      file_name: fileName,
+      s3_path: `tests/${fileName}`,
+      file_hash: `hash-${suffix}`,
+    }])
+    if (!data)
+      throw new Error('Failed to seed manifest entry')
     insertedManifestIds.push(data.id)
     return fileName
   }

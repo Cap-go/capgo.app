@@ -19,7 +19,6 @@ export const CONSOLE_TABLES = new Set([
   'deploy_history',
   'group_members',
   'groups',
-  'manifest',
   'org_users',
   'orgs',
   'role_bindings',
@@ -27,6 +26,7 @@ export const CONSOLE_TABLES = new Set([
   'usage_credit_ledger',
   'user_security',
   'users',
+  'version_manifest',
 ])
 
 export const CONSOLE_RPCS = new Set([

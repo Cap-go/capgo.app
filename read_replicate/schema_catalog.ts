@@ -8,9 +8,10 @@ export const REPLICA_TABLES = [
   'app_versions',
   'channels',
   'channel_devices',
-  'manifest',
+  'delta_files',
   'notifications',
   'onboarding_demo_data',
+  'version_files',
 ] as const
 
 export const REPLICA_TYPES = [
@@ -24,7 +25,6 @@ const REPLICA_SEQUENCES = [
   'app_versions_id_seq',
   'channel_devices_id_seq',
   'channel_id_seq',
-  'manifest_id_seq',
   'org_users_id_seq',
   'stripe_info_id_seq',
 ] as const
@@ -37,8 +37,11 @@ export const REPLICA_EXCLUDED_INDEXES = [
   // Primary-only reclaim helper for null_migrated_app_version_manifests; not needed on subscribers
   // and Cloud SQL server-side import cannot apply CREATE INDEX before primary migrations.
   'app_versions_manifest_present_idx',
-  // Plugin reads manifest by app_version_id only; this index just adds WAL that every regional replica downloads.
-  'idx_manifest_file_name',
+  // Delta storage writes and GC lookups run on the primary; plugin reads join by primary key only.
+  'delta_files_app_id_idx',
+  'delta_files_entry_key_idx',
+  'delta_files_path_key_idx',
+  'version_files_file_ids_gin_idx',
 ] as const
 
 export function replicaConfigPattern(values: readonly string[]): string {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   appVersionsMetaSelectEq,
@@ -142,7 +142,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlogErr: vi.fn(),
 }))
 
-const { app, deleteIt, onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
+const { deleteIt, onVersionUpdateTestUtils } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
 
 function createContext() {
   return {
@@ -168,21 +168,10 @@ function createVersion(overrides: Record<string, unknown> = {}) {
   } as any
 }
 
-let rowsLeft = 0
-
-function mockCleanupPg(count = 0) {
-  rowsLeft = count
-  pgQuery.mockImplementation(async (query: string, params: any[] = []) => {
+function mockCleanupPg() {
+  pgQuery.mockImplementation(async (query: string) => {
     if (query.includes('SELECT deleted'))
       return { rows: [{ deleted: true, deleted_at: null }] }
-    if (query.includes('WITH batch AS')) {
-      const removed = Math.min(rowsLeft, params[1])
-      rowsLeft -= removed
-      callOrder.push(`db_delete:${removed}`)
-      return { rows: [], rowCount: removed }
-    }
-    if (query.includes('SELECT EXISTS'))
-      return { rows: [{ remaining: rowsLeft > 0 }] }
     if (query.includes('WITH prev AS'))
       callOrder.push('finalize')
     return { rows: [], rowCount: 0 }
@@ -201,10 +190,9 @@ beforeEach(() => {
 
 describe('deleted version storage boundaries', () => {
   it('leaves shared and unreferenced delta objects intact and trashes only the canonical ZIP', async () => {
-    mockCleanupPg(2)
     const response = await deleteIt(createContext(), createVersion({ manifest_count: 2 }))
     expect(response.status).toBe(200)
-    expect(rowsLeft).toBe(0)
+    expect(callOrder).toContain('finalize')
     expect(moveObjectToTrash.mock.calls.map(args => args[1])).toEqual([createVersion().r2_path])
     expect(deleteObject).not.toHaveBeenCalled()
     expect(channelsUpdate).toHaveBeenCalledTimes(2)
@@ -223,23 +211,20 @@ describe('deleted version storage boundaries', () => {
     expect(moveObjectToTrash).toHaveBeenCalledWith(expect.anything(), createVersion().r2_path)
   })
 
-  it('clears manifest rows even when metadata is missing', async () => {
-    mockCleanupPg(1)
+  it('finalizes manifest counters even when metadata is missing', async () => {
     appVersionsMetaSelectEq.mockReturnValue({ single: vi.fn(async () => ({ data: null, error: { message: 'not found' } })) })
     await deleteIt(createContext(), createVersion({ manifest_count: 1 }))
-    expect(rowsLeft).toBe(0)
+    expect(callOrder).toContain('finalize')
     expect(moveObjectToTrash).toHaveBeenCalledTimes(1)
   })
 
   it.each(['false', 'throw'])('keeps ZIP failure retryable after database cleanup (%s)', async (failure) => {
-    mockCleanupPg(1)
     moveObjectToTrash.mockImplementation(async () => {
       if (failure === 'throw')
         throw new Error('storage unavailable')
       return false
     })
     await expect(deleteIt(createContext(), createVersion())).rejects.toThrow('Cannot move S3 object for deleted version to trash')
-    expect(rowsLeft).toBe(0)
     expect(callOrder).toContain('finalize')
     expect(closeClient).toHaveBeenCalledTimes(1)
   })
@@ -252,64 +237,15 @@ describe('deleted version storage boundaries', () => {
   })
 })
 
-describe('cleanup progress budget', () => {
-  afterEach(() => vi.unstubAllEnvs())
-
-  it('finishes metadata and ZIP cleanup through the sweeper after exhausting five original attempts', async () => {
-    vi.stubEnv('API_SECRET', 'test-cleanup-secret')
-    mockCleanupPg(100_001)
-    const version = createVersion({ manifest_count: 100_001 })
-    for (let attempt = 0; attempt < 5; attempt++)
-      await expect(deleteIt(createContext(), version)).rejects.toThrow('Manifest cleanup budget exhausted')
-    expect(rowsLeft).toBe(1)
-    expect(moveObjectToTrash).not.toHaveBeenCalled()
-    const response = await app.request('http://local/', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'apisecret': 'test-cleanup-secret' },
-      body: JSON.stringify({ type: 'UPDATE', table: 'app_versions', record: version, old_record: version }),
-    })
-    expect(response.status, await response.text()).toBe(200)
-    expect(rowsLeft).toBe(0)
-    expect(moveObjectToTrash).toHaveBeenCalledExactlyOnceWith(expect.anything(), version.r2_path)
-    expect(appVersionsMetaUpdate).toHaveBeenCalledWith({ size: 0 })
-    expect(createStatsMeta).toHaveBeenCalledWith(expect.anything(), version.app_id, version.id, -1234)
-  })
-
-  it('cleans a 5k bundle with five bounded transactions and one pool, making zero per-file R2 calls', async () => {
-    mockCleanupPg(5000)
+describe('manifest finalization', () => {
+  it('finalizes a deleted version in one transaction and one pool, making zero per-file R2 calls', async () => {
     await onVersionUpdateTestUtils.deleteManifest(createContext(), createVersion({ manifest_count: 5000 }))
-    expect(rowsLeft).toBe(0)
-    expect(drizzleTransaction).toHaveBeenCalledTimes(5)
+    expect(drizzleTransaction).toHaveBeenCalledTimes(1)
+    expect(callOrder.filter(value => value === 'finalize')).toHaveLength(1)
     expect(getPgClient).toHaveBeenCalledExactlyOnceWith(expect.anything(), false)
     expect(closeClient).toHaveBeenCalledTimes(1)
     expect(manifestSelectWhere).not.toHaveBeenCalled()
     expect(moveObjectToTrash).not.toHaveBeenCalled()
     expect(deleteObject).not.toHaveBeenCalled()
-    expect(pgQuery.mock.calls.filter(([query]) => query.includes('WITH batch AS')).every(([, params]) => params?.[1] === 1000)).toBe(true)
-    expect(pgQuery.mock.calls.some(([query]) => query.includes('hashtext') || query.includes('COUNT(*)') || query.includes('other.app_version_id'))).toBe(false)
-  })
-
-  it('commits bounded progress and leaves counters for the next pass', async () => {
-    mockCleanupPg(20_001)
-    await expect(onVersionUpdateTestUtils.deleteManifest(createContext(), createVersion())).rejects.toThrow('Manifest cleanup budget exhausted')
-    expect(rowsLeft).toBe(1)
-    expect(callOrder).not.toContain('finalize')
-    await onVersionUpdateTestUtils.deleteManifest(createContext(), createVersion())
-    expect(rowsLeft).toBe(0)
-    expect(callOrder.filter(value => value === 'finalize')).toHaveLength(1)
-  })
-
-  it('stops at the runtime budget after committed progress and always closes the pool', async () => {
-    mockCleanupPg(5000)
-    const now = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(10_000)
-    try {
-      await expect(onVersionUpdateTestUtils.deleteManifest(createContext(), createVersion())).rejects.toThrow('Manifest cleanup budget exhausted')
-      expect(rowsLeft).toBe(4000)
-      expect(closeClient).toHaveBeenCalledTimes(1)
-      expect(callOrder).not.toContain('finalize')
-    }
-    finally {
-      now.mockRestore()
-    }
   })
 })

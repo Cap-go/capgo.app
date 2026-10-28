@@ -56,6 +56,15 @@ bucket-scoped object access and the Cloud SQL service agent only read access.
 Any skipped, unsupported, or non-transactional change stops the release before
 it can mutate either database.
 
+New replicated tables are only created when they are listed in
+`ALLOWED_NEW_REPLICA_TABLES` (`schema_additive_sync.ts`), which pins their exact
+`CREATE TABLE` SQL and catalog shape; any other missing table stops the
+release. After primary migrations, the `read_replica_subscription` job lists
+the tables `capgo_google_eu_2_sub` streams and, when a replicated table is
+missing, runs `ALTER SUBSCRIPTION ... REFRESH PUBLICATION WITH (copy_data =
+true)` as a single Data API statement (it cannot run inside the import's
+transaction), then checks the table is streamed.
+
 This path has no direct PostgreSQL connection from GitHub Actions, no runner IP
 allowlist, no temporary Worker, and no database-side helper, database role,
 privilege, or object-owner setup.

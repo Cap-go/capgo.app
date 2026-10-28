@@ -47,7 +47,7 @@ const errorCases: Array<[string, string, Record<string, unknown>, number | null,
   ['app create record has no id', 'on_app_create', { table: 'apps', type: 'INSERT', record: { id: null, app_id: null } }, 400, 'no_id'],
   ['version create record has no id', 'on_version_create', { table: 'app_versions', type: 'INSERT', record: { id: null, app_id: null } }, 400, 'no_id'],
   ['deploy history create targets another table', 'on_deploy_history_create', { table: 'app_versions_meta', type: 'INSERT', record: { id: null, app_id: null } }, 400, 'table_not_match'],
-  ['manifest create data is incomplete', 'on_manifest_create', { table: 'manifest', type: 'INSERT', record: { id: randomUUID(), app_id: 'invalid.app', size: 'invalid-size' } }, 400, 'no_app_version_id_or_s3_path'],
+  ['delta file size lookup data is incomplete', 'on_manifest_create', { table: 'delta_files', type: 'INSERT', record: { id: null, entry_key: 'abc', path_key: 'def' } }, 400, 'no_s3_path'],
   ['version update targets another table', 'on_version_update', { table: 'not_app_versions', type: 'UPDATE', record: {}, old_record: {} }, 400, 'table_not_match'],
   ['version update is not an UPDATE', 'on_version_update', { table: 'app_versions', type: 'INSERT', record: {}, old_record: {} }, 400, 'type_not_match'],
   ['stripe event has no signature', 'stripe_event', { type: 'invalid.event.type', data: {} }, null, 'webhook_error_no_signature'],
@@ -60,6 +60,12 @@ describe('[POST] /triggers/* - Error Cases', () => {
       expect(response.status).toBe(status)
     const data = await response.json() as { error: string }
     expect(data.error).toBe(error)
+  })
+
+  it.concurrent('acknowledges size lookups queued for legacy manifest rows', async () => {
+    // public.manifest is a view now; lookups queued before the cutover are skipped.
+    const response = await postTrigger('on_manifest_create', { table: 'manifest', type: 'INSERT', record: { id: 1, app_version_id: 1, s3_path: 'legacy.js' } })
+    expect(response.status).toBe(200)
   })
 
   it.concurrent('cron_stat_app skips stale jobs when the app no longer exists', async () => {

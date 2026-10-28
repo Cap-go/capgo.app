@@ -20,6 +20,8 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+import type { VersionManifestJsonRow } from './version_manifest_sql.ts'
+import { versionManifestJsonSql } from './version_manifest_sql.ts'
 
 /**
  * PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -651,13 +653,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     rollout_cache_ttl_seconds: channelAlias.rollout_cache_ttl_seconds,
     paused_at: channelAlias.paused_at,
   }
-  const manifestSelect = sql<{ file_name: string, file_hash: string, s3_path: string }[]>`COALESCE(json_agg(
-        json_build_object(
-          'file_name', ${schema.manifest.file_name},
-          'file_hash', ${schema.manifest.file_hash},
-          's3_path', ${schema.manifest.s3_path}
-        )
-      ) FILTER (WHERE ${schema.manifest.file_name} IS NOT NULL), '[]'::json)`
+  const manifestSelect = versionManifestJsonSql(versionAlias.id)
   return { versionSelect, rolloutVersionSelect, channelDevicesAlias, channelAlias, channelSelect, manifestSelect, versionAlias, rolloutVersionAlias }
 }
 
@@ -705,9 +701,7 @@ export function requestInfosChannelDevicePostgres(
     .innerJoin(channelAlias, eq(channelDevicesAlias.channel_id, channelAlias.id))
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelDevice = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelDevice = baseQuery
     .where(and(
       eq(channelDevicesAlias.device_id, device_id),
       eq(channelDevicesAlias.app_id, app_id),
@@ -835,9 +829,7 @@ export function requestInfosChannelByIdPostgres(
     .from(channelAlias)
     .innerJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channel = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channel = baseQuery
     .where(and(
       eq(channelAlias.app_id, app_id),
       eq(channelAlias.id, channelId),
@@ -875,9 +867,7 @@ export function requestInfosChannelPostgres(
     .from(channelAlias)
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelQuery = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelQuery = baseQuery
     .where(and(
       defaultChannel
         ? and(
@@ -911,16 +901,11 @@ export function requestManifestEntriesPostgres(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ) {
   const manifestQuery = drizzleClient
-    .select({
-      file_name: schema.manifest.file_name,
-      file_hash: schema.manifest.file_hash,
-      s3_path: schema.manifest.s3_path,
-    })
-    .from(schema.manifest)
-    .where(eq(schema.manifest.app_version_id, versionId))
+    .select({ entries: versionManifestJsonSql(sql`${versionId}::bigint`) })
+    .from(sql`(SELECT 1) AS one`)
 
   cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', manifestQuery: manifestQuery.toSQL() })
-  return manifestQuery
+  return manifestQuery.then(result => (result[0]?.entries ?? []) as VersionManifestJsonRow[])
 }
 
 export function requestInfosChannelByIdPostgresRollout(

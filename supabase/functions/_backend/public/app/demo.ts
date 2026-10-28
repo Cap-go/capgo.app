@@ -384,44 +384,48 @@ async function seedOnboardingDemoDataInTransaction(
       options.seedId,
     )
 
-    const manifestResult = await pgClient.query<{ id: number }>(
-      `WITH input AS (
-        SELECT *
-        FROM jsonb_to_recordset($1::jsonb) AS manifest_data(
-          version_name text,
-          file_name text,
-          s3_path text,
-          file_hash text,
-          file_size bigint
-        )
-      )
-      INSERT INTO public.manifest (
-        app_version_id,
-        file_name,
-        s3_path,
-        file_hash,
-        file_size
-      )
+    // Demo files go into the shared delta tables like real uploads; their
+    // version_files rows follow the tracked demo versions on reset.
+    const manifestInput = `
       SELECT
-        app_versions.id,
-        input.file_name,
-        input.s3_path,
-        input.file_hash,
-        input.file_size
-      FROM input
+        app_versions.id AS version_id,
+        app_versions.app_id,
+        entry.ord,
+        data.file_name,
+        data.s3_path,
+        data.file_hash,
+        COALESCE(data.file_size, 0) AS file_size,
+        public.delta_path_key(data.s3_path) AS path_key,
+        public.delta_entry_key(data.s3_path, data.file_name, data.file_hash) AS entry_key
+      FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS entry(value, ord)
+      CROSS JOIN LATERAL jsonb_to_record(entry.value) AS data(
+        version_name text,
+        file_name text,
+        s3_path text,
+        file_hash text,
+        file_size bigint
+      )
       INNER JOIN public.app_versions
         ON app_versions.app_id = $2::text
-        AND app_versions.name = input.version_name
-      RETURNING id`,
+        AND app_versions.name = data.version_name`
+    await pgClient.query(
+      `INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
+      SELECT DISTINCT ON (input.entry_key)
+        input.app_id, input.s3_path, input.file_name, input.file_hash, input.file_size, input.path_key, input.entry_key
+      FROM (${manifestInput}) AS input
+      ORDER BY input.entry_key, input.file_size DESC
+      ON CONFLICT (entry_key) DO UPDATE SET file_size = EXCLUDED.file_size
+      WHERE df.file_size = 0 AND EXCLUDED.file_size > 0`,
       [JSON.stringify(options.manifestRows), options.appId],
     )
-    await trackOnboardingDemoRowsInTransaction(
-      pgClient,
-      options.appId,
-      options.ownerOrg,
-      'manifest',
-      manifestResult.rows.map(row => row.id),
-      options.seedId,
+    await pgClient.query(
+      `INSERT INTO public.version_files (app_version_id, file_ids)
+      SELECT input.version_id, array_agg(df.id ORDER BY input.ord)
+      FROM (${manifestInput}) AS input
+      INNER JOIN public.delta_files AS df ON df.entry_key = input.entry_key
+      GROUP BY input.version_id
+      ON CONFLICT (app_version_id) DO UPDATE SET file_ids = EXCLUDED.file_ids`,
+      [JSON.stringify(options.manifestRows), options.appId],
     )
 
     const channelResult = await pgClient.query<{ id: number, name: string, is_demo_shape: boolean }>(
@@ -920,7 +924,7 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
       }
     })
 
-    // Insert manifest entries into the manifest table for each version
+    // File entries of each demo version (stored in delta_files/version_files)
     // This is required for the bundle file list to show in the UI
     const manifestRows: Array<Record<string, unknown>> = []
 

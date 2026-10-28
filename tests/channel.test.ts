@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { getCanonicalAppVersionR2Path } from '../supabase/functions/_backend/utils/app_version_r2_path.ts'
-import { BASE_URL, createAppVersions, getEndpointUrl, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint } from './test-utils.ts'
+import { BASE_URL, createAppVersions, getEndpointUrl, getSupabaseClient, headers, ORG_ID, resetAndSeedAppData, resetAppData, resetAppDataStats, warmEdgeEndpoint,   insertManifestRows, } from './test-utils.ts'
 
 const id = randomUUID()
 const APPNAME = `com.app.c.${id}`
@@ -237,16 +237,13 @@ describe('[POST] /channel operations', () => {
 
 describe('channel update package vs bundle compatibility', () => {
   async function insertDelta(versionId: number) {
-    await getSupabaseClient()
-      .from('manifest')
-      .insert({
-        app_version_id: versionId,
-        file_name: `pkg-${versionId}.js`,
-        s3_path: `/pkg-${versionId}.js`,
-        file_hash: `hash-${versionId}`,
-        file_size: 16,
-      })
-      .throwOnError()
+    await insertManifestRows([{
+      app_version_id: versionId,
+      file_name: `pkg-${versionId}.js`,
+      s3_path: `/pkg-${versionId}.js`,
+      file_hash: `hash-${versionId}`,
+      file_size: 16,
+    }])
   }
 
   async function productionChannel() {

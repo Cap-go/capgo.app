@@ -4,7 +4,6 @@ import type { NativePackage } from '../../utils/bundle_compatibility.ts'
 import type { DeltaPackFile, DeltaPackManifest, ZipEntry } from '../../utils/bundle_zip.ts'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { ManifestPersistEntry } from '../../utils/manifest_persist.ts'
-import type { ManifestSizeReceiptFacts } from '../../utils/manifest_size_receipt.ts'
 import type { ManifestUploadRequest } from '../../utils/manifest_upload.ts'
 import type { Permission } from '../../utils/rbac.ts'
 import type { Database } from '../../utils/supabase.types.ts'
@@ -23,10 +22,8 @@ import { BundleUploadTokenError, getBundleUploadSessionSecret, signBundleUploadT
 import { BundleZipError, checksumAlgorithmForUpdater, isCordovaUpdaterPackage, isExactUpdaterVersion, compressDeltaFile, containsAscii, Crc32, extractDeltaPack, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
-import { ManifestInventoryConflict, registerManifestInventory, reserveManifestPaths, usesManifestInventory, withManifestInventory } from '../../utils/manifest_inventory.ts'
 import { MAX_MANIFEST_ENTRIES } from '../../utils/manifest_limits.ts'
 import { persistVersionManifestEntries } from '../../utils/manifest_persist.ts'
-import { getManifestReceiptBucket } from '../../utils/manifest_size_receipt.ts'
 import { createManifestUploadResponse, ManifestUploadRequestError, resolveManifestUploadPublicBaseUrl, validateManifestUploadRequest } from '../../utils/manifest_upload.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import type { StoredObjectInfo } from '../../utils/s3.ts'
@@ -207,7 +204,7 @@ function errorCode(error: unknown): string | undefined {
 /**
  * Rejections of the uploaded content (or of the upload against the channels) that would fail
  * the same way on every retry: complete deletes the unfinished upload for these. Anything else
- * (missing upload, storage/DB hiccups, inventory conflicts, permission or channel lookups)
+ * (missing upload, storage/DB hiccups, permission or channel lookups)
  * keeps the upload so complete can be retried or the session aborted.
  */
 const DETERMINISTIC_REJECTIONS = new Set([
@@ -1038,7 +1035,6 @@ async function writeDeltaManifest(
   const capabilitySecret = getEnv(c, 'MANIFEST_UPLOAD_CAPABILITY_SECRET')
   if (capabilitySecret && capabilitySecret === getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET'))
     throw quickError(503, 'upload_authorization_unavailable', 'Upload authorization is unavailable')
-  const bucket = getManifestReceiptBucket(getEnv(c, 'ENV_NAME'))
   let prefix: string
   let suffixes: string[]
   try {
@@ -1064,9 +1060,6 @@ async function writeDeltaManifest(
       secret: capabilitySecret,
       keyId: getEnv(c, 'MANIFEST_UPLOAD_CAPABILITY_KEY_ID'),
       publicBaseUrl: resolveManifestUploadPublicBaseUrl(c.req.url, manifestUploadPublicUrl(c)),
-      reservePaths: usesManifestInventory(c)
-        ? (reservePrefix, reserveSuffixes, sizes) => withManifestInventory(c, db => reserveManifestPaths(db, bucket, reservePrefix, reserveSuffixes, sizes))
-        : undefined,
     })
     prefix = response.default_s3_path_prefix
     const byId = new Map(response.entries.map(entry => [entry.id, entry.s3_path_suffix]))
@@ -1075,8 +1068,6 @@ async function writeDeltaManifest(
   catch (error) {
     if (error instanceof ManifestUploadRequestError)
       throw quickError(error.status, error.code, error.message, error.moreInfo)
-    if (error instanceof ManifestInventoryConflict)
-      throw quickError(409, 'error_manifest_inventory_conflict', `${error.message}. Retry complete.`, { entries: error.paths.slice(0, 20) })
     throw error
   }
 
@@ -1084,42 +1075,19 @@ async function writeDeltaManifest(
   const results = await mapWithConcurrency(files, STORAGE_CONCURRENCY, async (file, index) => {
     const path = `${prefix}${suffixes[index]}`
     let info = await bundleStorage.statObject(c, path)
-    let evidenceAt = Date.now()
     if (!info) {
-      const put = await bundleStorage.putObject(c, path, file.payload)
-      evidenceAt = Date.now()
+      await bundleStorage.putObject(c, path, file.payload)
       uploaded++
-      info = { size: file.payload.byteLength, etag: put.etag, lastModified: null }
-    }
-    const facts: ManifestSizeReceiptFacts = {
-      version: 2,
-      size: info.size,
-      signedAt: evidenceAt,
-      evidenceAt,
-      source: 'r2_read',
-      uploadedAt: info.lastModified,
-      etag: info.etag,
-      etagHash: null,
-      objectVersionHash: null,
-      objectIdentity: null,
+      info = { size: file.payload.byteLength, etag: null, lastModified: null }
     }
     const entry: ManifestPersistEntry = { file_name: file.file_name, file_hash: file.file_hash, s3_path: path, file_size: info.size }
-    return { entry, facts }
+    return entry
   })
 
-  try {
-    if (usesManifestInventory(c))
-      await withManifestInventory(c, db => registerManifestInventory(db, bucket, results.map(result => ({ path: result.entry.s3_path!, facts: result.facts }))))
-  }
-  catch (error) {
-    if (error instanceof ManifestInventoryConflict)
-      throw quickError(409, 'error_manifest_inventory_conflict', `${error.message}. Retry complete.`, { entries: error.paths.slice(0, 20) })
-    throw error
-  }
   await persistVersionManifestEntries(
     c,
     { id: claims.version_id, app_id: claims.app_id },
-    results.map(result => result.entry),
+    results,
     { s3PathPrefix: `orgs/${claims.owner_org}/apps/${claims.app_id}/`, trustFileSizes: true },
   )
   return { files: files.length, uploaded, reused: files.length - uploaded, brotli: files.filter(file => file.compression === 'brotli').length }

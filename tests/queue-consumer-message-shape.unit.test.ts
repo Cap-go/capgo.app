@@ -146,6 +146,14 @@ describe('queue_consumer legacy message compatibility', () => {
       },
     ])).toEqual([])
   })
+  it.concurrent('dispatches delta_files size lookups next to legacy manifest rows', () => {
+    const parse = __queueConsumerTestUtils__.getManifestRecordFromQueueBody
+    expect(parse({ type: 'INSERT', table: 'delta_files', record: { id: 7, s3_path: 'orgs/o/apps/a/delta/x' } }))
+      .toEqual({ table: 'delta_files', record: { id: 7, s3_path: 'orgs/o/apps/a/delta/x' } })
+    expect(parse({ type: 'INSERT', table: 'manifest', record: { id: 8 } }).table).toBe('manifest')
+    expect(() => parse({ type: 'INSERT', table: 'apps', record: {} })).toThrow()
+  })
+
   it.concurrent('checkpoints manifest queue deletes without reducing read batch size', () => {
     expect(__queueConsumerTestUtils__.getQueueBatchSize('on_manifest_create', 950)).toBe(950)
     expect(__queueConsumerTestUtils__.getQueueBatchSize('cron_email', 950)).toBe(950)
