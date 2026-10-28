@@ -95,6 +95,10 @@ test.describe('Actionable onboarding setup checklist', () => {
     await page.clock.pauseAt(time)
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto(fixture)
+    // Narrow screens start with the list collapsed so the current task reads first.
+    const listToggle = page.locator('[data-test="setup-checklist-toggle"]')
+    await expect(listToggle).toHaveAttribute('aria-expanded', 'false')
+    await listToggle.click()
     const optionalStep = page.locator('[data-test="setup-checklist-cicd-step"]')
     const cicdGuide = optionalStep.getByRole('link', { name: 'CI/CD integration guide', exact: true })
     const cicdHref = 'https://capgo.app/docs/getting-started/cicd-integration/'
@@ -598,7 +602,9 @@ test.describe('Actionable onboarding setup checklist', () => {
     await page.goto(`${fixture}?version=1`)
     await expect(page.locator(instructions).getByRole('heading', { name: 'Start guided setup' })).toBeVisible()
     const toggle = page.locator('[data-test="setup-checklist-toggle"]')
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    // Narrow screens open on the current task; the full list is one tap away.
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await toggle.click()
     await expect(page.locator('[data-test="app-onboarding-cli-step-test_update"]')).toBeVisible()
     await page.locator('[data-test="app-onboarding-cli-step-run_device"] button').click()
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')

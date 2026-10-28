@@ -10,6 +10,7 @@ import {
   aiOnboardingPathFor,
   checklistTaskListMode,
   defaultAiOrganizationName,
+  initialChecklistOpen,
   initialOnboardingSetupScreen,
   readAiAgentProgress,
   readAiOnboardingGoal,
@@ -196,6 +197,14 @@ describe('AI onboarding goal', () => {
     expect(checklistTaskListMode({ setup_mode: 'invite' })).toBe('default')
     // Accounts from before the setup choice keep the existing behavior.
     expect(checklistTaskListMode({})).toBe('default')
+  })
+
+  it.concurrent('starts the default task list collapsed on narrow screens so the current task reads first', () => {
+    expect(initialChecklistOpen('default', true)).toBe(true)
+    expect(initialChecklistOpen('default', false)).toBe(false)
+    // AI setup keeps the list open so the user watches the agent tick tasks off.
+    expect(initialChecklistOpen('open', false)).toBe(true)
+    expect(initialChecklistOpen('hidden', true)).toBe(false)
   })
 
   const promptFor = (goal?: 'ota' | 'builder' | 'both' | 'unsure') => buildAiOnboardingPrompt({ apiKey: 'capgo_test_secret', organization: { id: 'org-1', name: 'Acme' }, goal })

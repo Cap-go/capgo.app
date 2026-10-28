@@ -8,6 +8,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core'
 import { CameraPreview } from '@capgo/camera-preview'
 import { CapacitorUpdater } from '@capgo/capacitor-updater'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconArrowLeft from '~icons/heroicons/arrow-left-20-solid'
@@ -25,6 +26,7 @@ import { buildChannelPreviewLatestOptions, normalizeScannedPreviewValue, parsePr
 import { useDisplayStore } from '~/stores/display'
 import { buildChannelPreviewSubdomain, buildPreviewSubdomain, parsePreviewHostname } from '../../shared/preview-subdomain.ts'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const displayStore = useDisplayStore()
@@ -34,9 +36,17 @@ const isScanning = ref(false)
 const isLoading = ref(false)
 const downloadProgress = ref(0)
 const scannedUrl = ref('')
-const errorMessage = ref('')
+// Keep translation keys, not text, so messages follow a language that loads or changes later.
+interface ScanMessage { key: string, params?: Record<string, unknown> }
+const errorMessage = ref<ScanMessage | null>(null)
 const manualUrl = ref('')
-const statusMessage = ref('')
+const statusMessage = ref<ScanMessage | null>(null)
+function scanMessage(key: string, params?: Record<string, unknown>): ScanMessage {
+  return { key, params }
+}
+function translate(value: ScanMessage | null) {
+  return value ? t(value.key, value.params ?? {}) : ''
+}
 const scannerFrameRef = ref<HTMLElement | null>(null)
 const debugMessages = ref<string[]>([])
 const savedPreviews = ref<PreviewInfo[]>([])
@@ -161,17 +171,17 @@ async function copyDebugLogs() {
   const logs = debugMessages.value.slice().reverse().join('\n')
   try {
     await Clipboard.write({ string: logs })
-    toast.success('Debug logs copied')
+    toast.success(t('scan-debug-logs-copied'))
   }
   catch (error) {
     debugWarn('failed to copy debug logs with native clipboard', error)
     try {
       await navigator.clipboard.writeText(logs)
-      toast.success('Debug logs copied')
+      toast.success(t('scan-debug-logs-copied'))
     }
     catch (clipboardError) {
       debugWarn('failed to copy debug logs with browser clipboard', clipboardError)
-      toast.error('Failed to copy debug logs')
+      toast.error(t('scan-debug-logs-copy-failed'))
     }
   }
 }
@@ -256,23 +266,23 @@ const manualPreviewPayloadUrl = computed(() => previewPayloadUrlFromUrl(normaliz
 const canSubmitManualUrl = computed(() => !isLoading.value && (!!manualPreviewLink.value || !!manualPreviewPayloadUrl.value || isHttpUrl(normalizedManualUrl.value)))
 const manualActionLabel = computed(() => {
   if (manualPreviewLink.value || manualPreviewPayloadUrl.value)
-    return 'Start preview'
-  return isNativePlatform ? 'Download update' : 'Open update URL'
+    return t('start-preview')
+  return isNativePlatform ? t('scan-download-update') : t('scan-open-update-url')
 })
-const previewConfirmTitle = computed(() => pendingPreviewLoad.value?.source === 'camera' ? 'Load scanned preview?' : 'Load preview?')
+const previewConfirmTitle = computed(() => pendingPreviewLoad.value?.source === 'camera' ? t('scan-confirm-title-scanned') : t('scan-confirm-title-link'))
 const previewConfirmDescription = computed(() => pendingPreviewLoad.value?.source === 'camera'
-  ? 'A QR code was scanned. Confirm before this preview is downloaded and applied.'
-  : 'The app was opened from a preview link. Confirm before this preview is downloaded and applied.')
+  ? t('scan-confirm-description-scanned')
+  : t('scan-confirm-description-link'))
 const scannerHint = computed(() => {
   if (isLoading.value)
-    return 'Downloading preview…'
+    return t('scan-hint-downloading')
   if (statusMessage.value)
-    return statusMessage.value
+    return translate(statusMessage.value)
   if (isScanning.value)
-    return 'Align the QR code within the frame'
+    return t('scan-hint-align')
   if (errorMessage.value)
-    return 'Tap scan to try again or paste a link below'
-  return isNativePlatform ? 'Tap scan to open the camera' : 'Paste a preview link to get started'
+    return t('scan-hint-retry')
+  return isNativePlatform ? t('scan-hint-native') : t('scan-hint-web')
 })
 const downloadHost = computed(() => {
   if (!scannedUrl.value || !isHttpUrl(scannedUrl.value))
@@ -296,14 +306,12 @@ function previewLabel(preview: PreviewInfo) {
 
 function previewSourceLabel(preview: PreviewInfo) {
   if (preview.source === 'channel')
-    return 'Channel'
+    return t('channel')
   if (preview.source === 'bundle')
-    return 'Bundle'
-  if (preview.source === 'payload')
-    return 'Preview'
+    return t('bundle')
   if (preview.source === 'url')
-    return 'URL'
-  return 'Preview'
+    return t('url')
+  return t('preview-tab')
 }
 
 function hostFromUrl(value?: string) {
@@ -333,30 +341,30 @@ function previewNameFromUrl(value: string) {
 }
 
 function previewLinkAppLabel(previewLink: PreviewDeepLink) {
-  return previewLink.appId || hostFromUrl(previewLink.payloadUrl) || 'Unknown app'
+  return previewLink.appId || hostFromUrl(previewLink.payloadUrl) || t('scan-unknown-app')
 }
 
 function previewLinkDetail(previewLink: PreviewDeepLink) {
   if (previewLink.type === 'channel') {
     if (previewLink.channelName)
-      return `Channel ${previewLink.channelName}`
+      return t('scan-channel-detail', { channel: previewLink.channelName })
     if (typeof previewLink.channelId === 'number')
-      return `Channel ${previewLink.channelId}`
-    return 'Channel preview'
+      return t('scan-channel-detail', { channel: previewLink.channelId })
+    return t('scan-channel-preview')
   }
   if (typeof previewLink.versionId === 'number')
-    return `Bundle ${previewLink.versionId}`
-  return 'Bundle preview'
+    return t('scan-bundle-detail', { bundle: previewLink.versionId })
+  return t('scan-bundle-preview')
 }
 
 function previewHostDetail(target: PreviewHostTarget | null) {
   if (!target)
-    return 'Preview payload'
+    return t('scan-preview-payload')
   if (typeof target.channelId === 'number')
-    return `Channel ${target.channelId}`
+    return t('scan-channel-detail', { channel: target.channelId })
   if (typeof target.versionId === 'number')
-    return `Bundle ${target.versionId}`
-  return 'Preview payload'
+    return t('scan-bundle-detail', { bundle: target.versionId })
+  return t('scan-preview-payload')
 }
 
 function queuePreviewLoad(previewLoad: PendingPreviewLoad) {
@@ -367,8 +375,8 @@ function queuePreviewLoad(previewLoad: PendingPreviewLoad) {
     url: previewLoad.url,
   })
   pendingPreviewLoad.value = previewLoad
-  errorMessage.value = ''
-  statusMessage.value = 'Preview detected. Confirm before loading it.'
+  errorMessage.value = null
+  statusMessage.value = scanMessage('scan-preview-detected')
   downloadProgress.value = 0
   showOptions.value = false
 }
@@ -379,7 +387,7 @@ async function confirmPreviewLoad() {
     return
 
   pendingPreviewLoad.value = null
-  statusMessage.value = ''
+  statusMessage.value = null
   debugLog('preview load confirmed', { source: previewLoad.source, url: previewLoad.url })
   try {
     await previewLoad.start()
@@ -387,8 +395,8 @@ async function confirmPreviewLoad() {
   catch (error) {
     debugWarn('failed to start confirmed preview', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
-    toast.error(errorMessage.value)
+    errorMessage.value = scanMessage('scan-start-failed', { message })
+    toast.error(translate(errorMessage.value))
   }
 }
 
@@ -399,13 +407,13 @@ async function cancelPreviewLoad() {
 
   pendingPreviewLoad.value = null
   debugLog('preview load canceled', { source: previewLoad.source, url: previewLoad.url })
-  statusMessage.value = previewLoad.source === 'camera' ? '' : 'Preview loading canceled'
+  statusMessage.value = previewLoad.source === 'camera' ? null : scanMessage('scan-loading-canceled')
   if (previewLoad.source === 'camera' && isNativePlatform)
     await startScanner()
 }
 
 onMounted(async () => {
-  displayStore.NavTitle = 'Scan QR'
+  displayStore.NavTitle = t('2fa-step-scan-qr')
   displayStore.defaultBack = '/login'
   debugLog('scan page mounted', { isNativePlatform, previewQuery: route.query.preview })
 
@@ -420,7 +428,7 @@ onMounted(async () => {
 
   if (!isNativePlatform) {
     debugLog('native scanner unavailable on web platform')
-    statusMessage.value = 'Live camera scanning is available in the iOS and Android app. Paste a preview link or bundle URL below.'
+    statusMessage.value = scanMessage('scan-web-camera-unavailable')
     showOptions.value = true
     return
   }
@@ -507,49 +515,49 @@ async function runPreviewAction(preview: PreviewInfo | null, actionName: string,
 async function switchSavedPreview(preview: PreviewInfo) {
   await runPreviewAction(preview, 'switch', async () => {
     if (typeof previewManagerUpdater.setPreview !== 'function')
-      throw new Error('Preview manager is not available in this app version')
+      throw new Error(t('scan-preview-manager-unavailable'))
 
-    toast.success(`Opening ${previewLabel(preview)}`)
+    toast.success(t('scan-opening', { name: previewLabel(preview) }))
     await previewManagerUpdater.setPreview({ id: preview.id })
   })
 }
 
 async function updateSavedPreview(preview: PreviewInfo) {
   if (!preview.payloadUrl) {
-    toast.error('This preview cannot be updated locally')
+    toast.error(t('scan-preview-not-updatable'))
     return
   }
 
   await runPreviewAction(preview, 'update', async () => {
     if (typeof previewManagerUpdater.updatePreview !== 'function')
-      throw new Error('Preview manager is not available in this app version')
+      throw new Error(t('scan-preview-manager-unavailable'))
 
     const result = await previewManagerUpdater.updatePreview({ id: preview.id })
-    toast.success(result.updated ? `Updated ${previewLabel(result.preview)}` : `${previewLabel(result.preview)} is up to date`)
+    toast.success(result.updated ? t('scan-preview-updated', { name: previewLabel(result.preview) }) : t('scan-preview-up-to-date', { name: previewLabel(result.preview) }))
   })
 }
 
 async function deleteSavedPreview(preview: PreviewInfo) {
   if (preview.isActive) {
-    toast.error('Leave or switch preview before deleting it')
+    toast.error(t('scan-preview-leave-before-delete'))
     return
   }
 
   await runPreviewAction(preview, 'delete', async () => {
     if (typeof previewManagerUpdater.deletePreview !== 'function')
-      throw new Error('Preview manager is not available in this app version')
+      throw new Error(t('scan-preview-manager-unavailable'))
 
     const result = await previewManagerUpdater.deletePreview({ id: preview.id })
-    toast.success(result.deleted ? `Deleted ${previewLabel(preview)}` : `Removed ${previewLabel(preview)}`)
+    toast.success(result.deleted ? t('scan-preview-deleted', { name: previewLabel(preview) }) : t('scan-preview-removed', { name: previewLabel(preview) }))
   })
 }
 
 async function resetToMainApp() {
   await runPreviewAction(null, 'reset', async () => {
     if (typeof previewManagerUpdater.resetPreview !== 'function')
-      throw new Error('Preview manager is not available in this app version')
+      throw new Error(t('scan-preview-manager-unavailable'))
 
-    toast.success('Returning to main app')
+    toast.success(t('scan-returning-to-main-app'))
     await previewManagerUpdater.resetPreview()
   })
 }
@@ -709,7 +717,7 @@ async function stopScanner(force = false, options: { keepHandlingBarcode?: boole
 async function startScanner() {
   if (!isNativePlatform) {
     debugLog('startScanner ignored on web platform')
-    statusMessage.value = 'Live camera scanning is available in the iOS and Android app. Paste a preview link or bundle URL below.'
+    statusMessage.value = scanMessage('scan-web-camera-unavailable')
     return
   }
 
@@ -722,8 +730,8 @@ async function startScanner() {
     debugLog('starting scanner')
     isScanning.value = true
     isHandlingBarcode = false
-    errorMessage.value = ''
-    statusMessage.value = ''
+    errorMessage.value = null
+    statusMessage.value = null
     scannedUrl.value = ''
     manualUrl.value = ''
     window.scrollTo(0, 0)
@@ -762,8 +770,8 @@ async function startScanner() {
       catch (error) {
         debugWarn('failed to handle scanned barcode', error)
         const message = error instanceof Error ? error.message : String(error)
-        errorMessage.value = `Failed to handle scanned QR code: ${message}`
-        toast.error(errorMessage.value)
+        errorMessage.value = scanMessage('scan-handle-failed', { message })
+        toast.error(translate(errorMessage.value))
       }
       finally {
         isHandlingBarcode = false
@@ -800,7 +808,7 @@ async function startScanner() {
   }
   catch (error) {
     debugWarn('failed to start scanner', error)
-    errorMessage.value = 'The camera could not start. Check camera permissions, then tap scan again or paste the link manually.'
+    errorMessage.value = scanMessage('scan-camera-start-failed')
     await stopScanner(true)
   }
 }
@@ -841,7 +849,7 @@ async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource
     }
 
     queuePreviewLoad({
-      appLabel: target?.appId || hostFromUrl(value) || 'Unknown app',
+      appLabel: target?.appId || hostFromUrl(value) || t('scan-unknown-app'),
       detail: previewHostDetail(target),
       source,
       start: () => startPreviewPayload(previewPayloadUrl),
@@ -853,9 +861,9 @@ async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource
   if (!isHttpUrl(value)) {
     debugWarn('scan value is unsupported', value)
     // Show what was scanned so unsupported codes can be diagnosed from the device.
-    errorMessage.value = `This QR code is not a Capgo preview link or an HTTPS bundle URL: ${value.slice(0, 160)}`
+    errorMessage.value = scanMessage('scan-unsupported-code', { value: value.slice(0, 160) })
     manualUrl.value = value
-    toast.error('Scanned QR code is not a supported preview link')
+    toast.error(t('scan-unsupported-code-toast'))
     return
   }
 
@@ -863,8 +871,8 @@ async function handleBarcodeScan(scannedValue: string, source: PreviewLoadSource
   manualUrl.value = value
   debugLog('scan parsed as direct HTTP update URL', value)
   queuePreviewLoad({
-    appLabel: hostFromUrl(value) || 'Unknown host',
-    detail: 'Direct update URL',
+    appLabel: hostFromUrl(value) || t('scan-unknown-host'),
+    detail: t('scan-direct-update-url'),
     source,
     start: () => downloadUpdate(value),
     url: value,
@@ -908,7 +916,7 @@ function parsePreviewPayloadBody(data: unknown, status: number) {
     return JSON.parse(data)
   }
   catch {
-    throw new Error(data || `Preview payload request failed with HTTP ${status}`)
+    throw new Error(data || t('scan-payload-request-failed', { status }))
   }
 }
 
@@ -940,12 +948,12 @@ function previewPayloadErrorMessage(payload: unknown, status: number) {
     }
   }
 
-  return `Preview payload request failed with HTTP ${status}`
+  return t('scan-payload-request-failed', { status })
 }
 
 function validatePreviewPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object')
-    throw new Error('Preview payload is invalid')
+    throw new Error(t('scan-payload-invalid'))
 
   return payload as PreviewPayload
 }
@@ -1009,9 +1017,9 @@ async function fetchPreviewPayload(payloadUrl: string) {
     ? await fetchPreviewPayloadWithNativeHttp(payloadUrl)
     : await fetchPreviewPayloadWithBrowserFetch(payloadUrl)
   if (!payload.version)
-    throw new Error('Preview payload is missing a version')
+    throw new Error(t('scan-payload-missing-version'))
   if (!payload.url && !payload.manifest?.length)
-    throw new Error('Preview payload is missing download information')
+    throw new Error(t('scan-payload-missing-download'))
   debugLog('preview payload received', {
     appId: payload.appId,
     hasManifest: !!payload.manifest?.length,
@@ -1023,9 +1031,9 @@ async function fetchPreviewPayload(payloadUrl: string) {
 
 function downloadOptionsFromPreviewPayload(payload: PreviewPayload): DownloadOptions {
   if (!payload.version)
-    throw new Error('Preview payload is missing a version')
+    throw new Error(t('scan-payload-missing-version'))
   if (!payload.url)
-    throw new Error('Preview payload is missing a bundle URL')
+    throw new Error(t('scan-payload-missing-bundle-url'))
 
   return {
     checksum: payload.checksum ?? undefined,
@@ -1083,7 +1091,7 @@ async function startPreviewPayload(payloadUrl: string, appId?: string) {
       debugLog('download progress', { percent: state.percent })
     })
 
-    toast.success('Starting preview')
+    toast.success(t('scan-starting-preview'))
 
     const { payload, sessionPayloadUrl } = await fetchPreviewPayloadResolved(payloadUrl)
     const bundle = await CapacitorUpdater.download(downloadOptionsFromPreviewPayload(payload))
@@ -1102,9 +1110,9 @@ async function startPreviewPayload(payloadUrl: string, appId?: string) {
   catch (error) {
     debugWarn('failed to start preview payload flow', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
+    errorMessage.value = scanMessage('scan-start-failed', { message })
     manualUrl.value = scannedUrl.value
-    toast.error(errorMessage.value)
+    toast.error(translate(errorMessage.value))
   }
   finally {
     isLoading.value = false
@@ -1156,7 +1164,7 @@ async function startChannelPreview(previewLink: Extract<PreviewDeepLink, { type:
       debugLog('download progress', { percent: state.percent })
     })
 
-    toast.success('Starting preview')
+    toast.success(t('scan-starting-preview'))
 
     const latest = await CapacitorUpdater.getLatest(buildChannelPreviewLatestOptions(previewLink))
     debugLog('latest preview response received', {
@@ -1167,7 +1175,7 @@ async function startChannelPreview(previewLink: Extract<PreviewDeepLink, { type:
       version: latest.version,
     })
     if (!latest.url)
-      throw new Error(latest.message || latest.error || 'No preview update is available for this channel')
+      throw new Error(latest.message || latest.error || t('scan-no-channel-update'))
 
     const bundle = await CapacitorUpdater.download({
       checksum: latest.checksum,
@@ -1190,9 +1198,9 @@ async function startChannelPreview(previewLink: Extract<PreviewDeepLink, { type:
   catch (error) {
     debugWarn('failed to start channel preview flow', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
+    errorMessage.value = scanMessage('scan-start-failed', { message })
     manualUrl.value = scannedUrl.value
-    toast.error(errorMessage.value)
+    toast.error(translate(errorMessage.value))
   }
   finally {
     isLoading.value = false
@@ -1212,7 +1220,7 @@ async function startPreviewDownloadUrl(downloadUrl: string, version = `preview-$
       debugLog('download progress', { percent: state.percent })
     })
 
-    toast.success(`Starting preview from ${new URL(downloadUrl).host}`)
+    toast.success(t('scan-starting-preview-from', { host: new URL(downloadUrl).host }))
 
     const bundle = await CapacitorUpdater.download({
       url: downloadUrl,
@@ -1232,9 +1240,9 @@ async function startPreviewDownloadUrl(downloadUrl: string, version = `preview-$
   catch (error) {
     debugWarn('failed to download/apply direct preview', error)
     const message = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `Failed to start preview: ${message}`
+    errorMessage.value = scanMessage('scan-start-failed', { message })
     manualUrl.value = scannedUrl.value
-    toast.error(errorMessage.value)
+    toast.error(translate(errorMessage.value))
   }
   finally {
     isLoading.value = false
@@ -1258,8 +1266,8 @@ async function downloadUpdate(updateUrl: string) {
 
   if (!isHttpUrl(updateUrl)) {
     debugWarn('downloadUpdate rejected unsupported URL', updateUrl)
-    errorMessage.value = 'This is not a downloadable bundle URL. Use a Capgo preview QR code or an HTTPS bundle URL.'
-    toast.error('Unsupported update URL')
+    errorMessage.value = scanMessage('scan-not-downloadable-url')
+    toast.error(t('scan-unsupported-update-url'))
     return
   }
 
@@ -1269,12 +1277,12 @@ async function downloadUpdate(updateUrl: string) {
 async function submitManualUrl() {
   debugLog('submitManualUrl called', normalizedManualUrl.value)
   if (!canSubmitManualUrl.value) {
-    toast.error('Enter a valid preview link or update URL')
+    toast.error(t('scan-invalid-manual-url'))
     return
   }
 
-  errorMessage.value = ''
-  statusMessage.value = ''
+  errorMessage.value = null
+  statusMessage.value = null
   scannedUrl.value = normalizedManualUrl.value
 
   if (isScanning.value || cameraPreviewStarted)
@@ -1291,7 +1299,7 @@ async function submitManualUrl() {
   }
 
   if (!isNativePlatform) {
-    toast.success(`Opening ${new URL(normalizedManualUrl.value).host}`)
+    toast.success(t('scan-opening', { name: new URL(normalizedManualUrl.value).host }))
     window.location.assign(normalizedManualUrl.value)
     return
   }
@@ -1301,8 +1309,8 @@ async function submitManualUrl() {
 
 async function retryScanning() {
   debugLog('retryScanning called')
-  errorMessage.value = ''
-  statusMessage.value = ''
+  errorMessage.value = null
+  statusMessage.value = null
   scannedUrl.value = ''
   manualUrl.value = ''
   downloadProgress.value = 0
@@ -1336,13 +1344,13 @@ async function goBack() {
         <button
           type="button"
           class="inline-flex h-11 w-11 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm transition-opacity active:opacity-70"
-          aria-label="Go back"
+          :aria-label="t('go-back')"
           @click="goBack"
         >
           <IconArrowLeft class="h-5 w-5" />
         </button>
         <h1 class="truncate text-center text-base font-semibold text-white">
-          Scan QR Code
+          {{ t('2fa-step-scan-qr') }}
         </h1>
       </header>
 
@@ -1377,7 +1385,7 @@ async function goBack() {
 
           <div v-if="isLoading" class="space-y-2 px-1">
             <div class="flex items-center justify-between text-xs font-medium text-white/70">
-              <span>Downloading preview</span>
+              <span>{{ t('scan-downloading-preview') }}</span>
               <span>{{ progressPercentage }}%</span>
             </div>
             <div class="h-1.5 overflow-hidden rounded-full bg-white/10">
@@ -1396,7 +1404,7 @@ async function goBack() {
             class="rounded-2xl bg-amber-400/10 px-4 py-3 text-left text-sm leading-6 text-amber-100"
             role="alert"
           >
-            {{ errorMessage }}
+            {{ translate(errorMessage) }}
           </p>
         </div>
       </section>
@@ -1411,7 +1419,7 @@ async function goBack() {
         >
           <IconArrowPath v-if="errorMessage || statusMessage" class="h-5 w-5" />
           <IconQrCode v-else class="h-5 w-5" />
-          {{ isScanning ? 'Camera open' : errorMessage || statusMessage ? 'Scan again' : 'Scan QR code' }}
+          {{ isScanning ? t('scan-camera-open') : errorMessage || statusMessage ? t('scan-again') : t('2fa-step-scan-qr') }}
         </button>
 
         <button
@@ -1421,7 +1429,7 @@ async function goBack() {
           @click="showOptions = !showOptions"
         >
           <IconEllipsisHorizontal class="h-5 w-5 text-white/70" />
-          More options
+          {{ t('scan-more-options') }}
           <IconChevronDown
             class="h-4 w-4 text-white/50 transition-transform duration-200"
             :class="showOptions ? 'rotate-180' : ''"
@@ -1434,7 +1442,7 @@ async function goBack() {
         >
           <div class="rounded-2xl border border-white/10 bg-black/25 p-4 backdrop-blur-sm">
             <label class="block text-sm font-medium text-white/90" for="manual-url">
-              Paste preview link
+              {{ t('scan-paste-preview-link') }}
             </label>
             <input
               id="manual-url"
@@ -1459,7 +1467,7 @@ async function goBack() {
           <details v-if="hasSavedPreviewPanel" class="rounded-2xl border border-white/10 bg-black/25 backdrop-blur-sm">
             <summary class="flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-medium text-white/90 [&::-webkit-details-marker]:hidden">
               <IconRectangleStack class="h-5 w-5 text-azure-400" />
-              Saved previews
+              {{ t('scan-saved-previews') }}
               <span v-if="savedPreviews.length" class="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/70">
                 {{ savedPreviews.length }}
               </span>
@@ -1470,16 +1478,16 @@ async function goBack() {
               <div v-if="savedPreviewCurrent || savedPreviewLiveBundle" class="flex items-center justify-between gap-2 rounded-xl bg-white/5 px-3 py-2.5">
                 <div class="min-w-0">
                   <p class="truncate text-sm font-medium text-white">
-                    {{ savedPreviewCurrent ? previewLabel(savedPreviewCurrent) : 'Main app' }}
+                    {{ savedPreviewCurrent ? previewLabel(savedPreviewCurrent) : t('scan-main-app') }}
                   </p>
                   <p class="truncate text-xs text-white/50">
-                    {{ savedPreviewCurrent ? 'Current preview' : `Main ${bundleVersion(savedPreviewLiveBundle)}` }}
+                    {{ savedPreviewCurrent ? t('scan-current-preview') : t('scan-main-version', { version: bundleVersion(savedPreviewLiveBundle) }) }}
                   </p>
                 </div>
                 <button
                   v-if="savedPreviewCurrent"
                   type="button"
-                  aria-label="Return to main app"
+                  :aria-label="t('scan-return-to-main-app')"
                   class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white transition-colors active:bg-white/15 disabled:cursor-not-allowed disabled:opacity-45"
                   :disabled="!!previewActionId || isLoading"
                   @click="resetToMainApp"
@@ -1489,7 +1497,7 @@ async function goBack() {
               </div>
 
               <div v-if="isLoadingPreviews" class="rounded-xl px-3 py-2 text-xs text-white/50">
-                Loading previews...
+                {{ t('scan-loading-previews') }}
               </div>
 
               <ol v-else-if="savedPreviews.length" class="space-y-2">
@@ -1508,24 +1516,24 @@ async function goBack() {
                       </p>
                     </div>
                     <span v-if="preview.isActive" class="rounded-full bg-emerald-400/15 px-2 py-0.5 text-[11px] font-medium text-emerald-200">
-                      Active
+                      {{ t('bundle-active') }}
                     </span>
                   </div>
 
                   <div class="mt-2 flex gap-2">
                     <button
                       type="button"
-                      aria-label="Open preview"
+                      :aria-label="t('preview-download-open-preview')"
                       class="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-azure-500/20 text-xs font-semibold text-azure-200 transition-colors active:bg-azure-500/30 disabled:cursor-not-allowed disabled:opacity-45"
                       :disabled="preview.isActive || !!previewActionId || isLoading"
                       @click="switchSavedPreview(preview)"
                     >
                       <IconPlay class="h-4 w-4" />
-                      Open
+                      {{ t('open') }}
                     </button>
                     <button
                       type="button"
-                      aria-label="Update preview"
+                      :aria-label="t('scan-update-preview')"
                       class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white transition-colors active:bg-white/15 disabled:cursor-not-allowed disabled:opacity-45"
                       :disabled="!preview.payloadUrl || !!previewActionId || isLoading"
                       @click="updateSavedPreview(preview)"
@@ -1534,7 +1542,7 @@ async function goBack() {
                     </button>
                     <button
                       type="button"
-                      aria-label="Delete preview"
+                      :aria-label="t('scan-delete-preview')"
                       class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-rose-400/10 text-rose-200 transition-colors active:bg-rose-400/20 disabled:cursor-not-allowed disabled:opacity-45"
                       :disabled="preview.isActive || !!previewActionId || isLoading"
                       @click="deleteSavedPreview(preview)"
@@ -1549,7 +1557,7 @@ async function goBack() {
 
           <details v-if="debugMessages.length" class="rounded-2xl border border-white/10 bg-black/25 backdrop-blur-sm">
             <summary class="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-white/70 [&::-webkit-details-marker]:hidden">
-              Debug logs
+              {{ t('scan-debug-logs') }}
               <span class="rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/50">
                 {{ debugMessages.length }}
               </span>
@@ -1562,7 +1570,7 @@ async function goBack() {
                 @click="copyDebugLogs"
               >
                 <IconClipboard class="h-4 w-4" />
-                Copy logs
+                {{ t('scan-copy-logs') }}
               </button>
               <ol class="mt-3 max-h-32 space-y-1 overflow-y-auto font-mono text-[11px] leading-5 text-white/45">
                 <li v-for="message in debugMessages" :key="message">
@@ -1596,7 +1604,7 @@ async function goBack() {
         <dl class="mt-5 divide-y divide-white/10 border-y border-white/10">
           <div class="py-3">
             <dt class="text-xs font-medium uppercase text-white/40">
-              App
+              {{ t('app') }}
             </dt>
             <dd class="mt-1 break-all text-sm font-semibold text-white">
               {{ pendingPreviewLoad.appLabel }}
@@ -1604,7 +1612,7 @@ async function goBack() {
           </div>
           <div class="py-3">
             <dt class="text-xs font-medium uppercase text-white/40">
-              Target
+              {{ t('rollout-target') }}
             </dt>
             <dd class="mt-1 break-all text-sm text-white/75">
               {{ pendingPreviewLoad.detail }}
@@ -1618,14 +1626,14 @@ async function goBack() {
             class="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/80 transition-colors active:bg-white/10"
             @click="cancelPreviewLoad"
           >
-            No
+            {{ t('no') }}
           </button>
           <button
             type="button"
             class="inline-flex min-h-11 items-center justify-center rounded-xl bg-azure-500 px-4 text-sm font-semibold text-white transition-colors active:bg-azure-600"
             @click="confirmPreviewLoad"
           >
-            Load preview
+            {{ t('scan-load-preview') }}
           </button>
         </div>
       </div>

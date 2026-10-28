@@ -11,22 +11,26 @@ interface BillingRegionSuggestion {
   country: string | null
   suggested: BillingAccount
   usAvailable: boolean
+  usOffered?: boolean
 }
 
 const model = defineModel<BillingAccount | undefined>()
 const { t } = useI18n()
 const visible = ref(false)
+const detectedUs = ref(false)
 
+// US visitors answer "Is that OK?" with yes/no; everyone else picks between the two entities.
 const options = computed<Array<{ value: BillingAccount, title: string, description: string }>>(() => [
-  { value: 'us', title: t('billing-region-option-us'), description: t('billing-region-option-us-desc') },
-  { value: 'ee', title: t('billing-region-option-ee'), description: t('billing-region-option-ee-desc') },
+  { value: 'us', title: t(detectedUs.value ? 'billing-region-option-us' : 'billing-region-choose-us'), description: t('billing-region-option-us-desc') },
+  { value: 'ee', title: t(detectedUs.value ? 'billing-region-option-ee' : 'billing-region-choose-ee'), description: t('billing-region-option-ee-desc') },
 ])
 
 onMounted(async () => {
   const { data, error } = await invokeCapgoApi<BillingRegionSuggestion>('private/billing_region', { method: 'GET' })
-  // Only US visitors get asked; everyone else keeps the server default.
-  if (error || !data?.usAvailable || data.country !== 'US')
+  // Only countries the US entity is offered in get asked; everyone else keeps the server default.
+  if (error || !data?.usAvailable || !(data.usOffered ?? data.country === 'US'))
     return
+  detectedUs.value = data.country === 'US'
   if (!model.value)
     model.value = data.suggested
   visible.value = true
@@ -40,7 +44,7 @@ onMounted(async () => {
       {{ t('billing-region-label') }}
     </p>
     <p id="billing-region-help" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-      {{ t('billing-region-us-detected') }}
+      {{ t(detectedUs ? 'billing-region-us-detected' : 'billing-region-choose-help') }}
     </p>
 
     <div

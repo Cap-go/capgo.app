@@ -37,7 +37,7 @@ const { t } = useI18n()
       </div>
       <router-link
         to="/settings/organization/plans"
-        class="d-btn min-h-12 shrink-0 self-start border-primary-500 bg-primary-500 px-5 text-base text-white hover:border-primary-600 hover:bg-primary-600 focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 sm:self-center"
+        class="d-btn min-h-12 shrink-0 self-start border-primary-500 bg-primary-500 px-5 text-base text-white hover:border-primary-500 hover:bg-primary-500/90 focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 sm:self-center"
         data-test="onboarding-choose-plan-cta"
       >
         {{ t('onboarding-choose-plan-step-cta') }}

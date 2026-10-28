@@ -347,7 +347,7 @@ onUnmounted(() => {
           <p class="mx-auto mt-6 text-lg font-normal text-gray-600 dark:text-gray-200 font-pj">
             {{ t('add-your-first-app-t') }}
           </p>
-          <p class="mx-auto mt-2 font-normal text-md font-pj text-muted-blue-300 dark:text-muted-blue-50">
+          <p class="mx-auto mt-2 font-normal font-pj text-muted-blue-300 dark:text-muted-blue-50">
             {{ t('pro-tip-you-can-copy') }} <span class="text-pumpkin-orange-900">{{ t('commands') }}</span> {{ t('by-clicking-on-them') }}
           </p>
         </div>

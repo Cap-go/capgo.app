@@ -6,6 +6,8 @@ import { defaultApiHost } from '../services/console'
 
 const FALLBACK_LOCALE = 'en' as const
 const LANGUAGE_STORAGE_KEY = 'lang'
+const CATALOG_STORAGE_KEY = 'capgo_i18n_catalog'
+const INITIAL_LOAD_TIMEOUT_MS = 3000
 
 export const languages = {
   'de': 'Deutsch',
@@ -52,6 +54,12 @@ export class RemoteLanguageError extends Error {
 
 type MessageCatalog = Record<string, string>
 
+interface CachedCatalog {
+  checksum: string
+  lang: string
+  messages: MessageCatalog
+}
+
 export const i18n = createI18n({
   legacy: false,
   fallbackLocale: FALLBACK_LOCALE,
@@ -62,7 +70,9 @@ export const i18n = createI18n({
 })
 
 const loadedLanguages = new Set<string>([FALLBACK_LOCALE])
-const pendingLanguageLoads = new Map<string, Promise<MessageCatalog>>()
+// Last locale asked for; a late response for another locale must not take its cache slot.
+let requestedLanguage: string = FALLBACK_LOCALE
+const pendingLanguageLoads = new Map<string, Promise<MessageCatalog | null>>()
 function isMessageCatalog(value: unknown): value is MessageCatalog {
   return !!value && typeof value === 'object' && !Array.isArray(value)
     && Object.values(value).every(entry => typeof entry === 'string')
@@ -124,7 +134,35 @@ export function getSelectedLanguage() {
   return normalizeLanguage(i18n.global.locale.value)
 }
 
-async function fetchRemoteMessages(lang: string): Promise<MessageCatalog> {
+// One locale only (~300 KB) so localStorage never fills up with every catalog.
+export function readCachedCatalog(lang: string): CachedCatalog | null {
+  try {
+    const raw = localStorage.getItem(CATALOG_STORAGE_KEY)
+    if (!raw)
+      return null
+    const cached = JSON.parse(raw) as Partial<CachedCatalog>
+    if (cached.lang !== lang || typeof cached.checksum !== 'string' || !isMessageCatalog(cached.messages))
+      return null
+    return cached as CachedCatalog
+  }
+  catch {
+    return null
+  }
+}
+
+function writeCachedCatalog(lang: string, checksum: unknown, messages: MessageCatalog) {
+  if (typeof checksum !== 'string' || lang !== requestedLanguage)
+    return
+  try {
+    localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({ checksum, lang, messages }))
+  }
+  catch (error) {
+    console.warn('Unable to cache translation catalog', error)
+  }
+}
+
+// Resolves to null when the worker confirms `knownChecksum` is still current.
+async function fetchRemoteMessages(lang: string, knownChecksum?: string): Promise<MessageCatalog | null> {
   const pending = pendingLanguageLoads.get(lang)
   if (pending)
     return pending
@@ -136,6 +174,7 @@ async function fetchRemoteMessages(lang: string): Promise<MessageCatalog> {
     },
     body: JSON.stringify({
       targetLanguage: getWorkerLanguageCode(lang),
+      ...(knownChecksum ? { checksum: knownChecksum } : {}),
     }),
   }).then(async (response) => {
     if (response.status === 202)
@@ -143,10 +182,13 @@ async function fetchRemoteMessages(lang: string): Promise<MessageCatalog> {
     if (!response.ok)
       throw new RemoteLanguageError('unavailable')
 
-    const payload = await response.json() as { messages?: unknown }
+    const payload = await response.json() as { checksum?: unknown, messages?: unknown, status?: unknown }
+    if (payload.status === 'not_modified')
+      return null
     if (!isMessageCatalog(payload.messages))
       throw new RemoteLanguageError('unavailable')
 
+    writeCachedCatalog(lang, payload.checksum, payload.messages)
     return { ...sourceMessages, ...payload.messages }
   }).catch((error) => {
     if (error instanceof RemoteLanguageError)
@@ -164,31 +206,59 @@ async function ensureLanguageLoaded(lang: Locale) {
   if (loadedLanguages.has(lang))
     return
 
+  const cached = readCachedCatalog(lang)
+  if (cached) {
+    // Serve the cached catalog now, revalidate in the background.
+    i18n.global.setLocaleMessage(lang, { ...sourceMessages, ...cached.messages } as any)
+    loadedLanguages.add(lang)
+    void fetchRemoteMessages(lang, cached.checksum).then((messages) => {
+      if (messages)
+        i18n.global.setLocaleMessage(lang, messages as any)
+    }).catch((error) => {
+      console.warn('Translation catalog revalidation failed', error)
+    })
+    return
+  }
+
   const messages = await fetchRemoteMessages(lang)
+  if (!messages)
+    throw new RemoteLanguageError('unavailable')
   i18n.global.setLocaleMessage(lang, messages as any)
   loadedLanguages.add(lang)
 }
 
 export async function loadLanguageAsync(lang: string): Promise<Locale> {
   const normalized = normalizeLanguage(lang)
+  requestedLanguage = normalized
 
   if (normalized === FALLBACK_LOCALE)
     return setI18nLanguage(FALLBACK_LOCALE)
 
   await ensureLanguageLoaded(normalized)
+  // A newer selection was made while this one loaded: leave the active locale alone.
+  if (normalized !== requestedLanguage)
+    return getSelectedLanguage()
   return setI18nLanguage(normalized)
 }
 
-export const install: UserModule = ({ app }) => {
+// Resolves once the initial locale is ready (or after INITIAL_LOAD_TIMEOUT_MS) so main.ts can
+// mount without an English flash. A slow load keeps going and switches the locale when it lands.
+export const install: UserModule = async ({ app }) => {
   app.use(i18n)
 
   const initialLanguage = normalizeLanguage(readStoredLanguage() ?? getNavigatorLanguage())
-  if (initialLanguage !== FALLBACK_LOCALE) {
-    void loadLanguageAsync(initialLanguage).catch(() => {
-      showFallbackLanguage()
-    })
-  }
-  else {
+  if (initialLanguage === FALLBACK_LOCALE) {
     setI18nLanguage(FALLBACK_LOCALE)
+    return
   }
+
+  const load = loadLanguageAsync(initialLanguage).then(() => {}, () => {
+    if (requestedLanguage === initialLanguage)
+      showFallbackLanguage()
+  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([load, new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, INITIAL_LOAD_TIMEOUT_MS)
+  })])
+  clearTimeout(timer)
 }

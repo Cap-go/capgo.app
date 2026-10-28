@@ -611,6 +611,7 @@ onMounted(async () => {
       :org-id="orgId"
       @close="showCancelModal = false"
       @canceled="onCanceled"
+      @saved="onCanceled"
     />
     <RbacPermissionOnlyModal
       v-if="permissionModal"
