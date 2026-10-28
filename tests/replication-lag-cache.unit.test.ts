@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { REPLICA_LAG_QUERY } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 import { setReplicationLagHeader } from '../supabase/functions/_backend/utils/pg.ts'
 
 function makeContext(databaseSource: string) {
@@ -56,6 +57,14 @@ describe('replication lag header cache', () => {
     await setReplicationLagHeader(third.context as any, pool as any)
     expect(third.headers.get('X-Replication-Lag-Seconds')).toBe('25')
     expect(pool.query).toHaveBeenCalledTimes(2)
+  })
+
+  it('queries the shared REPLICA_LAG_QUERY on the replica pool', async () => {
+    vi.stubGlobal('caches', undefined)
+    const pool = { query: vi.fn().mockResolvedValue({ rows: [{ lag_seconds: '3' }] }) }
+    const source = `replica-query-${crypto.randomUUID()}`
+    await setReplicationLagHeader(makeContext(source).context as any, pool as any)
+    expect(pool.query).toHaveBeenCalledWith(REPLICA_LAG_QUERY)
   })
 
   it('emits cached zero-second lag values', async () => {

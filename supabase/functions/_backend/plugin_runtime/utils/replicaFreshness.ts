@@ -41,6 +41,8 @@ export const EDGE_CACHE_MAX_REPLICA_LAG_SECONDS = 60
 /** TTL of an edge cache refill from a replica measured lagging. */
 export const EDGE_CACHE_UNVERIFIED_REPLICA_TTL_SECONDS = 30
 
+export const REPLICATION_LAG_APPLY_THRESHOLD_SECONDS = 180
+
 /**
  * Replica lag SQL. The EU replica is the logical subscriber of the primary
  * (pg_stat_subscription); the regional replicas are physical standbys of that
@@ -53,10 +55,29 @@ export const EDGE_CACHE_UNVERIFIED_REPLICA_TTL_SECONDS = 30
  * still counts as running.
  *
  * On the logical subscriber (not in recovery), lag is apply progress:
- * latest_end_time and received_lsn vs latest_end_lsn. last_msg_receipt_time
- * only measures receive; a stuck apply worker can keep it fresh while data
- * stays stale.
+ * latest_end_time (last apply position acknowledged upstream; not proof the
+ * worker finished applying) and received_lsn vs latest_end_lsn. When WAL was
+ * received but not applied and latest_end_time is missing, treat as stalled
+ * (do not use fresh last_msg_receipt_time alone).
  */
+export const UNAPPLIED_LOGICAL_SUBSCRIBER_WAL_LAG_SECONDS = REPLICATION_LAG_APPLY_THRESHOLD_SECONDS + 1
+
+/** CASE expression for one pg_stat_subscription row (optional column prefix). */
+export function logicalSubscriberApplyLagCaseSql(columnPrefix = ''): string {
+  const p = columnPrefix
+  return `CASE
+          WHEN ${p}latest_end_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - ${p}latest_end_time))
+          WHEN ${p}received_lsn IS NOT NULL
+            AND ${p}latest_end_lsn IS NOT NULL
+            AND ${p}received_lsn::pg_lsn > ${p}latest_end_lsn::pg_lsn THEN
+            ${UNAPPLIED_LOGICAL_SUBSCRIBER_WAL_LAG_SECONDS}::double precision
+          WHEN ${p}last_msg_receipt_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - ${p}last_msg_receipt_time))
+          ELSE NULL
+        END`
+}
+
 export const REPLICA_LAG_QUERY = `
   SELECT CASE
     WHEN pg_is_in_recovery() THEN
@@ -69,25 +90,24 @@ export const REPLICA_LAG_QUERY = `
       END
     ELSE (
       SELECT MAX(
-        CASE
-          WHEN latest_end_time IS NOT NULL THEN
-            EXTRACT(EPOCH FROM (now() - latest_end_time))
-          WHEN received_lsn IS NOT NULL
-            AND latest_end_lsn IS NOT NULL
-            AND received_lsn > latest_end_lsn
-            AND last_msg_receipt_time IS NOT NULL THEN
-            EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))
-          WHEN last_msg_receipt_time IS NOT NULL THEN
-            EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))
-          ELSE NULL
-        END
+        ${logicalSubscriberApplyLagCaseSql('')}
       )
       FROM pg_stat_subscription
     )
   END AS lag_seconds
 `
 
-export const REPLICATION_LAG_APPLY_THRESHOLD_SECONDS = 180
+/** Evaluate the shared CASE against synthetic subscription stats (tests). */
+export const LOGICAL_SUBSCRIBER_APPLY_LAG_PROBE_SQL = `
+  SELECT ${logicalSubscriberApplyLagCaseSql('ss.')} AS lag_seconds
+  FROM (
+    SELECT
+      $1::timestamptz AS latest_end_time,
+      $2::timestamptz AS last_msg_receipt_time,
+      $3::pg_lsn AS received_lsn,
+      $4::pg_lsn AS latest_end_lsn
+  ) ss
+`
 
 export interface LogicalSubscriberLagRow {
   last_msg_receipt_time?: Date | string | null
@@ -103,7 +123,32 @@ function toLagTimestamp(value: Date | string | null | undefined): number | null 
   return Number.isFinite(ms) ? ms : null
 }
 
-/** Mirrors the logical-subscriber branch of REPLICA_LAG_QUERY for unit tests. */
+export function parsePgLsnParts(lsn: string): { high: number, low: number } | null {
+  const trimmed = lsn.trim()
+  const slash = trimmed.indexOf('/')
+  if (slash <= 0)
+    return null
+  const highHex = trimmed.slice(0, slash)
+  const lowHex = trimmed.slice(slash + 1)
+  if (!/^[0-9a-fA-F]+$/.test(highHex) || !/^[0-9a-fA-F]+$/.test(lowHex))
+    return null
+  return {
+    high: Number.parseInt(highHex, 16),
+    low: Number.parseInt(lowHex, 16),
+  }
+}
+
+export function pgLsnGreaterThan(received: string, latestEndLsn: string): boolean {
+  const a = parsePgLsnParts(received)
+  const b = parsePgLsnParts(latestEndLsn)
+  if (!a || !b)
+    return false
+  if (a.high !== b.high)
+    return a.high > b.high
+  return a.low > b.low
+}
+
+/** Mirrors logicalSubscriberApplyLagCaseSql for offline checks (keep in sync). */
 export function computeLogicalSubscriberApplyLagSeconds(
   row: LogicalSubscriberLagRow,
   nowMs = Date.now(),
@@ -115,8 +160,8 @@ export function computeLogicalSubscriberApplyLagSeconds(
   const receiptMs = toLagTimestamp(row.last_msg_receipt_time)
   const received = row.received_lsn?.trim()
   const latestEndLsn = row.latest_end_lsn?.trim()
-  if (received && latestEndLsn && received > latestEndLsn && receiptMs !== null)
-    return (nowMs - receiptMs) / 1000
+  if (received && latestEndLsn && pgLsnGreaterThan(received, latestEndLsn))
+    return UNAPPLIED_LOGICAL_SUBSCRIBER_WAL_LAG_SECONDS
 
   if (receiptMs !== null)
     return (nowMs - receiptMs) / 1000
