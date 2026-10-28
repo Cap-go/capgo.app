@@ -3,11 +3,13 @@ import {
   type AlertTailRecord,
 } from './tail_logic.ts'
 import {
-  applyCrossCallThrottle,
+  commitThrottleWrites,
   MemoryThrottleStore,
   parseThrottleSummaryIntervalSec,
   parseThrottleWindowSec,
+  planCrossCallThrottle,
   type ThrottleOptions,
+  type ThrottleWrite,
 } from './throttle_logic.ts'
 
 type ApplyThrottleRequest = {
@@ -19,10 +21,25 @@ type ApplyThrottleRequest = {
 
 export class AlertThrottle {
   private readonly store = new MemoryThrottleStore()
+  private pendingWrites: ThrottleWrite[] | null = null
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
     if (request.method !== 'POST')
       return new Response('method not allowed', { status: 405 })
+
+    if (url.pathname.endsWith('/ack')) {
+      if (this.pendingWrites) {
+        await commitThrottleWrites(this.store, this.pendingWrites)
+        this.pendingWrites = null
+      }
+      return Response.json({ status: 'ok' })
+    }
+
+    if (url.pathname.endsWith('/rollback')) {
+      this.pendingWrites = null
+      return Response.json({ status: 'ok' })
+    }
 
     let body: ApplyThrottleRequest
     try {
@@ -37,13 +54,14 @@ export class AlertThrottle {
       summaryIntervalMs: (body.summaryIntervalSec ?? parseThrottleSummaryIntervalSec(undefined)) * 1000,
     }
 
-    const throttled = await applyCrossCallThrottle(
+    const { toSend, writes } = await planCrossCallThrottle(
       body.records ?? [],
       this.store,
       body.nowMs ?? Date.now(),
       options,
     )
-    const alerts = capPostBodyAlerts(throttled)
+    this.pendingWrites = writes
+    const alerts = capPostBodyAlerts(toSend)
     return Response.json({ alerts })
   }
 }

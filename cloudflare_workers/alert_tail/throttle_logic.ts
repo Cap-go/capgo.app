@@ -55,6 +55,11 @@ export function buildSuppressedSummaryAlert(
   }
 }
 
+export type ThrottleWrite = {
+  key: string
+  state: ThrottleState
+}
+
 function shouldEmitPeriodicSummary(state: ThrottleState, nowMs: number, summaryIntervalMs: number): boolean {
   return state.suppressed > 0 && nowMs - state.lastSummaryMs >= summaryIntervalMs
 }
@@ -64,14 +69,15 @@ export async function hashThrottleStoreKey(dedupeKeyStr: string): Promise<string
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-export async function applyCrossCallThrottle(
+export async function planCrossCallThrottle(
   records: AlertTailRecord[],
   store: ThrottleStore,
   nowMs: number,
   options: ThrottleOptions,
-): Promise<AlertTailRecord[]> {
+): Promise<{ toSend: AlertTailRecord[], writes: ThrottleWrite[] }> {
   const { windowMs, summaryIntervalMs } = options
   const toSend: AlertTailRecord[] = []
+  const writes: ThrottleWrite[] = []
 
   for (const record of records) {
     const key = await hashThrottleStoreKey(dedupeKey(record))
@@ -83,11 +89,14 @@ export async function applyCrossCallThrottle(
         toSend.push(buildSuppressedSummaryAlert(existing.template, existing.suppressed, nowMs))
 
       toSend.push(record)
-      await store.put(key, {
-        windowStartMs: nowMs,
-        lastSummaryMs: nowMs,
-        suppressed: 0,
-        template: recordTemplate(record),
+      writes.push({
+        key,
+        state: {
+          windowStartMs: nowMs,
+          lastSummaryMs: nowMs,
+          suppressed: 0,
+          template: recordTemplate(record),
+        },
       })
       continue
     }
@@ -103,9 +112,25 @@ export async function applyCrossCallThrottle(
       next.lastSummaryMs = nowMs
     }
 
-    await store.put(key, next)
+    writes.push({ key, state: next })
   }
 
+  return { toSend, writes }
+}
+
+export async function commitThrottleWrites(store: ThrottleStore, writes: ThrottleWrite[]): Promise<void> {
+  for (const write of writes)
+    await store.put(write.key, write.state)
+}
+
+export async function applyCrossCallThrottle(
+  records: AlertTailRecord[],
+  store: ThrottleStore,
+  nowMs: number,
+  options: ThrottleOptions,
+): Promise<AlertTailRecord[]> {
+  const { toSend, writes } = await planCrossCallThrottle(records, store, nowMs, options)
+  await commitThrottleWrites(store, writes)
   return toSend
 }
 

@@ -3,8 +3,10 @@ import { isAllowedAlertWebhookUrl, redactSensitiveText } from '../cloudflare_wor
 import {
   applyCrossCallThrottle,
   buildSuppressedSummaryAlert,
+  commitThrottleWrites,
   hashThrottleStoreKey,
   MemoryThrottleStore,
+  planCrossCallThrottle,
   parseThrottleSummaryIntervalSec,
   parseThrottleWindowSec,
 } from '../cloudflare_workers/alert_tail/throttle_logic.ts'
@@ -252,6 +254,17 @@ describe('hashThrottleStoreKey', () => {
 })
 
 describe('applyCrossCallThrottle', () => {
+  it.concurrent('commits throttle state only when explicitly applied', async () => {
+    const store = new MemoryThrottleStore()
+    const options = { windowMs: 60_000, summaryIntervalMs: 10_000 }
+    const record = sampleRecord('delayed commit')
+    const plan = await planCrossCallThrottle([record], store, 0, options)
+    expect(plan.toSend).toHaveLength(1)
+    expect(await store.get(await hashThrottleStoreKey(dedupeKey(record)))).toBeNull()
+    await commitThrottleWrites(store, plan.writes)
+    expect(await store.get(await hashThrottleStoreKey(dedupeKey(record)))).not.toBeNull()
+  })
+
   it.concurrent('sends the first alert per signature then periodic summaries', async () => {
     const store = new MemoryThrottleStore()
     const options = { windowMs: 60_000, summaryIntervalMs: 10_000 }

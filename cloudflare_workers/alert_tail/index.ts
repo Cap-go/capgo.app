@@ -31,7 +31,8 @@ async function applyDurableThrottle(
 ): Promise<Awaited<ReturnType<typeof processTailBatch>>> {
   const id = namespace.idFromName(envName)
   const stub = namespace.get(id)
-  const response = await stub.fetch('https://alert-throttle/apply', {
+  const applyUrl = 'https://alert-throttle/apply'
+  const response = await stub.fetch(applyUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -43,10 +44,22 @@ async function applyDurableThrottle(
   })
   if (!response.ok) {
     console.error('alert tail throttle DO failed', response.status)
+    await stub.fetch('https://alert-throttle/rollback', { method: 'POST' })
     return []
   }
   const body = await response.json() as { alerts?: Awaited<ReturnType<typeof processTailBatch>> }
   return body.alerts ?? []
+}
+
+async function finalizeDurableThrottle(
+  namespace: DurableObjectNamespace,
+  envName: string,
+  delivered: boolean,
+): Promise<void> {
+  const id = namespace.idFromName(envName)
+  const stub = namespace.get(id)
+  const path = delivered ? 'https://alert-throttle/ack' : 'https://alert-throttle/rollback'
+  await stub.fetch(path, { method: 'POST' })
 }
 
 export default {
@@ -75,17 +88,22 @@ export default {
         return
 
       let alerts = batch
-      if (env.ALERT_THROTTLE) {
+      const throttleNamespace = env.ALERT_THROTTLE
+      const throttleEnvName = env.ENV_NAME ?? 'capgo_alert_tail'
+      if (throttleNamespace) {
         alerts = await applyDurableThrottle(
-          env.ALERT_THROTTLE,
-          env.ENV_NAME ?? 'capgo_alert_tail',
+          throttleNamespace,
+          throttleEnvName,
           batch,
           env,
         )
       }
 
-      if (alerts.length === 0)
+      if (alerts.length === 0) {
+        if (throttleNamespace)
+          await finalizeDurableThrottle(throttleNamespace, throttleEnvName, false)
         return
+      }
 
       const headers: Record<string, string> = {
         'content-type': 'application/json',
@@ -98,6 +116,9 @@ export default {
         body: JSON.stringify({ alerts }),
         signal: AbortSignal.timeout(5000),
       })
+      if (throttleNamespace)
+        await finalizeDurableThrottle(throttleNamespace, throttleEnvName, response.ok)
+
       if (!response.ok)
         console.error('alert webhook rejected batch', response.status, alerts.length)
     }
