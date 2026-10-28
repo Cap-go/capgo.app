@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { argv, env, exit } from 'node:process'
 
-export type TransientCiJobFailure = 'runner_shutdown' | 'supabase_docker_image_pull' | 'supabase_docker_port_bind'
+export type TransientCiJobFailure = 'runner_shutdown' | 'supabase_docker_image_pull' | 'supabase_docker_port_bind' | 'supabase_edge_runtime_health_check'
 
 interface WorkflowJobStep {
   conclusion: string | null
@@ -40,12 +40,14 @@ export function getTransientCiJobFailure(
   if (!failedStepNames.some(name => /Supabase Start/i.test(name)))
     return null
 
-  const terminalClassifications = [...output.matchAll(/SUPABASE_START_FINAL_FAILURE=(docker_image_pull|docker_port_bind|non_transient)/g)]
+  const terminalClassifications = [...output.matchAll(/SUPABASE_START_FINAL_FAILURE=(docker_image_pull|docker_port_bind|edge_runtime_health_check|non_transient)/g)]
   const startupFailure = terminalClassifications.at(-1)?.[1] ?? null
   if (startupFailure === 'docker_image_pull')
     return 'supabase_docker_image_pull'
   if (startupFailure === 'docker_port_bind')
     return 'supabase_docker_port_bind'
+  if (startupFailure === 'edge_runtime_health_check')
+    return 'supabase_edge_runtime_health_check'
   return null
 }
 

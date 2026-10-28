@@ -40,6 +40,11 @@ describe('transient CI job retry classifier', () => {
     expect(getTransientCiJobFailure(output, ['Run backend integration tests'])).toBeNull()
   })
 
+  it('classifies an exhausted edge runtime health check failure', () => {
+    expect(getTransientCiJobFailure('SUPABASE_START_FINAL_FAILURE=edge_runtime_health_check', ['Run Supabase Start']))
+      .toBe('supabase_edge_runtime_health_check')
+  })
+
   it('classifies exhausted Docker startup failures only when Supabase start failed', () => {
     const output = 'SUPABASE_START_FINAL_FAILURE=docker_image_pull'
 
