@@ -319,8 +319,20 @@ async function querySubscriptionHealth(
       s.subenabled,
       COALESCE(bool_or(ss.pid IS NOT NULL), false) AS has_apply_worker,
       COALESCE(bool_or(ss.last_msg_receipt_time IS NOT NULL), false) AS has_recent_receipt,
-      MAX(EXTRACT(EPOCH FROM (now() - ss.last_msg_receipt_time)))
-        FILTER (WHERE ss.last_msg_receipt_time IS NOT NULL) AS apply_lag_seconds,
+      MAX(
+        CASE
+          WHEN ss.latest_end_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - ss.latest_end_time))
+          WHEN ss.received_lsn IS NOT NULL
+            AND ss.latest_end_lsn IS NOT NULL
+            AND ss.received_lsn > ss.latest_end_lsn
+            AND ss.last_msg_receipt_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - ss.last_msg_receipt_time))
+          WHEN ss.last_msg_receipt_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - ss.last_msg_receipt_time))
+          ELSE NULL
+        END
+      ) AS apply_lag_seconds,
       MAX(ss.last_msg_receipt_time) AS last_msg_receipt_time
     FROM pg_subscription s
     LEFT JOIN pg_stat_subscription ss ON ss.subname = s.subname

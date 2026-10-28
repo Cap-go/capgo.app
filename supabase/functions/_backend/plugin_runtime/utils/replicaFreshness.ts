@@ -51,6 +51,11 @@ export const EDGE_CACHE_UNVERIFIED_REPLICA_TTL_SECONDS = 30
  * not visible from a standby). Roles
  * without pg_read_all_stats see the receiver pid but a NULL status, which
  * still counts as running.
+ *
+ * On the logical subscriber (not in recovery), lag is apply progress:
+ * latest_end_time and received_lsn vs latest_end_lsn. last_msg_receipt_time
+ * only measures receive; a stuck apply worker can keep it fresh while data
+ * stays stale.
  */
 export const REPLICA_LAG_QUERY = `
   SELECT CASE
@@ -63,12 +68,97 @@ export const REPLICA_LAG_QUERY = `
         ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
       END
     ELSE (
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
+      SELECT MAX(
+        CASE
+          WHEN latest_end_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - latest_end_time))
+          WHEN received_lsn IS NOT NULL
+            AND latest_end_lsn IS NOT NULL
+            AND received_lsn > latest_end_lsn
+            AND last_msg_receipt_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))
+          WHEN last_msg_receipt_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))
+          ELSE NULL
+        END
+      )
       FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
     )
   END AS lag_seconds
 `
+
+export const REPLICATION_LAG_APPLY_THRESHOLD_SECONDS = 180
+
+export interface LogicalSubscriberLagRow {
+  last_msg_receipt_time?: Date | string | null
+  latest_end_time?: Date | string | null
+  received_lsn?: string | null
+  latest_end_lsn?: string | null
+}
+
+function toLagTimestamp(value: Date | string | null | undefined): number | null {
+  if (value === null || value === undefined)
+    return null
+  const ms = value instanceof Date ? value.getTime() : Date.parse(value)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/** Mirrors the logical-subscriber branch of REPLICA_LAG_QUERY for unit tests. */
+export function computeLogicalSubscriberApplyLagSeconds(
+  row: LogicalSubscriberLagRow,
+  nowMs = Date.now(),
+): number | null {
+  const latestEndMs = toLagTimestamp(row.latest_end_time)
+  if (latestEndMs !== null)
+    return (nowMs - latestEndMs) / 1000
+
+  const receiptMs = toLagTimestamp(row.last_msg_receipt_time)
+  const received = row.received_lsn?.trim()
+  const latestEndLsn = row.latest_end_lsn?.trim()
+  if (received && latestEndLsn && received > latestEndLsn && receiptMs !== null)
+    return (nowMs - receiptMs) / 1000
+
+  if (receiptMs !== null)
+    return (nowMs - receiptMs) / 1000
+
+  return null
+}
+
+export function maxLogicalSubscriberApplyLagSeconds(
+  rows: LogicalSubscriberLagRow[],
+  nowMs = Date.now(),
+): number | null {
+  let max: number | null = null
+  for (const row of rows) {
+    const lag = computeLogicalSubscriberApplyLagSeconds(row, nowMs)
+    if (lag === null)
+      continue
+    max = max === null ? lag : Math.max(max, lag)
+  }
+  return max
+}
+
+export function replicationLagStatusFromSeconds(
+  lagSeconds: number | null,
+  thresholdSeconds = REPLICATION_LAG_APPLY_THRESHOLD_SECONDS,
+): ReplicationStatus {
+  if (lagSeconds === null)
+    return 'unknown'
+  return lagSeconds > thresholdSeconds ? 'lagging' : 'ok'
+}
+
+/** Cached apply lag for a read-replica source (probe runs on the replica itself). */
+export function isCachedReadReplicaApplyLagging(
+  source: string | null | undefined,
+  thresholdSeconds = REPLICATION_LAG_APPLY_THRESHOLD_SECONDS,
+): boolean {
+  if (!source || !isReadReplicaSource(source))
+    return false
+  const lag = getFreshReplicationLagMemoryEntry(source)
+  if (!lag || lag.max_lag_seconds === null)
+    return false
+  return lag.status === 'lagging' || lag.max_lag_seconds > thresholdSeconds
+}
 
 const REPLICATION_LAG_CACHE_PATH = '/cache/replication-lag'
 

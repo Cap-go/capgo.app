@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CacheHelper } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { getReadReplicaBinding } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { edgeCacheTtlForReplicaLag, isReadReplicaSource, REPLICA_LAG_QUERY, replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
+import { computeLogicalSubscriberApplyLagSeconds, edgeCacheTtlForReplicaLag, isCachedReadReplicaApplyLagging, isReadReplicaSource, maxLogicalSubscriberApplyLagSeconds, REPLICA_LAG_QUERY, REPLICATION_LAG_APPLY_THRESHOLD_SECONDS, replicationLagCacheRequest, replicationLagStatusFromSeconds, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 
 function contextFrom(source: string | undefined) {
   return {
@@ -128,7 +128,52 @@ describe('replica freshness', () => {
     expect(REPLICA_LAG_QUERY).toContain('pg_is_in_recovery()')
     expect(REPLICA_LAG_QUERY).toContain('pg_last_xact_replay_timestamp()')
     expect(REPLICA_LAG_QUERY).toContain('pg_stat_subscription')
+    expect(REPLICA_LAG_QUERY).toContain('latest_end_time')
     // Readable without pg_read_all_stats (status is NULL then).
     expect(REPLICA_LAG_QUERY).toContain('status IS NULL')
+  })
+
+  it('treats a stuck subscriber with fresh receipt but stale apply as lagging', () => {
+    const now = Date.parse('2026-10-28T12:00:00.000Z')
+    const receiptFresh = new Date(now - 5_000)
+    const applyStale = new Date(now - 400_000)
+    const row = {
+      last_msg_receipt_time: receiptFresh,
+      latest_end_time: applyStale,
+      received_lsn: '0/300',
+      latest_end_lsn: '0/100',
+    }
+    const receiptOnlyLag = (now - receiptFresh.getTime()) / 1000
+    expect(receiptOnlyLag).toBeLessThan(REPLICATION_LAG_APPLY_THRESHOLD_SECONDS)
+
+    const applyLag = computeLogicalSubscriberApplyLagSeconds(row, now)
+    expect(applyLag).toBeGreaterThan(REPLICATION_LAG_APPLY_THRESHOLD_SECONDS)
+    expect(replicationLagStatusFromSeconds(applyLag)).toBe('lagging')
+
+    const aggregate = maxLogicalSubscriberApplyLagSeconds([row], now)
+    expect(aggregate).toBe(applyLag)
+  })
+
+  it('uses the 180s apply threshold for cached primary fallback decisions', () => {
+    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU', { status: 'ok', max_lag_seconds: 181 })
+    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_READ_EU')).toBe(true)
+    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU', { status: 'lagging', max_lag_seconds: 400 })
+    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_READ_EU')).toBe(true)
+    setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_EU', { status: 'ok', max_lag_seconds: 2 })
+    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_READ_EU')).toBe(false)
+    expect(isCachedReadReplicaApplyLagging('HYPERDRIVE_CAPGO_DIRECT_EU')).toBe(false)
+  })
+
+  it('keeps a healthy subscriber with fresh apply at ok lag', () => {
+    const now = Date.parse('2026-10-28T12:00:00.000Z')
+    const fresh = new Date(now - 2_000)
+    const lag = computeLogicalSubscriberApplyLagSeconds({
+      last_msg_receipt_time: fresh,
+      latest_end_time: fresh,
+      received_lsn: '0/100',
+      latest_end_lsn: '0/100',
+    }, now)
+    expect(lag).toBeLessThanOrEqual(2)
+    expect(replicationLagStatusFromSeconds(lag)).toBe('ok')
   })
 })

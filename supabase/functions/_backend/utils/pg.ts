@@ -217,9 +217,21 @@ const REPLICA_LAG_QUERY = `
         ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
       END
     ELSE (
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
+      SELECT MAX(
+        CASE
+          WHEN latest_end_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - latest_end_time))
+          WHEN received_lsn IS NOT NULL
+            AND latest_end_lsn IS NOT NULL
+            AND received_lsn > latest_end_lsn
+            AND last_msg_receipt_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))
+          WHEN last_msg_receipt_time IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))
+          ELSE NULL
+        END
+      )
       FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
     )
   END AS lag_seconds
 `

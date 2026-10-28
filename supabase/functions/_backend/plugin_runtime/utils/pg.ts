@@ -19,7 +19,7 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
-import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
+import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isCachedReadReplicaApplyLagging, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
@@ -310,6 +310,8 @@ function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): strin
     return null
 
   setDatabaseSource(c, selectedRoute.binding)
+  if (isCachedReadReplicaApplyLagging(selectedRoute.binding))
+    return null
   return c.env[selectedRoute.binding].connectionString
 }
 
@@ -339,11 +341,14 @@ export function getDatabaseURL(c: Context, readOnly = false): string {
       return localReadOnlyDatabaseURL
   }
 
-  if (readOnly && shouldRequireReadReplica(c)) {
+  const replicaBinding = getReadReplicaBinding(c)
+  const replicaApplyLagging = isCachedReadReplicaApplyLagging(replicaBinding)
+
+  if (readOnly && shouldRequireReadReplica(c) && !replicaApplyLagging) {
     throw new Error('Read replica is required for this endpoint')
   }
 
-  if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU && !shouldSkipDirectHyperdriveFallback(c)) {
+  if (c.env.HYPERDRIVE_CAPGO_DIRECT_EU && (!shouldSkipDirectHyperdriveFallback(c) || replicaApplyLagging)) {
     setDatabaseSource(c, 'HYPERDRIVE_CAPGO_DIRECT_EU')
     return c.env.HYPERDRIVE_CAPGO_DIRECT_EU.connectionString
   }
