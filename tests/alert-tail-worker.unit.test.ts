@@ -5,5 +5,6 @@ describe('alert tail worker exports', () => {
   it.concurrent('exports the tail handler and AlertThrottle durable object', () => {
     expect(typeof worker.tail).toBe('function')
     expect(AlertThrottle).toBeTypeOf('function')
+    expect(AlertThrottle.length).toBe(1)
   })
 })
