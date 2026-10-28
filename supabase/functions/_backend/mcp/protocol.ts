@@ -110,8 +110,10 @@ export function withErrorGuidance(result: McpToolResult, tool: string): McpToolR
       requestId: typeof record.request_id === 'string' ? record.request_id : undefined,
       tool,
     })
-    // Guidance first, so it survives when a huge error body is cut at the result size limit.
-    return textResult({ [GUIDANCE_KEY]: guidance, ...record }, true)
+    // Guidance first, so it survives when a huge error body is cut at the result size limit. Drop any
+    // empty how_to_fix the API sent, so it cannot overwrite the generated one.
+    const { [GUIDANCE_KEY]: _empty, ...rest } = record
+    return textResult({ [GUIDANCE_KEY]: guidance, ...rest }, true)
   }
   const guidance = guidanceForError({ message: text, tool })
   const guidanceText = `\n\n${GUIDANCE_KEY} (${guidance.kind}):\n${guidance.next_steps.map(step => `- ${step}`).join('\n')}`

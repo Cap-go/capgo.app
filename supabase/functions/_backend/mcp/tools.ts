@@ -994,14 +994,25 @@ const requestBuildTool: McpTool = {
     const signed = await ctx.call({ method: 'POST', path: `/build/upload_url/${enc(job.job_id)}`, body: { app_id: id } })
     if (!signed.ok)
       return textResult({
+        // Guidance before the error body, which is also bounded, so the finish/cancel steps for this job always fit.
+        how_to_fix: buildUploadUrlGuidance(job.job_id, signed),
         job_id: job.job_id,
         status: signed.status,
-        upload_error: signed.data,
+        upload_error: boundedErrorBody(signed.data),
         ...(signed.requestId ? { request_id: signed.requestId } : {}),
-        how_to_fix: buildUploadUrlGuidance(job.job_id, signed),
       }, true)
     return textResult({ job_id: job.job_id, upload: signed.data, next_step: 'PUT the archive to upload.upload_url, then call capgo_start_build with this job_id.' })
   },
+}
+
+const MAX_EMBEDDED_ERROR_CHARS = 4_000
+
+/** Keep an upstream error body small enough that the steps around it are never truncated. */
+function boundedErrorBody(data: unknown): unknown {
+  const text = typeof data === 'string' ? data : JSON.stringify(data)
+  if (text === undefined || text.length <= MAX_EMBEDDED_ERROR_CHARS)
+    return data
+  return `${text.slice(0, MAX_EMBEDDED_ERROR_CHARS)}… (truncated)`
 }
 
 /** The build exists but has no upload URL: say what blocked it, and how to finish or cancel this job. */

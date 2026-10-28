@@ -67,4 +67,11 @@ const okResponse = { jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', 
 assert.equal(withGuidedErrorResults(okResponse), okResponse)
 assert.equal(withGuidedErrorResults(guidedSdkError), guidedSdkError)
 
+// JSON-RPC errors from the SDK (unknown tool) also get guidance pointing to tools/list.
+const unknownTool = withGuidedErrorResults({ jsonrpc: '2.0', id: 5, error: { code: -32602, message: 'MCP error -32602: Tool capgo_nope not found' } })
+assert.match(unknownTool.error.message, /How to fix \(not_found\)/)
+assert.match(unknownTool.error.message, /tools\/list/)
+assert.equal(unknownTool.error.code, -32602)
+assert.equal(withGuidedErrorResults(unknownTool), unknownTool)
+
 console.log('✅ MCP error guidance tests passed')

@@ -619,6 +619,24 @@ describe('hosted MCP errors always give a way out', () => {
     }
   })
 
+  it.concurrent('replaces an empty how_to_fix from the API with real guidance', async () => {
+    const result = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(404, { error: 'app_not_found', message: 'App not found', how_to_fix: null }))
+    expect(JSON.parse(result.content[0].text).how_to_fix.kind).toBe('not_found')
+  })
+
+  it.concurrent('keeps the build job steps when the upload URL error body is huge', async () => {
+    const ctx: McpToolContext = {
+      call: async request => request.path === '/build/request'
+        ? { ok: true, status: 200, data: { job_id: 'job-7' } }
+        : { ok: false, status: 500, data: { error: 'internal_error', message: 'y'.repeat(200_000) } },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const result = await callTool('capgo_request_build', { appId: 'com.example.app', platform: 'ios' }, ctx)
+    const body = JSON.parse(result.content[0].text)
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('capgo_cancel_build (job_id job-7)')
+    expect(String(body.upload_error)).toContain('(truncated)')
+  })
+
   it.concurrent('classifies a build upload URL failure instead of calling it unexpected', async () => {
     const ctx: McpToolContext = {
       call: async request => request.path === '/build/request'

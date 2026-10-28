@@ -49,6 +49,14 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
     ],
   })
 
+  // The SDK rejects unknown or disabled tools before any handler runs ("Tool capgo_x not found").
+  if (/^(mcp error -?\d+: )?tool \S+ (not found|disabled)/.test(text)) {
+    return withEscape('not_found', [
+      'This tool is not registered on the Capgo MCP server (or is disabled). Do not retry the same name.',
+      'Call tools/list to see the available Capgo tools, then call the right one. Tool names start with capgo_.',
+    ])
+  }
+
   if (has(text, ['requires_expiring_key', 'expiration_required', 'expiration_exceeds_max', 'requires api keys with expiration', '2fa', 'two-factor', 'password_policy', 'security policy'])) {
     return withEscape('security_policy', [
       'The organization enforces a security policy (API key expiration, 2FA or password rules) that the saved key or user does not meet. Retrying will not help.',
@@ -185,10 +193,17 @@ export function withErrorGuidance<H extends (...args: any[]) => Promise<unknown>
 }
 
 /**
- * Last safety net on the transport: a JSON-RPC response carrying an error tool result that no
- * handler explained (e.g. the SDK rejected the arguments) gets guidance. Other messages pass through.
+ * Last safety net on the transport: a JSON-RPC error (unknown tool, invalid request) or an error tool
+ * result that no handler explained (e.g. the SDK rejected the arguments) gets guidance. Other
+ * messages pass through.
  */
 export function withGuidedErrorResults<M>(message: M): M {
+  // JSON-RPC errors (unknown tool, invalid request) never reach a handler: guide those too.
+  const error = (message as { error?: { message?: unknown } } | null)?.error
+  if (error && typeof error === 'object' && typeof error.message === 'string') {
+    const guided = explainError(error.message)
+    return guided === error.message ? message : { ...message, error: { ...error, message: guided } }
+  }
   const result = (message as { result?: ToolResultLike } | null)?.result
   if (!result || typeof result !== 'object')
     return message
