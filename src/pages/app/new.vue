@@ -23,6 +23,8 @@ const appsCount = ref<number | null>(null)
 const showManualFlow = ref(route.query.mode === 'manual')
 // The AI prompt carries an organization API key: only users who own or may create one get the choice.
 const canUseAiAgent = ref(false)
+// Each init() supersedes the previous one (organization switch): only the latest may apply.
+let initGeneration = 0
 
 const lacksSecurityAccess = computed(() => {
   const org = organizationStore.currentOrganization
@@ -49,6 +51,7 @@ async function fetchAppsCount() {
 }
 
 async function init() {
+  const generation = ++initGeneration
   isLoading.value = true
   try {
     if (lacksSecurityAccess.value)
@@ -61,10 +64,12 @@ async function init() {
       fetchAppsCount(),
       orgId && userId ? canPrepareAgentKey(capgo, { userId, orgId, appId: null, task: 'add-app' }) : Promise.resolve(false),
     ])
-    canUseAiAgent.value = canManageKeys
+    if (generation === initGeneration)
+      canUseAiAgent.value = canManageKeys
   }
   finally {
-    isLoading.value = false
+    if (generation === initGeneration)
+      isLoading.value = false
   }
 }
 

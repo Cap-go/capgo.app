@@ -871,22 +871,13 @@ When it succeeds, tell me the channel name and its settings. The channel appears
 }
 
 /**
- * Prompt copied from "Request a native build". A platform that already built goes straight to
- * `build request` with the saved signing setup; a platform without builds goes through Capgo
- * MCP Builder onboarding, which owns signing and credentials.
+ * Prompt copied from "Request a native build". The console cannot tell whether signing is
+ * stored on Capgo, so the agent first requests the build with the stored signing and only
+ * falls back to Capgo MCP Builder onboarding (which owns signing) when it is missing.
  */
-export function buildAiRequestBuildPrompt(input: AiAppTaskPromptInput & { platform: 'ios' | 'android', platformReady: boolean }): string {
+export function buildAiRequestBuildPrompt(input: AiAppTaskPromptInput & { platform: 'ios' | 'android' }): string {
   const appId = input.app.appId
   const platformLabel = input.platform === 'ios' ? 'iOS' : 'Android'
-  if (!input.platformReady) {
-    return [
-      buildAuthenticationSection(input.apiKey, 'builder'),
-      `${appTaskContext(input)}
-
-I want a ${platformLabel} build of this app (Capgo app ID: \`${appId}\`) and ${platformLabel} is not set up for Capgo Builder yet. When you call \`start_capgo_builder_onboarding\`, pass the \`${input.platform}\` platform.`,
-      BUILDER_MCP_SECTION,
-    ].join('\n\n')
-  }
   return [
     buildAuthenticationSection(input.apiKey, 'task'),
     `## 2. Request a native build
@@ -898,8 +889,10 @@ ${appTaskContext(input)}
 
 {CAPGO_CLI_RUNNER} build request ${appId} --platform ${input.platform} --use-stored-credentials
 
-3. Never ask me to paste certificates, passwords or store keys into the chat, and never pass them on the command line. If the build fails because signing or credentials are missing, tell me and stop; I will set them up from the Capgo dashboard or with Capgo MCP Builder onboarding.
+3. Never ask me to paste certificates, passwords or store keys into the chat, and never pass them on the command line.
+4. If the request fails because ${platformLabel} signing or credentials are missing, do not configure them by hand: follow the Capgo MCP section below and pass the \`${input.platform}\` platform to \`start_capgo_builder_onboarding\`. When it reports completion, request the build again with the command above.
 
 When the build is queued, tell me its build ID and status. The build appears in my Capgo dashboard on its own and its logs stream there. Do not change other builds, channels or bundles.`,
+    BUILDER_MCP_SECTION,
   ].join('\n\n')
 }

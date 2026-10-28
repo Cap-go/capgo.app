@@ -299,20 +299,16 @@ describe('AI agent task prompts', () => {
     expect(unnamed).toContain('Ask me for the channel name')
   })
 
-  it.concurrent('requests a build for a ready platform without handling credentials', () => {
-    const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'android', platformReady: true })
+  it.concurrent('requests the build with stored signing first, without handling credentials', () => {
+    const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'android' })
     // Signing saved on Capgo must be usable even when it is not on the agent's machine.
     expect(prompt).toContain('{CAPGO_CLI_RUNNER} build request com.acme.app --platform android --use-stored-credentials')
     expect(prompt).toContain('Never ask me to paste certificates')
-    expect(prompt).not.toContain('start_capgo_builder_onboarding')
+    // Missing signing goes through Builder onboarding, then the build is requested again.
+    expect(prompt.indexOf('build request')).toBeLessThan(prompt.indexOf('Install Capgo MCP and start Builder onboarding'))
+    expect(prompt).toContain('pass the `android` platform to `start_capgo_builder_onboarding`')
     // Builder resolves its own app ID override before the native ID.
     expect(prompt).toContain('`plugins.CapgoBuilder.capgoBuilderAppId` if set')
   })
 
-  it.concurrent('sets up a new platform through Capgo MCP Builder onboarding', () => {
-    const prompt = buildAiRequestBuildPrompt({ apiKey, organization, app, platform: 'ios', platformReady: false })
-    expect(prompt).toContain('start_capgo_builder_onboarding')
-    expect(prompt).toContain('pass the `ios` platform')
-    expect(prompt).not.toContain('build request')
-  })
 })

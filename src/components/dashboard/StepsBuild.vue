@@ -416,7 +416,6 @@ onUnmounted(() => {
         task="request-build"
         :app-id="appId"
         :platform="selectedPlatform"
-        :platform-ready="selectedPlatformHasBuilds"
         or-separator="after"
         @copied="waitForDelegatedBuild"
       />
@@ -477,7 +476,6 @@ onUnmounted(() => {
         task="request-build"
         :app-id="appId"
         :platform="selectedPlatform"
-        :platform-ready="selectedPlatformHasBuilds"
         or-separator="before"
         @copied="waitForDelegatedBuild"
       />
