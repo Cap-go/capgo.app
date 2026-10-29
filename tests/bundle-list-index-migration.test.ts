@@ -14,7 +14,7 @@ async function withIndexFixture(run: (client: PoolClient, schema: string, sql: s
   const client = await pool.connect()
   const schema = `bundle_list_index_${randomUUID().replaceAll('-', '')}`
   const sql = migration.replaceAll(`public.${indexName}`, `${schema}.${indexName}`)
-    .replace('ON public.app_versions', `ON ${schema}.versions`)
+    .replaceAll('ON public.app_versions', `ON ${schema}.versions`)
   try {
     await client.query(`CREATE SCHEMA ${schema}`)
     await client.query(`CREATE TABLE ${schema}.versions (app_id varchar, deleted boolean, created_at timestamptz)`)
@@ -63,6 +63,37 @@ describe('bundle-list index migration preflight', () => {
       await client.query('BEGIN')
       await client.query(sql)
       expect(await indexState(client, schema)).toEqual(prebuilt)
+    })
+  })
+
+  it.concurrent.each([
+    { name: 'missing key', definition: '(app_id, created_at DESC)' },
+    { name: 'wrong key order', definition: '(deleted, app_id, created_at DESC)' },
+    { name: 'ascending time order', definition: '(app_id, deleted, created_at ASC)' },
+    { name: 'different null ordering', definition: '(app_id, deleted, created_at DESC NULLS LAST)' },
+    { name: 'partial predicate', definition: '(app_id, deleted, created_at DESC) WHERE deleted = false' },
+    { name: 'expression key', definition: '(lower(app_id), deleted, created_at DESC)' },
+    { name: 'unique index', definition: '(app_id, deleted, created_at DESC)', unique: true },
+    { name: 'wrong table', definition: '(app_id, deleted, created_at DESC)', otherTable: true },
+  ])('rejects a valid same-name index with $name', async ({ definition, unique, otherTable }) => {
+    await withIndexFixture(async (client, schema, sql) => {
+      const table = otherTable ? 'other_versions' : 'versions'
+      if (otherTable)
+        await client.query(`CREATE TABLE ${schema}.other_versions (LIKE ${schema}.versions)`)
+      await client.query(`CREATE ${unique ? 'UNIQUE ' : ''}INDEX ${indexName} ON ${schema}.${table} ${definition}`)
+      const mismatched = await indexState(client, schema)
+      expect(mismatched).toMatchObject({ indisvalid: true, indisready: true })
+      await client.query('BEGIN')
+      await expect(client.query(sql)).rejects.toMatchObject({
+        code: 'P0001',
+        message: `${indexName} exists with an unexpected definition; inspect it before retrying`,
+      })
+      await client.query('ROLLBACK')
+      expect(await indexState(client, schema)).toEqual(mismatched)
+      await client.query(`DROP INDEX CONCURRENTLY ${schema}.${indexName}`)
+      await client.query('BEGIN')
+      await client.query(sql)
+      expect(await indexState(client, schema)).toMatchObject({ indisvalid: true, indisready: true })
     })
   })
 

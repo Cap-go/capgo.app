@@ -5,7 +5,7 @@
 -- scripts/bench/bundle_list_summary.md. IF NOT EXISTS reuses that valid index.
 SET lock_timeout = '5s';
 
--- A failed concurrent prebuild must not be silently accepted as applied.
+-- Reuse only the exact expected index after a completed concurrent prebuild.
 DO $$
 BEGIN
   IF EXISTS (
@@ -15,6 +15,17 @@ BEGIN
       AND NOT (idx.indisvalid AND idx.indisready)
   ) THEN
     RAISE EXCEPTION 'idx_app_versions_app_deleted_created_at exists but is invalid or not ready; drop it concurrently and retry';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_index AS idx
+    WHERE idx.indexrelid = pg_catalog.to_regclass('public.idx_app_versions_app_deleted_created_at')
+      AND pg_catalog.pg_get_indexdef(idx.indexrelid) <>
+        'CREATE INDEX idx_app_versions_app_deleted_created_at ON public.app_versions USING btree '
+        || '(app_id, deleted, created_at DESC)'
+  ) THEN
+    RAISE EXCEPTION 'idx_app_versions_app_deleted_created_at exists with an unexpected definition; inspect it before retrying';
   END IF;
 END
 $$;

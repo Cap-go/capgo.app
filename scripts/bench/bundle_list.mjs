@@ -149,7 +149,7 @@ try {
     FROM generate_series(1,300000) g`, [appId, deniedApp, org, deniedOrg, USER_ID])
   await query(`INSERT INTO ${schema}.after SELECT * FROM ${schema}.before`)
   const indexStarted = performance.now()
-  await query(migration.replaceAll('public.idx_app_versions_app_deleted_created_at', `${schema}.idx_app_versions_app_deleted_created_at`).replace('ON public.app_versions', `ON ${schema}.after`))
+  await query(migration.replaceAll('public.idx_app_versions_app_deleted_created_at', `${schema}.idx_app_versions_app_deleted_created_at`).replaceAll('ON public.app_versions', `ON ${schema}.after`))
   results.indexBuildMs = performance.now() - indexStarted
   for (const side of ['before', 'after']) {
     await query(`ANALYZE ${schema}.${side}`)

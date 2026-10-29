@@ -79,10 +79,12 @@ migrations automatically; it does not enforce a maintenance window. This PR does
 not run the production prebuild.
 
 1. Inspect any existing index with the following query. A valid, ready index with
-   exactly the expected table and columns can be reused. If it is invalid, drop
-   only that invalid index with `DROP INDEX CONCURRENTLY
+   exactly the expected table, keys, and ordering can be reused. If it is invalid,
+   drop only that invalid index with `DROP INDEX CONCURRENTLY
    public.idx_app_versions_app_deleted_created_at;` outside a transaction before
-   retrying the build. Do not treat a same-name index as proof of a completed build.
+   retrying the build. If its definition differs, inspect its purpose and
+   dependencies before removing or replacing it. Do not treat a same-name index as
+   proof of a completed build.
 
    ```sql
    SELECT i.indisvalid, i.indisready, pg_catalog.pg_get_indexdef(i.indexrelid)
@@ -103,12 +105,15 @@ not run the production prebuild.
    build can leave an invalid index that `IF NOT EXISTS` would skip; remove the
    invalid index concurrently and retry before deployment.
 
-The migration rejects a same-name index that is invalid or not ready, so a failed
-concurrent prebuild cannot silently mark the migration as applied. A valid, ready
-index is reused with `CREATE INDEX IF NOT EXISTS`; its exact definition still
-requires the operator inspection above. The five-second lock timeout bounds lock
-acquisition. Without the prebuild, it performs a regular write-blocking build; this
-fallback is intended for small local and CI databases. The prepared-plan regression
+The migration rejects a same-name index that is invalid, not ready, or has a
+different canonical `pg_get_indexdef` definition. This includes a different table,
+key sequence, sort/null ordering, uniqueness, expression, or partial predicate. A
+matching valid, ready index is reused with `CREATE INDEX IF NOT EXISTS`; a failed
+or mismatched prebuild cannot silently mark the migration as applied. The operator
+inspection above still verifies the prebuild before automatic deployment. The
+five-second lock timeout bounds lock acquisition. Without the prebuild, it performs
+a regular write-blocking build; this fallback is intended for small local and CI
+databases. The prepared-plan regression
 tests disable sequential scans and explicit sorts only to assert that this specific
 index is usable with both boolean values and both plan modes; the production-like
 benchmark above measures natural plans.
