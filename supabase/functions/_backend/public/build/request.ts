@@ -286,7 +286,7 @@ async function resolveStoredBuildCredentials(c: Context, input: {
   }
 }
 
-async function ensureBuildPermission(c: Context, appId: string, userId: string) {
+export async function ensureBuildPermission(c: Context, appId: string, userId: string) {
   // Check if the user has permission to request builds (auth context set by middlewareKey)
   if (!(await checkPermission(c, 'app.build_native', { appId }))) {
     cloudlogErr({
@@ -299,7 +299,7 @@ async function ensureBuildPermission(c: Context, appId: string, userId: string) 
   }
 }
 
-async function getBuildOwnerOrg(c: Context, principal: RlsPrincipal, appId: string): Promise<string> {
+export async function getBuildOwnerOrg(c: Context, principal: RlsPrincipal, appId: string): Promise<string> {
   // Get org_id for the app to use as anonymized user ID
   let app: { owner_org: string } | null = null
   let appError: unknown = null
@@ -322,7 +322,7 @@ async function getBuildOwnerOrg(c: Context, principal: RlsPrincipal, appId: stri
   return app.owner_org
 }
 
-async function ensureBuildTimePlanAllowed(c: Context, principal: RlsPrincipal, orgId: string, appId: string) {
+export async function ensureBuildTimePlanAllowed(c: Context, principal: RlsPrincipal, orgId: string, appId: string) {
   // Native builds consume build-time credits; check that metric before creating a builder job.
   let buildTimeAllowed: boolean | null = null
   let buildTimePlanError: unknown = null

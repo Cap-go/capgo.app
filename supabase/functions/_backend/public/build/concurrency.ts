@@ -177,28 +177,29 @@ async function readPlanConcurrencyLimit(client: PgClient, orgId: string): Promis
   return { planName, limit }
 }
 
+export const ACTIVE_SIMULATOR_STATUSES = ['new', 'queued', 'starting', 'in-progress'] as const
+
+// One number for the plan limit: a native build and a running simulator each take a builder slot.
+export function occupiedBuilderSlotsSql(excludeBuildRequestId?: string): string {
+  const buildWhere = excludeBuildRequestId
+    ? `owner_org = $1 AND id <> $2::uuid AND NOT (status = ANY($3::varchar[]))`
+    : `owner_org = $1 AND NOT (status = ANY($2::varchar[]))`
+  return `
+    SELECT (
+      (SELECT COUNT(*) FROM public.build_requests WHERE ${buildWhere})
+      + (SELECT COUNT(*) FROM public.simulator_sessions WHERE owner_org = $1 AND status = ANY(ARRAY['new','queued','starting','in-progress']::text[]))
+    )::text AS active_count
+  `
+}
+
 async function countActiveNativeBuilds(client: PgClient, orgId: string, excludeBuildRequestId?: string): Promise<number> {
-  // Bounded by idx_build_requests_org (owner_org); org-scoped active rows stay small.
-  const activeBuildsResult = excludeBuildRequestId
-    ? await client.query<{ active_count: string }>(
-        `
-          SELECT COUNT(*)::text AS active_count
-          FROM public.build_requests
-          WHERE owner_org = $1
-            AND id <> $2::uuid
-            AND NOT (status = ANY($3::varchar[]))
-        `,
-        [orgId, excludeBuildRequestId, NON_ACTIVE_NATIVE_BUILD_STATUSES],
-      )
-    : await client.query<{ active_count: string }>(
-        `
-          SELECT COUNT(*)::text AS active_count
-          FROM public.build_requests
-          WHERE owner_org = $1
-            AND NOT (status = ANY($2::varchar[]))
-        `,
-        [orgId, NON_ACTIVE_NATIVE_BUILD_STATUSES],
-      )
+  // Bounded by idx_build_requests_org and simulator_sessions_owner_active_idx.
+  const activeBuildsResult = await client.query<{ active_count: string }>(
+    occupiedBuilderSlotsSql(excludeBuildRequestId),
+    excludeBuildRequestId
+      ? [orgId, excludeBuildRequestId, NON_ACTIVE_NATIVE_BUILD_STATUSES]
+      : [orgId, NON_ACTIVE_NATIVE_BUILD_STATUSES],
+  )
 
   return Number(activeBuildsResult.rows[0]?.active_count ?? 0)
 }
@@ -343,6 +344,78 @@ export async function reserveNativeBuildSlot(
     }
     logPgError(c, 'reserve_native_build_slot', error)
     throw simpleError('internal_error', 'Unable to reserve native build slot', { error: (error as Error)?.message })
+  }
+  finally {
+    releasePgClient(pgPool, client)
+    if (pgPool)
+      await closeClient(c, pgPool)
+  }
+}
+
+export interface SimulatorSlotReservation extends NativeBuildConcurrencyState {
+  id: string
+}
+
+export async function reserveSimulatorSlot(
+  c: Context,
+  input: { orgId: string, appId: string, userId: string, platform: 'ios' | 'android', name?: string },
+): Promise<SimulatorSlotReservation> {
+  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
+  let client: PgClient | null = null
+
+  try {
+    pgPool = await getPgClient(c)
+    client = await checkoutPgClient(pgPool) as PgClient
+    await beginWriteTransaction(client)
+
+    const orgLock = await client.query(
+      'SELECT id FROM public.orgs WHERE id = $1 FOR UPDATE',
+      [input.orgId],
+    )
+    if ((orgLock.rowCount ?? 0) !== 1)
+      throw simpleError('not_found', 'Organization not found')
+
+    const { planName, limit } = await readPlanConcurrencyLimit(client, input.orgId)
+    const activeBuilds = await countActiveNativeBuilds(client, input.orgId)
+    const upgradeUrl = getPlansUpgradeUrl(c)
+    if (activeBuilds >= limit) {
+      throwNativeBuildConcurrencyLimit(c, { activeBuilds, limit, planName, upgradeUrl }, {
+        orgId: input.orgId,
+        appId: input.appId,
+        userId: input.userId,
+      })
+    }
+
+    const inserted = await client.query<{ id: string }>(
+      `
+        INSERT INTO public.simulator_sessions (
+          owner_org, app_id, platform, name, status, requested_by, max_duration_minutes
+        )
+        VALUES ($1, $2, $3, $4, 'starting', $5, 40)
+        RETURNING id
+      `,
+      [input.orgId, input.appId, input.platform, input.name ?? null, input.userId],
+    )
+    const id = inserted.rows[0]?.id
+    if (!id)
+      throw simpleError('internal_error', 'Unable to reserve simulator slot')
+
+    await client.query('COMMIT')
+    return { id, activeBuilds, limit, planName, upgradeUrl }
+  }
+  catch (error) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch {
+        // Preserve the original error.
+      }
+    }
+    if (error instanceof HTTPException)
+      throw error
+    logPgError(c, 'reserve_simulator_slot', error)
+    throw simpleError('internal_error', 'Unable to reserve simulator slot', { error: (error as Error)?.message })
   }
   finally {
     releasePgClient(pgPool, client)

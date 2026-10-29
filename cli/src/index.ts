@@ -72,6 +72,7 @@ import { capturePosthogException, getCommandPath, shouldCapturePosthogException 
 import { getPreviewQr } from './preview/qr'
 import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
+import { getSimulatorCommand, startSimulatorCommand, stopSimulatorCommand } from './simulator/session'
 import { CliUserError } from './shared/cli-user-error'
 import { ORG_EMAIL_PREFERENCE_KEYS, USER_EMAIL_PREFERENCE_KEYS } from './shared/email-preferences'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
@@ -1776,6 +1777,36 @@ Example: npx @capgo/cli@latest mcp`)
   .action(async () => {
     await startMcpServer(getConfigWriteTarget())
   })
+
+const simulator = program
+  .command('simulator')
+  .description('Start a cloud simulator. A running simulator uses one builder slot and build minutes.')
+
+simulator
+  .command('start [appId]')
+  .description('Start an iOS or Android simulator and print its session URL.')
+  .action(startSimulatorCommand)
+  .option('-p, --platform <platform>', 'ios or android', 'ios')
+  .option('-n, --name <name>', 'Session name')
+  .option('--json', 'Print the session JSON')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+simulator
+  .command('get [sessionId] [appId]')
+  .description('Read one simulator session.')
+  .action(getSimulatorCommand)
+  .option('--json', 'Print the session JSON')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+simulator
+  .command('stop [sessionId] [appId]')
+  .description('Stop a simulator session and record its build minutes.')
+  .action(stopSimulatorCommand)
+  .option('--json', 'Print the session JSON')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
 
 program.exitOverride()
 program.configureOutput({

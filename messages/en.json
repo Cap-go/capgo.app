@@ -4147,5 +4147,12 @@
   "validation-contains-uppercase": "{label} must contain uppercase letters.",
   "validation-contains-lowercase": "{label} must contain lowercase letters.",
   "validation-contains-numeric": "{label} must contain numbers.",
-  "validation-contains-symbol": "{label} must contain symbols."
+  "validation-contains-symbol": "{label} must contain symbols.",
+  "simulator": "Simulator",
+  "simulator-did-not-start": "Simulator did not start.",
+  "simulator-sign-in": "Sign in again.",
+  "simulator-slot-minutes": "A running simulator uses one builder slot and build minutes.",
+  "simulator-starting": "Starting",
+  "start-android-simulator": "Start Android simulator",
+  "start-ios-simulator": "Start iOS simulator"
 }

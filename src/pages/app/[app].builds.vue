@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import BuildChartControls from '~/components/dashboard/BuildChartControls.vue'
+import SimulatorSessionCard from '../../components/dashboard/SimulatorSessionCard.vue'
 import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
 import { useConsole } from '~/services/console'
@@ -103,6 +104,7 @@ watchEffect(async () => {
             </div>
           </div>
 
+          <SimulatorSessionCard v-if="!showingBuildSteps && id" :app-id="id" />
           <BuildTable :app-id="id" @update:showing-steps="showingBuildSteps = $event" />
         </div>
       </div>
