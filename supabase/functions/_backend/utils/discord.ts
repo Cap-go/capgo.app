@@ -9,7 +9,7 @@ import { getEnv } from './utils.ts'
 // Fields that should be completely removed from logs (never logged)
 const REMOVED_FIELDS = ['password', 'x-chatgpt-token']
 // Fields that should show first 4 and last 4 characters
-const PARTIALLY_REDACTED_FIELDS = ['secret', 'token', 'apikey', 'api_key', 'authorization', 'credential', 'private_key']
+const PARTIALLY_REDACTED_FIELDS = ['capgkey', 'x-api-key', 'secret', 'token', 'apikey', 'api_key', 'authorization', 'credential', 'private_key']
 
 // Partially redact a value - show first 4 and last 4 characters
 function partialRedact(value: string): string {
