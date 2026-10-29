@@ -8,6 +8,15 @@ SET lock_timeout = '5s';
 -- Reuse only the exact expected index after a completed concurrent prebuild.
 DO $$
 BEGIN
+  IF pg_catalog.to_regclass('public.idx_app_versions_app_deleted_created_at') IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_index AS idx
+      WHERE idx.indexrelid = pg_catalog.to_regclass('public.idx_app_versions_app_deleted_created_at')
+    ) THEN
+    RAISE EXCEPTION 'idx_app_versions_app_deleted_created_at exists but is not an index; inspect it before retrying';
+  END IF;
+
   IF EXISTS (
     SELECT 1
     FROM pg_catalog.pg_index AS idx

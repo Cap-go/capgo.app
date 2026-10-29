@@ -83,13 +83,16 @@ not run the production prebuild.
    drop only that invalid index with `DROP INDEX CONCURRENTLY
    public.idx_app_versions_app_deleted_created_at;` outside a transaction before
    retrying the build. If its definition differs, inspect its purpose and
-   dependencies before removing or replacing it. Do not treat a same-name index as
-   proof of a completed build.
+   dependencies before removing or replacing it. If the name belongs to another
+   relation (such as a table, view, or sequence), inspect that object before renaming
+   or removing it. Do not treat the name alone as proof of a completed index build.
 
    ```sql
-   SELECT i.indisvalid, i.indisready, pg_catalog.pg_get_indexdef(i.indexrelid)
-   FROM pg_catalog.pg_index AS i
-   WHERE i.indexrelid = pg_catalog.to_regclass('public.idx_app_versions_app_deleted_created_at');
+   SELECT rel.relkind, i.indisvalid, i.indisready,
+     pg_catalog.pg_get_indexdef(i.indexrelid) AS indexdef
+   FROM pg_catalog.pg_class AS rel
+   LEFT JOIN pg_catalog.pg_index AS i ON i.indexrelid = rel.oid
+   WHERE rel.oid = pg_catalog.to_regclass('public.idx_app_versions_app_deleted_created_at');
    ```
 
 2. Run the following as a standalone statement, outside a transaction, when the
@@ -105,9 +108,10 @@ not run the production prebuild.
    build can leave an invalid index that `IF NOT EXISTS` would skip; remove the
    invalid index concurrently and retry before deployment.
 
-The migration rejects a same-name index that is invalid, not ready, or has a
-different canonical `pg_get_indexdef` definition. This includes a different table,
-key sequence, sort/null ordering, uniqueness, expression, or partial predicate. A
+The migration rejects a same-name relation that is not an index, as well as an
+index that is invalid, not ready, or has a different canonical `pg_get_indexdef`
+definition. This includes a different table, key sequence, sort/null ordering,
+uniqueness, expression, or partial predicate. A
 matching valid, ready index is reused with `CREATE INDEX IF NOT EXISTS`; a failed
 or mismatched prebuild cannot silently mark the migration as applied. The operator
 inspection above still verifies the prebuild before automatic deployment. The

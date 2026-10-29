@@ -67,6 +67,33 @@ describe('bundle-list index migration preflight', () => {
   })
 
   it.concurrent.each([
+    { kind: 'table', definition: '(id integer)' },
+    { kind: 'view', definition: 'AS SELECT 1 AS id' },
+    { kind: 'sequence', definition: '' },
+    { kind: 'materialized view', definition: 'AS SELECT 1 AS id' },
+  ])('rejects a same-name $kind without changing it', async ({ kind, definition }) => {
+    await withIndexFixture(async (client, schema, sql) => {
+      await client.query(`CREATE ${kind.toUpperCase()} ${schema}.${indexName} ${definition}`)
+      const stateQuery = 'SELECT oid, relkind FROM pg_catalog.pg_class WHERE oid=pg_catalog.to_regclass($1)'
+      const stateParams = [`${schema}.${indexName}`]
+      const original = await client.query(stateQuery, stateParams)
+      expect(original.rows).toHaveLength(1)
+      expect(await indexState(client, schema)).toBeUndefined()
+      await client.query('BEGIN')
+      await expect(client.query(sql)).rejects.toMatchObject({
+        code: 'P0001',
+        message: `${indexName} exists but is not an index; inspect it before retrying`,
+      })
+      await client.query('ROLLBACK')
+      expect((await client.query(stateQuery, stateParams)).rows).toEqual(original.rows)
+      await client.query(`DROP ${kind.toUpperCase()} ${schema}.${indexName}`)
+      await client.query('BEGIN')
+      await client.query(sql)
+      expect(await indexState(client, schema)).toMatchObject({ indisvalid: true, indisready: true })
+    })
+  })
+
+  it.concurrent.each([
     { name: 'missing key', definition: '(app_id, created_at DESC)' },
     { name: 'wrong key order', definition: '(deleted, app_id, created_at DESC)' },
     { name: 'ascending time order', definition: '(app_id, deleted, created_at ASC)' },
