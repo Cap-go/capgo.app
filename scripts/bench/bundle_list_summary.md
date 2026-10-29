@@ -103,9 +103,12 @@ not run the production prebuild.
    build can leave an invalid index that `IF NOT EXISTS` would skip; remove the
    invalid index concurrently and retry before deployment.
 
-The migration uses `CREATE INDEX IF NOT EXISTS` to reuse the prebuilt index. Its
-five-second lock timeout still bounds lock acquisition. Without the prebuild, it
-performs a regular write-blocking build; this fallback is intended for small local
-and CI databases. The prepared-plan regression tests disable sequential scans
-only to assert that this specific index is usable with both boolean values and
-both plan modes; the production-like benchmark above measures natural plans.
+The migration rejects a same-name index that is invalid or not ready, so a failed
+concurrent prebuild cannot silently mark the migration as applied. A valid, ready
+index is reused with `CREATE INDEX IF NOT EXISTS`; its exact definition still
+requires the operator inspection above. The five-second lock timeout bounds lock
+acquisition. Without the prebuild, it performs a regular write-blocking build; this
+fallback is intended for small local and CI databases. The prepared-plan regression
+tests disable sequential scans and explicit sorts only to assert that this specific
+index is usable with both boolean values and both plan modes; the production-like
+benchmark above measures natural plans.

@@ -86,8 +86,9 @@ describe('bundle-list filter and chronological paging', () => {
       it.concurrent(`keeps parameterized deleted=${deleted} reads correct with ${mode}`, async () => {
         const rows = await withAnonymousCapgkey(pool, key, async (client) => {
           await client.query(`SET LOCAL plan_cache_mode=${mode}`)
-          // Tiny fixtures can favor a sequential scan; prove index availability.
+          // Tiny fixtures can favor a scan or explicit sort; prove ordered index availability.
           await client.query('SET LOCAL enable_seqscan = off')
+          await client.query('SET LOCAL enable_sort = off')
           const result = await client.query({
             name: `bundle_list_${mode}`,
             text: `WITH q AS (SELECT * FROM public.app_versions WHERE app_id=$1 AND deleted=$4 ORDER BY created_at DESC LIMIT $2 OFFSET $3)
