@@ -346,10 +346,10 @@ npx @capgo/cli@latest simulator start com.example.app --platform android --name 
 
 - `--platform <platform>`: `ios` or `android`. Defaults to `ios`.
 - `-n, --name <name>`: optional session name.
-- `--json`: print the session JSON instead of only the URL.
+- `--json`: print the session JSON instead of the session id and URL.
 - `-a, --apikey <apikey>` and `--api-host <apiHost>`: same authentication override as the other commands.
 
-The command prints the session URL. An iOS session boots a slim device. An Android session uses a small profile: 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
+The command prints the session id, then the session URL. `simulator get` and `simulator stop` need that id. An iOS session boots a slim device. An Android session uses a small profile: 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
 
 ### `simulator get [sessionId] [appId]`
 

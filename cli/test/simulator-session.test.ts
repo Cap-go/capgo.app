@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { simulatorApiRequest } from '../src/simulator/session'
+import { simulatorApiRequest, simulatorTextOutput } from '../src/simulator/session'
 
 describe('simulator CLI requests', () => {
   it('starts, reads, and stops one session', () => {
@@ -24,5 +24,13 @@ describe('simulator CLI requests', () => {
       url: 'https://api.capgo.app/build/simulator/session-1/stop',
       body: { app_id: 'ee.forgr.capgo' },
     })
+  })
+
+  it('prints the session id before the URL', () => {
+    expect(simulatorTextOutput({
+      id: 'session-1',
+      url: 'https://ios-emulator.capgo.app/s/session-1/',
+    })).toBe('session-1\nhttps://ios-emulator.capgo.app/s/session-1/\n')
+    expect(simulatorTextOutput({ status: 'stopped' })).toBe('stopped\n')
   })
 })

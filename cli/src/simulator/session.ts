@@ -84,12 +84,14 @@ async function callSimulator(command: 'start' | 'stop' | 'get', appId: string, s
   if (!response.ok)
     fail(simulatorErrorText(text, response.status))
   const payload = text ? JSON.parse(text) as { data?: { id?: string, url?: string, status?: string, kind?: string } } : {}
-  if (options.json)
-    stdout.write(`${JSON.stringify(payload)}\n`)
-  else if (payload.data?.url)
-    stdout.write(`${payload.data.url}\n`)
-  else
-    stdout.write(`${payload.data?.status ?? 'ok'}\n`)
+  stdout.write(options.json ? `${JSON.stringify(payload)}\n` : simulatorTextOutput(payload.data))
+}
+
+export function simulatorTextOutput(data: { id?: string, url?: string, status?: string } | undefined) {
+  const lines = [data?.id, data?.url].filter((line): line is string => Boolean(line))
+  if (lines.length > 0)
+    return `${lines.join('\n')}\n`
+  return `${data?.status ?? 'ok'}\n`
 }
 
 export function startSimulatorCommand(appId: string | undefined, options: SimulatorCommandOptions) {
