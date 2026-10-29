@@ -11,7 +11,7 @@ CREATE TABLE public.simulator_sessions (
   status text NOT NULL DEFAULT 'starting' CHECK (status IN ('new', 'queued', 'starting', 'in-progress', 'stopped', 'errored')),
   url text,
   emulator_id text,
-  requested_by uuid NOT NULL,
+  requested_by uuid REFERENCES auth.users (id) ON DELETE SET NULL,
   max_duration_minutes integer NOT NULL DEFAULT 40 CHECK (max_duration_minutes BETWEEN 1 AND 115),
   started_at timestamptz,
   -- Set when the device itself has stopped, before build minutes are recorded.
@@ -69,7 +69,7 @@ BEGIN
     )
     VALUES (
       p_org_id,
-      session_row.requested_by,
+      (SELECT id FROM auth.users WHERE id = session_row.requested_by),
       session_row.id::varchar,
       session_row.platform,
       elapsed,
@@ -131,7 +131,7 @@ BEGIN
       )
       VALUES (
         session_row.owner_org,
-        session_row.requested_by,
+        (SELECT id FROM auth.users WHERE id = session_row.requested_by),
         session_row.id::varchar,
         session_row.platform,
         elapsed,

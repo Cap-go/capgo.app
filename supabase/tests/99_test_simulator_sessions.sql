@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(7);
+SELECT plan(9);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -35,6 +35,18 @@ VALUES
     40,
     now() - interval '5 minutes'
   );
+
+SELECT tests.create_supabase_user('sim_bill_user', 'sim_bill_user@test.local');
+UPDATE public.simulator_sessions
+SET requested_by = tests.get_supabase_uid('sim_bill_user')
+WHERE id = '99000000-0000-4000-8000-000000000001';
+DELETE FROM auth.users WHERE id = tests.get_supabase_uid('sim_bill_user');
+
+SELECT is(
+  (SELECT requested_by FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000001'),
+  NULL,
+  'deleting the requester keeps the simulator session'
+);
 
 SELECT tests.authenticate_as('test_user');
 
@@ -74,6 +86,17 @@ SELECT is(
   ),
   2400::bigint,
   'expiry bills the capped open time'
+);
+
+SELECT is(
+  (
+    SELECT user_id
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000001'
+  ),
+  NULL,
+  'usage is kept when the requester is already gone'
 );
 
 SELECT is(

@@ -236,31 +236,38 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
     })
   }
   catch (error) {
-    let deviceStopped = emulatorId === ''
-    if (emulatorId) {
-      try {
-        const { accessKey, origin } = simulatorConfig(c)
-        await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}/stop`, 'POST', {})
-        deviceStopped = true
-      }
-      catch (stopError) {
-        deviceStopped = stopError instanceof SimulatorHostError && simulatorHostStopIsFinal(stopError.status)
-        if (!deviceStopped)
-          cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator startup cleanup could not stop the device', emulatorId, error: stopError })
-      }
-    }
-    try {
-      if (startupFailureKeepsSlot(emulatorId, deviceStopped))
-        await markSession(c, slot.id, 'in-progress', { emulatorId })
-      else
-        await markSession(c, slot.id, 'errored')
-    }
-    catch (markError) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to record simulator startup failure', error: markError })
-    }
+    await recordStartupFailure(c, slot.id, emulatorId, await createdDeviceStopped(c, emulatorId))
     if (error instanceof Error && error.name === 'HTTPException')
       throw error
     throw quickError(502, 'simulator_unavailable', error instanceof Error ? error.message : 'Simulator did not start.', { app_id: appId }, error, { alert: false })
+  }
+}
+
+async function createdDeviceStopped(c: Context, emulatorId: string) {
+  if (!emulatorId)
+    return true
+  try {
+    const { accessKey, origin } = simulatorConfig(c)
+    await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}/stop`, 'POST', {})
+    return true
+  }
+  catch (stopError) {
+    const stopped = stopError instanceof SimulatorHostError && simulatorHostStopIsFinal(stopError.status)
+    if (!stopped)
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator startup cleanup could not stop the device', emulatorId, error: stopError })
+    return stopped
+  }
+}
+
+async function recordStartupFailure(c: Context, slotId: string, emulatorId: string, deviceStopped: boolean) {
+  try {
+    if (startupFailureKeepsSlot(emulatorId, deviceStopped))
+      await markSession(c, slotId, 'in-progress', { emulatorId })
+    else
+      await markSession(c, slotId, 'errored')
+  }
+  catch (markError) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to record simulator startup failure', error: markError })
   }
 }
 
