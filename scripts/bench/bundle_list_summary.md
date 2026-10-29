@@ -10,7 +10,15 @@ Run against a seeded local Supabase stack:
 bun scripts/supabase-worktree.ts with-env bun scripts/bench/bundle_list.mjs
 ```
 
-The script rejects non-loopback database and API URLs. It creates two isolated copies of `app_versions`, copies the existing indexes (excluding the candidate) plus the actual SELECT/MFA policies, then adds the migration index only to the second copy. Public `security_invoker` views allow real PostgREST requests under the same policies. Synthetic apps, organizations, API key, tables, and views are removed on exit. No customer data is required.
+The script rejects non-loopback database and API URLs. It creates two isolated copies of `app_versions`, copies the existing indexes (excluding the candidate) plus the actual SELECT/MFA policies, then adds the migration index only to the second copy. Public `security_invoker` views allow real PostgREST requests under the same policies. No customer data is required.
+
+The benchmark removes its synthetic schemas, public views, API key, apps, and
+organizations on success, SQL failure, `SIGINT`, or `SIGTERM`. Signal handlers
+abort HTTP requests and let any in-flight SQL finish before the same cleanup
+runs; the SQL statement timeout is 120 seconds. Interrupted runs exit with 130
+(`SIGINT`) or 143 (`SIGTERM`). Cleanup rolls back failed setup before resetting
+the database role and always closes the connection. A cleanup failure is reported
+without replacing the original benchmark error.
 
 ## Workload and verification
 
@@ -58,7 +66,46 @@ Nine timed executions per side, with alternating order and one unreported warmup
 - PostgreSQL 17.6; 18 logical CPUs; starting load averages [2.70458984375, 3.2001953125, 3.658203125]. No other validation jobs ran during the measurements.
 - Both sides use identical settings and warm caches. `work_mem` is set to the production 16 MiB budget; the complete local settings are recorded in the JSON. Hardware, buffer sizing, and network distance differ from production.
 - The added index occupies 17,899,520 bytes (17.07 MiB) for 300,000 rows. Local creation took 151.0 ms. It adds storage, cache, WAL, and write-maintenance costs. No existing indexes are removed.
-- The migration uses a five-second lock-acquisition timeout. A normal index build blocks writes while building; the local build duration is not a production guarantee. Roll out during an appropriate database migration window.
+- The migration uses a five-second lock-acquisition timeout. A normal index build blocks writes while building; the local build duration is not a production guarantee. Follow the production prebuild procedure below before merging into the automatic release flow.
 - This change leaves RLS, RPCs, permissions, queue behavior, API responses, and CLI contracts intact. It addresses the bundle-list statement in the sample; cron and manifest costs remain separate investigation targets.
 
 Raw runs and plans: [bundle_list_results.json](bundle_list_results.json).
+
+## Production rollout
+
+An authorized database operator must prebuild this index concurrently **before
+merging/deploying this migration to production**. The release workflow applies
+migrations automatically; it does not enforce a maintenance window. This PR does
+not run the production prebuild.
+
+1. Inspect any existing index with the following query. A valid, ready index with
+   exactly the expected table and columns can be reused. If it is invalid, drop
+   only that invalid index with `DROP INDEX CONCURRENTLY
+   public.idx_app_versions_app_deleted_created_at;` outside a transaction before
+   retrying the build. Do not treat a same-name index as proof of a completed build.
+
+   ```sql
+   SELECT i.indisvalid, i.indisready, pg_catalog.pg_get_indexdef(i.indexrelid)
+   FROM pg_catalog.pg_index AS i
+   WHERE i.indexrelid = pg_catalog.to_regclass('public.idx_app_versions_app_deleted_created_at');
+   ```
+
+2. Run the following as a standalone statement, outside a transaction, when the
+   expected valid index is absent:
+
+   ```sql
+   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_app_versions_app_deleted_created_at
+   ON public.app_versions (app_id, deleted, created_at DESC);
+   ```
+
+3. Repeat the inspection query. Proceed with deployment only when `indisvalid`
+   and `indisready` are both true and the definition matches. A failed concurrent
+   build can leave an invalid index that `IF NOT EXISTS` would skip; remove the
+   invalid index concurrently and retry before deployment.
+
+The migration uses `CREATE INDEX IF NOT EXISTS` to reuse the prebuilt index. Its
+five-second lock timeout still bounds lock acquisition. Without the prebuild, it
+performs a regular write-blocking build; this fallback is intended for small local
+and CI databases. The prepared-plan regression tests disable sequential scans
+only to assert that this specific index is usable with both boolean values and
+both plan modes; the production-like benchmark above measures natural plans.

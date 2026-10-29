@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { Pool } from 'pg'
+import { escapeLiteral, Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   createDirectApiKeyWithBindings,
@@ -25,6 +25,7 @@ let key = ''
 let keyId: number | undefined
 let authHeaders: Record<string, string>
 
+/** Derive the expected bundle names without relying on database ordering. */
 function expectedNames(deleted: boolean, offset = 0) {
   return Array.from({ length: 40 }, (_, i) => i + 1).reverse()
     .filter(i => (i % 5 === 0) === deleted)
@@ -32,6 +33,7 @@ function expectedNames(deleted: boolean, offset = 0) {
     .map(i => `ordered-${String(i).padStart(3, '0')}`)
 }
 
+/** Request the real bundle-list endpoint with the selected caller identity. */
 async function page(deleted: boolean, offset = 0, identity: 'key' | 'user' | 'anon' | 'invalid' = 'key', app = appId) {
   const headers: Record<string, string> = {
     apikey: SUPABASE_ANON_KEY,
@@ -84,12 +86,18 @@ describe('bundle-list filter and chronological paging', () => {
       it.concurrent(`keeps parameterized deleted=${deleted} reads correct with ${mode}`, async () => {
         const rows = await withAnonymousCapgkey(pool, key, async (client) => {
           await client.query(`SET LOCAL plan_cache_mode=${mode}`)
-          return (await client.query({
+          // Tiny fixtures can favor a sequential scan; prove index availability.
+          await client.query('SET LOCAL enable_seqscan = off')
+          const result = await client.query({
             name: `bundle_list_${mode}`,
             text: `WITH q AS (SELECT * FROM public.app_versions WHERE app_id=$1 AND deleted=$4 ORDER BY created_at DESC LIMIT $2 OFFSET $3)
               SELECT pg_catalog.to_json(q.*) AS row FROM q`,
             values: [appId, 5, 5, deleted],
-          })).rows
+          })
+          const plan = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+            EXECUTE bundle_list_${mode}(${escapeLiteral(appId)}, 5, 5, ${deleted})`)
+          expect(JSON.stringify(plan.rows[0]['QUERY PLAN'])).toContain('idx_app_versions_app_deleted_created_at')
+          return result.rows
         })
         expect(rows.map(row => row.row.name)).toEqual(expectedNames(deleted, 5))
       })
