@@ -113,7 +113,7 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
         >
           <router-link
             class="d-btn d-btn-ghost flex min-h-11 h-auto min-w-0 flex-1 items-center justify-start border-none bg-transparent p-0 shadow-none hover:bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
-            :to="getAppGettingStartedPath(app.app_id)"
+            :to="{ path: getAppGettingStartedPath(app.app_id), query: { showChecklist: '1' } }"
             :aria-current="isActive(app.app_id) ? 'page' : undefined"
             :aria-label="`${t('getting-started')} — ${appLabel(app)}`"
             :title="`${t('getting-started')} — ${appLabel(app)}`"

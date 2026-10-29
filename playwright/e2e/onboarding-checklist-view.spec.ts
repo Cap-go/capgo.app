@@ -14,6 +14,26 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
+for (const scenario of [
+  { name: 'legacy OTA after an install', query: 'version=2&otaInstalled=1' },
+  { name: 'completed legacy OTA', query: 'version=2&checklistState=completed' },
+  { name: 'pending OTA', query: 'version=3' },
+]) {
+  test(`opens ${scenario.name} from the sidebar without bouncing home`, async ({ page }) => {
+    await page.goto(`/app/${appId}?${scenario.query}`)
+    const link = page.locator('[data-test="getting-started-nav-link"]')
+    await expect(link).toBeVisible()
+    await link.click()
+    await expect(page).toHaveURL(`${gettingStarted}?showChecklist=1`)
+    await expect(page.locator('[data-test="getting-started-setup"]')).toBeVisible()
+    await expect(page.locator('[data-test="preview-app-dashboard"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-cli-step-login_cli_mcp"]')).toBeVisible()
+    const state = await page.evaluate(() => (window as any).onboardingSetupPreview.state)
+    expect(state.setupWrites).toEqual([])
+    expect(state.userWrites).toEqual([])
+  })
+}
+
 for (const preOrg of [false, true]) {
   for (const scenario of [
     { name: 'legacy OTA', query: 'version=2', completed: 'Guided setup complete' },

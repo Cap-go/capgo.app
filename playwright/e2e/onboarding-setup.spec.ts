@@ -756,7 +756,7 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     const link = page.locator('[data-test="getting-started-nav-link"]')
     for (const version of [2, 3]) {
       await page.goto(`/app/${appId}?version=${version}`)
-      await expect(link).toHaveAttribute('href', `/app/${appId}/getting-started`)
+      await expect(link).toHaveAttribute('href', `/app/${appId}/getting-started?showChecklist=1`)
       await link.click()
       await expect(page.locator('[data-test="onboarding-setup-cli"]')).toBeVisible()
       expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-mounted')
@@ -783,8 +783,8 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
       if (scenario.pollsProgress)
         await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.polls.length)).toBeGreaterThan(1)
       await expect(page.locator(scenario.checklist)).toBeVisible()
-      await expect(page).toHaveURL(new RegExp(`/app/${appId}/getting-started$`))
-      expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('getting-started-verified')
+      await expect(page).toHaveURL(`/app/${appId}/getting-started?showChecklist=1`)
+      expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events)).not.toContain('getting-started-verified')
       await expect(page.locator('[data-test="preview-app-dashboard"]')).toHaveCount(0)
     })
   }
