@@ -3,7 +3,7 @@ import type { AssistantAction, AssistantCard, AssistantTurn } from '~/services/a
 import type { ChatGptCredentials } from '~/services/chatgptAuth'
 import type { ChatGptCallback } from '~/utils/chatgptCallback'
 import { Capacitor } from '@capacitor/core'
-import { onKeyStroke, useLocalStorage } from '@vueuse/core'
+import { onKeyStroke, useEventListener, useLocalStorage } from '@vueuse/core'
 import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -22,6 +22,7 @@ import { AssistantKeyError, createAssistantKey, loadAssistantKey, saveAssistantK
 import { AssistantUpstreamError, runAssistant } from '~/services/assistantAgent'
 import { beginChatGptSignIn, CHATGPT_MANAGE_USAGE_URL, CHATGPT_REDIRECT_URI, ChatGptAuthError, completeChatGptSignIn, getChatGptAccessToken, loadChatGptCredentials, signOutChatGpt } from '~/services/chatgptAuth'
 import { useConsole } from '~/services/console'
+import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { tokenizeAssistantText } from '~/utils/assistantText'
@@ -43,6 +44,7 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const capgo = useConsole()
+const dialogStore = useDialogV2Store()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 
@@ -68,6 +70,7 @@ const apikey = ref('')
 const credentials = ref<ChatGptCredentials | null>(null)
 const chatgpt = computed(() => ({ connected: !!credentials.value, email: credentials.value?.email ?? '' }))
 const needsConnect = computed(() => !apikey.value || !credentials.value)
+const signInDialogId = 'assistant-chatgpt-sign-in'
 
 function reloadLocalState() {
   apikey.value = userId.value ? loadAssistantKey(userId.value) : ''
@@ -109,10 +112,10 @@ onKeyStroke('j', (event) => {
   event.preventDefault()
   toggle()
 })
-onKeyStroke('Escape', () => {
-  if (open.value)
+useEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && open.value && !dialogStore.showDialog)
     open.value = false
-})
+}, { capture: true })
 
 /**
  * Native app: same as the Capgo browser app. OpenAI only accepts an http://127.0.0.1 redirect, so the
@@ -164,6 +167,29 @@ async function finishSignIn(callback: ChatGptCallback) {
   signInWindow?.close()
   signInWindow = null
   showWelcome.value = !welcomeSeen.value
+}
+
+function requestConnect() {
+  if (!userId.value || connecting.value)
+    return
+  if (Capacitor.isNativePlatform() || credentials.value) {
+    void connect()
+    return
+  }
+  dialogStore.openDialog({
+    id: signInDialogId,
+    title: t('assistant-chatgpt-sign-in-title'),
+    description: t('assistant-chatgpt-sign-in-description'),
+    buttons: [
+      { text: t('button-cancel'), role: 'cancel' },
+      {
+        text: t('assistant-chatgpt-sign-in-open'),
+        role: 'primary',
+        id: 'assistant-chatgpt-sign-in-open',
+        handler: () => { void connect() },
+      },
+    ],
+  })
 }
 
 async function connect() {
@@ -418,6 +444,7 @@ watch(open, (value) => {
             class="d-input d-input-bordered w-full font-mono text-xs"
             :placeholder="`${pasteStep.redirectUri}?code=…`"
             autocomplete="off"
+            :aria-label="t('assistant-chatgpt-callback-label')"
             data-test="assistant-chatgpt-paste-input"
           >
           <div class="flex gap-2">
@@ -436,7 +463,7 @@ watch(open, (value) => {
           class="flex h-11 items-center justify-center gap-2 rounded-full bg-black px-5 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:opacity-60"
           :disabled="connecting"
           data-test="assistant-chatgpt-button"
-          @click="connect"
+          @click="requestConnect"
         >
           <span v-if="connecting" class="d-loading d-loading-spinner d-loading-sm" />
           <img v-else :src="chatGptLogoWhite" alt="" class="h-5 w-5">
@@ -654,4 +681,23 @@ watch(open, (value) => {
       <IconSparkles v-else class="h-5 w-5" />
     </button>
   </div>
+
+  <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions.id === signInDialogId" to="#dialog-v2-content" defer>
+    <div class="space-y-4" data-test="assistant-chatgpt-sign-in-instructions">
+      <ol class="list-decimal space-y-3 pl-5 text-sm text-slate-600 dark:text-slate-300">
+        <li>{{ t('assistant-chatgpt-sign-in-step-sign-in') }}</li>
+        <li>{{ t('assistant-chatgpt-sign-in-step-copy') }}</li>
+        <li>{{ t('assistant-chatgpt-sign-in-step-paste') }}</li>
+      </ol>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
+        <p class="mb-1 text-xs font-medium text-slate-700 dark:text-slate-200">
+          {{ t('assistant-chatgpt-callback-label') }}
+        </p>
+        <code class="break-all text-xs text-slate-600 dark:text-slate-300">{{ CHATGPT_REDIRECT_URI }}?code=…&amp;state=…</code>
+      </div>
+      <p class="text-xs text-slate-500 dark:text-slate-400">
+        {{ t('assistant-chatgpt-sign-in-private') }}
+      </p>
+    </div>
+  </Teleport>
 </template>
