@@ -2,6 +2,7 @@
 import type { LiveUpdateNextStepInput } from '../../schemas/live-update-onboarding.js'
 import type { ChoiceOption, LiveUpdatePhase, NextStepResult, Platform } from './contract.js'
 import type { LiveUpdateProgress } from './progress.js'
+import type { IosSimulatorCompatibility } from '../../run/ios-compatibility.js'
 import { LIVE_UPDATE_ROADMAP, LIVE_UPDATE_RULES, NEXT_STEP_TOOL } from './contract.js'
 import { explainForState } from './explanations.js'
 import { withMonorepoUploadRetryHint } from '../upload-recovery.js'
@@ -36,7 +37,7 @@ export interface EngineDeps {
   /** Pick the guided test bundle version. The visible change itself is made by the user or their AI assistant. */
   applyTestChange: (appId: string, baseVersion?: string) => Promise<{ ok: boolean, version?: string, error?: string }>
   uploadBundle: (appId: string, opts: { channelName: string, version: string, delta?: boolean, encrypt?: boolean }) => Promise<{ ok: boolean, error?: string }>
-  getRunDeviceCommand: (platform: Platform) => { command: string, cwd?: string }
+  getRunDeviceCommand: (platform: Platform) => { command: string, cwd?: string, manualInstructions?: string, iosSimulatorCompatibility?: IosSimulatorCompatibility }
   getGitStatus: (cwd?: string) => GitRepoStatus
   reportOnboardingStep?: (appId: string, stepDone: number) => void
 }
@@ -326,11 +327,11 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
 
   if (stepNumber === 8 && !session.deviceRunConfirmed) {
     const platform = session.platform ?? progress?.platform ?? facts.platformsDetected[0] ?? 'ios'
-    const { command, cwd } = deps.getRunDeviceCommand(platform)
+    const { command, cwd, manualInstructions, iosSimulatorCompatibility } = deps.getRunDeviceCommand(platform)
     return baseResult(stepNumber, 'run-on-device', 'human_gate', `${title} — run the app on a device or simulator.`, {
       platform,
       human: {
-        instruction: `Run this in your terminal${cwd ? ' from the selected project directory' : ''}:\n\n${command}\n\nConfirm the baseline app launches, then continue.`,
+        instruction: `${manualInstructions ? `${manualInstructions}\n\n` : ''}Run this in your terminal${cwd ? ' from the selected project directory' : ''}:\n\n${command}\n\n${manualInstructions ? 'In Xcode, select the simulator and choose Product > Run. ' : ''}Confirm the baseline app launches, then continue.`,
         resourceUri: 'https://capgo.app/docs/getting-started/onboarding/',
       },
       collect: [{ field: 'deviceRunConfirmed', desc: 'set true once the app is running on device/simulator' }],
@@ -339,7 +340,7 @@ async function decideAtStep(facts: LiveUpdateFacts, deps: EngineDeps, input?: Li
         { deviceRunConfirmed: true },
         `${NEXT_STEP_TOOL}({ deviceRunConfirmed: true })`,
       ),
-      context: { runCommand: command, ...(cwd ? { projectDir: cwd } : {}), platform },
+      context: { runCommand: command, ...(cwd ? { projectDir: cwd } : {}), platform, ...(iosSimulatorCompatibility ? { iosSimulatorCompatibility } : {}) },
     })
   }
 

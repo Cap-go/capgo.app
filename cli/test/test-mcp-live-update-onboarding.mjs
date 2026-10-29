@@ -147,6 +147,29 @@ function resumedDeps(o, progress = afterDeviceRun) {
   return deps
 }
 
+await test('manual iOS launch stays at the baseline gate until the app is confirmed running', async () => {
+  const compatibility = { kind: 'unsupported', capacitorCliVersion: '8.6.0', nativeRunVersion: '2.0.3' }
+  const deps = resumedDeps({
+    getRunDeviceCommand: () => ({
+      command: 'npx cap open ios',
+      cwd: '/tmp/example-app',
+      manualInstructions: 'Device Hub requires running the app from Xcode.',
+      iosSimulatorCompatibility: compatibility,
+    }),
+  }, { ...afterDeviceRun, step_done: 7 })
+  const gate = await runAdvance(deps, {})
+  eq(gate.state, 'run-on-device')
+  eq(gate.kind, 'human_gate')
+  ok(gate.human.instruction.includes('Device Hub'))
+  ok(gate.human.instruction.includes('Product > Run'))
+  eq(gate.context.runCommand, 'npx cap open ios')
+  eq(gate.context.iosSimulatorCompatibility.nativeRunVersion, '2.0.3')
+  eq(deps.loadProgress().step_done, 7)
+  eq((await runAdvance(deps, {})).state, 'run-on-device')
+  eq((await runAdvance(deps, { deviceRunConfirmed: true })).state, 'test-change-choice')
+  eq(deps.loadProgress().step_done, 8)
+})
+
 await test('test change: asks manual or agent before touching files', async () => {
   const calls = []
   const deps = resumedDeps({ applyTestChange: async (...args) => { calls.push(args); return { ok: true, version: '0.0.1' } } })

@@ -21,6 +21,8 @@ The command lists available devices and simulators, lets you reload the list, an
 For iOS, this asks whether to use a physical iPhone/iPad or simulator before showing devices.
 Use --no-launch to print the resolved command without starting the app.
 
+When the selected Xcode uses Device Hub and Capacitor's `native-run` lacks support, simulator selection prints instructions to run the app from Xcode with `npx cap open ios` and **Product > Run**. It does not attempt the incompatible simulator command. Physical-device selection remains available in interactive mode. See [doctor](../doctor/) for the upstream fix status and upgrade guidance.
+
 **Example:**
 
 ```bash

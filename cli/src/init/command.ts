@@ -32,6 +32,8 @@ import { doLoginExists, LOGIN_METHOD_OPTIONS, loginInternal } from '../login'
 import { writeOnboardingSupportBundle, writeSupportBundleFiles } from '../onboarding-support'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
+import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from '../run/ios-compatibility'
+import { CliUserError } from '../shared/cli-user-error'
 import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
@@ -3622,7 +3624,7 @@ function promoteEncryptionSummaryToEnabled(): void {
 type PackageManagerInfo = ReturnType<typeof getPMAndCommand>
 export type PlatformChoice = 'ios' | 'android'
 type BuildProjectStepOutcome = 'completed' | 'skipped'
-export type RunDeviceStepOutcome = { args: string[], command: string } | { args: undefined, command: string }
+export type RunDeviceStepOutcome = { args: string[], command: string } | { args: undefined, command: string, manualInstructions?: string }
 
 async function selectAvailablePackageManager(
   detectedPackageManager: PackageManagerInfo,
@@ -4412,6 +4414,15 @@ async function handleMissingSimulatorIosRunTargets(cancelHandler: RunDeviceCance
 }
 
 async function selectSimulatorIosRunTarget(cancelHandler: RunDeviceCancelHandler, pm: PackageManagerInfo, initialTargets?: CapacitorRunTarget[], projectDir = cwd()): Promise<RunDeviceStepOutcome> {
+  const compatibility = checkIosSimulatorCompatibility(projectDir)
+  if (compatibility.kind === 'unsupported') {
+    return {
+      args: undefined,
+      command: formatRunnerCommand(pm.runner, ['cap', 'open', 'ios']),
+      manualInstructions: formatIosSimulatorGuidance(compatibility),
+    }
+  }
+
   let knownTargets = initialTargets
 
   while (true) {
@@ -4629,6 +4640,16 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
 
   const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
   if (!runCommand.args) {
+    if (runCommand.manualInstructions) {
+      pLog.warn(runCommand.manualInstructions)
+      pLog.info(`From ${projectDir}, open Xcode with: ${runCommand.command}`)
+      const running = await pConfirm({ message: 'Have you run the baseline app from Xcode and confirmed it opens?' })
+      await cancelCommand(running, orgId, apikey)
+      if (!running)
+        throw new CliUserError('Run the baseline app from Xcode, then resume onboarding before testing OTA updates.')
+      await markStep(orgId, apikey, 'run-device', appId)
+      return 'completed'
+    }
     pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
     await markStep(orgId, apikey, 'run-device', appId)
     return 'skipped'
