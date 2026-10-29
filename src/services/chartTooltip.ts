@@ -19,6 +19,7 @@ interface ProcessedTooltipItem {
 
 export interface TooltipClickHandler {
   onAppClick?: (appId: string, clickContext?: { date: Date, dataIndex: number }) => void
+  datasetIdKey?: 'appId' | 'breakdownId'
   appIdByLabel?: Record<string, string> // Maps app label/name to app ID
 }
 
@@ -218,8 +219,10 @@ export function createCustomTooltip(context: TooltipContext, isAccumulated: bool
         ? Math.max(0, Math.round(countCandidate))
         : null
       const label = dataset?.label ?? ''
-      // Look up the app ID from the label using the provided mapping
-      const appId = clickHandler?.appIdByLabel?.[label]
+      const candidateId: unknown = clickHandler?.datasetIdKey
+        ? dataset?.[clickHandler.datasetIdKey]
+        : clickHandler?.appIdByLabel?.[label]
+      const appId = typeof candidateId === 'string' ? candidateId : undefined
       const formattedValue = numericCount !== null
         ? `${formatTooltipValue(numericValue)}% (${formatNumberValue(numericCount)})`
         : formatTooltipValue(numericValue)

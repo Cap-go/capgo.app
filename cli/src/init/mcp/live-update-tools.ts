@@ -22,8 +22,9 @@ import {
 import { getUpdaterInstallState } from '../updater.js'
 import { initOnboardingSteps } from '../ui.js'
 import { reportInitOnboardingStep } from '../onboarding-report.js'
-import { baseKeyV2, findSavedKeySilent, findMainFile, findRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
+import { baseKeyV2, findSavedKeySilent, findMainFile, findProjectRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
 import { formatRunnerCommand } from '../../runner-command.js'
+import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from '../../run/ios-compatibility.js'
 import { addChannelInternal } from '../../channel/add.js'
 import { uploadBundleInternal } from '../../bundle/upload.js'
 import { execSync, spawnSync } from 'node:child_process'
@@ -62,8 +63,19 @@ export function resolveLiveUpdateProjectTarget(input: LiveUpdateProjectTargetInp
   return { packageJsonPath, mainFilePath }
 }
 
-function getRunDeviceCommandForPlatform(platform: Platform, projectDir: string, initialCwd: string): { command: string, cwd?: string } {
+export function getRunDeviceCommandForPlatform(platform: Platform, projectDir: string, initialCwd: string): ReturnType<EngineDeps['getRunDeviceCommand']> {
   const pm = getPMAndCommand()
+  if (platform === 'ios') {
+    const compatibility = checkIosSimulatorCompatibility(projectDir)
+    if (compatibility.kind === 'unsupported') {
+      return {
+        command: formatRunnerCommand(pm.runner, ['cap', 'open', 'ios']),
+        cwd: projectDir,
+        manualInstructions: formatIosSimulatorGuidance(compatibility),
+        iosSimulatorCompatibility: compatibility,
+      }
+    }
+  }
   const args = ['cap', 'run', platform]
   const command = formatRunnerCommand(pm.runner, args)
   return { command, ...(projectDir === initialCwd ? {} : { cwd: projectDir }) }
@@ -76,13 +88,14 @@ export function buildDeps(
 ): EngineDeps {
   // Live accessor: the server re-creates its SDK on login/logout and project switches.
   const getSdk = typeof sdkOrGetter === 'function' ? sdkOrGetter : () => sdkOrGetter
-  const getPackageJsonPath = () => getProjectTarget()?.packageJsonPath ?? join(findRoot(cwd), PACKNAME)
+  const getPackageJsonPath = () => {
+    const packageJsonPath = getProjectTarget()?.packageJsonPath
+    if (packageJsonPath)
+      return packageJsonPath
+    return join(findProjectRoot(cwd), PACKNAME)
+  }
   const getProjectDir = () => dirname(getPackageJsonPath())
   const getMainFile = async () => getProjectTarget()?.mainFilePath ?? findMainFile(true, getProjectDir())
-  const getNodeModulesPath = () => {
-    const nodeModulesPath = join(findRoot(getProjectDir()), 'node_modules')
-    return existsSync(nodeModulesPath) ? nodeModulesPath : undefined
-  }
   const getAppIdClosure = async (): Promise<string | undefined> => {
     try {
       const ext = await getConfig(true)
@@ -238,7 +251,6 @@ export function buildDeps(
           ignoreChecksumCheck: true,
           key: encrypt ? undefined : false,
           keyV2: encrypt ? privateKeyPath : undefined,
-          nodeModules: getNodeModulesPath(),
           packageJson: packageJsonPath,
           path: webDir ? resolve(projectDir, webDir) : undefined,
           showReplicationProgress: false,

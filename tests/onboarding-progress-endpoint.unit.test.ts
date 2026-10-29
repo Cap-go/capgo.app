@@ -108,6 +108,7 @@ describe('onboarding progress endpoint', () => {
   })
   it.each([0, 1, 2, 3, 4, 5, 9])('always reads the exact app at N=%s and rotates extra checks', async (N) => {
     expect((await request(N)).status).toBe(200)
+    expect(mocks.permission.mock.calls.filter(([, permission]) => permission === 'app.read')).toHaveLength(1)
     expect(mocks.queries[0]).toMatchObject({ table: 'apps', values: ['com.test.onboarding'], principal: { kind: 'jwt', userId: mocks.auth.userId } })
     expect(mocks.queries[0].sql).toContain('SELECT onboarding, created_at, owner_org FROM public.apps WHERE app_id = $1')
     expect(mocks.queries.every(q => q.principal.kind === 'jwt')).toBe(true)
@@ -118,9 +119,35 @@ describe('onboarding progress endpoint', () => {
   })
   it('checks all four on initial load and bypasses demo logs', async () => {
     expect((await request(0, true)).status).toBe(200)
+    expect(mocks.permission.mock.calls.filter(([, permission]) => permission === 'app.read')).toHaveLength(1)
     expect(mocks.devices).toHaveBeenCalledWith(expect.anything(), { app_id: 'com.test.onboarding', limit: 1 }, false)
     expect(mocks.logs).toHaveBeenCalledWith(expect.anything(), { app_id: 'com.test.onboarding', actions: ['set'], start_date: mocks.row.created_at, limit: 10 }, false)
     expect(mocks.queries.some(q => q.sql.includes('add_code') || q.values.includes('add_code'))).toBe(false)
+  })
+  it.each(['jwt', 'apikey'])('rechecks app access on the next %s poll after a revocation', async (authType) => {
+    mocks.auth = { ...mocks.auth, authType, ...(authType === 'apikey' ? { apikey: { key: 'fixture-key' } } : {}) }
+    mocks.row.onboarding.setup.todo_list_version = 2
+    expect((await request(0)).status).toBe(200)
+    mocks.permission.mockResolvedValue(false)
+    mocks.from.mockClear()
+
+    expect((await request(0)).status).toBe(403)
+    expect(mocks.permission.mock.calls.filter(([, permission]) => permission === 'app.read')).toHaveLength(2)
+    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.transaction).not.toHaveBeenCalled()
+  })
+  it.each(['app.read_devices', 'app.read_logs'])('still requires %s for its initial observation', async (deniedPermission) => {
+    mocks.permission.mockImplementation(async (_c, permission) => permission !== deniedPermission)
+
+    const response = await request(0, true)
+    expect(response.status).toBe(200)
+    expect(mocks.permission).toHaveBeenCalledWith(expect.anything(), deniedPermission, { appId: 'com.test.onboarding' })
+    expect(mocks.permission.mock.calls.filter(([, permission]) => permission === 'app.read')).toHaveLength(1)
+    if (deniedPermission === 'app.read_devices')
+      expect(mocks.devices).not.toHaveBeenCalled()
+    else
+      expect(mocks.logs).not.toHaveBeenCalled()
+    expect(await response.json()).toEqual({ onboarding: mocks.row.onboarding, hasChannel: false, checkErrors: [] })
   })
   it.each([3, 4])('avoids the write transaction for unchanged v%s CLI progress', async (version) => {
     mocks.auth = { ...mocks.auth, authType: 'apikey', apikey: { key: 'fixture-key' } }

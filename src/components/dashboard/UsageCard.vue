@@ -50,6 +50,14 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  isRefreshing: {
+    type: Boolean,
+    default: false,
+  },
+  errorMessage: {
+    type: String,
+    default: undefined,
+  },
   // When true, show demo data (payment failed state)
   forceDemo: {
     type: Boolean,
@@ -146,6 +154,8 @@ const hasChartData = computed(() => {
     :last-day-evolution="lastDayEvolution"
     :has-data="hasChartData"
     :is-loading="isLoading"
+    :is-refreshing="isRefreshing"
+    :error-message="errorMessage"
     :is-demo-data="isDemoMode"
   >
     <template #header>

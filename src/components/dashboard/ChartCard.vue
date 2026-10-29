@@ -26,6 +26,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  isRefreshing: {
+    type: Boolean,
+    default: false,
+  },
   hasData: {
     type: Boolean,
     default: true,
@@ -60,6 +64,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
 <template>
   <div
     data-test="chart-card"
+    :aria-busy="isLoading || isRefreshing"
     class="relative col-span-full flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60"
     :class="heightClass"
   >
@@ -79,6 +84,10 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
           </div>
 
           <div data-test="chart-card-header-actions" class="flex items-center gap-2 sm:justify-end">
+            <span v-if="isRefreshing" data-test="chart-refreshing" role="status" class="pointer-events-none">
+              <Spinner size="w-4 h-4" />
+              <span class="sr-only">{{ t('loading') }}</span>
+            </span>
             <div
               v-if="showEvolutionBadge"
               class="inline-flex justify-center items-center rounded-full px-3 py-1 text-xs font-bold text-white shadow-sm"
@@ -103,6 +112,9 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
 
     <!-- Chart content area -->
     <div data-test="chart-card-content" class="relative flex min-h-0 flex-1 flex-col px-5" :class="compact ? 'pb-4 pt-2' : 'pb-5 pt-4'">
+      <p v-if="errorMessage && hasData" role="status" class="mb-2 text-sm text-amber-700 dark:text-amber-300">
+        {{ errorMessage }}
+      </p>
       <!-- Loading state -->
       <div v-if="isLoading" class="flex h-full items-center justify-center">
         <Spinner size="w-24 h-24" />
@@ -110,7 +122,7 @@ const displayNoDataMessage = computed(() => props.noDataMessage ?? t('no-data'))
 
       <!-- Error message -->
       <div
-        v-else-if="errorMessage"
+        v-else-if="errorMessage && !hasData"
         class="flex h-full items-center justify-center px-4 text-center text-sm text-slate-500 dark:text-slate-300"
       >
         {{ errorMessage }}

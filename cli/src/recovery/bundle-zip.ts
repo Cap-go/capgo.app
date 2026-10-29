@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { cwd } from 'node:process'
 import { confirm as pConfirm, isCancel as pIsCancel, log, text as pText } from '@clack/prompts'
 import { CAPGO_UPDATER_PACKAGE, getUpdaterInstallState } from '../init/updater'
-import { findRoot, getPMAndCommand } from '../utils'
+import { findProjectRoot, getPMAndCommand } from '../utils'
 import { parsePackageJsonOptionPaths } from './app-id'
 
 export function resolveLocalSemverFallback(uuid: string): string {
@@ -12,7 +12,7 @@ export function resolveLocalSemverFallback(uuid: string): string {
 }
 
 export function resolveUpdaterPackageJsonPath(packageJsonOption?: string): string {
-  const root = findRoot(cwd())
+  const root = findProjectRoot()
   const paths = parsePackageJsonOptionPaths(packageJsonOption)
   if (paths?.length) {
     for (const path of paths) {

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { Database } from '~/types/database.types'
 import colors from 'tailwindcss/colors'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useDashboardRequestState } from '~/composables/useDashboardRequestState'
 import { computeLastDayEvolution } from '~/services/buildCharts'
 import { useConsole } from '~/services/console'
 import { readAllConsoleRows } from '~/services/consoleRows'
@@ -19,7 +20,6 @@ import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
-import { ensureMinDelay } from '~/utils/minDelay'
 import ChartCard from './ChartCard.vue'
 import DeploymentStatsChart from './DeploymentStatsChart.vue'
 
@@ -50,7 +50,6 @@ const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
 const capgo = useConsole()
-let latestRequestToken = 0
 
 const totalDeployments = ref(0)
 const lastDayEvolution = ref(0)
@@ -62,7 +61,9 @@ const channelAppIds = ref<{ [channelId: string]: string }>({})
 // For dashboard view: breakdown by app
 const deploymentDataByApp = ref<{ [appId: string]: number[] }>({})
 const appNames = ref<{ [appId: string]: string }>({})
-const isLoading = ref(true)
+const dataScope = computed(() => `${organizationStore.currentOrganization?.gid}:${props.appId}:${props.useBillingPeriod}:${props.forceDemo}`)
+const loading = useDashboardRequestState(dataScope)
+const { isLoading, isRefreshing, error: loadError } = loading
 
 // Generate consistent demo data where total is derived from per-app breakdown
 const consistentDemoData = computed(() => {
@@ -96,41 +97,39 @@ const isSingleAppMode = computed(() => !!props.appId)
 type DeployDailyCount = Database['public']['Functions']['get_deploy_daily_counts']['Returns'][number]
 
 const cacheByOrg = new Map<string, { data: DeployDailyCount[], channelNames: { [channelId: string]: string }, channelAppIds: { [channelId: string]: string } }>()
-// Track current org for change detection
-const currentCacheOrgId = ref<string | null>(null)
 
 async function calculateStats(forceRefetch = false) {
-  const startTime = Date.now()
-  const requestToken = ++latestRequestToken
-
-  isLoading.value = true
-
-  // Reset display data
-  totalDeployments.value = 0
-  lastDayEvolution.value = 0
-  deploymentDataByChannel.value = {}
-  channelNames.value = {}
-  channelAppIds.value = {}
-  deploymentDataByApp.value = {}
-  appNames.value = {}
-  deploymentData.value = []
+  const request = loading.start()
+  if (request.isInitial) {
+    totalDeployments.value = 0
+    lastDayEvolution.value = 0
+    deploymentDataByChannel.value = {}
+    channelNames.value = {}
+    channelAppIds.value = {}
+    deploymentDataByApp.value = {}
+    appNames.value = {}
+    deploymentData.value = []
+  }
 
   const fallbackData = Array.from({ length: 30 }).fill(0) as number[]
 
   const currentOrgId = organizationStore.currentOrganization?.gid ?? null
-  const orgChanged = currentCacheOrgId.value !== currentOrgId
-  currentCacheOrgId.value = currentOrgId
 
   try {
+    if (props.forceDemo)
+      return
     await organizationStore.dedupFetchOrganizations()
-    await organizationStore.awaitInitialLoad()
+    if (props.appId)
+      await organizationStore.awaitInitialLoad()
+    if (!request.isCurrent())
+      return
 
     const targetOrganization = props.appId
       ? organizationStore.getOrgByAppId(props.appId) ?? organizationStore.currentOrganization
       : organizationStore.currentOrganization
 
     if (!targetOrganization) {
-      if (requestToken === latestRequestToken)
+      if (request.isCurrent())
         deploymentData.value = fallbackData
       return
     }
@@ -141,6 +140,7 @@ async function calculateStats(forceRefetch = false) {
       props.useBillingPeriod,
       billingStart,
     )
+    const cacheKey = `${currentOrgId}:${props.appId}:${last30DaysStart.toISOString()}:${exclusiveEnd.toISOString()}`
 
     let targetAppIds: string[] = []
 
@@ -148,13 +148,18 @@ async function calculateStats(forceRefetch = false) {
       targetAppIds = [props.appId]
     }
     else {
-      // Fetch apps if not loaded OR if org changed (to get fresh app list)
-      await dashboardAppsStore.fetchApps(orgChanged)
+      await dashboardAppsStore.fetchApps()
+      if (!request.isCurrent())
+        return
+      if (!dashboardAppsStore.isLoaded)
+        throw new Error('App catalog unavailable')
       targetAppIds = [...dashboardAppsStore.appIds]
     }
 
     if (targetAppIds.length === 0) {
-      if (requestToken === latestRequestToken) {
+      if (request.isCurrent()) {
+        totalDeployments.value = 0
+        lastDayEvolution.value = 0
         deploymentData.value = fallbackData
         deploymentDataByChannel.value = {}
         channelNames.value = {}
@@ -172,7 +177,7 @@ async function calculateStats(forceRefetch = false) {
     let data: DeployDailyCount[] | null = null
     let localChannelNames: { [channelId: string]: string } = {}
     let localChannelAppIds: { [channelId: string]: string } = {}
-    const cachedData = currentOrgId ? cacheByOrg.get(currentOrgId) : null
+    const cachedData = cacheByOrg.get(cacheKey)
 
     if (cachedData && !forceRefetch) {
       data = cachedData.data
@@ -182,13 +187,20 @@ async function calculateStats(forceRefetch = false) {
     else {
       // Per-day deploy counts per channel, aggregated in the database instead of
       // downloading every deployment of the window.
-      const result = await readAllConsoleRows<DeployDailyCount>((from, to) => capgo
-        .rpc('get_deploy_daily_counts', {
-          p_app_ids: targetAppIds,
-          p_start: last30DaysStart.toISOString(),
-          p_end: exclusiveEnd.toISOString(),
-        })
-        .range(from, to))
+      const result = await readAllConsoleRows<DeployDailyCount>((from, to) => {
+        if (!request.isCurrent())
+          return Promise.resolve({ data: [], error: null })
+        return capgo
+          .rpc('get_deploy_daily_counts', {
+            p_app_ids: targetAppIds,
+            p_start: last30DaysStart.toISOString(),
+            p_end: exclusiveEnd.toISOString(),
+          })
+          .range(from, to)
+      })
+
+      if (!request.isCurrent())
+        return
 
       if (result.error)
         throw result.error
@@ -207,7 +219,7 @@ async function calculateStats(forceRefetch = false) {
 
       // Store in per-org cache
       if (data && currentOrgId) {
-        cacheByOrg.set(currentOrgId, { data, channelNames: localChannelNames, channelAppIds: localChannelAppIds })
+        cacheByOrg.set(cacheKey, { data, channelNames: localChannelNames, channelAppIds: localChannelAppIds })
       }
     }
 
@@ -273,7 +285,7 @@ async function calculateStats(forceRefetch = false) {
 
     const evolution = computeLastDayEvolution(finalDeploymentData)
 
-    if (requestToken !== latestRequestToken)
+    if (!request.isCurrent())
       return
 
     deploymentData.value = finalDeploymentData
@@ -286,59 +298,19 @@ async function calculateStats(forceRefetch = false) {
     lastDayEvolution.value = evolution
   }
   catch (error) {
-    console.error('Error fetching deployment stats:', error)
-    if (requestToken === latestRequestToken) {
-      deploymentData.value = fallbackData
-      deploymentDataByChannel.value = {}
-      channelNames.value = {}
-      channelAppIds.value = {}
-      deploymentDataByApp.value = {}
-      appNames.value = {}
-      totalDeployments.value = 0
-      lastDayEvolution.value = 0
+    if (request.isCurrent()) {
+      request.fail()
+      console.error('Error fetching deployment stats:', error)
     }
   }
   finally {
-    if (requestToken === latestRequestToken) {
-      await ensureMinDelay(startTime)
-      isLoading.value = false
-    }
+    request.finish()
   }
 }
 
-// Watch for organization changes - use per-org cache (no need to force refetch)
-watch(() => organizationStore.currentOrganization?.gid, async (newOrgId, oldOrgId) => {
-  if (newOrgId && oldOrgId && newOrgId !== oldOrgId) {
-    // Per-org cache will be checked in calculateStats
-    await calculateStats(false)
-  }
-})
-
-// Watch for billing period mode changes - reprocess cached data
-watch(() => props.useBillingPeriod, async () => {
-  await calculateStats(false)
-})
-
-// Watch for app target changes - need to refetch
-watch(() => props.appId, async () => {
-  await calculateStats(true) // Force refetch for new app
-})
-
-// Watch for accumulated mode changes - reprocess cached data
-watch(() => props.accumulated, async () => {
-  await calculateStats(false)
-})
-
-// Watch for reload trigger - force refetch from API
-watch(() => props.reloadTrigger, async (newVal) => {
-  if (newVal > 0) {
-    await calculateStats(true)
-  }
-})
-
-onMounted(async () => {
-  await calculateStats(true) // Initial fetch
-})
+watch([dataScope, () => props.reloadTrigger], (_values, previous) => {
+  void calculateStats(!previous || previous[1] !== props.reloadTrigger)
+}, { immediate: true })
 </script>
 
 <template>
@@ -347,11 +319,12 @@ onMounted(async () => {
     :total="effectiveTotalDeployments"
     :last-day-evolution="effectiveLastDayEvolution"
     :is-loading="isLoading"
+    :is-refreshing="isRefreshing"
+    :error-message="loadError ? t('error-loading-data') : undefined"
     :has-data="hasData"
     :is-demo-data="isDemoMode"
   >
     <DeploymentStatsChart
-      :key="isSingleAppMode ? JSON.stringify(deploymentDataByChannel) : JSON.stringify(effectiveDeploymentDataByApp)"
       :title="t('deployment_statistics')"
       :colors="colors.blue"
       :data="effectiveDeploymentData"

@@ -184,6 +184,7 @@ declare global {
   const useDark: typeof import('@vueuse/core').useDark
   const useDashboardAppsStore: typeof import('./stores/dashboardApps').useDashboardAppsStore
   const useDashboardDailyChartCycle: typeof import('./composables/useOrgBillingCycleChart').useDashboardDailyChartCycle
+  const useDashboardRequestState: typeof import('./composables/useDashboardRequestState').useDashboardRequestState
   const useDateFormat: typeof import('@vueuse/core').useDateFormat
   const useDebounce: typeof import('@vueuse/core').useDebounce
   const useDebounceFn: typeof import('@vueuse/core').useDebounceFn
@@ -571,6 +572,7 @@ declare module 'vue' {
     readonly useDark: UnwrapRef<typeof import('@vueuse/core')['useDark']>
     readonly useDashboardAppsStore: UnwrapRef<typeof import('./stores/dashboardApps')['useDashboardAppsStore']>
     readonly useDashboardDailyChartCycle: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useDashboardDailyChartCycle']>
+    readonly useDashboardRequestState: UnwrapRef<typeof import('./composables/useDashboardRequestState')['useDashboardRequestState']>
     readonly useDateFormat: UnwrapRef<typeof import('@vueuse/core')['useDateFormat']>
     readonly useDebounce: UnwrapRef<typeof import('@vueuse/core')['useDebounce']>
     readonly useDebounceFn: UnwrapRef<typeof import('@vueuse/core')['useDebounceFn']>

@@ -300,17 +300,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     if (!app)
       return
 
-    const nextApp = { ...app, ...patch }
-    const nextAppsByAppId = new Map(_appsByAppId.value)
-    nextAppsByAppId.set(appId, nextApp)
-
-    const nextAppsByOrgId = new Map(_appsByOrgId.value)
-    const orgApps = nextAppsByOrgId.get(nextApp.owner_org)
-    if (orgApps)
-      nextAppsByOrgId.set(nextApp.owner_org, orgApps.map(orgApp => orgApp.app_id === appId ? nextApp : orgApp))
-
-    _appsByAppId.value = nextAppsByAppId
-    _appsByOrgId.value = nextAppsByOrgId
+    Object.assign(app, patch)
   }
 
   const loadOrganizationAppIcon = async (app: OrganizationApp, run: number) => {
@@ -374,6 +364,7 @@ export const useOrganizationStore = defineStore('organization', () => {
   watch([currentOrganization, stripeEnabled], async ([currentOrganizationRaw, stripeEnabledValue], [previousOrganization]) => {
     if (!currentOrganizationRaw) {
       currentRole.value = null
+      useDashboardAppsStore().reset()
       localStorage.removeItem(STORAGE_KEY)
       return
     }
@@ -395,11 +386,8 @@ export const useOrganizationStore = defineStore('organization', () => {
       const displayStore = useDisplayStore()
       displayStore.clearCachesForOrg(currentOrganizationRaw.gid)
 
-      // Reset and refetch dashboard apps for the new org
       const dashboardAppsStore = useDashboardAppsStore()
-      dashboardAppsStore.reset()
-      // Fetch apps for the new org - don't await to avoid blocking other operations
-      dashboardAppsStore.fetchApps(true)
+      dashboardAppsStore.fetchApps()
     }
 
     // Always fetch last 30 UTC days of data and filter client-side for billing period

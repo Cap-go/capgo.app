@@ -12,6 +12,7 @@ import { createTodayLineOptions, generateAppChartColors, getSafeChartHue } from 
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
 import { dailyChartBaseProps } from '~/services/dailyChartProps'
 import { generateMonthDays } from '~/services/date'
+import { limitChartBreakdown } from '~/utils/chartBreakdown'
 import { useChartCardCompact } from './chartCardDensity'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
@@ -25,28 +26,24 @@ const { t } = useI18n()
 const router = useRouter()
 const chartCycle = useDashboardDailyChartCycle(() => props.useBillingPeriod)
 const { cycleStart, cycleEnd, todayLimit, transformDailySeries } = chartCycle
+const breakdown = computed(() => limitChartBreakdown(props.dataByApp))
 
-const tooltipClickHandler = computed<TooltipClickHandler>(() => {
-  const appIdByLabel: Record<string, string> = {}
-  for (const [appId, appName] of Object.entries(props.appNames as Record<string, string>))
-    appIdByLabel[appName] = appId
-  return {
-    onAppClick: (appId: string) => router.push(`/app/${appId}`),
-    appIdByLabel,
-  }
-})
+const tooltipClickHandler: TooltipClickHandler = {
+  onAppClick: appId => router.push(`/app/${appId}`),
+  datasetIdKey: 'appId',
+}
 
 function monthdays() {
   return generateMonthDays(props.useBillingPeriod, cycleStart.value, cycleEnd.value)
 }
-const hasAppData = computed(() => Object.keys(props.dataByApp).length > 0)
+const hasAppData = computed(() => breakdown.value.length > 0)
 
 const chartData = computed<ChartData<any>>(() => {
-  const appIds = Object.keys(props.dataByApp)
+  const appSeries = breakdown.value
   const labels = monthdays()
   const labelCount = labels.length
 
-  if (appIds.length === 0) {
+  if (appSeries.length === 0) {
     // Fallback to single dataset if no app data
     let backgroundColor: string
     let borderColor: string
@@ -93,9 +90,10 @@ const chartData = computed<ChartData<any>>(() => {
   }
 
   // Create stacked datasets for each app
-  const appColors = generateAppChartColors(appIds.length)
-  const datasets = appIds.map((appId, index) => {
-    const appData = props.dataByApp[appId] as number[]
+  const appColors = generateAppChartColors(appSeries.length)
+  const datasets = appSeries.map((series, index) => {
+    const appId = series.id
+    const appData = series.data as number[]
 
     let backgroundColor: string
     let borderColor: string
@@ -122,7 +120,7 @@ const chartData = computed<ChartData<any>>(() => {
     }
 
     const baseDataset: any = {
-      label: props.appNames[appId] || appId,
+      label: appId ? props.appNames[appId] || appId : t('other-apps'),
       appId,
       data: processed.display,
       backgroundColor,
@@ -172,7 +170,7 @@ const chartOptions = computed(() => {
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler.value : undefined),
+      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler : undefined),
       todayLine: todayLineOptions.value,
     },
   }
