@@ -152,8 +152,8 @@ interface BuildLogger {
 
 - `--output-upload`: upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Pair with `--no-playstore-upload` (Android) or `--ios-distribution ad_hoc` (iOS) for artifact-only builds
 - `--no-output-upload`: skip Capgo storage upload (no download link); store upload can still happen when store credentials are set
-- `--symbols-upload`: keep only the debug symbols (iOS dSYMs zip, Android `mapping.txt`) and print a time-limited download link for crash reporters (Crashlytics, Sentry); the IPA/APK/AAB is not kept. Use with store builds. Off by default: Capgo keeps nothing unless you opt in. TTL follows `--output-retention`
-- `--no-symbols-upload`: do not keep the debug symbols (default unless `--output-upload`)
+- `--symbols-upload`: keep the debug symbols (iOS dSYMs zip, Android `mapping.txt`) and print a time-limited download link for crash reporters (Crashlytics, Sentry). If output upload is enabled by a flag, environment variable, or saved credentials, also pass `--no-output-upload` to avoid keeping the IPA/APK/AAB. Use with store builds. Off by default: Capgo keeps nothing unless you opt in. TTL follows `--output-retention`
+- `--no-symbols-upload`: do not keep debug symbols unless output upload is enabled. `--output-upload` still includes debug symbols
 - `--no-playstore-upload`: Android — skip Google Play upload for this build (ignores saved Play credentials). Requires `--output-upload`. Use when the Play app does not exist yet or you only need the AAB download
 - `--submit-to-store-review`: submit after upload instead of leaving a draft/inactive store release. Android completes the Google Play release; iOS submits to TestFlight external review.
 - `--store-release-name <name>`: Android Google Play version_name/release label.

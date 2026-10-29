@@ -1732,8 +1732,8 @@ Examples:
 | **--output-upload** | <code>boolean</code> | Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR), plus a link to the debug symbols (iOS dSYMs, Android mapping.txt) for crash reporters. Use with --no-playstore-upload (Android) or --ios-distribution ad_hoc (iOS) when you only need the artifact and are not publishing to the store yet. Precedence: CLI > env > saved credentials |
 | **--no-output-upload** | <code>boolean</code> | Do not upload the finished IPA/APK/AAB to Capgo storage (no download link). Store upload still happens when Play/TestFlight credentials are configured. Precedence: CLI > env > saved credentials |
 | **--output-retention** | <code>string</code> | Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials |
-| **--symbols-upload** | <code>boolean</code> | Keep only the debug symbols (iOS dSYMs zip, Android mapping.txt) in Capgo storage and print a time-limited download link for crash reporters (Crashlytics, Sentry), without keeping the IPA/APK/AAB. Use with store builds. Link TTL follows --output-retention. Precedence: CLI > env > saved credentials |
-| **--no-symbols-upload** | <code>boolean</code> | Do not keep the debug symbols in Capgo storage (default unless --output-upload). Precedence: CLI > env > saved credentials |
+| **--symbols-upload** | <code>boolean</code> | Keep the debug symbols (iOS dSYMs zip, Android mapping.txt) in Capgo storage and print a time-limited download link for crash reporters (Crashlytics, Sentry). If output upload is enabled, also pass --no-output-upload to avoid keeping the IPA/APK/AAB. Use with store builds. Link TTL follows --output-retention. Precedence: CLI > env > saved credentials |
+| **--no-symbols-upload** | <code>boolean</code> | Do not keep debug symbols unless output upload is enabled. --output-upload still includes debug symbols. Precedence: CLI > env > saved credentials |
 | **--build-env** | <code>string</code> | Pass an env var to the cloud build (repeatable). KEY alone takes the value from your environment, so CI secrets stay off the command line. Sent like other build credentials, never logged; Gradle and Xcode build phases see it (e.g. SENTRY_AUTH_TOKEN for the Sentry Gradle plugin). Also read from CAPGO_BUILD_ENV (comma-separated names). |
 | **--output-record** | <code>string</code> | After a successful build, write a JSON record (jobId, status, outputUrl, symbolsUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. symbolsUrl is the iOS dSYMs zip or Android mapping.txt download link (with --output-upload or --symbols-upload) for crash reporters like Sentry. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`. |
 | **--skip-build-number-bump** | <code>boolean</code> | Skip automatic build number/version code incrementing. Uses whatever version is already in the project files. |
@@ -1987,8 +1987,8 @@ Examples:
 | **--output-upload** | <code>boolean</code> | Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links |
 | **--no-output-upload** | <code>boolean</code> | Do not upload build outputs (IPA/APK/AAB) to Capgo storage |
 | **--output-retention** | <code>string</code> | Output link TTL: 1h to 7d (default: 1h). Examples: 1h, 6h, 2d |
-| **--symbols-upload** | <code>boolean</code> | Keep only the debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link |
-| **--no-symbols-upload** | <code>boolean</code> | Do not keep the debug symbols in Capgo storage on future builds |
+| **--symbols-upload** | <code>boolean</code> | Keep debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link. Also pass --no-output-upload to avoid keeping the IPA/APK/AAB when output upload is enabled |
+| **--no-symbols-upload** | <code>boolean</code> | Do not keep debug symbols on future builds unless output upload is enabled. --output-upload still includes debug symbols |
 | **--skip-build-number-bump** | <code>boolean</code> | Skip automatic build number/version code incrementing on future builds |
 | **--no-skip-build-number-bump** | <code>boolean</code> | Re-enable automatic build number incrementing (default behavior) |
 | **--skip-marketing-version-bump** | <code>boolean</code> | Skip automatic marketing version bump on future builds when the app is already released |
@@ -2078,8 +2078,8 @@ Examples:
 | **--output-upload** | <code>boolean</code> | Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links |
 | **--no-output-upload** | <code>boolean</code> | Do not upload build outputs (IPA/APK/AAB) to Capgo storage |
 | **--output-retention** | <code>string</code> | Output link TTL: 1h to 7d. Examples: 1h, 6h, 2d |
-| **--symbols-upload** | <code>boolean</code> | Keep only the debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link |
-| **--no-symbols-upload** | <code>boolean</code> | Do not keep the debug symbols in Capgo storage on future builds |
+| **--symbols-upload** | <code>boolean</code> | Keep debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link. Also pass --no-output-upload to avoid keeping the IPA/APK/AAB when output upload is enabled |
+| **--no-symbols-upload** | <code>boolean</code> | Do not keep debug symbols on future builds unless output upload is enabled. --output-upload still includes debug symbols |
 | **--skip-build-number-bump** | <code>boolean</code> | Skip automatic build number/version code incrementing on future builds |
 | **--no-skip-build-number-bump** | <code>boolean</code> | Re-enable automatic build number incrementing (default behavior) |
 | **--skip-marketing-version-bump** | <code>boolean</code> | Skip automatic marketing version bump on future builds when the app is already released |

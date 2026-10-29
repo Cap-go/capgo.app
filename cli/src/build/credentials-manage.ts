@@ -236,7 +236,7 @@ const CREDENTIAL_KNOWLEDGE: Record<string, FieldKnowledge> = {
     scope: 'shared',
     type: 'boolean',
     category: 'configuration',
-    explain: 'When true, the build worker keeps only the debug symbols (iOS dSYMs zip, Android R8/ProGuard mapping.txt) in Capgo storage and prints a time-limited download link for crash reporters (Crashlytics, Sentry). The IPA/APK/AAB is not kept unless BUILD_OUTPUT_UPLOAD_ENABLED is also true. Uses BUILD_OUTPUT_RETENTION_SECONDS. Off by default: nothing is kept unless you opt in.',
+    explain: 'When true, the build worker keeps the debug symbols (iOS dSYMs zip, Android R8/ProGuard mapping.txt) in Capgo storage and prints a time-limited download link for crash reporters (Crashlytics, Sentry). Set BUILD_OUTPUT_UPLOAD_ENABLED to false to avoid keeping the IPA/APK/AAB. When output upload is enabled, it includes debug symbols even if this setting is false. Uses BUILD_OUTPUT_RETENTION_SECONDS. Off by default: nothing is kept unless you opt in.',
   },
   SKIP_BUILD_NUMBER_BUMP: {
     scope: 'shared',
