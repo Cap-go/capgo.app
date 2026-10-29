@@ -48,11 +48,15 @@ export const useMainStore = defineStore('main', () => {
   let platformAdminStatusEpoch = 0
   let platformAdminStatusRequest: { epoch: number, generation: number, promise: Promise<boolean> } | undefined
   const dashboard = ref<AppUsageGlobal[]>([])
+  const dashboardOrgId = ref<string | null>(null)
+  const dashboardPlanOrgId = ref<string | null>(null)
   const dashboardByapp = ref<AppUsageByApp[]>([])
   const totalDevices = ref<number>(0)
   const totalStorage = ref<number>(0)
   const dashboardFetched = ref<boolean>(false)
   const _initialLoadPromise = ref(createDeferredPromise<boolean>())
+  let dashboardLoadId = 0
+  let dashboardRequest: { orgId: string, start: string, end: string, generation: number, promise: Promise<void> } | undefined
 
   const totalDownload = ref<number>(0)
 
@@ -97,6 +101,9 @@ export const useMainStore = defineStore('main', () => {
 
   watch(auth, () => {
     authGeneration.value += 1
+    dashboardOrgId.value = null
+    dashboardPlanOrgId.value = null
+    bestPlan.value = ''
     invalidatePlatformAdminStatus()
   }, { flush: 'sync' })
 
@@ -138,26 +145,56 @@ export const useMainStore = defineStore('main', () => {
   }
 
   const updateDashboard = async (currentOrgId: string, rangeStart?: string, rangeEnd?: string) => {
-    try {
-      const { start, end } = normalizeDashboardDateRange(rangeStart, rangeEnd)
-      const dashboardRes = await getAllDashboard(currentOrgId, start, end)
-      dashboard.value = dashboardRes.global
-      dashboardByapp.value = dashboardRes.byApp
+    const { start, end } = normalizeDashboardDateRange(rangeStart, rangeEnd)
+    const generation = authGeneration.value
+    if (dashboardRequest?.orgId === currentOrgId && dashboardRequest.start === start && dashboardRequest.end === end && dashboardRequest.generation === generation)
+      return dashboardRequest.promise
 
-      const monthDay = calculateMonthDay(start)
+    if (dashboardOrgId.value !== currentOrgId)
+      bestPlan.value = ''
+    dashboardPlanOrgId.value = null
+    const loadId = ++dashboardLoadId
+    const isCurrent = () => loadId === dashboardLoadId && generation === authGeneration.value
+    const request = (async () => {
+      try {
+        const dashboardRes = await getAllDashboard(currentOrgId, start, end)
+        if (!isCurrent())
+          return
+        dashboardOrgId.value = currentOrgId
+        dashboard.value = dashboardRes.global
+        dashboardByapp.value = dashboardRes.byApp
 
-      totalDevices.value = dashboard.value[monthDay]?.mau ?? 0
-      totalDownload.value = dashboard.value[monthDay]?.get ?? 0
-      totalStorage.value = await getTotalStorage()
-      totalStats.value = getTotalStats()
-      bestPlan.value = await findBestPlan(totalStats.value)
-      dashboardFetched.value = true
-      _initialLoadPromise.value.resolve(true)
-    }
-    catch (error) {
-      _initialLoadPromise.value.reject(error)
-      throw error
-    }
+        const monthDay = calculateMonthDay(start)
+        totalDevices.value = dashboard.value[monthDay]?.mau ?? 0
+        totalDownload.value = dashboard.value[monthDay]?.get ?? 0
+
+        const storage = await getTotalStorage()
+        if (!isCurrent())
+          return
+        totalStorage.value = storage
+        totalStats.value = getTotalStats()
+
+        const plan = await findBestPlan(totalStats.value)
+        if (!isCurrent())
+          return
+        bestPlan.value = plan
+        dashboardPlanOrgId.value = currentOrgId
+        dashboardFetched.value = true
+        _initialLoadPromise.value.resolve(true)
+      }
+      catch (error) {
+        if (!isCurrent())
+          return
+        _initialLoadPromise.value.reject(error)
+        throw error
+      }
+    })().finally(() => {
+      if (dashboardRequest?.promise === request)
+        dashboardRequest = undefined
+    })
+
+    dashboardRequest = { orgId: currentOrgId, start, end, generation, promise: request }
+    return request
   }
 
   const filterDashboard = (appId: string) => {
@@ -213,6 +250,8 @@ export const useMainStore = defineStore('main', () => {
     updateDashboard,
     filterDashboard,
     dashboard,
+    dashboardOrgId,
+    dashboardPlanOrgId,
     awaitInitialLoad,
     dashboardByapp,
     getTotalMauByApp,
