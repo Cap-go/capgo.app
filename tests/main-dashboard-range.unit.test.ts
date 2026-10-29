@@ -183,6 +183,27 @@ describe('main store dashboard range normalization', () => {
     resolvePreviousPlan('previous-plan')
     await previous
     expect(store.bestPlan).toBe('next-plan')
+    expect(store.dashboardPlanOrgId).toBe('org-next')
+  })
+
+  it.each(['storage', 'plan'])('keeps metrics ready but clears a previous organization plan when %s fails', async (stage) => {
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+    await store.updateDashboard('org-previous')
+    expect(store.bestPlan).toBe('team')
+
+    const failedStage = stage === 'storage' ? mockGetTotalStorage : mockFindBestPlan
+    failedStage.mockRejectedValueOnce(new Error('Recommendation unavailable'))
+    await expect(store.updateDashboard('org-next')).rejects.toThrow('Recommendation unavailable')
+
+    expect(store.dashboardOrgId).toBe('org-next')
+    expect(store.dashboard).toHaveLength(30)
+    expect(store.bestPlan).toBe('')
+    expect(store.dashboardPlanOrgId).toBeNull()
+
+    await store.updateDashboard('org-next')
+    expect(store.bestPlan).toBe('team')
+    expect(store.dashboardPlanOrgId).toBe('org-next')
   })
 
   it('shares and caches the platform-admin lookup until an explicit refresh', async () => {

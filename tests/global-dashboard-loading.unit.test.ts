@@ -2,7 +2,7 @@
 
 import type { App } from 'vue'
 import { createPinia, defineStore } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import Dashboard from '../src/pages/dashboard.vue'
@@ -119,9 +119,10 @@ describe('global dashboard loading does not block the page', () => {
 
   it('keeps security restrictions intact rather than treating them as loading states', async () => {
     const pinia = mountDashboard()
-    const organization = useOrganizationStore(pinia)
-    organization.currentOrganization.enforcing_2fa = true
-    organization.currentOrganization['2fa_has_access'] = false
+    const organization = useOrganizationStore(pinia).currentOrganization
+    assert(organization)
+    organization.enforcing_2fa = true
+    organization['2fa_has_access'] = false
     await flush()
 
     expect(container.querySelector('[data-test="FailedCard"]')).not.toBeNull()

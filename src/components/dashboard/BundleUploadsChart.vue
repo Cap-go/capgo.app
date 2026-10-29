@@ -28,17 +28,10 @@ const chartCycle = useDashboardDailyChartCycle(() => props.useBillingPeriod)
 const { cycleStart, cycleEnd, todayLimit, transformDailySeries } = chartCycle
 const breakdown = computed(() => limitChartBreakdown(props.dataByApp))
 
-const tooltipClickHandler = computed<TooltipClickHandler>(() => {
-  const appIdByLabel: Record<string, string> = {}
-  for (const series of breakdown.value) {
-    if (series.id && !(breakdown.value.some(item => !item.id) && props.appNames[series.id] === t('other-apps')))
-      appIdByLabel[props.appNames[series.id] || series.id] = series.id
-  }
-  return {
-    onAppClick: (appId: string) => router.push(`/app/${appId}`),
-    appIdByLabel,
-  }
-})
+const tooltipClickHandler: TooltipClickHandler = {
+  onAppClick: appId => router.push(`/app/${appId}`),
+  datasetIdKey: 'appId',
+}
 
 function monthdays() {
   return generateMonthDays(props.useBillingPeriod, cycleStart.value, cycleEnd.value)
@@ -177,7 +170,7 @@ const chartOptions = computed(() => {
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler.value : undefined),
+      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler : undefined),
       todayLine: todayLineOptions.value,
     },
   }

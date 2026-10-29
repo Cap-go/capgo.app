@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.stubGlobal('onClickOutside', vi.fn())
   vi.stubGlobal('onKeyStroke', vi.fn())
   container = document.createElement('div')
-  document.body.append(container)
+  document.body.appendChild(container)
 })
 
 afterEach(() => {

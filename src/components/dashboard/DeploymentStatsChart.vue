@@ -35,16 +35,6 @@ const hasBreakdownData = computed(() => isChannelMode.value || isAppMode.value)
 const breakdown = computed(() => limitChartBreakdown(isChannelMode.value ? props.dataByChannel : props.dataByApp))
 const otherLabel = computed(() => t(isChannelMode.value ? 'other-channels' : 'other-apps'))
 
-const idByLabel = computed(() => {
-  const mapping: Record<string, string> = {}
-  const names = isChannelMode.value ? props.channelNames : props.appNames
-  for (const series of breakdown.value) {
-    if (series.id && !(breakdown.value.some(item => !item.id) && names[series.id] === otherLabel.value))
-      mapping[names[series.id] || series.id] = series.id
-  }
-  return mapping
-})
-
 const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
   if (isChannelMode.value) {
     return {
@@ -53,13 +43,13 @@ const tooltipClickHandler = computed<TooltipClickHandler | undefined>(() => {
         if (appId)
           router.push(`/app/${appId}/channel/${channelId}`)
       },
-      appIdByLabel: idByLabel.value,
+      datasetIdKey: 'breakdownId',
     }
   }
   if (isAppMode.value) {
     return {
       onAppClick: (appId: string) => router.push(`/app/${appId}`),
-      appIdByLabel: idByLabel.value,
+      datasetIdKey: 'breakdownId',
     }
   }
   return undefined

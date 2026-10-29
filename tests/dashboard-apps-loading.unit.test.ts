@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   organization: {
     currentOrganization: { gid: 'org-many-apps' },
     dedupFetchOrganizations: vi.fn(async () => undefined),
-    awaitInitialLoad: vi.fn(async () => undefined),
+    awaitInitialLoad: vi.fn(async (): Promise<void> => undefined),
   },
   eq: vi.fn(),
   setAppNameResolver: vi.fn(),

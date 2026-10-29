@@ -792,7 +792,7 @@ async function loadData(forceRefetch = false) {
 
 async function ensureDashboard() {
   const orgId = effectiveOrganization.value?.gid
-  if (props.forceDemo || !orgId || main.dashboardOrgId === orgId)
+  if (props.forceDemo || !orgId || (main.dashboardOrgId === orgId && main.dashboardPlanOrgId === orgId))
     return
   const scopeKey = currentScopeKey.value
   const request = usageLoading.start()
@@ -801,9 +801,11 @@ async function ensureDashboard() {
   }
   catch (error) {
     if (!disposed && scopeKey === currentScopeKey.value && !props.forceDemo) {
-      const failure = usageLoading.start()
-      failure.fail()
-      failure.finish()
+      if (main.dashboardOrgId !== orgId) {
+        const failure = usageLoading.start()
+        failure.fail()
+        failure.finish()
+      }
       console.error('Error fetching dashboard usage:', error)
     }
   }

@@ -200,3 +200,23 @@ describe.each([
     expect(container.querySelector('[data-test="interactive-chart"]')?.textContent).toBe(currentChart)
   })
 })
+
+describe('update evolution refresh', () => {
+  it.each([0, 1])('clears the previous badge after refreshing to %i active days', async (activeDays) => {
+    mocks.rows.mockResolvedValueOnce({
+      data: [
+        { app_id: 'com.example.app', date: '2026-10-28', install: 5, fail: 0, get: 0 },
+        { app_id: 'com.example.app', date: '2026-10-29', install: 10, fail: 0, get: 0 },
+      ],
+      error: null,
+    })
+    const props = await mountCard(UpdateStatsCard)
+    expect(container.querySelector('[data-test="chart-card-header-actions"]')?.textContent).toContain('100.00%')
+
+    mocks.rows.mockResolvedValueOnce(result('daily_version', activeDays * 7))
+    props.reloadTrigger++
+    await flush()
+
+    expect(container.querySelector('[data-test="chart-card-header-actions"]')?.textContent).toContain('+0.00%')
+  })
+})

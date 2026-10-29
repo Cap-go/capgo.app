@@ -47,17 +47,10 @@ const router = useRouter()
 const { cycleStart, cycleEnd, todayLimit } = useDashboardDailyChartCycle(() => props.useBillingPeriod)
 const breakdown = computed(() => limitChartBreakdown(props.dataByApp))
 
-const tooltipClickHandler = computed<TooltipClickHandler>(() => {
-  const appIdByLabel: Record<string, string> = {}
-  for (const series of breakdown.value) {
-    if (series.id && !(breakdown.value.some(item => !item.id) && props.appNames[series.id] === t('other-apps')))
-      appIdByLabel[props.appNames[series.id] || series.id] = series.id
-  }
-  return {
-    onAppClick: (appId: string) => router.push(`/app/${appId}`),
-    appIdByLabel,
-  }
-})
+const tooltipClickHandler: TooltipClickHandler = {
+  onAppClick: appId => router.push(`/app/${appId}`),
+  datasetIdKey: 'appId',
+}
 
 const viewMode = computed(() => props.accumulated ? 'cumulative' : 'daily')
 
@@ -371,7 +364,7 @@ const chartOptions = computed<ChartOptions & { plugins: { inlineAnnotationPlugin
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler.value : undefined),
+      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler : undefined),
       filler: {
         propagate: false,
       },

@@ -2,7 +2,7 @@
 
 import type { App } from 'vue'
 import { createPinia, defineStore } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import Usage from '../src/components/dashboard/Usage.vue'
@@ -15,6 +15,7 @@ vi.mock('~/stores/main', () => ({
     state: () => ({
       dashboardFetched: true,
       dashboardOrgId: 'org-first' as string | null,
+      dashboardPlanOrgId: 'org-first' as string | null,
       dashboard: [{ date: '2026-10-29', mau: 5, storage: 0, storage_byte_hours: 0, bandwidth: 0 }],
       dashboardByapp: [],
       plans: [],
@@ -68,7 +69,7 @@ async function flush() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-29T12:00:00Z'))
   mocks.plans.mockImplementation(() => new Promise(() => {}))
@@ -82,9 +83,11 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function mountUsage(ready = true) {
+function mountUsage(ready = true, planReady = true) {
   const pinia = createPinia()
   const main = useMainStore(pinia)
+  if (!planReady)
+    main.dashboardPlanOrgId = null
   if (!ready) {
     main.dashboardFetched = false
     main.dashboardOrgId = null
@@ -109,12 +112,41 @@ describe('independent global usage loading', () => {
     expect(container.querySelector('[data-test="independent-deployments"]')).not.toBeNull()
   })
 
+  it('retries an incomplete recommendation without hiding available metrics', async () => {
+    mocks.updateDashboard.mockImplementationOnce(() => new Promise(() => {}))
+    mountUsage(true, false)
+    await flush()
+
+    expect(mocks.updateDashboard).toHaveBeenCalledOnce()
+    expect(container.querySelector('[data-test="usage-card"]')?.getAttribute('data-loading')).toBe('false')
+    expect(container.querySelector('[data-test="usage-card"]')?.textContent).toContain('5')
+  })
+
+  it('does not turn a recommendation failure into a usage failure when metrics are ready', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      mocks.updateDashboard.mockRejectedValueOnce(new Error('Recommendation unavailable'))
+      mountUsage(true, false)
+      await flush()
+
+      expect(mocks.updateDashboard).toHaveBeenCalledOnce()
+      expect(container.querySelector('[data-test="usage-card"]')?.getAttribute('data-loading')).toBe('false')
+      expect(container.querySelector('[data-test="usage-card"]')?.getAttribute('data-error')).toBe('false')
+      expect(container.querySelector('[data-test="usage-card"]')?.textContent).toContain('5')
+    }
+    finally {
+      errorLog.mockRestore()
+    }
+  })
+
   it('hides the previous organization snapshot while the next organization loads', async () => {
     const pinia = mountUsage()
     await flush()
     expect(container.querySelector('[data-test="usage-card"]')?.textContent).toContain('5')
     mocks.updateDashboard.mockImplementationOnce(() => new Promise(() => {}))
-    useOrganizationStore(pinia).currentOrganization.gid = 'org-next'
+    const organization = useOrganizationStore(pinia).currentOrganization
+    assert(organization)
+    organization.gid = 'org-next'
     await flush()
 
     expect(container.querySelector('[data-test="usage-card"]')?.getAttribute('data-loading')).toBe('true')

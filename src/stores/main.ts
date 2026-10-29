@@ -49,6 +49,7 @@ export const useMainStore = defineStore('main', () => {
   let platformAdminStatusRequest: { epoch: number, generation: number, promise: Promise<boolean> } | undefined
   const dashboard = ref<AppUsageGlobal[]>([])
   const dashboardOrgId = ref<string | null>(null)
+  const dashboardPlanOrgId = ref<string | null>(null)
   const dashboardByapp = ref<AppUsageByApp[]>([])
   const totalDevices = ref<number>(0)
   const totalStorage = ref<number>(0)
@@ -101,6 +102,8 @@ export const useMainStore = defineStore('main', () => {
   watch(auth, () => {
     authGeneration.value += 1
     dashboardOrgId.value = null
+    dashboardPlanOrgId.value = null
+    bestPlan.value = ''
     invalidatePlatformAdminStatus()
   }, { flush: 'sync' })
 
@@ -147,6 +150,9 @@ export const useMainStore = defineStore('main', () => {
     if (dashboardRequest?.orgId === currentOrgId && dashboardRequest.start === start && dashboardRequest.end === end && dashboardRequest.generation === generation)
       return dashboardRequest.promise
 
+    if (dashboardOrgId.value !== currentOrgId)
+      bestPlan.value = ''
+    dashboardPlanOrgId.value = null
     const loadId = ++dashboardLoadId
     const isCurrent = () => loadId === dashboardLoadId && generation === authGeneration.value
     const request = (async () => {
@@ -172,6 +178,7 @@ export const useMainStore = defineStore('main', () => {
         if (!isCurrent())
           return
         bestPlan.value = plan
+        dashboardPlanOrgId.value = currentOrgId
         dashboardFetched.value = true
         _initialLoadPromise.value.resolve(true)
       }
@@ -244,6 +251,7 @@ export const useMainStore = defineStore('main', () => {
     filterDashboard,
     dashboard,
     dashboardOrgId,
+    dashboardPlanOrgId,
     awaitInitialLoad,
     dashboardByapp,
     getTotalMauByApp,

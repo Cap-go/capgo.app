@@ -18,6 +18,8 @@ interface RenderedDataset {
 
 const mocks = vi.hoisted(() => ({
   rendered: undefined as { datasets: RenderedDataset[] } | undefined,
+  external: vi.fn<(context: unknown) => void>(),
+  push: vi.fn(),
 }))
 
 vi.mock('~/components/dashboard/lazyCharts', async () => {
@@ -26,6 +28,7 @@ vi.mock('~/components/dashboard/lazyCharts', async () => {
     props: ['data', 'options', 'plugins', 'height'],
     setup: props => () => {
       mocks.rendered = props.data
+      mocks.external = props.options.plugins.tooltip.external
       return h('div', { 'data-test': 'chart-canvas' })
     },
   })
@@ -35,7 +38,7 @@ vi.mock('~/stores/organization', () => ({
   useOrganizationStore: () => ({ currentOrganization: { subscription_start: '2026-10-01T00:00:00Z' } }),
 }))
 vi.mock('~/services/console', () => ({ defaultApiHost: 'https://example.com' }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }) }))
 
 let mountedApp: App | undefined
 let container: HTMLDivElement
@@ -44,6 +47,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-29T12:00:00Z'))
   mocks.rendered = undefined
+  mocks.push.mockClear()
   container = document.createElement('div')
 })
 
@@ -128,6 +132,55 @@ describe('deployment channel breakdown', () => {
       const expected = 500_500 * (accumulated ? dayIndex + 1 : 1)
       const actual = rendered.datasets.reduce((sum, dataset) => sum + (dataset.data[dayIndex] ?? 0), 0)
       expect(actual).toBe(expected)
+    }
+  })
+})
+
+describe.each([
+  ['usage', LineChartStats, false],
+  ['bundle uploads', BundleUploadsChart, false],
+  ['deployments', DeploymentStatsChart, false],
+  ['deployment channels', DeploymentStatsChart, true],
+] as const)('%s tooltip identity', (_name, component, channelMode) => {
+  it('navigates real series with the Other label but leaves the aggregate unlinked', () => {
+    const series = Object.fromEntries(Array.from({ length: 11 }, (_, index) => [
+      `com.example.app${index}`,
+      Array.from({ length: 30 }, () => index + 1),
+    ]))
+    const label = channelMode ? 'Other channels' : 'Other apps'
+    const names = { 'com.example.app9': label, 'com.example.app10': label }
+    const rendered = mountChart(component, false, channelMode ? {} : series, channelMode ? {
+      dataByChannel: series,
+      channelNames: names,
+      channelAppIds: { 'com.example.app9': 'com.example.parent', 'com.example.app10': 'com.example.parent' },
+    } : { appNames: names })
+    const canvas = document.createElement('canvas')
+    container.appendChild(canvas)
+    mocks.external({
+      chart: { canvas, data: rendered },
+      tooltip: {
+        opacity: 1,
+        caretX: 0,
+        caretY: 0,
+        body: rendered.datasets.map(() => ({ lines: [''] })),
+        labelColors: rendered.datasets.map(() => ({ backgroundColor: '#000', borderColor: '#000' })),
+        dataPoints: rendered.datasets.map((dataset, datasetIndex) => ({
+          dataset,
+          datasetIndex,
+          dataIndex: 0,
+          parsed: { y: dataset.data[0] },
+        })),
+      },
+    })
+
+    const matchingRows = Array.from(container.querySelectorAll<HTMLElement>('.tooltip-body > div')).filter(row => row.textContent?.includes(label))
+    expect(matchingRows).toHaveLength(3)
+    expect(matchingRows.filter(row => row.dataset.appId)).toHaveLength(2)
+    matchingRows.find(row => !row.dataset.appId)?.click()
+    expect(mocks.push).not.toHaveBeenCalled()
+    for (const appId of ['com.example.app9', 'com.example.app10']) {
+      container.querySelector<HTMLElement>(`[data-app-id="${appId}"]`)?.click()
+      expect(mocks.push).toHaveBeenLastCalledWith(channelMode ? `/app/com.example.parent/channel/${appId}` : `/app/${appId}`)
     }
   })
 })

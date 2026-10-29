@@ -318,6 +318,7 @@ async function calculateStats(forceRefetch = false) {
     requestedTotal = sumSeries(finalActionData.requested)
 
     const nonZeroDays = finalDailyCounts.filter(count => (count || 0) > 0)
+    lastDayEvolution.value = 0
     if (nonZeroDays.length >= 2) {
       const lastDayCount = nonZeroDays[nonZeroDays.length - 1] || 0
       const previousDayCount = nonZeroDays[nonZeroDays.length - 2] || 0
