@@ -40,7 +40,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     await expect(page.locator('[data-test="app-onboarding-cli-step-add_channel"]')).toBeVisible()
     await expect(page.locator('[data-test^="app-onboarding-cli-step-"]')).toHaveCount(7)
     await expect(page.locator('[data-test^="app-onboarding-cli-step-"] button')).toContainText([
-      'Start guided setup Current task',
+      'Start guided setup',
       'Create a channel',
       'Install Capgo Updater',
       'Add the app-ready code',

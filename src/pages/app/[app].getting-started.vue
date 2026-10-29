@@ -73,7 +73,7 @@ watch(() => app.value?.app_id, (appId) => {
 </script>
 
 <template>
-  <AppPageFrame :found="!!app" :loading="isLoading">
+  <AppPageFrame flush :found="!!app" :loading="isLoading">
     <OnboardingChoosePlanStep v-if="showChoosePlanStep" />
     <AppOnboardingFlow
       v-if="app && setupFlowAppId === app.app_id"
