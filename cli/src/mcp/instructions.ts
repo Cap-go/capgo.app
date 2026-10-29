@@ -6,7 +6,7 @@ export function buildServerInstructions(opts: { onboardingEnabled: boolean, live
   const base
     = 'Capgo MCP: apps, bundles, channels, Observe (capgo_observe, start at summary), '
     + 'native builds, docs (capgo_search_docs). Not signed in? capgo_login. '
-    + 'Project not found? capgo_set_project_dir with the workspace path.'
+    + 'Project or @capacitor/core missing? capgo_set_project_dir with the absolute app path before installing dependencies.'
 
   const parts = [base]
   if (opts.onboardingEnabled) {

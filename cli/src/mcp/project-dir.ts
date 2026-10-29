@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { hasCapacitorConfig } from '../build/onboarding/project-discovery'
+import { discoverCapacitorProjects, hasCapacitorConfig } from '../build/onboarding/project-discovery'
 
 /**
  * The MCP server resolves the user's project from `process.cwd()` (capacitor config,
@@ -54,20 +54,29 @@ export function rootsToDirectories(roots: McpRoot[]): string[] {
  * Pick the project directory from the client's roots. Keeps `currentDir` when it is
  * already a Capacitor project inside one of the roots (e.g. a project-scoped install
  * launched from a sub-app of a monorepo); otherwise prefers the first root holding a
- * Capacitor config, then the first root. Returns undefined when no usable root exists.
+ * Capacitor config, then a root's only Capacitor workspace app, then the first root.
+ * Returns undefined when no usable root exists. Multiple apps require explicit selection.
  */
-export function pickProjectDirFromRoots(roots: McpRoot[], currentDir = process.cwd()): string | undefined {
+export async function pickProjectDirFromRoots(roots: McpRoot[], currentDir = process.cwd()): Promise<string | undefined> {
   const dirs = rootsToDirectories(roots)
   if (dirs.length === 0)
     return undefined
   const current = resolve(currentDir)
   if (hasCapacitorConfig(current) && dirs.some(dir => isInside(current, dir)))
     return current
-  return dirs.find(dir => hasCapacitorConfig(dir)) ?? dirs[0]
+  const direct = dirs.find(dir => hasCapacitorConfig(dir))
+  if (direct)
+    return direct
+  for (const dir of dirs) {
+    const { candidates } = await discoverCapacitorProjects(dir)
+    if (candidates.length === 1)
+      return candidates[0].dir
+  }
+  return dirs[0]
 }
 
 /** Resolve a user/agent-supplied project path (absolute, `~`, or relative to the current dir). */
-export function resolveProjectDirInput(input: string, currentDir = process.cwd()): string {
+export async function resolveProjectDirInput(input: string, currentDir = process.cwd()): Promise<string> {
   const trimmed = input.trim()
   if (!trimmed)
     throw new Error('Project directory is empty.')
@@ -80,7 +89,10 @@ export function resolveProjectDirInput(input: string, currentDir = process.cwd()
     throw new Error(`Project directory does not exist: ${dir}`)
   if (!isDirectory(dir))
     throw new Error(`Project directory is not a directory: ${dir}`)
-  return dir
+  const { candidates } = await discoverCapacitorProjects(dir)
+  if (candidates.length > 1)
+    throw new Error(`Multiple Capacitor apps found in ${dir}. Call capgo_set_project_dir with the absolute path of the app you are working on:\n${candidates.map(candidate => candidate.dir).join('\n')}`)
+  return candidates[0]?.dir ?? dir
 }
 
 /** Switch the server's working directory. Returns true when it actually changed. */

@@ -1759,6 +1759,9 @@ Selected tools exposed via MCP:
 
 The project directory follows the client's MCP roots (the agent's workspace), so a global
 install works from any folder. Clients without roots can call capgo_set_project_dir.
+Workspace roots with exactly one Capacitor app automatically select that app, including
+when the server starts there without client roots. Multiple apps require an explicit app path.
+If @capacitor/core appears missing, select the absolute app folder before installing anything.
 
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:

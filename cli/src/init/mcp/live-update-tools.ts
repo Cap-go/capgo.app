@@ -76,7 +76,13 @@ export function buildDeps(
 ): EngineDeps {
   // Live accessor: the server re-creates its SDK on login/logout and project switches.
   const getSdk = typeof sdkOrGetter === 'function' ? sdkOrGetter : () => sdkOrGetter
-  const getPackageJsonPath = () => getProjectTarget()?.packageJsonPath ?? join(findRoot(cwd), PACKNAME)
+  const getPackageJsonPath = () => {
+    const packageJsonPath = getProjectTarget()?.packageJsonPath
+    if (packageJsonPath)
+      return packageJsonPath
+    const appPackageJson = join(cwd, PACKNAME)
+    return existsSync(appPackageJson) ? appPackageJson : join(findRoot(cwd), PACKNAME)
+  }
   const getProjectDir = () => dirname(getPackageJsonPath())
   const getMainFile = async () => getProjectTarget()?.mainFilePath ?? findMainFile(true, getProjectDir())
   const getNodeModulesPath = () => {

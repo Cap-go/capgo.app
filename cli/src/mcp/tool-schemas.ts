@@ -172,7 +172,7 @@ export const mcpSearchDocsInputSchema = z.object({
 })
 
 export const mcpSetProjectDirInputSchema = z.object({
-  path: z.string().min(1).describe('Absolute path to the Capacitor app folder the agent is working in (the folder containing capacitor.config.*). Relative paths resolve from the current project directory.'),
+  path: z.string().min(1).describe('Absolute path to the Capacitor app folder (with capacitor.config.* and its package.json), or a workspace containing exactly one Capacitor app. Multiple apps require an explicit app path. Relative paths resolve from the current project directory.'),
 })
 
 export const mcpDoctorInputSchema = z.object({

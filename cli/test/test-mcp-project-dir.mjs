@@ -28,34 +28,78 @@ const spawnDir = join(tmp, 'home')
 const workspace = join(tmp, 'workspace')
 const app = join(workspace, 'apps', 'mobile')
 const other = join(tmp, 'other-app')
-for (const dir of [spawnDir, app, other])
+const monorepo = join(tmp, 'monorepo')
+const mobile = join(monorepo, 'apps', 'mobile')
+for (const dir of [spawnDir, app, other, mobile])
   mkdirSync(dir, { recursive: true })
 writeFileSync(join(workspace, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.workspace', appName: 'ws', webDir: 'dist' }))
 writeFileSync(join(app, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.mobile', appName: 'mobile', webDir: 'dist' }))
 writeFileSync(join(other, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.other', appName: 'other', webDir: 'dist' }))
+writeFileSync(join(monorepo, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }))
+writeFileSync(join(mobile, 'package.json'), JSON.stringify({ name: 'example-mobile', dependencies: { '@capacitor/core': '^8.0.0' } }))
+writeFileSync(join(mobile, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.mobile', appName: 'mobile', webDir: 'dist' }))
 const fileRoot = dir => ({ uri: pathToFileURL(dir).href })
+const multiple = join(tmp, 'multiple-apps')
+const multipleApps = ['first', 'second'].map(name => join(multiple, 'apps', name))
+const pnpmWorkspace = join(tmp, 'pnpm-workspace')
+const pnpmApp = join(pnpmWorkspace, 'clients', 'native')
+mkdirSync(pnpmApp, { recursive: true })
+writeFileSync(join(pnpmWorkspace, 'package.json'), JSON.stringify({ private: true }))
+writeFileSync(join(pnpmWorkspace, 'pnpm-workspace.yaml'), 'packages:\n  - clients/*\n')
+writeFileSync(join(pnpmApp, 'package.json'), JSON.stringify({ name: 'example-native' }))
+writeFileSync(join(pnpmApp, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.native', webDir: 'dist' }))
+for (const dir of multipleApps) {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: dir.endsWith('first') ? 'example-first' : 'example-second' }))
+  writeFileSync(join(dir, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.app', webDir: 'dist' }))
+}
+writeFileSync(join(multiple, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }))
+
+await test('workspace roots resolve the nested app whose package declares Capacitor', async () => {
+  eq(await pickProjectDirFromRoots([fileRoot(monorepo)], spawnDir), mobile)
+})
+
+await test('setting a workspace directory resolves its only Capacitor app', async () => {
+  eq(await resolveProjectDirInput(monorepo, spawnDir), mobile)
+})
+
+await test('pnpm workspace YAML discovers apps without package.json workspaces', async () => {
+  eq(await pickProjectDirFromRoots([fileRoot(pnpmWorkspace)], spawnDir), pnpmApp)
+  eq(await resolveProjectDirInput(pnpmWorkspace, spawnDir), pnpmApp)
+})
+
+await test('multiple apps are not silently selected and explicit resolution lists their paths', async () => {
+  eq(await pickProjectDirFromRoots([fileRoot(multiple)], spawnDir), multiple)
+  eq(await pickProjectDirFromRoots([fileRoot(multiple)], multipleApps[1]), multipleApps[1])
+  let error
+  try { await resolveProjectDirInput(multiple, spawnDir) }
+  catch (caught) { error = caught }
+  ok(error?.message.includes('Multiple Capacitor apps'), error?.message)
+  for (const dir of multipleApps)
+    ok(error.message.includes(dir), error.message)
+})
 
 await test('pickProjectDirFromRoots prefers a root with a Capacitor config', async () => {
   const empty = join(tmp, 'empty-root')
   mkdirSync(empty, { recursive: true })
-  eq(pickProjectDirFromRoots([fileRoot(empty), fileRoot(workspace)], spawnDir), workspace)
+  eq(await pickProjectDirFromRoots([fileRoot(empty), fileRoot(workspace)], spawnDir), workspace)
 })
 
 await test('pickProjectDirFromRoots keeps a Capacitor cwd inside a root', async () => {
-  eq(pickProjectDirFromRoots([fileRoot(workspace)], app), app)
+  eq(await pickProjectDirFromRoots([fileRoot(workspace)], app), app)
 })
 
 await test('pickProjectDirFromRoots falls back to the first root and ignores non-file roots', async () => {
-  eq(pickProjectDirFromRoots([{ uri: 'https://example.com' }, fileRoot(spawnDir)], tmp), spawnDir)
-  eq(pickProjectDirFromRoots([{ uri: 'https://example.com' }], tmp), undefined)
-  eq(pickProjectDirFromRoots([fileRoot(join(tmp, 'missing'))], tmp), undefined)
+  eq(await pickProjectDirFromRoots([{ uri: 'https://example.com' }, fileRoot(spawnDir)], tmp), spawnDir)
+  eq(await pickProjectDirFromRoots([{ uri: 'https://example.com' }], tmp), undefined)
+  eq(await pickProjectDirFromRoots([fileRoot(join(tmp, 'missing'))], tmp), undefined)
 })
 
 await test('resolveProjectDirInput resolves relative paths and rejects missing dirs', async () => {
-  eq(resolveProjectDirInput('apps/mobile', workspace), app)
-  eq(resolveProjectDirInput(pathToFileURL(app).href, tmp), app)
+  eq(await resolveProjectDirInput('apps/mobile', workspace), app)
+  eq(await resolveProjectDirInput(pathToFileURL(app).href, tmp), app)
   let threw = false
-  try { resolveProjectDirInput(join(tmp, 'nope'), tmp) }
+  try { await resolveProjectDirInput(join(tmp, 'nope'), tmp) }
   catch { threw = true }
   ok(threw, 'missing dir should throw')
 })
@@ -70,11 +114,11 @@ function toolText(result) {
   return (result?.content ?? []).map(c => c.text ?? '').join('\n')
 }
 
-async function withServer(roots, fn) {
+async function withServer(roots, fn, cwd = spawnDir) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [bundlePath, 'mcp'],
-    cwd: spawnDir,
+    cwd,
     env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '1' },
     stderr: 'pipe',
   })
@@ -98,6 +142,59 @@ if (!existsSync(bundlePath)) {
   fail++
 }
 else {
+  await test('server follows a workspace root into its nested Capacitor app', async () => {
+    await withServer([fileRoot(monorepo)], async (client) => {
+      const text = await currentDir(client)
+      ok(text.includes(`project directory: ${mobile} (Capacitor config found)`), text)
+    })
+  })
+
+  await test('without roots, setting a workspace finds its nested Capacitor app', async () => {
+    await withServer(undefined, async (client) => {
+      const result = await client.callTool({ name: 'capgo_set_project_dir', arguments: { path: monorepo } })
+      const text = toolText(result)
+      ok(!result.isError, text)
+      ok(text.includes(`project directory: ${mobile} (Capacitor config found)`), text)
+    })
+  })
+
+  await test('without roots, a server launched in a workspace discovers its app', async () => {
+    await withServer(undefined, async (client) => {
+      const text = await currentDir(client)
+      ok(text.includes(`project directory: ${mobile} (Capacitor config found)`), text)
+    }, monorepo)
+  })
+
+  await test('ambiguous workspace selection keeps the previous app and lists choices', async () => {
+    await withServer([fileRoot(other)], async (client) => {
+      const result = await client.callTool({ name: 'capgo_set_project_dir', arguments: { path: multiple } })
+      const text = toolText(result)
+      ok(result.isError, text)
+      for (const dir of multipleApps)
+        ok(text.includes(dir), text)
+      ok((await currentDir(client)).includes(`project directory: ${other} `), 'ambiguous selection must not change the app')
+    })
+  })
+
+  await test('server discovers a nested app after roots change', async () => {
+    await withServer([fileRoot(other)], async (client, setRoots) => {
+      setRoots([fileRoot(monorepo)])
+      await client.sendRootsListChanged()
+      const text = await currentDir(client)
+      ok(text.includes(`project directory: ${mobile} (Capacitor config found)`), text)
+    })
+  })
+
+  await test('an explicitly selected app stays pinned when roots change', async () => {
+    await withServer([fileRoot(monorepo)], async (client, setRoots) => {
+      await client.callTool({ name: 'capgo_set_project_dir', arguments: { path: multipleApps[1] } })
+      setRoots([fileRoot(other)])
+      await client.sendRootsListChanged()
+      const text = await currentDir(client)
+      ok(text.includes(`project directory: ${multipleApps[1]} (Capacitor config found)`), text)
+    })
+  })
+
   await test('server follows the client roots instead of its spawn dir', async () => {
     await withServer([fileRoot(workspace)], async (client) => {
       const text = await currentDir(client)

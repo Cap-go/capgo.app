@@ -26,6 +26,8 @@ await test('all four variants describe Capgo and stay under 512 chars', async ()
   for (const opts of combos) {
     const text = buildServerInstructions(opts)
     ok(/capgo/i.test(text))
+    ok(text.includes('@capacitor/core'))
+    ok(text.includes('absolute app path before installing dependencies'))
     ok(text.length <= MAX_LEN, `len ${text.length} for ${JSON.stringify(opts)}`)
     if (!opts.onboardingEnabled)
       ok(!text.includes('start_capgo_builder_onboarding'))

@@ -92,10 +92,11 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
     ])
   }
 
-  if (has(text, ['capacitor config', 'capacitor.config', 'capacitor project', 'missing appid', 'does not define an app id', 'package.json', 'webdir', 'cannot find project', 'no capgo app id found', 'not a capacitor'])) {
+  if (has(text, ['capacitor config', 'capacitor.config', 'capacitor project', 'multiple capacitor apps', 'cannot find @capacitor/core', 'missing @capacitor/core', 'missing appid', 'does not define an app id', 'package.json', 'webdir', 'cannot find project', 'no capgo app id found', 'not a capacitor'])) {
     return withEscape('project', [
       'The MCP is not looking at the right project folder, or the project is missing Capacitor configuration.',
       'Call capgo_set_project_dir with the absolute path of the Capacitor app folder (the one with capacitor.config and package.json), then retry.',
+      'In a monorepo, use the app package (for example apps/mobile), not the workspace-root package. Verify the app\'s package.json before installing a supposedly missing @capacitor/core dependency.',
       'If the project really has no appId, pass appId explicitly to the tool, or ask the user for the app ID and set it in capacitor.config.',
     ])
   }

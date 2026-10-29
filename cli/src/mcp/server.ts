@@ -1,5 +1,6 @@
 import type { SDKResult } from '../schemas/sdk'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 import { McpServer } from '@modelcontextprotocol/server'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import pack from '../../package.json'
@@ -119,11 +120,13 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   let projectDirSync: Promise<void> = Promise.resolve()
   let projectDirPinned = false
   const syncProjectDirFromRoots = async (): Promise<void> => {
-    if (projectDirPinned || !server.server.getClientCapabilities()?.roots)
+    if (projectDirPinned)
       return
     try {
-      const { roots } = await server.server.listRoots(undefined, { timeout: 5000 })
-      const dir = pickProjectDirFromRoots(roots)
+      const { roots } = server.server.getClientCapabilities()?.roots
+        ? await server.server.listRoots(undefined, { timeout: 5000 })
+        : { roots: [{ uri: pathToFileURL(process.cwd()).href }] }
+      const dir = await pickProjectDirFromRoots(roots)
       if (!projectDirPinned && dir && switchProjectDir(dir))
         refreshSdkForProject()
     }
@@ -170,12 +173,12 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   server.registerTool(
     'capgo_set_project_dir',
     {
-      description: 'Point the Capgo MCP at the project the agent is working in. Call this FIRST with the absolute path of the current workspace / Capacitor app folder whenever Capgo cannot find the project (no capacitor.config, wrong app, missing package.json) — e.g. when the MCP is installed globally and was started from another folder.',
+      description: 'Point the Capgo MCP at the project the agent is working in. Call this FIRST with the absolute Capacitor app path when the project or @capacitor/core appears missing. A workspace with one Capacitor app resolves automatically; multiple apps require selecting an app path. Check the project path before installing dependencies.',
       inputSchema: mcpSetProjectDirInputSchema,
     },
     async ({ path }) => {
       try {
-        const dir = resolveProjectDirInput(path)
+        const dir = await resolveProjectDirInput(path)
         if (switchProjectDir(dir))
           refreshSdkForProject()
         projectDirPinned = true
