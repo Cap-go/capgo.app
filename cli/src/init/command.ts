@@ -32,11 +32,13 @@ import { doLoginExists, LOGIN_METHOD_OPTIONS, loginInternal } from '../login'
 import { writeOnboardingSupportBundle, writeSupportBundleFiles } from '../onboarding-support'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
+import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from '../run/ios-compatibility'
+import { CliUserError } from '../shared/cli-user-error'
 import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { canPromptInteractively, consoleWebUrl, createCapgoClient, defaultApiHost, fetchOrganizations, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createCapgoClient, defaultApiHost, fetchOrganizations, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectRoot, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { readBuilderOnlyInitAssignment, tryBuilderOnlyInit } from './builder-setup'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
@@ -1768,8 +1770,8 @@ async function promptForMonorepoRootUploadPaths(
   const packageJson = await askForExistingPackageJsonPath(
     orgId,
     apikey,
-    'Monorepo root package.json path:',
-    join(rootDir, PACKNAME),
+    'Capacitor app package.json path:',
+    currentPackageJson ?? join(findProjectRoot(), PACKNAME),
   )
   const nodeModules = await askForExistingDirectoryPath(
     orgId,
@@ -2757,8 +2759,8 @@ async function resolvePackageJsonPath(): Promise<string | null> {
 }
 
 async function getAssistedDependencies() {
-  // here we will assume that getAllPackagesDependencies uses 'findRoot(cwd())' for the first argument
-  const root = join(findRoot(cwd()), PACKNAME)
+
+  const root = join(findProjectRoot(), PACKNAME)
   let packageJsonPath = globalPathToPackageJson ?? root
   let dependencies = await getAllPackagesDependencies(undefined, packageJsonPath)
   if (dependencies.size === 0 || !dependencies.has('@capacitor/core')) {
@@ -3010,7 +3012,7 @@ async function ensureSplashScreenForDirectUpdate(
 }
 
 async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
   let pkgVersion = '1.0.0'
@@ -3096,7 +3098,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
 }
 
 async function addCodeStep(orgId: string, apikey: string, appId: string) {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
   const projectType = await findProjectType({ quiet: true, packageJsonPath })
@@ -3262,7 +3264,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
   if (globalCodeDiff) {
     setInitCodeDiff(globalCodeDiff)
   }
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const dependencies = await getAllPackagesDependencies(undefined, packageJsonPath)
   const coreVersion = dependencies.get('@capacitor/core')
@@ -3622,7 +3624,7 @@ function promoteEncryptionSummaryToEnabled(): void {
 type PackageManagerInfo = ReturnType<typeof getPMAndCommand>
 export type PlatformChoice = 'ios' | 'android'
 type BuildProjectStepOutcome = 'completed' | 'skipped'
-export type RunDeviceStepOutcome = { args: string[], command: string } | { args: undefined, command: string }
+export type RunDeviceStepOutcome = { args: string[], command: string } | { args: undefined, command: string, manualInstructions?: string }
 
 async function selectAvailablePackageManager(
   detectedPackageManager: PackageManagerInfo,
@@ -3924,7 +3926,7 @@ async function runBuildAndSyncLoop(
   }
 }
 async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, orgId: string, apikey: string, pm: PackageManagerInfo): Promise<BuildProjectStepOutcome> {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const projectType = await findProjectType({ packageJsonPath })
   const buildCommand = await findBuildCommandForProjectType(projectType)
@@ -3939,7 +3941,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
 }
 
 async function buildProjectStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', config?: CapacitorConfigSnapshot): Promise<'completed' | 'skipped'> {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
   await ensureNativePlatformForBuild(platform, config, pm.runner, projectDir)
@@ -4412,6 +4414,15 @@ async function handleMissingSimulatorIosRunTargets(cancelHandler: RunDeviceCance
 }
 
 async function selectSimulatorIosRunTarget(cancelHandler: RunDeviceCancelHandler, pm: PackageManagerInfo, initialTargets?: CapacitorRunTarget[], projectDir = cwd()): Promise<RunDeviceStepOutcome> {
+  const compatibility = checkIosSimulatorCompatibility(projectDir)
+  if (compatibility.kind === 'unsupported') {
+    return {
+      args: undefined,
+      command: formatRunnerCommand(pm.runner, ['cap', 'open', 'ios']),
+      manualInstructions: formatIosSimulatorGuidance(compatibility),
+    }
+  }
+
   let knownTargets = initialTargets
 
   while (true) {
@@ -4629,6 +4640,16 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
 
   const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
   if (!runCommand.args) {
+    if (runCommand.manualInstructions) {
+      pLog.warn(runCommand.manualInstructions)
+      pLog.info(`From ${projectDir}, open Xcode with: ${runCommand.command}`)
+      const running = await pConfirm({ message: 'Have you run the baseline app from Xcode and confirmed it opens?' })
+      await cancelCommand(running, orgId, apikey)
+      if (!running)
+        throw new CliUserError('Run the baseline app from Xcode, then resume onboarding before testing OTA updates.')
+      await markStep(orgId, apikey, 'run-device', appId)
+      return 'completed'
+    }
     pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
     await markStep(orgId, apikey, 'run-device', appId)
     return 'skipped'
@@ -4720,7 +4741,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
   pLog.info(`🎯 Now let's test Capgo by making a visible change and deploying an update!`)
   // Keep any restored auto-test change metadata on resume so step 12 can
   // still offer cleanup after an interrupted step-9 flow.
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
 
   const modificationType = await pSelect({
@@ -5051,18 +5072,7 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
       s.start(`Running: ${pm.runner} @capgo/cli@latest bundle upload ${delta ? '--delta-only' : ''}`)
       if (isMonorepo && !warnedMonorepo) {
         warnedMonorepo = true
-        pLog.warn('This project looks like a monorepo. Bundle upload needs the monorepo root package.json and the hoisted root node_modules folder.')
         pLog.info(MONOREPO_ROOT_PATHS_NOTE)
-        pLog.warn(`Example: ${pm.runner} @capgo/cli@latest bundle upload --package-json ./package.json --node-modules ./node_modules ${delta ? '--delta-only' : ''}`)
-        nodeModulesPath ||= join(findRoot(cwd()), 'node_modules')
-        pLog.warn(`Using monorepo root node_modules path: ${nodeModulesPath}`)
-        const firstNodeModulesPath = nodeModulesPath.split(',')[0]?.trim()
-        if (firstNodeModulesPath && !existsSync(firstNodeModulesPath)) {
-          s.stop('Upload blocked ❌')
-          pLog.error('Monorepo root node_modules path does not exist')
-          nodeModulesPath = await askForExistingDirectoryPath(orgId, apikey, 'Monorepo root node_modules path:', nodeModulesPath)
-          continue
-        }
       }
 
       globalNodeModulesPath = nodeModulesPath
@@ -5498,7 +5508,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const initialAppId = await ensureWorkspaceReadyForInit(appId) ?? appId
   appId = initialAppId
-  let selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  let selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   let selectedProjectDir = dirname(selectedPackageJsonPath)
   const versionStatus = await checkVersionStatus()
   if (versionStatus.isOutdated) {
@@ -5507,7 +5517,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   let extConfig: Awaited<ReturnType<typeof getConfig>> | undefined
   const reloadSelectedProjectConfig = async () => {
-    selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+    selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
     selectedProjectDir = dirname(selectedPackageJsonPath)
     // Custom Capgo backend (--api-host): remember it in capacitor config so later
     // commands use it too. Updater endpoints (updateUrl, statsUrl, channelUrl) stay
@@ -5732,7 +5742,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   if (pendingOnboardingSelection.builderOnly && await handoffBuilderOnlySetup(appId, selectedProjectDir, true))
     return
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
-  selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   selectedProjectDir = dirname(selectedPackageJsonPath)
 
   if (pendingOnboardingSelection.reusedPendingApp) {
@@ -5789,7 +5799,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       delta = res.delta
       globalCurrentVersion = currentVersion
       globalDelta = delta
-      selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+      selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
       selectedProjectDir = dirname(selectedPackageJsonPath)
       try {
         extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => getConfig())

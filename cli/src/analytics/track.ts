@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { env } from 'node:process'
+import { cwd, env } from 'node:process'
 import pack from '../../package.json'
 import { isTruthyEnvValue } from '../posthog'
-import { findSavedKeySilent, getAppId, getConfig, sendEvent } from '../utils'
+import { findSavedKeySilent, getAppId, getConfig, getLocalConfig, sendEvent } from '../utils'
 import { getBuilderAppId } from '../build/app-id'
+import { withCwd } from '../build/cwd'
 import { resolveOwnerOrgId } from './org-resolver'
 import { categorizeCliError, categorizeHttpStatus } from './error-category'
 import { deriveApiOperation, setApiCallRecorder, SLOW_THRESHOLD_MS } from './api-perf'
@@ -49,34 +50,26 @@ export async function flushAnalytics(timeoutMs = 2000): Promise<void> {
 }
 
 // --- best-effort app + owner-org context from the local Capacitor config ---
-// Keyed by apikey so events for different accounts never reuse another's org.
-const cachedContextByApiKey = new Map<string, Promise<{ appId?: string, orgId?: string }>>()
-
 export function isBuilderInvocation(commandPath: string): boolean {
   return commandPath === 'build' || commandPath.startsWith('build ')
     || /^mcp:(?:capgo_builder_|start_capgo_builder_|start_capgo_build$|capgo_build_|cancel_capgo_build$)/u.test(commandPath)
 }
 
-export function resolveTrackingContext(apikey: string, signal?: AbortSignal, builder = false): Promise<{ appId?: string, orgId?: string }> {
-  const cacheKey = `${apikey}\0${builder ? 'builder' : 'default'}`
-  const cached = cachedContextByApiKey.get(cacheKey)
-  if (cached)
-    return cached
-  const promise = (async () => {
-    try {
+export async function resolveTrackingContext(apikey: string, signal?: AbortSignal, builder = false): Promise<{ appId?: string, orgId?: string, apiHost?: string }> {
+  try {
+    const readContext = async () => {
       const extConfig = await getConfig(true).catch(() => undefined)
       const appId = (builder ? getBuilderAppId(undefined, extConfig?.config) : getAppId('', extConfig?.config)) || undefined
-      if (!appId)
-        return {}
-      const orgId = await resolveOwnerOrgId(apikey, appId, {}, signal)
-      return { appId, orgId }
+      const { hostApi: apiHost } = await getLocalConfig(true)
+      return { appId, apiHost }
     }
-    catch {
-      return {}
-    }
-  })()
-  cachedContextByApiKey.set(cacheKey, promise)
-  return promise
+    const context = mcpCommandPathStore.getStore() ? await withCwd(cwd(), readContext) : await readContext()
+    const orgId = context.appId ? await resolveOwnerOrgId(apikey, context.appId, { apiHost: context.apiHost }, signal) : undefined
+    return { ...context, orgId }
+  }
+  catch {
+    return {}
+  }
 }
 
 export interface TrackEventInput {
@@ -116,11 +109,15 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
     try {
       let appId = input.appId
       let orgId = input.orgId
+      let apiHost: string | undefined
       if (appId === undefined && orgId === undefined) {
         const commandPath = mcpCommandPathStore.getStore() ?? (typeof input.tags?.command_path === 'string' ? input.tags.command_path : currentCommandPath)
         const ctx = await resolveTrackingContext(apikey, controller.signal, isBuilderInvocation(commandPath))
         appId = ctx.appId
         orgId = ctx.orgId
+        apiHost = ctx.apiHost
+        if (!apiHost)
+          return
       }
 
       const tags: Record<string, string | number | boolean> = {
@@ -136,7 +133,7 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
         ...(orgId ? { org_id: orgId } : {}),
         tags,
         ...(input.nonPersonTags ? { nonPersonTags: input.nonPersonTags } : {}),
-      }, false, controller.signal).catch(() => {})
+      }, false, controller.signal, apiHost).catch(() => {})
     }
     catch {
       // telemetry must never break a command

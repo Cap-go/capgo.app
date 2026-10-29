@@ -222,7 +222,8 @@ async function readProgress(c: Context<MiddlewareKeyVariables>, db: CallerDb, ap
   const due = (slot: number) => initial || N % 5 === slot
   async function check(id: keyof Observations, permission: Permission, action: () => Promise<boolean>) {
     try {
-      if (!(await checkPermission(c, permission, { appId })))
+      // The route already authorized app.read for this app in the current request.
+      if (permission !== 'app.read' && !(await checkPermission(c, permission, { appId })))
         return
       observations[id] = await action()
     }

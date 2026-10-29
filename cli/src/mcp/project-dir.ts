@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { hasCapacitorConfig } from '../build/onboarding/project-discovery'
+import { discoverCapacitorProjects, hasCapacitorConfig } from '../build/onboarding/project-discovery'
 
 /**
  * The MCP server resolves the user's project from `process.cwd()` (capacitor config,
@@ -31,6 +31,10 @@ function isInside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
+function ambiguousProjectDir(dirs: string[]): Error {
+  return new Error(`Multiple Capacitor apps found. Pass projectDir or call capgo_set_project_dir with the absolute path of the app you are working on:\n${dirs.join('\n')}`)
+}
+
 /** Convert MCP roots to existing local directories. Non-`file://` roots are ignored. */
 export function rootsToDirectories(roots: McpRoot[]): string[] {
   const dirs: string[] = []
@@ -53,21 +57,30 @@ export function rootsToDirectories(roots: McpRoot[]): string[] {
 /**
  * Pick the project directory from the client's roots. Keeps `currentDir` when it is
  * already a Capacitor project inside one of the roots (e.g. a project-scoped install
- * launched from a sub-app of a monorepo); otherwise prefers the first root holding a
- * Capacitor config, then the first root. Returns undefined when no usable root exists.
+ * launched from a sub-app of a monorepo); otherwise resolves a unique Capacitor app
+ * across the roots and their workspaces, falling back to the first root without an app.
+ * Returns undefined when no usable root exists. Multiple apps require explicit selection.
  */
-export function pickProjectDirFromRoots(roots: McpRoot[], currentDir = process.cwd()): string | undefined {
+export async function pickProjectDirFromRoots(roots: McpRoot[], currentDir = process.cwd()): Promise<string | undefined> {
   const dirs = rootsToDirectories(roots)
   if (dirs.length === 0)
     return undefined
   const current = resolve(currentDir)
   if (hasCapacitorConfig(current) && dirs.some(dir => isInside(current, dir)))
     return current
-  return dirs.find(dir => hasCapacitorConfig(dir)) ?? dirs[0]
+  const candidates = new Set<string>()
+  for (const dir of dirs) {
+    const discovered = await discoverCapacitorProjects(dir)
+    for (const candidate of discovered.candidates)
+      candidates.add(candidate.dir)
+  }
+  if (candidates.size > 1)
+    throw ambiguousProjectDir([...candidates])
+  return candidates.values().next().value ?? dirs[0]
 }
 
 /** Resolve a user/agent-supplied project path (absolute, `~`, or relative to the current dir). */
-export function resolveProjectDirInput(input: string, currentDir = process.cwd()): string {
+export async function resolveProjectDirInput(input: string, currentDir = process.cwd()): Promise<string> {
   const trimmed = input.trim()
   if (!trimmed)
     throw new Error('Project directory is empty.')
@@ -80,16 +93,27 @@ export function resolveProjectDirInput(input: string, currentDir = process.cwd()
     throw new Error(`Project directory does not exist: ${dir}`)
   if (!isDirectory(dir))
     throw new Error(`Project directory is not a directory: ${dir}`)
-  return dir
+  const { candidates } = await discoverCapacitorProjects(dir)
+  if (candidates.length > 1)
+    throw ambiguousProjectDir(candidates.map(candidate => candidate.dir))
+  return candidates[0]?.dir ?? dir
 }
 
-/** Switch the server's working directory. Returns true when it actually changed. */
-export function switchProjectDir(dir: string): boolean {
-  const target = resolve(dir)
-  if (target === process.cwd())
-    return false
-  process.chdir(target)
-  return true
+export async function resolveProjectDirOptions(input: { projectDir?: string, cwd?: string }, currentDir: string): Promise<string | undefined> {
+  const projectDir = input.projectDir === undefined ? undefined : await resolveProjectDirInput(input.projectDir, currentDir)
+  const workingDir = input.cwd === undefined ? undefined : await resolveProjectDirInput(input.cwd, currentDir)
+  if (projectDir && workingDir && projectDir !== workingDir)
+    throw new Error('projectDir and cwd must select the same project directory. Pass only one when switching projects.')
+  return projectDir ?? workingDir
+}
+
+export function createProjectDirQueue() {
+  let pending: Promise<unknown> = Promise.resolve()
+  return <T>(run: () => Promise<T>): Promise<T> => {
+    const result = pending.then(run, run)
+    pending = result.then(() => undefined, () => undefined)
+    return result
+  }
 }
 
 export function describeProjectDir(dir = process.cwd()): string {

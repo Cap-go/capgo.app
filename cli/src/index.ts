@@ -161,6 +161,7 @@ program
 This includes adding code for updates, building, uploading your app, and verifying update functionality.
 Capgo bundles are web assets and can be fetched by anyone who knows the URL. Use encryption for banking, regulated, or other high-security apps.
 During the iOS run-on-device step, choose a physical iPhone/iPad or simulator. If you choose a physical device, the CLI lets you connect, unlock, and check again before it launches the app.
+If the selected Xcode uses Device Hub and Capacitor's native-run cannot open it, onboarding gives you a manual launch path. Run npx cap open ios, select the simulator in Xcode, choose Product > Run, and confirm that the baseline app opens before continuing. MCP live-update onboarding gives the same instructions and waits for deviceRunConfirmed: true. Run npx @capgo/cli@latest doctor for the upstream fix status and upgrade guidance.
 
 Example: npx @capgo/cli@latest init YOUR_API_KEY com.example.app`)
   .action(initApp)
@@ -186,6 +187,7 @@ If you omit the platform in an interactive terminal, the command asks whether to
 The command lists available devices and simulators, lets you reload the list, and runs with your selection.
 For iOS, this asks whether to use a physical iPhone/iPad or simulator before showing devices.
 Use --no-launch to print the resolved command without starting the app.
+When the selected Xcode uses Device Hub and Capacitor's native-run lacks support, simulator selection prints instructions to run the app from Xcode with npx cap open ios and Product > Run. It does not attempt the incompatible simulator command. Physical-device selection remains available in interactive mode. Run npx @capgo/cli@latest doctor for the upstream fix status and upgrade guidance.
 
 Example: npx @capgo/cli@latest run device ios --no-launch`)
   .action(testRunDeviceCommand)
@@ -213,6 +215,10 @@ program
   .description(`👨‍⚕️ Check if your Capgo app installation is up-to-date and gather information useful for bug reports.
 
 This command helps diagnose issues with your setup.
+
+For local iOS projects on macOS, doctor also checks whether the selected Xcode uses Device Hub and whether the native-run resolved by your app's @capacitor/cli supports it. An incompatible version fails diagnostics with manual launch instructions. Installing a separate top-level native-run does not necessarily update the copy used by Capacitor.
+Xcode 27 removed Simulator.app. As of October 29, 2026, the Device Hub fix is merged but unreleased, and the latest published native-run is 2.0.3. There is no released minimum Capacitor version for this fix yet, including with Capacitor CLI 8.6.0. See the upstream issue and temporary package-manager patch: https://github.com/ionic-team/capacitor/issues/8620
+Until the fixed dependency is available, use npx cap open ios, select the simulator in Xcode, and choose Product > Run. You can also use a physical device or select an older installed Xcode that includes Simulator.app. After the fix ships, update the dependency used by @capacitor/cli and your lockfile, then run doctor again. Keep the Capacitor packages on the same major version; a major upgrade is not required just to change simulator launching.
 
 Example: npx @capgo/cli@latest doctor`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
@@ -1759,6 +1765,9 @@ Selected tools exposed via MCP:
 
 The project directory follows the client's MCP roots (the agent's workspace), so a global
 install works from any folder. Clients without roots can call capgo_set_project_dir.
+Workspace roots with exactly one Capacitor app automatically select that app, including
+when the server starts there without client roots. Multiple apps require an explicit app path.
+If @capacitor/core appears missing, select the absolute app folder before installing anything.
 
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:
