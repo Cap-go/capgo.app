@@ -11,6 +11,7 @@ import { useDashboardDailyChartCycle } from '~/composables/useOrgBillingCycleCha
 import { createLegendConfig, createStackedChartScales } from '~/services/chartConfig'
 import { createTodayLineOptions, getSafeChartHue } from '~/services/chartTodayLine'
 import { generateMonthDays, getCurrentDayMonth, getDaysInCurrentUtcMonth } from '~/services/date'
+import { limitChartBreakdown } from '~/utils/chartBreakdown'
 import { inlineAnnotationPlugin } from '../../services/chartAnnotations'
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '../../services/chartTooltip'
 import { useChartCardCompact } from './chartCardDensity'
@@ -44,16 +45,12 @@ const isDark = useDark()
 const { t } = useI18n()
 const router = useRouter()
 const { cycleStart, cycleEnd, todayLimit } = useDashboardDailyChartCycle(() => props.useBillingPeriod)
+const breakdown = computed(() => limitChartBreakdown(props.dataByApp))
 
-const tooltipClickHandler = computed<TooltipClickHandler>(() => {
-  const appIdByLabel: Record<string, string> = {}
-  for (const [appId, appName] of Object.entries(props.appNames as Record<string, string>))
-    appIdByLabel[appName] = appId
-  return {
-    onAppClick: (appId: string) => router.push(`/app/${appId}`),
-    appIdByLabel,
-  }
-})
+const tooltipClickHandler: TooltipClickHandler = {
+  onAppClick: appId => router.push(`/app/${appId}`),
+  datasetIdKey: 'appId',
+}
 
 const viewMode = computed(() => props.accumulated ? 'cumulative' : 'daily')
 
@@ -190,26 +187,27 @@ function generateAppColors(appCount: number) {
 }
 
 const chartData = computed<ChartData<'line' | 'bar'>>(() => {
-  const appIds = Object.keys(props.dataByApp || {})
+  const appSeries = breakdown.value
   const datasets = []
 
-  if (appIds.length > 0) {
+  if (appSeries.length > 0) {
     // Create stacked area datasets for each app
-    const appColors = generateAppColors(appIds.length)
-    appIds.forEach((appId, index) => {
-      const appData = props.dataByApp[appId]
+    const appColors = generateAppColors(appSeries.length)
+    appSeries.forEach((series, index) => {
+      const appId = series.id
+      const appData = series.data
       if (appData) {
         // Process app data with accumulation if needed
         let processedData = appData
         if (viewMode.value === 'cumulative') {
-          processedData = appData.reduce((acc: number[], val: number, i: number) => {
-            const last = acc[acc.length - 1] ?? 0
+          processedData = appData.reduce<Array<number | undefined>>((values, value, dayIndex) => {
+            const last = values[values.length - 1] ?? 0
             let newVal
-            if (val !== undefined)
-              newVal = last + val
-            else if (i < getCurrentDayMonth())
+            if (value !== undefined)
+              newVal = last + value
+            else if (dayIndex < getCurrentDayMonth())
               newVal = last
-            return acc.concat([newVal as number])
+            return values.concat([newVal])
           }, [])
         }
 
@@ -234,7 +232,7 @@ const chartData = computed<ChartData<'line' | 'bar'>>(() => {
         }
 
         const baseDataset = {
-          label: props.appNames[appId] || appId,
+          label: appId ? props.appNames[appId] || appId : t('other-apps'),
           appId,
           data: processedData,
           borderColor,
@@ -306,7 +304,7 @@ const chartData = computed<ChartData<'line' | 'bar'>>(() => {
   }
 })
 
-const hasAppData = computed(() => Object.keys(props.dataByApp || {}).length > 0)
+const hasAppData = computed(() => breakdown.value.length > 0)
 
 const legendItems = computed(() => hasAppData.value ? createChartLegendItems(chartData.value.datasets, 'appId') : [])
 
@@ -366,7 +364,7 @@ const chartOptions = computed<ChartOptions & { plugins: { inlineAnnotationPlugin
       title: {
         display: false,
       },
-      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler.value : undefined),
+      tooltip: createTooltipConfig(hasAppData.value, props.accumulated, props.useBillingPeriod ? cycleStart.value : false, hasAppData.value ? tooltipClickHandler : undefined),
       filler: {
         propagate: false,
       },

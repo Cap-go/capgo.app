@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { Database } from '~/types/database.types'
 import colors from 'tailwindcss/colors'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useDashboardRequestState } from '~/composables/useDashboardRequestState'
 import { computeLastDayEvolution } from '~/services/buildCharts'
 import { useConsole } from '~/services/console'
 import { readAllConsoleRows } from '~/services/consoleRows'
@@ -19,7 +20,6 @@ import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
-import { ensureMinDelay } from '~/utils/minDelay'
 import BundleUploadsChart from './BundleUploadsChart.vue'
 import ChartCard from './ChartCard.vue'
 
@@ -56,12 +56,12 @@ const lastDayEvolution = ref(0)
 const bundleData = ref<number[]>([])
 const bundleDataByApp = ref<{ [appId: string]: number[] }>({})
 const appNames = ref<{ [appId: string]: string }>({})
-const isLoading = ref(true)
+const dataScope = computed(() => `${organizationStore.currentOrganization?.gid}:${props.appId}:${props.useBillingPeriod}:${props.forceDemo}`)
+const loading = useDashboardRequestState(dataScope)
+const { isLoading, isRefreshing, error: loadError } = loading
 
 // Per-org cache for raw API data: Map<orgId, cachedData>
 const cacheByOrg = new Map<string, UploadDailyCount[]>()
-// Track current org for change detection
-const currentCacheOrgId = ref<string | null>(null)
 // Cache for single app name to avoid refetching
 const singleAppNameCache = new Map<string, string>()
 
@@ -92,20 +92,19 @@ const effectiveLastDayEvolution = computed(() => isDemoMode.value ? calculateDem
 const hasData = computed(() => effectiveTotal.value > 0 || isDemoMode.value)
 
 async function calculateStats(forceRefetch = false) {
-  const startTime = Date.now()
+  const request = loading.start()
   try {
-    isLoading.value = true
-
-    // Reset display data
-    total.value = 0
-    lastDayEvolution.value = 0
-    bundleDataByApp.value = {}
-    appNames.value = {}
-    bundleData.value = []
+    if (request.isInitial) {
+      total.value = 0
+      lastDayEvolution.value = 0
+      bundleDataByApp.value = {}
+      appNames.value = {}
+      bundleData.value = []
+    }
+    if (props.forceDemo)
+      return
 
     const currentOrgId = organizationStore.currentOrganization?.gid ?? null
-    const orgChanged = currentCacheOrgId.value !== currentOrgId
-    currentCacheOrgId.value = currentOrgId
 
     // Get billing period dates for filtering
     const billingStart = normalizeToUtcStartOfDay(new Date(organizationStore.currentOrganization?.subscription_start ?? new Date()))
@@ -113,6 +112,7 @@ async function calculateStats(forceRefetch = false) {
       props.useBillingPeriod,
       billingStart,
     )
+    const cacheKey = `${currentOrgId}:${props.appId}:${last30DaysStart.toISOString()}:${last30DaysEnd.toISOString()}`
 
     // Determine target apps
     const localAppNames: { [appId: string]: string } = {}
@@ -137,20 +137,27 @@ async function calculateStats(forceRefetch = false) {
         }
         singleAppNameCache.set(props.appId, cachedName)
       }
+      if (!request.isCurrent())
+        return
       localAppNames[props.appId] = cachedName || props.appId
       appNames.value = localAppNames
     }
     else {
       // Multiple apps mode - use store for shared apps data
       const dashboardAppsStore = useDashboardAppsStore()
-      // Force fetch if org changed to ensure we get fresh data
-      await dashboardAppsStore.fetchApps(orgChanged)
+      await dashboardAppsStore.fetchApps()
+      if (!request.isCurrent())
+        return
+      if (!dashboardAppsStore.isLoaded)
+        throw new Error('App catalog unavailable')
 
       targetAppIds = [...dashboardAppsStore.appIds]
       appNames.value = dashboardAppsStore.appNames
     }
 
     if (targetAppIds.length === 0) {
+      total.value = 0
+      lastDayEvolution.value = 0
       bundleData.value = Array.from({ length: dayCount }).fill(0) as number[]
       bundleDataByApp.value = {}
       return
@@ -159,7 +166,7 @@ async function calculateStats(forceRefetch = false) {
     // Check per-org cache - only use cache if not forcing refetch
     let data: UploadDailyCount[] | null = null
     let error = null
-    const cachedData = currentOrgId ? cacheByOrg.get(currentOrgId) : null
+    const cachedData = cacheByOrg.get(cacheKey)
 
     if (cachedData && !forceRefetch) {
       data = cachedData
@@ -167,23 +174,32 @@ async function calculateStats(forceRefetch = false) {
     else {
       // Per-day upload counts for the series window (billing cycle or last 30 UTC
       // days), aggregated in the database instead of downloading every bundle.
-      const result = await readAllConsoleRows<UploadDailyCount>((from, to) => useConsole()
-        .rpc('get_bundle_upload_daily_counts', {
-          p_app_ids: targetAppIds,
-          p_start: last30DaysStart.toISOString(),
-          p_end: last30DaysEnd.toISOString(),
-        })
-        .range(from, to))
+      const result = await readAllConsoleRows<UploadDailyCount>((from, to) => {
+        if (!request.isCurrent())
+          return Promise.resolve({ data: [], error: null })
+        return useConsole()
+          .rpc('get_bundle_upload_daily_counts', {
+            p_app_ids: targetAppIds,
+            p_start: last30DaysStart.toISOString(),
+            p_end: last30DaysEnd.toISOString(),
+          })
+          .range(from, to)
+      })
       data = result.data
       error = result.error
+      if (!request.isCurrent())
+        return
 
       // Store in per-org cache
       if (!error && data && currentOrgId) {
-        cacheByOrg.set(currentOrgId, data)
+        cacheByOrg.set(cacheKey, data)
       }
     }
 
-    if (!error && data) {
+    if (error)
+      throw error
+
+    if (data) {
       // Create fresh arrays for processing
       const dailyCounts30Days = Array.from({ length: dayCount }).fill(0) as number[]
       const bundleDataByApp30Days: { [appId: string]: number[] } = {}
@@ -231,42 +247,19 @@ async function calculateStats(forceRefetch = false) {
     }
   }
   catch (error) {
-    console.error('Error calculating bundle upload stats:', error)
+    if (request.isCurrent()) {
+      request.fail()
+      console.error('Error calculating bundle upload stats:', error)
+    }
   }
   finally {
-    await ensureMinDelay(startTime)
-    isLoading.value = false
+    request.finish()
   }
 }
 
-// Watch for organization changes - use per-org cache (no need to force refetch)
-watch(() => organizationStore.currentOrganization?.gid, async (newOrgId, oldOrgId) => {
-  if (newOrgId && oldOrgId && newOrgId !== oldOrgId) {
-    // Per-org cache will be checked in calculateStats
-    await calculateStats(false)
-  }
-})
-
-// Watch for billing period mode changes - reprocess cached data
-watch(() => props.useBillingPeriod, async () => {
-  await calculateStats(false)
-})
-
-// Watch for accumulated mode changes - reprocess cached data
-watch(() => props.accumulated, async () => {
-  await calculateStats(false)
-})
-
-// Watch for reload trigger - force refetch from API
-watch(() => props.reloadTrigger, async (newVal, oldVal) => {
-  if (newVal !== oldVal && newVal > 0) {
-    await calculateStats(true)
-  }
-})
-
-onMounted(async () => {
-  await calculateStats(true) // Initial fetch
-})
+watch([dataScope, () => props.reloadTrigger], (_values, previous) => {
+  void calculateStats(!previous || previous[1] !== props.reloadTrigger)
+}, { immediate: true })
 </script>
 
 <template>
@@ -275,11 +268,12 @@ onMounted(async () => {
     :total="effectiveTotal"
     :last-day-evolution="effectiveLastDayEvolution"
     :is-loading="isLoading"
+    :is-refreshing="isRefreshing"
+    :error-message="loadError ? t('error-loading-data') : undefined"
     :has-data="hasData"
     :is-demo-data="isDemoMode"
   >
     <BundleUploadsChart
-      :key="JSON.stringify(effectiveBundleDataByApp)"
       :title="t('bundle_uploads')"
       :colors="colors.violet"
       :data="effectiveBundleData"

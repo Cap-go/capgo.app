@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useConsole } from '~/services/console'
+import { readAllConsoleRows } from '~/services/consoleRows'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from './organization'
 
@@ -10,6 +11,7 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
   const isLoaded = ref(false)
   const currentOrgId = ref<string | null>(null)
   let loadPromise: Promise<void> | null = null
+  let loadGeneration = 0
 
   const appNames = computed(() => {
     const names: { [appId: string]: string } = {}
@@ -32,7 +34,6 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
 
     try {
       await organizationStore.dedupFetchOrganizations()
-      await organizationStore.awaitInitialLoad()
     }
     catch (error) {
       console.error('Error preparing organization data for apps fetch:', error)
@@ -41,20 +42,16 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
     const orgId = organizationStore.currentOrganization?.gid
 
     if (!orgId) {
-      apps.value = []
-      currentOrgId.value = null
+      reset()
       isLoaded.value = true
       return
     }
 
-    if (isLoading.value) {
-      if (loadPromise)
-        await loadPromise
-      // After waiting, check if we now have the right org's data
-      if (!force && isLoaded.value && currentOrgId.value === orgId) {
-        return
-      }
-    }
+    if (currentOrgId.value === orgId && loadPromise)
+      return loadPromise
+
+    if (!force && isLoaded.value && currentOrgId.value === orgId)
+      return
 
     // Reset if organization changed
     if (currentOrgId.value !== orgId) {
@@ -65,32 +62,48 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
     isLoading.value = true
 
     const capgo = useConsole()
+    const generation = loadGeneration
+    const isCurrent = () => generation === loadGeneration && organizationStore.currentOrganization?.gid === orgId
     const request = (async () => {
       try {
-        const { data } = await capgo
-          .from('apps')
-          .select('app_id, name')
-          .eq('owner_org', orgId)
+        const { data, error } = await readAllConsoleRows<{ app_id: string, name: string | null }>((from, to) => {
+          if (!isCurrent())
+            return Promise.resolve({ data: [], error: null })
+          return capgo
+            .from('apps')
+            .select('app_id, name')
+            .eq('owner_org', orgId)
+            .order('app_id')
+            .range(from, to)
+        })
+
+        if (!isCurrent())
+          return
+        if (error)
+          throw error
 
         apps.value = data || []
         isLoaded.value = true
+        const display = useDisplayStore()
+        display.setAppNameResolver(appId => appNames.value[appId])
       }
       catch (error) {
+        if (!isCurrent())
+          return
         console.error('Error fetching apps:', error)
-        apps.value = []
-      }
-      finally {
-        isLoading.value = false
-        loadPromise = null
       }
     })()
 
     loadPromise = request
-    await request
-
-    // After load, publish resolver for app names
-    const display = useDisplayStore()
-    display.setAppNameResolver(appId => appNames.value[appId])
+    try {
+      await request
+    }
+    finally {
+      if (loadPromise === request) {
+        isLoading.value = false
+        loadPromise = null
+      }
+    }
   }
 
   function upsertApp(app: { app_id: string, name: string | null, ownerOrgId?: string | null }) {
@@ -112,6 +125,8 @@ export const useDashboardAppsStore = defineStore('dashboardApps', () => {
   }
 
   function reset() {
+    loadGeneration += 1
+    loadPromise = null
     apps.value = []
     isLoaded.value = false
     isLoading.value = false

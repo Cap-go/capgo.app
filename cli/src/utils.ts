@@ -411,8 +411,12 @@ export function findRoot(dir: string) {
   return dir
 }
 
+export function findProjectRoot(dir: string = cwd()): string {
+  return getNearestPackageDir(resolve(dir)) ?? findRoot(dir)
+}
+
 // do not expose this function this prevent missuses
-function readPackageJson(f: string = findRoot(cwd()), file: string | undefined = undefined) {
+function readPackageJson(f: string = findProjectRoot(), file: string | undefined = undefined) {
   const fileSplit = file?.split(',')[0]
   const packageJsonPath = fileSplit ?? join(f, PACKNAME)
   if (!existsSync(packageJsonPath)) {
@@ -429,11 +433,11 @@ function readPackageJson(f: string = findRoot(cwd()), file: string | undefined =
   return JSON.parse(packageJson as any)
 }
 
-export function getPackageScripts(f: string = findRoot(cwd()), file: string | undefined = undefined): Record<string, string> {
+export function getPackageScripts(f: string = findProjectRoot(), file: string | undefined = undefined): Record<string, string> {
   const packageJson = readPackageJson(f, file)
   return packageJson.scripts
 }
-export function getBundleVersion(f: string = findRoot(cwd()), file: string | undefined = undefined): string {
+export function getBundleVersion(f: string = findProjectRoot(), file: string | undefined = undefined): string {
   const packageJson = readPackageJson(f, file)
   return packageJson.version ?? ''
 }
@@ -607,7 +611,7 @@ export async function getInstalledVersion(packageName: string, rootDir: string =
   return null
 }
 
-export async function getAllPackagesDependencies(f: string = findRoot(cwd()), file: string | undefined = undefined) {
+export async function getAllPackagesDependencies(f: string = findProjectRoot(), file: string | undefined = undefined) {
   // if file contain , split by comma and return the array
   let files = file?.split(',').map(file => file.trim()).filter(Boolean)
   files ??= [join(f, PACKNAME)]
@@ -682,7 +686,7 @@ export async function getAllPackagesDependencies(f: string = findRoot(cwd()), fi
   return dependencies
 }
 
-export async function getDeclaredPackageVersionMap(f: string = findRoot(cwd()), file: string | undefined = undefined) {
+export async function getDeclaredPackageVersionMap(f: string = findProjectRoot(), file: string | undefined = undefined) {
   // if file contain , split by comma and return the array
   let files = file?.split(',').map(file => file.trim()).filter(Boolean)
   files ??= [join(f, PACKNAME)]
@@ -2332,17 +2336,26 @@ export function getHumanDate(createdA: string | null) {
   return date.toLocaleString()
 }
 
-let pmFetched = false
+let pmProjectDir: string | undefined
 let pm: PackageManagerType = 'npm'
 let pmCommand: InstallCommand = 'install'
 let pmRunner: PackageManagerRunner = 'npx'
 export function getPMAndCommand() {
-  if (pmFetched)
+  const projectDir = findProjectRoot()
+  if (pmProjectDir === projectDir)
     return { pm, command: pmCommand, installCommand: `${pm} ${pmCommand}`, runner: pmRunner }
-  const dir = findRoot(cwd())
+  let dir = projectDir
+  while (findPackageManagerType(dir, 'unknown') === 'unknown') {
+    const parent = dirname(dir)
+    if (parent === dir) {
+      dir = projectDir
+      break
+    }
+    dir = parent
+  }
   pm = findPackageManagerType(dir, 'npm')
   pmCommand = findInstallCommand(pm)
-  pmFetched = true
+  pmProjectDir = projectDir
   pmRunner = findPackageManagerRunner(dir)
   return { pm, command: pmCommand, installCommand: `${pm} ${pmCommand}`, runner: pmRunner }
 }
@@ -2351,7 +2364,7 @@ export function setPMAndCommand(next: { pm: PackageManagerType, command: Install
   pm = next.pm
   pmCommand = next.command
   pmRunner = next.runner
-  pmFetched = true
+  pmProjectDir = findProjectRoot()
 }
 
 export function getNativeProjectResetAdvice(platformRunner: string, nativePlatform: 'ios' | 'android') {
@@ -2528,7 +2541,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
     : []
   let dependencies
   try {
-    dependencies = await getAllPackagesDependencies('', packageJsonPath)
+    dependencies = await getAllPackagesDependencies(undefined, packageJsonPath)
   }
   catch (err) {
     log.error('Invalid package.json, JSON parsing failed')
@@ -2538,7 +2551,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
   const firstPackageJson = packageJsonPath
     ? packageJsonPath.split(',')[0].trim()
     : undefined
-  const dir = !firstPackageJson ? findRoot(cwd()) : path.resolve(firstPackageJson).replace(PACKNAME, '')
+  const dir = !firstPackageJson ? findProjectRoot() : dirname(path.resolve(firstPackageJson))
   if (!dependencies) {
     log.error('Missing dependencies section in package.json')
     throw new Error('Missing dependencies section in package.json')
@@ -2551,8 +2564,11 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
     }
   }
 
+  const packageDirs = packageJsonPath
+    ? packageJsonPath.split(',').map(file => file.trim()).filter(Boolean).map(file => dirname(resolve(file)))
+    : [dir]
   const nodeModulesPaths = nodeModules.length === 0
-    ? getHoistedNodeModulesPaths(cwd())
+    ? [...new Set(packageDirs.flatMap(getHoistedNodeModulesPaths))]
     : nodeModules
 
   const anyValidPath = nodeModulesPaths.some(path => existsSync(path))
@@ -2564,7 +2580,7 @@ export async function getLocalDependencies(packageJsonPath: string | undefined, 
   }
 
   let anyInvalid = false
-  const declaredDependencies = await getDeclaredPackageVersionMap(findRoot(cwd()), packageJsonPath)
+  const declaredDependencies = await getDeclaredPackageVersionMap(undefined, packageJsonPath)
   const dependenciesObject = await Promise.all(Array.from(dependencies.entries())
     .map(async ([key, value]) => {
       let dependencyFound = false

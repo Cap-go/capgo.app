@@ -281,6 +281,37 @@ await test('registerLiveUpdateTools: start returns rendered text', async () => {
 })
 
 const { getConfigWriteTarget, setConfigWriteTarget, withConfigWriteTarget } = await import('../src/config/index.ts')
+await test('nested app uses its own package and native folders with hoisted dependencies', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-live-update-workspace-')))
+  const appDir = join(root, 'apps', 'mobile')
+  const packageJsonPath = join(appDir, 'package.json')
+  const previousCwd = process.cwd()
+  const previousTarget = getConfigWriteTarget()
+  try {
+    mkdirSync(join(appDir, 'ios'), { recursive: true })
+    const updaterDir = join(root, 'node_modules', '@capgo', 'capacitor-updater')
+    mkdirSync(updaterDir, { recursive: true })
+    writeFileSync(join(updaterDir, 'package.json'), JSON.stringify({ name: '@capgo/capacitor-updater', version: '8.0.0' }))
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }))
+    const appPackage = JSON.stringify({ name: 'example-mobile', version: '1.2.3', dependencies: { '@capacitor/core': '^8.0.0', '@capgo/capacitor-updater': '^8.0.0' } })
+    writeFileSync(packageJsonPath, appPackage)
+    writeFileSync(join(appDir, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.mobile', appName: 'mobile', webDir: 'dist' }))
+    process.chdir(appDir)
+    setConfigWriteTarget(undefined)
+    const deps = buildDeps({}, appDir)
+    const installed = await deps.installUpdater('com.example.mobile')
+    ok(installed.ok, installed.error)
+    eq(JSON.stringify(await deps.detectPlatforms()), JSON.stringify(['ios']))
+    eq(installed.currentVersion, '1.2.3')
+    eq(readFileSync(packageJsonPath, 'utf8'), appPackage)
+  }
+  finally {
+    process.chdir(previousCwd)
+    setConfigWriteTarget(previousTarget)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 await test('live-update onboarding validates Capacitor config target input', async () => {
   eq(safeParseSchema(liveUpdateStartSchema, { capacitorConfig: '' }).success, false)
   eq(safeParseSchema(liveUpdateNextStepSchema, { capacitorConfig: '' }).success, false)

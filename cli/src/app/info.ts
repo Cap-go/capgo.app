@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { cwd, version as nodeVersion } from 'node:process'
+import { version as nodeVersion } from 'node:process'
 import { platform, version } from 'node:os'
 import { findInstallCommand, findPackageManagerRunner, findPackageManagerType } from '@capgo/find-package-manager'
 import { confirm, isCancel, log, select, spinner } from '@clack/prompts'
@@ -11,7 +11,7 @@ import { trackEvent } from '../analytics/track'
 import { getPlatformDirFromCapacitorConfig } from '../build/platform-paths'
 import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from '../run/ios-compatibility'
 import { CliUserError } from '../shared/cli-user-error'
-import { canPromptInteractively, findRoot, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getPMAndCommand } from '../utils'
+import { canPromptInteractively, findProjectRoot, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getPMAndCommand } from '../utils'
 import { getLatestVersion } from '../utils/latest-version'
 
 export const OUTDATED_DEPENDENCIES_ERROR = 'Some dependencies are not up to date'
@@ -67,7 +67,7 @@ export function parseDoctorPackageJsonPaths(packageJson?: string): string[] | un
 export function resolveDoctorProjectRoot(packageJson?: string): string {
   const paths = parseDoctorPackageJsonPaths(packageJson)
   if (!paths)
-    return findRoot(cwd())
+    return findProjectRoot()
 
   return dirname(paths[0])
 }

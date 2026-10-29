@@ -1,6 +1,5 @@
 import type { BundleEncryptOptions, EncryptResult } from '../schemas/bundle'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { cwd } from 'node:process'
 import { intro, log, outro } from '@clack/prompts'
 import { parse } from '@std/semver'
 import { trackEvent } from '../analytics/track'
@@ -8,7 +7,7 @@ import { encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey }
 import { checkAlerts } from '../api/update'
 import { ensurePublicKeyFromPrivateKey, ensurePublicKeyInConfig } from '../recovery/public-key'
 import { CliUserError } from '../shared/cli-user-error'
-import { baseKeyV2, canPromptInteractively, findRoot, formatError, getConfigForWrite, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
+import { baseKeyV2, canPromptInteractively, findProjectRoot, formatError, getConfigForWrite, getInstalledVersion, isDeprecatedPluginVersion } from '../utils'
 import { requireChecksum, requireExistingZipPath, requireZipPath } from './validate-inputs'
 
 export type { EncryptResult } from '../schemas/bundle'
@@ -126,7 +125,7 @@ export async function encryptZipInternal(
     const encryptedData = encryptSource(zipFile, sessionKey, ivSessionKey)
 
     // Determine which checksum encryption to use based on updater version
-    const root = findRoot(cwd())
+    const root = findProjectRoot()
     const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
     let supportsV3Checksum = false
     let coerced

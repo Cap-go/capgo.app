@@ -20,6 +20,9 @@ const cases = [
   ['Error status 429: need_plan_upgrade: Cannot request native build, upgrade plan to continue to build', 'plan_limit'],
   ['not_authorized: you cannot access this app', 'permission'],
   ['Missing appId, use --app-id or set it in capacitor.config', 'project'],
+  ['Cannot find @capacitor/core in package.json.', 'project'],
+  ['Cannot find @capacitor/core', 'project'],
+  ['Multiple Capacitor apps found in /example/workspace.', 'project'],
   ['Channel production not found for app com.example.app', 'not_found'],
   ['Version 1.0.0 already exists', 'conflict'],
   ['fetch failed: ECONNREFUSED', 'network'],
@@ -32,6 +35,9 @@ for (const [message, kind] of cases) {
   assert.ok(guidance.nextSteps.length >= 2, message)
   assert.ok(guidance.nextSteps.join(' ').includes('support@capgo.app'), `${message} has a support escape hatch`)
 }
+
+const dependencyGuidance = guidanceForError('Cannot find @capacitor/core in package.json.')
+assert.ok(dependencyGuidance.nextSteps.some(step => step.includes('apps/mobile') && step.includes('before installing')))
 
 // Already-explained errors are left alone, others get exactly one guidance block.
 const taken = buildAppIdTakenMessage('com.example.app')

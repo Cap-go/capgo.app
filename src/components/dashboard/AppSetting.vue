@@ -22,6 +22,7 @@ import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
+import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getAppDeletionTrackingProperties } from '~/utils/appDeletionFeedback'
 
@@ -259,6 +260,7 @@ async function deleteApp() {
       sendOnboardingEvent('app_deletion_failed', getDeletionEventProperties())
     }
     else {
+      useDashboardAppsStore().reset()
       await organizationStore.fetchOrganizations()
       toast.success(t('app-deleted'))
       sendOnboardingEvent('app_deletion_completed', getDeletionEventProperties())
