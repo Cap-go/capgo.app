@@ -152,6 +152,8 @@ interface BuildLogger {
 
 - `--output-upload`: upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Pair with `--no-playstore-upload` (Android) or `--ios-distribution ad_hoc` (iOS) for artifact-only builds
 - `--no-output-upload`: skip Capgo storage upload (no download link); store upload can still happen when store credentials are set
+- `--symbols-upload`: keep only the debug symbols (iOS dSYMs zip, Android `mapping.txt`) and print a time-limited download link for crash reporters (Crashlytics, Sentry); the IPA/APK/AAB is not kept. Use with store builds. Off by default: Capgo keeps nothing unless you opt in. TTL follows `--output-retention`
+- `--no-symbols-upload`: do not keep the debug symbols (default unless `--output-upload`)
 - `--no-playstore-upload`: Android — skip Google Play upload for this build (ignores saved Play credentials). Requires `--output-upload`. Use when the Play app does not exist yet or you only need the AAB download
 - `--submit-to-store-review`: submit after upload instead of leaving a draft/inactive store release. Android completes the Google Play release; iOS submits to TestFlight external review.
 - `--store-release-name <name>`: Android Google Play version_name/release label.
@@ -214,6 +216,7 @@ npx @capgo/cli@latest build credentials save --platform android \
   - `--local`
   - `--output-upload`, `--no-output-upload`
   - `--output-retention <duration>`
+  - `--symbols-upload`, `--no-symbols-upload`
   - `--skip-build-number-bump`, `--no-skip-build-number-bump`
 
 #### iOS credential save options
@@ -286,6 +289,7 @@ Store the locally saved credentials for one platform on Capgo, encrypted (AES-25
   - `--overwrite-ios-provisioning-map`
   - `--output-upload`, `--no-output-upload`
   - `--output-retention <duration>`
+  - `--symbols-upload`, `--no-symbols-upload`
   - `--skip-build-number-bump`, `--no-skip-build-number-bump`
 - Supports the same iOS and Android credential fields as `build credentials save`.
 

@@ -57,6 +57,7 @@ export const NON_CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
   'CAPGO_IOS_XCODE_VERSION',
   'BUILD_OUTPUT_UPLOAD_ENABLED',
   'BUILD_OUTPUT_RETENTION_SECONDS',
+  'BUILD_SYMBOLS_UPLOAD_ENABLED',
   'SKIP_BUILD_NUMBER_BUMP',
   'SKIP_MARKETING_VERSION_BUMP',
   'CAPGO_STORE_SUBMIT_REVIEW',
@@ -106,6 +107,7 @@ const RESERVED_BUILD_ENV_PREFIXES = ['CAPGO_', 'OUTPUT_UPLOAD_URL_', 'OUTPUT_DOW
 
 const BOOLEAN_KEYS = [
   'BUILD_OUTPUT_UPLOAD_ENABLED',
+  'BUILD_SYMBOLS_UPLOAD_ENABLED',
   'SKIP_BUILD_NUMBER_BUMP',
   'SKIP_MARKETING_VERSION_BUMP',
   'CAPGO_STORE_SUBMIT_REVIEW',
@@ -555,6 +557,7 @@ const OPTION_KEY_MAP: ReadonlyArray<readonly [option: string, key: string, kind:
   ['androidFlavor', 'CAPGO_ANDROID_FLAVOR', 'string'],
   ['outputUploadEnabled', 'BUILD_OUTPUT_UPLOAD_ENABLED', 'boolean'],
   ['outputRetentionSeconds', 'BUILD_OUTPUT_RETENTION_SECONDS', 'number'],
+  ['symbolsUploadEnabled', 'BUILD_SYMBOLS_UPLOAD_ENABLED', 'boolean'],
   ['skipBuildNumberBump', 'SKIP_BUILD_NUMBER_BUMP', 'boolean'],
   ['skipMarketingVersionBump', 'SKIP_MARKETING_VERSION_BUMP', 'boolean'],
   ['submitToStoreReview', 'CAPGO_STORE_SUBMIT_REVIEW', 'boolean'],
@@ -653,7 +656,7 @@ export function mergeStoredCredentialsForBuild(input: MergeStoredCredentialsInpu
     buildOptions.outputUploadEnabled = false
   if (buildOptions.outputRetentionSeconds === undefined)
     buildOptions.outputRetentionSeconds = MIN_OUTPUT_RETENTION_SECONDS
-  for (const option of ['skipBuildNumberBump', 'skipMarketingVersionBump', 'submitToStoreReview']) {
+  for (const option of ['symbolsUploadEnabled', 'skipBuildNumberBump', 'skipMarketingVersionBump', 'submitToStoreReview']) {
     if (buildOptions[option] === undefined)
       buildOptions[option] = false
   }
