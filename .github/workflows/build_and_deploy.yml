@@ -176,13 +176,18 @@ jobs:
           bun scripts/sync-read-replica-schema.ts
 
   # Migrations may add tables to the Google publication; the subscriber only
-  # streams them once its subscription is refreshed. This job still runs on
-  # every production release and must stay visible when it fails, but worker
-  # deploys no longer wait on it: read_replica_schema already reconciles new
-  # tables on the subscriber before primary migrations, and a refresh failure
-  # (for example subscription ownership) must not block api, files, or plugin
-  # releases. Fix refresh out of band; until then new worker code may see empty
-  # replica rows for tables not yet subscribed.
+  # streams them once its subscription is refreshed. Migration
+  # 20261029015108_delta_sessions (#3979) adds delta_sessions to the
+  # publication, adds delta_files.path_session_id, and a delta_sessions_move
+  # cron task that NULLs path_session. With a stale replica subscription,
+  # delta_sessions is empty on replicas, so once CAPGO_DELTA_SESSIONS_ENABLED is
+  # turned on, new workers return empty manifests for moved versions and old
+  # workers build S3 paths without the session part. Keep that flag off until
+  # this refresh succeeds and every api, files, and plugin worker runs the new
+  # release. Current prod: flag off, 0 rows moved. This job still runs on every
+  # production release and must stay visible when it fails, but worker deploys
+  # no longer wait on it so releases are not blocked on subscription ownership
+  # errors (read_replica_schema still reconciles table DDL before migrations).
   read_replica_subscription:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' && needs.read_replica_schema.result == 'success' }}
@@ -206,6 +211,8 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Install dependencies
         run: bun install
+      - name: Assert deploy tag is current
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Refresh the Google subscription for newly published tables
         env:
           GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
