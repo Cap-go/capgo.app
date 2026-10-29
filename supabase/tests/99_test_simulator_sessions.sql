@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(5);
+SELECT plan(7);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -74,6 +74,37 @@ SELECT is(
   ),
   2400::bigint,
   'expiry bills the capped open time'
+);
+
+SELECT is(
+  (
+    SELECT created_at
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id = '99000000-0000-4000-8000-000000000001'
+  ),
+  (
+    SELECT started_at + interval '40 minutes'
+    FROM public.simulator_sessions
+    WHERE id = '99000000-0000-4000-8000-000000000001'
+  ),
+  'expired usage is dated when the session ended'
+);
+
+DELETE FROM public.apps WHERE app_id = 'com.test.simulator.session';
+
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM public.build_logs
+    WHERE org_id = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+      AND build_id IN (
+        '99000000-0000-4000-8000-000000000001',
+        '99000000-0000-4000-8000-000000000002'
+      )
+  ),
+  2,
+  'deleting the app keeps the simulator minutes'
 );
 
 SELECT * FROM finish();

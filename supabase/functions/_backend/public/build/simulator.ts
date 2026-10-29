@@ -130,7 +130,7 @@ async function markSession(c: Context, id: string, status: 'in-progress' | 'stop
     SET status = $2,
         url = COALESCE($3, url),
         emulator_id = COALESCE($4, emulator_id),
-        started_at = CASE WHEN $2 = 'in-progress' THEN now() ELSE started_at END,
+        started_at = CASE WHEN $2 = 'in-progress' AND started_at IS NULL THEN now() ELSE started_at END,
         finished_at = CASE WHEN $2 IN ('stopped', 'errored') THEN now() ELSE finished_at END,
         updated_at = now()
     WHERE id = $1::uuid
@@ -146,6 +146,10 @@ class SimulatorHostError extends Error {
 
 export function simulatorHostStopIsFinal(status: number): boolean {
   return status === 200 || status === 204 || status === 404 || status === 409
+}
+
+export function startupFailureKeepsSlot(emulatorId: string, deviceStopped: boolean): boolean {
+  return emulatorId !== '' && !deviceStopped
 }
 
 export function canFinishSimulatorStop(input: { remoteStatus: number | null, billingRecorded: boolean, seconds: number }): boolean {
@@ -223,20 +227,27 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
     })
   }
   catch (error) {
-    try {
-      if (emulatorId) {
+    let deviceStopped = emulatorId === ''
+    if (emulatorId) {
+      try {
         const { accessKey, origin } = simulatorConfig(c)
         await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}/stop`, 'POST', {})
+        deviceStopped = true
+      }
+      catch (stopError) {
+        deviceStopped = stopError instanceof SimulatorHostError && simulatorHostStopIsFinal(stopError.status)
+        if (!deviceStopped)
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator startup cleanup could not stop the device', emulatorId, error: stopError })
       }
     }
-    catch {
-      // The slot is released below even when the device host is already gone.
-    }
     try {
-      await markSession(c, slot.id, 'errored')
+      if (startupFailureKeepsSlot(emulatorId, deviceStopped))
+        await markSession(c, slot.id, 'in-progress', { emulatorId })
+      else
+        await markSession(c, slot.id, 'errored')
     }
     catch (markError) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to release simulator slot', error: markError })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to record simulator startup failure', error: markError })
     }
     if (error instanceof Error && error.name === 'HTTPException')
       throw error

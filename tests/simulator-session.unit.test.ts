@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, simulatorBillableSeconds, simulatorHostStopIsFinal, simulatorUsageEnd } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, simulatorBillableSeconds, simulatorHostStopIsFinal, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -36,5 +36,8 @@ describe('simulator sessions', () => {
     expect(canFinishSimulatorStop({ remoteStatus: 404, billingRecorded: false, seconds: 30 })).toBe(false)
     expect(canFinishSimulatorStop({ remoteStatus: 200, billingRecorded: true, seconds: 30 })).toBe(true)
     expect(canFinishSimulatorStop({ remoteStatus: null, billingRecorded: true, seconds: 0 })).toBe(true)
+    expect(startupFailureKeepsSlot('device-1', false)).toBe(true)
+    expect(startupFailureKeepsSlot('device-1', true)).toBe(false)
+    expect(startupFailureKeepsSlot('', false)).toBe(false)
   })
 })

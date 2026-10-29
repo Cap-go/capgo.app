@@ -64,7 +64,9 @@ BEGIN
     );
     -- Write the log here. record_build_time rejects the call unless the request
     -- role is internal, and this sweeper runs from whichever connection holds the slot lock.
-    INSERT INTO public.build_logs (org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id)
+    INSERT INTO public.build_logs (
+      org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id, created_at
+    )
     VALUES (
       p_org_id,
       session_row.requested_by,
@@ -72,16 +74,20 @@ BEGIN
       session_row.platform,
       elapsed,
       elapsed * CASE session_row.platform WHEN 'ios' THEN 2 ELSE 1 END,
-      session_row.app_id
+      session_row.app_id,
+      session_row.opened_at + make_interval(secs => elapsed)
     )
     ON CONFLICT (build_id, org_id) DO UPDATE SET
       user_id = EXCLUDED.user_id,
       platform = EXCLUDED.platform,
       build_time_unit = EXCLUDED.build_time_unit,
       billable_seconds = EXCLUDED.billable_seconds,
-      app_id = EXCLUDED.app_id;
+      app_id = EXCLUDED.app_id,
+      created_at = EXCLUDED.created_at;
     UPDATE public.simulator_sessions
-    SET status = 'stopped', finished_at = now(), updated_at = now()
+    SET status = 'stopped',
+        finished_at = session_row.opened_at + make_interval(secs => elapsed),
+        updated_at = now()
     WHERE id = session_row.id;
     expired_count := expired_count + 1;
   END LOOP;
@@ -94,3 +100,63 @@ REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid) FROM anon;
 REVOKE ALL ON FUNCTION public.expire_simulator_sessions(uuid) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.expire_simulator_sessions(uuid) TO service_role;
+
+-- App deletion cascades the session row. Write the usage first so the minutes survive.
+CREATE OR REPLACE FUNCTION public.settle_simulator_sessions_before_app_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  session_row record;
+  elapsed bigint;
+BEGIN
+  FOR session_row IN
+    SELECT id, owner_org, platform, requested_by, max_duration_minutes,
+           COALESCE(started_at, created_at) AS opened_at,
+           COALESCE(device_stopped_at, now()) AS closed_at
+    FROM public.simulator_sessions
+    WHERE app_id = OLD.app_id
+      AND status IN ('new', 'queued', 'starting', 'in-progress')
+    FOR UPDATE
+  LOOP
+    elapsed := LEAST(
+      session_row.max_duration_minutes * 60,
+      GREATEST(0, floor(extract(epoch FROM (session_row.closed_at - session_row.opened_at)))::bigint)
+    );
+    IF elapsed > 0 THEN
+      INSERT INTO public.build_logs (
+        org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id, created_at
+      )
+      VALUES (
+        session_row.owner_org,
+        session_row.requested_by,
+        session_row.id::varchar,
+        session_row.platform,
+        elapsed,
+        elapsed * CASE session_row.platform WHEN 'ios' THEN 2 ELSE 1 END,
+        OLD.app_id,
+        session_row.opened_at + make_interval(secs => elapsed)
+      )
+      ON CONFLICT (build_id, org_id) DO UPDATE SET
+        user_id = EXCLUDED.user_id,
+        platform = EXCLUDED.platform,
+        build_time_unit = EXCLUDED.build_time_unit,
+        billable_seconds = EXCLUDED.billable_seconds,
+        app_id = EXCLUDED.app_id,
+        created_at = EXCLUDED.created_at;
+    END IF;
+  END LOOP;
+  RETURN OLD;
+END;
+$$;
+
+ALTER FUNCTION public.settle_simulator_sessions_before_app_delete() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.settle_simulator_sessions_before_app_delete() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.settle_simulator_sessions_before_app_delete() TO service_role;
+
+CREATE TRIGGER settle_simulator_sessions_before_app_delete
+BEFORE DELETE ON public.apps
+FOR EACH ROW
+EXECUTE FUNCTION public.settle_simulator_sessions_before_app_delete();
