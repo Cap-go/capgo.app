@@ -420,6 +420,15 @@ export async function reserveSimulatorSlot(
       })
     }
 
+    const appOwner = await client.query<{ owner_org: string }>(
+      'SELECT owner_org FROM public.apps WHERE app_id = $1 FOR SHARE',
+      [input.appId],
+    )
+    if ((appOwner.rowCount ?? 0) !== 1)
+      throw simpleError('not_found', 'App not found')
+    if (appOwner.rows[0]?.owner_org !== input.orgId)
+      throw quickError(409, 'app_transferred', 'This app moved to another organization.', { app_id: input.appId })
+
     const inserted = await client.query<{ id: string }>(
       `
         INSERT INTO public.simulator_sessions (

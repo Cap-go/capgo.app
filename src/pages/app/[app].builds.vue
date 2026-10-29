@@ -104,7 +104,7 @@ watchEffect(async () => {
             </div>
           </div>
 
-          <SimulatorSessionCard v-if="!showingBuildSteps && id" :app-id="id" />
+          <SimulatorSessionCard v-if="!showingBuildSteps && id" :key="id" :app-id="id" />
           <BuildTable :app-id="id" @update:showing-steps="showingBuildSteps = $event" />
         </div>
       </div>

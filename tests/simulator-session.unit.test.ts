@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, simulatorBillableSeconds, simulatorBillingInstant, simulatorHostStopIsFinal, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, simulatorBillableSeconds, simulatorBillingInstant, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -29,6 +29,19 @@ describe('simulator sessions', () => {
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', simulatorUsageEnd(stoppedAt, retryAt), 40)).toBe(300)
     const nextDay = Date.parse('2026-10-30T08:00:00.000Z')
     expect(simulatorBillingInstant('2026-10-29T23:50:00.000Z', nextDay, 40)).toBe(Date.parse('2026-10-30T00:30:00.000Z'))
+  })
+
+  it('rejects a request that is not the simulator contract', () => {
+    expect(simulatorRequestFields({ app_id: ' ee.forgr.capgo ', platform: 'android', name: ' Checkout ' })).toEqual({
+      appId: 'ee.forgr.capgo',
+      platform: 'android',
+      name: 'Checkout',
+    })
+    expect(simulatorRequestFields({ app_id: 'ee.forgr.capgo', platform: 'ios', name: null })).toMatchObject({ name: undefined })
+    expect(() => simulatorRequestFields({ app_id: 12, platform: 'ios' })).toThrow()
+    expect(() => simulatorRequestFields({ app_id: 'ee.forgr.capgo', platform: 'ios', name: 12 })).toThrow()
+    expect(isSimulatorSessionId('6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4')).toBe(true)
+    expect(isSimulatorSessionId('session-1')).toBe(false)
   })
 
   it('keeps the slot when the device or the billing write is not finished', () => {

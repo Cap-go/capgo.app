@@ -64,7 +64,7 @@ BEGIN
   LOOP
     elapsed := LEAST(
       session_row.max_duration_minutes * 60,
-      GREATEST(1, floor(extract(epoch FROM (session_row.closed_at - session_row.opened_at)))::bigint)
+      GREATEST(1, round(extract(epoch FROM (session_row.closed_at - session_row.opened_at)))::bigint)
     );
     -- Write the log here. record_build_time rejects the call unless the request
     -- role is internal, and this sweeper runs from whichever connection holds the slot lock.
@@ -81,13 +81,7 @@ BEGIN
       session_row.app_id,
       session_row.opened_at + make_interval(secs => elapsed)
     )
-    ON CONFLICT (build_id, org_id) DO UPDATE SET
-      user_id = EXCLUDED.user_id,
-      platform = EXCLUDED.platform,
-      build_time_unit = EXCLUDED.build_time_unit,
-      billable_seconds = EXCLUDED.billable_seconds,
-      app_id = EXCLUDED.app_id,
-      created_at = EXCLUDED.created_at;
+    ON CONFLICT (build_id, org_id) DO NOTHING;
     UPDATE public.simulator_sessions
     SET status = 'stopped',
         finished_at = session_row.opened_at + make_interval(secs => elapsed),
@@ -133,7 +127,7 @@ BEGIN
   LOOP
     elapsed := LEAST(
       session_row.max_duration_minutes * 60,
-      GREATEST(0, floor(extract(epoch FROM (session_row.closed_at - session_row.opened_at)))::bigint)
+      GREATEST(0, round(extract(epoch FROM (session_row.closed_at - session_row.opened_at)))::bigint)
     );
     IF elapsed > 0 THEN
       INSERT INTO public.build_logs (
@@ -149,13 +143,7 @@ BEGIN
         OLD.app_id,
         session_row.opened_at + make_interval(secs => elapsed)
       )
-      ON CONFLICT (build_id, org_id) DO UPDATE SET
-        user_id = EXCLUDED.user_id,
-        platform = EXCLUDED.platform,
-        build_time_unit = EXCLUDED.build_time_unit,
-        billable_seconds = EXCLUDED.billable_seconds,
-        app_id = EXCLUDED.app_id,
-        created_at = EXCLUDED.created_at;
+      ON CONFLICT (build_id, org_id) DO NOTHING;
     END IF;
   END LOOP;
   RETURN OLD;

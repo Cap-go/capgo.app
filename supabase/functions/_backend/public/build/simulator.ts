@@ -23,6 +23,8 @@ export interface EmulatorSessionData {
 }
 
 const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
+const SIMULATOR_HOST_TIMEOUT_MS = 30_000
+const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export function emulatorSessionCreateBody(input: { appId: string, platform: 'ios' | 'android', orgId: string, name?: string }) {
   return {
@@ -62,17 +64,40 @@ export function simulatorBillableSeconds(startedAt: string | null, now = Date.no
   return Math.min(elapsed, cap)
 }
 
-function requirePlatform(value: string | undefined): 'ios' | 'android' {
+function requirePlatform(value: unknown): 'ios' | 'android' {
   if (value === 'ios' || value === 'android')
     return value
   throw simpleError('invalid_request', 'platform must be ios or android.')
 }
 
-function requireAppId(value: string | undefined): string {
-  const appId = value?.trim()
+function requireAppId(value: unknown): string {
+  if (typeof value !== 'string')
+    throw simpleError('invalid_request', 'app_id is required.')
+  const appId = value.trim()
   if (!appId)
     throw simpleError('invalid_request', 'app_id is required.')
   return appId
+}
+
+export function simulatorRequestFields(body: { app_id?: unknown, platform?: unknown, name?: unknown }) {
+  return {
+    appId: requireAppId(body.app_id),
+    platform: requirePlatform(body.platform),
+    name: simulatorSessionName(body.name),
+  }
+}
+
+function simulatorSessionName(value: unknown) {
+  if (value == null)
+    return undefined
+  if (typeof value !== 'string')
+    throw simpleError('invalid_request', 'name must be a string.')
+  const name = value.trim()
+  return name || undefined
+}
+
+export function isSimulatorSessionId(value: string) {
+  return SIMULATOR_SESSION_ID.test(value)
 }
 
 async function queryWrite<T extends object>(c: Context, sql: string, params: unknown[]): Promise<T[]> {
@@ -134,7 +159,7 @@ interface SimulatorRow {
 }
 
 async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string }) {
-  await queryWrite(c, `
+  const rows = await queryWrite<{ id: string }>(c, `
     UPDATE public.simulator_sessions
     SET status = $2,
         url = COALESCE($3, url),
@@ -143,7 +168,10 @@ async function markSession(c: Context, id: string, status: 'in-progress' | 'stop
         finished_at = CASE WHEN $2 IN ('stopped', 'errored') THEN now() ELSE finished_at END,
         updated_at = now()
     WHERE id = $1::uuid
+    RETURNING id
   `, [id, status, extra?.url ?? null, extra?.emulatorId ?? null])
+  if (rows.length !== 1)
+    throw simpleError('not_found', 'Simulator session not found.')
 }
 
 class SimulatorHostError extends Error {
@@ -178,6 +206,7 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
       'Content-Type': 'application/json',
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
   })
   const payload = await response.json().catch(() => undefined) as { data?: EmulatorSessionData, error?: string } | undefined
   if (!response.ok)
@@ -194,6 +223,8 @@ function simulatorConfig(c: Context) {
 }
 
 async function ownedSession(c: Context, principal: RlsPrincipal, userId: string, appId: string, sessionId: string) {
+  if (!isSimulatorSessionId(sessionId))
+    throw simpleError('not_found', 'Simulator session not found.')
   await ensureBuildPermission(c, appId, userId)
   const orgId = await getBuildOwnerOrg(c, principal, appId)
   const rows = await queryRead<SimulatorRow>(c, `
@@ -208,9 +239,7 @@ async function ownedSession(c: Context, principal: RlsPrincipal, userId: string,
 }
 
 export async function startSimulator(c: Context, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
-  const appId = requireAppId(body.app_id)
-  const platform = requirePlatform(body.platform)
-  const name = body.name?.trim() || undefined
+  const { appId, platform, name } = simulatorRequestFields(body)
   await ensureBuildPermission(c, appId, userId)
   const orgId = await getBuildOwnerOrg(c, principal, appId)
   await ensureBuildTimePlanAllowed(c, principal, orgId, appId)

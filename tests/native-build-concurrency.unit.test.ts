@@ -224,6 +224,23 @@ describe('native build concurrency limits', () => {
       upgradeUrl: 'https://console.capgo.app/settings/organization/plans',
     })
   })
+
+  it('does not reserve a simulator after the app moved to another organization', async () => {
+    mockPgClient({
+      activeCount: 0,
+      planLimit: 2,
+      planName: 'Maker',
+      mode: 'assert',
+      appOwnerOrg: '11111111-1111-4111-8111-111111111111',
+    })
+
+    await expect(reserveSimulatorSlot(context as any, {
+      orgId: input.orgId,
+      appId: input.appId,
+      userId: input.userId,
+      platform: 'ios',
+    })).rejects.toMatchObject({ status: 409 })
+  })
 })
 
 function mockPgClient(options: {
@@ -232,6 +249,7 @@ function mockPgClient(options: {
   planName: string
   reservationStatus?: string
   mode?: 'reserve' | 'assert'
+  appOwnerOrg?: string
 }) {
   const mode = options.mode ?? 'reserve'
   const client = {
@@ -276,6 +294,11 @@ function mockPgClient(options: {
           ])
         }
         return { rowCount: 1, rows: [{ active_count: String(options.activeCount) }] }
+      }
+
+      if (query.includes('SELECT owner_org FROM public.apps')) {
+        expect(params).toEqual(['com.test.native.concurrency'])
+        return { rowCount: 1, rows: [{ owner_org: options.appOwnerOrg ?? '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57' }] }
       }
 
       if (query.includes('INSERT INTO public.simulator_sessions')) {
