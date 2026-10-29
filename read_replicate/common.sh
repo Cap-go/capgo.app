@@ -24,12 +24,14 @@ REPLICA_TABLES=(
   "channels"
   "channel_devices"
   "delta_files"
+  "delta_sessions"
   "notifications"
   "onboarding_demo_data"
   "version_files"
 )
 
 REPLICA_PRIORITY_TABLES=(
+  "delta_sessions"
   "orgs"
   "stripe_info"
   "org_users"

@@ -70,10 +70,9 @@ FROM public.delta_files AS df
 INNER JOIN slim_expected AS e ON e.s3_path = df.s3_path;
 
 SELECT is(public.delta_files_compact(100), 0, 'nothing is compacted while CAPGO_DELTA_FILES_COMPACT_ENABLED is unset');
-SELECT throws_ok(
-  'CALL public.delta_files_compact_all()',
-  'delta_files_compact_all: set CAPGO_DELTA_FILES_COMPACT_ENABLED first',
-  'the catch-up refuses to run while the switch is off'
+SELECT ok(
+  pg_catalog.to_regprocedure('public.delta_files_compact_all(integer,integer)') IS NULL,
+  'the obsolete transaction-controlling catch-up procedure is removed'
 );
 
 SELECT vault.create_secret('true', 'CAPGO_DELTA_FILES_COMPACT_ENABLED');
