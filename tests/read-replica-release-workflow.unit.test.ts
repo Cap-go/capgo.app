@@ -80,15 +80,14 @@ describe('production read-replica release gate', () => {
         'deploy_plugin_regions',
       ]) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema(?:, read_replica_subscription)?\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema\\]`),
         )
       }
-      // Workers that read the replica wait for its initial copy of new tables.
-      for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions']) {
-        expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema, read_replica_subscription\\]`),
-        )
-      }
+      // Subscription refresh stays a visible release step but must not gate worker deploys.
+      expect(workflow).toContain('read_replica_subscription:')
+      expect(workflow).not.toMatch(
+        /deploy_(?:api|files|plugin_regions):\n    needs:.*read_replica_subscription/,
+      )
     },
   )
 

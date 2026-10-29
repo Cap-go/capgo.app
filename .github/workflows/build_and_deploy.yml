@@ -176,9 +176,12 @@ jobs:
           bun scripts/sync-read-replica-schema.ts
 
   # Migrations may add tables to the Google publication; the subscriber only
-  # streams them once its subscription is refreshed. Workers that read the
-  # replica (api, files, plugins) deploy once the initial copy is finished;
-  # until then the previous workers keep serving.
+  # streams them once its subscription is refreshed. This job still runs on
+  # every production release and must stay visible when it fails, but worker
+  # deploys no longer wait on it: read_replica_schema already reconciles new
+  # tables on the subscriber, and a refresh failure (for example subscription
+  # ownership) must not block api, files, or plugin releases. Previous workers
+  # keep serving until refresh succeeds manually or on a later run.
   read_replica_subscription:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' && needs.read_replica_schema.result == 'success' }}
@@ -364,8 +367,8 @@ jobs:
           prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}
 
   deploy_api:
-    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -444,8 +447,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_files:
-    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -481,8 +484,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_plugin_regions:
-    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
