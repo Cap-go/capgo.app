@@ -165,17 +165,23 @@ const uploadCommandTool: McpTool = {
     + 'Use this when you have a shell but the Capgo CLI is not logged in.',
   inputSchema: z.object({
     appId,
+    projectDir: z.string().trim().min(1).optional().describe('Absolute local Capacitor app directory, not the MCP server directory or workspace root. The command changes into this folder before uploading.'),
+    cwd: z.string().trim().min(1).optional().describe('Alias for projectDir: the agent\'s absolute local app directory. The upload command changes into this folder; the hosted MCP cannot inspect local files.'),
     path: z.string().min(1).optional().describe('Folder of the web build to upload, e.g. dist. Defaults to webDir from capacitor.config.'),
     bundle: z.string().min(1).optional().describe('Bundle version, e.g. 1.2.3. Defaults to the package.json version.'),
     channel: z.string().min(1).optional().describe('Channel to link the uploaded bundle to'),
     comment: z.string().min(1).optional(),
     delta: z.boolean().optional().describe('Also upload the per-file manifest for delta updates'),
     deltaOnly: z.boolean().optional().describe('Upload only the delta manifest files, no full zip'),
+  }).refine(input => !input.projectDir || !input.cwd || input.projectDir === input.cwd, {
+    message: 'projectDir and cwd must select the same project directory. Pass only one when switching projects.',
   }) as unknown as z.ZodObject<z.ZodRawShape>,
   annotations: { title: 'Get bundle upload command', ...READ },
   run: async (input, ctx) => {
-    const { appId: id, path, bundle, channel, comment, delta, deltaOnly } = input as {
+    const { appId: id, projectDir, cwd, path, bundle, channel, comment, delta, deltaOnly } = input as {
       appId: string
+      projectDir?: string
+      cwd?: string
       path?: string
       bundle?: string
       channel?: string
@@ -191,7 +197,7 @@ const uploadCommandTool: McpTool = {
           kind: 'authentication',
           next_steps: [
             'Upload without the CLI instead: package the build with npx @capgo/cli@latest bundle zip --for-upload --json (no login needed), then call capgo_prepare_bundle_upload and capgo_complete_bundle_upload.',
-            'Or log the CLI in yourself with bunx @capgo/cli@latest login (the user creates a key at https://console.capgo.app/apikeys) and run bunx @capgo/cli@latest bundle upload.',
+            'Or log the CLI in yourself with npx @capgo/cli@latest login (the user creates a key at https://console.capgo.app/apikeys) and run npx @capgo/cli@latest bundle upload from the app directory.',
           ],
         },
       }, true)
@@ -201,7 +207,7 @@ const uploadCommandTool: McpTool = {
     if (!app.ok)
       return apiResult(app)
 
-    const args = ['bunx', '@capgo/cli@latest', 'bundle', 'upload', shellQuote(id)]
+    const args = ['npx', '@capgo/cli@latest', 'bundle', 'upload', shellQuote(id)]
     if (path)
       args.push('--path', shellQuote(path))
     if (bundle)
@@ -215,10 +221,12 @@ const uploadCommandTool: McpTool = {
     else if (delta)
       args.push('--delta')
 
+    const directory = projectDir ?? cwd
+    const directoryPrefix = directory ? `cd ${shellQuote(directory)} && ` : ''
     return textResult({
-      command: `CAPGO_TOKEN=${shellQuote(ctx.apikey)} ${args.join(' ')}`,
+      command: `${directoryPrefix}CAPGO_TOKEN=${shellQuote(ctx.apikey)} ${args.join(' ')}`,
       apikeyExpiresAt: ctx.caller.apikeyExpiresAt,
-      note: 'Run from the project root after building the web assets. The key needs upload rights on this app.',
+      note: 'Run locally from the absolute Capacitor app directory after building its web assets, not from the MCP server directory or workspace root. The hosted MCP cannot inspect local files. The key needs upload rights on this app.',
     })
   },
 }
@@ -239,7 +247,7 @@ const bundleUploadTools: McpTool[] = [
     name: 'capgo_prepare_bundle_upload',
     title: 'Prepare bundle upload',
     description: 'Step 1 of 3 to upload a live update bundle without a logged-in CLI. '
-      + 'First package the web build offline (no login needed): `npx @capgo/cli@latest bundle zip <appId> --for-upload --json` (add --delta-pack <file> for delta updates; it encrypts like bundle upload when the project has an encryption key). '
+      + 'First, change into the absolute local Capacitor app directory (not the workspace root or MCP server directory) and package the web build offline (no login needed): `npx @capgo/cli@latest bundle zip <appId> --for-upload --json` (add --delta-pack <file> for delta updates; it encrypts like bundle upload when the project has an encryption key). '
       + 'Pass the JSON fields it prints (checksum, native_packages, updater_version, session_key, key_id, size_bytes, cli_version) here. '
       + 'Capgo runs every check the CLI runs (permissions, plan, version name, encryption policy, channel permissions, same-checksum and native compatibility per channel), creates the version and returns signed PUT URLs. '
       + 'Step 2: upload with `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<url>"` (and the delta pack to its own URL). Step 3: capgo_complete_bundle_upload with upload_token.',
@@ -951,7 +959,7 @@ const requestBuildTool: McpTool = {
   name: 'capgo_request_build',
   title: 'Request native build',
   description: 'Step 1 of 3 to run a native cloud build without a logged-in CLI. Uses the signing credentials stored for this app (see capgo_get_build_credentials), so it requires app admin rights (app.update_settings) on the app, not only build rights. '
-    + 'First package the native project offline: `npx @capgo/cli@latest build zip <appId> --platform <ios|android> --json`, and pass its build_options and ios_dependency_manager here. '
+    + 'First, change into the absolute local Capacitor app directory (not the workspace root or MCP server directory) and package the native project offline: `npx @capgo/cli@latest build zip <appId> --platform <ios|android> --json`, and pass its build_options and ios_dependency_manager here. '
     + 'Returns a job_id and a signed URL. Step 2: `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<upload_url>"`. Step 3: capgo_start_build. Builds use build minutes.',
   inputSchema: z.object({
     appId,
