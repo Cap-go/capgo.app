@@ -12,7 +12,7 @@ import {
   unsubscribedReplicaTables,
 } from '../scripts/sync-read-replica-schema.ts'
 
-const NEW_TABLES = ['delta_files', 'version_files']
+const NEW_TABLES = ['delta_files', 'delta_sessions', 'version_files']
 
 function snapshot() {
   return JSON.parse(readFileSync(new URL('../read_replicate/schema_replicate.catalog.json', import.meta.url), 'utf8'))
@@ -105,7 +105,7 @@ describe('read-replica subscription refresh', () => {
   })
 
   it('analyzes only replicated tables after their initial copy', () => {
-    expect(readReplicaAnalyzeSql(NEW_TABLES)).toBe('ANALYZE public."delta_files", public."version_files"')
+    expect(readReplicaAnalyzeSql(NEW_TABLES)).toBe('ANALYZE public."delta_files", public."delta_sessions", public."version_files"')
     expect(() => readReplicaAnalyzeSql(['pg_authid'])).toThrow('Not a replicated table: pg_authid')
   })
 

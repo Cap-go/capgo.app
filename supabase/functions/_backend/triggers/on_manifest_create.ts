@@ -10,6 +10,7 @@ import { isTransientDatabaseError } from '../utils/pg_errors.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { isRetryablePostgrestResult, retryWithBackoff } from '../utils/retry.ts'
 import { s3 } from '../utils/s3.ts'
+import { deltaFileS3PathSql, deltaSessionJoinSql } from '../utils/version_manifest_sql.ts'
 
 const SIZE_RETRY_ATTEMPTS = 1
 const SIZE_RETRY_DELAY_MS = 500
@@ -99,21 +100,6 @@ function isDeltaFileRecord(record: object): record is DeltaFileRecord {
   return 'entry_key' in record || 'path_key' in record
 }
 
-type DeltaFilePathColumns = Pick<DeltaFileRecord, 's3_path' | 'app_id' | 'file_name' | 'path_org' | 'path_session' | 'path_sha'>
-
-// PostgREST returns bytea as '\\x<hex>'.
-function byteaHex(value: string): string {
-  return value.startsWith('\\x') ? value.slice(2) : value
-}
-
-// Same rule as public.delta_file_s3_path: a compacted row stores its path as parts.
-export function deltaFileS3Path(row: DeltaFilePathColumns): string {
-  if (!row.path_sha || !row.path_org)
-    return row.s3_path
-  const session = row.path_session ? `${byteaHex(row.path_session)}/` : ''
-  return `orgs/${row.path_org}/apps/${row.app_id}/delta/${session}${byteaHex(row.path_sha)}_${row.file_name}`
-}
-
 // One R2 lookup per unique unsized delta file; versions share the row.
 export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, queue = getQueueLogMetadata(c)) {
   if (!record.id)
@@ -121,11 +107,14 @@ export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, q
 
   const pg = await getPgClient(c)
   try {
-    let current: ({ file_size: number } & DeltaFilePathColumns) | null
+    let current: { file_size: number, s3_path: string } | null
     try {
-      current = await queryJsonOne<{ file_size: number } & DeltaFilePathColumns>(
+      current = await queryJsonOne<{ file_size: number, s3_path: string }>(
         pg,
-        'SELECT file_size, s3_path, app_id, file_name, path_org, path_session, path_sha FROM public.delta_files WHERE id = $1',
+        `SELECT delta_file.file_size, ${deltaFileS3PathSql('delta_file', 'delta_session')} AS s3_path
+         FROM public.delta_files AS delta_file
+         ${deltaSessionJoinSql('delta_file', 'delta_session')}
+         WHERE delta_file.id = $1`,
         [record.id],
       )
     }
@@ -138,8 +127,7 @@ export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, q
     }
 
     // The queued record may predate the row's compaction: read the path from the row.
-    // queryJson uses to_json, so bytea arrives as '\\x<hex>', the same shape PostgREST returned.
-    const s3Path = deltaFileS3Path(current)
+    const s3Path = current.s3_path
     if (!s3Path)
       throw simpleError('no_s3_path', 'No s3 path', { record })
 

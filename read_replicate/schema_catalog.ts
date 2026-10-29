@@ -9,6 +9,7 @@ export const REPLICA_TABLES = [
   'channels',
   'channel_devices',
   'delta_files',
+  'delta_sessions',
   'notifications',
   'onboarding_demo_data',
   'version_files',
@@ -41,6 +42,7 @@ export const REPLICA_EXCLUDED_INDEXES = [
   'delta_files_app_id_idx',
   'delta_files_entry_key_idx',
   'delta_files_path_key_idx',
+  'delta_sessions_app_id_session_idx',
   'version_files_file_ids_gin_idx',
 ] as const
 

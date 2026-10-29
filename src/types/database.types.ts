@@ -1602,6 +1602,7 @@ export type Database = {
           path_key: string
           path_org: string | null
           path_session: string | null
+          path_session_id: number | null
           path_sha: string | null
           s3_path: string
         }
@@ -1617,6 +1618,7 @@ export type Database = {
           path_key: string
           path_org?: string | null
           path_session?: string | null
+          path_session_id?: number | null
           path_sha?: string | null
           s3_path: string
         }
@@ -1632,6 +1634,7 @@ export type Database = {
           path_key?: string
           path_org?: string | null
           path_session?: string | null
+          path_session_id?: number | null
           path_sha?: string | null
           s3_path?: string
         }
@@ -1739,6 +1742,32 @@ export type Database = {
           recorded_at?: string
         }
         Relationships: []
+      }
+      delta_sessions: {
+        Row: {
+          app_id: string
+          id: number
+          session: string
+        }
+        Insert: {
+          app_id: string
+          id?: number
+          session: string
+        }
+        Update: {
+          app_id?: string
+          id?: number
+          session?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_sessions_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
       }
       deploy_history: {
         Row: {
@@ -4628,6 +4657,8 @@ export type Database = {
         Returns: string[]
       }
       delta_path_key: { Args: { p_s3_path: string }; Returns: string }
+      delta_sessions_attach: { Args: { p_ids: number[] }; Returns: number }
+      delta_sessions_move: { Args: { p_batch_size?: number }; Returns: number }
       delta_storage_gc_enabled: { Args: never; Returns: boolean }
       delta_storage_setting: {
         Args: { p_default: boolean; p_name: string }

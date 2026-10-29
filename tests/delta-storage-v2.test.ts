@@ -66,6 +66,7 @@ async function versionFiles(versionId: number) {
 const SWITCHES = {
   gc_enabled: 'CAPGO_DELTA_STORAGE_GC_ENABLED',
   compact_enabled: 'CAPGO_DELTA_FILES_COMPACT_ENABLED',
+  sessions_enabled: 'CAPGO_DELTA_SESSIONS_ENABLED',
 } as const
 
 async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof SWITCHES, value: boolean) {
@@ -75,7 +76,7 @@ async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof S
 
 // The Vault switches stay untouched for parallel test files: each case sets
 // them inside its own transaction and rolls back.
-async function withConfig<T>(settings: { gc_enabled?: boolean, compact_enabled?: boolean }, run: (client: PoolClient) => Promise<T>) {
+async function withConfig<T>(settings: Partial<Record<keyof typeof SWITCHES, boolean>>, run: (client: PoolClient) => Promise<T>) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -620,7 +621,7 @@ describe('delta storage v2 legacy guards', () => {
 })
 
 describe('delta storage v2 compacted rows', () => {
-  it('serves the original paths and hashes once rows are stored as parts', async () => {
+  it.each([false, true])('serves original compacted paths and hashes with shared sessions enabled: %s', async (sessionsEnabled) => {
     const versionId = await insertVersion(pool)
     const sha = 'ab'.repeat(32)
     const hash = 'cd'.repeat(128)
@@ -629,7 +630,7 @@ describe('delta storage v2 compacted rows', () => {
       { file_name: 'index.html', file_hash: 'ef'.repeat(32), s3_path: deltaPath(`${sha}_index.html`) },
       { file_name: 'svg/rainy.svg', file_hash: 'uhAeBLCA==', s3_path: `orgs/${ORG_ID}/apps/${APP_ID}/1.0.0/svg/rainy.svg` },
     ]
-    await withConfig({ compact_enabled: true }, async (client) => {
+    await withConfig({ compact_enabled: true, sessions_enabled: sessionsEnabled }, async (client) => {
       // delta_files_compact scans ids globally: explicit negative ids keep rows
       // inserted by parallel test files out of this batch.
       const ids = entries.map((_, index) => -9_690_000 - entries.length + index)
@@ -652,6 +653,9 @@ describe('delta storage v2 compacted rows', () => {
       const stored = await client.query<{ s3_path: string, file_hash: string }>('SELECT s3_path, file_hash FROM public.delta_files WHERE id = ANY($1::bigint[]) ORDER BY id', [ids])
       expect(stored.rows.filter(row => row.s3_path === '')).toHaveLength(2)
       expect(stored.rows.filter(row => row.file_hash === '')).toHaveLength(2)
+      const sessions = await client.query('SELECT path_session, path_session_id FROM public.delta_files WHERE id = $1', [ids[0]])
+      expect(sessions.rows[0].path_session_id !== null).toBe(sessionsEnabled)
+      expect(sessions.rows[0].path_session === null).toBe(sessionsEnabled)
 
       const database = drizzle({ client })
       const rows = await database.execute(versionManifestRowsSql(sql`${versionId}::bigint`))
@@ -661,6 +665,12 @@ describe('delta storage v2 compacted rows', () => {
 
       const view = await client.query('SELECT file_name, file_hash, s3_path FROM public.version_manifest WHERE app_version_id = $1 ORDER BY id', [versionId])
       expect(view.rows).toEqual(entries)
+      const compat = await client.query('SELECT file_name, file_hash, s3_path FROM public.manifest WHERE app_version_id = $1 ORDER BY id', [versionId])
+      expect(compat.rows).toEqual(entries)
+      for (const entry of entries) {
+        const match = await client.query('SELECT public.delta_version_has_entry($1, $2, $3) AS found', [versionId, entry.s3_path, entry.file_hash])
+        expect(match.rows[0].found).toBe(true)
+      }
 
       const [{ name }] = (await client.query<{ name: string }>('SELECT name FROM public.app_versions WHERE id = $1', [versionId])).rows
       const lookup = buildManifestSizeLookupQuery(APP_ID, name, undefined, normalizeManifestSizeFiles([{ file_name: 'index.html', file_hash: 'ef'.repeat(32) }]))

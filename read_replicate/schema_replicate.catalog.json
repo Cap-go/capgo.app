@@ -1131,6 +1131,46 @@
       "type": "bytea"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "path_session_id",
+      "notNull": false,
+      "position": 14,
+      "table": "delta_files",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "d",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "delta_sessions",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "app_id",
+      "notNull": true,
+      "position": 2,
+      "table": "delta_sessions",
+      "type": "character varying"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "session",
+      "notNull": true,
+      "position": 3,
+      "table": "delta_sessions",
+      "type": "bytea"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -2120,6 +2160,13 @@
       "valid": true
     },
     {
+      "definition": "PRIMARY KEY (id)",
+      "name": "delta_sessions_pkey",
+      "table": "delta_sessions",
+      "type": "p",
+      "valid": true
+    },
+    {
       "definition": "PRIMARY KEY (owner_org, event, uniq_id)",
       "name": "notifications_pkey",
       "table": "notifications",
@@ -2592,6 +2639,13 @@
     },
     {
       "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX delta_sessions_pkey ON public.delta_sessions USING btree (id)",
+      "name": "delta_sessions_pkey",
+      "table": "delta_sessions",
+      "valid": true
+    },
+    {
+      "constraintOwned": true,
       "definition": "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (owner_org, event, uniq_id)",
       "name": "notifications_pkey",
       "table": "notifications",
@@ -2826,6 +2880,18 @@
       "cache": "1",
       "cycle": false,
       "increment": "1",
+      "max": "2147483647",
+      "min": "1",
+      "name": "delta_sessions_id_seq",
+      "ownedColumn": "id",
+      "ownedTable": "delta_sessions",
+      "start": "1",
+      "type": "integer"
+    },
+    {
+      "cache": "1",
+      "cycle": false,
+      "increment": "1",
       "max": "9223372036854775807",
       "min": "1",
       "name": "org_users_id_seq",
@@ -2874,6 +2940,11 @@
     {
       "kind": "r",
       "name": "delta_files",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "delta_sessions",
       "reloptions": []
     },
     {

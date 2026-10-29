@@ -10,16 +10,29 @@ import { sql } from 'drizzle-orm'
 
 // delta_files stores most paths as parts and hashes as bytes (s3_path /
 // file_hash are then ''): the inline form of public.delta_file_s3_path and
-// public.delta_file_hash, which the replicas do not have.
-export function deltaFileS3PathSql(alias: string): string {
-  return `CASE WHEN ${alias}.path_sha IS NULL THEN ${alias}.s3_path::text ELSE 'orgs/' || ${alias}.path_org::text || '/apps/' || ${alias}.app_id || '/delta/' || COALESCE(pg_catalog.encode(${alias}.path_session, 'hex') || '/', '') || pg_catalog.encode(${alias}.path_sha, 'hex') || '_' || ${alias}.file_name END`
+// public.delta_file_hash, which the replicas do not have. A row's upload
+// session is in path_session, or in delta_sessions (path_session_id).
+export function deltaFileS3PathSql(alias: string, sessionAlias: string): string {
+  return `CASE WHEN ${alias}.path_sha IS NULL THEN ${alias}.s3_path::text ELSE 'orgs/' || ${alias}.path_org::text || '/apps/' || ${alias}.app_id || '/delta/' || COALESCE(pg_catalog.encode(COALESCE(${alias}.path_session, ${sessionAlias}.session), 'hex') || '/', '') || pg_catalog.encode(${alias}.path_sha, 'hex') || '_' || ${alias}.file_name END`
+}
+
+export function deltaSessionJoinSql(alias: string, sessionAlias: string): string {
+  return `LEFT JOIN public.delta_sessions AS ${sessionAlias} ON ${sessionAlias}.id = ${alias}.path_session_id`
+}
+
+// A row whose delta_sessions row is not visible yet (replica still copying)
+// counts as missing, like a missing delta_files row.
+export function deltaSessionVisibleSql(alias: string, sessionAlias: string): string {
+  return `(${alias}.path_session_id IS NULL OR ${sessionAlias}.id IS NOT NULL)`
 }
 
 export function deltaFileHashSql(alias: string): string {
   return `CASE WHEN ${alias}.file_hash_bin IS NULL THEN ${alias}.file_hash::text ELSE pg_catalog.encode(${alias}.file_hash_bin, 'hex') END`
 }
 
-const deltaFileS3Path = sql.raw(deltaFileS3PathSql('delta_file'))
+const deltaFileS3Path = sql.raw(deltaFileS3PathSql('delta_file', 'delta_session'))
+const deltaSessionJoin = sql.raw(deltaSessionJoinSql('delta_file', 'delta_session'))
+const deltaSessionVisible = sql.raw(deltaSessionVisibleSql('delta_file', 'delta_session'))
 const deltaFileHash = sql.raw(deltaFileHashSql('delta_file'))
 
 export interface VersionManifestJsonRow { file_name: string, file_hash: string, s3_path: string }
@@ -35,7 +48,9 @@ export function versionManifestJsonSql(versionId: unknown): SQL<VersionManifestJ
       CROSS JOIN LATERAL (SELECT pg_catalog.cardinality(version_file.file_ids) AS expected OFFSET 0) AS version_size
       CROSS JOIN LATERAL pg_catalog.unnest(version_file.file_ids) WITH ORDINALITY AS entry (file_id, ord)
       INNER JOIN public.delta_files AS delta_file ON delta_file.id = entry.file_id
+      ${deltaSessionJoin}
       WHERE version_file.app_version_id = ${versionId}
+        AND ${deltaSessionVisible}
       HAVING count(*) = max(version_size.expected)),
     '[]'::json)`
 }
@@ -52,7 +67,9 @@ export function versionManifestRowsSql(versionId: unknown): SQL<VersionManifestR
     CROSS JOIN LATERAL (SELECT pg_catalog.cardinality(version_file.file_ids) AS expected OFFSET 0) AS version_size
     CROSS JOIN LATERAL pg_catalog.unnest(version_file.file_ids) WITH ORDINALITY AS entry (file_id, ord)
     INNER JOIN public.delta_files AS delta_file ON delta_file.id = entry.file_id
+    ${deltaSessionJoin}
     WHERE version_file.app_version_id = ${versionId}
+      AND ${deltaSessionVisible}
     ORDER BY entry.ord`
 }
 
