@@ -6,9 +6,12 @@ import { REPLICA_TABLES } from '../read_replicate/schema_catalog.ts'
 import {
   assertGoogleReadReplicaSchemaPlan,
   copyingReplicaTables,
+  isReadReplicaSubscriptionOwnerError,
   preflightCompatibilityIssues,
-  READ_REPLICA_REFRESH_SUBSCRIPTION_SQL,
   readReplicaAnalyzeSql,
+  readReplicaSubscriptionIsComplete,
+  readReplicaSubscriptionManualRefreshWarning,
+  READ_REPLICA_REFRESH_SUBSCRIPTION_SQL,
   renderReadReplicaImportTransaction,
   unsubscribedReplicaTables,
 } from '../scripts/sync-read-replica-schema.ts'
@@ -135,6 +138,22 @@ describe('read-replica subscription refresh', () => {
   it('analyzes only replicated tables after their initial copy', () => {
     expect(readReplicaAnalyzeSql(NEW_TABLES)).toBe('ANALYZE public."delta_files", public."delta_sessions", public."version_files"')
     expect(() => readReplicaAnalyzeSql(['pg_authid'])).toThrow('Not a replicated table: pg_authid')
+  })
+
+  it('skips refresh when pg_subscription_rel already lists every replicated table as ready', () => {
+    const rows = REPLICA_TABLES.map(table => ({ table_name: table, state: 'r' }))
+    expect(readReplicaSubscriptionIsComplete(rows)).toBe(true)
+    expect(readReplicaSubscriptionIsComplete(rows.filter(row => row.table_name !== 'delta_sessions'))).toBe(false)
+  })
+
+  it('detects subscription owner errors from Cloud SQL Data API output', () => {
+    expect(isReadReplicaSubscriptionOwnerError(new Error('pq: must be owner of subscription capgo_google_eu_2_sub'))).toBe(true)
+    expect(isReadReplicaSubscriptionOwnerError(new Error('timeout'))).toBe(false)
+  })
+
+  it('warns humans to run refresh manually when CI is not the subscription owner', () => {
+    expect(readReplicaSubscriptionManualRefreshWarning(NEW_TABLES)).toContain(READ_REPLICA_REFRESH_SUBSCRIPTION_SQL)
+    expect(readReplicaSubscriptionManualRefreshWarning(NEW_TABLES)).toContain('eu-2')
   })
 
   it('runs the refresh after primary migrations in the release workflow', () => {
