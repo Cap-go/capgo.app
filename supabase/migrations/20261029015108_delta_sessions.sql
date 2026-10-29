@@ -229,6 +229,7 @@ DECLARE
   v_cursor bigint;
   v_ids bigint[];
   v_updated integer := 0;
+  v_sessions_enabled boolean;
 BEGIN
   IF NOT public.delta_storage_setting('CAPGO_DELTA_FILES_COMPACT_ENABLED', false) THEN
     RETURN 0;
@@ -262,6 +263,17 @@ BEGIN
   );
   IF v_ids IS NULL THEN
     RETURN 0;
+  END IF;
+
+  v_sessions_enabled := public.delta_storage_setting('CAPGO_DELTA_SESSIONS_ENABLED', false);
+  IF NOT v_sessions_enabled THEN
+    -- The session mover may already have passed these un-compacted rows.
+    -- Rewind before locking file rows, matching the mover's lock order.
+    -- Each retry still scans only its bounded primary-key batch.
+    INSERT INTO public.backfill_progress AS bp (job_name, scope_key, cutover_at, last_processed_id)
+    VALUES ('delta_sessions_move', 'all', now(), LEAST(0::bigint, v_ids[1] - 1))
+    ON CONFLICT (job_name, scope_key) DO UPDATE
+    SET last_processed_id = LEAST(bp.last_processed_id, v_ids[1] - 1), updated_at = now();
   END IF;
 
   WITH prefixed AS (
@@ -332,7 +344,7 @@ BEGIN
     AND ((compact.path_ok AND df.path_sha IS NULL) OR (compact.hash_ok AND df.file_hash_bin IS NULL));
   GET DIAGNOSTICS v_updated = ROW_COUNT;
 
-  IF public.delta_storage_setting('CAPGO_DELTA_SESSIONS_ENABLED', false) THEN
+  IF v_sessions_enabled THEN
     PERFORM public.delta_sessions_attach(v_ids);
   END IF;
 

@@ -160,6 +160,23 @@ interface AllowedNewReplicaTable {
   sql: string
   catalog: Required<Pick<SchemaCatalog, 'columns' | 'constraints' | 'indexes' | 'sequences'>>
 }
+function replicaIdentityKeyCatalog(
+  table: string,
+  type: 'bigint' | 'integer',
+): Pick<AllowedNewReplicaTable['catalog'], 'constraints' | 'indexes' | 'sequences'> {
+  return {
+    constraints: [
+      { definition: 'PRIMARY KEY (id)', name: `${table}_pkey`, table, type: 'p', valid: true },
+    ],
+    indexes: [
+      { constraintOwned: true, definition: `CREATE UNIQUE INDEX ${table}_pkey ON public.${table} USING btree (id)`, name: `${table}_pkey`, table, valid: true },
+    ],
+    sequences: [
+      { cache: '1', cycle: false, increment: '1', max: type === 'bigint' ? '9223372036854775807' : '2147483647', min: '1', name: `${table}_id_seq`, ownedColumn: 'id', ownedTable: table, start: '1', type },
+    ],
+  }
+}
+
 export const ALLOWED_NEW_REPLICA_TABLES: Readonly<Record<string, AllowedNewReplicaTable>> = {
   delta_files: {
     sql: [
@@ -198,15 +215,7 @@ export const ALLOWED_NEW_REPLICA_TABLES: Readonly<Record<string, AllowedNewRepli
         { default: null, generated: '', identity: '', name: 'file_hash_bin', notNull: false, table: 'delta_files', type: 'bytea' },
         { default: null, generated: '', identity: '', name: 'path_session_id', notNull: false, table: 'delta_files', type: 'integer' },
       ],
-      constraints: [
-        { definition: 'PRIMARY KEY (id)', name: 'delta_files_pkey', table: 'delta_files', type: 'p', valid: true },
-      ],
-      indexes: [
-        { constraintOwned: true, definition: 'CREATE UNIQUE INDEX delta_files_pkey ON public.delta_files USING btree (id)', name: 'delta_files_pkey', table: 'delta_files', valid: true },
-      ],
-      sequences: [
-        { cache: '1', cycle: false, increment: '1', max: '9223372036854775807', min: '1', name: 'delta_files_id_seq', ownedColumn: 'id', ownedTable: 'delta_files', start: '1', type: 'bigint' },
-      ],
+      ...replicaIdentityKeyCatalog('delta_files', 'bigint'),
     },
   },
   delta_sessions: {
@@ -224,15 +233,7 @@ export const ALLOWED_NEW_REPLICA_TABLES: Readonly<Record<string, AllowedNewRepli
         { default: null, generated: '', identity: '', name: 'app_id', notNull: true, table: 'delta_sessions', type: 'character varying' },
         { default: null, generated: '', identity: '', name: 'session', notNull: true, table: 'delta_sessions', type: 'bytea' },
       ],
-      constraints: [
-        { definition: 'PRIMARY KEY (id)', name: 'delta_sessions_pkey', table: 'delta_sessions', type: 'p', valid: true },
-      ],
-      indexes: [
-        { constraintOwned: true, definition: 'CREATE UNIQUE INDEX delta_sessions_pkey ON public.delta_sessions USING btree (id)', name: 'delta_sessions_pkey', table: 'delta_sessions', valid: true },
-      ],
-      sequences: [
-        { cache: '1', cycle: false, increment: '1', max: '2147483647', min: '1', name: 'delta_sessions_id_seq', ownedColumn: 'id', ownedTable: 'delta_sessions', start: '1', type: 'integer' },
-      ],
+      ...replicaIdentityKeyCatalog('delta_sessions', 'integer'),
     },
   },
   version_files: {

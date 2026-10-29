@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import { createPgliteEngine } from 'tinbase'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { completeVersionManifest, deltaFileHashSql, deltaFileS3PathSql, deltaSessionJoinSql, versionManifestJsonSql, versionManifestRowsSql } from '../supabase/functions/_backend/plugin_runtime/utils/version_manifest_sql.ts'
+import { completeVersionManifest, deltaFileHashSql, deltaFileS3PathSql, deltaSessionJoinSql, versionManifestJsonSql, versionManifestRowsSql, versionManifestSizeRowsSql } from '../supabase/functions/_backend/plugin_runtime/utils/version_manifest_sql.ts'
 
 const org = '2f322bd9-a7ba-47d2-92be-4e13c3dd6f6e'
 const appId = 'co.example.app'
@@ -24,7 +24,7 @@ describe('replica SQL for compacted delta_files rows', () => {
     await database.exec(`
       CREATE TABLE public.delta_files (
         id integer PRIMARY KEY, app_id varchar NOT NULL, s3_path varchar NOT NULL, file_name varchar NOT NULL,
-        file_hash varchar NOT NULL, path_org uuid, path_session bytea, path_sha bytea, file_hash_bin bytea, path_session_id integer
+        file_hash varchar NOT NULL, path_org uuid, path_session bytea, path_sha bytea, file_hash_bin bytea, path_session_id integer, file_size bigint DEFAULT 10
       );
       CREATE TABLE public.delta_sessions (id integer PRIMARY KEY, session bytea NOT NULL);
       CREATE TABLE public.version_files (app_version_id bigint PRIMARY KEY, file_ids bigint[] NOT NULL);
@@ -72,6 +72,9 @@ describe('replica SQL for compacted delta_files rows', () => {
     expect(completeVersionManifest(rows)).toEqual(expected)
     const json = dialect.sqlToQuery(sql`SELECT ${versionManifestJsonSql(1)} AS entries`)
     expect((await database.query(json.sql, json.params)).rows).toEqual([{ entries: expected }])
+    const sizes = await database.query(`SELECT * FROM ${versionManifestSizeRowsSql('1')} AS manifest_size`)
+    expect(sizes.rows).toHaveLength(expected.length)
+    expect(sizes.rows.every(row => row.file_size === 10)).toBe(true)
   })
 
   it.each([2, 3])('serves no partial manifest while session or file rows are missing, version %s', async (versionId) => {
@@ -80,5 +83,7 @@ describe('replica SQL for compacted delta_files rows', () => {
     expect(completeVersionManifest(rows)).toEqual([])
     const json = dialect.sqlToQuery(sql`SELECT ${versionManifestJsonSql(versionId)} AS entries`)
     expect((await database.query(json.sql, json.params)).rows).toEqual([{ entries: [] }])
+    const sizes = await database.query(`SELECT * FROM ${versionManifestSizeRowsSql(String(versionId))} AS manifest_size`)
+    expect(sizes.rows).toEqual([])
   })
 })

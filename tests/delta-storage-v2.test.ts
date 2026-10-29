@@ -621,6 +621,48 @@ describe('delta storage v2 legacy guards', () => {
 })
 
 describe('delta storage v2 compacted rows', () => {
+  it('revisits rows compacted while the session rollout switch is paused', async () => {
+    await withConfig({ compact_enabled: true, sessions_enabled: true }, async (client) => {
+      const id = -9_692_000
+      const sha = 'ab'.repeat(32)
+      const hash = 'cd'.repeat(32)
+      const path = deltaPath(`5476a39b3d/${sha}_late.js`)
+      await client.query(
+        `INSERT INTO public.delta_files (id, app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key, created_at)
+         VALUES ($1, $2, $3::text, 'late.js', $4::text, 10, public.delta_path_key($3::text), public.delta_entry_key($3::text, 'late.js', $4::text), now() - interval '1 hour')`,
+        [id, APP_ID, path, hash],
+      )
+      for (const job of ['delta_files_compact', 'delta_sessions_move']) {
+        await client.query(
+          `INSERT INTO public.backfill_progress (job_name, scope_key, cutover_at, last_processed_id)
+           VALUES ($1, 'all', now(), $2)
+           ON CONFLICT (job_name, scope_key) DO UPDATE SET last_processed_id = EXCLUDED.last_processed_id`,
+          [job, id - 1],
+        )
+      }
+      expect((await client.query('SELECT public.delta_sessions_move(1) AS count')).rows[0].count).toBe(0)
+      const cursor = () => client.query<{ last_processed_id: string }>(`SELECT last_processed_id FROM public.backfill_progress WHERE job_name = 'delta_sessions_move' AND scope_key = 'all'`)
+      expect(Number((await cursor()).rows[0].last_processed_id)).toBe(id)
+
+      await setSwitch(client, 'sessions_enabled', false)
+      expect((await client.query('SELECT public.delta_files_compact(1) AS count')).rows[0].count).toBe(1)
+      expect(Number((await cursor()).rows[0].last_processed_id)).toBe(id - 1)
+      expect((await client.query('SELECT public.delta_sessions_move(1) AS count')).rows[0].count).toBe(0)
+      expect(Number((await cursor()).rows[0].last_processed_id)).toBe(id - 1)
+
+      await setSwitch(client, 'sessions_enabled', true)
+      expect((await client.query('SELECT public.delta_sessions_move(1) AS count')).rows[0].count).toBe(1)
+      expect(Number((await cursor()).rows[0].last_processed_id)).toBe(id)
+      const shared = await client.query(
+        `SELECT df.path_session, encode(ds.session, 'hex') AS session
+         FROM public.delta_files AS df JOIN public.delta_sessions AS ds ON ds.id = df.path_session_id
+         WHERE df.id = $1`,
+        [id],
+      )
+      expect(shared.rows).toEqual([{ path_session: null, session: '5476a39b3d' }])
+    })
+  })
+
   it.each([false, true])('serves original compacted paths and hashes with shared sessions enabled: %s', async (sessionsEnabled) => {
     const versionId = await insertVersion(pool)
     const sha = 'ab'.repeat(32)

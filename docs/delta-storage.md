@@ -129,7 +129,10 @@ The session RLS policy calls `app_versions_readable_app_ids()` in an InitPlan
 once per statement for `anon` and `authenticated`. The helper starts from the
 caller identity and indexed role bindings. Session writes are internal only.
 `delta_sessions_move` scans at most 5,000 file ids per scheduled invocation
-through `delta_files_pkey`. `delta_sessions_attach` selects and updates only
+through `delta_files_pkey`. If compaction creates inline sessions while the
+session switch is paused, it rewinds the session cursor before that batch so
+re-enabling the switch revisits those ids through the same bounded index path.
+`delta_sessions_attach` selects and updates only
 those ids, using `delta_sessions_app_id_session_idx` for session identity.
 The existing entry-validation RPC starts with `delta_files_path_key_idx` and a
 single `version_files_pkey` lookup. Restore work starts with one version's
@@ -148,7 +151,12 @@ For a 5,000-file manifest, six warm `EXPLAIN (ANALYZE, BUFFERS)` runs had median
 execution times of 5.3 ms with inline sessions and 7.5 ms with shared sessions.
 The plans used indexed version/file/session lookups, with no scan over the
 million-row file table. Moving the 400,000 inline sessions in 5,000-id batches
-took 6.8 seconds in total. These are local measurements, not production SLAs.
+took 6.8 seconds in total. Both samples use the new reader: this compares
+inline and shared session storage, not the previous release's SQL against this
+PR. These are local measurements, not production endpoint latency guarantees.
+The extra session lookup runs only on a manifest-cache miss; up-to-date checks
+skip the manifest query, and cached manifests return before it runs. Concurrent
+cache-miss load and production p95/p99 latency remain unmeasured.
 
 RLS `limit=1` checks took 0.8 ms for unauthenticated and invalid-key callers,
 7.5 ms for a broad API key, 5.3 ms on its app-filtered control query, and

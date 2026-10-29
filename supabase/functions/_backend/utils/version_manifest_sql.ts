@@ -91,7 +91,9 @@ export function versionManifestSizeRowsSql(versionIdSql: string): string {
     CROSS JOIN LATERAL (SELECT pg_catalog.cardinality(version_file.file_ids) AS expected OFFSET 0) AS version_size
     CROSS JOIN LATERAL pg_catalog.unnest(version_file.file_ids) AS entry (file_id)
     INNER JOIN public.delta_files AS delta_file ON delta_file.id = entry.file_id
+    ${deltaSessionJoinSql('delta_file', 'delta_session')}
     WHERE version_file.app_version_id = ${versionIdSql}
+      AND ${deltaSessionVisibleSql('delta_file', 'delta_session')}
   ),
   delta_complete AS MATERIALIZED (
     SELECT count(*) > 0 AND count(*) = max(delta.expected) AS complete FROM delta
