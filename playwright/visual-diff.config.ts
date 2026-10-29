@@ -44,7 +44,7 @@ async function prepareProfileGoalScreenshot(page: Page, completed = false) {
         abtests: assignments,
         setup_mode: 'manual',
         version: 6,
-        ...(completed ? { profile_completed_at: '2026-10-20T11:00:00.000Z' } : {}),
+        ...(completed ? { profile_completed_at: '2026-10-20T11:00:00.000Z', org_name: 'Example Company' } : {}),
       },
     }
     await route.fulfill(consoleQueryJson(consoleQueryRows(query, [profile])))
@@ -85,7 +85,7 @@ async function prepareAiOnboardingScreenshot(page: Page, setupMode: 'ai' | 'invi
   await routeConsoleQuery(page, 'users', async (route, query) => {
     if (consoleQueryMethod(query) !== 'GET')
       return route.fulfill(consoleQueryJson(consoleQueryRows(query, [])))
-    const onboarding = { profile_completed_at: '2026-10-20T10:00:00.000Z', ...(setupMode ? { setup_mode: setupMode } : {}) }
+    const onboarding = { profile_completed_at: '2026-10-20T10:00:00.000Z', org_name: 'Example Company', ...(setupMode ? { setup_mode: setupMode } : {}) }
     await forwardConsoleQuery(route, (row: any) => ({ ...row, first_name: 'Example', last_name: 'User', onboarding }))
   })
   await page.reload()
@@ -512,7 +512,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await routeConsoleQuery(page, 'users', async (route, query) => {
         if (consoleQueryMethod(query) !== 'GET')
           return route.fulfill(consoleQueryJson(consoleQueryRows(query, [])))
-        await forwardConsoleQuery(route, (row: any) => ({ ...row, first_name: 'Example', last_name: 'User', onboarding: { profile_completed_at: '2026-10-20T10:00:00.000Z', setup_mode: 'manual' } }))
+        await forwardConsoleQuery(route, (row: any) => ({ ...row, first_name: 'Example', last_name: 'User', onboarding: { profile_completed_at: '2026-10-20T10:00:00.000Z', org_name: 'Example Company', setup_mode: 'manual' } }))
       })
       await page.reload()
       // Base captures predate the required name step and still open on the legacy welcome canvas.
@@ -533,7 +533,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await appName.fill('Example App')
       await page.locator('[data-test="app-onboarding-continue"]').click()
       await page.locator('[data-test="app-onboarding-continue"]').click()
-      await page.locator('[data-test="onboarding-org-name"]').waitFor()
+      await page.locator('[data-test="onboarding-org-name"]').or(page.locator('[data-test="onboarding-company-name-summary"]')).waitFor()
     },
   },
   { slug: 'dashboard', path: '/dashboard', auth: true },

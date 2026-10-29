@@ -7,10 +7,11 @@ import { getLocalConfig, useConsole } from '~/services/console'
 import { setUser } from '~/services/posthog'
 import { replaceUserOnboardingWithRetry, serializeUserOnboardingWrite } from '~/services/userOnboardingWriteQueue'
 import { useMainStore } from '~/stores/main'
+import { readOnboardingCompanyName } from '~/utils/onboardingProfile'
 
 const props = defineProps<{ disabled?: boolean, initial?: boolean }>()
 const emit = defineEmits<{
-  fieldInput: [field: 'first_name' | 'last_name', value: string]
+  fieldInput: [field: 'first_name' | 'last_name' | 'company_name', value: string]
   saved: []
   saveFailed: []
 }>()
@@ -21,13 +22,16 @@ const { t } = useI18n()
 const inputId = useId()
 const firstName = ref(main.user?.first_name ?? '')
 const lastName = ref(main.user?.last_name ?? '')
+const companyName = ref(readOnboardingCompanyName(main.user?.onboarding))
 const needsProfileName = computed(() => props.initial || !main.user?.first_name?.trim() || !main.user?.last_name?.trim())
-const isValid = computed(() => !!main.user?.id && (!needsProfileName.value || (!!firstName.value.trim() && !!lastName.value.trim())))
+const isValid = computed(() => !!main.user?.id
+  && (!needsProfileName.value || (!!firstName.value.trim() && !!lastName.value.trim()))
+  && (!props.initial || companyName.value.trim().length >= 3))
 let draftGeneration = 0
 let draftTimer: ReturnType<typeof setTimeout> | undefined
 let draftUserId = main.user?.id
 let draftAuthGeneration = main.authGeneration
-const edited = { first_name: false, last_name: false }
+const edited = { first_name: false, last_name: false, company_name: false }
 
 function onboardingObject(value: Json): { [key: string]: Json | undefined } {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -37,7 +41,7 @@ watch(() => [main.user, main.authGeneration] as const, ([user, authGeneration]) 
   if (draftUserId !== user?.id || draftAuthGeneration !== authGeneration) {
     clearTimeout(draftTimer)
     draftTimer = undefined
-    edited.first_name = edited.last_name = false
+    edited.first_name = edited.last_name = edited.company_name = false
     draftUserId = user?.id
     draftAuthGeneration = authGeneration
   }
@@ -46,6 +50,8 @@ watch(() => [main.user, main.authGeneration] as const, ([user, authGeneration]) 
     firstName.value = typeof draft.first_name === 'string' ? draft.first_name : user?.first_name ?? ''
   if (!edited.last_name)
     lastName.value = typeof draft.last_name === 'string' ? draft.last_name : user?.last_name ?? ''
+  if (!edited.company_name)
+    companyName.value = typeof draft.company_name === 'string' ? draft.company_name : readOnboardingCompanyName(user?.onboarding)
 }, { immediate: true })
 
 async function persistDraft() {
@@ -54,7 +60,11 @@ async function persistDraft() {
   if (!userId || main.user?.id !== userId || main.authGeneration !== authGeneration || !needsProfileName.value)
     return
   const generation = draftGeneration
-  const profileDraft = { first_name: firstName.value, last_name: lastName.value }
+  const profileDraft = {
+    first_name: firstName.value,
+    last_name: lastName.value,
+    ...(props.initial ? { company_name: companyName.value } : {}),
+  }
   const isCurrentUser = () => generation === draftGeneration && main.user?.id === userId && main.authGeneration === authGeneration
   try {
     await serializeUserOnboardingWrite(userId, async () => {
@@ -79,12 +89,14 @@ async function persistDraft() {
   }
 }
 
-function fieldInput(field: 'first_name' | 'last_name', value: string) {
+function fieldInput(field: 'first_name' | 'last_name' | 'company_name', value: string) {
   edited[field] = true
   if (field === 'first_name')
     firstName.value = value
-  else
+  else if (field === 'last_name')
     lastName.value = value
+  else
+    companyName.value = value
   emit('fieldInput', field, value)
   clearTimeout(draftTimer)
   draftTimer = setTimeout(() => {
@@ -100,13 +112,14 @@ onBeforeUnmount(() => {
   }
 })
 
-async function resetDraft() {
+async function resetDraft(savedCompanyName?: string) {
   draftGeneration++
   clearTimeout(draftTimer)
   draftTimer = undefined
-  edited.first_name = edited.last_name = false
+  edited.first_name = edited.last_name = edited.company_name = false
   firstName.value = main.user?.first_name ?? ''
   lastName.value = main.user?.last_name ?? ''
+  companyName.value = savedCompanyName ?? readOnboardingCompanyName(main.user?.onboarding)
   const userId = main.user?.id
   const authGeneration = main.authGeneration
   if (!userId)
@@ -120,6 +133,8 @@ async function resetDraft() {
         const onboarding = { ...onboardingObject(current) }
         delete onboarding.profile_draft
         delete onboarding.profile_completed_at
+        if (savedCompanyName !== undefined)
+          onboarding.org_name = savedCompanyName
         return onboarding
       }, isCurrentUser)
       if (result.status !== 'persisted' || !isCurrentUser())
@@ -158,7 +173,7 @@ async function save() {
     draftGeneration++
     main.user = { ...main.user, ...data }
     // A saved profile has no unfinished draft. Use the same queue as wizard writes.
-    if (!await resetDraft())
+    if (!await resetDraft(props.initial ? companyName.value.trim() : undefined))
       throw new Error('onboarding_profile_draft_reset_failed')
     try {
       setUser(userId, {
@@ -218,6 +233,25 @@ defineExpose({ isValid, resetDraft, save })
         data-test="onboarding-last-name"
         class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 dark:border-white/20 dark:bg-slate-950/90 dark:text-white"
         @input="fieldInput('last_name', ($event.target as HTMLInputElement).value)"
+      >
+    </div>
+    <div v-if="initial" class="sm:col-span-2">
+      <label :for="`${inputId}-company-name`" class="text-sm font-medium text-slate-800 dark:text-slate-200">
+        {{ t('company-name') }}
+      </label>
+      <input
+        :id="`${inputId}-company-name`"
+        :value="companyName"
+        name="organization"
+        type="text"
+        autocomplete="organization"
+        minlength="3"
+        maxlength="80"
+        required
+        :disabled="disabled"
+        data-test="onboarding-company-name"
+        class="d-input mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 dark:border-white/20 dark:bg-slate-950/90 dark:text-white"
+        @input="fieldInput('company_name', ($event.target as HTMLInputElement).value)"
       >
     </div>
   </div>

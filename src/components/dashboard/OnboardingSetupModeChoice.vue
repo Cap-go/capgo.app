@@ -31,6 +31,7 @@ import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
+import { readOnboardingCompanyName } from '~/utils/onboardingProfile'
 import { aiGoalToIntent, aiOnboardingPathFor, defaultAiOrganizationName, readAiOnboardingGoal, withAiSetupOrganization, withOnboardingFields, withOnboardingSetupMode, withoutAiAgentProgress } from '~/utils/onboardingSetupMode'
 
 type SetupScreen = 'choice' | 'ai' | 'invite'
@@ -75,8 +76,11 @@ const billingAccount = ref<'ee' | 'us' | undefined>()
 const hasEditedOrgName = ref(false)
 const orgNameInput = ref('')
 const assistantIcons = developmentEnvironmentOptions.find(option => option.value === 'ai_assistant')?.icons ?? []
+const profileCompanyName = computed(() => props.newOrganization ? '' : readOnboardingCompanyName(main.user?.onboarding))
 
 const defaultOrgName = computed(() => {
+  if (profileCompanyName.value)
+    return profileCompanyName.value
   const name = defaultAiOrganizationName(
     main.user?.first_name,
     t('ai-onboarding-default-org-name-fallback'),
@@ -471,9 +475,17 @@ function onInviteSuccess(invite: { email: string }) {
             </div>
           </div>
 
-          <div>
+          <div v-if="profileCompanyName">
+            <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+              {{ t('company-name') }}
+            </p>
+            <p class="mt-2 break-words text-base text-slate-950 dark:text-white" data-test="onboarding-company-name-summary">
+              {{ orgName }}
+            </p>
+          </div>
+          <div v-else>
             <label for="ai-onboarding-org-name" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-              {{ t('ai-onboarding-org-name-label') }}
+              {{ t('company-name') }}
             </label>
             <input
               id="ai-onboarding-org-name"

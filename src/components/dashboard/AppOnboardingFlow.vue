@@ -87,7 +87,7 @@ import {
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { withOnboardingChannelOrigin } from '~/utils/onboardingChannelAnalytics'
 import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
-import { canEditInitialOnboardingName, consumeProfileOnboardingHandoff, initialProfileOnboardingProgressSteps, initialProfileOnboardingSteps, needsInitialOnboardingName, PROFILE_ONBOARDING_HANDOFF_KEY } from '~/utils/onboardingProfile'
+import { canEditInitialOnboardingName, consumeProfileOnboardingHandoff, initialProfileOnboardingProgressSteps, initialProfileOnboardingSteps, needsInitialOnboardingName, PROFILE_ONBOARDING_HANDOFF_KEY, readOnboardingCompanyName } from '~/utils/onboardingProfile'
 import {
   createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
@@ -263,8 +263,9 @@ const onboardingTelemetry = createOnboardingTelemetryIdentity({
   apiHost: config.apiHost,
 })
 const webNativeRecommendationDismissed = ref(false)
-const orgNameInput = ref('')
-const hasEditedOrgName = ref(false)
+const profileCompanyName = computed(() => initialProfileOnboarding.value ? readOnboardingCompanyName(main.user?.onboarding) : '')
+const orgNameInput = ref(profileCompanyName.value)
+const hasEditedOrgName = ref(!!profileCompanyName.value)
 const estimatedUsersIndex = ref<number | null>(null)
 const isStoreImportOpen = ref(false)
 const isAppIdAdvancedOpen = ref(false)
@@ -1524,7 +1525,7 @@ async function importOrganizationWebsite() {
     }
 
     websitePreview.value = data as OrganizationWebsitePreview
-    if (websitePreview.value.name) {
+    if (websitePreview.value.name && !profileCompanyName.value) {
       orgNameInput.value = websitePreview.value.name
       hasEditedOrgName.value = true
     }
@@ -3253,15 +3254,23 @@ defineExpose({
                 </p>
               </div>
 
-              <div>
+              <div v-if="profileCompanyName">
+                <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                  {{ t('company-name') }}
+                </p>
+                <p class="mt-2 break-words text-base text-slate-950 dark:text-white" data-test="onboarding-company-name-summary">
+                  {{ orgNameInput }}
+                </p>
+              </div>
+              <div v-else>
                 <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                  {{ t('organization-name') }}
+                  {{ t('company-name') }}
                 </label>
                 <input
                   id="onboarding-org-name-input"
                   v-model="orgNameInput"
                   type="text"
-                  :placeholder="t('organization-name')"
+                  :placeholder="t('company-name')"
                   data-test="onboarding-org-name"
                   autocomplete="organization"
                   autofocus

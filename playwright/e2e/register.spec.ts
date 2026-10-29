@@ -45,6 +45,7 @@ async function completeName(page: Page) {
   await continuePastProfileWelcome(page)
   await page.fill('[data-test="onboarding-first-name"]', 'Example')
   await page.fill('[data-test="onboarding-last-name"]', 'User')
+  await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
   await page.click('[data-test="onboarding-name-continue"]')
   await page.waitForURL(/\/onboarding\/app/)
 }
@@ -266,6 +267,8 @@ test.describe('Registration', () => {
     await page.fill('[data-test="onboarding-last-name"]', '   ')
     await expect(continueGoal).toBeDisabled()
     await page.fill('[data-test="onboarding-last-name"]', '  User  ')
+    await expect(continueGoal).toBeDisabled()
+    await page.getByRole('textbox', { name: 'Company name', exact: true }).fill(`  ${organizationName}  `)
     await expect(continueGoal).toBeEnabled()
 
     await routeConsoleQuery(page, 'users', async (route, query) => {
@@ -319,17 +322,17 @@ test.describe('Registration', () => {
 
     await expectProtectedRouteRedirect(page, '/apps', /\/onboarding\/app/, '[data-test="onboarding-logout"]')
 
-    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="onboarding-company-name-summary"]')).toHaveText(organizationName)
     await page.locator('[data-test="onboarding-estimated-users-option"]').nth(1).click()
     await returnFromOrganizationToAppName(page)
     await page.fill('[data-test="app-onboarding-name"]', editedAppName)
     await continueFromAppNameToOrganization(page)
-    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(editedAppName)
-    await page.fill('[data-test="onboarding-org-name"]', organizationName)
+    await expect(page.locator('[data-test="onboarding-company-name-summary"]')).toHaveText(organizationName)
     await returnFromOrganizationToAppName(page)
     await page.fill('[data-test="app-onboarding-name"]', finalAppName)
     await continueFromAppNameToOrganization(page)
-    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(organizationName)
+    await expect(page.locator('[data-test="onboarding-company-name-summary"]')).toHaveText(organizationName)
     const createOrganization = page.locator('[data-test="onboarding-create-org"]')
     await expect(createOrganization).toBeEnabled()
     await expect(page.locator('[data-test="onboarding-first-name"]')).toHaveCount(0)
@@ -370,6 +373,7 @@ test.describe('Registration', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
     await page.fill('[data-test="onboarding-first-name"]', 'Example')
     await page.fill('[data-test="onboarding-last-name"]', 'User')
+    await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
     await expect(page.locator('[data-test="onboarding-intent-ota"]')).toHaveCount(0)
     await page.click('[data-test="onboarding-name-continue"]')
     await page.click('[data-test="onboarding-intent-ota"]')
@@ -396,10 +400,11 @@ test.describe('Registration', () => {
         if (!query || query.name !== 'users' || consoleQueryMethod(query) !== 'PATCH')
           return false
         const draft = consoleQueryPayload(query)?.onboarding?.profile_draft
-        return draft?.first_name === 'Draft' && draft?.last_name === 'User'
+        return draft?.first_name === 'Draft' && draft?.last_name === 'User' && draft?.company_name === 'Example Company'
       })
       await page.fill('[data-test="onboarding-first-name"]', 'Draft')
       await page.fill('[data-test="onboarding-last-name"]', 'User')
+      await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
       await draftSaved
 
       const capgo = createClient(localSupabaseUrl, localSupabaseAnonKey)
@@ -412,7 +417,7 @@ test.describe('Registration', () => {
       expect(error).toBeNull()
       expect(profile?.first_name || '').toBe('')
       expect(profile?.last_name || '').toBe('')
-      expect(profile?.onboarding).toMatchObject({ profile_draft: { first_name: 'Draft', last_name: 'User' } })
+      expect(profile?.onboarding).toMatchObject({ profile_draft: { first_name: 'Draft', last_name: 'User', company_name: 'Example Company' } })
       await capgo.auth.signOut({ scope: 'local' })
 
       await page.reload()
@@ -423,6 +428,7 @@ test.describe('Registration', () => {
       await expect(page.locator('[data-test="onboarding-welcome-continue"]')).toHaveCount(0)
       await expect(firstName).toHaveValue('Draft')
       await expect(page.locator('[data-test="onboarding-last-name"]')).toHaveValue('User')
+      await expect(page.locator('[data-test="onboarding-company-name"]')).toHaveValue('Example Company')
       await expect(page.locator('[data-test="onboarding-name-continue"]')).toBeEnabled()
 
       await page.reload()
@@ -433,9 +439,11 @@ test.describe('Registration', () => {
       await expect(page.locator('[data-test="onboarding-name-step"]')).toBeVisible()
       await expect(firstName).toHaveValue('')
       await expect(page.locator('[data-test="onboarding-last-name"]')).toHaveValue('')
+      await expect(page.locator('[data-test="onboarding-company-name"]')).toHaveValue('')
       await expect(page.locator('[data-test="onboarding-name-continue"]')).toBeDisabled()
       await firstName.fill('Draft')
       await page.fill('[data-test="onboarding-last-name"]', 'User')
+      await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
       await page.click('[data-test="onboarding-name-continue"]')
       if (!mobile)
         await expectOnboardingGoal(page)
@@ -467,6 +475,7 @@ test.describe('Registration', () => {
     await page.fill('[data-test="onboarding-last-name"]', '   ')
     await expect(createOrganization).toBeDisabled()
     await page.fill('[data-test="onboarding-last-name"]', '  User  ')
+    await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
     await expect(createOrganization).toBeEnabled()
 
     const writes: string[] = []
@@ -479,8 +488,7 @@ test.describe('Registration', () => {
     })
     await createOrganization.click()
     await page.click('[data-test="onboarding-intent-ota"]')
-    await page.click('[data-test="onboarding-mode-name"]')
-    await page.fill('[data-test="onboarding-org-name"]', `Standalone Profile Org ${Date.now()}`)
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
     await page.locator('[data-test="onboarding-estimated-users-option"]').first().click()
     await page.click('[data-test="onboarding-create-org"]')
     await expect(page.locator('[data-test="onboarding-logo-action"]')).toBeVisible({ timeout: 60000 })
@@ -513,6 +521,7 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="onboarding-last-name"]')).toHaveValue('')
     await expect(page.locator('[data-test="onboarding-name-continue"]')).toBeDisabled()
     await page.fill('[data-test="onboarding-last-name"]', '  User  ')
+    await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
     await expect(page.locator('[data-test="onboarding-name-continue"]')).toBeEnabled()
     await page.click('[data-test="onboarding-name-continue"]')
     await expectOnboardingGoal(page)
@@ -522,10 +531,9 @@ test.describe('Registration', () => {
 
     await page.goto('/onboarding/organization?source=org-switcher')
     await page.click('[data-test="onboarding-intent-ota"]')
-    await page.click('[data-test="onboarding-mode-name"]')
     await expect(page.locator('[data-test="onboarding-first-name"]')).toHaveCount(0)
     await expect(page.locator('[data-test="onboarding-last-name"]')).toHaveCount(0)
-    await page.fill('[data-test="onboarding-org-name"]', `Profile Org ${Date.now()}`)
+    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveCount(0)
     await page.locator('[data-test="onboarding-estimated-users-option"]').first().click()
     const createOrganization = page.locator('[data-test="onboarding-create-org"]')
     await expect(createOrganization).toBeEnabled()
@@ -562,6 +570,7 @@ test.describe('Registration', () => {
     await loginToOnboarding(page, email, password)
     await expect(page.locator('[data-test="onboarding-last-name"]')).toHaveValue('Existing')
     await page.fill('[data-test="onboarding-first-name"]', '  Example  ')
+    await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
     await page.click('[data-test="onboarding-name-continue"]')
     await expectOnboardingGoal(page)
     await page.click('[data-test="onboarding-intent-ota"]')
@@ -607,7 +616,7 @@ test.describe('Registration', () => {
       }),
       page.click('[data-test="app-onboarding-continue"]'),
     ])
-    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
+    await expect(page.locator('[data-test="onboarding-company-name-summary"]')).toHaveText('Example Company')
 
     await page.click('[data-test="onboarding-logout"]')
     await page.waitForURL(/\/login\/?$/)
@@ -615,7 +624,7 @@ test.describe('Registration', () => {
 
     await expect(page.locator('[data-test="onboarding-resume-continue"]')).toBeVisible()
     await page.locator('[data-test="onboarding-resume-continue"]').click()
-    await expect(page.locator('[data-test="onboarding-org-name"]')).toHaveValue(appName)
+    await expect(page.locator('[data-test="onboarding-company-name-summary"]')).toHaveText('Example Company')
 
     await page.click('[data-test="onboarding-logout"]')
     await page.waitForURL(/\/login\/?$/)
@@ -623,6 +632,7 @@ test.describe('Registration', () => {
     await expect(page.locator('[data-test="onboarding-resume-restart"]')).toBeVisible()
     await page.locator('[data-test="onboarding-resume-restart"]').click()
     await continuePastProfileWelcome(page)
+    await page.fill('[data-test="onboarding-company-name"]', 'Example Company')
     await page.locator('[data-test="onboarding-name-continue"]').click()
     await expectOnboardingGoal(page)
     await expect(page.locator('[data-test="onboarding-intent-ota"]')).toBeVisible()
