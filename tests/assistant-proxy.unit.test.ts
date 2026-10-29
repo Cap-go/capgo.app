@@ -118,12 +118,21 @@ describe('authenticated assistant proxy', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('rejects non-JSON request bodies', async () => {
+  it.each(['text/plain', 'application/jsonp', 'application/json-seq', 'application/json-patch+json'])('rejects non-JSON request bodies (%s)', async (contentType) => {
     const response = await app.request('/private/assistant/responses', {
-      method: 'POST', headers: { ...headers, 'content-type': 'text/plain' }, body: JSON.stringify(payload),
+      method: 'POST', headers: { ...headers, 'content-type': contentType }, body: JSON.stringify(payload),
     })
     expect(response.status).toBe(415)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['application/json; charset=utf-8', 'Application/JSON ; charset=UTF-8'])('accepts JSON media types with parameters (%s)', async (contentType) => {
+    fetchMock.mockResolvedValueOnce(new Response('data: {}\n\n', { headers: { 'content-type': 'text/event-stream' } }))
+    const response = await app.request('/private/assistant/responses', {
+      method: 'POST', headers: { ...headers, 'content-type': contentType }, body: JSON.stringify(payload),
+    })
+    expect(response.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
   it.each([

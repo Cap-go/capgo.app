@@ -1,3 +1,5 @@
+import { tryDecodeURI } from 'hono/utils/url'
+
 /**
  * URL / route helpers for logs and alerts.
  *
@@ -26,5 +28,5 @@ export function isSecretBodyRoute(url: string): boolean {
   catch {
     // Relative URL / path: test it as is.
   }
-  return SECRET_BODY_ROUTE.test(pathname)
+  return SECRET_BODY_ROUTE.test(tryDecodeURI(pathname))
 }

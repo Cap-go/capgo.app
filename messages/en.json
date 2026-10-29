@@ -90,6 +90,7 @@
   "assistant-open": "Open Capgo Assistant",
   "assistant-placeholder": "Ask the assistant…",
   "assistant-send": "Send",
+  "assistant-session-required": "Your Capgo session has expired. Sign in to Capgo again, then retry. Your ChatGPT connection is unchanged.",
   "assistant-subtitle": "Ask where things are or what to do",
   "assistant-suggestion-devices": "Show me the devices of this app",
   "assistant-suggestion-latest": "Which bundle is live on production?",

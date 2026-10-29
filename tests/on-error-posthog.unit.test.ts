@@ -130,6 +130,10 @@ describe('onError PostHog capture', () => {
       'https://api.capgo.app/build/request',
       'https://api.capgo.app/private/assistant/responses',
       'https://example.com/functions/v1/private/assistant/responses',
+      'https://api.capgo.app/private/%61ssistant/responses',
+      'https://example.com/functions/v1/%70rivate/assistant/responses',
+      'https://api.capgo.app/private/%61ssistant/%ZZ',
+      'https://api.capgo.app/build/%63redentials/upload-url',
     ]
     for (const url of urls) {
       sendDiscordAlert500Mock.mockClear()

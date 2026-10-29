@@ -8,7 +8,6 @@ import { defaultApiHost } from '~/services/console'
  * the user's assistant API key and the normal public API rules (RBAC, rate limits).
  */
 
-export const OPENAI_API_URL = 'https://api.openai.com/v1'
 /** Preferred model; ChatGPT plans list their own catalog, so the first listed model is the fallback. */
 export const PREFERRED_MODEL = 'gpt-6.1-sol'
 const MAX_ROUNDS = 8
@@ -17,7 +16,7 @@ const MODEL_TIMEOUT_MS = 90_000
 const MCP_TIMEOUT_MS = 60_000
 
 export class AssistantUpstreamError extends Error {
-  constructor(readonly code: 'chatgpt_usage_limit' | 'chatgpt_not_eligible' | 'chatgpt_reconnect_required' | 'assistant_upstream_error' | 'assistant_key_invalid') {
+  constructor(readonly code: 'chatgpt_usage_limit' | 'chatgpt_not_eligible' | 'chatgpt_reconnect_required' | 'assistant_upstream_error' | 'assistant_key_invalid' | 'assistant_session_required') {
     super(code)
   }
 }
@@ -306,10 +305,10 @@ export async function resolveModel(accessToken: string): Promise<string> {
       const body = JSON.parse(response.text) as { models?: Array<{ slug?: string, visibility?: string }> }
       const listed = (body.models ?? []).filter(model => model.slug && model.visibility === 'list').map(model => model.slug!)
       slug = listed.includes(PREFERRED_MODEL) ? PREFERRED_MODEL : (listed[0] ?? PREFERRED_MODEL)
+      modelCache.set(accessToken, slug)
     }
   }
   catch {}
-  modelCache.set(accessToken, slug)
   return slug
 }
 
@@ -326,7 +325,9 @@ async function callModel(accessToken: string, prompt: string, input: InputItem[]
       timeoutMs: MODEL_TIMEOUT_MS,
     })
   }
-  catch {
+  catch (error) {
+    if (error instanceof Error && error.message === 'assistant_session_required')
+      throw new AssistantUpstreamError('assistant_session_required')
     throw new AssistantUpstreamError('assistant_upstream_error')
   }
   if (response.status < 200 || response.status >= 300) {

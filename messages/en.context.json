@@ -605,6 +605,7 @@
   "assistant-open": "Used in Capgo web console areas: components/assistant. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "assistant-placeholder": "Used in Capgo web console areas: components/assistant. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "assistant-send": "Used in Capgo web console areas: components/assistant. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "assistant-session-required": "Shown when the assistant proxy rejects the Capgo console session. Ask the user to sign in to Capgo, not reconnect ChatGPT; the saved ChatGPT connection is preserved.",
   "assistant-subtitle": "Used in Capgo web console areas: components/assistant. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "assistant-suggestion-devices": "Used in Capgo web console areas: components/assistant. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "assistant-suggestion-latest": "Used in Capgo web console areas: components/assistant. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

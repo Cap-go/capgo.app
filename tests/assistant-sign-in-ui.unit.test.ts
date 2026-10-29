@@ -9,6 +9,7 @@ import { createI18n } from 'vue-i18n'
 import en from '../messages/en.json'
 import AssistantChat from '../src/components/assistant/AssistantChat.vue'
 import DialogV2 from '../src/components/DialogV2.vue'
+import { AssistantUpstreamError } from '../src/services/assistantAgent'
 import { CHATGPT_REDIRECT_URI } from '../src/services/chatgptAuth'
 
 const mocks = vi.hoisted(() => ({
@@ -19,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   beginSignIn: vi.fn(async () => 'https://auth.openai.com/test-sign-in'),
   completeSignIn: vi.fn(),
   loadCredentials: vi.fn<() => ChatGptCredentials | null>(() => null),
+  getAccessToken: vi.fn(async () => 'test-access-token'),
+  signOut: vi.fn(),
+  runAssistant: vi.fn(),
   openWebView: vi.fn(async () => {}),
   closeWebView: vi.fn(async () => {}),
   browserListeners: new Map<string, (event: { url: string }) => void>(),
@@ -53,6 +57,12 @@ vi.mock('~/services/chatgptAuth', async (importOriginal) => ({
   beginChatGptSignIn: mocks.beginSignIn,
   completeChatGptSignIn: mocks.completeSignIn,
   loadChatGptCredentials: mocks.loadCredentials,
+  getChatGptAccessToken: mocks.getAccessToken,
+  signOutChatGpt: mocks.signOut,
+}))
+vi.mock('~/services/assistantAgent', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/services/assistantAgent')>(),
+  runAssistant: mocks.runAssistant,
 }))
 
 const route = reactive({ fullPath: '/dashboard', params: {} })
@@ -119,6 +129,23 @@ afterEach(() => {
 })
 
 describe('assistant ChatGPT callback instructions', () => {
+  it('keeps ChatGPT connected when the Capgo console session expires', async () => {
+    mocks.loadCredentials.mockReturnValue(savedCredentials)
+    mocks.loadKey.mockReturnValue('existing-assistant-key')
+    mocks.runAssistant.mockRejectedValueOnce(new AssistantUpstreamError('assistant_session_required'))
+    await mountAssistant()
+    const input = element<HTMLTextAreaElement>('[data-test="assistant-input"]')
+    input.value = 'Hello'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushUpdates()
+    input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(element('[data-test="assistant-messages"]').textContent).toContain(en['assistant-session-required']))
+    expect(mocks.signOut).not.toHaveBeenCalled()
+    expect(mocks.saveKey).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-test="assistant-chatgpt-button"]')).toBeNull()
+    expect(element('[data-test="assistant-chatgpt-indicator"]')).toBeDefined()
+  })
+
   it('explains the expected error page and callback before opening sign-in or creating a key', async () => {
     await requestSignIn()
     const instructions = element('[data-test="assistant-chatgpt-sign-in-instructions"]')

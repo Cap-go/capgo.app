@@ -27,7 +27,8 @@ async function proxy(c: Context<MiddlewareKeyVariables>, path: 'models' | 'respo
 
   let body: string | undefined
   if (path === 'responses') {
-    if (!c.req.header('content-type')?.toLowerCase().startsWith('application/json'))
+    const mediaType = c.req.header('content-type')?.split(';')[0].trim().toLowerCase()
+    if (mediaType !== 'application/json')
       throw quickError(415, 'invalid_content_type', 'Assistant requests require JSON')
     let payload: unknown
     try {

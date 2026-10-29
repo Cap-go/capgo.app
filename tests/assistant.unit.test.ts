@@ -12,7 +12,7 @@ vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test',
 
 const { tokenizeAssistantText } = await import('../src/utils/assistantText.ts')
 const { parseChatGptCallback } = await import('../src/utils/chatgptCallback.ts')
-const { needsConfirmation, parseResponseStream, responsesTools, runAssistant, sanitizeConsolePath } = await import('../src/services/assistantAgent.ts')
+const { needsConfirmation, parseResponseStream, PREFERRED_MODEL, resolveModel, responsesTools, runAssistant, sanitizeConsolePath } = await import('../src/services/assistantAgent.ts')
 const chatgpt = await import('../src/services/chatgptAuth.ts')
 const { assistantOpenAIRequest } = await import('../src/services/assistantHttp.ts')
 
@@ -244,9 +244,11 @@ describe('assistant loop in the browser', () => {
 
 describe('assistant model transport', () => {
   afterEach(() => {
+    vi.restoreAllMocks()
     nativePlatform.mockReturnValue(false)
     nativeRequest.mockReset()
-    getSession.mockClear()
+    getSession.mockReset()
+    getSession.mockResolvedValue({ data: { session: { access_token: 'console-session' } }, error: null })
     vi.unstubAllGlobals()
   })
 
@@ -256,6 +258,91 @@ describe('assistant model transport', () => {
     vi.stubGlobal('fetch', fetchMock)
     await expect(assistantOpenAIRequest('models', 'chatgpt-token', { method: 'GET' })).rejects.toThrow('assistant_session_required')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['invalid_jwt', 'no_jwt_apikey_or_subkey', 'not_authorized'])('distinguishes Capgo %s rejections from ChatGPT authentication errors', async (error) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/mcp')
+      ? Response.json({ result: { tools: [] } })
+      : Response.json({ error, message: 'Sign in to Capgo' }, { status: 401 })))
+    await expect(runAssistant({ ...base, accessToken: `capgo-session-error-${error}`, apikey: `auth-test-key-${error}`, messages: [{ role: 'user', content: 'Hello' }] }))
+      .rejects.toMatchObject({ code: 'assistant_session_required' })
+  })
+
+  it('preserves a missing console session error through the agent loop', async () => {
+    getSession.mockResolvedValue({ data: { session: null }, error: null })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ result: { tools: [] } })))
+    await expect(runAssistant({ ...base, accessToken: 'missing-capgo-session', apikey: 'missing-session-test-key', messages: [{ role: 'user', content: 'Hello' }] }))
+      .rejects.toMatchObject({ code: 'assistant_session_required' })
+  })
+
+  it.each([
+    JSON.stringify({ error: { code: 'invalid_api_key' } }),
+    'Unauthorized',
+  ])('keeps upstream 401s on the ChatGPT reconnect path (%s)', async (body) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/mcp')
+      ? Response.json({ result: { tools: [] } })
+      : new Response(body, { status: 401 })))
+    await expect(runAssistant({ ...base, apikey: `upstream-auth-test-key-${body}`, messages: [{ role: 'user', content: 'Hello' }] }))
+      .rejects.toMatchObject({ code: 'chatgpt_reconnect_required' })
+  })
+
+  it('bounds a stalled session refresh without sending ChatGPT credentials', async () => {
+    const controller = new AbortController()
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal)
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener')
+    getSession.mockReturnValueOnce(new Promise(() => {}))
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const request = assistantOpenAIRequest('responses', 'chatgpt-token', { method: 'POST', timeoutMs: 90_000 })
+    const assertion = expect(request).rejects.toMatchObject({ name: 'TimeoutError' })
+    controller.abort(new DOMException('Request timed out', 'TimeoutError'))
+    await assertion
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000)
+    expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('uses the original deadline for fetching and reading the response after session refresh', async () => {
+    const controller = new AbortController()
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal)
+    let finishRefresh!: (value: Awaited<ReturnType<typeof getSession>>) => void
+    getSession.mockReturnValueOnce(new Promise(resolve => { finishRefresh = resolve }))
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(init.signal).toBe(controller.signal)
+      return new Response(new ReadableStream({
+        start(stream) {
+          init.signal!.addEventListener('abort', () => stream.error(init.signal!.reason), { once: true })
+        },
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const request = assistantOpenAIRequest('responses', 'chatgpt-token', { method: 'POST', timeoutMs: 90_000 })
+    expect(fetchMock).not.toHaveBeenCalled()
+    finishRefresh({ data: { session: { access_token: 'refreshed-console-session' } }, error: null })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    const assertion = expect(request).rejects.toMatchObject({ name: 'TimeoutError' })
+    controller.abort(new DOMException('Request timed out', 'TimeoutError'))
+    await assertion
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000)
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headers: { authorization: 'Bearer refreshed-console-session', 'x-chatgpt-token': 'chatgpt-token' },
+    }))
+  })
+
+  it.each(['session', 'upstream', 'json'])('retries model discovery after a temporary %s failure', async (failure) => {
+    const accessToken = `model-discovery-recovery-${failure}`
+    if (failure === 'session')
+      getSession.mockResolvedValueOnce({ data: { session: null }, error: null })
+    const fetchMock = vi.fn(async () => Response.json({ models: [{ slug: 'available-model', visibility: 'list' }] }))
+    if (failure === 'upstream')
+      fetchMock.mockResolvedValueOnce(Response.json({ error: 'unavailable' }, { status: 503 }))
+    if (failure === 'json')
+      fetchMock.mockResolvedValueOnce(new Response('{'))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await resolveModel(accessToken)).toBe(PREFERRED_MODEL)
+    expect(await resolveModel(accessToken)).toBe('available-model')
+    expect(await resolveModel(accessToken)).toBe('available-model')
+    expect(fetchMock).toHaveBeenCalledTimes(failure === 'session' ? 1 : 2)
   })
 
   it('keeps native model requests direct without a console session lookup', async () => {

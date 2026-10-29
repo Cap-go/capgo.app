@@ -291,6 +291,10 @@ async function run(confirm?: { tool: string, arguments: Record<string, unknown> 
       entries.value.push({ id: nextId++, role: 'assistant', content: '', cards: [], actions: [], usageLimit: true })
       return
     }
+    if (error instanceof AssistantUpstreamError && error.code === 'assistant_session_required') {
+      entries.value.push({ id: nextId++, role: 'assistant', content: t('assistant-session-required'), cards: [], actions: [], error: true })
+      return
+    }
     console.error('Assistant request failed', error)
     const content = error instanceof AssistantUpstreamError && error.code === 'chatgpt_not_eligible' ? t('assistant-chatgpt-not-eligible') : t('assistant-error')
     entries.value.push({ id: nextId++, role: 'assistant', content, cards: [], actions: [], error: true })
