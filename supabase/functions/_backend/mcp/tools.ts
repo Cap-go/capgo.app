@@ -166,18 +166,22 @@ const uploadCommandTool: McpTool = {
   inputSchema: z.object({
     appId,
     projectDir: z.string().trim().min(1).optional().describe('Absolute local Capacitor app directory, not the MCP server directory or workspace root. The command changes into this folder before uploading.'),
+    cwd: z.string().trim().min(1).optional().describe('Alias for projectDir: the agent\'s absolute local app directory. The upload command changes into this folder; the hosted MCP cannot inspect local files.'),
     path: z.string().min(1).optional().describe('Folder of the web build to upload, e.g. dist. Defaults to webDir from capacitor.config.'),
     bundle: z.string().min(1).optional().describe('Bundle version, e.g. 1.2.3. Defaults to the package.json version.'),
     channel: z.string().min(1).optional().describe('Channel to link the uploaded bundle to'),
     comment: z.string().min(1).optional(),
     delta: z.boolean().optional().describe('Also upload the per-file manifest for delta updates'),
     deltaOnly: z.boolean().optional().describe('Upload only the delta manifest files, no full zip'),
+  }).refine(input => !input.projectDir || !input.cwd || input.projectDir === input.cwd, {
+    message: 'projectDir and cwd must select the same project directory. Pass only one when switching projects.',
   }) as unknown as z.ZodObject<z.ZodRawShape>,
   annotations: { title: 'Get bundle upload command', ...READ },
   run: async (input, ctx) => {
-    const { appId: id, projectDir, path, bundle, channel, comment, delta, deltaOnly } = input as {
+    const { appId: id, projectDir, cwd, path, bundle, channel, comment, delta, deltaOnly } = input as {
       appId: string
       projectDir?: string
+      cwd?: string
       path?: string
       bundle?: string
       channel?: string
@@ -217,8 +221,9 @@ const uploadCommandTool: McpTool = {
     else if (delta)
       args.push('--delta')
 
+    const directory = projectDir ?? cwd
     return textResult({
-      command: `${projectDir ? `cd ${shellQuote(projectDir)} && ` : ''}CAPGO_TOKEN=${shellQuote(ctx.apikey)} ${args.join(' ')}`,
+      command: `${directory ? `cd ${shellQuote(directory)} && ` : ''}CAPGO_TOKEN=${shellQuote(ctx.apikey)} ${args.join(' ')}`,
       apikeyExpiresAt: ctx.caller.apikeyExpiresAt,
       note: 'Run locally from the absolute Capacitor app directory after building its web assets, not from the MCP server directory or workspace root. The hosted MCP cannot inspect local files. The key needs upload rights on this app.',
     })

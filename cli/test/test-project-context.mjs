@@ -8,6 +8,7 @@ import AdmZip from 'adm-zip'
 import cliPackage from '../package.json'
 import { CapgoSDK } from '../src/sdk.ts'
 import { resolveDoctorProjectRoot } from '../src/app/info.ts'
+import { withCwd } from '../src/build/cwd.ts'
 import { patchNotifyAppReadyInSourceAsync } from '../src/recovery/notify-app-ready.ts'
 import { createProjectDirQueue } from '../src/mcp/project-dir.ts'
 import { findProjectRoot, findRoot, getAllPackagesDependencies, getBundleVersion, getDeclaredPackageVersionMap, getLocalDependencies, getPackageScripts, getPMAndCommand } from '../src/utils.ts'
@@ -112,7 +113,7 @@ try {
 
   mkdirSync(join(app, 'android'), { recursive: true })
   writeFileSync(join(app, 'android', 'settings.gradle'), 'rootProject.name = "ExampleMobile"\n')
-  const buildZip = await sdk.zipBuild({ platform: 'android', syncAndroidVersion: false, output: 'native.zip' })
+  const buildZip = await withCwd(app, () => sdk.zipBuild({ platform: 'android', syncAndroidVersion: false, output: 'native.zip' }))
   assert.equal(buildZip.success, true, buildZip.error)
   assert.equal(buildZip.data.app_id, 'com.example.mobile')
   assert.equal(JSON.parse(new AdmZip(buildZip.data.filename).readAsText('package.json')).version, '1.2.3')

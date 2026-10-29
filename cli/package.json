@@ -111,7 +111,7 @@
     "test:mcp-instructions": "bun test/test-mcp-instructions.mjs",
     "test:mcp-error-guidance": "bun test/test-mcp-error-guidance.mjs",
     "test:mcp-stdout-guard": "bun test/test-mcp-stdout-guard.mjs",
-    "test:mcp-project-dir": "bun test/test-mcp-project-dir.mjs && bun test/test-project-context.mjs",
+    "test:mcp-project-dir": "bun test/test-mcp-project-dir.mjs && bun test/test-cwd.mjs && bun test/test-project-context.mjs",
     "test:mcp-host-fields": "bun test/test-mcp-host-fields.mjs",
     "test:mcp-platform-select": "bun test/test-mcp-platform-select.mjs",
     "test:mcp-explain-scopes": "bun test/test-mcp-explain-scopes.mjs",

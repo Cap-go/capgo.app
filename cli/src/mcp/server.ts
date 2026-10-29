@@ -37,6 +37,7 @@ import {
   mcpRemoveOrganizationMemberInputSchema,
   mcpSetProjectDirInputSchema,
   mcpProjectDirOptionSchema,
+  mcpCwdOptionSchema,
   mcpUpdateAccountInputSchema,
   mcpUpdateOrganizationInputSchema,
 } from './tool-schemas'
@@ -47,11 +48,12 @@ import { clearSavedKey, getLoginState, loginSuccessMessage, logoutMessage, valid
 import { mcpLoginInputSchema, mcpLogoutInputSchema } from '../schemas/auth'
 import { findSavedKeySilent, formatError } from '../utils'
 import { registerOnboardingTools } from '../build/onboarding/mcp/onboarding-tools'
+import { withCwd } from '../build/cwd'
 import { registerLiveUpdateTools } from '../init/mcp/live-update-tools'
 import { withErrorGuidance, withGuidedErrorResults } from './error-guidance'
 import { buildServerInstructions } from './instructions'
 import { installMcpStdoutGuard } from './stdout-guard'
-import { createProjectDirQueue, describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, switchProjectDir } from './project-dir'
+import { createProjectDirQueue, describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, resolveProjectDirOptions } from './project-dir'
 
 /**
  * Format an SDK result error for MCP response.
@@ -120,6 +122,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // client's dir (often ~ or /), not the agent's workspace, so follow the client's MCP roots
   // once initialized and on roots/list_changed. capgo_set_project_dir overrides both.
   let projectDirSync: Promise<void> = Promise.resolve()
+  let selectedProjectDir = process.cwd()
   let projectDirPinned = false
   let projectDirError: unknown
   const runInProjectDir = createProjectDirQueue()
@@ -129,18 +132,20 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     try {
       const { roots } = server.server.getClientCapabilities()?.roots
         ? await server.server.listRoots(undefined, { timeout: 5000 })
-        : { roots: [{ uri: pathToFileURL(process.cwd()).href }] }
+        : { roots: [{ uri: pathToFileURL(selectedProjectDir).href }] }
       let dir: string | undefined
       try {
-        dir = await pickProjectDirFromRoots(roots)
+        dir = await pickProjectDirFromRoots(roots, selectedProjectDir)
         projectDirError = undefined
       }
       catch (error) {
         projectDirError = error
         return
       }
-      if (!projectDirPinned && dir && switchProjectDir(dir))
+      if (!projectDirPinned && dir && dir !== selectedProjectDir) {
+        selectedProjectDir = dir
         refreshSdkForProject()
+      }
     }
     catch {
       // Client advertised roots but did not answer: keep the spawn dir; the agent can
@@ -162,24 +167,27 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     const waitForProjectDir = async (...args: unknown[]) => {
       await projectDirSync
       return runInProjectDir(async () => {
-        const { projectDir, ...input } = (args[0] ?? {}) as { projectDir?: string }
-        if (projectDir) {
-          const dir = await resolveProjectDirInput(projectDir)
-          if (switchProjectDir(dir))
+        const { projectDir, cwd, ...input } = (args[0] ?? {}) as { projectDir?: string, cwd?: string }
+        const dir = await resolveProjectDirOptions({ projectDir, cwd }, selectedProjectDir)
+        if (dir) {
+          if (dir !== selectedProjectDir) {
+            selectedProjectDir = dir
             refreshSdkForProject()
+          }
           projectDirPinned = true
           projectDirError = undefined
         }
         if (projectDirError && name !== 'capgo_set_project_dir')
           throw projectDirError
-        return (handler as (...args: unknown[]) => unknown)(input, ...args.slice(1))
+        return withCwd(selectedProjectDir, async () => (handler as (...args: unknown[]) => unknown)(input, ...args.slice(1)))
       })
     }
     const guided = withErrorGuidance(String(name), waitForProjectDir)
     const tracked = withMcpToolTracking(String(name), guided)
+    const contextFields = { projectDir: mcpProjectDirOptionSchema, cwd: mcpCwdOptionSchema }
     const inputSchema = config.inputSchema instanceof z.ZodObject
-      ? config.inputSchema.safeExtend({ projectDir: mcpProjectDirOptionSchema })
-      : z.object({ ...config.inputSchema, projectDir: mcpProjectDirOptionSchema })
+      ? config.inputSchema.safeExtend(contextFields)
+      : z.object({ ...config.inputSchema, ...contextFields })
     return originalRegisterTool(name, { ...config, inputSchema } as unknown as typeof config, tracked as typeof handler)
   }
 
@@ -205,9 +213,11 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     },
     async ({ path }) => {
       try {
-        const dir = await resolveProjectDirInput(path)
-        if (switchProjectDir(dir))
+        const dir = await resolveProjectDirInput(path, selectedProjectDir)
+        if (dir !== selectedProjectDir) {
+          selectedProjectDir = dir
           refreshSdkForProject()
+        }
         projectDirPinned = true
         projectDirError = undefined
         return { content: [{ type: 'text' as const, text: describeProjectDir(dir) }] }

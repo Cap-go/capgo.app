@@ -275,17 +275,29 @@ describe('hosted MCP protocol', () => {
     )
   })
 
-  it.concurrent('runs a hosted upload command in the selected local app with shell-safe quoting', async () => {
+  it.concurrent.each(['projectDir', 'cwd'])('runs a hosted upload command in the selected %s with shell-safe quoting', async (directoryOption) => {
     const { ctx } = fakeContext({ app_id: 'com.example.app' })
     ctx.apikey = 'example-key'
     const response = await handleJsonRpcMessage({
       jsonrpc: '2.0', id: 90, method: 'tools/call',
-      params: { name: 'capgo_get_upload_command', arguments: { appId: 'com.example.app', projectDir: '/workspace/example\'s app/apps/mobile' } },
+      params: { name: 'capgo_get_upload_command', arguments: { appId: 'com.example.app', [directoryOption]: '/workspace/example\'s app/apps/mobile' } },
     }, ctx)
     const result = response?.result as { content: Array<{ text: string }> }
     expect(JSON.parse(result.content[0].text).command).toBe(
       `cd '/workspace/example'\\''s app/apps/mobile' && CAPGO_TOKEN='example-key' npx @capgo/cli@latest bundle upload 'com.example.app'`,
     )
+  })
+
+  it.concurrent('rejects conflicting hosted working directories before calling the API', async () => {
+    const { ctx, calls } = fakeContext({ app_id: 'com.example.app' })
+    ctx.apikey = 'example-key'
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0', id: 91, method: 'tools/call',
+      params: { name: 'capgo_get_upload_command', arguments: { appId: 'com.example.app', projectDir: '/workspace/first', cwd: '/workspace/second' } },
+    }, ctx)
+    expect(response?.result).toMatchObject({ isError: true })
+    expect(JSON.stringify(response)).toContain('projectDir and cwd must select the same project')
+    expect(calls).toHaveLength(0)
   })
 
   it.concurrent('refuses the upload command when the key cannot read the app', async () => {

@@ -12,7 +12,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
 console.log('🧪 Testing MCP project directory resolution...\n')
 
-const { pickProjectDirFromRoots, resolveProjectDirInput } = await import('../src/mcp/project-dir.ts')
+const { pickProjectDirFromRoots, resolveProjectDirInput, resolveProjectDirOptions } = await import('../src/mcp/project-dir.ts')
 
 let pass = 0
 let fail = 0
@@ -61,6 +61,13 @@ await test('workspace roots resolve the nested app whose package declares Capaci
 
 await test('setting a workspace directory resolves its only Capacitor app', async () => {
   eq(await resolveProjectDirInput(monorepo, spawnDir), mobile)
+})
+
+await test('projectDir and cwd resolve against the selected app, allowing equivalent app and workspace paths', async () => {
+  eq(await resolveProjectDirOptions({ projectDir: monorepo, cwd: mobile }, spawnDir), mobile)
+  eq(await resolveProjectDirOptions({ cwd: '../monorepo' }, spawnDir), mobile)
+  eq(await resolveProjectDirOptions({ cwd: pathToFileURL(mobile).href }, spawnDir), mobile)
+  eq(await resolveProjectDirOptions({}, spawnDir), undefined)
 })
 
 await test('pnpm workspace YAML discovers apps without package.json workspaces', async () => {
@@ -160,14 +167,61 @@ else {
     })
   })
 
-  await test('every registered tool accepts projectDir, including tools without inputs and both onboarding flows', async () => {
+  await test('every registered tool accepts projectDir and cwd, including tools without inputs and both onboarding flows', async () => {
     await withServer(undefined, async (client) => {
       const { tools } = await client.listTools()
       ok(tools.some(tool => tool.name === 'capgo_list_apps'), 'account tools must be registered')
       ok(tools.some(tool => tool.name === 'start_capgo_builder_onboarding'), 'builder tools must be registered')
       ok(tools.some(tool => tool.name === 'start_capgo_live_update_onboarding'), 'live-update tools must be registered')
-      for (const tool of tools)
+      for (const tool of tools) {
         eq(tool.inputSchema.properties.projectDir.type, 'string', `${tool.name} must accept projectDir`)
+        eq(tool.inputSchema.properties.cwd.type, 'string', `${tool.name} must accept cwd`)
+      }
+    })
+  })
+
+  await test('cwd selects and retains the app for relative paths and concurrent tools', async () => {
+    const cwdWorkspace = join(tmp, 'cwd-workspace')
+    const cwdMobile = join(cwdWorkspace, 'apps', 'mobile')
+    const cwdOther = join(tmp, 'cwd-other')
+    for (const directory of [cwdMobile, cwdOther]) {
+      mkdirSync(directory, { recursive: true })
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'example-cwd-app' }))
+      writeFileSync(join(directory, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.cwd', webDir: 'dist' }))
+    }
+    writeFileSync(join(cwdWorkspace, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }))
+    await withServer(undefined, async (client) => {
+      const generated = await client.callTool({ name: 'capgo_generate_encryption_keys', arguments: { cwd: cwdWorkspace, force: true } })
+      ok(!generated.isError, toolText(generated))
+      ok(existsSync(join(cwdMobile, '.capgo_key_v2')), 'cwd must select the workspace app')
+      eq(existsSync(join(spawnDir, '.capgo_key_v2')), false, 'spawn directory must not receive keys')
+
+      writeFileSync(join(cwdMobile, '.capgo'), 'example-mobile-key')
+      writeFileSync(join(cwdOther, '.capgo'), 'example-other-key')
+      const logout = await client.callTool({ name: 'capgo_logout', arguments: { scope: 'local' } })
+      ok(!logout.isError, toolText(logout))
+      eq(existsSync(join(cwdMobile, '.capgo')), false, 'cwd persists for subsequent calls')
+
+      const relative = await client.callTool({ name: 'capgo_set_project_dir', arguments: { path: '../../../cwd-other' } })
+      ok(!relative.isError, toolText(relative))
+      ok(toolText(relative).includes(`project directory: ${cwdOther} `), toolText(relative))
+      const conflicting = await client.callTool({ name: 'capgo_logout', arguments: { projectDir: cwdMobile, cwd: cwdOther, scope: 'local' } })
+      eq(conflicting.isError, true)
+      ok(toolText(conflicting).includes('projectDir and cwd must select the same project'), toolText(conflicting))
+      eq(readFileSync(join(cwdOther, '.capgo'), 'utf8'), 'example-other-key')
+      ok((await currentDir(client)).includes(`project directory: ${cwdOther} `), 'conflicts must not change the selection')
+
+      const results = await Promise.all([
+        client.callTool({ name: 'capgo_generate_encryption_keys', arguments: { cwd: cwdWorkspace, force: true } }),
+        client.callTool({ name: 'capgo_generate_encryption_keys', arguments: { cwd: cwdOther, force: true } }),
+      ])
+      for (const result of results)
+        ok(!result.isError, toolText(result))
+      for (const directory of [cwdMobile, cwdOther]) {
+        const publicKey = readFileSync(join(directory, '.capgo_key_v2.pub'), 'utf8')
+        eq(JSON.parse(readFileSync(join(directory, 'capacitor.config.json'), 'utf8')).plugins.CapacitorUpdater.publicKey, publicKey)
+      }
+      ok((await currentDir(client)).includes(`project directory: ${cwdOther} `), 'concurrent calls retain the last selection')
     })
   })
 

@@ -99,13 +99,12 @@ export async function resolveProjectDirInput(input: string, currentDir = process
   return candidates[0]?.dir ?? dir
 }
 
-/** Switch the server's working directory. Returns true when it actually changed. */
-export function switchProjectDir(dir: string): boolean {
-  const target = resolve(dir)
-  if (target === process.cwd())
-    return false
-  process.chdir(target)
-  return true
+export async function resolveProjectDirOptions(input: { projectDir?: string, cwd?: string }, currentDir: string): Promise<string | undefined> {
+  const projectDir = input.projectDir === undefined ? undefined : await resolveProjectDirInput(input.projectDir, currentDir)
+  const workingDir = input.cwd === undefined ? undefined : await resolveProjectDirInput(input.cwd, currentDir)
+  if (projectDir && workingDir && projectDir !== workingDir)
+    throw new Error('projectDir and cwd must select the same project directory. Pass only one when switching projects.')
+  return projectDir ?? workingDir
 }
 
 export function createProjectDirQueue() {
