@@ -7,9 +7,14 @@ import { defaultApiHost, useConsole } from '../../services/console'
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
 const capgo = useConsole()
-const pending = ref<'ios' | 'android' | 'stop' | ''>('')
-const sessionId = ref('')
-const url = ref('')
+interface RunningSimulator {
+  id: string
+  url: string
+}
+
+const pending = ref<'ios' | 'android' | ''>('')
+const stoppingId = ref('')
+const sessions = ref<RunningSimulator[]>([])
 const error = ref('')
 
 async function sessionToken() {
@@ -22,8 +27,6 @@ async function sessionToken() {
 
 async function start(platform: 'ios' | 'android') {
   error.value = ''
-  url.value = ''
-  sessionId.value = ''
   pending.value = platform
   try {
     const response = await fetch(`${defaultApiHost}/private/simulator/`, {
@@ -37,8 +40,9 @@ async function start(platform: 'ios' | 'android') {
     const payload = await response.json().catch(() => undefined) as { data?: { id?: string, url?: string }, message?: string, error?: string } | undefined
     if (!response.ok)
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
-    sessionId.value = payload?.data?.id || ''
-    url.value = payload?.data?.url || ''
+    const id = payload?.data?.id
+    if (id)
+      sessions.value = [...sessions.value, { id, url: payload.data?.url || '' }]
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : t('simulator-did-not-start')
@@ -48,13 +52,11 @@ async function start(platform: 'ios' | 'android') {
   }
 }
 
-async function stop() {
-  if (!sessionId.value)
-    return
+async function stop(id: string) {
   error.value = ''
-  pending.value = 'stop'
+  stoppingId.value = id
   try {
-    const response = await fetch(`${defaultApiHost}/private/simulator/${sessionId.value}/stop`, {
+    const response = await fetch(`${defaultApiHost}/private/simulator/${id}/stop`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -65,14 +67,13 @@ async function stop() {
     const payload = await response.json().catch(() => undefined) as { message?: string, error?: string } | undefined
     if (!response.ok)
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-stop'))
-    sessionId.value = ''
-    url.value = ''
+    sessions.value = sessions.value.filter(session => session.id !== id)
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : t('simulator-did-not-stop')
   }
   finally {
-    pending.value = ''
+    stoppingId.value = ''
   }
 }
 </script>
@@ -89,19 +90,21 @@ async function stop() {
       </p>
     </div>
     <div class="flex flex-wrap gap-2 mt-4">
-      <button type="button" class="text-white d-btn d-btn-primary" :disabled="pending !== ''" @click="start('ios')">
+      <button type="button" class="text-white d-btn d-btn-primary" :disabled="pending !== '' || stoppingId !== ''" @click="start('ios')">
         {{ pending === 'ios' ? t('simulator-starting') : t('start-ios-simulator') }}
       </button>
-      <button type="button" class="d-btn" :disabled="pending !== ''" @click="start('android')">
+      <button type="button" class="d-btn" :disabled="pending !== '' || stoppingId !== ''" @click="start('android')">
         {{ pending === 'android' ? t('simulator-starting') : t('start-android-simulator') }}
       </button>
-      <button v-if="sessionId" type="button" class="d-btn" :disabled="pending !== ''" @click="stop()">
-        {{ pending === 'stop' ? t('simulator-stopping') : t('stop-simulator') }}
+    </div>
+    <div v-for="session in sessions" :key="session.id" class="flex flex-wrap gap-3 items-center mt-3">
+      <a v-if="session.url" class="text-sm text-blue-600 underline dark:text-blue-400" :href="session.url" target="_blank" rel="noreferrer">
+        {{ session.url }}
+      </a>
+      <button type="button" class="d-btn" :disabled="pending !== '' || stoppingId !== ''" @click="stop(session.id)">
+        {{ stoppingId === session.id ? t('simulator-stopping') : t('stop-simulator') }}
       </button>
     </div>
-    <a v-if="url" class="inline-block mt-3 text-sm text-blue-600 underline dark:text-blue-400" :href="url" target="_blank" rel="noreferrer">
-      {{ url }}
-    </a>
     <p v-if="error" class="mt-3 text-sm text-red-600 dark:text-red-400">
       {{ error }}
     </p>
