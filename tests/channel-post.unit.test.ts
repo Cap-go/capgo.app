@@ -184,6 +184,56 @@ describe('public channel post', () => {
     configureTransaction()
   })
 
+  it('rechecks update permission after a concurrent channel creation', async () => {
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const conflict = Object.assign(new Error('duplicate channel'), { code: '23505', constraint: 'unique_name_app_id' })
+    updateOrCreateChannel.mockRejectedValueOnce(conflict)
+    const initialLookup = buildAdminChain()
+    const existingLookup = buildAdminChain({ existingChannelId: 42 })
+    let channelLookups = 0
+    adminQuery.mockImplementation((text: string, values: unknown[]) => {
+      if (text.includes('FROM public.channels'))
+        channelLookups++
+      return channelLookups > 1 ? existingLookup(text, values) : initialLookup(text, values)
+    })
+    const c = context()
+    await post(c, { app_id: 'com.test.channel-race', channel: 'preview' }, apiKey())
+    expect(checkPermission).toHaveBeenCalledWith(c, 'channel.update_settings', { appId: 'com.test.channel-race', channelId: 42 })
+    expect(updateOrCreateChannel).toHaveBeenLastCalledWith(c, expect.anything(), 42, true)
+  })
+
+  it('rejects the concurrent update when the key has only creation permission', async () => {
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    updateOrCreateChannel.mockRejectedValueOnce(Object.assign(new Error('duplicate channel'), { code: '23505', constraint: 'unique_name_app_id' }))
+    const initialLookup = buildAdminChain()
+    const existingLookup = buildAdminChain({ existingChannelId: 42 })
+    let channelLookups = 0
+    adminQuery.mockImplementation((text: string, values: unknown[]) => {
+      if (text.includes('FROM public.channels'))
+        channelLookups++
+      return channelLookups > 1 ? existingLookup(text, values) : initialLookup(text, values)
+    })
+    checkPermission.mockImplementation(async (_c: unknown, permission: string) => permission !== 'channel.update_settings')
+    await expect(post(context(), { app_id: 'com.test.channel-race', channel: 'preview' }, apiKey())).rejects.toThrow('You can\'t access this app')
+    expect(updateOrCreateChannel).toHaveBeenCalledOnce()
+  })
+
+  it('does not insert when the channel lookup fails', async () => {
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const failure = new Error('lookup unavailable')
+    adminQuery.mockRejectedValueOnce(failure)
+    await expect(post(context(), { app_id: 'com.test.channel-lookup', channel: 'preview' }, apiKey())).rejects.toBe(failure)
+    expect(updateOrCreateChannel).not.toHaveBeenCalled()
+  })
+
+  it('retries a channel conflict only once', async () => {
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const conflict = Object.assign(new Error('duplicate channel'), { code: '23505', constraint: 'unique_name_app_id' })
+    updateOrCreateChannel.mockRejectedValueOnce(conflict).mockRejectedValueOnce(conflict)
+    await expect(post(context(), { app_id: 'com.test.channel-race', channel: 'preview' }, apiKey())).rejects.toBe(conflict)
+    expect(updateOrCreateChannel).toHaveBeenCalledTimes(2)
+  })
+
   it('defaults legacy public mobile channel writes to electron false', async () => {
     const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
     const c = context()

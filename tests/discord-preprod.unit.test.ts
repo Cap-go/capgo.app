@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { sendDiscordAlert as sendPluginDiscordAlert } from '../supabase/functions/_backend/plugin_runtime/utils/discord.ts'
+import { sendDiscordAlert as sendPluginDiscordAlert, sendDiscordAlert500 as sendPluginDiscordAlert500 } from '../supabase/functions/_backend/plugin_runtime/utils/discord.ts'
 import { sendDiscordAlert, sendDiscordAlert500 } from '../supabase/functions/_backend/utils/discord.ts'
 
 const WEBHOOK_URL = 'https://discord.test/webhook'
@@ -9,6 +9,24 @@ describe('assistant credential privacy in alerts', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
+  })
+
+  it.each([sendDiscordAlert500, sendPluginDiscordAlert500])('masks API key aliases in alert headers and JSON bodies', async (send) => {
+    vi.stubEnv('DISCORD_ALERT', WEBHOOK_URL)
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const key = 'fake-api-key-for-alert-test-1234'
+    const app = new Hono()
+    app.get('/', async (c) => {
+      await send(c, 'api', JSON.stringify({ capgkey: key, 'x-api-key': key }), new Error('failure'))
+      return c.json({ status: 'ok' })
+    })
+    await app.request('/', { headers: { capgkey: key, 'x-api-key': key, authorization: key } })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const payload = String(fetchMock.mock.calls[0][1].body)
+    expect(payload).not.toContain(key)
+    expect(payload).toContain('fake...1234')
   })
 
   it('removes the entire ChatGPT token header', async () => {
