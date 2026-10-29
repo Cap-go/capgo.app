@@ -90,7 +90,7 @@ describe('native build concurrency limits', () => {
     expect(client.query).toHaveBeenCalledWith('BEGIN')
     expect(client.query).toHaveBeenCalledWith('COMMIT')
     expect(client.query).not.toHaveBeenCalledWith('ROLLBACK')
-    expect(client.release).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledTimes(2)
     expect(mockCloseClient).toHaveBeenCalledWith(context, pool)
     expect(mockSendEventToTracking).not.toHaveBeenCalled()
   })
@@ -119,7 +119,7 @@ describe('native build concurrency limits', () => {
 
     expect(client.query).toHaveBeenCalledWith('ROLLBACK')
     expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE public.build_requests'), expect.anything())
-    expect(client.release).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledTimes(2)
     expect(mockSendEventToTracking).toHaveBeenCalledWith(context, expect.objectContaining({
       event: 'Native build concurrency limit reached',
       sentToBento: true,
@@ -239,6 +239,9 @@ function mockPgClient(options: {
       if (query === 'BEGIN' || query === 'COMMIT' || query === 'ROLLBACK')
         return { rowCount: null, rows: [] }
 
+      if (query.includes('expire_simulator_sessions'))
+        return { rowCount: 1, rows: [{ expire_simulator_sessions: 0 }] }
+
       if (query.includes('SELECT id FROM public.orgs')) {
         expect(params).toEqual(['91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57'])
         return { rowCount: 1, rows: [{ id: '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57' }] }
@@ -257,6 +260,7 @@ function mockPgClient(options: {
 
       if (query.includes('AS active_count')) {
         expect(query).toContain('public.simulator_sessions')
+        expect(query).toContain('max_duration_minutes')
         expect(query).toContain('public.build_requests')
         if (mode === 'assert') {
           expect(params).toEqual([

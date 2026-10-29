@@ -187,9 +187,40 @@ export function occupiedBuilderSlotsSql(excludeBuildRequestId?: string): string 
   return `
     SELECT (
       (SELECT COUNT(*) FROM public.build_requests WHERE ${buildWhere})
-      + (SELECT COUNT(*) FROM public.simulator_sessions WHERE owner_org = $1 AND status = ANY(ARRAY['new','queued','starting','in-progress']::text[]))
+      + (SELECT COUNT(*) FROM public.simulator_sessions WHERE owner_org = $1 AND status = ANY(ARRAY['new','queued','starting','in-progress']::text[]) AND COALESCE(started_at, created_at) > now() - make_interval(mins => max_duration_minutes))
     )::text AS active_count
   `
+}
+
+export async function expireSimulatorSessions(c: Context, orgId: string): Promise<void> {
+  let pgPool: Awaited<ReturnType<typeof getPgClient>> | null = null
+  let client: PgClient | null = null
+  try {
+    pgPool = await getPgClient(c)
+    client = await checkoutPgClient(pgPool) as PgClient
+    await beginWriteTransaction(client)
+    await client.query('SELECT public.expire_simulator_sessions($1::uuid)', [orgId])
+    await client.query('COMMIT')
+  }
+  catch (error) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch {
+        // Preserve the original error.
+      }
+    }
+    if (error instanceof HTTPException)
+      throw error
+    logPgError(c, 'expire_simulator_sessions', error)
+    throw simpleError('internal_error', 'Unable to expire simulator sessions', { error: (error as Error)?.message })
+  }
+  finally {
+    releasePgClient(pgPool, client)
+    if (pgPool)
+      await closeClient(c, pgPool)
+  }
 }
 
 async function countActiveNativeBuilds(client: PgClient, orgId: string, excludeBuildRequestId?: string): Promise<number> {
@@ -216,6 +247,7 @@ export async function assertNativeBuildConcurrencyAvailable(
   let client: PgClient | null = null
 
   try {
+    await expireSimulatorSessions(c, input.orgId)
     pgPool = await getPgClient(c, true)
     client = await checkoutPgClient(pgPool) as PgClient
     const { planName, limit } = await readPlanConcurrencyLimit(client, input.orgId)
@@ -253,6 +285,7 @@ export async function reserveNativeBuildSlot(
   let client: PgClient | null = null
 
   try {
+    await expireSimulatorSessions(c, input.orgId)
     pgPool = await getPgClient(c)
     client = await checkoutPgClient(pgPool) as PgClient
     await beginWriteTransaction(client)
@@ -364,6 +397,7 @@ export async function reserveSimulatorSlot(
   let client: PgClient | null = null
 
   try {
+    await expireSimulatorSessions(c, input.orgId)
     pgPool = await getPgClient(c)
     client = await checkoutPgClient(pgPool) as PgClient
     await beginWriteTransaction(client)

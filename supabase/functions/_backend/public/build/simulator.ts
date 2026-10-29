@@ -126,7 +126,27 @@ async function markSession(c: Context, id: string, status: 'in-progress' | 'stop
   `, [id, status, extra?.url ?? null, extra?.emulatorId ?? null])
 }
 
-async function postEmulator(origin: string, accessKey: string, path: string, method: string, body?: unknown): Promise<EmulatorSessionData | undefined> {
+class SimulatorHostError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'SimulatorHostError'
+  }
+}
+
+export function simulatorHostStopIsFinal(status: number): boolean {
+  return status === 200 || status === 204 || status === 404 || status === 409
+}
+
+export function canFinishSimulatorStop(input: { remoteStatus: number | null, billingRecorded: boolean, seconds: number }): boolean {
+  const remoteDone = input.remoteStatus === null || simulatorHostStopIsFinal(input.remoteStatus)
+  if (!remoteDone)
+    return false
+  if (input.seconds > 0 && !input.billingRecorded)
+    return false
+  return true
+}
+
+async function postEmulator(origin: string, accessKey: string, path: string, method: string, body?: unknown): Promise<{ status: number, data?: EmulatorSessionData }> {
   const response = await fetch(`${origin}${path}`, {
     method,
     headers: {
@@ -137,8 +157,8 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
   })
   const payload = await response.json().catch(() => undefined) as { data?: EmulatorSessionData, error?: string } | undefined
   if (!response.ok)
-    throw new Error(payload?.error || `Simulator request failed (${response.status})`)
-  return payload?.data
+    throw new SimulatorHostError(payload?.error || `Simulator request failed (${response.status})`, response.status)
+  return { status: response.status, data: payload?.data }
 }
 
 function simulatorConfig(c: Context) {
@@ -174,7 +194,8 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
   let emulatorId = ''
   try {
     const { accessKey, origin } = simulatorConfig(c)
-    const device = await postEmulator(origin, accessKey, '/v2/device-run-sessions', 'POST', emulatorSessionCreateBody({ appId, platform, orgId, name }))
+    const created = await postEmulator(origin, accessKey, '/v2/device-run-sessions', 'POST', emulatorSessionCreateBody({ appId, platform, orgId, name }))
+    const device = created.data
     if (!device?.id || !device.url)
       throw new Error('Simulator did not return a session URL.')
     emulatorId = device.id
@@ -233,17 +254,31 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
     return c.json({ data: { id: row.id, url: row.url, status: row.status, platform: row.platform, kind: 'simulator' } })
   }
   const { accessKey, origin } = simulatorConfig(c)
+  let remoteStatus: number | null = null
   if (row.emulator_id) {
     try {
-      await postEmulator(origin, accessKey, `/v2/device-run-sessions/${row.emulator_id}/stop`, 'POST', {})
+      const stopped = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${row.emulator_id}/stop`, 'POST', {})
+      remoteStatus = stopped.status
     }
     catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop failed', sessionId, error })
+      if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status)) {
+        remoteStatus = error.status
+      }
+      else {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop failed', sessionId, error })
+        throw quickError(502, 'simulator_stop_failed', 'The simulator is still running. Retry stop.', { id: row.id }, error, { alert: false })
+      }
     }
   }
-  await markSession(c, row.id, 'stopped')
   const seconds = simulatorBillableSeconds(row.started_at)
-  if (seconds > 0)
-    await recordBuildTime(c, orgId, row.requested_by || userId, row.id, row.platform, seconds, Date.now(), appId)
-  return c.json({ data: { id: row.id, url: row.url, status: 'stopped', platform: row.platform, kind: 'simulator', build_time_seconds: seconds } })
+  const platform = row.platform === 'android' ? 'android' : 'ios'
+  let billingRecorded = seconds === 0
+  if (seconds > 0) {
+    const billingId = await recordBuildTime(c, orgId, row.requested_by || userId, row.id, platform, seconds, Date.now(), appId)
+    billingRecorded = billingId !== null
+  }
+  if (!canFinishSimulatorStop({ remoteStatus, billingRecorded, seconds }))
+    throw quickError(503, 'simulator_billing_failed', 'Build minutes were not recorded. Retry stop.', { id: row.id }, undefined, { alert: false })
+  await markSession(c, row.id, 'stopped')
+  return c.json({ data: { id: row.id, url: row.url, status: 'stopped', platform, kind: 'simulator', build_time_seconds: seconds } })
 }
