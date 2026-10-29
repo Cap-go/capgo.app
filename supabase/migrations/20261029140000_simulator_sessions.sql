@@ -28,6 +28,10 @@ CREATE INDEX simulator_sessions_owner_active_idx
   ON public.simulator_sessions (owner_org)
   WHERE status IN ('new', 'queued', 'starting', 'in-progress');
 
+CREATE INDEX simulator_sessions_app_active_idx
+  ON public.simulator_sessions (app_id)
+  WHERE status IN ('new', 'queued', 'starting', 'in-progress');
+
 ALTER TABLE public.simulator_sessions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Deny all direct access" ON public.simulator_sessions AS RESTRICTIVE USING (false) WITH CHECK (false);
 
@@ -112,6 +116,12 @@ DECLARE
   session_row record;
   elapsed bigint;
 BEGIN
+  -- Organization deletion cascades apps, then this trigger. The org row is already
+  -- gone, and build_logs are removed with it, so settlement would fail the delete.
+  IF public.is_org_delete_cascade(OLD.owner_org) THEN
+    RETURN OLD;
+  END IF;
+
   FOR session_row IN
     SELECT id, owner_org, platform, requested_by, max_duration_minutes,
            COALESCE(started_at, created_at) AS opened_at,

@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(9);
+SELECT plan(12);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -128,6 +128,85 @@ SELECT is(
   ),
   2,
   'deleting the app keeps the simulator minutes'
+);
+
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND tablename = 'simulator_sessions'
+      AND indexname = 'simulator_sessions_app_active_idx'
+  ),
+  'active simulator sessions are indexed by app'
+);
+
+CREATE FUNCTION pg_temp.simulator_settlement_plan_uses_app_index()
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  line text;
+BEGIN
+  PERFORM set_config('enable_seqscan', 'off', true);
+  FOR line IN EXECUTE $q$
+    EXPLAIN
+    SELECT id
+    FROM public.simulator_sessions
+    WHERE app_id = 'com.test.simulator.session'
+      AND status IN ('new', 'queued', 'starting', 'in-progress')
+  $q$
+  LOOP
+    IF line LIKE '%simulator_sessions_app_active_idx%' THEN
+      RETURN true;
+    END IF;
+  END LOOP;
+  RETURN false;
+END;
+$$;
+
+SELECT ok(
+  pg_temp.simulator_settlement_plan_uses_app_index(),
+  'app deletion looks up active sessions through the app index'
+);
+
+INSERT INTO public.orgs (id, created_by, management_email, name)
+VALUES (
+  '99000000-0000-4000-8000-000000000099',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  'sim-delete@test.local',
+  'Simulator delete org'
+);
+
+INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
+VALUES (
+  '99000000-0000-4000-8000-000000000099',
+  'com.test.simulator.delete',
+  '',
+  'Simulator delete',
+  '6aa76066-55ef-4238-ade6-0b32334a4097'
+);
+
+INSERT INTO public.simulator_sessions (
+  id, owner_org, app_id, platform, status, requested_by, max_duration_minutes, started_at
+)
+VALUES (
+  '99000000-0000-4000-8000-000000000003',
+  '99000000-0000-4000-8000-000000000099',
+  'com.test.simulator.delete',
+  'android',
+  'in-progress',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  40,
+  now() - interval '5 minutes'
+);
+
+DELETE FROM public.orgs WHERE id = '99000000-0000-4000-8000-000000000099';
+
+SELECT is(
+  (SELECT count(*)::integer FROM public.orgs WHERE id = '99000000-0000-4000-8000-000000000099'),
+  0,
+  'deleting an organization with an active simulator succeeds'
 );
 
 SELECT * FROM finish();
