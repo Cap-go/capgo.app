@@ -336,7 +336,7 @@ async function createAndPromoteChannelInTransaction(
         // Preserve the original database error when rollback itself fails.
       }
     }
-    if (error instanceof HTTPException)
+    if (error instanceof HTTPException || isChannelCreationConflict(error))
       throw error
     throwIfChannelUpdatePackageMismatch(error)
     logPgError(c, 'create_and_promote_channel', error)
@@ -346,6 +346,12 @@ async function createAndPromoteChannelInTransaction(
     releasePgClient(pgClient, dbClient)
     await closeClient(c, pgClient)
   }
+}
+
+function isChannelCreationConflict(error: unknown): boolean {
+  return error instanceof Error
+    && 'code' in error && error.code === '23505'
+    && 'constraint' in error && error.constraint === 'unique_name_app_id'
 }
 
 export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
@@ -358,7 +364,16 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   }
   const pg = await getPgClient(c)
   try {
-    return await upsertChannel(c, pg, body, apikey)
+    try {
+      return await upsertChannel(c, pg, body, apikey)
+    }
+    catch (error) {
+      if (!isChannelCreationConflict(error))
+        throw error
+      // A concurrent creator won. Re-read and authorize the existing channel
+      // before applying settings; creation permission alone cannot authorize updates.
+      return await upsertChannel(c, pg, body, apikey)
+    }
   }
   finally {
     closeClient(c, pg)
@@ -366,14 +381,13 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
 }
 
 async function upsertChannel(c: Context<MiddlewareKeyVariables>, pg: PgClient, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
-  // maybeSingle() without an error check: a failed or ambiguous lookup reads as no channel.
   const existingChannel = await queryJson<ExistingChannel>(
     pg,
     'SELECT id, version, rollout_version, public, paused_at FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
     [body.app_id, body.channel],
   ).then(rows => rows.length === 1 ? rows[0] : null).catch((error: unknown) => {
     logPgError(c, 'channel_post_existing_channel', error)
-    return null
+    throw error
   })
 
   if (existingChannel) {
