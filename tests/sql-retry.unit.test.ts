@@ -21,6 +21,13 @@ describe('retryTransientSqlError', () => {
     expect(run).toHaveBeenCalledTimes(SQL_MAX_ATTEMPTS)
   })
 
+  it('waits longer when Postgres has no free connection', async () => {
+    const run = vi.fn().mockRejectedValue(pgError('53300'))
+
+    await expect(retryTransientSqlError(run, noWait)).rejects.toThrow('pg 53300')
+    expect(run).toHaveBeenCalledTimes(8)
+  })
+
   it('does not retry other errors', async () => {
     const run = vi.fn().mockRejectedValue(pgError('23505'))
 
