@@ -222,8 +222,9 @@ const uploadCommandTool: McpTool = {
       args.push('--delta')
 
     const directory = projectDir ?? cwd
+    const directoryPrefix = directory ? `cd ${shellQuote(directory)} && ` : ''
     return textResult({
-      command: `${directory ? `cd ${shellQuote(directory)} && ` : ''}CAPGO_TOKEN=${shellQuote(ctx.apikey)} ${args.join(' ')}`,
+      command: `${directoryPrefix}CAPGO_TOKEN=${shellQuote(ctx.apikey)} ${args.join(' ')}`,
       apikeyExpiresAt: ctx.caller.apikeyExpiresAt,
       note: 'Run locally from the absolute Capacitor app directory after building its web assets, not from the MCP server directory or workspace root. The hosted MCP cannot inspect local files. The key needs upload rights on this app.',
     })
