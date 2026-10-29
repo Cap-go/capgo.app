@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import colors from 'tailwindcss/colors'
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ArrowDownOnSquareIcon from '~icons/heroicons/arrow-down-on-square'
 import GlobeAltIcon from '~icons/heroicons/globe-alt'
 import XCircleIcon from '~icons/heroicons/x-circle'
 import UpdateStatsChart from '~/components/dashboard/UpdateStatsChart.vue'
+import { useDashboardRequestState } from '~/composables/useDashboardRequestState'
 import { useConsole } from '~/services/console'
 import { addUtcDays, formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
 import { calculateDemoEvolution, calculateDemoTotal, generateDemoUpdateStatsData } from '~/services/demoChartData'
@@ -59,13 +60,13 @@ const updateData = ref<(number | undefined)[]>([])
 const updateDataByApp = ref<{ [appId: string]: (number | undefined)[] }>({})
 const updateDataByAction = ref<{ [action: string]: (number | undefined)[] }>({})
 const appNames = ref<{ [appId: string]: string }>({})
-const isLoading = ref(true)
+const dataScope = computed(() => `${effectiveOrganization.value?.gid}:${props.appId}:${props.useBillingPeriod}:${props.forceDemo}`)
+const loading = useDashboardRequestState(dataScope)
+const { isLoading, isRefreshing, error: loadError } = loading
 
 // Per-org cache for raw API data, keyed by "orgId:billingMode"
 // Using shallowRef for Vue reactivity - cache invalidates properly on org changes
 const cacheByOrgAndMode = shallowRef(new Map<string, any[]>())
-// Track current org for change detection
-const currentCacheOrgId = ref<string | null>(null)
 
 const dashboardAppsStore = useDashboardAppsStore()
 
@@ -122,12 +123,12 @@ const hasData = computed(() => effectiveTotalUpdates.value > 0 || isDemoMode.val
 
 const PAGE_SIZE = 1000
 
-async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string) {
+async function fetchDailyVersionStats(targetAppIds: string[], startDate: string, endDate: string, isCurrent: () => boolean) {
   const capgo = useConsole()
   const allRows: any[] = []
   let offset = 0
 
-  while (true) {
+  while (isCurrent()) {
     const { data, error } = await capgo
       .from('daily_version')
       .select('date, app_id, install, fail, get')
@@ -137,6 +138,8 @@ async function fetchDailyVersionStats(targetAppIds: string[], startDate: string,
       .order('date', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1)
 
+    if (!isCurrent())
+      return []
     if (error)
       throw error
 
@@ -153,21 +156,18 @@ async function fetchDailyVersionStats(targetAppIds: string[], startDate: string,
 }
 
 async function calculateStats(forceRefetch = false) {
-  const startTime = Date.now()
-  isLoading.value = true
-
-  // Reset display data
-  totalInstalled.value = 0
-  totalFailed.value = 0
-  totalRequested.value = 0
-  lastDayEvolution.value = 0
-  updateDataByApp.value = {}
-  updateDataByAction.value = {}
-  updateData.value = []
+  const request = loading.start()
+  if (request.isInitial) {
+    totalInstalled.value = 0
+    totalFailed.value = 0
+    totalRequested.value = 0
+    lastDayEvolution.value = 0
+    updateDataByApp.value = {}
+    updateDataByAction.value = {}
+    updateData.value = []
+  }
 
   const currentOrgId = effectiveOrganization.value?.gid ?? null
-  const orgChanged = currentCacheOrgId.value !== currentOrgId
-  currentCacheOrgId.value = currentOrgId
 
   const DAY_IN_MS = 1000 * 60 * 60 * 24
 
@@ -191,6 +191,8 @@ async function calculateStats(forceRefetch = false) {
   const cacheKey = `${currentOrgId ?? 'none'}:${props.appId || 'org'}:${startDate}:${endDate}`
 
   try {
+    if (props.forceDemo)
+      return
     // Determine target apps
     const localAppNames: { [appId: string]: string } = {}
     let targetAppIds: string[] = []
@@ -210,19 +212,30 @@ async function calculateStats(forceRefetch = false) {
         console.error('Error fetching app name for update stats:', error)
         localAppNames[props.appId] = props.appId
       }
+      if (!request.isCurrent())
+        return
       appNames.value = localAppNames
     }
     else {
       // Multiple apps mode - use store for shared apps data
-      await dashboardAppsStore.fetchApps(orgChanged)
+      await dashboardAppsStore.fetchApps()
+      if (!request.isCurrent())
+        return
+      if (!dashboardAppsStore.isLoaded)
+        throw new Error('App catalog unavailable')
 
       targetAppIds = [...dashboardAppsStore.appIds]
       appNames.value = dashboardAppsStore.appNames
     }
 
     if (targetAppIds.length === 0) {
+      totalInstalled.value = 0
+      totalFailed.value = 0
+      totalRequested.value = 0
+      lastDayEvolution.value = 0
       updateData.value = createUndefinedArray(dayCount) as (number | undefined)[]
       updateDataByApp.value = {}
+      updateDataByAction.value = {}
       return
     }
 
@@ -235,7 +248,9 @@ async function calculateStats(forceRefetch = false) {
     }
     else {
       // Get update stats from daily_version table (paginate to avoid PostgREST 1000-row limit)
-      data = await fetchDailyVersionStats(targetAppIds, startDate, endDate)
+      data = await fetchDailyVersionStats(targetAppIds, startDate, endDate, request.isCurrent)
+      if (!request.isCurrent())
+        return
 
       // Store in per-org cache (immutable update for reactivity)
       if (data) {
@@ -320,53 +335,19 @@ async function calculateStats(forceRefetch = false) {
     totalRequested.value = requestedTotal
   }
   catch (error) {
-    console.error('Error fetching update stats:', error)
-    updateData.value = createUndefinedArray(dayCount) as (number | undefined)[]
+    if (request.isCurrent()) {
+      request.fail()
+      console.error('Error fetching update stats:', error)
+    }
   }
   finally {
-    // Ensure spinner shows for at least 300ms for better UX
-    const elapsed = Date.now() - startTime
-    if (elapsed < 300) {
-      await new Promise(resolve => setTimeout(resolve, 300 - elapsed))
-    }
-    isLoading.value = false
+    request.finish()
   }
 }
 
-// Watch for organization changes - use per-org cache (no need to force refetch)
-watch(() => effectiveOrganization.value?.gid, async (newOrgId, oldOrgId) => {
-  if (newOrgId && oldOrgId !== undefined && newOrgId !== oldOrgId) {
-    // Per-org cache will be checked in calculateStats
-    await calculateStats(true)
-  }
-})
-
-watch(() => props.appId, async (newAppId, oldAppId) => {
-  if (newAppId !== oldAppId) {
-    await calculateStats(true)
-  }
-})
-
-// Watch for billing period mode changes - cache is keyed by mode, so no force needed
-watch(() => props.useBillingPeriod, async () => {
-  await calculateStats(false)
-})
-
-// Watch for accumulated mode changes - reprocess cached data
-watch(() => props.accumulated, async () => {
-  await calculateStats(false)
-})
-
-// Watch for reload trigger - force refetch from API
-watch(() => props.reloadTrigger, async (newVal) => {
-  if (newVal > 0) {
-    await calculateStats(true)
-  }
-})
-
-onMounted(async () => {
-  await calculateStats(true) // Initial fetch
-})
+watch([dataScope, () => props.reloadTrigger], (_values, previous) => {
+  void calculateStats(!previous || previous[1] !== props.reloadTrigger)
+}, { immediate: true })
 </script>
 
 <template>
@@ -375,6 +356,8 @@ onMounted(async () => {
     :total="effectiveTotalUpdates"
     :last-day-evolution="effectiveLastDayEvolution"
     :is-loading="isLoading"
+    :is-refreshing="isRefreshing"
+    :error-message="loadError ? t('error-loading-data') : undefined"
     :has-data="hasData"
     :is-demo-data="isDemoMode"
   >
@@ -419,7 +402,6 @@ onMounted(async () => {
     </template>
 
     <UpdateStatsChart
-      :key="JSON.stringify(effectiveChartDataByAction)"
       :title="t('update_statistics')"
       :colors="colors.blue"
       :data="effectiveChartData"

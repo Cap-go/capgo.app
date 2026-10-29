@@ -101,6 +101,90 @@ describe('main store dashboard range normalization', () => {
     expect(store.totalDownload).toBe(2220)
   })
 
+  it('coalesces concurrent global dashboard statistics requests but still allows a later refresh', async () => {
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+    await Promise.all(Array.from({ length: 3 }, () => store.updateDashboard('org-many-apps')))
+
+    expect(mockGetAllDashboard).toHaveBeenCalledTimes(1)
+    expect(mockFindBestPlan).toHaveBeenCalledTimes(1)
+    await store.updateDashboard('org-many-apps')
+    expect(mockGetAllDashboard).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores global dashboard statistics that arrive after an organization switch', async () => {
+    let resolvePrevious!: (value: unknown) => void
+    mockGetAllDashboard.mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePrevious = resolve
+    }))
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+    const previous = store.updateDashboard('org-previous')
+    const freshDashboard = { global: createGlobalDashboard(), byApp: [{ app_id: 'com.example.next' }] }
+    mockGetAllDashboard.mockResolvedValueOnce(freshDashboard)
+    await store.updateDashboard('org-next')
+
+    resolvePrevious({ global: [], byApp: [{ app_id: 'com.example.previous' }] })
+    await previous
+    expect(store.dashboard).toEqual(freshDashboard.global)
+    expect(store.dashboardByapp).toEqual(freshDashboard.byApp)
+    expect(mockFindBestPlan).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not coalesce different ranges or publish the older range', async () => {
+    let resolvePrevious!: (value: unknown) => void
+    mockGetAllDashboard.mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePrevious = resolve
+    }))
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+    const previous = store.updateDashboard('org-many-apps')
+    mockNormalizeDashboardDateRange.mockReturnValueOnce({ start: '2026-04-01T00:00:00.000Z', end: '2026-04-22T00:00:00.000Z' })
+    const freshDashboard = { global: createGlobalDashboard(), byApp: [{ app_id: 'com.example.next' }] }
+    mockGetAllDashboard.mockResolvedValueOnce(freshDashboard)
+    await store.updateDashboard('org-many-apps', '2026-04-01', '2026-04-22')
+
+    expect(mockGetAllDashboard).toHaveBeenCalledTimes(2)
+    resolvePrevious({ global: [], byApp: [] })
+    await previous
+    expect(store.dashboardByapp).toEqual(freshDashboard.byApp)
+  })
+
+  it('does not reuse or publish requests from a previous authentication session', async () => {
+    let resolvePrevious!: (value: unknown) => void
+    mockGetAllDashboard.mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePrevious = resolve
+    }))
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+    const previous = store.updateDashboard('org-many-apps')
+    store.auth = { id: 'next-session' } as any
+    await store.updateDashboard('org-many-apps')
+
+    expect(mockGetAllDashboard).toHaveBeenCalledTimes(2)
+    resolvePrevious({ global: [], byApp: [] })
+    await previous
+    expect(store.dashboard).not.toEqual([])
+    expect(mockFindBestPlan).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not overwrite a new organization with a delayed plan lookup', async () => {
+    let resolvePreviousPlan!: (value: string) => void
+    mockFindBestPlan.mockImplementationOnce(() => new Promise<string>((resolve) => {
+      resolvePreviousPlan = resolve
+    }))
+    const { useMainStore } = await import('../src/stores/main.ts')
+    const store = useMainStore()
+    const previous = store.updateDashboard('org-previous')
+    await vi.waitFor(() => expect(mockFindBestPlan).toHaveBeenCalledTimes(1))
+    mockFindBestPlan.mockResolvedValueOnce('next-plan')
+    await store.updateDashboard('org-next')
+
+    resolvePreviousPlan('previous-plan')
+    await previous
+    expect(store.bestPlan).toBe('next-plan')
+  })
+
   it('shares and caches the platform-admin lookup until an explicit refresh', async () => {
     mockIsPlatformAdmin.mockResolvedValue(true)
     const { useMainStore } = await import('../src/stores/main.ts')

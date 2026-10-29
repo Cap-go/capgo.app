@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import type { Tab } from '~/components/comp_def'
-import type { Database } from '~/types/database.types'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute } from 'vue-router'
 import IconBell from '~icons/heroicons/bell'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconHammer from '~icons/lucide/hammer'
@@ -13,19 +11,16 @@ import DeliveryLatencyPanel from '~/components/dashboard/DeliveryLatencyPanel.vu
 import OrgNativeBuildStatsPanel from '~/components/dashboard/OrgNativeBuildStatsPanel.vue'
 import OrgNotificationStatsPanel from '~/components/dashboard/OrgNotificationStatsPanel.vue'
 import Tabs from '~/components/Tabs.vue'
-import { useConsole } from '~/services/console'
+import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
 type DashboardTab = 'usage' | 'builds' | 'delivery' | 'notifications'
 
-const route = useRoute('/dashboard')
 const organizationStore = useOrganizationStore()
-const isLoading = ref(true)
-const capgo = useConsole()
+const dashboardApps = useDashboardAppsStore()
 const { t } = useI18n()
 const displayStore = useDisplayStore()
-const apps = ref<Database['public']['Tables']['apps']['Row'][]>([])
 const scrollContainer = ref<HTMLElement | null>(null)
 const activeTab = ref<DashboardTab>('usage')
 
@@ -45,9 +40,13 @@ const lacksSecurityAccess = computed(() => {
   return lacks2FA || lacksPassword
 })
 
+const apps = computed(() => !lacksSecurityAccess.value && dashboardApps.currentOrgId === currentOrganization.value?.gid ? dashboardApps.apps : [])
+
 const hasNoApps = computed(() => {
   return apps.value.length === 0
-    && !isLoading.value
+    && dashboardApps.currentOrgId === currentOrganization.value?.gid
+    && dashboardApps.isLoaded
+    && !dashboardApps.isLoading
     && !organizationStore.currentOrganizationFailed
     && !lacksSecurityAccess.value
 })
@@ -63,42 +62,10 @@ watch(shouldBlurContent, (blur) => {
     scrollContainer.value.scrollTop = 0
 }, { flush: 'post' })
 
-async function getMyApps() {
-  await organizationStore.awaitInitialLoad()
-
-  if (lacksSecurityAccess.value) {
-    apps.value = []
-    return
-  }
-
-  const currentGid = organizationStore.currentOrganization?.gid
-
-  if (!currentGid) {
-    console.error('Current organization is null, cannot fetch apps')
-    apps.value = []
-    return
-  }
-
-  const { data } = await capgo
-    .from('apps')
-    .select()
-    .eq('owner_org', currentGid)
-
-  apps.value = data ?? []
-}
-
-watch(currentOrganization, async () => {
-  await getMyApps()
-})
-
-onMounted(async () => {
-  if (route.path === '/dashboard') {
-    isLoading.value = true
-    await getMyApps()
-    isLoading.value = false
-    displayStore.NavTitle = t('dashboard')
-  }
-})
+watch([() => currentOrganization.value?.gid, lacksSecurityAccess], ([orgId, restricted]) => {
+  if (orgId && !restricted)
+    void dashboardApps.fetchApps()
+}, { immediate: true })
 displayStore.NavTitle = t('dashboard')
 displayStore.defaultBack = '/apps'
 

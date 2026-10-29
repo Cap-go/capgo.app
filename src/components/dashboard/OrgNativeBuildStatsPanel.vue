@@ -14,7 +14,7 @@ import { formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { useOrganizationStore } from '~/stores/organization'
 
-type AppRow = Database['public']['Tables']['apps']['Row']
+type AppRow = Pick<Database['public']['Tables']['apps']['Row'], 'app_id' | 'name'>
 
 const props = withDefaults(defineProps<{
   orgId?: string

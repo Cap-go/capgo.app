@@ -10,6 +10,7 @@ import BanknotesIcon from '~icons/heroicons/banknotes'
 import CalendarDaysIcon from '~icons/heroicons/calendar-days'
 import ChartBarIcon from '~icons/heroicons/chart-bar'
 import InformationInfo from '~icons/heroicons/information-circle'
+import { useDashboardRequestState } from '~/composables/useDashboardRequestState'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { getPlans } from '~/services/console'
 import { bytesToGb, getDaysBetweenDates } from '~/services/conversion'
@@ -48,7 +49,6 @@ const { t } = useI18n()
 const compact = useChartCardCompact()
 
 const noData = computed(() => false)
-const loadedAlready = ref(false)
 const storageUsageMode = ref<'total' | 'hourly'>('total')
 const storageUnit = computed(() => storageUsageMode.value === 'total' ? t('units-gb') : t('units-gb-hours'))
 // const noData = computed(() => data.value.mau.length == 0)
@@ -77,13 +77,6 @@ const mauDataByApp = computed(() => dataByApp.value.mau)
 const storageDataByApp = computed(() => storageUsageMode.value === 'total' ? dataByApp.value.storage : dataByApp.value.storageByteHours)
 const bandwidthDataByApp = computed(() => dataByApp.value.bandwidth)
 
-const isLoading = ref(true)
-const chartsLoaded = ref({
-  usage: false,
-  bundles: false,
-  updates: false,
-  deployments: false,
-})
 const reloadTrigger = ref(0) // Increment this to trigger reload in all charts
 
 // Per-org cache for 30-day data: Map<orgId, cachedData>
@@ -144,6 +137,9 @@ const effectiveOrganization = computed(() => {
 const currentScopeKey = computed(() => props.appId
   ? `app:${props.appId}`
   : `org:${effectiveOrganization.value?.gid ?? 'none'}`)
+const usageLoading = useDashboardRequestState(() => `${currentScopeKey.value}:${useBillingPeriod.value}:${props.forceDemo}`)
+const { isLoading, isRefreshing, error: loadError } = usageLoading
+let disposed = false
 const scopeStatsUpdatedAt = computed(() => props.appId ? localAppStatsUpdatedAt.value : localOrgStatsUpdatedAt.value)
 const scopeStatsRefreshRequestedAt = computed(() => props.appId ? localAppStatsRefreshRequestedAt.value : localOrgStatsRefreshRequestedAt.value)
 const isCurrentScopeRefreshing = computed(() => isChartRefreshInProgress(scopeStatsRefreshRequestedAt.value, scopeStatsUpdatedAt.value, refreshStateClock.value))
@@ -409,18 +405,25 @@ async function reloadAllCharts() {
   const last30DaysStart = addUtcDays(todayUtc, -29)
 
   const orgId = effectiveOrganization.value?.gid
-  if (orgId) {
-    await main.updateDashboard(orgId, last30DaysStart.toISOString(), last30DaysEnd.toISOString())
-  }
-
-  // Force reload apps data
-  await dashboardAppsStore.fetchApps(true)
-
-  // Increment reload trigger for all chart components
+  const request = usageLoading.start()
   reloadTrigger.value++
-
-  // Also reload usage data - force refetch
-  await getUsages(true)
+  try {
+    await Promise.all([
+      dashboardAppsStore.fetchApps(true),
+      orgId ? main.updateDashboard(orgId, last30DaysStart.toISOString(), last30DaysEnd.toISOString()) : Promise.resolve(),
+    ])
+    if (request.isCurrent())
+      await loadData(true)
+  }
+  catch (error) {
+    if (request.isCurrent()) {
+      request.fail()
+      console.error('Error refreshing dashboard usage:', error)
+    }
+  }
+  finally {
+    request.finish()
+  }
 }
 
 // Expose function and state for parent components
@@ -469,7 +472,7 @@ const storageLimits = computed(() => {
 
 async function getAppStats(rangeStart: Date, rangeEnd: Date) {
   if (props.appId) {
-    const cached = main.filterDashboard(props.appId)
+    const cached = main.dashboardOrgId === effectiveOrganization.value?.gid ? main.filterDashboard(props.appId) : []
     if (!needsForceRefresh.value && cached.length > 0) {
       return {
         global: cached,
@@ -484,12 +487,7 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
     })
 
     if (response.error) {
-      console.error('Error fetching app statistics:', response.error)
-      return {
-        global: [],
-        byApp: {},
-        appNames: {},
-      }
+      throw response.error
     }
 
     const global = (response.data ?? []) as any[]
@@ -500,16 +498,10 @@ async function getAppStats(rangeStart: Date, rangeEnd: Date) {
     }
   }
 
-  // Use store for apps data
-  // Only fetch if not already loaded
-  if (!dashboardAppsStore.isLoaded) {
-    await dashboardAppsStore.fetchApps()
-  }
-
   return {
     global: main.dashboard,
     byApp: main.dashboardByapp,
-    appNames: dashboardAppsStore.appNames,
+    appNames: dashboardAppsStore.currentOrgId === effectiveOrganization.value?.gid ? dashboardAppsStore.appNames : {},
   }
 }
 
@@ -548,7 +540,7 @@ function filterToBillingPeriod(fullData: { mau: number[], storage: number[], sto
   return { data: billingData }
 }
 
-async function getUsages(forceRefetch = false) {
+async function getUsages(forceRefetch = false, isCurrent: () => boolean = () => true) {
   // Always work with last 30 UTC days of data
   // End date should be next UTC midnight to include all of today's UTC data
   const todayUtc = normalizeToUtcStartOfDay()
@@ -626,6 +618,8 @@ async function getUsages(forceRefetch = false) {
   }
 
   const { global: globalStats, byApp: byAppStats, appNames: appNamesMap } = await getAppStats(last30DaysStart, last30DaysEnd)
+  if (!isCurrent())
+    return
 
   const finalData = globalStats.map((item: any) => {
     const itemDate = normalizeToUtcStartOfDay(new Date(item.date))
@@ -774,80 +768,72 @@ async function loadDemoData() {
   appNames.value = DEMO_APP_NAMES
 }
 
-async function loadData() {
-  const startTime = Date.now()
-  isLoading.value = true
+async function loadData(forceRefetch = false) {
+  if (!props.forceDemo && !props.appId && main.dashboardOrgId !== effectiveOrganization.value?.gid)
+    return
 
-  await getPlans().then((pls) => {
-    plans.value.length = 0
-    plans.value.push(...pls)
-  })
-
-  // If forceDemo is true, use demo data instead of fetching real data
-  if (props.forceDemo) {
-    await loadDemoData()
+  const request = usageLoading.start()
+  try {
+    if (props.forceDemo)
+      await loadDemoData()
+    else
+      await getUsages(forceRefetch, request.isCurrent)
   }
-  else {
-    await getUsages(true) // Initial load - force fetch
+  catch (error) {
+    if (request.isCurrent()) {
+      request.fail()
+      console.error('Error loading dashboard usage:', error)
+    }
   }
-
-  // Ensure spinner shows for at least 300ms for better UX
-  const elapsed = Date.now() - startTime
-  if (elapsed < 300) {
-    await new Promise(resolve => setTimeout(resolve, 300 - elapsed))
+  finally {
+    request.finish()
   }
-  isLoading.value = false
-  chartsLoaded.value.usage = true
-  loadedAlready.value = true // Mark as loaded so watcher can reload data on mode changes
-
-  // Stagger additional charts loading to improve perceived performance
-  setTimeout(() => {
-    chartsLoaded.value.bundles = true
-  }, 100)
-
-  setTimeout(() => {
-    chartsLoaded.value.updates = true
-  }, 200)
-
-  setTimeout(() => {
-    chartsLoaded.value.deployments = true
-  }, 300)
 }
 
-// Watch for organization changes - show loading immediately when org switches
-watch(() => effectiveOrganization.value?.gid, (newOrgId, oldOrgId) => {
-  if (newOrgId && oldOrgId !== undefined && newOrgId !== oldOrgId && loadedAlready.value) {
-    // Show loading state immediately when org changes (before data is fetched)
-    isLoading.value = true
-    // Increment reload trigger to force all child charts to refetch
-    reloadTrigger.value++
+async function ensureDashboard() {
+  const orgId = effectiveOrganization.value?.gid
+  if (props.forceDemo || !orgId || main.dashboardOrgId === orgId)
+    return
+  const scopeKey = currentScopeKey.value
+  const request = usageLoading.start()
+  try {
+    await main.updateDashboard(orgId)
   }
-})
-
-watch(() => props.appId, async (newAppId, oldAppId) => {
-  if (newAppId !== oldAppId && loadedAlready.value) {
-    await getUsages(true)
-    reloadTrigger.value++
+  catch (error) {
+    if (!disposed && scopeKey === currentScopeKey.value && !props.forceDemo) {
+      const failure = usageLoading.start()
+      failure.fail()
+      failure.finish()
+      console.error('Error fetching dashboard usage:', error)
+    }
   }
-})
+  finally {
+    request.finish()
+  }
+}
 
-watch(dashboard, async (_dashboard) => {
-  if (loadedAlready.value) {
-    // Data has been refreshed (e.g., after org switch) - process it
-    await getUsages(true) // Dashboard data changed, force refetch
-    isLoading.value = false
+watch([currentScopeKey, () => props.forceDemo], () => {
+  if (needsForceRefresh.value) {
+    needsForceRefresh.value = false
+    void reloadAllCharts()
   }
   else {
-    loadedAlready.value = true
-    // If refresh parameter was present, force a complete reload to fetch fresh data from server
-    if (needsForceRefresh.value) {
-      needsForceRefresh.value = false
-      await reloadAllCharts()
-    }
-    else {
-      await loadData()
-    }
+    void ensureDashboard()
   }
+}, { immediate: true })
+
+watch([dashboard, () => main.dashboardOrgId, currentScopeKey, () => props.forceDemo], (_values, previous) => {
+  if (previous && previous[2] !== currentScopeKey.value) {
+    data.value = { mau: [], storage: [], storageByteHours: [], bandwidth: [] }
+    dataByApp.value = { mau: {}, storage: {}, storageByteHours: {}, bandwidth: {} }
+    appNames.value = {}
+  }
+  void loadData(true)
+}, { immediate: true })
+
+watch(() => dashboardAppsStore.appNames, (names) => {
+  if (!props.forceDemo && !props.appId && dashboardAppsStore.currentOrgId === effectiveOrganization.value?.gid)
+    appNames.value = names
 })
 
 // Watch view mode changes and refetch data only when needed
@@ -861,8 +847,11 @@ watch([showCumulative, useBillingPeriod], async (newValues, oldValues) => {
   }
 
   // Reprocess data when billing period mode changes - use cached data if available
-  if (loadedAlready.value && newBillingPeriod !== oldBillingPeriod && oldBillingPeriod !== null) {
-    await getUsages(false) // Use cache if available
+  if (newBillingPeriod !== oldBillingPeriod && oldBillingPeriod !== null) {
+    if (!props.forceDemo && !props.appId && main.dashboardOrgId !== effectiveOrganization.value?.gid)
+      await ensureDashboard()
+    else
+      await loadData(false)
   }
 
   // Update URL parameters
@@ -947,30 +936,24 @@ watch(() => ({
   startRefreshPolling()
 }, { immediate: true })
 
-onMounted(async () => {
+onMounted(() => {
   refreshClockTimer = setInterval(() => {
     touchRefreshStateClock()
   }, CHART_REFRESH_POLL_MS)
 
-  // If forceDemo is true, load immediately with demo data
-  if (props.forceDemo) {
-    loadData()
+  if (main.plans?.length) {
+    plans.value = main.plans
   }
-  else if (main.dashboardFetched) {
-    // If refresh parameter was present, force a complete reload including store refresh
-    if (needsForceRefresh.value) {
-      needsForceRefresh.value = false
-      await reloadAllCharts()
-    }
-    else {
-      loadData()
-    }
+  else {
+    void getPlans().then((result) => {
+      if (!disposed)
+        plans.value = result
+    }).catch(error => console.error('Error loading dashboard plans:', error))
   }
-  // If dashboard not fetched yet, the watcher on 'dashboard' will handle loading
-  // and will check needsForceRefresh there
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   if (refreshClockTimer !== null) {
     clearInterval(refreshClockTimer)
     refreshClockTimer = null
@@ -1106,6 +1089,8 @@ onBeforeUnmount(() => {
       :data="mauData" :data-by-app="mauDataByApp" :app-names="appNames" :title="`${t('monthly-active')}`" :unit="t('units-users')"
       :use-billing-period="useBillingPeriod"
       :is-loading="isLoading"
+      :is-refreshing="isRefreshing"
+      :error-message="loadError ? t('error-loading-data') : undefined"
       :force-demo="forceDemo"
       :app-id="appId"
       class="col-span-full sm:col-span-6 xl:col-span-4"
@@ -1115,6 +1100,8 @@ onBeforeUnmount(() => {
       :title="t('Storage')" :unit="storageUnit"
       :use-billing-period="useBillingPeriod"
       :is-loading="isLoading"
+      :is-refreshing="isRefreshing"
+      :error-message="loadError ? t('error-loading-data') : undefined"
       :force-demo="forceDemo"
       :app-id="appId"
       class="col-span-full sm:col-span-6 xl:col-span-4"
@@ -1150,6 +1137,8 @@ onBeforeUnmount(() => {
       :title="t('Bandwidth')" :unit="t('units-gb')"
       :use-billing-period="useBillingPeriod"
       :is-loading="isLoading"
+      :is-refreshing="isRefreshing"
+      :error-message="loadError ? t('error-loading-data') : undefined"
       :force-demo="forceDemo"
       :app-id="appId"
       class="col-span-full sm:col-span-6 xl:col-span-4"

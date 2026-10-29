@@ -12,6 +12,7 @@ import { createTodayLineOptions, generateAppChartColors, getSafeChartHue } from 
 import { createTooltipConfig, todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
 import { dailyChartBaseProps } from '~/services/dailyChartProps'
 import { generateMonthDays } from '~/services/date'
+import { limitChartBreakdown } from '~/utils/chartBreakdown'
 import { useChartCardCompact } from './chartCardDensity'
 import { createChartLegendItems } from './chartLegend'
 import ChartLegend from './ChartLegend.vue'
@@ -31,16 +32,15 @@ const { cycleStart, cycleEnd, todayLimit, transformDailySeries } = useDashboardD
 const isChannelMode = computed(() => Object.keys(props.dataByChannel).length > 0)
 const isAppMode = computed(() => Object.keys(props.dataByApp).length > 0)
 const hasBreakdownData = computed(() => isChannelMode.value || isAppMode.value)
+const breakdown = computed(() => limitChartBreakdown(isChannelMode.value ? props.dataByChannel : props.dataByApp))
+const otherLabel = computed(() => t(isChannelMode.value ? 'other-channels' : 'other-apps'))
 
 const idByLabel = computed(() => {
   const mapping: Record<string, string> = {}
-  if (isChannelMode.value) {
-    for (const [channelId, channelName] of Object.entries(props.channelNames as Record<string, string>))
-      mapping[channelName] = channelId
-  }
-  else if (isAppMode.value) {
-    for (const [appId, appName] of Object.entries(props.appNames as Record<string, string>))
-      mapping[appName] = appId
+  const names = isChannelMode.value ? props.channelNames : props.appNames
+  for (const series of breakdown.value) {
+    if (series.id && !(breakdown.value.some(item => !item.id) && names[series.id] === otherLabel.value))
+      mapping[names[series.id] || series.id] = series.id
   }
   return mapping
 })
@@ -74,21 +74,18 @@ const chartData = computed<ChartData<any>>(() => {
   const labelCount = labels.length
 
   // Determine which data to use based on mode
-  let dataSource: Record<string, number[]> = {}
   let nameMapping: Record<string, string> = {}
 
   if (isChannelMode.value) {
-    dataSource = props.dataByChannel as Record<string, number[]>
     nameMapping = props.channelNames as Record<string, string>
   }
   else if (isAppMode.value) {
-    dataSource = props.dataByApp as Record<string, number[]>
     nameMapping = props.appNames as Record<string, string>
   }
 
-  const itemIds = Object.keys(dataSource)
+  const itemSeries = breakdown.value
 
-  if (itemIds.length === 0) {
+  if (itemSeries.length === 0) {
     // No breakdown data - show total deployments
     let backgroundColor: string
     let borderColor: string
@@ -135,9 +132,10 @@ const chartData = computed<ChartData<any>>(() => {
   }
 
   // Multiple items view - show breakdown by channel or app
-  const itemColors = generateAppChartColors(itemIds.length)
-  const datasets = itemIds.map((itemId, index) => {
-    const itemData = dataSource[itemId] as number[]
+  const itemColors = generateAppChartColors(itemSeries.length)
+  const datasets = itemSeries.map((series, index) => {
+    const itemId = series.id
+    const itemData = series.data as number[]
 
     let backgroundColor: string
     let borderColor: string
@@ -164,7 +162,7 @@ const chartData = computed<ChartData<any>>(() => {
     }
 
     const baseDataset: any = {
-      label: nameMapping[itemId] || itemId,
+      label: itemId ? nameMapping[itemId] || itemId : otherLabel.value,
       breakdownId: itemId,
       data: processed.display,
       backgroundColor,
