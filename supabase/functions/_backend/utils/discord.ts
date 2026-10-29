@@ -7,7 +7,7 @@ import { redactSensitiveUrl } from './sensitive_url.ts'
 import { getEnv } from './utils.ts'
 
 // Fields that should be completely removed from logs (never logged)
-const REMOVED_FIELDS = ['password']
+const REMOVED_FIELDS = ['password', 'x-chatgpt-token']
 // Fields that should show first 4 and last 4 characters
 const PARTIALLY_REDACTED_FIELDS = ['secret', 'token', 'apikey', 'api_key', 'authorization', 'credential', 'private_key']
 

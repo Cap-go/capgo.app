@@ -1,9 +1,34 @@
 import { Hono } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { sendDiscordAlert as sendPluginDiscordAlert } from '../supabase/functions/_backend/plugin_runtime/utils/discord.ts'
-import { sendDiscordAlert } from '../supabase/functions/_backend/utils/discord.ts'
+import { sendDiscordAlert, sendDiscordAlert500 } from '../supabase/functions/_backend/utils/discord.ts'
 
 const WEBHOOK_URL = 'https://discord.test/webhook'
+
+describe('assistant credential privacy in alerts', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('removes the entire ChatGPT token header', async () => {
+    vi.stubEnv('DISCORD_ALERT', WEBHOOK_URL)
+    vi.stubEnv('ENV_NAME', 'capgo_api-prod')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const app = new Hono()
+    app.get('/', async (c) => {
+      await sendDiscordAlert500(c, 'private', '[redacted]', new Error('Upstream failure'))
+      return c.json({ status: 'ok' })
+    })
+    await app.request('/', { headers: { 'x-chatgpt-token': 'T9x2-chatgpt-token-W8q0' } })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const alertBody = String(fetchMock.mock.calls[0][1].body)
+    expect(alertBody).not.toContain('x-chatgpt-token')
+    expect(alertBody).not.toContain('T9x2')
+    expect(alertBody).not.toContain('W8q0')
+  })
+})
 
 function requestAlert(send: typeof sendDiscordAlert, envName: string) {
   const app = new Hono()

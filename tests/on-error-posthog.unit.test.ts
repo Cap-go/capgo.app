@@ -120,7 +120,7 @@ describe('onError PostHog capture', () => {
     expect(alertBody).not.toContain('Password1!')
   })
 
-  it('never copies /build/credentials* or /build/request bodies into alerts and redacts tokens in URLs', async () => {
+  it('never copies build secrets or assistant conversations into alerts and redacts tokens in URLs', async () => {
     const { onError, SECRET_ROUTE_BODY_PLACEHOLDER } = await import('../supabase/functions/_backend/utils/on_error.ts')
     const secretBody = JSON.stringify({ P12_PASSWORD: 'p12-secret', APPLE_KEY_CONTENT: 'p8-secret', ANDROID_KEYSTORE_FILE: 'keystore-secret' })
     const urls = [
@@ -128,6 +128,12 @@ describe('onError PostHog capture', () => {
       'https://api.capgo.app/build/credentials',
       'https://example.com/functions/v1/build/credentials/upload-url',
       'https://api.capgo.app/build/request',
+      'https://api.capgo.app/private/assistant/responses',
+      'https://example.com/functions/v1/private/assistant/responses',
+      'https://api.capgo.app/private/%61ssistant/responses',
+      'https://example.com/functions/v1/%70rivate/assistant/responses',
+      'https://api.capgo.app/private/%61ssistant/%ZZ',
+      'https://api.capgo.app/build/%63redentials/upload-url',
     ]
     for (const url of urls) {
       sendDiscordAlert500Mock.mockClear()

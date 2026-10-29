@@ -2,9 +2,9 @@ import type { ChatGptCallback } from '~/utils/chatgptCallback'
 import { assistantRequest } from '~/services/assistantHttp'
 
 /**
- * "Continue with ChatGPT" (OpenAI Sign in with ChatGPT, plan usage), entirely in the browser like the
- * Capgo browser app: the ChatGPT tokens never reach Capgo servers, they stay on this device for this
- * Capgo user. The first sign-in registers an agent client (dynamic_agent_client) and OpenAI issues a
+ * "Continue with ChatGPT" (OpenAI Sign in with ChatGPT, plan usage). Sign-in and token storage stay
+ * on this device for this Capgo user; browser model requests relay access tokens through Capgo.
+ * The first sign-in registers an agent client (dynamic_agent_client) and OpenAI issues a
  * per-user oaiapp_ client in the callback, which later sign-ins reuse.
  */
 
