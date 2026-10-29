@@ -3,6 +3,7 @@ import { Hono } from 'hono/tiny'
 import { hasCliUsageIngest, resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
 import { MIN_CLI_VERSION, MIN_CLI_VERSION_REASON } from '../utils/cliMinVersion.ts'
 import { useCors } from '../utils/hono.ts'
+import { isLegacySdkCli, notifyLegacyCliUpgrade } from '../utils/legacy_cli_notice.ts'
 import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -11,8 +12,11 @@ app.use('/', useCors)
 
 app.get('/', async (c) => {
   const cliVersion = c.req.header('x-cli-version') ?? ''
+  const capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key') ?? undefined
+  // CLIs up to 8.90.0 read the database through PostgREST: ask their owner to upgrade, off the response path.
+  if (capgkey && isLegacySdkCli(cliVersion))
+    backgroundTask(c, notifyLegacyCliUpgrade(c, { capgkey, cliVersion }))
   if (cliVersion && hasCliUsageIngest(c)) {
-    const capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key') ?? undefined
     const event = {
       cli_version: cliVersion,
       command: c.req.header('x-cli-command') ?? '',

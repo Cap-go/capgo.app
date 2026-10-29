@@ -6,6 +6,11 @@ const connect = vi.hoisted(() => vi.fn(() => {
   throw new Error('No database lookup expected')
 }))
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: connect, closeClient: vi.fn() }))
+const notifyLegacyCliUpgrade = vi.hoisted(() => vi.fn(async () => {}))
+vi.mock('../supabase/functions/_backend/utils/legacy_cli_notice.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/legacy_cli_notice.ts')>(),
+  notifyLegacyCliUpgrade,
+}))
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -60,5 +65,20 @@ describe('get /private/config', () => {
 
     expect(response.status).toBe(200)
     expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('asks the owner of an old CLI to upgrade, off the response path', async () => {
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const response = await app.request('http://local/', { method: 'GET', headers: { 'x-cli-version': '8.90.0', 'capgkey': 'fake-key' } })
+
+    expect(response.status).toBe(200)
+    await vi.waitFor(() => expect(notifyLegacyCliUpgrade).toHaveBeenCalledWith(expect.anything(), { capgkey: 'fake-key', cliVersion: '8.90.0' }))
+  })
+
+  it('leaves current and anonymous CLIs alone', async () => {
+    await app.request('http://local/', { method: 'GET', headers: { 'x-cli-version': '8.90.1', 'capgkey': 'fake-key' } })
+    await app.request('http://local/', { method: 'GET', headers: { 'x-cli-version': '8.90.0' } })
+
+    expect(notifyLegacyCliUpgrade).not.toHaveBeenCalled()
   })
 })
