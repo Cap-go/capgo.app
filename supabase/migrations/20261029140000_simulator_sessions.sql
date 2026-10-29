@@ -170,3 +170,38 @@ CREATE TRIGGER settle_simulator_sessions_before_app_delete
 BEFORE DELETE ON public.apps
 FOR EACH ROW
 EXECUTE FUNCTION public.settle_simulator_sessions_before_app_delete();
+
+-- transfer_app moves the app, then get and stop look up the session under the new
+-- organization. Stop the device first so the original organization is billed and the slot is released.
+CREATE OR REPLACE FUNCTION public.reject_app_transfer_with_active_simulator()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.owner_org IS NOT DISTINCT FROM OLD.owner_org THEN
+    RETURN NEW;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.simulator_sessions
+    WHERE app_id = OLD.app_id
+      AND status IN ('new', 'queued', 'starting', 'in-progress')
+  ) THEN
+    RAISE EXCEPTION 'Stop the running simulator before transferring this app.'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+ALTER FUNCTION public.reject_app_transfer_with_active_simulator() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.reject_app_transfer_with_active_simulator() FROM PUBLIC;
+
+CREATE TRIGGER reject_app_transfer_with_active_simulator
+BEFORE UPDATE OF owner_org ON public.apps
+FOR EACH ROW
+EXECUTE FUNCTION public.reject_app_transfer_with_active_simulator();

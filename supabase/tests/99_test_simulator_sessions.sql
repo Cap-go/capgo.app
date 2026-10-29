@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(12);
+SELECT plan(13);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -113,6 +113,27 @@ SELECT is(
   ),
   'expired usage is dated when the session ended'
 );
+
+INSERT INTO public.orgs (id, created_by, management_email, name)
+VALUES (
+  '99000000-0000-4000-8000-000000000098',
+  '6aa76066-55ef-4238-ade6-0b32334a4097',
+  'sim-transfer@test.local',
+  'Simulator transfer org'
+);
+
+SELECT set_config('capgo.allow_owner_org_transfer', 'true', true);
+
+SELECT throws_ok(
+  $$ UPDATE public.apps
+     SET owner_org = '99000000-0000-4000-8000-000000000098'
+     WHERE app_id = 'com.test.simulator.session' $$,
+  'P0001',
+  'Stop the running simulator before transferring this app.',
+  'an active simulator blocks the app transfer'
+);
+
+SELECT set_config('capgo.allow_owner_org_transfer', 'false', true);
 
 DELETE FROM public.apps WHERE app_id = 'com.test.simulator.session';
 
