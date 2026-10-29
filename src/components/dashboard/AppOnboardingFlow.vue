@@ -3247,10 +3247,10 @@ defineExpose({
                   {{ t('unified-onboarding-step-organization') }}
                 </p>
                 <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('unified-onboarding-organization-title') }}
+                  {{ t(profileCompanyName ? 'unified-onboarding-company-title' : 'unified-onboarding-organization-title') }}
                 </h2>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t('unified-onboarding-organization-helper') }}
+                  {{ t(profileCompanyName ? 'unified-onboarding-company-helper' : 'unified-onboarding-organization-helper') }}
                 </p>
               </div>
 

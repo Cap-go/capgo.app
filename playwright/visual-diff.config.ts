@@ -89,12 +89,11 @@ async function prepareAiOnboardingScreenshot(page: Page, setupMode: 'ai' | 'invi
     await forwardConsoleQuery(route, (row: any) => ({ ...row, first_name: 'Example', last_name: 'User', onboarding }))
   })
   await page.reload()
-  // The base commit has no setup choice yet; only the head capture can wait for it.
-  if (process.env.VISUAL_DIFF_PHASE !== 'after')
-    return
   await page.locator(setupMode ? '[data-test="onboarding-ai-plan"]' : '[data-test="onboarding-setup-mode"]').waitFor()
-  if (setupMode)
+  if (setupMode) {
     await page.locator('[data-test="onboarding-ai-plan-option"]').nth(1).click()
+    await page.locator('[data-test="onboarding-ai-org-name"]').or(page.locator('[data-test="onboarding-company-name-summary"]')).scrollIntoViewIfNeeded()
+  }
 }
 
 const nativeObserveDays = ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30']

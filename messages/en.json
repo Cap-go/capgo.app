@@ -4028,6 +4028,8 @@
   "unified-onboarding-profile-goal-question": "What would you like to do with Capgo?",
   "onboarding-name-kicker": "Let’s get to know you",
   "company-name": "Company name",
+  "unified-onboarding-company-title": "Set up your company",
+  "unified-onboarding-company-helper": "Choose a user tier for your company to continue.",
   "onboarding-name-description": "Tell us about yourself and your company before we set up your workspace.",
   "onboarding-name-required": "Your first name, last name, and company name are required to continue.",
   "onboarding-goal-decision-hint": "Not sure? Already in the App Store or Google Play: start with live updates. Not published yet, or no Mac with Xcode for iOS: start with Builder.",
