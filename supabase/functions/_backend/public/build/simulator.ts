@@ -269,6 +269,28 @@ export async function readSimulator(c: Context, sessionId: string, body: Simulat
   })
 }
 
+async function stopRemoteDevice(c: Context, emulatorId: string, sessionId: string, rowId: string): Promise<number> {
+  const { accessKey, origin } = simulatorConfig(c)
+  try {
+    const stopped = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}/stop`, 'POST', {})
+    return stopped.status
+  }
+  catch (error) {
+    if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status))
+      return error.status
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop failed', sessionId, error })
+    throw quickError(502, 'simulator_stop_failed', 'The simulator is still running. Retry stop.', { id: rowId }, error, { alert: false })
+  }
+}
+
+async function confirmDeviceStopped(c: Context, row: SimulatorRow, sessionId: string) {
+  if (row.device_stopped_at)
+    return { remoteStatus: 200, stoppedAt: row.device_stopped_at }
+  const remoteStatus = row.emulator_id ? await stopRemoteDevice(c, row.emulator_id, sessionId, row.id) : null
+  const stoppedAt = await rememberDeviceStop(c, row.id, new Date().toISOString())
+  return { remoteStatus, stoppedAt }
+}
+
 async function rememberDeviceStop(c: Context, id: string, stoppedAt: string) {
   const rows = await queryWrite<{ device_stopped_at: string }>(c, `
     UPDATE public.simulator_sessions
@@ -286,27 +308,7 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
   if (row.status === 'stopped' || row.status === 'errored') {
     return c.json({ data: { id: row.id, url: row.url, status: row.status, platform: row.platform, kind: 'simulator' } })
   }
-  let remoteStatus: number | null = row.device_stopped_at ? 200 : null
-  let stoppedAt = row.device_stopped_at
-  if (!stoppedAt) {
-    if (row.emulator_id) {
-      const { accessKey, origin } = simulatorConfig(c)
-      try {
-        const stopped = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${row.emulator_id}/stop`, 'POST', {})
-        remoteStatus = stopped.status
-      }
-      catch (error) {
-        if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status)) {
-          remoteStatus = error.status
-        }
-        else {
-          cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop failed', sessionId, error })
-          throw quickError(502, 'simulator_stop_failed', 'The simulator is still running. Retry stop.', { id: row.id }, error, { alert: false })
-        }
-      }
-    }
-    stoppedAt = await rememberDeviceStop(c, row.id, new Date().toISOString())
-  }
+  const { remoteStatus, stoppedAt } = await confirmDeviceStopped(c, row, sessionId)
   const seconds = simulatorBillableSeconds(row.started_at, simulatorUsageEnd(stoppedAt), Number(row.max_duration_minutes) || 40)
   const platform = row.platform === 'android' ? 'android' : 'ios'
   let billingRecorded = seconds === 0
