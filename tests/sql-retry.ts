@@ -1,7 +1,7 @@
 // Concurrent test files write the same RBAC/org rows through triggers, so Postgres can
-// pick one autocommit statement as a deadlock victim. The victim is fully rolled back,
-// so re-running that single statement is safe.
-const RETRYABLE_SQL_STATES = new Set(['40P01', '40001'])
+// pick one autocommit statement as a deadlock victim. It can also refuse the connection
+// when every slot is taken. Neither attempt changed data, so the statement can run again.
+const RETRYABLE_SQL_STATES = new Set(['40P01', '40001', '53300'])
 export const SQL_MAX_ATTEMPTS = 3
 
 export async function retryTransientSqlError<T>(

@@ -5,7 +5,7 @@ async function noWait() {}
 const pgError = (code: string) => Object.assign(new Error(`pg ${code}`), { code })
 
 describe('retryTransientSqlError', () => {
-  it.each(['40P01', '40001'])('retries %s and returns the later result', async (code) => {
+  it.each(['40P01', '40001', '53300'])('retries %s and returns the later result', async (code) => {
     const run = vi.fn()
       .mockRejectedValueOnce(pgError(code))
       .mockResolvedValueOnce('ok')
