@@ -26,6 +26,7 @@
   "env": {
     "prod": {
       "name": "capgo_api-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "durable_objects": {
         "bindings": [
           { "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" },

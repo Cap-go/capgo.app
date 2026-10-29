@@ -1,0 +1,58 @@
+{
+  "name": "capgo_alert_tail",
+  "compatibility_date": "2026-04-21",
+  "main": "./index.ts",
+  "workers_dev": false,
+  "upload_source_maps": true,
+  "durable_objects": {
+    "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+  },
+  "migrations": [{ "tag": "alert-throttle-v1", "new_sqlite_classes": ["AlertThrottle"] }],
+  "env": {
+    "prod": {
+      "name": "capgo_alert_tail-prod",
+      "vars": {
+        "ENV_NAME": "capgo_alert_tail-prod",
+        "ALERT_THROTTLE_WINDOW_SEC": "300",
+        "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+      },
+      "observability": {
+        "enabled": true,
+        "issues": { "enabled": true }
+      }
+    },
+    "preprod": {
+      "name": "capgo_alert_tail-preprod",
+      "vars": {
+        "ENV_NAME": "capgo_alert_tail-preprod",
+        "ALERT_THROTTLE_WINDOW_SEC": "300",
+        "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+      },
+      "observability": {
+        "enabled": true,
+        "issues": { "enabled": true }
+      }
+    },
+    "alpha": {
+      "name": "capgo_alert_tail-alpha",
+      "vars": {
+        "ENV_NAME": "capgo_alert_tail-alpha",
+        "ALERT_THROTTLE_WINDOW_SEC": "300",
+        "ALERT_THROTTLE_SUMMARY_INTERVAL_SEC": "60"
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "ALERT_THROTTLE", "class_name": "AlertThrottle" }]
+      },
+      "observability": {
+        "enabled": true,
+        "issues": { "enabled": true }
+      }
+    }
+  }
+}

@@ -35,6 +35,7 @@
   "env": {
     "prod": {
       "name": "capgo_files-prod",
+      "tail_consumers": [{ "service": "capgo_alert_tail-prod" }],
       "cache": {
         "enabled": true,
         "cross_version_cache": true

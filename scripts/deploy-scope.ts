@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import process from 'node:process'
 import { TextDecoder } from 'node:util'
 
-export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins'
+export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins' | 'alert_tail'
 export type DeployScope = Record<DeployTarget, boolean>
 type GitRunner = (args: string[]) => string
 
@@ -13,7 +13,7 @@ export interface DeployScopeResult {
   scope: DeployScope
 }
 
-const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins'] as const satisfies readonly DeployTarget[]
+const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins', 'alert_tail'] as const satisfies readonly DeployTarget[]
 
 const workerDependencyMatchers = [
   /^package\.json$/,
@@ -78,6 +78,10 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     /^cloudflare_workers\/plugin\//,
     /^supabase\/functions\/_backend\/plugin_runtime\//,
     /^supabase\/functions\/(updates|stats|channel_self|updates_debug)\//,
+  ],
+  alert_tail: [
+    ...workerDependencyMatchers,
+    /^cloudflare_workers\/alert_tail\//,
   ],
 }
 
