@@ -28,21 +28,9 @@ Selected tools exposed via MCP:
   - capgo_search_docs, capgo_set_project_dir
 The project directory follows the client's MCP roots (the agent's workspace), so a global
 install works from any folder. Clients without roots can call capgo_set_project_dir.
-Every tool also accepts `projectDir` or its `cwd` alias with the absolute app directory, including doctor,
-bundle/channel operations, native builds, credential management, and both onboarding flows.
-That selection applies to the current and subsequent calls. Project switches and tool calls
-are serialized so concurrent requests cannot read another app's files or credentials.
-Relative tool paths resolve from that app. Each call restores the server's previous working
-directory while retaining the selected app for later calls. Nested build operations share
-the same CWD lock. If both `projectDir` and `cwd` are supplied, they must select the same app.
 Workspace roots with exactly one Capacitor app automatically select that app, including
 when the server starts there without client roots. Multiple apps require an explicit app path.
-App versions, scripts, dependency declarations, source files, and config use the selected app,
-not the workspace manifest. Installed dependencies still resolve from app-local or hoisted
-`node_modules`; explicit `packageJson` and `nodeModules` inputs continue to override discovery.
 If @capacitor/core appears missing, select the absolute app folder before installing anything.
-The hosted MCP cannot inspect local files. For local upload commands, pass `projectDir` or `cwd` to
-`capgo_get_upload_command`; run offline bundle/build packaging from that app directory too.
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:
   {
