@@ -42,6 +42,7 @@ export const CONSOLE_RPCS = new Set([
   'get_account_removal_date',
   'get_app_access_rbac',
   'get_app_stats_refresh_state',
+  'get_bundle_channel_removals',
   'get_bundle_upload_daily_counts',
   'get_current_plan_name_org',
   'get_deploy_daily_counts',

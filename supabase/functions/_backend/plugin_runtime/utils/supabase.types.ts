@@ -4187,6 +4187,16 @@ export type Database = {
         Args: { apikey: string; appid: string; name_version: string }
         Returns: number
       }
+      get_bundle_channel_removals: {
+        Args: {
+          p_app_id: string
+          p_ascending?: boolean
+          p_channel_ids?: string[]
+          p_limit?: number
+          p_version_id: number
+        }
+        Returns: Json
+      }
       get_bundle_upload_daily_counts: {
         Args: { p_app_ids: string[]; p_end: string; p_start: string }
         Returns: {

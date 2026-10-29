@@ -4,6 +4,7 @@ import { computedAsync } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { z } from 'zod'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
@@ -44,6 +45,16 @@ const props = defineProps<{
   bundleId?: number
   appId: string
 }>()
+
+const bundleRemovalsSchema = z.object({
+  data: z.array(z.object({
+    id: z.number(),
+    record_id: z.string(),
+    user_id: z.string().nullable(),
+    created_at: z.string(),
+  })),
+  count: z.number().int().nonnegative(),
+})
 
 const canRollbackBundle = computedAsync(async () => {
   if (!props.appId || !props.channelId)
@@ -335,27 +346,26 @@ async function fetchBundleHistory() {
     assignmentQuery = assignmentQuery.in('channel_id', channelIds.map(Number))
 
   // When a channel's version changes FROM this bundle TO another bundle, that's a removal.
-  // The audit log is the largest table, so its total is estimated like AuditLogTable's.
-  // Match this app and the old bundle in the database, so only real removals come
-  // back instead of every channel change the caller can read.
-  let removalQuery = capgo
-    .from('audit_logs')
-    .select('id, record_id, user_id, created_at', { count: 'estimated' })
-    .eq('table_name', 'channels')
-    .eq('operation', 'UPDATE')
-    .contains('changed_fields', ['version'])
-    .eq('old_record->>app_id', props.appId)
-    .eq('old_record->>version', String(bundleId))
-  if (channelIds)
-    removalQuery = removalQuery.in('record_id', channelIds)
+  // The RPC applies audit visibility once and uses the app/bundle JSON index.
+  const removalQuery = capgo.rpc('get_bundle_channel_removals', {
+    p_app_id: props.appId,
+    p_version_id: bundleId,
+    p_limit: mergedRows,
+    p_ascending: ascending,
+    p_channel_ids: channelIds ?? undefined,
+  })
 
   const [
     { data: assignmentData, error: assignmentError, count: assignmentCount },
-    { data: auditData, error: auditError, count: removalCount },
+    { data: removalResult, error: auditError },
   ] = await Promise.all([
     assignmentQuery.order('deployed_at', { ascending }).limit(mergedRows),
-    removalQuery.order('created_at', { ascending }).limit(mergedRows),
+    removalQuery,
   ])
+
+  const parsedRemovals = bundleRemovalsSchema.safeParse(removalResult)
+  const auditData = parsedRemovals.success ? parsedRemovals.data.data : []
+  const removalCount = parsedRemovals.success ? parsedRemovals.data.count : 0
 
   if (assignmentError) {
     console.error('Error fetching deploy history:', assignmentError)
@@ -366,6 +376,9 @@ async function fetchBundleHistory() {
   if (auditError) {
     console.error('Error fetching audit logs:', auditError)
     // Don't fail completely, just show assignments
+  }
+  else if (!parsedRemovals.success) {
+    console.error('Invalid bundle removals response:', parsedRemovals.error)
   }
 
   // Process assignments
