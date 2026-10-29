@@ -1,12 +1,11 @@
 import type { AssistantAction, AssistantCard, AssistantContext, AssistantResponse, AssistantTurn } from '~/services/assistant'
-import { assistantRequest } from '~/services/assistantHttp'
+import { assistantOpenAIRequest, assistantRequest } from '~/services/assistantHttp'
 import { defaultApiHost } from '~/services/console'
 
 /**
- * The console assistant runs in the browser: the model is called with the user's own ChatGPT token
- * (OpenAI Responses API) and tools go straight to the hosted Capgo MCP server with the user's
- * assistant API key. Nothing about the conversation or the ChatGPT account goes through Capgo
- * servers except the MCP tool calls themselves, which use the normal public API rules (RBAC, rate limits).
+ * The console assistant runs locally; browser model requests pass through the authenticated Capgo
+ * proxy, while native requests go directly to OpenAI. Tools use the hosted Capgo MCP server with
+ * the user's assistant API key and the normal public API rules (RBAC, rate limits).
  */
 
 export const OPENAI_API_URL = 'https://api.openai.com/v1'
@@ -302,7 +301,7 @@ export async function resolveModel(accessToken: string): Promise<string> {
     return cached
   let slug = PREFERRED_MODEL
   try {
-    const response = await assistantRequest(`${OPENAI_API_URL}/models`, { method: 'GET', headers: { authorization: `Bearer ${accessToken}` }, timeoutMs: 10_000 })
+    const response = await assistantOpenAIRequest('models', accessToken, { method: 'GET', timeoutMs: 10_000 })
     if (response.status === 200) {
       const body = JSON.parse(response.text) as { models?: Array<{ slug?: string, visibility?: string }> }
       const listed = (body.models ?? []).filter(model => model.slug && model.visibility === 'list').map(model => model.slug!)
@@ -318,9 +317,9 @@ async function callModel(accessToken: string, prompt: string, input: InputItem[]
   const model = await resolveModel(accessToken)
   let response
   try {
-    response = await assistantRequest(`${OPENAI_API_URL}/responses`, {
+    response = await assistantOpenAIRequest('responses', accessToken, {
       method: 'POST',
-      headers: { 'authorization': `Bearer ${accessToken}`, 'content-type': 'application/json', 'accept': 'text/event-stream' },
+      headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
       // ChatGPT plan usage requires store: false and stream: true. Tools stay declared on the last
       // turn (history references them); tool_choice none forces a plain answer.
       body: JSON.stringify({ model, instructions: prompt, input, tools, store: false, stream: true, ...(allowTools ? {} : { tool_choice: 'none' }) }),

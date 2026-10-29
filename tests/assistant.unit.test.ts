@@ -1,13 +1,20 @@
 import type { McpToolInfo } from '../src/services/assistantAgent.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => false }, CapacitorHttp: {} }))
-vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test' }))
+const { nativePlatform, nativeRequest, getSession } = vi.hoisted(() => ({
+  nativePlatform: vi.fn(() => false),
+  nativeRequest: vi.fn(),
+  getSession: vi.fn<() => Promise<{ data: { session: { access_token: string } | null }, error: Error | null }>>(async () => ({ data: { session: { access_token: 'console-session' } }, error: null })),
+}))
+
+vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: nativePlatform }, CapacitorHttp: { request: nativeRequest } }))
+vi.mock('~/services/console', () => ({ defaultApiHost: 'https://api.capgo.test', useConsole: () => ({ auth: { getSession } }) }))
 
 const { tokenizeAssistantText } = await import('../src/utils/assistantText.ts')
 const { parseChatGptCallback } = await import('../src/utils/chatgptCallback.ts')
 const { needsConfirmation, parseResponseStream, responsesTools, runAssistant, sanitizeConsolePath } = await import('../src/services/assistantAgent.ts')
 const chatgpt = await import('../src/services/chatgptAuth.ts')
+const { assistantOpenAIRequest } = await import('../src/services/assistantHttp.ts')
 
 class MemoryStorage {
   private values = new Map<string, string>()
@@ -36,7 +43,7 @@ function completed(output: { text?: string, calls?: Array<[string, Record<string
   return sse([{ type: 'response.created' }, { type: 'response.completed', response: { output: items } }])
 }
 
-interface Recorded { url: string, auth: string | null, body: any }
+interface Recorded { url: string, auth: string | null, token: string | null, body: any }
 
 /** Fake OpenAI (models + responses) and the hosted Capgo MCP endpoint. */
 function mockNetwork(outputs: Array<{ text?: string, calls?: Array<[string, Record<string, unknown>]> } | string>, mcpResult: unknown = [{ app_id: 'com.example.app' }]) {
@@ -44,15 +51,19 @@ function mockNetwork(outputs: Array<{ text?: string, calls?: Array<[string, Reco
   const mcp: Recorded[] = []
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
     const auth = new Headers(init.headers).get('authorization')
-    if (url === 'https://api.openai.com/v1/models')
+    const token = new Headers(init.headers).get('x-chatgpt-token')
+    if (url === 'https://api.capgo.test/private/assistant/models') {
+      expect(auth).toBe('Bearer console-session')
+      expect(token).toBe('chatgpt-token')
       return Response.json({ models: [{ slug: 'gpt-hidden', visibility: 'hide' }, { slug: 'gpt-plan-default', visibility: 'list' }] })
+    }
     if (url === 'https://api.capgo.test/mcp') {
       const body = JSON.parse(String(init.body))
-      mcp.push({ url, auth, body })
+      mcp.push({ url, auth, token, body })
       const result = body.method === 'tools/list' ? { tools: MCP_TOOLS } : { content: [{ type: 'text', text: JSON.stringify(mcpResult) }] }
       return Response.json({ jsonrpc: '2.0', id: body.id, result })
     }
-    openai.push({ url, auth, body: JSON.parse(String(init.body)) })
+    openai.push({ url, auth, token, body: JSON.parse(String(init.body)) })
     const next = outputs.shift() ?? { text: 'done' }
     return new Response(typeof next === 'string' ? next : completed(next), { status: 200 })
   }))
@@ -180,7 +191,7 @@ describe('assistant loop in the browser', () => {
     vi.unstubAllGlobals()
   })
 
-  it('calls OpenAI with the ChatGPT token and the hosted MCP with the Capgo key', async () => {
+  it('proxies OpenAI with a console session and keeps the Capgo key on MCP calls', async () => {
     const { openai, mcp } = mockNetwork([
       { calls: [['capgo_list_apps', {}]] },
       { calls: [['show_link', { title: 'Channels', path: '/app/com.example.app/channels' }], ['show_link', { title: 'Bad', path: 'https://evil.example' }]] },
@@ -191,10 +202,11 @@ describe('assistant loop in the browser', () => {
     expect(result.reply).toBe('Your channels are here.')
     expect(result.cards).toEqual([{ type: 'link', title: 'Channels', description: undefined, path: '/app/com.example.app/channels' }])
     expect(result.actions).toEqual([{ tool: 'capgo_list_apps', title: 'List apps', ok: true }])
-    expect(openai.every(call => call.url === 'https://api.openai.com/v1/responses' && call.auth === 'Bearer chatgpt-token')).toBe(true)
+    expect(openai.every(call => call.url === 'https://api.capgo.test/private/assistant/responses' && call.auth === 'Bearer console-session' && call.token === 'chatgpt-token')).toBe(true)
     expect(openai.every(call => call.body.store === false && call.body.stream === true && call.body.model === 'gpt-plan-default')).toBe(true)
     expect(openai[1].body.input.map((item: any) => item.type ?? item.role)).toEqual(['user', 'function_call', 'function_call_output'])
     expect(mcp.map(call => [call.body.method, call.auth])).toEqual([['tools/list', 'Bearer capgo-key-1'], ['tools/call', 'Bearer capgo-key-1']])
+    expect(mcp.every(call => call.token === null)).toBe(true)
   })
 
   it('turns ask_user into a question card and stops', async () => {
@@ -227,5 +239,40 @@ describe('assistant loop in the browser', () => {
   it('reports the ChatGPT plan usage limit', async () => {
     mockNetwork([sse([{ type: 'response.failed', response: { error: { code: 'subscription_sharing_usage_limit_exceeded' } } }])])
     await expect(runAssistant({ ...base, apikey: 'capgo-key-5', messages: [{ role: 'user', content: 'hi' }] })).rejects.toMatchObject({ code: 'chatgpt_usage_limit' })
+  })
+})
+
+describe('assistant model transport', () => {
+  afterEach(() => {
+    nativePlatform.mockReturnValue(false)
+    nativeRequest.mockReset()
+    getSession.mockClear()
+    vi.unstubAllGlobals()
+  })
+
+  it('does not send ChatGPT tokens without a console session', async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null }, error: null })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(assistantOpenAIRequest('models', 'chatgpt-token', { method: 'GET' })).rejects.toThrow('assistant_session_required')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps native model requests direct without a console session lookup', async () => {
+    nativePlatform.mockReturnValue(true)
+    nativeRequest.mockResolvedValueOnce({ status: 200, data: 'native-result' })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(assistantOpenAIRequest('responses', 'native-chatgpt-token', {
+      method: 'POST', body: '{"stream":true}', headers: { 'content-type': 'application/json' }, timeoutMs: 90_000,
+    })).resolves.toEqual({ status: 200, text: 'native-result' })
+    expect(nativeRequest).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://api.openai.com/v1/responses',
+      headers: { 'content-type': 'application/json', 'authorization': 'Bearer native-chatgpt-token' },
+      data: '{"stream":true}',
+      connectTimeout: 90_000,
+    }))
+    expect(getSession).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

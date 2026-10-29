@@ -6,6 +6,8 @@ import apiWorker from '../cloudflare_workers/api/index.ts'
 const NO_AUTH = { status: 401, error: 'no_jwt_apikey_or_subkey' }
 
 const cases: { name: string, method: string, path: string, body?: unknown, expected: { status: number, error: string } }[] = [
+  { name: 'assistant models', method: 'GET', path: '/private/assistant/models', expected: NO_AUTH },
+  { name: 'assistant responses', method: 'POST', path: '/private/assistant/responses', body: { store: false, stream: true }, expected: NO_AUTH },
   ...['GET', 'POST', 'DELETE'].map(method => ({ name: `custom_domains ${method}`, method, path: '/private/custom_domains/00000000-0000-4000-8000-000000000001', expected: NO_AUTH })),
   { name: 'onboarding_ab_tests', method: 'POST', path: '/private/onboarding_ab_tests', expected: NO_AUTH },
   { name: 'onboarding_progress', method: 'POST', path: '/private/onboarding_progress', expected: NO_AUTH },

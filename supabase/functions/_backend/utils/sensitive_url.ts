@@ -12,12 +12,11 @@ export function redactSensitiveUrl(url: string): string {
   return url.replace(SECRET_PATH_SEGMENT, '$1[redacted]')
 }
 
-const SECRET_BODY_ROUTE = /\/build\/(?:credentials|request)(?:[/?#]|$)/
+const SECRET_BODY_ROUTE = /\/(?:build\/(?:credentials|request)|private\/assistant)(?:[/?#]|$)/
 
 /**
- * Routes whose request body carries native build signing secrets (flat keys such as
- * P12_PASSWORD or APPLE_KEY_CONTENT). Their bodies must never be copied into
- * error reports, whatever the error.
+ * Routes whose request body carries native build signing secrets or assistant conversations.
+ * Their bodies must never be copied into error reports, whatever the error.
  */
 export function isSecretBodyRoute(url: string): boolean {
   let pathname = url

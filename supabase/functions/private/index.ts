@@ -1,4 +1,5 @@
 import { app as accept_invitation } from '../_backend/private/accept_invitation.ts'
+import { app as assistant } from '../_backend/private/assistant.ts'
 import { app as billing_region } from '../_backend/private/billing_region.ts'
 import { app as plan_prices } from '../_backend/private/plan_prices.ts'
 import { app as bundle_install_stats } from '../_backend/private/bundle_install_stats.ts'
@@ -68,6 +69,7 @@ const appGlobal = createHono(functionName, version)
 
 appGlobal.route('/plans', plans)
 appGlobal.route('/console', console_data)
+appGlobal.route('/assistant', assistant)
 appGlobal.route('/custom_domains', customDomains)
 appGlobal.route('/credits', credits)
 appGlobal.route('/store_top', storeTop)

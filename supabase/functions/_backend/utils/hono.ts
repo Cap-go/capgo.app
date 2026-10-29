@@ -176,6 +176,7 @@ export const useCors = cors({
   allowHeaders: [
     'Content-Type',
     'Authorization',
+    'x-chatgpt-token',
     'X-Capgo-Spoof-Admin-Authorization',
     'capgkey',
     'capgo_api',

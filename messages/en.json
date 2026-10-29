@@ -53,7 +53,7 @@
   "agent-claim-wrong-account": "This request is for {email}. Log out and log in with that account to continue.",
   "assistant-cancelled": "Cancel that, do not run it.",
   "assistant-chatgpt-connect-description": "Sign in with your ChatGPT account. The assistant uses your ChatGPT plan to answer, and acts on your apps, channels, bundles and devices through the Capgo MCP tools.",
-  "assistant-chatgpt-connect-note": "Your ChatGPT sign-in stays on this device and never goes to Capgo servers. Capgo also creates an \"MCP · Capgo Assistant\" API key for the organizations you manage, kept on this device too. You can revoke it from API keys and disconnect ChatGPT anytime.",
+  "assistant-chatgpt-connect-note": "Your ChatGPT credentials are stored on this device. On the web, your ChatGPT access token and conversation pass through Capgo's authenticated proxy to OpenAI. The native app connects directly to OpenAI. Capgo also creates an \"MCP · Capgo Assistant\" API key for the organizations you manage, kept on this device too. You can revoke it from API keys and disconnect ChatGPT anytime.",
   "assistant-chatgpt-connect-title": "Use your ChatGPT plan in Capgo",
   "assistant-chatgpt-continue": "Continue with ChatGPT",
   "assistant-chatgpt-denied": "ChatGPT sign-in was cancelled.",
