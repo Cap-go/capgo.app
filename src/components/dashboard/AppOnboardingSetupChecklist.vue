@@ -327,7 +327,7 @@ function statusLabel(status: string | undefined) {
       </div>
     </div>
 
-    <div v-if="!completed || !hideFooter" class="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-white/15 dark:bg-slate-900" :data-test="completed ? undefined : 'setup-checklist-handoff'">
+    <div v-if="!completed || !hideFooter" class="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between dark:border-white/15 dark:bg-slate-900" :data-test="completed ? undefined : 'setup-checklist-handoff'">
       <TechnicalTeammateInviteCard
         v-if="!completed"
         handoff
