@@ -170,20 +170,24 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       return runInProjectDir(async () => {
         const { projectDir, cwd, ...input } = (args[0] ?? {}) as { projectDir?: string, cwd?: string }
         const dir = await resolveProjectDirOptions({ projectDir, cwd }, selectedProjectDir)
-        if (dir) {
-          if (dir !== selectedProjectDir) {
-            selectedProjectDir = dir
-            refreshSdkForProject()
-          }
-          projectDirPinned = true
-          projectDirError = undefined
-        }
-        if (projectDirError && name !== 'capgo_set_project_dir')
+        const isProjectDirSetter = name === 'capgo_set_project_dir'
+        const baseDir = dir ?? selectedProjectDir
+        const workingDir = isProjectDirSetter
+          ? await resolveProjectDirInput(mcpSetProjectDirInputSchema.parse(input).path, baseDir)
+          : baseDir
+        if (projectDirError && !isProjectDirSetter && !dir)
           throw projectDirError
-        const workingDir = name === 'capgo_set_project_dir'
-          ? await resolveProjectDirInput(mcpSetProjectDirInputSchema.parse(input).path, selectedProjectDir)
-          : selectedProjectDir
-        return withCwd(workingDir, async () => tracked(input, ...args.slice(1)))
+        return withCwd(workingDir, async () => {
+          if (dir || isProjectDirSetter) {
+            if (workingDir !== selectedProjectDir) {
+              selectedProjectDir = workingDir
+              refreshSdkForProject()
+            }
+            projectDirPinned = true
+            projectDirError = undefined
+          }
+          return tracked(input, ...args.slice(1))
+        })
       })
     }
     const guided = withErrorGuidance(String(name), waitForProjectDir)
@@ -214,21 +218,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Point the Capgo MCP at the project the agent is working in. Call this FIRST with the absolute Capacitor app path when the project or @capacitor/core appears missing. A workspace with one Capacitor app resolves automatically; multiple apps require selecting an app path. Check the project path before installing dependencies.',
       inputSchema: mcpSetProjectDirInputSchema,
     },
-    async ({ path }) => {
-      try {
-        const dir = await resolveProjectDirInput(path, selectedProjectDir)
-        if (dir !== selectedProjectDir) {
-          selectedProjectDir = dir
-          refreshSdkForProject()
-        }
-        projectDirPinned = true
-        projectDirError = undefined
-        return { content: [{ type: 'text' as const, text: describeProjectDir(dir) }] }
-      }
-      catch (error) {
-        return { content: [{ type: 'text' as const, text: formatError(error) }], isError: true as const }
-      }
-    },
+    async () => ({ content: [{ type: 'text' as const, text: describeProjectDir(selectedProjectDir) }] }),
   )
 
   // ============================================================================

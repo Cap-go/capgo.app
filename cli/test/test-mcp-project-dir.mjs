@@ -153,6 +153,44 @@ if (!existsSync(bundlePath)) {
   fail++
 }
 else {
+  await test('invalid setter paths do not commit cwd or projectDir selectors', async () => {
+    await withServer([fileRoot(app)], async (client) => {
+      for (const selector of ['projectDir', 'cwd']) {
+        for (const path of [join(other, 'missing'), multiple]) {
+          const result = await client.callTool({ name: 'capgo_set_project_dir', arguments: { [selector]: other, path } })
+          eq(result.isError, true)
+          ok((await currentDir(client)).includes(`project directory: ${app} `), 'a failed setter must keep the previous app')
+        }
+      }
+      const relative = await client.callTool({ name: 'capgo_set_project_dir', arguments: { cwd: workspace, path: 'apps/mobile' } })
+      ok(!relative.isError, toolText(relative))
+      ok(toolText(relative).includes(`project directory: ${app} `), 'setter paths resolve from the explicit base directory once')
+    })
+  })
+
+  await test('failed setters do not pin a selector or stop subsequent roots updates', async () => {
+    await withServer([fileRoot(app)], async (client, setRoots) => {
+      const result = await client.callTool({ name: 'capgo_set_project_dir', arguments: { cwd: other, path: 'missing' } })
+      eq(result.isError, true)
+      setRoots([fileRoot(monorepo)])
+      await client.sendRootsListChanged()
+      ok((await currentDir(client)).includes(`project directory: ${mobile} `), 'the failed selector must not pin the project')
+    })
+  })
+
+  await test('failed setters preserve roots ambiguity until a valid explicit selection', async () => {
+    await withServer([fileRoot(multiple)], async (client) => {
+      const result = await client.callTool({ name: 'capgo_set_project_dir', arguments: { projectDir: other, path: 'missing' } })
+      eq(result.isError, true)
+      const blocked = await client.callTool({ name: 'capgo_generate_encryption_keys', arguments: {} })
+      eq(blocked.isError, true)
+      for (const directory of multipleApps)
+        ok(toolText(blocked).includes(directory), toolText(blocked))
+      const recovered = await client.callTool({ name: 'capgo_logout', arguments: { cwd: other, scope: 'local' } })
+      ok(!recovered.isError, toolText(recovered))
+    })
+  })
+
   await test('ambiguous client roots stop tools before writing files and recover through projectDir', async () => {
     await withServer([fileRoot(multiple)], async (client) => {
       const blocked = await client.callTool({ name: 'capgo_generate_encryption_keys', arguments: {} })
