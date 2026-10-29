@@ -7,34 +7,69 @@ import { defaultApiHost, useConsole } from '../../services/console'
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
 const capgo = useConsole()
-const pending = ref<'ios' | 'android' | ''>('')
+const pending = ref<'ios' | 'android' | 'stop' | ''>('')
+const sessionId = ref('')
 const url = ref('')
 const error = ref('')
+
+async function sessionToken() {
+  const { data } = await capgo.auth.getSession()
+  const token = data.session?.access_token
+  if (!token)
+    throw new Error(t('simulator-sign-in'))
+  return token
+}
 
 async function start(platform: 'ios' | 'android') {
   error.value = ''
   url.value = ''
+  sessionId.value = ''
   pending.value = platform
   try {
-    const { data } = await capgo.auth.getSession()
-    const token = data.session?.access_token
-    if (!token)
-      throw new Error(t('simulator-sign-in'))
     const response = await fetch(`${defaultApiHost}/private/simulator/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'authorization': `Bearer ${token}`,
+        'authorization': `Bearer ${await sessionToken()}`,
       },
       body: JSON.stringify({ app_id: props.appId, platform }),
     })
-    const payload = await response.json().catch(() => undefined) as { data?: { url?: string }, message?: string, error?: string } | undefined
+    const payload = await response.json().catch(() => undefined) as { data?: { id?: string, url?: string }, message?: string, error?: string } | undefined
     if (!response.ok)
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
+    sessionId.value = payload?.data?.id || ''
     url.value = payload?.data?.url || ''
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : t('simulator-did-not-start')
+  }
+  finally {
+    pending.value = ''
+  }
+}
+
+async function stop() {
+  if (!sessionId.value)
+    return
+  error.value = ''
+  pending.value = 'stop'
+  try {
+    const response = await fetch(`${defaultApiHost}/private/simulator/${sessionId.value}/stop`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': `Bearer ${await sessionToken()}`,
+      },
+      body: JSON.stringify({ app_id: props.appId }),
+    })
+    const payload = await response.json().catch(() => undefined) as { message?: string, error?: string } | undefined
+    if (!response.ok)
+      throw new Error(payload?.message || payload?.error || t('simulator-did-not-stop'))
+    sessionId.value = ''
+    url.value = ''
+  }
+  catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t('simulator-did-not-stop')
   }
   finally {
     pending.value = ''
@@ -59,6 +94,9 @@ async function start(platform: 'ios' | 'android') {
       </button>
       <button type="button" class="d-btn" :disabled="pending !== ''" @click="start('android')">
         {{ pending === 'android' ? t('simulator-starting') : t('start-android-simulator') }}
+      </button>
+      <button v-if="sessionId" type="button" class="d-btn" :disabled="pending !== ''" @click="stop()">
+        {{ pending === 'stop' ? t('simulator-stopping') : t('stop-simulator') }}
       </button>
     </div>
     <a v-if="url" class="inline-block mt-3 text-sm text-blue-600 underline dark:text-blue-400" :href="url" target="_blank" rel="noreferrer">

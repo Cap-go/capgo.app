@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(13);
+SELECT plan(15);
 
 INSERT INTO public.apps (owner_org, app_id, icon_url, name, user_id)
 VALUES (
@@ -131,6 +131,30 @@ SELECT throws_ok(
   'P0001',
   'Stop the running simulator before transferring this app.',
   'an active simulator blocks the app transfer'
+);
+
+SELECT set_config('capgo.allow_owner_org_transfer', 'false', true);
+
+UPDATE public.simulator_sessions
+SET started_at = now() - interval '2 hours'
+WHERE id = '99000000-0000-4000-8000-000000000002';
+
+SELECT set_config('capgo.allow_owner_org_transfer', 'true', true);
+
+UPDATE public.apps
+SET owner_org = '99000000-0000-4000-8000-000000000098'
+WHERE app_id = 'com.test.simulator.session';
+
+SELECT is(
+  (SELECT owner_org FROM public.apps WHERE app_id = 'com.test.simulator.session'),
+  '99000000-0000-4000-8000-000000000098'::uuid,
+  'an expired simulator does not block the app transfer'
+);
+
+SELECT is(
+  (SELECT status FROM public.simulator_sessions WHERE id = '99000000-0000-4000-8000-000000000002'),
+  'stopped',
+  'the transfer settles the expired simulator'
 );
 
 SELECT set_config('capgo.allow_owner_org_transfer', 'false', true);

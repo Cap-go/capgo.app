@@ -4157,5 +4157,8 @@
   "simulator-slot-minutes": "A running simulator uses one builder slot and build minutes.",
   "simulator-starting": "Starting",
   "start-android-simulator": "Start Android simulator",
-  "start-ios-simulator": "Start iOS simulator"
+  "start-ios-simulator": "Start iOS simulator",
+  "simulator-did-not-stop": "Simulator did not stop.",
+  "simulator-stopping": "Stopping",
+  "stop-simulator": "Stop simulator"
 }

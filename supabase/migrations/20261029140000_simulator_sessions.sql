@@ -172,6 +172,10 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- A session past its duration stays in-progress until the next reservation.
+  -- Settle it here so that leftover row does not block the transfer.
+  PERFORM public.expire_simulator_sessions(OLD.owner_org);
+
   IF EXISTS (
     SELECT 1
     FROM public.simulator_sessions
