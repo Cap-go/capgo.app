@@ -297,6 +297,14 @@ describe('mergeStoredCredentialsForBuild', () => {
     expect(result.buildCredentials).not.toHaveProperty('BUILD_OUTPUT_UPLOAD_ENABLED')
   })
 
+  it.concurrent('keeps symbols upload off by default and maps the stored opt-in to build_options', () => {
+    const base = { platform: 'ios', requestCredentials: {}, requestBuildOptions: {} } as const
+    expect(mergeStoredCredentialsForBuild({ ...base, stored: completeIos }).buildOptions.symbolsUploadEnabled).toBe(false)
+    const result = mergeStoredCredentialsForBuild({ ...base, stored: { ...completeIos, BUILD_SYMBOLS_UPLOAD_ENABLED: 'yes' } })
+    expect(result.buildOptions.symbolsUploadEnabled).toBe(true)
+    expect(result.buildCredentials).not.toHaveProperty('BUILD_SYMBOLS_UPLOAD_ENABLED')
+  })
+
   it.concurrent('ignores loader env names in stored credentials but keeps request (--build-env) ones', () => {
     const result = mergeStoredCredentialsForBuild({
       platform: 'android',

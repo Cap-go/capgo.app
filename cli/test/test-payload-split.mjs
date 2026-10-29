@@ -149,6 +149,7 @@ await test('Output and store release fields go to buildOptions, not buildCredent
   const merged = {
     BUILD_OUTPUT_UPLOAD_ENABLED: 'true',
     BUILD_OUTPUT_RETENTION_SECONDS: '7200',
+    BUILD_SYMBOLS_UPLOAD_ENABLED: 'true',
     SKIP_BUILD_NUMBER_BUMP: 'true',
     SKIP_MARKETING_VERSION_BUMP: 'true',
     CAPGO_STORE_SUBMIT_REVIEW: 'true',
@@ -165,6 +166,7 @@ await test('Output and store release fields go to buildOptions, not buildCredent
   // Output and store release control in options
   assertEquals(buildOptions.outputUploadEnabled, true, 'outputUploadEnabled should be true')
   assertEquals(buildOptions.outputRetentionSeconds, 7200, 'outputRetentionSeconds should be 7200')
+  assertEquals(buildOptions.symbolsUploadEnabled, true, 'symbolsUploadEnabled should be true')
   assertEquals(buildOptions.skipBuildNumberBump, true, 'skipBuildNumberBump should be true')
   assertEquals(buildOptions.skipMarketingVersionBump, true, 'skipMarketingVersionBump should be true')
   assertEquals(buildOptions.submitToStoreReview, true, 'submitToStoreReview should be true')
@@ -177,6 +179,7 @@ await test('Output and store release fields go to buildOptions, not buildCredent
   // Output and store release control NOT in credentials
   assert(!('BUILD_OUTPUT_UPLOAD_ENABLED' in buildCredentials), 'Output upload should not be in credentials')
   assert(!('BUILD_OUTPUT_RETENTION_SECONDS' in buildCredentials), 'Output retention should not be in credentials')
+  assert(!('BUILD_SYMBOLS_UPLOAD_ENABLED' in buildCredentials), 'Symbols upload should not be in credentials')
   assert(!('SKIP_BUILD_NUMBER_BUMP' in buildCredentials), 'Skip bump should not be in credentials')
   assert(!('SKIP_MARKETING_VERSION_BUMP' in buildCredentials), 'Skip marketing bump should not be in credentials')
   assert(!('CAPGO_STORE_SUBMIT_REVIEW' in buildCredentials), 'Store review flag should not be in credentials')
@@ -290,6 +293,7 @@ await test('NON_CREDENTIAL_KEYS covers all non-secret fields', async () => {
     'CAPGO_IOS_XCODE_VERSION',
     'BUILD_OUTPUT_UPLOAD_ENABLED',
     'BUILD_OUTPUT_RETENTION_SECONDS',
+    'BUILD_SYMBOLS_UPLOAD_ENABLED',
     'SKIP_BUILD_NUMBER_BUMP',
     'SKIP_MARKETING_VERSION_BUMP',
     'CAPGO_STORE_SUBMIT_REVIEW',

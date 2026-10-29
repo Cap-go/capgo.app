@@ -30,7 +30,7 @@ export interface WriteBuildOutputRecordInput {
   symbolsUrl?: string | null
 }
 
-// Line the builder prints once the debug symbols are uploaded (with --output-upload).
+// Line the builder prints once the debug symbols are uploaded (with --output-upload or --symbols-upload).
 const DEBUG_SYMBOLS_LINE = /Debug symbols for crash reporting \([^)]*\): (https?:\/\/\S+)/
 
 /** Download URL of the debug symbols from a build log line, or null. */
