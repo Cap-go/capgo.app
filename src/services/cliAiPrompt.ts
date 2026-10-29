@@ -111,6 +111,27 @@ Authentication requirements:
 - ${AUTHENTICATION_CONTINUATION[destination]}`
 }
 
+const ONBOARDING_RECOVERY_GUIDANCE = `### App identity and registration recovery
+
+The native bundle ID / Android applicationId identifies my app in the stores and signing configuration. The Capgo app ID defaults to it, but can be different. Let the onboarding tools inspect the project first, then report the effective Capgo app ID and app name before registration:
+
+- Live Updates uses \`plugins.CapacitorUpdater.appId\` if set, otherwise the native \`appId\` in \`capacitor.config\`.
+- Builder uses \`plugins.CapgoBuilder.capgoBuilderAppId\` if set, otherwise \`plugins.CapacitorUpdater.appId\` if set, otherwise the native \`appId\`.
+- Preserve existing overrides. Never change the native \`appId\`, iOS bundle identifier, Android \`applicationId\`, store listing, or signing identity just to resolve a Capgo app ID conflict.
+
+If registration reports that the app ID / bundle ID already exists or is taken (including \`app_id_already_exists\`, \`app-id-conflict\`, or HTTP 409), do not stop at the error or retry the same registration unchanged. Explain that Capgo app IDs are globally unique and offer these concrete choices:
+
+1. Check the apps this connection can access with \`capgo_list_apps\`. If the same app already belongs to the intended organization, reuse it instead of creating a duplicate; confirm it is the project I want to configure. An app missing from this list is not necessarily available: it may belong to an organization this connection cannot access.
+2. If my team owns it in another organization or account, ask an admin to invite me or reconnect MCP with the correct account, then reuse it. If it must move to the intended organization, an authorized admin can use the Capgo console's App settings > Transfer app ownership. Do not switch accounts or organizations, transfer ownership, delete an app, or modify another app without my confirmation.
+3. Otherwise, offer a different Capgo app ID using the MCP's suggestions, or a valid reverse-domain alternative such as \`com.example.app.capgo\`. Ask me to approve the exact ID before registration or configuration edits. Keep the native bundle ID unchanged: for Live Updates set \`plugins.CapacitorUpdater.appId\` in \`capacitor.config\`; for Builder set \`plugins.CapgoBuilder.capgoBuilderAppId\`. If configuring both products for this app, use the same approved Capgo app ID for both overrides. Register that ID through MCP in the intended organization and use it for subsequent Capgo operations. Run \`npx cap sync\` after the approved config change, before the first native validation build; never sync the later OTA-only test change into the native app.
+4. If nobody on my team created the existing app and I own the store listing, offer to contact support@capgo.app about reclaiming it. Do not promise an automatic transfer or claim to know who owns an inaccessible app.
+
+Present the applicable choices and wait for my decision; do not silently rename the app, pick another organization, or abandon setup. Resume the matching onboarding flow only after the selected recovery is complete and follow its returned \`next\` instruction. If the current guided step cannot perform the selected recovery, explain the exact action I need to take and how to resume rather than bypassing the flow.
+
+### Other MCP errors
+
+For any MCP error, explain what failed and give a concrete way forward using the returned \`how_to_fix.next_steps\` and \`next\` guidance when present. Use the matching \`*_explain\` tool if the step or options are unclear. Do not only repeat a raw error, retry unchanged indefinitely, skip a failed required step, restart onboarding to bypass a failed build, or claim setup is complete. If I must take an action, tell me exactly what to do and which step resumes afterward.`
+
 const BUILDER_MCP_SECTION = `## Install Capgo MCP and start Builder onboarding
 
 Capgo Builder setup must be conducted through Capgo MCP. Do not configure signing, credentials, native builds, or store access manually.
@@ -141,6 +162,8 @@ After installation, check whether Capgo MCP tools are available in the current s
 If the Capgo MCP server was already running before the mandatory CLI authentication, reconnect that server so it loads the newly saved login. If reconnecting requires an AI client restart, first try the sub-agent handoff above; only if that is not possible, give the restart and resume instructions above, then stop and wait.
 
 Once Capgo MCP is connected with the new login, call \`capgo_whoami\` and verify it is signed in before calling \`start_capgo_builder_onboarding\`. If I already named iOS or Android, pass that platform; otherwise omit it and let the tool ask.
+
+${ONBOARDING_RECOVERY_GUIDANCE}
 
 Follow every result's \`next\` instruction exactly. Use \`capgo_builder_onboarding_next_step\` and \`capgo_builder_onboarding_explain\` only as directed until setup is complete. Do not replace the MCP flow with manual repository inspection or web research, and do not claim success unless the onboarding tools report completion.`
 
@@ -666,7 +689,7 @@ export interface AiOnboardingPromptInput {
   goal?: AiOnboardingPromptGoal | null
 }
 
-const LIVE_UPDATES_START = '**Capgo Live Updates**: from my Capacitor project directory, call `start_capgo_live_update_onboarding`. It registers the app with the app ID (bundle ID) and name from `capacitor.config`, creates the `production` channel, installs the updater plugin, adds `notifyAppReady()`, then guides the first build, test upload and on-device check.'
+const LIVE_UPDATES_START = '**Capgo Live Updates**: from my Capacitor project directory, call `start_capgo_live_update_onboarding`. It registers or reuses the app with the effective Capgo app ID and name from `capacitor.config` (see the app identity rules below), creates the `production` channel, installs the updater plugin, adds `notifyAppReady()`, then guides the first build, test upload and on-device check.'
 const BUILDER_START = '**Capgo Builder**: call `start_capgo_builder_onboarding`. If I already named iOS or Android, pass that platform; otherwise omit it and let the tool ask.'
 
 const PRODUCT_SUMMARY = `- Capgo Live Updates ships web-layer changes (JavaScript, HTML, CSS, assets) to apps already installed on devices, without store review. It needs an app that is installed from the stores or a test build.
@@ -771,7 +794,7 @@ ${appState}
 
 ${buildGoalSection(goal)}
 
-Before the app is registered, tell me the app ID and app name that will be used, so I can stop you if they are wrong.
+${ONBOARDING_RECOVERY_GUIDANCE}
 
 If this workspace has no Capacitor project, ask me where it is. If I do not have one yet, explain that Capgo needs a Capacitor app, point me to https://capacitorjs.com/docs/getting-started, and stop.
 
