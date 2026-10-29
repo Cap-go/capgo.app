@@ -107,7 +107,7 @@
     "test:preview-qr": "bun test/test-preview-qr.mjs",
     "test:bundle-pages": "bun test test/test-bundle-pages.test.ts",
     "test:bundle-single-requests": "bun test test/test-bundle-single-requests.test.ts",
-    "test:mcp-analytics": "bun test/test-mcp-analytics.mjs",
+    "test:mcp-analytics": "bun test/test-mcp-analytics.mjs && bun test/test-mcp-telemetry-project.mjs",
     "test:mcp-instructions": "bun test/test-mcp-instructions.mjs",
     "test:mcp-error-guidance": "bun test/test-mcp-error-guidance.mjs",
     "test:mcp-stdout-guard": "bun test/test-mcp-stdout-guard.mjs",

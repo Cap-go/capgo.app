@@ -163,6 +163,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // for a pending roots sync so its first call already runs in the agent's project.
   const originalRegisterTool = server.registerTool.bind(server)
   ;(server as unknown as { registerTool: typeof server.registerTool }).registerTool = (name: string, config: Parameters<typeof server.registerTool>[1], handler: Parameters<typeof server.registerTool>[2]) => {
+    const tracked = withMcpToolTracking(String(name), async (...args: unknown[]) => (handler as (...args: unknown[]) => unknown)(...args))
     // Never leave the agent in a dead end: every error result (or throw) gets a way out appended.
     const waitForProjectDir = async (...args: unknown[]) => {
       await projectDirSync
@@ -179,16 +180,18 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         }
         if (projectDirError && name !== 'capgo_set_project_dir')
           throw projectDirError
-        return withCwd(selectedProjectDir, async () => (handler as (...args: unknown[]) => unknown)(input, ...args.slice(1)))
+        const workingDir = name === 'capgo_set_project_dir'
+          ? await resolveProjectDirInput(mcpSetProjectDirInputSchema.parse(input).path, selectedProjectDir)
+          : selectedProjectDir
+        return withCwd(workingDir, async () => tracked(input, ...args.slice(1)))
       })
     }
     const guided = withErrorGuidance(String(name), waitForProjectDir)
-    const tracked = withMcpToolTracking(String(name), guided)
     const contextFields = { projectDir: mcpProjectDirOptionSchema, cwd: mcpCwdOptionSchema }
     const inputSchema = config.inputSchema instanceof z.ZodObject
       ? config.inputSchema.safeExtend(contextFields)
       : z.object({ ...config.inputSchema, ...contextFields })
-    return originalRegisterTool(name, { ...config, inputSchema } as unknown as typeof config, tracked as typeof handler)
+    return originalRegisterTool(name, { ...config, inputSchema } as unknown as typeof config, guided as typeof handler)
   }
 
   // Initialize the SDK from any saved key. Silent lookup (env -> ~/.capgo -> ./.capgo):
