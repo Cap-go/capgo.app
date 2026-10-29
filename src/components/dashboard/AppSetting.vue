@@ -22,6 +22,7 @@ import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
+import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getAppDeletionTrackingProperties } from '~/utils/appDeletionFeedback'
 
@@ -259,6 +260,7 @@ async function deleteApp() {
       sendOnboardingEvent('app_deletion_failed', getDeletionEventProperties())
     }
     else {
+      useDashboardAppsStore().reset()
       await organizationStore.fetchOrganizations()
       toast.success(t('app-deleted'))
       sendOnboardingEvent('app_deletion_completed', getDeletionEventProperties())
@@ -1853,7 +1855,7 @@ async function transferAppOwnership() {
                 v-model="selectedChannel"
                 type="radio"
                 :value="channel.name"
-                class="radio radio-primary"
+                class="d-radio d-radio-primary"
               >
               <span class="text-sm font-medium">{{ channel.name }}</span>
             </label>
@@ -1948,7 +1950,7 @@ async function transferAppOwnership() {
                     v-model="selectedCombinedChannelId"
                     type="radio"
                     :value="channel.id"
-                    class="mt-1 radio radio-primary"
+                    class="mt-1 d-radio d-radio-primary"
                   >
                   <div class="flex flex-col">
                     <span class="text-sm font-medium">{{ channel.name }}</span>
@@ -1997,7 +1999,7 @@ async function transferAppOwnership() {
                     v-model="selectedDownloadChannelIds[section.platform]"
                     type="radio"
                     :value="channel.id"
-                    class="mt-1 radio radio-primary"
+                    class="mt-1 d-radio d-radio-primary"
                   >
                   <div class="flex flex-col">
                     <span class="text-sm font-medium">{{ channel.name }}</span>

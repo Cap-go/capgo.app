@@ -4,8 +4,9 @@ import type { Database } from '../../utils/supabase.types.ts'
 import type { DeviceLink } from './delete.ts'
 import { syncLegacyChannelSelfOverrideForDevice } from '../../utils/channelSelfStore.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey, updateOrCreateChannelDevice } from '../../utils/supabase.ts'
+import { updateOrCreateChannelDevice } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 export async function post(c: Context<MiddlewareKeyVariables, any, object>, body: DeviceLink, apikey: Database['public']['Tables']['apikeys']['Row']) {
@@ -22,17 +23,24 @@ export async function post(c: Context<MiddlewareKeyVariables, any, object>, body
   }
 
   const effectiveApikey = apikey.key ?? (c.get('capgkey') as string)
-  const supabase = supabaseApikey(c, effectiveApikey)
+  const principal = apikeyPrincipal(c, effectiveApikey)
 
   // if channel set channel_override to it
   if (body.channel) {
     // get channel by name through the caller's RBAC-visible scope
-    const { data: dataChannel, error: dbError } = await supabase
-      .from('channels')
-      .select()
-      .eq('app_id', body.app_id)
-      .eq('name', body.channel)
-      .single()
+    let dataChannel: { id: number, public: boolean, owner_org: string } | null = null
+    let dbError: unknown = null
+    try {
+      const rows = await withRlsContext(c, principal, client => queryJson<{ id: number, public: boolean, owner_org: string }>(
+        client,
+        'SELECT id, public, owner_org FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+        [body.app_id, body.channel],
+      ))
+      dataChannel = rows.length === 1 ? rows[0] : null
+    }
+    catch (error) {
+      dbError = error
+    }
     if (dbError || !dataChannel) {
       throw quickError(404, 'channel_not_found', 'Cannot find channel', { dbError })
     }
@@ -55,7 +63,7 @@ export async function post(c: Context<MiddlewareKeyVariables, any, object>, body
     if (channelDeviceError) {
       throw quickError(500, 'channel_device_error', 'Error setting channel override', { channelDeviceError })
     }
-    if (!(await syncLegacyChannelSelfOverrideForDevice(c, supabase, {
+    if (!(await syncLegacyChannelSelfOverrideForDevice(c, principal, {
       device_id: body.device_id,
       channel_id: dataChannel.id,
       app_id: body.app_id,

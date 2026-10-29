@@ -6,13 +6,25 @@ import { syncBentoSubscriberTags, trackBentoEvent } from './bento.ts'
 import { TRIAL_CARD_BENTO_TAG } from './billing_bento_tags.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import type { PgQueryClient } from './pg.ts'
 import { checkoutPgClient, closeClient, getPgClient, releasePgClient, TRANSACTION_IDLE_TIMEOUT_MS } from './pg.ts'
+import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { PriceTier } from './country_price_tier.ts'
 import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { getCustomerBilling, isRegionalCurrency } from './regional_price.ts'
-import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
-import { supabaseAdmin } from './supabase.ts'
+import type { Database } from './supabase.types.ts'
+import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, singleRowOrNull, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
+
+type PlanRow = Database['public']['Tables']['plans']['Row']
+
+function adminQuery<T>(c: Context, run: (client: PgQueryClient) => Promise<T>) {
+  return withRlsContext(c, servicePrincipal, run)
+}
+
+function setStripeInfoProduct(c: Context, customerId: string, productId: string) {
+  return adminQuery(c, client => client.query('UPDATE public.stripe_info SET product_id = $2 WHERE customer_id = $1', [customerId, productId]))
+}
 
 // Starts the plan picked during onboarding when the free trial ends, charging the saved card.
 // A subscription schedule creates no subscription until its start date, so the org stays a
@@ -88,13 +100,12 @@ export function getTrialPlanPriceId(plan: TrialPlanPriceRow, billingAccount: Bil
 
 // Currencies the tier's regional price is sold in, so USD can stand in where Stripe lacks the local one.
 async function getRegionalSoldCurrencies(c: Context, ctx: InAppBillingContext, tier: PriceTier): Promise<string[] | null> {
-  const { data: plans, error } = await supabaseAdmin(c)
-    .from('plans')
-    .select('regional_price_ids')
-    .in('name', [...SCHEDULABLE_TRIAL_PLAN_NAMES])
-  if (error)
-    throw error
-  const priceId = (plans ?? []).map(plan => getRegionalPlanPriceId(plan.regional_price_ids, tier, ctx.billingAccount, 'month')).find(id => !!id)
+  const plans = await adminQuery(c, client => queryJson<Pick<PlanRow, 'regional_price_ids'>>(
+    client,
+    'SELECT regional_price_ids FROM public.plans WHERE name = ANY($1::text[])',
+    [[...SCHEDULABLE_TRIAL_PLAN_NAMES]],
+  ))
+  const priceId = plans.map(plan => getRegionalPlanPriceId(plan.regional_price_ids, tier, ctx.billingAccount, 'month')).find(id => !!id)
   if (!priceId)
     return null
   const price = await ctx.stripe.prices.retrieve(priceId, { expand: ['currency_options'] })
@@ -117,13 +128,11 @@ export async function getTrialPriceTier(c: Context, ctx: InAppBillingContext): P
 }
 
 async function loadTrialState(c: Context, ctx: InAppBillingContext): Promise<TrialState | null> {
-  const { data: info, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('product_id, trial_at, status, subscription_id')
-    .eq('customer_id', ctx.customerId)
-    .maybeSingle()
-  if (error)
-    throw error
+  const info = singleRowOrNull(await adminQuery(c, client => queryJson<{ product_id: string | null, trial_at: string | null, status: string | null, subscription_id: string | null }>(
+    client,
+    'SELECT product_id, trial_at, status, subscription_id FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+    [ctx.customerId],
+  )))
   // Orgs that already subscribed manage their plan through checkout, not this flow. A linked
   // subscription counts even when a failed charge left the status at failed.
   const hasLiveSubscription = !!info?.subscription_id && info.status !== 'canceled' && info.status !== 'deleted'
@@ -158,17 +167,16 @@ function isSchedulableTrialPlanName(name: string | null | undefined): boolean {
 // Monthly Solo/Maker/Team for the org's billing account so the prompt can switch before scheduling.
 export async function listSchedulableTrialPlans(c: Context, ctx: InAppBillingContext): Promise<TrialPlanOption[]> {
   const { billingAccount } = ctx
-  const [{ data: plans, error }, tier] = await Promise.all([
-    supabaseAdmin(c)
-      .from('plans')
-      .select('name, price_m, stripe_id, price_m_id, price_y_id, stripe_id_us, price_m_id_us, price_y_id_us, regional_price_ids')
-      .in('name', [...SCHEDULABLE_TRIAL_PLAN_NAMES]),
+  const [plans, tier] = await Promise.all([
+    adminQuery(c, client => queryJson<Pick<PlanRow, 'name' | 'price_m' | 'stripe_id' | 'price_m_id' | 'price_y_id' | 'stripe_id_us' | 'price_m_id_us' | 'price_y_id_us' | 'regional_price_ids'>>(
+      client,
+      'SELECT name, price_m, stripe_id, price_m_id, price_y_id, stripe_id_us, price_m_id_us, price_y_id_us, regional_price_ids FROM public.plans WHERE name = ANY($1::text[])',
+      [[...SCHEDULABLE_TRIAL_PLAN_NAMES]],
+    )),
     getTrialPriceTier(c, ctx),
   ])
-  if (error)
-    throw error
   // Console Plans page lists these in USD; keep the picker consistent.
-  const options = await Promise.all((plans ?? []).map(async (plan): Promise<TrialPlanOption | null> => {
+  const options = await Promise.all(plans.map(async (plan): Promise<TrialPlanOption | null> => {
     try {
       const productId = getPlanProductId(plan, billingAccount)
       if (!productId || !isSchedulableTrialPlanName(plan.name))
@@ -212,12 +220,7 @@ async function applyTrialPlanProduct(c: Context, ctx: InAppBillingContext, produ
   }
   if (nextProductId !== productId)
     throw simpleError('invalid_trial_plan', 'This plan cannot start automatically when the trial ends')
-  const { error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .update({ product_id: nextProductId })
-    .eq('customer_id', ctx.customerId)
-  if (error)
-    throw error
+  await setStripeInfoProduct(c, ctx.customerId, nextProductId)
   return { planName: plan.name!, productId: nextProductId, priceId, startsAt: state.startsAt }
 }
 
@@ -365,10 +368,14 @@ async function ensureDefaultPaymentMethod(ctx: InAppBillingContext) {
 }
 
 async function getTrialPlanBentoEmails(c: Context, orgId: string, userId: string | undefined) {
-  const admin = supabaseAdmin(c)
-  const [{ data: org }, { data: user }] = await Promise.all([
-    admin.from('orgs').select('management_email').eq('id', orgId).maybeSingle(),
-    userId ? admin.from('users').select('email').eq('id', userId).maybeSingle() : Promise.resolve({ data: null }),
+  // Lookup errors only drop that address, as before.
+  const [org, user] = await Promise.all([
+    adminQuery(c, client => client.query<{ management_email: string | null }>('SELECT management_email FROM public.orgs WHERE id = $1 LIMIT 2', [orgId]))
+      .then(result => result.rows.length === 1 ? result.rows[0] : null, () => null),
+    userId
+      ? adminQuery(c, client => client.query<{ email: string | null }>('SELECT email FROM public.users WHERE id = $1 LIMIT 2', [userId]))
+          .then(result => result.rows.length === 1 ? result.rows[0] : null, () => null)
+      : Promise.resolve(null),
   ])
   return Array.from(new Set([org?.management_email, user?.email]
     .filter((email): email is string => typeof email === 'string' && email.trim().length > 0)
@@ -651,10 +658,7 @@ export async function startTrialPlanNow(
     planProductId = typeof price.product === 'string' ? price.product : price.product.id
     const { data: plan } = await findPlanByProductId(c, planProductId)
     planName = plan?.name ?? ''
-    const { error } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .update({ product_id: planProductId })
-      .eq('customer_id', ctx.customerId)
+    const error = await setStripeInfoProduct(c, ctx.customerId, planProductId).then(() => null, (updateError: unknown) => updateError)
     if (error)
       cloudlogErr({ requestId: c.get('requestId'), message: 'trial plan start now product restore failed', orgId, subscriptionId: subscription.id, error })
   }

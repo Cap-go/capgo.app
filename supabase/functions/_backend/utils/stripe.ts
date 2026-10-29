@@ -6,6 +6,7 @@ import type { PriceTier } from './country_price_tier.ts'
 import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { getCustomerBilling, getPriceTier, isRegionalCurrency } from './regional_price.ts'
 import {
   BillingAccountUnavailableError,
@@ -19,9 +20,9 @@ import {
   isStripeConfiguredForAccount,
   planProductIdOrFilter,
   resolveCheckoutPlanProductId,
+  singleRowOrNull,
   TRIAL_PLAN_SCHEDULE_METADATA_KEY,
 } from './stripe_billing.ts'
-import { supabaseAdmin } from './supabase.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
 export type { BillingAccount } from './stripe_billing.ts'
@@ -378,13 +379,15 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
       }
     }
 
-    const { data: currentStripeInfo, error: currentStripeInfoError } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .select('status, past_due_at')
-      .eq('customer_id', customerId)
-      .maybeSingle()
-
-    if (currentStripeInfoError) {
+    let currentStripeInfo: { status: string | null, past_due_at: string | null } | null
+    try {
+      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null }>(
+        client,
+        'SELECT status, past_due_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        [customerId],
+      )))
+    }
+    catch (currentStripeInfoError) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'syncSubscriptionData current stripe_info', error: currentStripeInfoError })
       return
     }
@@ -423,12 +426,10 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     // Extra MAU only counts while the subscription that bought it is live.
     updateData.extra_mau = dbStatus === 'succeeded' ? subscriptionData?.extraMau ?? 0 : 0
 
-    const { error: updateError } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .update(updateData)
-      .eq('customer_id', customerId)
-
-    if (updateError) {
+    try {
+      await withRlsContext(c, servicePrincipal, client => updateStripeInfoByCustomer(client, customerId, updateData))
+    }
+    catch (updateError) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'syncSubscriptionData', error: updateError })
     }
   }
@@ -437,17 +438,43 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
   }
 }
 
+const STRIPE_INFO_SYNC_COLUMNS = new Set([
+  'status',
+  'past_due_at',
+  'churn_reason',
+  'product_id',
+  'subscription_id',
+  'subscription_anchor_start',
+  'subscription_anchor_end',
+  'canceled_at',
+  'extra_mau',
+])
+
+// Column names come from the fixed set above; values are always bound.
+async function updateStripeInfoByCustomer(client: Parameters<typeof queryJson>[0], customerId: string, updateData: Record<string, unknown>) {
+  const columns = Object.keys(updateData).filter(column => STRIPE_INFO_SYNC_COLUMNS.has(column))
+  if (!columns.length)
+    return
+  const assignments = columns.map((column, index) => `"${column}" = $${index + 2}`).join(', ')
+  await client.query(`UPDATE public.stripe_info SET ${assignments} WHERE customer_id = $1`, [customerId, ...columns.map(column => updateData[column])])
+}
+
 export type PortalFlow = 'cancel_subscription'
 
 // known is false on a stripe_info read error: the subscription may exist, so callers must not
 // treat null as "no subscription" for destructive work (e.g. spare-card detach).
 export async function lookupActiveSubscriptionId(c: Context, customerId: string) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('subscription_id, status')
-    .eq('customer_id', customerId)
-    .maybeSingle()
-  if (error) {
+  let data: { subscription_id: string | null, status: string | null } | null
+  try {
+    data = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = await client.query<{ subscription_id: string | null, status: string | null }>(
+        'SELECT subscription_id, status FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        [customerId],
+      )
+      return singleRowOrNull(result.rows)
+    })
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getActiveSubscriptionId', error })
     return { subscriptionId: null as string | null, known: false }
   }
@@ -577,16 +604,17 @@ export async function syncStripeCustomerCountry(c: Context, customerId: string |
   if (customerCountry === undefined)
     return undefined
 
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .update({ customer_country: customerCountry })
-    .eq('customer_id', customerId)
-    .select('customer_id')
-
-  if (error) {
+  let updatedRows: number | null = null
+  try {
+    updatedRows = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = await client.query('UPDATE public.stripe_info SET customer_country = $2 WHERE customer_id = $1', [customerId, customerCountry])
+      return result.rowCount ?? 0
+    })
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'syncStripeCustomerCountry', customerId, error })
   }
-  else if (!data?.length) {
+  if (updatedRows === 0) {
     cloudlog({ requestId: c.get('requestId'), message: 'syncStripeCustomerCountry no stripe_info row matched', customerId, customerCountry })
   }
 
@@ -714,14 +742,16 @@ export async function getLatestOpenSubscriptionInvoice(c: Context, customerId: s
 
 async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount, tier: PriceTier): Promise<string | null> {
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .from('plans')
-      .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us, regional_price_ids')
-      .or(planProductIdOrFilter(planId))
-      .single()
-
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error })
+    planProductIdOrFilter(planId)
+    const plans = await withRlsContext(c, servicePrincipal, client => queryJson<Pick<Database['public']['Tables']['plans']['Row'], 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us' | 'regional_price_ids'>>(
+      client,
+      'SELECT price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us, regional_price_ids FROM public.plans WHERE stripe_id = $1 OR stripe_id_us = $1 LIMIT 2',
+      [planId],
+    ))
+    // `.single()`: anything but exactly one plan is an error.
+    const data = plans.length === 1 ? plans[0] : null
+    if (!data) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error: { code: 'PGRST116', rows: plans.length } })
       return null
     }
 
@@ -916,11 +946,18 @@ function hashString(value: string) {
 // `currencyRatios` (local minor units per USD cent, from the plan price) mirrors the plan's currency_options,
 // so a non-USD checkout can bill both items in one currency at the plan's local pricing.
 async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null, billingAccount: BillingAccount = 'ee', currencyRatios: Record<string, number> = {}) {
-  const { data: steps, error } = await supabaseAdmin(c)
-    .from('capgo_credits_steps')
-    .select('step_min, step_max, price_per_unit')
-    .eq('type', 'mau')
-    .is('org_id', null)
+  let steps: { step_min: number, step_max: number, price_per_unit: number }[] | null = null
+  let error: unknown = null
+  try {
+    steps = await withRlsContext(c, servicePrincipal, client => queryJson<{ step_min: number, step_max: number, price_per_unit: number }>(
+      client,
+      'SELECT step_min, step_max, price_per_unit FROM public.capgo_credits_steps WHERE type = $1 AND org_id IS NULL',
+      ['mau'],
+    ))
+  }
+  catch (stepsError) {
+    error = stepsError
+  }
   if (error || !steps?.length)
     throw simpleError('mau_tiers_not_found', 'Cannot load MAU price tiers', { error })
 

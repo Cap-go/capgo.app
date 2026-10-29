@@ -4,12 +4,12 @@ const {
   captureInvitationEventMock,
   cloudlogErrMock,
   createSignedImageUrlMock,
-  supabaseAdminMock,
+  getPgClientMock,
 } = vi.hoisted(() => ({
   captureInvitationEventMock: vi.fn(),
   cloudlogErrMock: vi.fn(),
   createSignedImageUrlMock: vi.fn(),
-  supabaseAdminMock: vi.fn(),
+  getPgClientMock: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -25,8 +25,9 @@ vi.mock('../supabase/functions/_backend/utils/storage.ts', () => ({
   createSignedImageUrl: createSignedImageUrlMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: supabaseAdminMock,
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: vi.fn(),
+  getPgClient: getPgClientMock,
 }))
 
 const { app } = await import('../supabase/functions/_backend/private/organization_invitation.ts')
@@ -55,7 +56,7 @@ interface ClientOptions {
   organizationOwner?: { created_by: string } | null
 }
 
-function buildAdminClient(options: ClientOptions = {}) {
+function buildPgClient(options: ClientOptions = {}) {
   const invitationIdentity = {
     email: 'invitee@example.com',
     future_uuid: FUTURE_USER_ID,
@@ -63,38 +64,27 @@ function buildAdminClient(options: ClientOptions = {}) {
   }
 
   return {
-    rpc: vi.fn(() => ({
-      maybeSingle: async () => ({
-        data: options.invitationData === undefined ? INVITATION_DATA : options.invitationData,
-        error: null,
-      }),
-    })),
-    from: vi.fn((table: string) => {
-      const chain: any = {
-        eq: () => chain,
-        maybeSingle: async () => {
-          if (table === 'tmp_users') {
-            return {
-              data: options.identityError ? null : invitationIdentity,
-              error: options.identityError ?? null,
-            }
-          }
-          if (table === 'orgs') {
-            return {
-              data: options.organizationError
-                ? null
-                : (options.organizationOwner === undefined ? { created_by: ORG_OWNER_ID } : options.organizationOwner),
-              error: options.organizationError ?? null,
-            }
-          }
-          return {
-            data: options.existingUser === undefined ? { id: USER_ID } : options.existingUser,
-            error: null,
-          }
-        },
-        select: () => chain,
+    query: vi.fn(async (text: string) => {
+      if (text.includes('public.get_invite_by_magic_lookup')) {
+        const invitationData = options.invitationData === undefined ? INVITATION_DATA : options.invitationData
+        return { rows: invitationData ? [{ row: invitationData }] : [] }
       }
-      return chain
+      if (text.includes('FROM public.tmp_users')) {
+        if (options.identityError)
+          throw options.identityError
+        return { rows: [invitationIdentity] }
+      }
+      if (text.includes('FROM public.orgs')) {
+        if (options.organizationError)
+          throw options.organizationError
+        const owner = options.organizationOwner === undefined ? { created_by: ORG_OWNER_ID } : options.organizationOwner
+        return { rows: owner ? [owner] : [] }
+      }
+      if (text.includes('FROM public.users')) {
+        const existingUser = options.existingUser === undefined ? { id: USER_ID } : options.existingUser
+        return { rows: existingUser ? [existingUser] : [] }
+      }
+      throw new Error(`Unexpected query: ${text}`)
     }),
   }
 }
@@ -121,7 +111,7 @@ describe('magic-link invitation lookup endpoint', () => {
   })
 
   it('returns a signed organization logo and tracks a new account with its future Capgo UUID', async () => {
-    supabaseAdminMock.mockReturnValue(buildAdminClient({ existingUser: null }))
+    getPgClientMock.mockResolvedValue(buildPgClient({ existingUser: null }))
 
     const response = await postMagicLookup()
 
@@ -141,7 +131,7 @@ describe('magic-link invitation lookup endpoint', () => {
   })
 
   it('tracks an already-existing account using its actual Capgo UUID without exposing PII', async () => {
-    supabaseAdminMock.mockReturnValue(buildAdminClient({ existingUser: { id: USER_ID } }))
+    getPgClientMock.mockResolvedValue(buildPgClient({ existingUser: { id: USER_ID } }))
 
     const response = await postMagicLookup()
 
@@ -158,7 +148,7 @@ describe('magic-link invitation lookup endpoint', () => {
 
   it('uses the organization owner scope for legacy logo storage paths', async () => {
     const legacyLogoPath = `${ORG_OWNER_ID}/organization-logo.png`
-    supabaseAdminMock.mockReturnValue(buildAdminClient({
+    getPgClientMock.mockResolvedValue(buildPgClient({
       invitationData: {
         ...INVITATION_DATA,
         org_logo: legacyLogoPath,
@@ -178,7 +168,7 @@ describe('magic-link invitation lookup endpoint', () => {
 
   it('does not sign a logo storage key belonging to another organization', async () => {
     const outOfScopeLogoPath = `org/${OTHER_ORG_ID}/logo/organization-logo.png`
-    supabaseAdminMock.mockReturnValue(buildAdminClient({
+    getPgClientMock.mockResolvedValue(buildPgClient({
       invitationData: {
         ...INVITATION_DATA,
         org_logo: outOfScopeLogoPath,
@@ -200,7 +190,7 @@ describe('magic-link invitation lookup endpoint', () => {
     ['external', 'https://cdn.example.com/organization-logo.png'],
     ['Supabase storage', 'https://example.supabase.co/storage/v1/object/public/images/organization-logo.png'],
   ])('keeps %s organization logo URLs unchanged', async (_label, logoUrl) => {
-    supabaseAdminMock.mockReturnValue(buildAdminClient({
+    getPgClientMock.mockResolvedValue(buildPgClient({
       invitationData: {
         ...INVITATION_DATA,
         org_logo: logoUrl,
@@ -215,7 +205,7 @@ describe('magic-link invitation lookup endpoint', () => {
   })
 
   it('does not emit viewed for an invalid or expired invitation', async () => {
-    supabaseAdminMock.mockReturnValue(buildAdminClient({ invitationData: null }))
+    getPgClientMock.mockResolvedValue(buildPgClient({ invitationData: null }))
 
     const response = await postMagicLookup('invalid-token')
 
@@ -224,7 +214,7 @@ describe('magic-link invitation lookup endpoint', () => {
   })
 
   it('still returns invitation details when telemetry identity lookup fails', async () => {
-    supabaseAdminMock.mockReturnValue(buildAdminClient({ identityError: new Error('database unavailable') }))
+    getPgClientMock.mockResolvedValue(buildPgClient({ identityError: new Error('database unavailable') }))
 
     const response = await postMagicLookup()
 
@@ -238,7 +228,7 @@ describe('magic-link invitation lookup endpoint', () => {
   })
 
   it('falls back to initials instead of returning a raw logo key when signing fails', async () => {
-    supabaseAdminMock.mockReturnValue(buildAdminClient())
+    getPgClientMock.mockResolvedValue(buildPgClient())
     createSignedImageUrlMock.mockResolvedValueOnce(null)
 
     const response = await postMagicLookup()
@@ -251,7 +241,7 @@ describe('magic-link invitation lookup endpoint', () => {
   })
 
   it('still returns invitation details when PostHog capture fails', async () => {
-    supabaseAdminMock.mockReturnValue(buildAdminClient())
+    getPgClientMock.mockResolvedValue(buildPgClient())
     captureInvitationEventMock.mockRejectedValue(new Error('PostHog unavailable'))
 
     const response = await postMagicLookup()

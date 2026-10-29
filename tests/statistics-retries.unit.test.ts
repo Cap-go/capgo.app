@@ -27,19 +27,24 @@ describe('statistics retry helpers', () => {
   })
 
   it('marks missing apps as not found when the lookup returns no rows', async () => {
-    const supabase = {
-      from: vi.fn(() => ({
-        select: vi.fn(() => ({
-          eq: vi.fn(() => ({
-            maybeSingle: vi.fn(async () => ({ data: null, error: null })),
-          })),
-        })),
-      })),
-    } as any
+    const db = vi.fn(async () => []) as any
 
-    const result = await statisticsTestUtils.resolveAppOwnerOrg(fakeContext, 'com.demo.missing', supabase)
+    const result = await statisticsTestUtils.resolveAppOwnerOrg(fakeContext, 'com.demo.missing', db)
 
     expect(result).toEqual({ ownerOrg: null, error: null, notFound: true })
+    expect(db).toHaveBeenCalledWith('SELECT owner_org FROM public.apps WHERE app_id = $1', ['com.demo.missing'])
+  })
+
+  it('returns the lookup error without marking the app missing', async () => {
+    const lookupError = Object.assign(new Error('permission denied for table apps'), { code: '42501' })
+    const db = vi.fn(async () => {
+      throw lookupError
+    }) as any
+
+    const result = await statisticsTestUtils.resolveAppOwnerOrg(fakeContext, 'com.demo.app', db)
+
+    expect(result).toEqual({ ownerOrg: null, error: lookupError, notFound: false })
+    expect(db).toHaveBeenCalledTimes(1)
   })
 
   it('detects missing-app errors in aggregated statistics results', () => {

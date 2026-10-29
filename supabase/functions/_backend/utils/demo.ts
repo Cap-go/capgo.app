@@ -3,20 +3,24 @@ import type { MiddlewareKeyVariables } from './hono.ts'
 import type { PgQueryClient } from './pg.ts'
 import { cloudlog } from './logging.ts'
 import { checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
-import { supabaseAdmin } from './supabase.ts'
 
 export function isDemoAppRow(app?: { need_onboarding?: boolean | null }): boolean {
   return app?.need_onboarding === true
 }
 
 export async function isDemoApp(c: Context<MiddlewareKeyVariables>, appId: string): Promise<boolean> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('apps')
-    .select('need_onboarding')
-    .eq('app_id', appId)
-    .maybeSingle()
-
-  if (error) {
+  let data: { need_onboarding: boolean | null } | undefined
+  try {
+    const pg = await getPgClient(c)
+    try {
+      const result = await pg.query<{ need_onboarding: boolean | null }>('SELECT need_onboarding FROM public.apps WHERE app_id = $1 LIMIT 1', [appId])
+      data = result.rows[0]
+    }
+    finally {
+      closeClient(c, pg)
+    }
+  }
+  catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'Cannot load onboarding app flag', error, app_id: appId })
     throw error
   }

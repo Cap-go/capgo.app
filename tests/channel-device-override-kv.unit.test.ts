@@ -7,6 +7,7 @@ const supabaseWithAuthMock = vi.fn()
 const syncLegacyChannelSelfOverrideDeleteForDeviceMock = vi.fn()
 const syncLegacyChannelSelfOverrideForDeviceMock = vi.fn()
 const updateOrCreateChannelDeviceMock = vi.fn()
+const withRlsContextMock = vi.fn()
 
 vi.mock('../supabase/functions/_backend/utils/channelSelfStore.ts', () => ({
   syncLegacyChannelSelfOverrideDeleteForDevice: syncLegacyChannelSelfOverrideDeleteForDeviceMock,
@@ -42,6 +43,14 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseWithAuth: supabaseWithAuthMock,
   updateOrCreateChannelDevice: updateOrCreateChannelDeviceMock,
 }))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    withRlsContext: withRlsContextMock,
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   isValidAppId: isValidAppIdMock,
@@ -118,44 +127,33 @@ function createPublicApiSupabase(pluginVersion: string | null = '7.33.0') {
   }
 }
 
-function createPrivateSupabase(
-  pluginVersion: string | null = '7.33.0',
+// Direct-Postgres stand-in for the dashboard handlers: answers their SQL as the caller's RLS context would.
+function createPrivateDb(
   channelDeviceOverride: { app_id: string, channel_id: number, owner_org: string } | null = { app_id: 'com.test.app', channel_id: 42, owner_org: 'org-test' },
+  channel = { id: 42, app_id: 'com.test.app', owner_org: 'org-test', public: false },
 ) {
-  const upsertMock = vi.fn(async () => ({ error: null }))
-  const deleteResult = { error: null }
-  const channelDevicesTable = {
-    upsert: upsertMock,
-    select() {
-      return this
-    },
-    delete() {
-      return this
-    },
-    eq() {
-      return this
-    },
-    maybeSingle: vi.fn(async () => ({ data: channelDeviceOverride, error: null })),
-    then(resolve: (value: { error: null }) => unknown) {
-      return Promise.resolve(resolve(deleteResult))
-    },
+  const upsertMock = vi.fn()
+  const deleteMock = vi.fn()
+  const client = {
+    query: vi.fn(async (text: string, values: unknown[] = []) => {
+      if (text.startsWith('INSERT INTO public.channel_devices')) {
+        const [app_id, channel_id, device_id, owner_org, is_self_set] = values
+        upsertMock({ app_id, channel_id, device_id, owner_org, is_self_set })
+        return { rows: [] }
+      }
+      if (text.startsWith('DELETE FROM public.channel_devices')) {
+        deleteMock(values)
+        return { rows: [] }
+      }
+      if (text.includes('FROM public.channels WHERE app_id = $1'))
+        return { rows: channel ? [{ row: channel }] : [] }
+      if (text.includes('FROM public.channel_devices WHERE device_id = $1 AND app_id = $2'))
+        return { rows: channelDeviceOverride ? [{ row: channelDeviceOverride }] : [] }
+      throw new Error(`Unexpected query: ${text}`)
+    }),
   }
-
-  return {
-    channelDevicesTable,
-    upsertMock,
-    client: {
-      from(table: string) {
-        if (table === 'channels')
-          return createChannelSelect()
-        if (table === 'devices')
-          return createDeviceSelect(pluginVersion)
-        if (table === 'channel_devices')
-          return channelDevicesTable
-        throw new Error(`Unexpected table: ${table}`)
-      },
-    },
-  }
+  withRlsContextMock.mockImplementation(async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run(client))
+  return { client, upsertMock, deleteMock }
 }
 
 describe('channel device override KV sync', () => {
@@ -167,6 +165,7 @@ describe('channel device override KV sync', () => {
     syncLegacyChannelSelfOverrideForDeviceMock.mockResolvedValue(true)
     syncLegacyChannelSelfOverrideDeleteForDeviceMock.mockResolvedValue(true)
     updateOrCreateChannelDeviceMock.mockResolvedValue({ error: null })
+    createPrivateDb()
   })
 
   it('syncs public device API channel override writes through the legacy channel_self helper', async () => {
@@ -233,8 +232,7 @@ describe('channel device override KV sync', () => {
   })
 
   it('syncs dashboard channel override writes through the legacy channel_self helper', async () => {
-    const privateSupabase = createPrivateSupabase()
-    supabaseWithAuthMock.mockReturnValue(privateSupabase.client)
+    const privateSupabase = createPrivateDb()
     const { setChannelDeviceOverride } = await import('../supabase/functions/_backend/private/channel_device.ts')
     const c = createContext()
 
@@ -255,7 +253,7 @@ describe('channel device override KV sync', () => {
       device_id: '11111111-1111-4111-8111-111111111111',
       owner_org: 'org-test',
       is_self_set: false,
-    }, { onConflict: 'app_id,device_id' })
+    })
     expect(syncLegacyChannelSelfOverrideForDeviceMock).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       app_id: 'com.test.app',
       channel_id: 42,
@@ -266,8 +264,7 @@ describe('channel device override KV sync', () => {
   })
 
   it('rejects dashboard channel override writes without channel forced-device permission', async () => {
-    const privateSupabase = createPrivateSupabase()
-    supabaseWithAuthMock.mockReturnValue(privateSupabase.client)
+    const privateSupabase = createPrivateDb()
     checkPermissionMock.mockResolvedValue(false)
     const { setChannelDeviceOverride } = await import('../supabase/functions/_backend/private/channel_device.ts')
     const c = createContext()
@@ -283,8 +280,7 @@ describe('channel device override KV sync', () => {
   })
 
   it('fails dashboard channel override writes when KV sync fails', async () => {
-    const privateSupabase = createPrivateSupabase()
-    supabaseWithAuthMock.mockReturnValue(privateSupabase.client)
+    createPrivateDb()
     syncLegacyChannelSelfOverrideForDeviceMock.mockResolvedValue(false)
     const { setChannelDeviceOverride } = await import('../supabase/functions/_backend/private/channel_device.ts')
     const c = createContext()
@@ -297,8 +293,7 @@ describe('channel device override KV sync', () => {
   })
 
   it('syncs dashboard channel override deletes through the legacy channel_self helper', async () => {
-    const privateSupabase = createPrivateSupabase()
-    supabaseWithAuthMock.mockReturnValue(privateSupabase.client)
+    const privateSupabase = createPrivateDb()
     const { deleteChannelDeviceOverride } = await import('../supabase/functions/_backend/private/channel_device.ts')
     const c = createContext()
 
@@ -307,6 +302,7 @@ describe('channel device override KV sync', () => {
       device_id: '11111111-1111-4111-8111-111111111111',
     })
 
+    expect(privateSupabase.deleteMock).toHaveBeenCalledWith(['11111111-1111-4111-8111-111111111111', 'com.test.app'])
     expect(checkPermissionMock).toHaveBeenCalledWith(expect.anything(), 'channel.manage_forced_devices', {
       appId: 'com.test.app',
       channelId: 42,
@@ -321,8 +317,7 @@ describe('channel device override KV sync', () => {
   })
 
   it('fails dashboard channel override deletes when KV sync fails', async () => {
-    const privateSupabase = createPrivateSupabase()
-    supabaseWithAuthMock.mockReturnValue(privateSupabase.client)
+    createPrivateDb()
     syncLegacyChannelSelfOverrideDeleteForDeviceMock.mockResolvedValue(false)
     const { deleteChannelDeviceOverride } = await import('../supabase/functions/_backend/private/channel_device.ts')
     const c = createContext()

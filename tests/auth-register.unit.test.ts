@@ -31,10 +31,10 @@ const {
     },
     error: null,
   })),
-  usersUpsertMock: vi.fn(async () => ({ error: null })),
+  usersUpsertMock: vi.fn(async (_row: unknown) => ({ error: null })),
   deleteUserMock: vi.fn(async () => ({ error: null })),
   updateUserByIdMock: vi.fn<(id: string, attributes: unknown) => Promise<{ error: Error | null }>>(async () => ({ error: null })),
-  usersDeleteMock: vi.fn(async () => ({ error: null })),
+  usersDeleteMock: vi.fn(async (_id: unknown) => ({ error: null })),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
@@ -52,18 +52,6 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
     },
   }),
   supabaseAdmin: () => ({
-    rpc: rpcMock,
-    from(table: string) {
-      if (table === 'users') {
-        return {
-          upsert: usersUpsertMock,
-          delete: () => ({
-            eq: usersDeleteMock,
-          }),
-        }
-      }
-      throw new Error(`unexpected table ${table}`)
-    },
     auth: {
       admin: {
         deleteUser: deleteUserMock,
@@ -71,6 +59,37 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
       },
     },
   }),
+}))
+
+// Route the direct-Postgres statements back to the same mocks the supabase-js calls used.
+async function unwrap(result: Promise<{ data?: unknown, error: unknown }>) {
+  const { data, error } = await result
+  if (error)
+    throw error
+  return data
+}
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({
+    async query(text: string, values: unknown[] = []) {
+      if (text.includes('public.is_not_deleted')) {
+        const data = await unwrap(rpcMock())
+        return { rows: [{ not_deleted: data }] }
+      }
+      if (text.includes('INSERT INTO public.users')) {
+        expect(text).toContain('ON CONFLICT (id) DO UPDATE')
+        const [id, email, first_name, last_name, opt_for_newsletters] = values
+        await unwrap(usersUpsertMock({ id, email, first_name, last_name, enable_notifications: true, opt_for_newsletters }))
+        return { rows: [] }
+      }
+      if (text.includes('DELETE FROM public.users')) {
+        await unwrap(usersDeleteMock(values[0]))
+        return { rows: [] }
+      }
+      throw new Error(`unexpected query ${text}`)
+    },
+  }),
+  closeClient: () => {},
 }))
 
 const { app } = await import('../supabase/functions/_backend/auth/register.ts')
@@ -184,7 +203,7 @@ describe('pOST /auth/register unit', () => {
       last_name: lastName ?? '',
       enable_notifications: true,
       opt_for_newsletters: false,
-    }, { onConflict: 'id' })
+    })
   })
 
   it.each([
@@ -249,7 +268,7 @@ describe('pOST /auth/register unit', () => {
       last_name: '',
       enable_notifications: true,
       opt_for_newsletters: newsletter,
-    }, { onConflict: 'id' })
+    })
   })
 
   it('rejects non-boolean newsletter preferences before signup', async () => {

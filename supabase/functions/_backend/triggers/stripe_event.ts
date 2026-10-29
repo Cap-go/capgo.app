@@ -3,6 +3,7 @@ import type Stripe from 'stripe'
 import type { MiddlewareKeyVariablesStripe } from '../utils/hono_middleware_stripe.ts'
 import type { NotificationAudience } from '../utils/org_email_notifications.ts'
 import type { OpenSubscriptionInvoiceSummary, StripeData, StripeWebhookStatus } from '../utils/stripe.ts'
+import type { PgClient, PgQueryClient } from '../utils/pg.ts'
 import type { BillingAccount } from '../utils/stripe_billing.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
@@ -17,7 +18,9 @@ import { middlewareStripeWebhook } from '../utils/hono_middleware_stripe.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { getOpenAIFirstPaymentAt, trackOpenAIFirstPayment } from '../utils/openai_ads_first_payment.ts'
 import { getOrgAdminMemberEmailsForTags } from '../utils/org_email_notifications.ts'
-import { beginWriteTransaction, closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { beginWriteTransaction, checkoutPgClient, closeClient, getDrizzleClient, getPgClient, releasePgClient } from '../utils/pg.ts'
+import { isTransientDatabaseError } from '../utils/pg_errors.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 import { tierPricePercent } from '../utils/country_price_tier.ts'
 import { getPlanPriceInterval } from '../utils/plan_price_interval.ts'
 import * as schema from '../utils/postgres_schema.ts'
@@ -26,15 +29,36 @@ import { enforceRegionalPrice, enforceRegionalPriceForCustomer } from '../utils/
 import { getRetryablePostgrestStatus, isRetryablePostgrestError } from '../utils/retry.ts'
 import { signupAttributionTagsForOrg } from '../utils/signup_attribution.ts'
 import { ensureCustomerMetadata, findInvoiceForCharge, getBillingAccountForCustomer, getCreditCheckoutDetails, getLatestOpenSubscriptionInvoice, getStripe, isStripeConfiguredForAccount, isSubscriptionCharge, isSubscriptionInvoice, normalizeBillingAccount, planProductIdOrFilter, resolvePlanCreditProductId, syncStripeCustomerCountry, toOpenSubscriptionInvoiceSummary } from '../utils/stripe.ts'
-import { getRegionalPriceTier } from '../utils/stripe_billing.ts'
+import { getRegionalPriceTier, queryPlanByProductId, singleRowOrNull } from '../utils/stripe_billing.ts'
 import { payInvoiceWithBackupCard } from '../utils/stripe_in_app.ts'
 import { buildTransferInvoiceFooter, getStripeCustomerEmailFromEvent, getTransferInvoiceFooterUpdate, isTransferInvoice, normalizeBillingEmail, shouldStampTransferInvoiceFooter, TRANSFER_INVOICE_FOOTER, TRANSFER_INVOICE_FOOTER_MAX_LENGTH } from '../utils/stripe_event.ts'
 import type { TrialPlanFirstInvoiceState } from '../utils/stripe_trial_plan.ts'
 import { cancelTrialPlanScheduleForSubscription, isTrialPlanFirstInvoiceUnpaid, isTrialPlanSubscription, settleTrialPlanFirstInvoice } from '../utils/stripe_trial_plan.ts'
-import { customerToSegmentOrg, supabaseAdmin } from '../utils/supabase.ts'
+import { customerToSegmentOrg } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { trackUsChargeRefunded, trackUsChargeSucceeded } from '../utils/us_revenue_tracking.ts'
 import { backgroundTask, getEnv, trimTrailingSlashes } from '../utils/utils.ts'
+
+async function withAdminPg<T>(c: Context, run: (pg: PgClient) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await run(pg)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
+// PostgREST answered 5xx when the database was unreachable; pg throws connection errors instead.
+function isRetryableLookupError(error: unknown) {
+  return isRetryablePostgrestError(error) || isTransientDatabaseError(error)
+}
+
+function exactlyOneRow<T>(rows: T[]): T {
+  if (rows.length !== 1)
+    throw Object.assign(new Error('JSON object requested, multiple (or no) rows returned'), { code: 'PGRST116' })
+  return rows[0]
+}
 
 function getWebhookBillingAccount(c: Context): BillingAccount {
   return c.get('stripeBillingAccount') ?? 'ee'
@@ -504,16 +528,13 @@ async function getBillingBentoEmails(
 }
 
 async function getBillingPlans(c: Context): Promise<PlanRow[]> {
-  const { data: plans, error } = await supabaseAdmin(c)
-    .from('plans')
-    .select()
-
-  if (error) {
+  try {
+    return await withAdminPg(c, pg => queryJson<PlanRow>(pg, 'SELECT * FROM public.plans'))
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getBillingPlans error', error })
     throw error
   }
-
-  return plans ?? []
 }
 
 async function syncBillingBentoTags(
@@ -587,13 +608,15 @@ export async function syncBillingBentoTagsFromStoredStripeInfo(c: Context, org: 
   if (!isBentoConfigured(c))
     return
 
-  const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('price_id, product_id')
-    .eq('customer_id', customerId)
-    .maybeSingle()
-
-  if (stripeInfoError) {
+  let stripeInfo: Pick<StripeInfoRow, 'price_id' | 'product_id'> | null
+  try {
+    stripeInfo = await withAdminPg(c, async pg => singleRowOrNull(await queryJson<Pick<StripeInfoRow, 'price_id' | 'product_id'>>(
+      pg,
+      'SELECT price_id, product_id FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+      [customerId],
+    )))
+  }
+  catch (stripeInfoError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'syncBillingBentoTagsFromStoredStripeInfo stripe_info error', customerId, error: stripeInfoError })
     return
   }
@@ -723,12 +746,16 @@ function isStaleStripeEvent(
 }
 
 async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
-  const { data: plans, error } = await supabaseAdmin(c)
-    .from('plans')
-    .select('name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, alt_price_m_ids, alt_price_y_ids, regional_price_ids')
-    .in('name', ['Solo', 'Maker', 'Team', 'Enterprise'])
-
-  if (error) {
+  try {
+    return await withAdminPg(c, pg => queryJson<RevenuePlanRow>(
+      pg,
+      `SELECT name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id, price_m_id_us, price_y_id_us, alt_price_m_ids, alt_price_y_ids, regional_price_ids
+      FROM public.plans
+      WHERE name = ANY($1::varchar[])`,
+      [['Solo', 'Maker', 'Team', 'Enterprise']],
+    ))
+  }
+  catch (error) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'Failed to load revenue plans for Stripe revenue movement tracking',
@@ -736,8 +763,6 @@ async function getRevenuePlans(c: Context): Promise<RevenuePlanRow[]> {
     })
     throw error
   }
-
-  return plans ?? []
 }
 
 function buildStripeInfoUpdateStatement(customerId: string, updateData: StripeInfoUpdate) {
@@ -776,9 +801,13 @@ async function persistStripeInfoAndRevenueMovement(
   if (Object.keys(transactionUpdateData).length === 0 && !shouldRecordMovement)
     return { status: 'applied', firstPaidAt: null }
 
-  const pgClient = await getPgClient(c, false)
+  // Pin one connection: BEGIN/COMMIT on the request-shared Pool could land on different ones.
+  const pg = await getPgClient(c, false)
+  let pgClient: PgQueryClient | undefined
+  let rollbackFailed = false
 
   try {
+    pgClient = await checkoutPgClient(pg)
     await beginWriteTransaction(pgClient)
 
     // Lock the row so concurrent retries serialize before we classify
@@ -851,15 +880,17 @@ async function persistStripeInfoAndRevenueMovement(
   }
   catch (error) {
     try {
-      await pgClient.query('ROLLBACK')
+      await pgClient?.query('ROLLBACK')
     }
     catch {
-      // Ignore rollback failures and rethrow the original error.
+      // Rethrow the original error; the connection is discarded below.
+      rollbackFailed = true
     }
     throw error
   }
   finally {
-    closeClient(c, pgClient)
+    releasePgClient(pg, pgClient, rollbackFailed)
+    closeClient(c, pg)
   }
 }
 
@@ -899,9 +930,13 @@ async function persistInvoicePayment(
   invoiceSubscriptionId: string,
   eventOccurredAtIso: string,
 ): Promise<InvoicePaymentResult> {
-  const pgClient = await getPgClient(c, false)
+  // Pin one connection: BEGIN/COMMIT on the request-shared Pool could land on different ones.
+  const pg = await getPgClient(c, false)
+  let pgClient: PgQueryClient | undefined
+  let rollbackFailed = false
 
   try {
+    pgClient = await checkoutPgClient(pg)
     await beginWriteTransaction(pgClient)
     const stripeInfoRow = await pgClient.query<Pick<StripeInfoRow, 'last_stripe_event_at' | 'status' | 'subscription_id'> & { paid_at: string | Date | null }>(
       'SELECT last_stripe_event_at, status, subscription_id, paid_at FROM public.stripe_info WHERE customer_id = $1 FOR UPDATE',
@@ -932,38 +967,41 @@ async function persistInvoicePayment(
   }
   catch (error) {
     try {
-      await pgClient.query('ROLLBACK')
+      await pgClient?.query('ROLLBACK')
     }
     catch {
-      // Ignore rollback failures and rethrow the original error.
+      // Rethrow the original error; the connection is discarded below.
+      rollbackFailed = true
     }
     throw error
   }
   finally {
-    closeClient(c, pgClient)
+    releasePgClient(pg, pgClient, rollbackFailed)
+    closeClient(c, pg)
   }
 }
 
 async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: string): Promise<string> {
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
   const fetchFallbackPlan = async () => {
-    const { data, error } = await supabaseAdmin(c)
-      .from('plans')
-      .select('*')
-      .eq('name', 'Solo')
-      .single()
-    if (error)
-      throw error
-    return data ? { credit_id: resolvePlanCreditProductId(data, billingAccount) } : null
+    const data = await withAdminPg(c, async pg => exactlyOneRow(await queryJson<PlanRow>(pg, 'SELECT * FROM public.plans WHERE name = $1 LIMIT 2', ['Solo'])))
+    return { credit_id: resolvePlanCreditProductId(data, billingAccount) }
   }
-  const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('product_id')
-    .eq('customer_id', customerId)
-    .maybeSingle()
+  let stripeInfo: Pick<StripeInfoRow, 'product_id'> | null = null
+  let stripeInfoError: unknown = null
+  try {
+    stripeInfo = await withAdminPg(c, async pg => singleRowOrNull(await queryJson<Pick<StripeInfoRow, 'product_id'>>(
+      pg,
+      'SELECT product_id FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+      [customerId],
+    )))
+  }
+  catch (error) {
+    stripeInfoError = error
+  }
 
   if (stripeInfoError) {
-    if (isRetryablePostgrestError(stripeInfoError)) {
+    if (isRetryableLookupError(stripeInfoError)) {
       const retryStatus = getRetryablePostgrestStatus(stripeInfoError) ?? 503
       throw quickError(retryStatus, 'stripe_info_lookup_failed', 'Temporary stripe_info lookup failure', {
         customerId,
@@ -982,14 +1020,19 @@ async function getCreditTopUpProductIdFromCustomer(c: Context, customerId: strin
     return await getFallbackCreditProductId(c, customerId, fetchFallbackPlan)
   }
 
-  const { data: plan, error: planError } = await supabaseAdmin(c)
-    .from('plans')
-    .select('*')
-    .or(planProductIdOrFilter(stripeInfo.product_id))
-    .maybeSingle()
+  const planProductId = stripeInfo.product_id
+  planProductIdOrFilter(planProductId)
+  let plan: PlanRow | null = null
+  let planError: unknown = null
+  try {
+    plan = await withAdminPg(c, pg => queryPlanByProductId(pg, planProductId))
+  }
+  catch (error) {
+    planError = error
+  }
 
   if (planError) {
-    if (isRetryablePostgrestError(planError)) {
+    if (isRetryableLookupError(planError)) {
       const retryStatus = getRetryablePostgrestStatus(planError) ?? 503
       throw quickError(retryStatus, 'credit_plan_lookup_failed', 'Temporary credit plan lookup failure', {
         customerId,
@@ -1090,22 +1133,31 @@ async function handleCheckoutSessionCompleted(
     itemsSummary,
   }
 
-  const { data: grant, error: rpcError } = await supabaseAdmin(c)
-    .rpc('top_up_usage_credits', {
-      p_org_id: org.id,
-      p_amount: creditQuantity,
-      p_source: 'stripe_top_up',
-      p_notes: 'Stripe Checkout credit top-up',
-      p_source_ref: sourceRef,
-    })
-    .single()
+  let grant: { grant_id: string | null } | null = null
+  let rpcError = null as { code?: string, message?: string, details?: string, detail?: string, hint?: string } | null
+  try {
+    grant = await withAdminPg(c, async pg => exactlyOneRow(await queryJson<{ grant_id: string | null }>(
+      pg,
+      `SELECT * FROM public.top_up_usage_credits(
+        p_org_id => $1,
+        p_amount => $2,
+        p_source => $3,
+        p_notes => $4,
+        p_source_ref => $5::jsonb
+      )`,
+      [org.id, creditQuantity, 'stripe_top_up', 'Stripe Checkout credit top-up', JSON.stringify(sourceRef)],
+    )))
+  }
+  catch (error) {
+    rpcError = (error ?? {}) as NonNullable<typeof rpcError>
+  }
 
   if (rpcError) {
     const rpcErrorInfo = {
       code: rpcError.code ?? null,
       message: rpcError.message ?? null,
-      details: (rpcError as any)?.details ?? null,
-      hint: (rpcError as any)?.hint ?? null,
+      details: rpcError.details ?? rpcError.detail ?? null,
+      hint: rpcError.hint ?? null,
     }
     throw simpleError('top_up_failed', 'Failed to top up credits', { rpcError: rpcErrorInfo })
   }
@@ -1265,10 +1317,17 @@ async function invoiceUpcoming(c: Context, org: Org, stripeEvent: Stripe.Invoice
     .filter((productId: unknown): productId is string => typeof productId === 'string')
   const productIds = [...new Set([stripeData.data.product_id, ...lineProductIds].filter((id): id is string => !!id))]
   if (productIds.length) {
-    const { data: plans } = await supabaseAdmin(c)
-      .from('plans')
-      .select('name, stripe_id, stripe_id_us, price_y_id, price_y_id_us, alt_price_y_ids')
-      .or(productIds.map(productId => planProductIdOrFilter(productId)).join(','))
+    productIds.forEach(productId => planProductIdOrFilter(productId))
+    const plans = await withAdminPg(c, pg => queryJson<Pick<PlanRow, 'name' | 'stripe_id' | 'stripe_id_us' | 'price_y_id' | 'price_y_id_us' | 'alt_price_y_ids'>>(
+      pg,
+      `SELECT name, stripe_id, stripe_id_us, price_y_id, price_y_id_us, alt_price_y_ids
+      FROM public.plans
+      WHERE stripe_id = ANY($1::varchar[]) OR stripe_id_us = ANY($1::varchar[])`,
+      [productIds],
+    )).catch((error: unknown) => {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'invoiceUpcoming plans lookup failed', productIds, error })
+      return null
+    })
     const plan = plans?.[0]
     if (!plan) {
       throw simpleError('failed_to_get_plan', 'failed to get plan', { stripeData })
@@ -1320,11 +1379,12 @@ async function createdOrUpdated(
     })
     return
   }
-  const { data: plan } = await supabaseAdmin(c)
-    .from('plans')
-    .select()
-    .or(planProductIdOrFilter(stripeData.data.product_id!))
-    .single()
+  const productId = stripeData.data.product_id!
+  planProductIdOrFilter(productId)
+  const plan = await withAdminPg(c, pg => queryPlanByProductId(pg, productId)).catch((error: unknown) => {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'createdOrUpdated plan lookup failed', productId, error })
+    return null
+  })
   if (plan) {
     const trackingState = getSubscriptionTrackingState(stripeData, status)
     statusName = trackingState.statusName
@@ -1413,12 +1473,12 @@ async function createdOrUpdated(
 
     let previousPlan: PlanRow | null = null
     if (trackingState.shouldSendPlanChange && stripeData.previousProductId) {
-      const previousProduct = await supabaseAdmin(c)
-        .from('plans')
-        .select()
-        .or(planProductIdOrFilter(stripeData.previousProductId))
-        .single()
-      previousPlan = previousProduct.data
+      const previousProductId = stripeData.previousProductId
+      planProductIdOrFilter(previousProductId)
+      previousPlan = await withAdminPg(c, pg => queryPlanByProductId(pg, previousProductId)).catch((error: unknown) => {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'createdOrUpdated previous plan lookup failed', previousProductId, error })
+        return null
+      })
       const planChangeMetadata = buildSubscriptionEventMetadata(stripeData, plan, previousPlan)
       const planChangeEventName = getPlanChangeTrackingEventName(trackingState.statusName)
       await sendEventToTracking(c, {
@@ -1510,12 +1570,32 @@ async function createdOrUpdated(
   }
 }
 
+// Like a PostgREST PATCH: undefined values are left out. Keys are stripe_info
+// column names from typed payloads; values are always bound.
+async function updateStripeInfoColumns(c: Context, customerId: string, updateData: StripeInfoUpdate) {
+  const entries = Object.entries(updateData).filter(([, value]) => value !== undefined)
+  if (!entries.length)
+    return
+  for (const [column] of entries) {
+    if (!/^[a-z_][a-z0-9_]*$/.test(column))
+      throw new Error(`Invalid stripe_info column ${column}`)
+  }
+  const assignments = entries.map(([column], index) => `"${column}" = $${index + 2}`).join(', ')
+  await withAdminPg(c, pg => pg.query(
+    `UPDATE public.stripe_info SET ${assignments} WHERE customer_id = $1`,
+    [customerId, ...entries.map(([, value]) => value)],
+  ))
+}
+
 async function updateStripeInfo(c: Context, stripeData: StripeData) {
   const updateData = toStripeInfoUpdate(stripeData.data)
-  const { error: dbError2 } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .update(updateData)
-    .eq('customer_id', stripeData.data.customer_id)
+  let dbError2: unknown = null
+  try {
+    await updateStripeInfoColumns(c, stripeData.data.customer_id, updateData)
+  }
+  catch (error) {
+    dbError2 = error
+  }
   if (dbError2) {
     return quickError(404, 'canceled_customer_id_not_found', `canceled:  customer_id not found`, { dbError2, stripeData })
   }
@@ -1552,18 +1632,17 @@ async function didCancel(c: Context, org: Org, customerId: string) {
 }
 
 async function getOrgForCustomerId(c: Context, customerId: string): Promise<Org | null> {
-  const { error: dbError, data: org } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('id, management_email, created_by, name, customer_id, signup_plugin')
-    .eq('customer_id', customerId)
-    .maybeSingle()
-
-  if (dbError) {
+  try {
+    return await withAdminPg(c, async pg => singleRowOrNull(await queryJson<Org>(
+      pg,
+      'SELECT id, management_email, created_by, name, customer_id, signup_plugin FROM public.orgs WHERE customer_id = $1 LIMIT 2',
+      [customerId],
+    )))
+  }
+  catch (dbError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getOrgForCustomerId error', customerId, error: dbError })
     return null
   }
-
-  return org ?? null
 }
 
 async function syncOrgManagementEmailFromStripeCustomer(
@@ -1581,13 +1660,17 @@ async function syncOrgManagementEmailFromStripeCustomer(
   if (!shouldReplaceOrgManagementEmail(org.management_email, stripeEmail))
     return org
 
-  const { data: updatedOrg, error } = await supabaseAdmin(c)
-    .from('orgs')
-    .update({ management_email: stripeEmail })
-    .eq('id', org.id)
-    .eq('customer_id', customerId)
-    .select('id')
-    .maybeSingle()
+  let updatedOrg: { id: string } | null = null
+  let error: unknown = null
+  try {
+    updatedOrg = await withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ id: string }>(
+      'UPDATE public.orgs SET management_email = $1 WHERE id = $2 AND customer_id = $3 RETURNING id',
+      [stripeEmail, org.id, customerId],
+    )).rows))
+  }
+  catch (updateError) {
+    error = updateError
+  }
 
   if (error || !updatedOrg) {
     return quickError(500, 'stripe_management_email_sync_failed', 'Failed to sync org management email from Stripe', {
@@ -1619,18 +1702,17 @@ async function getOrg(c: Context, stripeData: StripeData) {
 }
 
 async function orgHasActiveUsageCredits(c: Context, orgId: string): Promise<boolean> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('has_usage_credits')
-    .eq('id', orgId)
-    .maybeSingle()
-
-  if (error) {
+  try {
+    const data = await withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ has_usage_credits: boolean | null }>(
+      'SELECT has_usage_credits FROM public.orgs WHERE id = $1 LIMIT 2',
+      [orgId],
+    )).rows))
+    return data?.has_usage_credits === true
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'orgHasActiveUsageCredits error', orgId, error })
     return false
   }
-
-  return data?.has_usage_credits === true
 }
 
 async function cancelingOrFinished(
@@ -1656,20 +1738,16 @@ async function cancelingOrFinished(
   if (stripeEvent.data.object.object === 'subscription' && stripeEvent.data.object.cancel_at_period_end === true && typeof previousAttributes.cancel_at_period_end === 'boolean' && previousAttributes.cancel_at_period_end === false) {
     // cloudlog('USER CANCELLED!!!!!!!!!!!!!!!')
     const canceledAt = stripeData.canceled_at ?? new Date().toISOString()
-    const { error: dbError2 } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .update({ canceled_at: canceledAt })
-      .eq('customer_id', stripeData.customer_id)
+    const dbError2 = await withAdminPg(c, pg => pg.query('UPDATE public.stripe_info SET canceled_at = $1 WHERE customer_id = $2', [canceledAt, stripeData.customer_id]))
+      .then(() => null, (error: unknown) => error)
     if (dbError2) {
       return quickError(404, 'user_cancelled_customer_id_not_found', `USER CANCELLED, customer_id not found`, { dbError2, stripeData })
     }
   }
   else if (stripeEvent.data.object.object === 'subscription' && stripeEvent.data.object.cancel_at_period_end === false && typeof previousAttributes.cancel_at_period_end === 'boolean' && previousAttributes.cancel_at_period_end === true) {
     // cloudlog('USER UNCANCELED')
-    const { error: dbError2 } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .update({ canceled_at: null })
-      .eq('customer_id', stripeData.customer_id)
+    const dbError2 = await withAdminPg(c, pg => pg.query('UPDATE public.stripe_info SET canceled_at = NULL WHERE customer_id = $1', [stripeData.customer_id]))
+      .then(() => null, (error: unknown) => error)
     if (dbError2) {
       return quickError(404, 'user_uncancelled_customer_id_not_found', `USER UNCANCELED, customer_id not found`, { dbError2, stripeData })
     }
@@ -1750,14 +1828,21 @@ async function handleCustomerProfileStripeEvent(
 }
 
 async function loadStripeCustomer(c: Context<MiddlewareKeyVariablesStripe>, stripeData: StripeData) {
-  const { data: customer, error: customerError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select()
-    .eq('customer_id', stripeData.data.customer_id)
-    .single()
+  let customer: StripeInfoRow | null = null
+  let customerError: unknown = null
+  try {
+    customer = await withAdminPg(c, async pg => exactlyOneRow(await queryJson<StripeInfoRow>(
+      pg,
+      'SELECT * FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+      [stripeData.data.customer_id],
+    )))
+  }
+  catch (error) {
+    customerError = error
+  }
 
   if (customerError) {
-    if (isRetryablePostgrestError(customerError)) {
+    if (isRetryableLookupError(customerError)) {
       const retryStatus = getRetryablePostgrestStatus(customerError) ?? 503
       throw quickError(retryStatus, 'stripe_info_lookup_failed', 'Temporary stripe_info lookup failure', {
         stripeData,
@@ -1805,16 +1890,10 @@ async function scheduleOpenAIFirstPayment(c: Context, org: Org, paidAt: string, 
     planId,
     stripeEvent: c.get('stripeEvent'),
   }, {
-    loadUser: async (userId) => {
-      const { data, error } = await supabaseAdmin(c)
-        .from('users')
-        .select('id, email, first_name, last_name, country')
-        .eq('id', userId)
-        .maybeSingle()
-      if (error)
-        throw error
-      return data
-    },
+    loadUser: userId => withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ id: string, email: string, first_name: string | null, last_name: string | null, country: string | null }>(
+      'SELECT id, email, first_name, last_name, country FROM public.users WHERE id = $1 LIMIT 2',
+      [userId],
+    )).rows)),
     // Short, single-shot requests: the helper retries, inside the background budget.
     retrieveInvoice: invoiceId => getStripe(c, billingAccount).invoices.retrieve(invoiceId, {}, { timeout: 3_000, maxNetworkRetries: 0 }),
   }))

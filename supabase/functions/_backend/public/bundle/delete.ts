@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { PgQueryClient } from '../../utils/pg.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { CAPGO_API_2026_10_22, resolveCapgoApiVersion } from '../../utils/api_version.ts'
@@ -7,7 +8,7 @@ import { lockBundleLifecycles, softDeleteLockedBundles } from '../../utils/bundl
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
+import { apikeyPrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 interface GetLatest {
@@ -16,16 +17,19 @@ interface GetLatest {
   page?: number
 }
 
-async function getLinkedChannelVersionIds(c: Context<MiddlewareKeyVariables>, apikey: Database['public']['Tables']['apikeys']['Row'], appId: string) {
-  const { data, error } = await supabaseApikey(c, apikey.key)
-    .from('channels')
-    .select('version, rollout_version')
-    .eq('app_id', appId)
-
-  if (error)
+async function getLinkedChannelVersionIds(client: PgQueryClient, appId: string) {
+  let rows: { version: string | null, rollout_version: string | null }[]
+  try {
+    rows = (await client.query<{ version: string | null, rollout_version: string | null }>(
+      'SELECT version, rollout_version FROM public.channels WHERE app_id = $1',
+      [appId],
+    )).rows
+  }
+  catch (error) {
     throw simpleError('cannot_check_linked_channels', 'Cannot check linked channels', { supabaseError: error })
+  }
 
-  return new Set((data ?? []).flatMap(channel => [channel.version, channel.rollout_version]).filter((id): id is number => typeof id === 'number'))
+  return new Set(rows.flatMap(channel => [channel.version, channel.rollout_version]).filter(id => id !== null).map(Number))
 }
 
 /** True when the caller opted into the 2026-10-22 delete contract. Invalid headers keep the default. */
@@ -143,51 +147,50 @@ export async function deleteBundle(c: Context<MiddlewareKeyVariables>, body: Get
   if (body.version && wantsDistinctDeleteErrors(c))
     return deleteBundleByName(c, body.app_id, body.version, apikey)
 
-  if (body.version) {
-    const supabase = supabaseApikey(c, apikey.key)
-    const { data: version, error: versionError } = await supabase
-      .from('app_versions')
-      .select('id, name')
-      .eq('app_id', body.app_id)
-      .eq('name', body.version)
-      .eq('deleted', false)
-      .single()
-    if (versionError || !version)
-      throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: versionError })
+  await withRlsContext(c, apikeyPrincipal(c, apikey.key), async (client) => {
+    if (body.version) {
+      let versionId: number | null = null
+      try {
+        const found = await client.query<{ id: string }>(
+          'SELECT id FROM public.app_versions WHERE app_id = $1 AND name = $2 AND deleted = false',
+          [body.app_id, body.version],
+        )
+        if (found.rows.length === 1)
+          versionId = Number(found.rows[0].id)
+      }
+      catch (versionError) {
+        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: versionError })
+      }
+      if (versionId === null)
+        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: null })
 
-    const linkedVersionIds = await getLinkedChannelVersionIds(c, apikey, body.app_id)
-    if (linkedVersionIds.has(version.id))
-      throw simpleError('cannot_delete_linked_version', 'Cannot delete a bundle linked to a channel', { app_id: body.app_id, version: body.version })
+      const linkedVersionIds = await getLinkedChannelVersionIds(client, body.app_id)
+      if (linkedVersionIds.has(versionId))
+        throw simpleError('cannot_delete_linked_version', 'Cannot delete a bundle linked to a channel', { app_id: body.app_id, version: body.version })
 
-    const { data, error: dbError } = await supabase
-      .from('app_versions')
-      .update({
-        deleted: true,
-      })
-      .eq('id', version.id)
-      .select()
-      .single()
-    if (dbError || !data) {
-      throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: dbError })
+      let updated = 0
+      try {
+        updated = (await client.query('UPDATE public.app_versions SET deleted = true WHERE id = $1 RETURNING id', [versionId])).rows.length
+      }
+      catch (dbError) {
+        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: dbError })
+      }
+      if (updated !== 1)
+        throw simpleError('cannot_delete_version', 'Cannot delete version', { supabaseError: null })
     }
-  }
-  else {
-    const linkedVersionIds = await getLinkedChannelVersionIds(c, apikey, body.app_id)
-    let query = supabaseApikey(c, apikey.key)
-      .from('app_versions')
-      .update({
-        deleted: true,
-      })
-      .eq('app_id', body.app_id)
-
-    if (linkedVersionIds.size > 0)
-      query = query.not('id', 'in', `(${[...linkedVersionIds].join(',')})`)
-
-    const { error: dbError } = await query
-    if (dbError) {
-      throw simpleError('cannot_delete_all_version', 'Cannot delete all version', { supabaseError: dbError })
+    else {
+      const linkedVersionIds = await getLinkedChannelVersionIds(client, body.app_id)
+      try {
+        if (linkedVersionIds.size > 0)
+          await client.query('UPDATE public.app_versions SET deleted = true WHERE app_id = $1 AND NOT (id = ANY($2::bigint[]))', [body.app_id, [...linkedVersionIds]])
+        else
+          await client.query('UPDATE public.app_versions SET deleted = true WHERE app_id = $1', [body.app_id])
+      }
+      catch (dbError) {
+        throw simpleError('cannot_delete_all_version', 'Cannot delete all version', { supabaseError: dbError })
+      }
     }
-  }
+  })
 
   return c.json(BRES)
 }

@@ -13,7 +13,7 @@ import { checkPermission } from '../utils/rbac.ts'
 import { getCustomerBilling, isRegionalCurrency } from '../utils/regional_price.ts'
 import { getCheckoutPlanPrice, getPriceCurrencyAmounts, getStripe } from '../utils/stripe.ts'
 import { getBillingAccountForCustomer, getRequestCountry, isStripeConfiguredForAccount } from '../utils/stripe_billing.ts'
-import { emptySupabase, supabaseClient } from '../utils/supabase.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
 const PLAN_PRICES_CACHE_PATH = '/private/plan_prices'
 const PLAN_PRICES_TTL_SECONDS = 60 * 60
@@ -77,12 +77,15 @@ interface PlanPriceRow {
 
 // The plan catalog is readable by anyone through RLS; signed-in requests read it as the user.
 async function listPlans(c: Context, authorization: string | null): Promise<PlanPriceRow[]> {
-  const { data: plans, error } = await (authorization ? supabaseClient(c, authorization) : emptySupabase(c))
-    .from('plans')
-    .select('stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us, regional_price_ids')
-  if (error)
+  try {
+    return await withRlsContext(c, authorization ? authPrincipal(c) : { kind: 'anon' }, client => queryJson<PlanPriceRow>(
+      client,
+      'SELECT stripe_id, price_m_id, price_y_id, price_m_id_us, price_y_id_us, regional_price_ids FROM public.plans',
+    ))
+  }
+  catch (error) {
     throw simpleError('plans_not_found', 'Cannot load plans', { error })
-  return plans ?? []
+  }
 }
 
 // Changes whenever a plan switches to another Stripe price, so the cached catalog never outlives it.
@@ -196,12 +199,16 @@ app.get('/', middlewareAuth, async (c) => {
     throw simpleError('not_authorized', 'Not authorized')
 
   // RLS: only members of the org can read its billing currency.
-  const { data: org, error } = await supabaseClient(c, authorization)
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', orgId)
-    .single()
-  if (error || !org)
+  let org: { customer_id: string | null } | null = null
+  try {
+    org = await withRlsContext(c, authPrincipal(c), client => queryJsonOne<{ customer_id: string | null }>(
+      client,
+      'SELECT customer_id FROM public.orgs WHERE id = $1',
+      [orgId],
+    ))
+  }
+  catch {}
+  if (!org)
     throw simpleError('not_authorized', 'Not authorized')
 
   const billingAccount = org.customer_id ? await getBillingAccountForCustomer(c, org.customer_id) : 'ee'

@@ -11,6 +11,11 @@ Replace `APP_ID` with the URL-encoded app ID. Only the single query value
 `showChecklist=1` enables this mode. Missing, empty, repeated, `0`, `false`, and
 other values keep the normal automatic redirect for completed or dismissed setup.
 
+The sidebar's Getting started links use this checklist-view mode. An explicit
+click keeps the checklist open even when legacy completion signals or a refresh
+would otherwise send the user straight back to the app dashboard. Automatic
+onboarding resume links still use the normal redirect behavior.
+
 This mode uses the app's persisted OTA or Builder checklist, selected path and
 platform, and actual task statuses. It also works during a pre-organization setup
 handoff. It does not reset checklist evidence, clear dismissal, create an app, or

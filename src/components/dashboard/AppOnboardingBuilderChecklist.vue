@@ -19,6 +19,7 @@ import { isOpenOnboardingStepStatus } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
 import { useConsole } from '~/services/console'
 import { resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'
+import { initialChecklistOpen } from '~/utils/onboardingSetupMode'
 import { skipOnboardingStep } from '~/utils/onboardingSkipStep'
 import AppOnboardingBuilderAiSetup from './AppOnboardingBuilderAiSetup.vue'
 import AppOnboardingSkipStep from './AppOnboardingSkipStep.vue'
@@ -99,8 +100,8 @@ const currentStep = computed(() => steps.value.find(step => step.status !== 'don
 const selectedStep = computed(() => steps.value.find(step => step.id === selectedId.value) ?? currentStep.value ?? steps.value.at(-1))
 const isFirstStep = computed(() => selectedStep.value?.index === 0)
 const canSkipSelected = computed(() => !!selectedStep.value && isOpenOnboardingStepStatus(selectedStep.value.status))
-// Every step is shown by default; new manual signups only see their next step.
-const checklistOpen = ref(props.taskList !== 'hidden')
+// Every step is shown by default on wide screens; new manual signups only see their next step.
+const checklistOpen = ref(initialChecklistOpen(props.taskList, typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches))
 const showTaskList = computed(() => props.taskList !== 'hidden')
 const skipping = ref(false)
 const completed = computed(() => steps.value.length > 0
@@ -236,7 +237,7 @@ function statusLabel(status: BuilderStepStatus) {
 
     <section aria-labelledby="builder-platform-title" class="space-y-3">
       <div class="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 id="builder-platform-title" class="text-base font-semibold text-slate-950 dark:text-white">
+        <h2 id="builder-platform-title" class="text-lg font-semibold text-slate-950 dark:text-white">
           {{ t('builder-checklist-platform-title') }}
         </h2>
         <p class="text-sm text-slate-500 dark:text-slate-400">
@@ -327,7 +328,7 @@ function statusLabel(status: BuilderStepStatus) {
             <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t('builder-checklist-complete-description') }}
             </p>
-            <button type="button" class="d-btn mt-6 min-h-12 self-start border-primary-500 bg-primary-500 text-white hover:border-primary-600 hover:bg-primary-600" :disabled="hiding || leaving" @click="emit('complete')">
+            <button type="button" class="d-btn mt-6 min-h-12 self-start border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90" :disabled="hiding || leaving" @click="emit('complete')">
               {{ completionAction || t('setup-checklist-open-app') }}
               <IconArrowRight class="h-4 w-4" aria-hidden="true" />
             </button>
@@ -336,7 +337,7 @@ function statusLabel(status: BuilderStepStatus) {
             <p class="text-sm font-medium text-sky-700 dark:text-azure-400">
               {{ showTaskList ? t(selectedStep.id === currentStep?.id ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) : t('setup-checklist-next-step') }}
             </p>
-            <h2 class="mt-3 text-2xl font-semibold leading-tight text-slate-950 sm:text-3xl dark:text-white">
+            <h2 class="mt-2 text-2xl font-semibold leading-tight text-slate-950 dark:text-white">
               {{ selectedStep.title }}
             </h2>
             <p class="mt-4 max-w-prose text-base leading-7 text-slate-600 dark:text-slate-300">
@@ -362,7 +363,7 @@ function statusLabel(status: BuilderStepStatus) {
                 <IconCopy class="absolute right-4 top-5 h-5 w-5 text-slate-400 group-hover:text-white" aria-hidden="true" />
               </button>
               <output v-else class="mt-5 block rounded-2xl bg-slate-950 p-5 text-sm text-slate-300">{{ t('app-onboarding-command-apikey-loading') }}</output>
-              <button type="button" class="d-btn mt-4 min-h-12 self-start border-primary-500 bg-primary-500 px-5 text-white hover:border-primary-600 hover:bg-primary-600" :disabled="!platformCommand" @click="emit('copyCommand', viewedPlatform)">
+              <button type="button" class="d-btn mt-4 min-h-12 self-start border-primary-500 bg-primary-500 px-5 text-white hover:border-primary-500 hover:bg-primary-500/90" :disabled="!platformCommand" @click="emit('copyCommand', viewedPlatform)">
                 <IconCopy class="h-4 w-4" aria-hidden="true" />
                 {{ t('builder-checklist-copy-command') }}
               </button>
@@ -373,19 +374,20 @@ function statusLabel(status: BuilderStepStatus) {
               {{ t('builder-checklist-follow-terminal') }}
             </p>
 
-            <AppOnboardingSkipStep v-if="canSkipSelected" :key="`${viewedPlatform}-${selectedStep.id}`" test-id="builder-checklist" :skipping="skipping" @skip="skipSelectedStep" />
-
             <output class="mt-7 block border-t border-slate-200 py-5 text-sm dark:border-white/15" aria-live="polite" aria-atomic="true">
               <span class="flex items-center gap-3 font-medium text-slate-800 dark:text-slate-200">
                 <IconInfo v-if="refreshError" class="h-5 w-5 text-amber-600" aria-hidden="true" />
                 <IconCheck v-else-if="selectedStep.status === 'done'" class="h-5 w-5 text-emerald-600" aria-hidden="true" />
                 <IconMinus v-else-if="selectedStep.status === 'skipped'" class="h-5 w-5 text-slate-400" aria-hidden="true" />
-                <IconLoader v-else class="h-5 w-5 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
+                <IconLoader v-else-if="selectedStep.id === currentStep?.id" class="h-5 w-5 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
+                <IconCircle v-else class="h-5 w-5 text-slate-300 dark:text-slate-600" aria-hidden="true" />
                 {{ refreshError ? t('setup-checklist-refresh-error') : statusLabel(selectedStep.status) }}
               </span>
               <span class="mt-2 block pl-8 leading-6 text-slate-500 dark:text-slate-400">{{ t('builder-checklist-auto-progress') }}</span>
               <button v-if="refreshError" type="button" class="d-btn d-btn-ghost mt-2 min-h-11 text-sky-700 dark:text-azure-300" @click="refreshOnboarding">{{ t('setup-checklist-retry') }}</button>
             </output>
+
+            <AppOnboardingSkipStep v-if="canSkipSelected" :key="`${viewedPlatform}-${selectedStep.id}`" test-id="builder-checklist" :skipping="skipping" @skip="skipSelectedStep" />
 
             <div class="mt-auto flex flex-wrap items-stretch gap-2 pt-4" data-test="builder-checklist-task-actions">
               <button v-if="currentStep && currentStep.id !== selectedStep.id" type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full shrink whitespace-normal" @click="selectStep(currentStep.id)">
@@ -401,11 +403,11 @@ function statusLabel(status: BuilderStepStatus) {
       </div>
     </template>
 
-    <div v-else class="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-white/15 dark:bg-slate-900" data-test="builder-checklist-choose-platform">
-      <h2 class="text-xl font-semibold text-slate-950 dark:text-white">
+    <div v-else class="rounded-2xl border border-dashed border-slate-300 px-6 py-5 text-center dark:border-white/15" data-test="builder-checklist-choose-platform">
+      <h2 class="text-base font-medium text-slate-700 dark:text-slate-200">
         {{ t('builder-checklist-choose-platform-title') }}
       </h2>
-      <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+      <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
         {{ t('builder-checklist-choose-platform-description') }}
       </p>
     </div>

@@ -9,70 +9,46 @@ const appVersions: Record<number, { id: number, name: string, native_packages: u
   700: { id: 700, name: '7.0.0', native_packages: PKG_V7 },
 }
 
-const { eventStore, dedupKey, supabaseAdmin } = vi.hoisted(() => {
+const { eventStore, dedupKey, pgQuery } = vi.hoisted(() => {
   const store: any[] = []
   const key = (r: any) => [r.app_id, r.channel_id, r.platform, r.current_version_id, r.previous_version_id, r.change_occurred_at].join('|')
-  return { eventStore: store, dedupKey: key, supabaseAdmin: vi.fn() }
+  return { eventStore: store, dedupKey: key, pgQuery: vi.fn() }
 })
 
-// A tiny chainable query builder. Each `from(table)` returns a builder whose
-// terminal methods (maybeSingle / upsert / update / is) resolve against an
-// in-memory model. The handler only needs the channels winner lookup to return
-// "this is the sole public default" and app_versions/compatibility_events.
-function makeBuilder(table: string, ctx: { appVersionsById: typeof appVersions, events: any[] }) {
-  const state: any = { table, filters: {}, op: 'select' }
-  const builder: any = {}
-  const chain = (mutate: () => void) => {
-    mutate()
-    return builder
-  }
-  Object.assign(builder, {
-    select: () => builder,
-    update: (patch: any) => chain(() => Object.assign(state, { op: 'update', patch })),
-    upsert: (row: any) => chain(() => Object.assign(state, { op: 'upsert', row })),
-    eq: (col: string, val: any) => chain(() => { state.filters[col] = val }),
-    neq: (col: string, val: any) => chain(() => { state.filters[`neq_${col}`] = val }),
-    is: (col: string, val: any) => chain(() => { state.filters[`is_${col}`] = val }),
-    order: () => builder,
-    limit: () => builder,
-    maybeSingle: async () => terminate(state, ctx),
-    single: async () => terminate(state, ctx),
-    then: (resolve: any, reject: any) => terminate(state, ctx).then(resolve, reject),
-  })
-  return builder
+// A tiny SQL-text router over an in-memory model. The handler only needs the
+// channels winner lookup to return "this is the sole public default" and
+// app_versions/compatibility_events. `queryJson` wraps statements in
+// `WITH q AS (...) SELECT to_json(q.*) AS row FROM q`, so those rows come back as `{ row }`.
+async function runQuery(sql: string, params: any[], ctx: { appVersionsById: typeof appVersions, events: any[] }) {
+  const wrapped = /^WITH q AS \(([\s\S]*)\) SELECT pg_catalog\.to_json\(q\.\*\) AS row FROM q$/.exec(sql)
+  const rows = await routeQuery(wrapped ? wrapped[1] : sql, params, ctx)
+  return { rows: wrapped ? rows.map(row => ({ row })) : rows, rowCount: rows.length }
 }
 
-async function terminate(state: any, ctx: { appVersionsById: typeof appVersions, events: any[] }) {
-  const { table, op, filters } = state
-
-  if (table === 'channels') {
+async function routeQuery(sql: string, params: any[], ctx: { appVersionsById: typeof appVersions, events: any[] }): Promise<any[]> {
+  if (sql.includes('public.channels')) {
     // getCurrentChannel: select by id -> return the record as a public default.
-    if (op === 'select' && filters.id != null && filters.public == null) {
-      return { data: { id: filters.id, app_id: 'com.test.app', public: true, ios: true, android: false, electron: false, updated_at: 't', created_at: 't' }, error: null }
-    }
-    // getCurrentPublicWinner: select id where public + platform -> the record itself wins.
-    if (op === 'select' && filters.public === true && filters.neq_id == null) {
-      return { data: { id: filters.id ?? 101, version: 700 }, error: null }
-    }
+    if (sql.startsWith('SELECT id, app_id, public'))
+      return [{ id: params[0], app_id: 'com.test.app', public: true, ios: true, android: false, electron: false, updated_at: 't', created_at: 't' }]
     // getPreviousDefaultChannel: excludes record.id -> no other public default (Case B).
-    if (op === 'select' && filters.public === true && filters.neq_id != null) {
-      return { data: null, error: null }
-    }
+    if (sql.startsWith('SELECT id, version'))
+      return []
+    // getCurrentPublicWinner: select id where public + platform -> the record itself wins.
+    if (sql.startsWith('SELECT id FROM'))
+      return [{ id: 101 }]
     // demotion update -> no-op success
-    if (op === 'update') {
-      return { data: null, error: null }
-    }
-    return { data: null, error: null }
+    return []
   }
 
-  if (table === 'app_versions') {
-    const row = ctx.appVersionsById[filters.id]
-    return { data: row ?? null, error: null }
+  if (sql.includes('FROM public.app_versions')) {
+    const row = ctx.appVersionsById[params[0]]
+    return row ? [row] : []
   }
 
-  if (table === 'compatibility_events') {
-    if (op === 'upsert') {
-      const row = state.row
+  if (sql.includes('public.compatibility_events')) {
+    if (sql.startsWith('INSERT')) {
+      const [org_id, app_id, source, platform, channel_id, channel_name, current_version_id, current_version_name, previous_version_id, previous_version_name, offenders, change_occurred_at] = params
+      const row = { org_id, app_id, source, platform, channel_id, channel_name, current_version_id, current_version_name, previous_version_id, previous_version_name, offenders: JSON.parse(offenders), change_occurred_at }
       const k = dedupKey(row)
       const existing = ctx.events.find(e => dedupKey(e) === k)
       if (existing) {
@@ -81,7 +57,7 @@ async function terminate(state: any, ctx: { appVersionsById: typeof appVersions,
         // already-resolved row keeps its resolved_at / resolution_kind /
         // resolution_note across a redelivery.
         Object.assign(existing, row)
-        return { data: null, error: null }
+        return []
       }
       ctx.events.push({
         id: ctx.events.length + 1,
@@ -91,24 +67,26 @@ async function terminate(state: any, ctx: { appVersionsById: typeof appVersions,
         resolution_note: null,
         ...row,
       })
-      return { data: null, error: null }
+      return []
     }
-    if (op === 'update') {
-      const target = ctx.events.find(e => e.id === filters.id && e.resolved_at == null)
+    if (sql.startsWith('UPDATE')) {
+      const [resolvedAt, note, id] = params
+      const target = ctx.events.find(e => e.id === id && e.resolved_at == null)
       if (target)
-        Object.assign(target, state.patch)
-      return { data: null, error: null }
+        Object.assign(target, { resolved_at: resolvedAt, resolved_by: null, resolution_kind: 'auto_compatible', resolution_note: note })
+      return []
     }
-    // select unresolved for app
-    const unresolved = ctx.events.filter(e => e.app_id === filters.app_id && e.resolved_at == null)
-    return { data: unresolved, error: null }
+    // select unresolved for app (and channel, for revert detection)
+    const channelId = sql.includes('channel_id = $2') ? params[1] : undefined
+    return ctx.events.filter(e => e.app_id === params[0] && e.resolved_at == null && (channelId === undefined || e.channel_id === channelId))
   }
 
-  return { data: null, error: null }
+  return []
 }
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin,
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: vi.fn(async () => ({ query: pgQuery })),
+  closeClient: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
@@ -176,9 +154,7 @@ describe('on_channel_update compatibility events (integration)', () => {
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
     vi.clearAllMocks()
     eventStore.length = 0
-    supabaseAdmin.mockImplementation(() => ({
-      from: (table: string) => makeBuilder(table, { appVersionsById: appVersions, events: eventStore }),
-    }))
+    pgQuery.mockImplementation((sql: string, params: any[] = []) => runQuery(sql, params, { appVersionsById: appVersions, events: eventStore }))
   })
 
   it('records one incompatible event on a default-channel version change (Case B)', async () => {

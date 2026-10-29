@@ -1,9 +1,8 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
-import { cwd } from 'node:process'
 import { confirm as pConfirm, isCancel as pIsCancel, log, select as pSelect } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { findMainFile, findRoot, formatError } from '../utils'
+import { findMainFile, findProjectRoot, formatError } from '../utils'
 import { checkIndexPosition, searchInDirectory } from '../bundle/check'
 
 const NOTIFY_CALL = 'CapacitorUpdater.notifyAppReady()'
@@ -103,7 +102,7 @@ function findProjectRootForFile(filePath: string): string {
       return dir
     dir = dirname(dir)
   }
-  return findRoot(cwd())
+  return findProjectRoot()
 }
 
 function usesCommonJsModuleFormat(filePath: string, content: string): boolean {
@@ -216,7 +215,7 @@ export function patchNotifyAppReadyInBuildFolder(webDir: string): string | undef
   return entryPath
 }
 
-export async function patchNotifyAppReadyInSourceAsync(projectRoot = findRoot(cwd())): Promise<string | undefined> {
+export async function patchNotifyAppReadyInSourceAsync(projectRoot = findProjectRoot()): Promise<string | undefined> {
   const directCandidates = ['src/main.ts', 'src/main.tsx', 'src/main.js', 'src/index.ts', 'src/index.tsx']
     .map(relativePath => readExistingMainFile(join(projectRoot, relativePath)))
     .find(Boolean)
@@ -328,7 +327,7 @@ export async function ensureNotifyAppReadyInBuildFolder(options: EnsureNotifyApp
 
     if (choice === 'patch-source') {
       try {
-        const patchedPath = await patchNotifyAppReadyInSourceAsync(findRoot(cwd()))
+        const patchedPath = await patchNotifyAppReadyInSourceAsync(findProjectRoot())
         if (!patchedPath) {
           log.warn('Could not find your app entry file automatically.')
           continue

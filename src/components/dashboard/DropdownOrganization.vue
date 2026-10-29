@@ -34,6 +34,7 @@ const capgo = useConsole()
 const main = useMainStore()
 const dropdown = useTemplateRef<HTMLDetailsElement>('dropdown')
 const menu = useTemplateRef<HTMLElement>('orgSwitcherMenu')
+const menuOpen = ref(false)
 const compactMenuOpen = ref(false)
 const organizationSearch = ref('')
 const compactMenuStyle = ref<Record<string, string>>({})
@@ -62,6 +63,7 @@ const triggerAriaLabel = computed(() => {
 })
 const canCreateOrganizationInContext = !isNativeAppStoreContext()
 const ORGANIZATION_SEARCH_THRESHOLD = 8
+const APP_PREVIEW_LIMIT = 20
 const showOrganizationSearch = computed(() => {
   const appCount = organizationStore.organizations.reduce((total, org) => total + getOrgApps(org).length, 0)
   return organizationStore.organizations.length + appCount > ORGANIZATION_SEARCH_THRESHOLD
@@ -152,6 +154,7 @@ function unbindCompactMenuListeners() {
 
 async function onDropdownToggle() {
   const open = dropdown.value?.open ?? false
+  menuOpen.value = open
   compactMenuOpen.value = props.compact && open
   if (!open)
     organizationSearch.value = ''
@@ -294,12 +297,13 @@ async function openInvitationFromRouteIfNeeded() {
 }
 
 function closeDropdown(options?: { restoreFocus?: boolean }) {
-  const wasCompactOpen = compactMenuOpen.value
+  const wasOpen = menuOpen.value
   organizationSearch.value = ''
+  menuOpen.value = false
   compactMenuOpen.value = false
   unbindCompactMenuListeners()
   dropdown.value?.removeAttribute('open')
-  if (wasCompactOpen && options?.restoreFocus !== false)
+  if (wasOpen && options?.restoreFocus !== false)
     dropdown.value?.querySelector('summary')?.focus()
 }
 
@@ -311,7 +315,7 @@ function onMenuClick(event: MouseEvent) {
 }
 
 onKeyStroke('Escape', (event) => {
-  if (!compactMenuOpen.value)
+  if (!menuOpen.value)
     return
   event.preventDefault()
   closeDropdown({ restoreFocus: true })
@@ -423,12 +427,23 @@ function appMatchesSearch(app: Pick<OrganizationApp, 'app_id' | 'name'>, query: 
   return getAppLabel(app).toLowerCase().includes(query) || app.app_id.toLowerCase().includes(query)
 }
 
-function getVisibleOrgApps(org: Organization) {
+function getMatchingOrgApps(org: Organization) {
   const apps = getOrgApps(org)
   const query = normalizedOrganizationSearch.value
   if (!query || org.name.toLowerCase().includes(query))
     return apps
   return apps.filter(app => appMatchesSearch(app, query))
+}
+
+function getVisibleOrgApps(org: Organization) {
+  return getMatchingOrgApps(org).slice(0, APP_PREVIEW_LIMIT)
+}
+
+async function openAllApps(org: Organization) {
+  if (!isSelected(org))
+    organizationStore.setCurrentOrganization(org.gid)
+  closeDropdown()
+  await router.push('/apps')
 }
 
 function isSelectedApp(app: OrganizationApp) {
@@ -539,7 +554,7 @@ watch(
       </summary>
       <Teleport to="body" :disabled="!props.compact">
         <div
-          v-show="!props.compact || compactMenuOpen"
+          v-if="menuOpen"
           ref="orgSwitcherMenu"
           data-test="org-switcher-menu"
           class="flex flex-col max-h-[min(34rem,70vh)] overflow-hidden rounded-xl border border-slate-600/70 bg-slate-800 text-slate-200 shadow-2xl shadow-black/40"
@@ -659,6 +674,16 @@ watch(
                       <span class="block truncate font-mono text-[11px]" :class="isSelectedApp(app) ? 'text-slate-400' : 'text-slate-500'">{{ app.app_id }}</span>
                     </span>
                     <IconCheck v-if="isSelectedApp(app)" class="size-4 shrink-0 text-azure-400" aria-hidden="true" />
+                  </button>
+                </li>
+                <li v-if="getMatchingOrgApps(org).length > APP_PREVIEW_LIMIT">
+                  <button
+                    type="button"
+                    data-test="org-switcher-view-all-apps"
+                    class="flex w-full items-center min-h-10 py-1.5 pl-6 pr-2 rounded-lg text-left text-sm font-medium text-azure-400 hover:bg-slate-700/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
+                    @click.stop="openAllApps(org)"
+                  >
+                    {{ t('view-all-apps') }}
                   </button>
                 </li>
               </ul>

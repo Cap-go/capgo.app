@@ -13,6 +13,12 @@ export interface LiveUpdateProgress {
   currentVersion?: string
   delta?: boolean
   encryptionEnabled?: boolean
+  testChangeMode?: 'agent' | 'manual'
+  /** Files the AI assistant changed for the guided test, so it can revert them afterward. */
+  testChangeFiles?: string[]
+  /** What to look for on the device, as described when the change was made. */
+  testChangeDescription?: string
+  testChangeReverted?: boolean
 }
 
 function progressPath(): string {

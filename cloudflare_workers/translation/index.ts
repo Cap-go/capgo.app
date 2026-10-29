@@ -111,6 +111,8 @@ interface TranslationWorkerBindings {
 }
 
 interface TranslationBody {
+  // Checksum of the catalog the client already holds; matching it skips the ~300 KB payload.
+  checksum?: string
   targetLanguage?: string
 }
 
@@ -1376,6 +1378,9 @@ async function handleTranslationMessages(request: Request, env: TranslationWorke
     fail(400, 'unsupported_translation_language', 'Target language is not enabled')
 
   const checksum = await currentSourceChecksum(env)
+  if (body.checksum === checksum)
+    return jsonResponse({ checksum, status: 'not_modified' }, 200, { 'Cache-Control': 'no-store' })
+
   const model = getTranslationModel(env)
   const readyRequest = buildTranslationCacheRequest(checksum, targetLanguage)
 

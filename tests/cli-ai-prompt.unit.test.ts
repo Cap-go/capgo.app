@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiRequestBuildPrompt, buildAiUploadBundlePrompt, buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
+import { buildAiAddAppPrompt, buildAiCreateChannelPrompt, buildAiOnboardingPrompt, buildAiRequestBuildPrompt, buildAiUploadBundlePrompt, buildCliAiSetupPrompt } from '../src/services/cliAiPrompt'
 
 const apiKey = 'capgo_test_secret'
 
@@ -41,6 +41,14 @@ describe('buildCliAiSetupPrompt', () => {
     expect(prompt).toContain('Treat a task as complete only when the CLI reports it done or skipped')
     expect(prompt).toContain('skip every later checklist checkpoint')
     expect(prompt.match(new RegExp(apiKey, 'g'))).toHaveLength(1)
+  })
+
+  it.concurrent('asks whether the user makes the OTA test change before editing files', () => {
+    const prompt = buildCliAiSetupPrompt(promptInput())
+
+    expect(prompt).toContain('Before editing any file, ask me how I want to make the test change')
+    expect(prompt).toContain('Do not edit application files for me in this case.')
+    expect(prompt).toContain('if you made the test change, revert it in the source')
   })
 
   it.concurrent('leaves v1 and v2 OTA prompts without checklist instructions', () => {
@@ -259,6 +267,68 @@ describe('buildCliAiSetupPrompt', () => {
 
     expect(prompt).toContain('ask me to confirm which organization and app I want to configure')
     expect(prompt).not.toContain('There is only one possible target.')
+  })
+})
+
+describe('MCP onboarding recovery prompts', () => {
+  const organization = { id: 'org-1', name: 'Acme' }
+  const recoveryPrompts = [
+    ...([undefined, 'ota', 'builder', 'both', 'unsure'] as const).map(goal => ({
+      name: `onboarding ${goal ?? 'default'}`,
+      prompt: buildAiOnboardingPrompt({ apiKey, organization, goal }),
+    })),
+    { name: 'add app', prompt: buildAiAddAppPrompt({ apiKey, organization }) },
+    ...(['builder', 'both', 'exploring'] as const).map(intent => ({
+      name: `CLI setup ${intent}`,
+      prompt: buildCliAiSetupPrompt(promptInput(), intent),
+    })),
+    { name: 'request build', prompt: buildAiRequestBuildPrompt({ apiKey, organization, app: { appId: 'com.example.app', name: 'Example' }, platform: 'ios' }) },
+  ]
+
+  it.concurrent.each(recoveryPrompts)('offers app ID conflict solutions in $name', ({ prompt }) => {
+    expect(prompt).toContain('app_id_already_exists')
+    expect(prompt).toContain('app-id-conflict')
+    expect(prompt).toContain('HTTP 409')
+    expect(prompt).toContain('Capgo app IDs are globally unique')
+    expect(prompt).toContain('capgo_list_apps')
+    expect(prompt).toContain('reuse it instead of creating a duplicate')
+    expect(prompt).toContain('ask an admin to invite me or reconnect MCP with the correct account')
+    expect(prompt).toContain('App settings > Transfer app ownership')
+    expect(prompt).toContain('com.example.app.capgo')
+    expect(prompt).toContain('support@capgo.app')
+    expect(prompt).toContain('Present the applicable choices and wait for my decision')
+    expect(prompt).toContain('Ask me to approve the exact ID before registration or configuration edits')
+    expect(prompt).toContain('Do not switch accounts or organizations, transfer ownership, delete an app, or modify another app without my confirmation')
+  })
+
+  it.concurrent.each(recoveryPrompts)('preserves native identity and existing Capgo overrides in $name', ({ prompt }) => {
+    expect(prompt).toContain('Live Updates uses `plugins.CapacitorUpdater.appId` if set, otherwise the native `appId`')
+    expect(prompt).toContain('Builder uses `plugins.CapgoBuilder.capgoBuilderAppId` if set, otherwise `plugins.CapacitorUpdater.appId` if set, otherwise the native `appId`')
+    expect(prompt).toContain('Preserve existing overrides. Never change the native `appId`')
+    expect(prompt).toContain('If configuring both products for this app, use the same approved Capgo app ID for both overrides')
+    expect(prompt).toContain('Register that ID through MCP in the intended organization and use it for subsequent Capgo operations')
+    expect(prompt).toContain('Run `npx cap sync` after the approved config change, before the first native validation build')
+    expect(prompt).toContain('never sync the later OTA-only test change into the native app')
+    expect(prompt).not.toContain('app ID (bundle ID) and name from')
+  })
+
+  it.concurrent.each(recoveryPrompts)('requires actionable error recovery without bypassing MCP in $name', ({ prompt }) => {
+    expect(prompt).toContain('using the returned `how_to_fix.next_steps` and `next` guidance')
+    expect(prompt).toContain('Use the matching `*_explain` tool')
+    expect(prompt).toContain('retry unchanged indefinitely')
+    expect(prompt).toContain('restart onboarding to bypass a failed build')
+    expect(prompt).toContain('Resume the matching onboarding flow only after the selected recovery is complete')
+    expect(prompt).toContain('If the current guided step cannot perform the selected recovery')
+    expect(prompt.match(new RegExp(apiKey, 'g'))).toHaveLength(1)
+  })
+
+  it.concurrent('includes recovery in the self-contained Section 3 delegated to a fresh MCP session', () => {
+    for (const prompt of [buildAiOnboardingPrompt({ apiKey, organization }), buildAiAddAppPrompt({ apiKey, organization })]) {
+      const continuation = prompt.slice(prompt.indexOf('## 3. Continue Capgo onboarding through MCP'))
+      expect(continuation).toContain('App identity and registration recovery')
+      expect(continuation).toContain('Other MCP errors')
+      expect(continuation).not.toContain(apiKey)
+    }
   })
 })
 

@@ -289,7 +289,7 @@ jobs:
             uses: crate-ci/typos@v1 # v1.45.1
           - name: Check for console statements
             run: |
-              if grep -r --exclude="logging.ts" --exclude=".env" --exclude=".env.*" "console\." supabase/functions/; then
+              if grep -rE --exclude="logging.ts" --exclude=".env" --exclude=".env.*" "console\.[A-Za-z]+[[:space:]]*\(" supabase/functions/; then
                 echo "Found console statements in supabase/functions directory, use cloudlog instead"
                 exit 1
               else

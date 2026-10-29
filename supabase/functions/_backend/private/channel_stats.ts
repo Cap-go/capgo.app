@@ -7,7 +7,7 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 import { buildDailyReportedCountsByName, convertCountsToPercentagesByName, fillMissingDailyCounts } from '../utils/version_stats_helpers.ts'
 
 dayjs.extend(utc)
@@ -247,14 +247,42 @@ app.post('/', middlewareAuth, async (c) => {
       throw simpleError('not_authenticated', 'Authentication required')
     }
 
-    const supabase = supabaseWithAuth(c, auth)
-
-    const { data: channelData, error: channelError } = await supabase
-      .from('channels')
-      .select('id, name, version, version (name, created_at)')
-      .eq('id', body.channel_id)
-      .eq('app_id', body.app_id)
-      .single()
+    // Both reads run as the caller; a failed deploy history read is only logged.
+    const { channelData, channelError, deployHistory, deployError } = await withRlsContext(c, authPrincipal(c, auth), async (client) => {
+      let channelData: { id: number, name: string, version: { name: string, created_at: string | null } | null } | null = null
+      try {
+        channelData = await queryJsonOne<{ id: number, name: string, version: { name: string, created_at: string | null } | null }>(
+          client,
+          `SELECT ch.id, ch.name,
+            (SELECT pg_catalog.json_build_object('name', av.name, 'created_at', av.created_at) FROM public.app_versions av WHERE av.id = ch.version) AS version
+          FROM public.channels ch
+          WHERE ch.id = $1 AND ch.app_id = $2`,
+          [body.channel_id, body.app_id],
+        )
+      }
+      catch (error) {
+        return { channelData: null, channelError: error, deployHistory: null, deployError: null }
+      }
+      if (!channelData)
+        return { channelData: null, channelError: null, deployHistory: null, deployError: null }
+      try {
+        // PostgREST capped this read at max_rows (1000).
+        const deployHistory = await queryJson<{ version_id: number | null, deployed_at: string | null, app_versions: { name: string } | null }>(
+          client,
+          `SELECT dh.version_id, dh.deployed_at,
+            (SELECT pg_catalog.json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = dh.version_id) AS app_versions
+          FROM public.deploy_history dh
+          WHERE dh.channel_id = $1 AND dh.app_id = $2
+          ORDER BY dh.deployed_at ASC
+          LIMIT 1000`,
+          [body.channel_id, body.app_id],
+        )
+        return { channelData, channelError: null, deployHistory, deployError: null }
+      }
+      catch (error) {
+        return { channelData, channelError: null, deployHistory: null, deployError: error }
+      }
+    })
 
     if (channelError || !channelData) {
       throw simpleError('channel_not_found', 'Channel not found')
@@ -263,13 +291,6 @@ app.post('/', middlewareAuth, async (c) => {
     const currentVersionName = (channelData.version as any)?.name ?? ''
 
     const endDate = dayjs().utc().endOf('day').toDate()
-
-    const { data: deployHistory, error: deployError } = await supabase
-      .from('deploy_history')
-      .select('version_id, deployed_at, app_versions(name)')
-      .eq('channel_id', body.channel_id)
-      .eq('app_id', body.app_id)
-      .order('deployed_at', { ascending: true })
 
     if (deployError) {
       cloudlog({ requestId: c.get('requestId'), message: 'Error fetching deploy history', error: deployError })

@@ -7,7 +7,8 @@ import { cloudlogErr } from '../utils/logging.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { getLatestOpenSubscriptionInvoice } from '../utils/stripe.ts'
 import { normalizeBillingAccount } from '../utils/stripe_billing.ts'
-import { supabaseAdmin, supabaseClient } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
 interface PastDueBody {
   orgId: string
@@ -33,12 +34,16 @@ app.post('/', middlewareAuth, async (c) => {
     throw simpleError('not_authorized', 'Not authorized')
 
   // Authenticated client: RLS only returns orgs the caller belongs to.
-  const { data: org, error: dbError } = await supabaseClient(c, authorization)
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', body.orgId)
-    .single()
-  if (dbError || !org)
+  let org: { customer_id: string | null } | null = null
+  try {
+    org = await withRlsContext(c, authPrincipal(c), client => queryJsonOne<{ customer_id: string | null }>(
+      client,
+      'SELECT customer_id FROM public.orgs WHERE id = $1',
+      [body.orgId],
+    ))
+  }
+  catch {}
+  if (!org)
     throw simpleError('not_authorized', 'Not authorized')
 
   if (!await checkPermission(c, 'org.update_billing', { orgId: body.orgId }))
@@ -48,11 +53,22 @@ app.post('/', middlewareAuth, async (c) => {
   if (!org.customer_id)
     return c.json(notPastDue)
 
-  const { data: stripeInfo, error: stripeInfoError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('status, past_due_at, billing_account')
-    .eq('customer_id', org.customer_id)
-    .maybeSingle()
+  let stripeInfo: { status: string | null, past_due_at: string | null, billing_account: string | null } | null = null
+  let stripeInfoError: unknown = null
+  const pg = await getPgClient(c)
+  try {
+    stripeInfo = await queryJsonOne<{ status: string | null, past_due_at: string | null, billing_account: string | null }>(
+      pg,
+      'SELECT status, past_due_at, billing_account FROM public.stripe_info WHERE customer_id = $1',
+      [org.customer_id],
+    )
+  }
+  catch (error) {
+    stripeInfoError = error
+  }
+  finally {
+    closeClient(c, pg)
+  }
   if (stripeInfoError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'stripe_past_due stripe_info', orgId: body.orgId, error: stripeInfoError })
     throw simpleError('cannot_get_stripe_info', 'Cannot get billing status')

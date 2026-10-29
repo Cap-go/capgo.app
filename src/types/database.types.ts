@@ -817,6 +817,71 @@ export type Database = {
           },
         ]
       }
+      cancel_save_offers: {
+        Row: {
+          billing_account: string
+          coupon_id: string
+          created_at: string
+          currency: string
+          customer_id: string
+          discount_end: string | null
+          discount_start: string | null
+          duration_months: number
+          id: string
+          monthly_amount: number
+          org_id: string
+          outcome: string
+          percent_off: number
+          reason: string
+          responded_at: string | null
+          subscription_id: string
+        }
+        Insert: {
+          billing_account: string
+          coupon_id: string
+          created_at?: string
+          currency: string
+          customer_id: string
+          discount_end?: string | null
+          discount_start?: string | null
+          duration_months: number
+          id?: string
+          monthly_amount: number
+          org_id: string
+          outcome?: string
+          percent_off: number
+          reason: string
+          responded_at?: string | null
+          subscription_id: string
+        }
+        Update: {
+          billing_account?: string
+          coupon_id?: string
+          created_at?: string
+          currency?: string
+          customer_id?: string
+          discount_end?: string | null
+          discount_start?: string | null
+          duration_months?: number
+          id?: string
+          monthly_amount?: number
+          org_id?: string
+          outcome?: string
+          percent_off?: number
+          reason?: string
+          responded_at?: string | null
+          subscription_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cancel_save_offers_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       capgo_credits_steps: {
         Row: {
           created_at: string
@@ -1530,10 +1595,15 @@ export type Database = {
           created_at: string
           entry_key: string
           file_hash: string
+          file_hash_bin: string | null
           file_name: string
           file_size: number
           id: number
           path_key: string
+          path_org: string | null
+          path_session: string | null
+          path_session_id: number | null
+          path_sha: string | null
           s3_path: string
         }
         Insert: {
@@ -1541,10 +1611,15 @@ export type Database = {
           created_at?: string
           entry_key: string
           file_hash: string
+          file_hash_bin?: string | null
           file_name: string
           file_size?: number
           id?: number
           path_key: string
+          path_org?: string | null
+          path_session?: string | null
+          path_session_id?: number | null
+          path_sha?: string | null
           s3_path: string
         }
         Update: {
@@ -1552,10 +1627,15 @@ export type Database = {
           created_at?: string
           entry_key?: string
           file_hash?: string
+          file_hash_bin?: string | null
           file_name?: string
           file_size?: number
           id?: number
           path_key?: string
+          path_org?: string | null
+          path_session?: string | null
+          path_session_id?: number | null
+          path_sha?: string | null
           s3_path?: string
         }
         Relationships: [
@@ -1662,6 +1742,32 @@ export type Database = {
           recorded_at?: string
         }
         Relationships: []
+      }
+      delta_sessions: {
+        Row: {
+          app_id: string
+          id: number
+          session: string
+        }
+        Insert: {
+          app_id: string
+          id?: number
+          session: string
+        }
+        Update: {
+          app_id?: string
+          id?: number
+          session?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_sessions_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
       }
       deploy_history: {
         Row: {
@@ -4473,6 +4579,22 @@ export type Database = {
         Args: { p_file_hash: string; p_file_name: string; p_s3_path: string }
         Returns: string
       }
+      delta_file_hash: {
+        Args: { p_file_hash: string; p_file_hash_bin: string }
+        Returns: string
+      }
+      delta_file_s3_path: {
+        Args: {
+          p_app_id: string
+          p_file_name: string
+          p_path_org: string
+          p_path_session: string
+          p_path_sha: string
+          p_s3_path: string
+        }
+        Returns: string
+      }
+      delta_files_compact: { Args: { p_batch_size?: number }; Returns: number }
       delta_gc_begin_delete: {
         Args: { p_app_id: string; p_lease_ms?: number; p_paths: string[] }
         Returns: string[]
@@ -4535,6 +4657,8 @@ export type Database = {
         Returns: string[]
       }
       delta_path_key: { Args: { p_s3_path: string }; Returns: string }
+      delta_sessions_attach: { Args: { p_ids: number[] }; Returns: number }
+      delta_sessions_move: { Args: { p_batch_size?: number }; Returns: number }
       delta_storage_gc_enabled: { Args: never; Returns: boolean }
       delta_storage_setting: {
         Args: { p_default: boolean; p_name: string }
@@ -4729,6 +4853,16 @@ export type Database = {
       get_app_versions: {
         Args: { apikey: string; appid: string; name_version: string }
         Returns: number
+      }
+      get_bundle_channel_removals: {
+        Args: {
+          p_app_id: string
+          p_ascending?: boolean
+          p_channel_ids?: string[]
+          p_limit?: number
+          p_version_id: number
+        }
+        Returns: Json
       }
       get_bundle_upload_daily_counts: {
         Args: { p_app_ids: string[]; p_end: string; p_start: string }

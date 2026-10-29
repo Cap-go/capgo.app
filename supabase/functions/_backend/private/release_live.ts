@@ -13,7 +13,7 @@ import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, mergeLegacyCheckFailures, subtractLegacyDownloadFails } from '../utils/legacyDownloadFail.ts'
 import { checkPermission, getDeniedChannelIdsForPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts } from '../utils/stats.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 
 // Near-realtime view of a release rollout on one channel. Every number is
 // scoped to that channel (the app's default channel unless the request names
@@ -175,6 +175,19 @@ interface RawFailedDevicesRow {
 }
 
 type Relation<T> = T | T[] | null | undefined
+
+interface CandidateChannelRow {
+  id: number
+  name: string
+  public: boolean
+  rollout_enabled: boolean
+  rollout_percentage_bps: number | null
+  rollout_paused_at: string | null
+  rollout_pause_reason: string | null
+  version: Relation<{ id: number, name: string, created_at: string | null }>
+  rollout_version_info: Relation<{ id: number, name: string, created_at: string | null }>
+  deploy_history: Array<{ deployed_at: string | null, app_versions: Relation<{ id: number, name: string }> }> | null
+}
 
 function one<T>(value: Relation<T>): T | null {
   if (Array.isArray(value))
@@ -563,20 +576,43 @@ async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: 
   if (cached)
     return cached
 
-  const { data: channelRows, error: channelError } = await supabaseAdmin(c)
-    .from('channels')
-    .select('id, name, public, rollout_enabled, rollout_percentage_bps, rollout_paused_at, rollout_pause_reason, version:app_versions!channels_version_fkey(id, name, created_at), rollout_version_info:app_versions!channels_rollout_version_fkey(id, name, created_at), deploy_history(deployed_at, app_versions(id, name))')
-    .eq('app_id', appId)
-    .order('name', { ascending: true })
-    .order('id', { ascending: true })
-    .order('deployed_at', { referencedTable: 'deploy_history', ascending: false })
-    .limit(DEPLOY_HISTORY_PER_CHANNEL_LIMIT, { referencedTable: 'deploy_history' })
-  if (channelError) {
+  let channelRows: CandidateChannelRow[]
+  const pg = await getPgClient(c)
+  try {
+    // PostgREST capped the channels at max_rows (1000).
+    channelRows = await queryJson<CandidateChannelRow>(
+      pg,
+      `SELECT ch.id, ch.name, ch.public, ch.rollout_enabled, ch.rollout_percentage_bps, ch.rollout_paused_at, ch.rollout_pause_reason,
+        (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'created_at', av.created_at) FROM public.app_versions av WHERE av.id = ch.version) AS version,
+        (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'created_at', av.created_at) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_version_info,
+        COALESCE((
+          SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
+            'deployed_at', d.deployed_at,
+            'app_versions', (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name) FROM public.app_versions av WHERE av.id = d.version_id)
+          ) ORDER BY d.deployed_at DESC)
+          FROM (
+            SELECT dh.deployed_at, dh.version_id FROM public.deploy_history dh
+            WHERE dh.channel_id = ch.id
+            ORDER BY dh.deployed_at DESC
+            LIMIT $2
+          ) d
+        ), '[]'::json) AS deploy_history
+      FROM public.channels ch
+      WHERE ch.app_id = $1
+      ORDER BY ch.name ASC, ch.id ASC
+      LIMIT 1000`,
+      [appId, DEPLOY_HISTORY_PER_CHANNEL_LIMIT],
+    )
+  }
+  catch (channelError) {
     cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', channelError })
     throw simpleError('fetch_error', 'Failed to fetch deployment history')
   }
+  finally {
+    closeClient(c, pg)
+  }
 
-  const channels = (channelRows ?? []).map((row) => {
+  const channels = channelRows.map((row) => {
     const version = one(row.version as Relation<{ id: number, name: string, created_at: string | null }>)
     const current = version?.name && version.created_at && !INTERNAL_VERSION_NAMES.has(version.name)
       ? {
@@ -605,8 +641,8 @@ async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: 
     return { id: row.id, name: row.name, public: row.public, current, rollout } satisfies CandidateChannel
   })
 
-  const deployments = sortDeploymentsNewestFirst((channelRows ?? []).flatMap((row) => {
-    const history = (row.deploy_history ?? []) as Array<{ deployed_at: string | null, app_versions: Relation<{ id: number, name: string }> }>
+  const deployments = sortDeploymentsNewestFirst(channelRows.flatMap((row) => {
+    const history = row.deploy_history ?? []
     return history.flatMap((entry) => {
       const version = one(entry.app_versions)
       if (!version?.name || !entry.deployed_at)
@@ -695,20 +731,26 @@ async function loadNamedBundle(c: Context<MiddlewareKeyVariables>, appId: string
   if (cached)
     return cached.bundle ? { ...cached.bundle, channel_id: channel.id, channel_name: channel.name } : null
 
-  const { data, error } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id, name, created_at')
-    .eq('app_id', appId)
-    .eq('name', versionName)
-    .eq('deleted', false)
-    .not('name', 'in', '("builtin","unknown")')
-    .limit(1)
-  if (error) {
+  let data: { id: number, name: string, created_at: string | null }[]
+  const pg = await getPgClient(c)
+  try {
+    data = await queryJson<{ id: number, name: string, created_at: string | null }>(
+      pg,
+      `SELECT id, name, created_at FROM public.app_versions
+      WHERE app_id = $1 AND name = $2 AND deleted = false AND name NOT IN ('builtin', 'unknown')
+      LIMIT 1`,
+      [appId, versionName],
+    )
+  }
+  catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'release_live named bundle error', error })
     throw simpleError('fetch_error', 'Failed to fetch bundle')
   }
+  finally {
+    closeClient(c, pg)
+  }
 
-  const version = data?.[0]
+  const version = data[0]
   const bundle: ResolvedRelease | null = version?.name && version.created_at
     ? {
         bundle_id: version.id,

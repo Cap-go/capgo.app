@@ -1,30 +1,18 @@
 import type { Context } from 'hono'
-import { createClient } from '@supabase/supabase-js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildReadDevicesCFQuery as buildPluginReadDevicesCFQuery } from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
-import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF, readDevicesCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import { readDevicesSB } from '../supabase/functions/_backend/utils/supabase.ts'
 
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: vi.fn(),
+const pgMocks = vi.hoisted(() => ({
+  getPgClient: vi.fn(),
 }))
 
-function createReadDevicesQueryMock() {
-  const query = {
-    select: vi.fn(() => query),
-    eq: vi.fn(() => query),
-    gt: vi.fn(() => query),
-    in: vi.fn(() => query),
-    order: vi.fn(() => query),
-    limit: vi.fn(() => query),
-    then: vi.fn((resolve, reject) => Promise.resolve({ data: [], count: 12, error: null }).then(resolve, reject)),
-  }
-  const client = {
-    from: vi.fn(() => query),
-  }
-
-  return { client, query }
-}
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>(),
+  getPgClient: pgMocks.getPgClient,
+  closeClient: vi.fn(),
+}))
 
 function createContextMock() {
   return {
@@ -41,7 +29,7 @@ function createContextMock() {
 }
 
 beforeEach(() => {
-  vi.mocked(createClient).mockReset()
+  pgMocks.getPgClient.mockReset()
   vi.unstubAllGlobals()
 })
 
@@ -61,15 +49,25 @@ describe('buildReadDevicesCFQuery', () => {
     expect(query).toContain('ORDER BY device_id ASC')
   })
 
-  it.concurrent('does not read install source blob on default device listing', () => {
+  const installSourceArgMax = 'argMax(blob9, if(blob9 != \'\', timestamp, toDateTime(\'1970-01-01 00:00:00\'))) AS install_source'
+
+  it.concurrent('reads install_source from blob9 on default device listing', () => {
     const query = buildReadDevicesCFQuery({
       app_id: 'com.example.app',
       limit: 1,
     }, false)
 
-    expect(query).not.toContain('blob9')
-    expect(query).not.toContain('install_source')
+    expect(query).toContain(installSourceArgMax)
     expect(query).not.toContain('blob10')
+  })
+
+  it.concurrent('reads install_source from blob9 in plugin-runtime device listing', () => {
+    const query = buildPluginReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(installSourceArgMax)
   })
 
   it.concurrent('does not read country code for custom id listing without device ids', () => {
@@ -236,6 +234,58 @@ describe('buildReadDevicesCFQuery', () => {
     expect(searchIndex).toBeGreaterThan(groupByIndex)
     expect(query.indexOf('platform = 0')).toBeGreaterThan(groupByIndex)
   })
+
+  it('maps install_source from Analytics Engine rows in readDevicesCF', async () => {
+    let query = ''
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        meta: [
+          { name: 'device_id', type: 'String' },
+          { name: 'version_name', type: 'String' },
+          { name: 'plugin_version', type: 'String' },
+          { name: 'os_version', type: 'String' },
+          { name: 'custom_id', type: 'String' },
+          { name: 'version_build', type: 'String' },
+          { name: 'default_channel', type: 'String' },
+          { name: 'key_id', type: 'String' },
+          { name: 'install_source', type: 'String' },
+          { name: 'platform', type: 'Float64' },
+          { name: 'is_prod', type: 'Float64' },
+          { name: 'is_emulator', type: 'Float64' },
+          { name: 'updated_at', type: 'DateTime' },
+        ],
+        data: [{
+          device_id: '11111111-1111-4111-8111-111111111111',
+          version_name: '1.0.0',
+          plugin_version: '8.0.0',
+          os_version: '17.0',
+          custom_id: '',
+          version_build: '1',
+          default_channel: 'production',
+          key_id: '',
+          install_source: 'app_store',
+          platform: 1,
+          is_prod: 1,
+          is_emulator: 0,
+          updated_at: '2026-04-04 03:05:59',
+        }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const devices = await readDevicesCF(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(installSourceArgMax)
+    expect(devices).toHaveLength(1)
+    expect(devices[0]?.install_source).toBe('app_store')
+  })
 })
 
 describe('countDevicesCF', () => {
@@ -397,89 +447,87 @@ describe('countInstallSourcesCF', () => {
 })
 
 describe('readDevicesSB', () => {
-  it('applies default device_id cursor pagination when no order is provided', async () => {
-    const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
+  async function readDevicesQuery(params: Parameters<typeof readDevicesSB>[1], customIdMode = false) {
+    const query = vi.fn(async (_text: string, _values: unknown[]) => ({ rows: [] }))
+    pgMocks.getPgClient.mockResolvedValueOnce({ query })
+    await readDevicesSB(createContextMock() as unknown as Context, params, customIdMode)
+    expect(query).toHaveBeenCalledTimes(1)
+    const [text, values] = query.mock.calls[0]!
+    return { text, values }
+  }
 
-    await readDevicesSB(createContextMock() as unknown as Context, {
+  it('applies default device_id cursor pagination when no order is provided', async () => {
+    const { text, values } = await readDevicesQuery({
       app_id: 'com.example.app',
       cursor: '2026-04-04 03:05:59|11111111-1111-4111-8111-111111111111',
       limit: 1,
-    }, false)
+    })
 
-    expect(client.from).toHaveBeenCalledWith('devices')
-    expect(query.gt).toHaveBeenCalledWith('device_id', '11111111-1111-4111-8111-111111111111')
-    expect(query.order).toHaveBeenCalledTimes(1)
-    expect(query.order).toHaveBeenCalledWith('device_id', { ascending: true })
-    expect(query.limit).toHaveBeenCalledWith(2)
+    expect(text).toContain('FROM public.devices WHERE app_id = $1 AND device_id > $2 ORDER BY device_id ASC LIMIT $3')
+    expect(values).toEqual(['com.example.app', '11111111-1111-4111-8111-111111111111', 2])
+    expect(pgMocks.getPgClient).toHaveBeenLastCalledWith(expect.anything(), false)
   })
 
   it('applies install source filters', async () => {
-    const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
-
-    await readDevicesSB(createContextMock() as unknown as Context, {
+    const { text, values } = await readDevicesQuery({
       app_id: 'com.example.app',
       installSources: ['app_store', 'testflight'],
       limit: 1,
-    }, false)
+    })
 
-    expect(query.in).toHaveBeenCalledWith('install_source', ['app_store', 'testflight'])
+    expect(text).toContain('install_source = ANY($2::text[])')
+    expect(values).toContainEqual(['app_store', 'testflight'])
   })
 
   it('applies platform and version_name filters together', async () => {
-    const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
-
-    await readDevicesSB(createContextMock() as unknown as Context, {
+    const { text, values } = await readDevicesQuery({
       app_id: 'com.example.app',
       platform: 'android',
       version_name: '2.0.0',
       limit: 1,
-    }, false)
+    })
 
-    expect(query.eq).toHaveBeenCalledWith('platform', 'android')
-    expect(query.eq).toHaveBeenCalledWith('version_name', '2.0.0')
+    expect(text).toContain('version_name = $2')
+    expect(text).toContain('platform = $3::public.platform_os')
+    expect(values).toEqual(['com.example.app', '2.0.0', 'android', 2])
   })
 
   it('applies default_channel filter', async () => {
-    const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
-
-    await readDevicesSB(createContextMock() as unknown as Context, {
+    const { text, values } = await readDevicesQuery({
       app_id: 'com.example.app',
       default_channel: 'beta',
       limit: 1,
-    }, false)
+    })
 
-    expect(query.eq).toHaveBeenCalledWith('default_channel', 'beta')
+    expect(text).toContain('default_channel = $2')
+    expect(values).toEqual(['com.example.app', 'beta', 2])
   })
 
   it('filters devices with updated_at greater than the provided timestamp', async () => {
-    const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
-
-    await readDevicesSB(createContextMock() as unknown as Context, {
+    const { text, values } = await readDevicesQuery({
       app_id: 'com.example.app',
       updated_at_gt: '2026-04-04T03:05:59.000Z',
       limit: 1,
-    }, false)
+    })
 
-    expect(query.gt).toHaveBeenCalledWith('updated_at', '2026-04-04T03:05:59.000Z')
+    expect(text).toContain('updated_at > $2::timestamptz')
+    expect(values).toEqual(['com.example.app', '2026-04-04T03:05:59.000Z', 2])
   })
 
   it('orders devices by updated_at when requested', async () => {
-    const { client, query } = createReadDevicesQueryMock()
-    vi.mocked(createClient).mockReturnValue(client as unknown as ReturnType<typeof createClient>)
-
-    await readDevicesSB(createContextMock() as unknown as Context, {
+    const { text } = await readDevicesQuery({
       app_id: 'com.example.app',
       order: [{ key: 'updated_at', sortable: 'desc' }],
       limit: 1,
-    }, false)
+    })
 
-    expect(query.order).toHaveBeenCalledWith('updated_at', { ascending: false })
-    expect(query.order).toHaveBeenCalledWith('device_id', { ascending: true })
+    expect(text).toContain('ORDER BY updated_at DESC, device_id ASC')
+  })
+
+  it('returns rows as PostgREST JSON', async () => {
+    const { text } = await readDevicesQuery({ app_id: 'com.example.app', limit: 1 })
+
+    expect(text).toContain('pg_catalog.to_json(q.*)')
   })
 })
 

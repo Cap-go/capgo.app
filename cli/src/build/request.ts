@@ -870,6 +870,7 @@ export const NON_CREDENTIAL_KEYS = new Set([
   'CAPGO_IOS_XCODE_VERSION',
   'BUILD_OUTPUT_UPLOAD_ENABLED',
   'BUILD_OUTPUT_RETENTION_SECONDS',
+  'BUILD_SYMBOLS_UPLOAD_ENABLED',
   'SKIP_BUILD_NUMBER_BUMP',
   'SKIP_MARKETING_VERSION_BUMP',
   'CAPGO_STORE_SUBMIT_REVIEW',
@@ -962,6 +963,7 @@ export function explicitBuildOptions(
   const defaulted: Array<[keyof BuildOptionsPayload, string]> = [
     ['outputUploadEnabled', 'BUILD_OUTPUT_UPLOAD_ENABLED'],
     ['outputRetentionSeconds', 'BUILD_OUTPUT_RETENTION_SECONDS'],
+    ['symbolsUploadEnabled', 'BUILD_SYMBOLS_UPLOAD_ENABLED'],
     ['skipBuildNumberBump', 'SKIP_BUILD_NUMBER_BUMP'],
     ['skipMarketingVersionBump', 'SKIP_MARKETING_VERSION_BUMP'],
     ['submitToStoreReview', 'CAPGO_STORE_SUBMIT_REVIEW'],
@@ -1004,6 +1006,7 @@ export function splitPayload(
     outputRetentionSeconds: mergedCredentials.BUILD_OUTPUT_RETENTION_SECONDS
       ? Number.parseInt(mergedCredentials.BUILD_OUTPUT_RETENTION_SECONDS, 10) || MIN_OUTPUT_RETENTION_SECONDS
       : MIN_OUTPUT_RETENTION_SECONDS,
+    symbolsUploadEnabled: mergedCredentials.BUILD_SYMBOLS_UPLOAD_ENABLED === 'true',
     skipBuildNumberBump: mergedCredentials.SKIP_BUILD_NUMBER_BUMP === 'true',
     skipMarketingVersionBump: mergedCredentials.SKIP_MARKETING_VERSION_BUMP === 'true',
     submitToStoreReview: mergedCredentials.CAPGO_STORE_SUBMIT_REVIEW === 'true',
@@ -1193,6 +1196,9 @@ export async function requestBuildInternal(appId: string, options: BuildRequestO
     }
     if (options.outputRetention) {
       cliCredentials.BUILD_OUTPUT_RETENTION_SECONDS = String(parseOutputRetentionSeconds(options.outputRetention))
+    }
+    if (options.symbolsUpload !== undefined) {
+      cliCredentials.BUILD_SYMBOLS_UPLOAD_ENABLED = parseOptionalBoolean(options.symbolsUpload) ? 'true' : 'false'
     }
     if (options.skipBuildNumberBump !== undefined) {
       cliCredentials.SKIP_BUILD_NUMBER_BUMP = parseOptionalBoolean(options.skipBuildNumberBump) ? 'true' : 'false'

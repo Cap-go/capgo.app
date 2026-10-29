@@ -10,6 +10,10 @@ export interface LiveUpdateSessionState {
   delta?: boolean
   resumeResolved?: boolean
   dirtyGitResolved?: boolean
+  testChangeChoice?: 'agent' | 'manual'
+  testChangeReady?: boolean
+  testChangeFiles?: string[]
+  testChangeDescription?: string
   deviceRunConfirmed?: boolean
   otaReceivedConfirmed?: boolean
 }

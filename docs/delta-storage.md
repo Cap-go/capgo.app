@@ -11,6 +11,7 @@ reservations and leases).
 | Table | Rows | Purpose |
 | --- | --- | --- |
 | `delta_files` | one per unique `(s3_path, file_name, file_hash)` | path, hash, size. Deduplicated across versions through `entry_key`. |
+| `delta_sessions` | one per `(app_id, session)` | Upload session bytes, referenced by `delta_files.path_session_id`. |
 | `version_files` | one per version | `file_ids bigint[]`: the ordered `delta_files` ids of the version. Written once, never rewritten. |
 | `version_manifest` (view) | per version entry | Console, CLI, download links and preview read one version through RLS. |
 | `manifest` (view) | per version entry | Compatibility only: published CLIs read it (AI version bump). Users can only read it. |
@@ -39,6 +40,130 @@ returns the deterministic paths and never reserves anything.
 Plugin reads (`/updates`, `/updates/manifest_size`) serve a version's list only
 when its `version_files` row and all of its `delta_files` rows are visible on
 the replica. The response format is unchanged.
+
+## Compact rows
+
+About 70% of a `delta_files` row used to be two hex strings: `s3_path` repeats
+the org, the app id, the upload session (encrypted bundles, up to ~470
+characters) and the file name, and `file_hash` is hex text (64 or ~512
+characters). A row in the usual shape is stored as parts:
+
+```
+s3_path   = 'orgs/<path_org>/apps/<app_id>/delta/[<hex path_session>/]<hex path_sha>_<file_name>'
+file_hash = encode(file_hash_bin, 'hex')
+```
+
+with `s3_path` / `file_hash` set to `''`. Every other shape keeps its text:
+legacy `orgs/<org>/apps/<app>/<version>/<file>` paths, `demo/` paths, a file
+name that does not end the path, upper-case hex, base64 hashes. A row is only
+compacted when the rebuilt value equals the stored one, so the rule is
+lossless for any path. On production data (3% sample) 99.6% of paths and
+99.95% of hashes compact, and the two columns shrink from about 688 to 316
+bytes per row.
+
+Readers always go through the rebuild: `public.delta_file_s3_path(...)` and
+`public.delta_file_hash(...)` on the primary (views `version_manifest` and
+`manifest`, GC, restore and compatibility triggers), and the same expressions
+inlined in `utils/version_manifest_sql.ts` on the replicas, which have no
+functions. The size lookup worker reads the path from the row, not from the
+queued message.
+
+Writers keep inserting text. The `delta_files_compact` cron task (every
+10 seconds, 2,000 rows) compacts new rows in id order once they are 10 minutes
+old; its cursor is `backfill_progress` (`job_name = 'delta_files_compact'`).
+The initial catch-up is complete on production. The old
+`delta_files_compact_all` procedure is removed because PostgreSQL procedures
+that commit cannot also pin `search_path`. New installations catch up through
+the scheduled task, or repeatedly call `SELECT public.delta_files_compact(20000)`
+from separate transactions. Compaction requires the Vault setting
+`CAPGO_DELTA_FILES_COMPACT_ENABLED`; enable it after all readers support
+compacted rows. Progress is in `backfill_progress`.
+
+### Shared upload sessions
+
+Encrypted uploads repeat the same session in each file's path. Sessions now
+live in `delta_sessions (id int4, app_id, session bytea)`, with a primary key
+and a primary-only unique index on `(app_id, session)`. A file stores a nullable
+`path_session_id int4`; replicas resolve it by primary key. Sessions are scoped
+to an app and cascade on app deletion. They use the same statement-level,
+caller-scoped RLS readable-app set as `delta_files`.
+
+Readers resolve `COALESCE(delta_files.path_session, delta_sessions.session)`.
+The old bytea column remains nullable during rollout and becomes NULL as rows
+move. Dropping it requires a later release, after every previous reader and
+writer is retired. No public response or CLI protocol changes.
+
+Deployment order:
+
+1. CI creates the session table and adds the file reference column on the
+   subscriber before the primary migration. Only the primary keeps the unique
+   session index. The migration publishes `delta_sessions`.
+2. CI refreshes the subscription and waits for the table copies before
+   deploying API, files and plugin workers. All readers understand both forms.
+3. Once those workers are deployed everywhere, enable the Vault setting:
+   `SELECT vault.create_secret('true', 'CAPGO_DELTA_SESSIONS_ENABLED');`
+   If it exists, use `vault.update_secret` instead.
+4. The existing cron dispatcher calls `delta_sessions_move(5000)` every
+   10 seconds. It scans by `delta_files_pkey`, records its cursor in
+   `backfill_progress`, and moves only each batch. The compactor attaches
+   sessions from newly compacted rows under the same switch. An interrupted
+   batch rolls back; the next invocation resumes at the committed cursor.
+5. Check progress with
+   `SELECT last_processed_id FROM public.backfill_progress WHERE job_name = 'delta_sessions_move';`
+   Compare it with `SELECT max(id) FROM public.delta_files`.
+
+Nothing rewrites rows during migration. Keep the setting off until the worker
+rollout and replica synchronization finish. Turning it off stops further moves;
+rows already moved continue to need the new readers.
+
+Plain `VACUUM (ANALYZE, TRUNCATE FALSE) public.delta_files` makes freed heap
+space reusable without requesting a table truncation lock. It does not shrink
+the heap file. `REINDEX TABLE CONCURRENTLY public.delta_files` can reclaim index
+bloat, using psql outside a transaction. Run maintenance separately on the
+primary and subscriber. A heap rewrite needs a maintenance plan; this release
+performs none.
+
+### Query cost and validation
+
+The session RLS policy calls `app_versions_readable_app_ids()` in an InitPlan
+once per statement for `anon` and `authenticated`. The helper starts from the
+caller identity and indexed role bindings. Session writes are internal only.
+`delta_sessions_move` scans at most 5,000 file ids per scheduled invocation
+through `delta_files_pkey`. If compaction creates inline sessions while the
+session switch is paused, it rewinds the session cursor before that batch so
+re-enabling the switch revisits those ids through the same bounded index path.
+`delta_sessions_attach` selects and updates only
+those ids, using `delta_sessions_app_id_session_idx` for session identity.
+The existing entry-validation RPC starts with `delta_files_path_key_idx` and a
+single `version_files_pkey` lookup. Restore work starts with one version's
+file-id array. Plugin reads use only replicas and join `delta_sessions_pkey`;
+they make no new primary-database request or permission-function call.
+
+Local PostgreSQL 17 validation used synthetic data, one million file rows,
+40% with 368-byte inline sessions, 4,000 shared sessions, and callers with
+100 orgs and 4,000 apps. Compact copies occupied 434,118,656 bytes with inline
+sessions and 290,390,016 bytes after sharing, including the new session table
+and all its indexes. File secondary indexes are unchanged and excluded from
+both copies. This measures reusable storage; it does not mean an in-place
+backfill shrinks the production heap file.
+
+For a 5,000-file manifest, six warm `EXPLAIN (ANALYZE, BUFFERS)` runs had median
+execution times of 5.3 ms with inline sessions and 7.5 ms with shared sessions.
+The plans used indexed version/file/session lookups, with no scan over the
+million-row file table. Moving the 400,000 inline sessions in 5,000-id batches
+took 6.8 seconds in total. Both samples use the new reader: this compares
+inline and shared session storage, not the previous release's SQL against this
+PR. These are local measurements, not production endpoint latency guarantees.
+The extra session lookup runs only on a manifest-cache miss; up-to-date checks
+skip the manifest query, and cached manifests return before it runs. Concurrent
+cache-miss load and production p95/p99 latency remain unmeasured.
+
+RLS `limit=1` checks took 0.8 ms for unauthenticated and invalid-key callers,
+7.5 ms for a broad API key, 5.3 ms on its app-filtered control query, and
+15.7 ms for the user with many orgs/apps. Their readable-app InitPlan ran once;
+none scanned the large file table. The planner scanned the small, 4,000-row
+session table. Eight parallel broad-key requests completed in 14-29 ms while
+an unrelated org query completed in 7.5 ms, including driver scheduling.
 
 ## Deletion, restore and GC
 

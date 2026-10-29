@@ -4,8 +4,17 @@ import { requireEnterprisePlan } from '../supabase/functions/_backend/utils/plan
 
 const mocks = vi.hoisted(() => ({ single: vi.fn(), subscription: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({ from: () => ({ select: () => ({ eq: () => ({ single: mocks.single }), or: () => ({ single: mocks.single }) }) }) }),
   getCurrentPlanNameOrg: vi.fn(),
+}))
+// mocks.single answers each lookup in order with a supabase-js style `{ data }`.
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  servicePrincipal: { kind: 'service' },
+  withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => Promise<unknown>) => run({
+    query: async () => {
+      const { data } = await mocks.single()
+      return { rows: data ? [data] : [] }
+    },
+  }),
 }))
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ getSubscriptionData: mocks.subscription, planProductIdOrFilter: (productId: string) => `stripe_id.eq.${productId},stripe_id_us.eq.${productId}` }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: vi.fn() }))

@@ -8,11 +8,13 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import { parseOrgOnboardingDevelopmentEnvironment, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
+import type { PgClient } from '../../utils/pg.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
+import { authPrincipal, queryJsonOne, setRequestApikeyHeader, withRlsContext } from '../../utils/pg_rls.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { getPlanProductId } from '../../utils/stripe.ts'
 import { canChooseUsBillingAccount, resolveNewOrgBillingAccount } from '../../utils/stripe_billing.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
+import { supabaseAdmin } from '../../utils/supabase.ts'
 import { normalizeWebsiteUrl } from './website.ts'
 
 const MAX_ESTIMATED_MAU = 1_000_000
@@ -37,18 +39,22 @@ interface PgTransactionClient {
   query: <T = unknown>(text: string, params?: unknown[]) => Promise<{ rows: T[], rowCount?: number | null }>
 }
 
-async function getInitialPlanForMau(c: Context<MiddlewareKeyVariables>, estimatedMau: number) {
-  const adminClient = supabaseAdmin(c)
-  const { data: plan, error } = await adminClient
-    .from('plans')
-    .select('name, stripe_id, stripe_id_us, mau')
-    .gte('mau', estimatedMau)
-    .order('mau', { ascending: true })
-    .limit(1)
-    .single()
+async function getInitialPlanForMau(pg: PgClient, estimatedMau: number) {
+  let plan: { name: string, stripe_id: string, stripe_id_us: string | null, mau: number } | null = null
+  let error: unknown = null
+  try {
+    plan = await queryJsonOne(
+      pg,
+      'SELECT name, stripe_id, stripe_id_us, mau FROM public.plans WHERE mau >= $1 ORDER BY mau ASC LIMIT 1',
+      [estimatedMau],
+    )
+  }
+  catch (planError) {
+    error = planError
+  }
 
   if (error || !plan) {
-    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: error?.message, estimatedMau })
+    throw simpleError('cannot_get_plan', 'Cannot get plan', { error: (error as Error | null)?.message, estimatedMau })
   }
 
   return plan
@@ -71,8 +77,8 @@ function resolvePlanBillingAccount(c: Context<MiddlewareKeyVariables>, plan: { n
   }
 }
 
-async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId: string, creatorId: string, estimatedMau: number, requestedBillingAccount: BillingAccount, explicit: boolean) {
-  const plan = await getInitialPlanForMau(c, estimatedMau)
+async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, pg: PgClient, orgId: string, creatorId: string, estimatedMau: number, requestedBillingAccount: BillingAccount, explicit: boolean) {
+  const plan = await getInitialPlanForMau(pg, estimatedMau)
   const billingAccount = resolvePlanBillingAccount(c, plan, requestedBillingAccount, explicit)
   const pendingCustomerId = `pending_${orgId}`
   // Direct-offer (paid ads) creators get no trial; everyone else gets the standard trial.
@@ -81,19 +87,15 @@ async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId
     throw simpleError('cannot_create_org_plan', 'Cannot create org plan', { error: error instanceof Error ? error.message : String(error) })
   })
 
-  const { error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .insert({
-      customer_id: pendingCustomerId,
-      product_id: getPlanProductId(plan, billingAccount),
-      billing_account: billingAccount,
-      trial_at: trialAt.toISOString(),
-      status: null,
-      is_good_plan: true,
-    })
-
-  if (error) {
-    throw simpleError('cannot_create_org_plan', 'Cannot create org plan', { error: error.message, estimatedMau, plan: plan.name })
+  try {
+    await pg.query(
+      `INSERT INTO public.stripe_info (customer_id, product_id, billing_account, trial_at, status, is_good_plan)
+       VALUES ($1, $2, $3, $4, NULL, true)`,
+      [pendingCustomerId, getPlanProductId(plan, billingAccount), billingAccount, trialAt.toISOString()],
+    )
+  }
+  catch (error) {
+    throw simpleError('cannot_create_org_plan', 'Cannot create org plan', { error: (error as Error).message, estimatedMau, plan: plan.name })
   }
 
   return pendingCustomerId
@@ -101,14 +103,22 @@ async function createPendingStripeInfo(c: Context<MiddlewareKeyVariables>, orgId
 
 async function getOwnerEmail(c: Context<MiddlewareKeyVariables>, auth: AuthInfo) {
   if (auth.authType === 'jwt') {
-    const { data: self, error } = await supabaseWithAuth(c, auth)
-      .from('users')
-      .select('email')
-      .eq('id', auth.userId)
-      .single()
+    const principal = authPrincipal(c, auth)
+    let self: { email: string | null } | null = null
+    let error: unknown = null
+    try {
+      self = await withRlsContext(c, principal, client => queryJsonOne<{ email: string | null }>(
+        client,
+        'SELECT email FROM public.users WHERE id = $1',
+        [auth.userId],
+      ))
+    }
+    catch (lookupError) {
+      error = lookupError
+    }
 
     if (error || !self?.email) {
-      throw simpleError('cannot_get_user', 'Cannot get user', { error: error?.message })
+      throw simpleError('cannot_get_user', 'Cannot get user', { error: (error as Error | null)?.message })
     }
 
     return self.email
@@ -202,10 +212,7 @@ async function insertOrgForApiKey(
 
     await beginWriteTransaction(dbClient)
     transactionStarted = true
-    await dbClient.query(
-      'SELECT set_config($1, $2, true)',
-      ['request.headers', JSON.stringify({ capgkey: apikeyValue })],
-    )
+    await setRequestApikeyHeader(dbClient, apikeyValue)
 
     const roleResult = await dbClient.query<{ id: string }>(
       'SELECT id FROM public.roles WHERE name = public.rbac_role_org_super_admin() AND scope_type = public.rbac_scope_org() LIMIT 1',
@@ -301,57 +308,59 @@ export async function post(
   if (body.billingAccount === 'us' && !canChooseUsBillingAccount(c))
     throw simpleError('billing_account_unavailable', 'US billing is not available', { billingAccount: 'us' })
   const billingAccount = resolveNewOrgBillingAccount(c, body.billingAccount)
-  const pendingCustomerId = await createPendingStripeInfo(c, orgId, auth.userId, estimatedMau, billingAccount, body.billingAccount === 'us')
-  const onboarding = {
-    intent: parseOrgOnboardingIntent({ intent: body.intent }),
-    starting_out: body.startingOut ?? false,
-    development_environment: parseOrgOnboardingDevelopmentEnvironment({
-      development_environment: body.developmentEnvironment,
-    }),
-  }
-  const newOrg = {
-    id: orgId,
-    name: body.name,
-    created_by: auth.userId,
-    management_email: body.email ?? ownerEmail,
-    customer_id: pendingCustomerId,
-    website,
-    onboarding,
-  }
-
+  const pg = await getPgClient(c)
   try {
-    if (auth.authType === 'apikey') {
-      await insertOrgForApiKey(c, auth, newOrg)
+    const pendingCustomerId = await createPendingStripeInfo(c, pg, orgId, auth.userId, estimatedMau, billingAccount, body.billingAccount === 'us')
+    const onboarding = {
+      intent: parseOrgOnboardingIntent({ intent: body.intent }),
+      starting_out: body.startingOut ?? false,
+      development_environment: parseOrgOnboardingDevelopmentEnvironment({
+        development_environment: body.developmentEnvironment,
+      }),
     }
-    else {
-      await assertJwtMfaAssurance(c, auth)
+    const newOrg = {
+      id: orgId,
+      name: body.name,
+      created_by: auth.userId,
+      management_email: body.email ?? ownerEmail,
+      customer_id: pendingCustomerId,
+      website,
+      onboarding,
+    }
 
-      // Omit customer_id: org-create trigger links pre-created pending stripe_info.
-      const { id, name, created_by, management_email, website: orgWebsite, onboarding: orgOnboarding } = newOrg
-      const { error: errorOrg } = await supabaseWithAuth(c, auth)
-        .from('orgs')
-        .insert({
-          id,
-          name,
-          created_by,
-          management_email,
-          website: orgWebsite,
-          onboarding: orgOnboarding,
-        })
+    try {
+      if (auth.authType === 'apikey') {
+        await insertOrgForApiKey(c, auth, newOrg)
+      }
+      else {
+        await assertJwtMfaAssurance(c, auth)
 
-      if (errorOrg) {
-        throw simpleError('cannot_create_org', 'Cannot create org', { error: errorOrg.message })
+        // Omit customer_id: org-create trigger links pre-created pending stripe_info.
+        const { id, name, created_by, management_email, website: orgWebsite, onboarding: orgOnboarding } = newOrg
+        const principal = authPrincipal(c, auth)
+        try {
+          await withRlsContext(c, principal, client => client.query(
+            `INSERT INTO public.orgs (id, name, created_by, management_email, website, onboarding)
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+            [id, name, created_by, management_email, orgWebsite, JSON.stringify(orgOnboarding)],
+          ))
+        }
+        catch (errorOrg) {
+          throw simpleError('cannot_create_org', 'Cannot create org', { error: (errorOrg as Error).message })
+        }
       }
     }
-  }
-  catch (error) {
-    await supabaseAdmin(c)
-      .from('stripe_info')
-      .delete()
-      .eq('customer_id', pendingCustomerId)
+    catch (error) {
+      await pg.query('DELETE FROM public.stripe_info WHERE customer_id = $1', [pendingCustomerId]).catch((cleanupError: unknown) => {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot clean up pending stripe_info', pendingCustomerId, error: cleanupError })
+      })
 
-    throw error
-  }
+      throw error
+    }
 
-  return c.json({ id: orgId })
+    return c.json({ id: orgId })
+  }
+  finally {
+    closeClient(c, pg)
+  }
 }

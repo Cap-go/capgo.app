@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { simpleError } from '../../utils/hono.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
 
 // Organization encryption policy shared by bundle create and upsert.
 
@@ -14,17 +14,31 @@ export interface AppWithOrg {
 
 export async function getAppOrganization(c: Context, appId: string): Promise<AppWithOrg> {
   // Admin read: org security settings are needed for enforcement regardless of caller RLS.
-  const { data: app, error: appError } = await supabaseAdmin(c)
-    .from('apps')
-    .select('owner_org, orgs!inner(enforce_encrypted_bundles, required_encryption_key)')
-    .eq('app_id', appId)
-    .single()
-
-  if (appError || !app) {
+  let app: AppWithOrg | undefined
+  const pg = await getPgClient(c)
+  try {
+    const result = await pg.query<AppWithOrg>(
+      `SELECT a.owner_org, json_build_object('enforce_encrypted_bundles', o.enforce_encrypted_bundles, 'required_encryption_key', o.required_encryption_key) AS orgs
+      FROM public.apps a
+      JOIN public.orgs o ON o.id = a.owner_org
+      WHERE a.app_id = $1`,
+      [appId],
+    )
+    if (result.rows.length === 1)
+      app = result.rows[0]
+  }
+  catch (appError) {
     throw simpleError('cannot_find_app', 'Cannot find app', { supabaseError: appError })
   }
+  finally {
+    closeClient(c, pg)
+  }
 
-  return app as unknown as AppWithOrg
+  if (!app) {
+    throw simpleError('cannot_find_app', 'Cannot find app', { supabaseError: null })
+  }
+
+  return app
 }
 
 export function checkEncryptedBundleEnforcement(

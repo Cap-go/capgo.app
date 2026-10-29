@@ -59,7 +59,7 @@ function redactSensitiveRequestBody(value: unknown): unknown {
   ]))
 }
 
-export const SECRET_ROUTE_BODY_PLACEHOLDER = '[redacted: build credentials route]'
+export const SECRET_ROUTE_BODY_PLACEHOLDER = '[redacted: secret request body]'
 
 function isFilesDurableObjectTransientError(functionName: string, error: unknown): boolean {
   if (!filesUploadFunctionNames.has(functionName) || !error || typeof error !== 'object' || !('message' in error))
@@ -145,7 +145,7 @@ export function onError(functionName: string) {
     const rawReq = c.req.raw
     const method = c.req.method.toUpperCase()
     const shouldReadBody = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
-    // /build/credentials* and /build/request bodies carry signing secrets: never read them here.
+    // Signing secrets and assistant conversations must never be read here.
     if (shouldReadBody && isSecretBodyRoute(c.req.url)) {
       body = SECRET_ROUTE_BODY_PLACEHOLDER
     }

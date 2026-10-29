@@ -271,8 +271,33 @@ describe('hosted MCP protocol', () => {
     const result = response?.result as { content: Array<{ text: string }>, isError?: boolean }
     expect(result.isError).toBeUndefined()
     expect(JSON.parse(result.content[0].text).command).toBe(
-      `CAPGO_TOKEN='key-123' bunx @capgo/cli@latest bundle upload 'com.example.app' --path 'dist' --channel 'it'\\''s' --delta`,
+      `CAPGO_TOKEN='key-123' npx @capgo/cli@latest bundle upload 'com.example.app' --path 'dist' --channel 'it'\\''s' --delta`,
     )
+  })
+
+  it.concurrent.each(['projectDir', 'cwd'])('runs a hosted upload command in the selected %s with shell-safe quoting', async (directoryOption) => {
+    const { ctx } = fakeContext({ app_id: 'com.example.app' })
+    ctx.apikey = 'example-key'
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0', id: 90, method: 'tools/call',
+      params: { name: 'capgo_get_upload_command', arguments: { appId: 'com.example.app', [directoryOption]: '/workspace/example\'s app/apps/mobile' } },
+    }, ctx)
+    const result = response?.result as { content: Array<{ text: string }> }
+    expect(JSON.parse(result.content[0].text).command).toBe(
+      `cd '/workspace/example'\\''s app/apps/mobile' && CAPGO_TOKEN='example-key' npx @capgo/cli@latest bundle upload 'com.example.app'`,
+    )
+  })
+
+  it.concurrent('rejects conflicting hosted working directories before calling the API', async () => {
+    const { ctx, calls } = fakeContext({ app_id: 'com.example.app' })
+    ctx.apikey = 'example-key'
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0', id: 91, method: 'tools/call',
+      params: { name: 'capgo_get_upload_command', arguments: { appId: 'com.example.app', projectDir: '/workspace/first', cwd: '/workspace/second' } },
+    }, ctx)
+    expect(response?.result).toMatchObject({ isError: true })
+    expect(JSON.stringify(response)).toContain('projectDir and cwd must select the same project')
+    expect(calls).toHaveLength(0)
   })
 
   it.concurrent('refuses the upload command when the key cannot read the app', async () => {
@@ -289,6 +314,61 @@ describe('hosted MCP protocol', () => {
     }, ctx)
     expect(response?.result).toMatchObject({ isError: true })
     expect(JSON.stringify(response?.result)).not.toContain('key-123')
+  })
+})
+
+describe('hosted MCP app creation conflicts', () => {
+  const orgId = '7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601'
+
+  function conflictContext(getApp: { ok: boolean, status: number, data: unknown }) {
+    const calls: McpApiRequest[] = []
+    const ctx: McpToolContext = {
+      call: async (request) => {
+        calls.push(request)
+        if (request.method === 'POST')
+          return { ok: false, status: 409, data: { error: 'app_id_already_exists', message: 'App ID already exists' } }
+        return getApp
+      },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    return { ctx, calls }
+  }
+
+  async function addApp(ctx: McpToolContext) {
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'capgo_add_app', arguments: { appId: 'com.example.app', name: 'Example', orgId } },
+    }, ctx)
+    const result = response?.result as { content: Array<{ text: string }>, isError?: boolean }
+    return { result, body: JSON.parse(result.content[0].text) }
+  }
+
+  it.concurrent('reports an app already in the target organization as usable, not as an error', async () => {
+    const { ctx, calls } = conflictContext({ ok: true, status: 200, data: { app_id: 'com.example.app', owner_org: orgId } })
+    const { result, body } = await addApp(ctx)
+    expect(calls.map(call => `${call.method} ${call.path}`)).toEqual(['POST /app', 'GET /app/com.example.app'])
+    expect(result.isError).toBeUndefined()
+    expect(body.status).toBe('already_exists')
+  })
+
+  it.concurrent('offers solutions and alternative IDs when another account owns the app ID', async () => {
+    const { ctx } = conflictContext({ ok: false, status: 404, data: { error: 'app_not_found' } })
+    const { result, body } = await addApp(ctx)
+    expect(result.isError).toBe(true)
+    expect(body.error).toBe('app_id_already_exists')
+    expect(body.suggested_app_ids).toEqual(['com.example.app.mobile', 'com.example.app.capgo', 'com.example.app.live'])
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('plugins.CapacitorUpdater.appId')
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('Transfer app ownership')
+  })
+
+  it.concurrent('explains an app ID used by another organization the caller can access', async () => {
+    const { ctx } = conflictContext({ ok: true, status: 200, data: { app_id: 'com.example.app', owner_org: 'other-org' } })
+    const { result, body } = await addApp(ctx)
+    expect(result.isError).toBe(true)
+    expect(body.owner_org).toBe('other-org')
+    expect(body.suggested_app_ids.length).toBeGreaterThan(0)
   })
 })
 
@@ -416,5 +496,201 @@ describe('hosted MCP OAuth helpers', () => {
       .toEqual(['https://mcp.so/api/mcp-servers/oauth/callback'])
     expect(getPinnedClientMetadata('https://app.example/oauth/client.json')).toBeNull()
     expect(base64UrlEncode(new Uint8Array([251, 255]))).toBe('-_8')
+  })
+})
+
+describe('hosted MCP errors always give a way out', () => {
+  function failingContext(status: number, data: unknown, requestId?: string): McpToolContext {
+    return {
+      call: async () => ({ ok: false, status, data, requestId }),
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+  }
+
+  async function callTool(name: string, args: Record<string, unknown>, ctx: McpToolContext) {
+    const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, ctx)
+    return response?.result as { content: Array<{ text: string }>, isError?: boolean }
+  }
+
+  function guidanceOf(result: { content: Array<{ text: string }> }) {
+    const text = result.content.map(part => part.text).join('\n')
+    try {
+      return (JSON.parse(text) as { how_to_fix?: { kind: string, next_steps: string[] } }).how_to_fix
+    }
+    catch {
+      return text.includes('how_to_fix') ? { kind: 'text', next_steps: [text] } : undefined
+    }
+  }
+
+  // Smallest valid value for a JSON schema, so each tool passes validation and reaches the API.
+  function sampleValue(schema: Record<string, any>): unknown {
+    if (schema.const !== undefined)
+      return schema.const
+    if (Array.isArray(schema.enum))
+      return schema.enum[0]
+    const options = schema.anyOf ?? schema.oneOf
+    if (Array.isArray(options))
+      return sampleValue(options.find((option: Record<string, any>) => option.type !== 'null') ?? options[0])
+    const type = Array.isArray(schema.type) ? schema.type.find((t: string) => t !== 'null') : schema.type
+    switch (type) {
+      case 'string':
+        if (schema.format === 'uuid')
+          return '7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601'
+        if (schema.format === 'uri' || schema.format === 'url' || /https/.test(schema.pattern ?? ''))
+          return 'https://example.com/bundle.zip'
+        if (schema.format === 'email')
+          return 'dev@example.com'
+        return 'com.example.app'
+      case 'integer':
+      case 'number':
+        return Math.max(1, schema.minimum ?? 1, schema.exclusiveMinimum !== undefined ? schema.exclusiveMinimum + 1 : 1)
+      case 'boolean':
+        return true
+      case 'array':
+        return Array.from({ length: Math.max(1, schema.minItems ?? 1) }, () => sampleValue(schema.items ?? { type: 'string' }))
+      case 'object':
+        return sampleArgs(schema)
+      default:
+        return 'com.example.app'
+    }
+  }
+
+  function sampleArgs(schema: Record<string, any>): Record<string, unknown> {
+    const args: Record<string, unknown> = {}
+    for (const key of schema.required ?? [])
+      args[key] = sampleValue(schema.properties?.[key] ?? {})
+    return args
+  }
+
+  it.concurrent('adds how_to_fix to every error of every API-backed tool', async () => {
+    const failures = [
+      [400, { error: 'invalid_body', message: 'Invalid body' }],
+      [401, { error: 'invalid_apikey', message: 'Invalid API key' }],
+      [404, { error: 'app_not_found', message: 'App not found' }],
+      [500, '<html>Internal Server Error</html>'],
+    ] as const
+    // Tools that answer without calling the API (whoami, docs search) are covered separately.
+    const localTools = new Set(['capgo_whoami', 'capgo_search_docs'])
+    const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
+    for (const tool of tools) {
+      const args = sampleArgs(tool.inputSchema)
+      for (const [status, data] of failures) {
+        let apiCalls = 0
+        const ctx: McpToolContext = {
+          ...failingContext(status, data, 'req-1'),
+          call: async () => {
+            apiCalls += 1
+            return { ok: false, status, data, requestId: 'req-1' }
+          },
+          apikey: 'key-123',
+        }
+        const result = await callTool(tool.name, args, ctx)
+        const label = `${tool.name} → ${status}`
+        expect(apiCalls, `${label} reaches the API with ${JSON.stringify(args)}`).toBeGreaterThan(0)
+        expect(result.isError, label).toBe(true)
+        const guidance = guidanceOf(result)
+        expect(guidance, label).toBeDefined()
+        expect(guidance!.next_steps.length, label).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it.concurrent('keeps tools that answer without the API free of guidance on success', async () => {
+    const result = await callTool('capgo_whoami', {}, failingContext(500, null))
+    expect(result.isError).toBeUndefined()
+  })
+
+  it.concurrent('classifies API errors and ends with a support escape hatch', async () => {
+    const cases = [
+      [400, 'invalid_body', 'fix_input'],
+      [401, 'invalid_apikey', 'authentication'],
+      [400, 'not_authorized', 'permission'],
+      [404, 'app_not_found', 'not_found'],
+      [409, 'version_already_exists', 'conflict'],
+      [429, 'api_key_rate_limit_exceeded', 'rate_limited'],
+      [400, 'need_plan_upgrade', 'plan_limit'],
+      [429, 'need_plan_upgrade', 'plan_limit'],
+      [400, 'org_requires_expiring_key', 'security_policy'],
+      [400, 'upload_token_expired', 'expired'],
+      [500, 'internal_error', 'unexpected'],
+    ] as const
+    for (const [status, error, kind] of cases) {
+      const result = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(status, { error, message: error }, 'req-42'))
+      const body = JSON.parse(result.content[0].text)
+      expect(body.how_to_fix.kind, error).toBe(kind)
+      expect(body.request_id).toBe('req-42')
+      expect(body.how_to_fix.next_steps.join(' '), error).toContain('support@capgo.app')
+    }
+  })
+
+  it.concurrent('does not mistake words containing sso for an SSO policy, and treats expired keys as authentication', async () => {
+    const associated = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(404, { error: 'not_found', message: 'Associated app not found' }))
+    expect(JSON.parse(associated.content[0].text).how_to_fix.kind).toBe('not_found')
+    const sso = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(400, { error: 'sso_required', message: 'SSO required' }))
+    expect(JSON.parse(sso.content[0].text).how_to_fix.kind).toBe('security_policy')
+    const jwt = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(400, { error: 'auth_error', message: 'JWT expired' }))
+    expect(JSON.parse(jwt.content[0].text).how_to_fix.kind).toBe('authentication')
+  })
+
+  it.concurrent('keeps guidance when the error body hits the result size limit', async () => {
+    const huge = 'x'.repeat(150_000)
+    const asJson = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(500, { error: 'internal_error', message: huge }))
+    const asText = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(502, huge))
+    for (const result of [asJson, asText]) {
+      const text = result.content[0].text
+      expect(text.length).toBeLessThanOrEqual(100_100)
+      expect(text).toContain('how_to_fix')
+      expect(text).toContain('support@capgo.app')
+    }
+  })
+
+  it.concurrent('replaces an empty how_to_fix from the API with real guidance', async () => {
+    const result = await callTool('capgo_get_app', { appId: 'com.example.app' }, failingContext(404, { error: 'app_not_found', message: 'App not found', how_to_fix: null }))
+    expect(JSON.parse(result.content[0].text).how_to_fix.kind).toBe('not_found')
+  })
+
+  it.concurrent('keeps the build job steps when the upload URL error body is huge', async () => {
+    const ctx: McpToolContext = {
+      call: async request => request.path === '/build/request'
+        ? { ok: true, status: 200, data: { job_id: 'job-7' } }
+        : { ok: false, status: 500, data: { error: 'internal_error', message: 'y'.repeat(200_000) } },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const result = await callTool('capgo_request_build', { appId: 'com.example.app', platform: 'ios' }, ctx)
+    const body = JSON.parse(result.content[0].text)
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('capgo_cancel_build (job_id job-7)')
+    expect(String(body.upload_error)).toContain('(truncated)')
+  })
+
+  it.concurrent('classifies a build upload URL failure instead of calling it unexpected', async () => {
+    const ctx: McpToolContext = {
+      call: async request => request.path === '/build/request'
+        ? { ok: true, status: 200, data: { job_id: 'job-9' } }
+        : { ok: false, status: 429, data: { error: 'need_plan_upgrade', message: 'Upgrade plan to continue to build' } },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const result = await callTool('capgo_request_build', { appId: 'com.example.app', platform: 'ios' }, ctx)
+    const body = JSON.parse(result.content[0].text)
+    expect(body.how_to_fix.kind).toBe('plan_limit')
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('job-9')
+    expect(body.how_to_fix.next_steps.join(' ')).toContain('capgo_cancel_build')
+  })
+
+  it.concurrent('guides the agent when a tool throws or gets invalid arguments', async () => {
+    const throwing: McpToolContext = {
+      call: async () => { throw new Error('socket hang up') },
+      caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
+    }
+    const thrown = await callTool('capgo_get_app', { appId: 'com.example.app' }, throwing)
+    expect(thrown.isError).toBe(true)
+    expect(guidanceOf(thrown)?.kind).toBe('unexpected')
+
+    const invalid = await callTool('capgo_get_app', {}, throwing)
+    expect(guidanceOf(invalid)?.kind).toBe('fix_input')
+  })
+
+  it.concurrent('points to tools/list for an unknown tool', async () => {
+    const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_nope', arguments: {} } }, failingContext(500, null))
+    expect(response?.error?.message).toContain('tools/list')
   })
 })

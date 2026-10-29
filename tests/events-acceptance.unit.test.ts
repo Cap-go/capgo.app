@@ -38,7 +38,13 @@ vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
   sendEventToTracking: sendTracking,
   addAuthenticatedApiKeyIdToTrackingPayload: (payload: unknown) => payload,
 }))
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseWithAuth: () => ({ from }) }))
+// Caller-scoped lookups: `from` receives the table each SQL statement reads and returns its rows.
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: async () => ({}), closeClient: vi.fn() }))
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  authPrincipal: () => ({ kind: 'jwt', userId: state.actorId }),
+  withRlsTransaction: (_pg: unknown, _principal: unknown, run: (client: unknown) => Promise<unknown>) => run({}),
+  queryJson: async (_client: unknown, text: string) => from(/FROM public\.(\w+)/.exec(text)?.[1]),
+}))
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/realtime_broadcast.ts', () => ({ broadcastCLIEvent: broadcast }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({ backgroundTask: (_c: Context, promise: Promise<unknown>) => promise }))
@@ -65,13 +71,11 @@ beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(acceptedAt)
   queueSend.mockResolvedValue(undefined)
   from.mockImplementation((table: string) => {
-    const query = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({ data: table === 'apps' ? { owner_org: 'org-a', name: 'Example app' } : { id: 'org-a', name: 'Example org' } }),
-      maybeSingle: vi.fn().mockResolvedValue({ data: null }),
-    }
-    return query
+    if (table === 'apps')
+      return [{ owner_org: 'org-a', name: 'Example app' }]
+    if (table === 'orgs')
+      return [{ id: 'org-a', name: 'Example org' }]
+    return []
   })
   sendTracking.mockResolvedValue(undefined)
   checkPermission.mockResolvedValue(true)

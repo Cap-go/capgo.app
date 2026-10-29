@@ -4,9 +4,12 @@ import type { Database, Json } from '../../utils/supabase.types.ts'
 import { BuildCredentialsValidationError, mergeStoredCredentialsForBuild, parseCredentialRecord } from '../../utils/build_credentials_validation.ts'
 import { notifyCocoaPodsDeprecation } from '../../utils/cocoapods_deprecation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
+import type { PgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { backgroundTask, getEnv } from '../../utils/utils.ts'
 import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
@@ -296,13 +299,20 @@ async function ensureBuildPermission(c: Context, appId: string, userId: string) 
   }
 }
 
-async function getBuildOwnerOrg(c: Context, supabase: ReturnType<typeof supabaseApikey>, appId: string): Promise<string> {
+async function getBuildOwnerOrg(c: Context, principal: RlsPrincipal, appId: string): Promise<string> {
   // Get org_id for the app to use as anonymized user ID
-  const { data: app, error: appError } = await supabase
-    .from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .single()
+  let app: { owner_org: string } | null = null
+  let appError: unknown = null
+  try {
+    const rows = await withRlsContext(c, principal, async client => (await client.query<{ owner_org: string }>(
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )).rows)
+    app = rows[0] ?? null
+  }
+  catch (error) {
+    appError = error
+  }
 
   if (appError || !app) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'App not found', app_id: appId, error: appError })
@@ -312,10 +322,19 @@ async function getBuildOwnerOrg(c: Context, supabase: ReturnType<typeof supabase
   return app.owner_org
 }
 
-async function ensureBuildTimePlanAllowed(c: Context, supabase: ReturnType<typeof supabaseApikey>, orgId: string, appId: string) {
+async function ensureBuildTimePlanAllowed(c: Context, principal: RlsPrincipal, orgId: string, appId: string) {
   // Native builds consume build-time credits; check that metric before creating a builder job.
-  const buildTimePlanArgs = { orgid: orgId, actions: ['build_time'], appid: appId } as never
-  const { data: buildTimeAllowed, error: buildTimePlanError } = await supabase.rpc('is_allowed_action_org_action', buildTimePlanArgs)
+  let buildTimeAllowed: boolean | null = null
+  let buildTimePlanError: unknown = null
+  try {
+    buildTimeAllowed = await withRlsContext(c, principal, async client => (await client.query<{ allowed: boolean | null }>(
+      `SELECT public.is_allowed_action_org_action(orgid => $1, actions => $2::public.action_type[], appid => $3) AS allowed`,
+      [orgId, ['build_time'], appId],
+    )).rows[0]?.allowed ?? null)
+  }
+  catch (error) {
+    buildTimePlanError = error
+  }
   if (buildTimePlanError) {
     cloudlogErr({
       requestId: c.get('requestId'),
@@ -528,27 +547,43 @@ async function persistBuildRequest(c: Context, input: {
     uses_stored_credentials,
   } = input
 
-  const supabaseAdminClient = supabaseAdmin(c)
-  const { data: buildRequestRow, error: insertError } = await supabaseAdminClient
-    .from('build_requests')
-    .insert({
-      app_id,
-      owner_org: org_id,
-      requested_by,
-      platform,
-      build_mode,
-      build_config,
-      ios_dependency_manager,
-      status: 'pending',
-      builder_job_id,
-      upload_session_key,
-      upload_path,
-      upload_url,
-      upload_expires_at: upload_expires_at.toISOString(),
-      uses_stored_credentials,
-    })
-    .select('*')
-    .single()
+  let buildRequestRow: Database['public']['Tables']['build_requests']['Row'] | null = null
+  let insertError: unknown = null
+  let pg: PgClient | null = null
+  try {
+    pg = await getPgClient(c)
+    const rows = await queryJson<Database['public']['Tables']['build_requests']['Row']>(
+      pg,
+      `INSERT INTO public.build_requests (
+        app_id, owner_org, requested_by, platform, build_mode, build_config, ios_dependency_manager,
+        status, builder_job_id, upload_session_key, upload_path, upload_url, upload_expires_at, uses_stored_credentials
+      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'pending', $8, $9, $10, $11, $12, $13)
+      RETURNING *`,
+      [
+        app_id,
+        org_id,
+        requested_by,
+        platform,
+        build_mode,
+        build_config === null ? null : JSON.stringify(build_config),
+        ios_dependency_manager,
+        builder_job_id,
+        upload_session_key,
+        upload_path,
+        upload_url,
+        upload_expires_at.toISOString(),
+        uses_stored_credentials,
+      ],
+    )
+    buildRequestRow = rows[0] ?? null
+  }
+  catch (error) {
+    insertError = error
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
 
   if (insertError || !buildRequestRow) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to persist build request', error: insertError })
@@ -626,9 +661,9 @@ export async function requestBuild(
     : { buildOptions: requested_build_options, buildCredentials: requested_build_credentials }
 
   // Use authenticated client for data queries - RLS will enforce access
-  const supabase = supabaseApikey(c, apikey.key)
-  const org_id = await getBuildOwnerOrg(c, supabase, app_id)
-  await ensureBuildTimePlanAllowed(c, supabase, org_id, app_id)
+  const principal = apikeyPrincipal(c, apikey.key)
+  const org_id = await getBuildOwnerOrg(c, principal, app_id)
+  await ensureBuildTimePlanAllowed(c, principal, org_id, app_id)
   // Fail before creating a builder job / upload session when the org is already
   // at its plan concurrency. /build/start still enforces transactionally.
   await assertNativeBuildConcurrencyAvailable(c, {

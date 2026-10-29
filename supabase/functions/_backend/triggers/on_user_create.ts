@@ -10,6 +10,7 @@ import { DIRECT_OFFER_BENTO_TAG, isDirectOfferMetadata } from '../utils/direct_o
 import { BRES, middlewareAPISecret, quickError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackOpenAIRegistration } from '../utils/openai_ads.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { createApiKey, supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
@@ -26,10 +27,14 @@ async function getAuthUser(c: Context, userId: string) {
 }
 
 async function getTrialPlanNames(c: Context) {
-  const { data, error } = await supabaseAdmin(c).from('plans').select('name')
-  if (error)
-    throw error
-  return (data ?? []).map(plan => plan.name)
+  const pg = await getPgClient(c)
+  try {
+    const { rows } = await pg.query<{ name: string }>('SELECT name FROM public.plans')
+    return rows.map(plan => plan.name)
+  }
+  finally {
+    closeClient(c, pg)
+  }
 }
 
 app.post('/', middlewareAPISecret, triggerValidator('users', 'INSERT'), async (c) => {

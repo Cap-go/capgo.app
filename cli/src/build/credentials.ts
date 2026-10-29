@@ -291,6 +291,7 @@ export function loadCredentialsFromEnv(): Partial<BuildCredentials> {
   const playStoreInAppUpdatePriority = readRuntimeEnv('PLAY_STORE_IN_APP_UPDATE_PRIORITY')
   const buildOutputUploadEnabled = readRuntimeEnv('BUILD_OUTPUT_UPLOAD_ENABLED')
   const buildOutputRetentionSeconds = readRuntimeEnv('BUILD_OUTPUT_RETENTION_SECONDS')
+  const buildSymbolsUploadEnabled = readRuntimeEnv('BUILD_SYMBOLS_UPLOAD_ENABLED')
   const skipBuildNumberBump = readRuntimeEnv('SKIP_BUILD_NUMBER_BUMP')
   const skipMarketingVersionBump = readRuntimeEnv('SKIP_MARKETING_VERSION_BUMP')
   const capgoIosDistribution = readRuntimeEnv('CAPGO_IOS_DISTRIBUTION')
@@ -369,6 +370,9 @@ export function loadCredentialsFromEnv(): Partial<BuildCredentials> {
   }
   if (buildOutputRetentionSeconds) {
     credentials.BUILD_OUTPUT_RETENTION_SECONDS = String(parseOutputRetentionSeconds(buildOutputRetentionSeconds))
+  }
+  if (buildSymbolsUploadEnabled) {
+    credentials.BUILD_SYMBOLS_UPLOAD_ENABLED = parseOptionalBoolean(buildSymbolsUploadEnabled) ? 'true' : 'false'
   }
   if (skipBuildNumberBump) {
     credentials.SKIP_BUILD_NUMBER_BUMP = parseOptionalBoolean(skipBuildNumberBump) ? 'true' : 'false'

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { BRES, simpleError } from '../../../utils/hono.ts'
 import { cloudlog } from '../../../utils/logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../../utils/pg.ts'
+import { setRequestApikeyHeader } from '../../../utils/pg_rls.ts'
 import { checkPermission } from '../../../utils/rbac.ts'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
 
@@ -84,10 +85,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
     dbClient = await checkoutPgClient(pgPool) as PgTransactionClient
     await beginWriteTransaction(dbClient)
     transactionStarted = true
-    await dbClient.query(
-      'SELECT set_config($1, $2, true)',
-      ['request.headers', JSON.stringify({ capgkey: effectiveApikey })],
-    )
+    await setRequestApikeyHeader(dbClient, effectiveApikey)
     const result = await dbClient.query<{ invite_user_to_org_rbac: string }>(
       'SELECT public.invite_user_to_org_rbac($1::varchar, $2::uuid, $3::text) AS invite_user_to_org_rbac',
       [body.email, body.orgId, rbacRoleName],

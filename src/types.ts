@@ -7,4 +7,4 @@ interface AppContext<HasRouter extends boolean = true> {
   routes: HasRouter extends true ? RouteRecordRaw[] : undefined
 }
 
-export type UserModule = (ctx: AppContext) => void
+export type UserModule = (ctx: AppContext) => void | Promise<void>

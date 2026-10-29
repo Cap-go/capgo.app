@@ -419,7 +419,7 @@ defineExpose({ isSubmitting })
           </div>
         </div>
 
-        <button type="button" class="d-btn mt-6 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-600" data-test="channel-create-continue" @click="continueOnboarding">
+        <button type="button" class="d-btn mt-6 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-500/90" data-test="channel-create-continue" @click="continueOnboarding">
           {{ t('channel-create-onboarding-continue') }}
           <IconArrowRight class="h-4 w-4" />
         </button>
@@ -432,7 +432,7 @@ defineExpose({ isSubmitting })
           <div class="absolute right-[-6rem] top-[-7rem] h-72 w-72 rounded-full bg-primary-500/15 blur-3xl dark:bg-primary-500/25" />
           <div class="absolute bottom-[-8rem] left-[-4rem] h-72 w-72 rounded-full bg-sky-400/10 blur-3xl" />
         </div>
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-primary-600 dark:text-sky-300">
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-primary-500 dark:text-sky-300">
           {{ t('channel-create-onboarding-preview-label') }}
         </p>
         <div class="mt-5 grid grid-cols-[2.75rem_1fr_3rem_1fr_7rem] items-center gap-2" aria-hidden="true">
@@ -443,7 +443,7 @@ defineExpose({ isSubmitting })
           <span class="flex h-12 w-12 items-center justify-center justify-self-center rounded-xl bg-primary-500 text-white shadow-lg shadow-primary-500/25">
             <IconServer class="h-5 w-5" />
           </span>
-          <span class="h-px bg-gradient-to-r from-primary-400 to-emerald-400" />
+          <span class="h-px bg-gradient-to-r from-primary-500 to-emerald-400" />
           <span class="flex h-11 w-11 items-center justify-center justify-self-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-300/30 dark:bg-emerald-400/15 dark:text-emerald-200">
             <IconGitBranch class="h-5 w-5 shrink-0" />
           </span>
@@ -491,7 +491,7 @@ defineExpose({ isSubmitting })
       <form class="flex flex-col justify-center px-6 py-7 sm:px-8" @submit.prevent="createChannel">
         <div>
           <div class="flex items-center gap-2 text-sm font-semibold text-slate-950 dark:text-white">
-            <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-500/10 text-primary-600 dark:bg-primary-400/15 dark:text-primary-300">
+            <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-500/10 text-primary-500 dark:bg-primary-500/15 dark:text-slate-300">
               <IconSparkles class="h-4 w-4" />
             </span>
             {{ t('channel-create-onboarding-form-title') }}
@@ -551,7 +551,7 @@ defineExpose({ isSubmitting })
           </p>
         </div>
 
-        <button type="submit" class="d-btn mt-5 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-600 disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400" data-test="channel-create-submit" :disabled="!canSubmit">
+        <button type="submit" class="d-btn mt-5 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-500/90 disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400" data-test="channel-create-submit" :disabled="!canSubmit">
           <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
           <template v-else>
             {{ t('channel-create-onboarding-submit') }}

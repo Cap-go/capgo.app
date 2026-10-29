@@ -1,4 +1,6 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { parseSignupAttributionRecord, signupAttributionEventTags } from '../../shared/signup-attribution.ts'
@@ -8,6 +10,8 @@ import { getDirectOfferStatus } from '../utils/direct_offer.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent, syncOrgOnboardingIntentForOrg } from '../utils/org_onboarding_intent.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJsonOne } from '../utils/pg_rls.ts'
 import { groupIdentifyPosthog } from '../utils/posthog.ts'
 import { resolveSignupAttributionForOrg, resolveSignupAttributionForUser } from '../utils/signup_attribution.ts'
 import { createStripeCustomer, finalizePendingStripeCustomer, isPendingStripeCustomerId } from '../utils/stripe_org.ts'
@@ -30,20 +34,33 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
   if (!queuedRecord.created_at || !Number.isFinite(new Date(queuedRecord.created_at).getTime()))
     throw simpleError('invalid_payload', 'Missing organization creation timestamp')
 
+  const pg = await getPgClient(c)
+  try {
+    return await processOrgCreate(c, pg, queuedRecord, new Date(queuedRecord.created_at).toISOString())
+  }
+  finally {
+    closeClient(c, pg)
+  }
+})
+
+async function processOrgCreate(c: Context<MiddlewareKeyVariables>, pg: PgClient, queuedRecord: Database['public']['Tables']['orgs']['Row'], occurredAt: string) {
   // INSERT queue payloads omit customer_id when org-create assigns it in a later
   // AFTER INSERT trigger; reload the committed row before Stripe bootstrap.
-  const { data: orgRow, error: orgLoadError } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('*')
-    .eq('id', queuedRecord.id)
-    .single()
+  let orgRow: Database['public']['Tables']['orgs']['Row'] | null = null
+  let orgLoadError: unknown
+  try {
+    orgRow = await queryJsonOne<Database['public']['Tables']['orgs']['Row']>(pg, 'SELECT * FROM public.orgs WHERE id = $1', [queuedRecord.id])
+  }
+  catch (error) {
+    orgLoadError = error
+  }
 
   if (orgLoadError || !orgRow) {
     cloudlog({
       requestId: c.get('requestId'),
       message: 'org create reload failed, using queue payload',
       orgId: queuedRecord.id,
-      error: orgLoadError?.message,
+      error: orgLoadError instanceof Error ? orgLoadError.message : undefined,
     })
   }
 
@@ -57,16 +74,15 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
       const creatorAttribution = await resolveSignupAttributionForUser(c, org.created_by)
       signupPlugin = creatorAttribution.signup_plugin ?? null
       if (signupPlugin) {
-        const { error: signupPluginUpdateError } = await supabaseAdmin(c)
-          .from('orgs')
-          .update({ signup_plugin: signupPlugin })
-          .eq('id', org.id)
-        if (signupPluginUpdateError) {
+        try {
+          await pg.query('UPDATE public.orgs SET signup_plugin = $1 WHERE id = $2', [signupPlugin, org.id])
+        }
+        catch (signupPluginUpdateError) {
           cloudlog({
             requestId: c.get('requestId'),
             message: 'org signup_plugin persist failed',
             orgId: org.id,
-            error: signupPluginUpdateError.message,
+            error: signupPluginUpdateError instanceof Error ? signupPluginUpdateError.message : signupPluginUpdateError,
           })
         }
       }
@@ -94,13 +110,13 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
   // An unknown offer (lookup failed) only skips the trial tag; later syncs reconcile it.
   const directOffer = await getDirectOfferStatus(c, supabaseAdmin(c), org.created_by)
   if (trialPlanName || directOffer === true) {
-    const { data: creator, error: creatorError } = await supabaseAdmin(c)
-      .from('users')
-      .select('email')
-      .eq('id', org.created_by)
-      .maybeSingle()
-    if (creatorError)
+    let creator: { email: string } | undefined
+    try {
+      creator = (await pg.query<{ email: string }>('SELECT email FROM public.users WHERE id = $1', [org.created_by])).rows[0]
+    }
+    catch (creatorError) {
       cloudlog({ requestId: c.get('requestId'), message: 'trial plan Bento creator lookup failed', userId: org.created_by, error: creatorError })
+    }
     if (creator?.email) {
       await backgroundTask(c, syncBentoSubscriberTags(c, {
         email: creator.email.trim().toLowerCase(),
@@ -160,7 +176,7 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
     channel: 'org-created',
     event: 'Org Created',
     // pgmq.send is part of the org INSERT transaction; delivery starts after commit.
-    occurred_at: new Date(queuedRecord.created_at).toISOString(),
+    occurred_at: occurredAt,
     timeoutMs: 1000,
     sentToBento: true,
     user_id: queuedRecord.created_by,
@@ -177,4 +193,4 @@ app.post('/', middlewareAPISecret, triggerValidator('orgs', 'INSERT'), async (c)
   }, { background: false, strict: true, requirePosthogDelivery: true })
 
   return c.json(BRES)
-})
+}

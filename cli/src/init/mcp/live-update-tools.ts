@@ -13,7 +13,6 @@ import { getPlatformDirFromCapacitorConfig } from '../../build/platform-paths.js
 import { createKeyInternal } from '../../key.js'
 import { isAppAlreadyExistsError } from '../app-conflict.js'
 import {
-  applyInitAutoTestChange,
   getGitRepoStatus,
   getInitSuggestedOtaVersion,
   getInitUpdaterPluginConfig,
@@ -23,7 +22,7 @@ import {
 import { getUpdaterInstallState } from '../updater.js'
 import { initOnboardingSteps } from '../ui.js'
 import { reportInitOnboardingStep } from '../onboarding-report.js'
-import { baseKeyV2, findSavedKeySilent, findMainFile, findRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
+import { baseKeyV2, findSavedKeySilent, findMainFile, findProjectRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
 import { formatRunnerCommand } from '../../runner-command.js'
 import { addChannelInternal } from '../../channel/add.js'
 import { uploadBundleInternal } from '../../bundle/upload.js'
@@ -77,13 +76,14 @@ export function buildDeps(
 ): EngineDeps {
   // Live accessor: the server re-creates its SDK on login/logout and project switches.
   const getSdk = typeof sdkOrGetter === 'function' ? sdkOrGetter : () => sdkOrGetter
-  const getPackageJsonPath = () => getProjectTarget()?.packageJsonPath ?? join(findRoot(cwd), PACKNAME)
+  const getPackageJsonPath = () => {
+    const packageJsonPath = getProjectTarget()?.packageJsonPath
+    if (packageJsonPath)
+      return packageJsonPath
+    return join(findProjectRoot(cwd), PACKNAME)
+  }
   const getProjectDir = () => dirname(getPackageJsonPath())
   const getMainFile = async () => getProjectTarget()?.mainFilePath ?? findMainFile(true, getProjectDir())
-  const getNodeModulesPath = () => {
-    const nodeModulesPath = join(findRoot(getProjectDir()), 'node_modules')
-    return existsSync(nodeModulesPath) ? nodeModulesPath : undefined
-  }
   const getAppIdClosure = async (): Promise<string | undefined> => {
     try {
       const ext = await getConfig(true)
@@ -210,15 +210,10 @@ export function buildDeps(
     },
     applyTestChange: async (_appId: string, baseVersion?: string) => {
       try {
-        const packageJsonPath = getPackageJsonPath()
-        const mainFile = await getMainFile()
-        if (!mainFile)
-          return { ok: false as const, error: 'Could not find main entry file for test change' }
-        const content = await readFile(mainFile, 'utf8')
-        const changed = applyInitAutoTestChange(mainFile, content)
-        if (changed)
-          await writeFile(mainFile, changed.content, 'utf8')
-        const version = getInitSuggestedOtaVersion(baseVersion || getBundleVersion(undefined, packageJsonPath) || '1.0.0')
+        const version = getInitSuggestedOtaVersion(baseVersion || getBundleVersion(undefined, getPackageJsonPath()) || '1.0.0')
+        // Rebuild the web assets so the upload contains the test change; no cap sync, it must arrive through Capgo.
+        const pm = getPMAndCommand()
+        execSync(`${pm.pm} run build`, { cwd: getProjectDir(), stdio: 'pipe' })
         return { ok: true as const, version }
       }
       catch (error) {
@@ -244,7 +239,6 @@ export function buildDeps(
           ignoreChecksumCheck: true,
           key: encrypt ? undefined : false,
           keyV2: encrypt ? privateKeyPath : undefined,
-          nodeModules: getNodeModulesPath(),
           packageJson: packageJsonPath,
           path: webDir ? resolve(projectDir, webDir) : undefined,
           showReplicationProgress: false,

@@ -5,7 +5,6 @@ import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../uti
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifToOrgMembersOnce } from '../utils/org_email_notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
 import { shouldSkipVersionNotifications } from '../utils/version_notifications.ts'
@@ -21,31 +20,42 @@ app.post('/', middlewareAPISecret, triggerValidator('deploy_history', 'INSERT'),
     throw simpleError('no_id', 'No id', { record })
   }
 
-  // Check if the channel is public
-  const { data: channel, error: channelError } = await supabaseAdmin(c)
-    .from('channels')
-    .select('public')
-    .eq('id', record.channel_id)
-    .single()
+  let channel: { public: boolean } | undefined
+  let version: { name: string, owner_org: string } | undefined
+  const pg = await getPgClient(c)
+  try {
+    // Check if the channel is public
+    try {
+      const { rows } = await pg.query<{ public: boolean }>('SELECT public FROM public.channels WHERE id = $1', [record.channel_id])
+      if (rows.length !== 1)
+        throw new Error('Channel not found')
+      channel = rows[0]
+    }
+    catch (channelError) {
+      cloudlog({ requestId: c.get('requestId'), message: 'Error fetching channel', channelError })
+      return c.json(BRES)
+    }
 
-  if (channelError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Error fetching channel', channelError })
-    return c.json(BRES)
+    if (channel.public) {
+      // Get version details for the event
+      try {
+        const { rows } = await pg.query<{ name: string, owner_org: string }>('SELECT name, owner_org FROM public.app_versions WHERE id = $1', [record.version_id])
+        if (rows.length !== 1)
+          throw new Error('Version not found')
+        version = rows[0]
+      }
+      catch (versionError) {
+        cloudlog({ requestId: c.get('requestId'), message: 'Error fetching version', versionError })
+        return c.json(BRES)
+      }
+    }
+  }
+  finally {
+    closeClient(c, pg)
   }
 
   // If channel is public, send events
-  if (channel?.public) {
-    // Get version details for the event
-    const { data: version, error: versionError } = await supabaseAdmin(c)
-      .from('app_versions')
-      .select('name, owner_org')
-      .eq('id', record.version_id)
-      .single()
-
-    if (versionError || !version) {
-      cloudlog({ requestId: c.get('requestId'), message: 'Error fetching version', versionError })
-      return c.json(BRES)
-    }
+  if (channel?.public && version) {
 
     if (await shouldSkipVersionNotifications(c, record.app_id, record.version_id, record.id)) {
       cloudlog({ requestId: c.get('requestId'), message: 'Demo or removed deployment, skipping deployment events' })

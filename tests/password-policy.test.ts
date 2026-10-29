@@ -444,8 +444,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
 describe('checkOrgReadAccess', () => {
   it('returns error when membership RPC fails', async () => {
     const result = await checkOrgReadAccess({
-      rpc: async () => ({ data: null, error: { message: 'boom' } }),
-    } as any, ORG_ID, 'req-test')
+      query: async () => {
+        throw new Error('boom')
+      },
+    }, ORG_ID, 'req-test')
 
     expect(result.allowed).toBe(false)
     expect(result.error).toBe('boom')

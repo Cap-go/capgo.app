@@ -66,28 +66,27 @@ vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({
   getClientIP: () => '203.0.113.10',
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    from(table: string) {
-      if (table !== 'users')
-        throw new Error(`unexpected table ${table}`)
-      return {
-        select: () => ({
-          ilike: () => ({
-            maybeSingle: usersMaybeSingleMock,
-          }),
-        }),
-        update: (payload: unknown) => {
-          usersUpdateEqMock(payload)
-          return {
-            eq: () => ({
-              select: () => ({
-                maybeSingle: usersUpdateMaybeSingleMock,
-              }),
-            }),
-          }
-        },
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: () => undefined,
+  getPgClient: async () => ({
+    async query(text: string, values: unknown[] = []) {
+      const run = async (result: Promise<{ data: unknown, error: unknown }>) => {
+        const { data, error } = await result
+        if (error)
+          throw error
+        return { rows: data ? [data] : [] }
       }
+      if (/^SELECT .* FROM public\.users WHERE email ILIKE \$1/s.test(text))
+        return run(usersMaybeSingleMock())
+      if (/^UPDATE public\.users/s.test(text)) {
+        usersUpdateEqMock({
+          email_preferences: JSON.parse(values[0] as string),
+          enable_notifications: values[1],
+          opt_for_newsletters: values[2],
+        })
+        return run(usersUpdateMaybeSingleMock())
+      }
+      throw new Error(`unexpected query ${text}`)
     },
   }),
 }))

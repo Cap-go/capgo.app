@@ -1,19 +1,29 @@
 import type { Context } from 'hono'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { servicePrincipal, withRlsContext } from './pg_rls.ts'
 import { getSubscriptionData, planProductIdOrFilter } from './stripe.ts'
-import { getCurrentPlanNameOrg, supabaseAdmin } from './supabase.ts'
+import { getCurrentPlanNameOrg } from './supabase.ts'
 
 function isActivePlanStatus(status: string | null | undefined): boolean {
   return status === 'succeeded'
 }
 
+// supabase-js `.single()`: `{ data, error }`, with an error unless exactly one row matched.
+async function selectSingle<T>(c: Context, text: string, values: unknown[]): Promise<{ data: T | null, error: unknown }> {
+  try {
+    const rows = await withRlsContext(c, servicePrincipal, async client => (await client.query(text, values)).rows as T[])
+    if (rows.length !== 1)
+      return { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
+    return { data: rows[0], error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+}
+
 async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = false): Promise<string | null> {
-  const { data: org, error: orgError } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('customer_id')
-    .eq('id', orgId)
-    .single()
+  const { data: org, error: orgError } = await selectSingle<{ customer_id: string | null }>(c, 'SELECT customer_id FROM public.orgs WHERE id = $1 LIMIT 2', [orgId])
   if (orgError || !org?.customer_id) {
     cloudlogErr({
       requestId: c.get('requestId'),
@@ -24,11 +34,11 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
     return null
   }
 
-  const { data: stripeInfo, error: stripeError } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('status, is_good_plan, product_id, subscription_id, past_due_at')
-    .eq('customer_id', org.customer_id)
-    .single()
+  const { data: stripeInfo, error: stripeError } = await selectSingle<{ status: string | null, is_good_plan: boolean | null, product_id: string | null, subscription_id: string | null, past_due_at: unknown }>(
+    c,
+    'SELECT status, is_good_plan, product_id, subscription_id, past_due_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+    [org.customer_id],
+  )
   if (stripeError || !stripeInfo?.product_id) {
     cloudlogErr({
       requestId: c.get('requestId'),
@@ -49,11 +59,12 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
       return null
   }
 
-  const { data: plan, error: planError } = await supabaseAdmin(c)
-    .from('plans')
-    .select('name')
-    .or(planProductIdOrFilter(stripeInfo.product_id))
-    .single()
+  planProductIdOrFilter(stripeInfo.product_id)
+  const { data: plan, error: planError } = await selectSingle<{ name: string }>(
+    c,
+    'SELECT name FROM public.plans WHERE stripe_id = $1 OR stripe_id_us = $1 LIMIT 2',
+    [stripeInfo.product_id],
+  )
   if (planError || !plan?.name) {
     cloudlogErr({
       requestId: c.get('requestId'),

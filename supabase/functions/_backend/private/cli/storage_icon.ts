@@ -3,9 +3,9 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { uploadImage } from '../../utils/image_storage.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { assertAllowedImagePath } from '../../utils/storage.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
@@ -70,14 +70,20 @@ export async function uploadCliAppIcon(
 
   // Resolve existence with the admin client: an app hidden by the caller's RLS must
   // not be treated as missing, otherwise an org.create_app-only key could overwrite it.
-  const { data: existingApp, error: existingAppError } = await supabaseAdmin(c)
-    .from('apps')
-    .select('app_id, owner_org')
-    .eq('app_id', body.app_id)
-    .maybeSingle()
-
-  if (existingAppError) {
+  let existingApp: { app_id: string, owner_org: string } | null
+  const pg = await getPgClient(c)
+  try {
+    const { rows } = await pg.query<{ app_id: string, owner_org: string }>(
+      'SELECT app_id, owner_org FROM public.apps WHERE app_id = $1',
+      [body.app_id],
+    )
+    existingApp = rows[0] ?? null
+  }
+  catch (existingAppError) {
     throw simpleError('cannot_upload_icon', 'Cannot resolve app for icon upload', { error: existingAppError })
+  }
+  finally {
+    closeClient(c, pg)
   }
 
   const allowed = existingApp

@@ -129,6 +129,8 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://checkout.stripe.com', // embedded Checkout
     'https://merchant-ui-api.stripe.com',
     'https://hooks.stripe.com',
+    'https://auth.openai.com', // assistant ChatGPT sign-in token exchange
+    'https://api.openai.com', // assistant model calls
     ...PREVIEW_CONNECT_SOURCES,
     ...getConfiguredConnectSources(dev),
     ...(dev

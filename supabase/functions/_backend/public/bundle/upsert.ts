@@ -3,7 +3,8 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
+import type { PgQueryClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { isValidAppId, isValidSemver } from '../../utils/utils.ts'
 import { checkEncryptedBundleEnforcement, getAppOrganization } from './encryption_policy.ts'
 
@@ -67,6 +68,32 @@ function buildUpsertRow(
 type AppVersionRow = Database['public']['Tables']['app_versions']['Row']
 
 /**
+ * Inserts (or with `upsert`, merges on name+app_id) an app_versions row and returns it as
+ * PostgREST did. The row goes through json_populate_record like a PostgREST body, so json
+ * values for jsonb[] / manifest_entry[] columns convert the same way.
+ */
+export async function writeAppVersionRow(
+  client: PgQueryClient,
+  row: Database['public']['Tables']['app_versions']['Insert'],
+  options: { upsert: boolean },
+): Promise<AppVersionRow | null> {
+  // Like JSON.stringify in supabase-js, undefined values are not written.
+  const columns = Object.entries(row)
+    .filter(([, value]) => value !== undefined)
+    .map(([column]) => `"${column.replaceAll('"', '""')}"`)
+  const conflict = options.upsert
+    ? ` ON CONFLICT (name, app_id) DO UPDATE SET ${columns.map(column => `${column} = EXCLUDED.${column}`).join(', ')}`
+    : ''
+  return queryJsonOne<AppVersionRow>(
+    client,
+    `INSERT INTO public.app_versions (${columns.join(', ')})
+    SELECT ${columns.join(', ')} FROM pg_catalog.json_populate_record(NULL::public.app_versions, $1::json)${conflict}
+    RETURNING *`,
+    [JSON.stringify(row)],
+  )
+}
+
+/**
  * Validation shared by every API write of an app_versions row (upsert and insert-only
  * create): body checks, app.upload_bundle, deleted-name guard and the org encryption policy.
  */
@@ -92,15 +119,16 @@ async function prepareBundleWrite(
     throw simpleError('cannot_upsert_bundle', 'You can\'t upload bundles to this app', { app_id: body.app_id })
   }
 
-  const supabase = supabaseApikey(c, apikey.key)
-  const { data: existingVersion, error: existingError } = await supabase
-    .from('app_versions')
-    .select('id, deleted, session_key, key_id')
-    .eq('app_id', body.app_id)
-    .eq('name', body.name)
-    .maybeSingle()
-
-  if (existingError) {
+  const principal = apikeyPrincipal(c, apikey.key)
+  let existingVersion: { id: number, deleted: boolean, session_key: string | null, key_id: string | null } | null = null
+  try {
+    existingVersion = await withRlsContext(c, principal, client => queryJsonOne(
+      client,
+      'SELECT id, deleted, session_key, key_id FROM public.app_versions WHERE app_id = $1 AND name = $2',
+      [body.app_id, body.name],
+    ))
+  }
+  catch (existingError) {
     throw simpleError('cannot_upsert_bundle', 'Cannot upsert bundle', { supabaseError: existingError })
   }
 
@@ -122,7 +150,7 @@ async function prepareBundleWrite(
     )
   }
 
-  return { supabase, existingVersion, row: buildUpsertRow(body, appWithOrg.owner_org, apikey.user_id) }
+  return { principal, existingVersion, row: buildUpsertRow(body, appWithOrg.owner_org, apikey.user_id) }
 }
 
 export async function upsertBundle(
@@ -130,15 +158,16 @@ export async function upsertBundle(
   body: UpsertBundleBody,
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
-  const { supabase, row } = await prepareBundleWrite(c, body, apikey)
-  const { data: upserted, error: upsertError } = await supabase
-    .from('app_versions')
-    .upsert(row, { onConflict: 'name,app_id' })
-    .select()
-    .single()
-
-  if (upsertError || !upserted) {
+  const { principal, row } = await prepareBundleWrite(c, body, apikey)
+  let upserted: AppVersionRow | null = null
+  try {
+    upserted = await withRlsContext(c, principal, client => writeAppVersionRow(client, row, { upsert: true }))
+  }
+  catch (upsertError) {
     throw simpleError('cannot_upsert_bundle', 'Cannot upsert bundle', { supabaseError: upsertError })
+  }
+  if (!upserted) {
+    throw simpleError('cannot_upsert_bundle', 'Cannot upsert bundle', { supabaseError: null })
   }
 
   return c.json(upserted)
@@ -154,18 +183,20 @@ export async function insertBundle(
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<AppVersionRow> {
   const alreadyExists = () => quickError(409, 'version_already_exists', `Version ${body.name} already exists. Pick a new version.`, { version: body.name })
-  const { supabase, row, existingVersion } = await prepareBundleWrite(c, body, apikey)
+  const { principal, row, existingVersion } = await prepareBundleWrite(c, body, apikey)
   if (existingVersion)
     throw alreadyExists()
-  const { data: inserted, error: insertError } = await supabase
-    .from('app_versions')
-    .insert(row)
-    .select()
-    .single()
-  if (insertError?.code === '23505')
-    throw alreadyExists()
-  if (insertError || !inserted) {
+  let inserted: AppVersionRow | null = null
+  try {
+    inserted = await withRlsContext(c, principal, client => writeAppVersionRow(client, row, { upsert: false }))
+  }
+  catch (insertError) {
+    if ((insertError as { code?: string })?.code === '23505')
+      throw alreadyExists()
     throw simpleError('cannot_upsert_bundle', 'Cannot create bundle', { supabaseError: insertError })
+  }
+  if (!inserted) {
+    throw simpleError('cannot_upsert_bundle', 'Cannot create bundle', { supabaseError: null })
   }
   return inserted
 }

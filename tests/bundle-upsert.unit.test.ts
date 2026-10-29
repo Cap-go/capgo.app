@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   checkPermission: vi.fn(),
-  from: vi.fn(),
-  adminFrom: vi.fn(),
+  orgPolicy: vi.fn(),
+  existingVersion: vi.fn(),
   upsert: vi.fn(),
 }))
 
@@ -11,13 +11,19 @@ vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: (...args: unknown[]) => mocks.checkPermission(...args),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: () => ({
-    from: (...args: unknown[]) => mocks.from(...args),
-  }),
-  supabaseAdmin: () => ({
-    from: (...args: unknown[]) => mocks.adminFrom(...args),
-  }),
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({ query: async () => ({ rows: [mocks.orgPolicy()] }) }),
+  closeClient: () => {},
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  apikeyPrincipal: (_c: unknown, apikey: string) => ({ kind: 'apikey', apikey }),
+  withRlsContext: (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({}),
+  queryJsonOne: async (_client: unknown, text: string, values: unknown[]) => {
+    if (text.startsWith('INSERT'))
+      return mocks.upsert(text, JSON.parse(values[0] as string))
+    return mocks.existingVersion()
+  },
 }))
 
 const { upsertBundle } = await import('../supabase/functions/_backend/public/bundle/upsert.ts')
@@ -31,40 +37,23 @@ function createContext() {
 const apikey = { key: 'test-key', user_id: 'user-1' } as any
 
 function mockOrgPolicy(enforce: boolean, requiredKey: string | null = null) {
-  mocks.adminFrom.mockReturnValue({
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({
-      data: {
-        owner_org: 'org-1',
-        orgs: {
-          enforce_encrypted_bundles: enforce,
-          required_encryption_key: requiredKey,
-        },
-      },
-      error: null,
-    }),
+  mocks.orgPolicy.mockReturnValue({
+    owner_org: 'org-1',
+    orgs: {
+      enforce_encrypted_bundles: enforce,
+      required_encryption_key: requiredKey,
+    },
   })
 }
 
 function mockVersions(existingVersion: unknown) {
-  const query = {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    maybeSingle: vi.fn().mockResolvedValue({ data: existingVersion, error: null }),
-    upsert: mocks.upsert,
-    single: vi.fn().mockResolvedValue({
-      data: {
-        id: 99,
-        app_id: 'com.example.app',
-        name: '1.0.0',
-        storage_provider: 'r2-direct',
-      },
-      error: null,
-    }),
-  }
-  mocks.upsert.mockReturnValue(query)
-  mocks.from.mockReturnValue(query)
+  mocks.existingVersion.mockReturnValue(existingVersion)
+  mocks.upsert.mockReturnValue({
+    id: 99,
+    app_id: 'com.example.app',
+    name: '1.0.0',
+    storage_provider: 'r2-direct',
+  })
 }
 
 describe('bundle upsert endpoint', () => {
@@ -97,6 +86,7 @@ describe('bundle upsert endpoint', () => {
     })
     expect(mocks.upsert).toHaveBeenCalledTimes(1)
     expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.stringContaining('ON CONFLICT (name, app_id) DO UPDATE SET "app_id" = EXCLUDED."app_id"'),
       {
         app_id: 'com.example.app',
         name: '1.0.0',
@@ -106,7 +96,6 @@ describe('bundle upsert endpoint', () => {
         storage_provider: 'r2-direct',
         session_key: 'iv-key',
       },
-      { onConflict: 'name,app_id' },
     )
   })
 
@@ -146,8 +135,8 @@ describe('bundle upsert endpoint', () => {
 
     expect(response.status).toBe(200)
     expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.stringContaining('ON CONFLICT (name, app_id)'),
       expect.objectContaining({ r2_path: 'orgs/org-1/apps/com.example.app/1.0.0.zip' }),
-      { onConflict: 'name,app_id' },
     )
   })
 })

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { createPgliteEngine } from 'tinbase'
 import { describe, expect, it } from 'vitest'
 import { ALLOWED_NEW_REPLICA_TABLES, planReadReplicaSchemaSync } from '../read_replicate/schema_additive_sync.ts'
 import { REPLICA_TABLES } from '../read_replicate/schema_catalog.ts'
@@ -12,7 +13,7 @@ import {
   unsubscribedReplicaTables,
 } from '../scripts/sync-read-replica-schema.ts'
 
-const NEW_TABLES = ['delta_files', 'version_files']
+const NEW_TABLES = ['delta_files', 'delta_sessions', 'version_files']
 
 function snapshot() {
   return JSON.parse(readFileSync(new URL('../read_replicate/schema_replicate.catalog.json', import.meta.url), 'utf8'))
@@ -85,6 +86,33 @@ describe('read-replica new table provisioning', () => {
   })
 })
 
+describe('read-replica schema reload', () => {
+  it('recreates shared sessions when an established table is missing and preserves unrelated tables', async () => {
+    const database = await createPgliteEngine()
+    const schema = readFileSync(new URL('../read_replicate/schema_replicate.sql', import.meta.url), 'utf8')
+    try {
+      await database.exec(schema)
+      await database.exec(`
+        INSERT INTO public.delta_sessions (app_id, session) VALUES ('com.example.replica-reload', decode('1234', 'hex'));
+        CREATE TABLE public.replica_reload_sentinel (id integer);
+        INSERT INTO public.replica_reload_sentinel VALUES (1);
+        DROP TABLE public.channels;
+      `)
+      await database.exec(schema)
+
+      const tables = await database.query<{ tablename: string }>(`
+        SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public' ORDER BY tablename
+      `)
+      expect(tables.rows.map(row => row.tablename)).toEqual([...REPLICA_TABLES, 'replica_reload_sentinel'].sort())
+      expect((await database.query('SELECT * FROM public.delta_sessions')).rows).toEqual([])
+      expect((await database.query('SELECT * FROM public.replica_reload_sentinel')).rows).toEqual([{ id: 1 }])
+    }
+    finally {
+      await database.close()
+    }
+  })
+})
+
 describe('read-replica subscription refresh', () => {
   it('lists replicated tables the subscription does not stream yet', () => {
     const subscribed = REPLICA_TABLES.filter(table => !NEW_TABLES.includes(table))
@@ -105,7 +133,7 @@ describe('read-replica subscription refresh', () => {
   })
 
   it('analyzes only replicated tables after their initial copy', () => {
-    expect(readReplicaAnalyzeSql(NEW_TABLES)).toBe('ANALYZE public."delta_files", public."version_files"')
+    expect(readReplicaAnalyzeSql(NEW_TABLES)).toBe('ANALYZE public."delta_files", public."delta_sessions", public."version_files"')
     expect(() => readReplicaAnalyzeSql(['pg_authid'])).toThrow('Not a replicated table: pg_authid')
   })
 

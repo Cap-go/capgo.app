@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 
 const mockEq = vi.fn()
 const mockDelete = vi.fn(() => ({ eq: mockEq }))
@@ -25,6 +25,7 @@ const mockResolveImagePath = vi.fn((raw?: string | null) => ({
   shouldSign: Boolean(raw?.trim()),
 }))
 const mockUpdateDashboard = vi.fn()
+const mockResetDashboardApps = vi.fn()
 const mainStore: any = {
   auth: { id: 'auth-user-123' } as { id: string } | undefined,
   user: { id: 'user-123' } as { id: string } | undefined,
@@ -79,7 +80,7 @@ vi.mock('../src/stores/display.ts', () => ({
 
 vi.mock('../src/stores/dashboardApps.ts', () => ({
   useDashboardAppsStore: () => ({
-    reset: vi.fn(),
+    reset: mockResetDashboardApps,
     fetchApps: vi.fn(),
   }),
 }))
@@ -200,6 +201,73 @@ describe('organization store refreshOrganizationLogos', () => {
 })
 
 describe('organization store fetchOrganizations', () => {
+  it('loads many app icons without invalidating the entire app catalog for every icon', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    })
+    const orgId = 'org-many-app-icons'
+    const organization = {
+      'gid': orgId,
+      'role': 'org_super_admin',
+      'is_invite': false,
+      'app_count': 1000,
+      'created_by': 'owner-many-app-icons',
+      'name': 'Many app icons',
+      'logo': null,
+      'password_policy_config': null,
+      'enforcing_2fa': false,
+      '2fa_has_access': true,
+      'password_has_access': true,
+      'paying': true,
+    }
+    mockRpc.mockResolvedValueOnce({ data: [organization], error: null })
+    mockIn.mockResolvedValueOnce({
+      data: Array.from({ length: 1000 }, (_, index) => ({
+        app_id: `com.example.icons${index}`,
+        name: `Icon app ${index}`,
+        owner_org: orgId,
+        need_onboarding: false,
+        icon_url: `icon-${index}.png`,
+      })),
+      error: null,
+    })
+    let releaseIcons!: () => void
+    const pendingIcons = new Promise<void>((resolve) => {
+      releaseIcons = resolve
+    })
+    mockCreateSignedImageUrl.mockImplementation(async (path: string) => {
+      await pendingIcons
+      return `https://example.com/${path}`
+    })
+
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore(createPinia())
+    await store.fetchOrganizations()
+    await store.awaitInitialLoad()
+    const catalog = store.getAppsByOrgId(orgId)
+    const onCatalogChange = vi.fn()
+    const stopWatching = watch(() => store.getAppsByOrgId(orgId), onCatalogChange)
+    releaseIcons()
+    await vi.waitFor(() => {
+      expect(store.getAppByAppId('com.example.icons999')?.icon_url).toBe('https://example.com/icon-999.png')
+    })
+    await nextTick()
+    stopWatching()
+    mockCreateSignedImageUrl.mockReset()
+
+    expect(store.getAppsByOrgId(orgId) === catalog).toBe(true)
+    expect(onCatalogChange).not.toHaveBeenCalled()
+    expect(catalog.every(app => app.icon_url_loading === false)).toBe(true)
+    expect(catalog.find(app => app.app_id === 'com.example.icons999')?.icon_url).toBe('https://example.com/icon-999.png')
+
+    mockResetDashboardApps.mockClear()
+    store.currentOrganization = undefined
+    await nextTick()
+    expect(mockResetDashboardApps).toHaveBeenCalledOnce()
+  })
+
   it.concurrent('fetches organizations with the auth session when the public profile is unavailable', async () => {
     mainStore.user = undefined
     mockCreateSignedImageUrl.mockResolvedValueOnce('')
