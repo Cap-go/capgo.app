@@ -9,13 +9,12 @@ import type { Buffer } from 'node:buffer'
 import type { getLocalDependencies } from '../utils'
 import type { OptionsUpload } from './upload_interface'
 import { existsSync, readFileSync } from 'node:fs'
-import { cwd } from 'node:process'
 import { greaterOrEqual, parse } from '@std/semver'
 import { calcKeyId, encryptChecksum, encryptChecksumV3, encryptSource, generateSessionKey } from '../api/crypto'
 import { getChecksum } from '../checksum'
 import { isCordovaMode } from '../framework/mode'
 import { CliUserError } from '../shared/cli-user-error'
-import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, findRoot, getInstalledVersion, isDeprecatedPluginVersion, zipFile } from '../utils'
+import { baseKeyV2, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, findProjectRoot, getInstalledVersion, isDeprecatedPluginVersion, zipFile } from '../utils'
 import { getUploadReporter } from './reporter'
 
 const log = {
@@ -92,7 +91,7 @@ export async function prepareBundleArtifact(path: string, options: BundleArtifac
   s.start(`Zipping bundle from ${path}`)
   zipped = await zipFile(path)
   s.message(`Calculating checksum`)
-  const root = findRoot(cwd())
+  const root = findProjectRoot()
   const resolvedUpdater = await resolveUpdaterForUpload(options, root)
   const updaterVersion = resolvedUpdater?.version
   const updaterPackageName = resolvedUpdater?.packageName
@@ -217,7 +216,7 @@ export async function resolveDeltaEncryptionSettings(options: OptionsUpload, enc
   // Auto-encrypt delta updates for updater versions >= 6.14.4 if encryption method is v2
   if (options.delta && encryptionMethod === 'v2' && !options.encryptDelta) {
     // Check updater version
-    const root = findRoot(cwd())
+    const root = findProjectRoot()
     const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
     let coerced
     try {
@@ -237,7 +236,7 @@ export async function resolveDeltaEncryptionSettings(options: OptionsUpload, enc
 
   // Check if updater supports hex checksum format (for delta updates with encryption)
   if (options.delta && (options.encryptDelta || encryptionMethod === 'v2')) {
-    const root = findRoot(cwd())
+    const root = findProjectRoot()
     const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)
     let coerced
     try {

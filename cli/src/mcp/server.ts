@@ -3,6 +3,7 @@ import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { McpServer } from '@modelcontextprotocol/server'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
+import { z } from 'zod'
 import pack from '../../package.json'
 import { enableApiInstrumentation, setInvocationSource, trackMcpServerStarted, withMcpToolTracking } from '../analytics/track'
 import { parseSchema } from '../schemas/schema_validation'
@@ -35,6 +36,7 @@ import {
   mcpOrgIdInputSchema,
   mcpRemoveOrganizationMemberInputSchema,
   mcpSetProjectDirInputSchema,
+  mcpProjectDirOptionSchema,
   mcpUpdateAccountInputSchema,
   mcpUpdateOrganizationInputSchema,
 } from './tool-schemas'
@@ -49,7 +51,7 @@ import { registerLiveUpdateTools } from '../init/mcp/live-update-tools'
 import { withErrorGuidance, withGuidedErrorResults } from './error-guidance'
 import { buildServerInstructions } from './instructions'
 import { installMcpStdoutGuard } from './stdout-guard'
-import { describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, switchProjectDir } from './project-dir'
+import { createProjectDirQueue, describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, switchProjectDir } from './project-dir'
 
 /**
  * Format an SDK result error for MCP response.
@@ -119,14 +121,24 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // once initialized and on roots/list_changed. capgo_set_project_dir overrides both.
   let projectDirSync: Promise<void> = Promise.resolve()
   let projectDirPinned = false
-  const syncProjectDirFromRoots = async (): Promise<void> => {
+  let projectDirError: unknown
+  const runInProjectDir = createProjectDirQueue()
+  const syncProjectDirFromRoots = (): Promise<void> => runInProjectDir(async () => {
     if (projectDirPinned)
       return
     try {
       const { roots } = server.server.getClientCapabilities()?.roots
         ? await server.server.listRoots(undefined, { timeout: 5000 })
         : { roots: [{ uri: pathToFileURL(process.cwd()).href }] }
-      const dir = await pickProjectDirFromRoots(roots)
+      let dir: string | undefined
+      try {
+        dir = await pickProjectDirFromRoots(roots)
+        projectDirError = undefined
+      }
+      catch (error) {
+        projectDirError = error
+        return
+      }
       if (!projectDirPinned && dir && switchProjectDir(dir))
         refreshSdkForProject()
     }
@@ -134,7 +146,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       // Client advertised roots but did not answer: keep the spawn dir; the agent can
       // still call capgo_set_project_dir.
     }
-  }
+  })
   server.server.oninitialized = () => {
     projectDirSync = syncProjectDirFromRoots()
   }
@@ -147,13 +159,28 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   const originalRegisterTool = server.registerTool.bind(server)
   ;(server as unknown as { registerTool: typeof server.registerTool }).registerTool = (name: string, config: Parameters<typeof server.registerTool>[1], handler: Parameters<typeof server.registerTool>[2]) => {
     // Never leave the agent in a dead end: every error result (or throw) gets a way out appended.
-    const guided = withErrorGuidance(String(name), handler as any)
-    const tracked = withMcpToolTracking(String(name), guided) as (...args: unknown[]) => Promise<unknown>
     const waitForProjectDir = async (...args: unknown[]) => {
       await projectDirSync
-      return tracked(...args)
+      return runInProjectDir(async () => {
+        const { projectDir, ...input } = (args[0] ?? {}) as { projectDir?: string }
+        if (projectDir) {
+          const dir = await resolveProjectDirInput(projectDir)
+          if (switchProjectDir(dir))
+            refreshSdkForProject()
+          projectDirPinned = true
+          projectDirError = undefined
+        }
+        if (projectDirError && name !== 'capgo_set_project_dir')
+          throw projectDirError
+        return (handler as (...args: unknown[]) => unknown)(input, ...args.slice(1))
+      })
     }
-    return originalRegisterTool(name, config, waitForProjectDir as typeof handler)
+    const guided = withErrorGuidance(String(name), waitForProjectDir)
+    const tracked = withMcpToolTracking(String(name), guided)
+    const inputSchema = config.inputSchema instanceof z.ZodObject
+      ? config.inputSchema.safeExtend({ projectDir: mcpProjectDirOptionSchema })
+      : z.object({ ...config.inputSchema, projectDir: mcpProjectDirOptionSchema })
+    return originalRegisterTool(name, { ...config, inputSchema } as unknown as typeof config, tracked as typeof handler)
   }
 
   // Initialize the SDK from any saved key. Silent lookup (env -> ~/.capgo -> ./.capgo):
@@ -182,6 +209,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
         if (switchProjectDir(dir))
           refreshSdkForProject()
         projectDirPinned = true
+        projectDirError = undefined
         return { content: [{ type: 'text' as const, text: describeProjectDir(dir) }] }
       }
       catch (error) {

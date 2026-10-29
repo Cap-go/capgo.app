@@ -271,7 +271,20 @@ describe('hosted MCP protocol', () => {
     const result = response?.result as { content: Array<{ text: string }>, isError?: boolean }
     expect(result.isError).toBeUndefined()
     expect(JSON.parse(result.content[0].text).command).toBe(
-      `CAPGO_TOKEN='key-123' bunx @capgo/cli@latest bundle upload 'com.example.app' --path 'dist' --channel 'it'\\''s' --delta`,
+      `CAPGO_TOKEN='key-123' npx @capgo/cli@latest bundle upload 'com.example.app' --path 'dist' --channel 'it'\\''s' --delta`,
+    )
+  })
+
+  it.concurrent('runs a hosted upload command in the selected local app with shell-safe quoting', async () => {
+    const { ctx } = fakeContext({ app_id: 'com.example.app' })
+    ctx.apikey = 'example-key'
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0', id: 90, method: 'tools/call',
+      params: { name: 'capgo_get_upload_command', arguments: { appId: 'com.example.app', projectDir: '/workspace/example\'s app/apps/mobile' } },
+    }, ctx)
+    const result = response?.result as { content: Array<{ text: string }> }
+    expect(JSON.parse(result.content[0].text).command).toBe(
+      `cd '/workspace/example'\\''s app/apps/mobile' && CAPGO_TOKEN='example-key' npx @capgo/cli@latest bundle upload 'com.example.app'`,
     )
   })
 

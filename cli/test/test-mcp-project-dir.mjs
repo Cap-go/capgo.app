@@ -2,7 +2,7 @@
 // A user-scoped MCP install is spawned from the client's dir (often ~ or /), not the
 // agent's workspace. The server must follow the client's MCP roots, and
 // capgo_set_project_dir must let the agent point it at the project explicitly.
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -69,7 +69,11 @@ await test('pnpm workspace YAML discovers apps without package.json workspaces',
 })
 
 await test('multiple apps are not silently selected and explicit resolution lists their paths', async () => {
-  eq(await pickProjectDirFromRoots([fileRoot(multiple)], spawnDir), multiple)
+  let rootsError
+  try { await pickProjectDirFromRoots([fileRoot(multiple)], spawnDir) }
+  catch (caught) { rootsError = caught }
+  for (const dir of multipleApps)
+    ok(rootsError?.message.includes(dir), rootsError?.message)
   eq(await pickProjectDirFromRoots([fileRoot(multiple)], multipleApps[1]), multipleApps[1])
   let error
   try { await resolveProjectDirInput(multiple, spawnDir) }
@@ -142,6 +146,59 @@ if (!existsSync(bundlePath)) {
   fail++
 }
 else {
+  await test('ambiguous client roots stop tools before writing files and recover through projectDir', async () => {
+    await withServer([fileRoot(multiple)], async (client) => {
+      const blocked = await client.callTool({ name: 'capgo_generate_encryption_keys', arguments: {} })
+      eq(blocked.isError, true)
+      for (const dir of multipleApps)
+        ok(toolText(blocked).includes(dir), toolText(blocked))
+      eq(existsSync(join(spawnDir, '.capgo_key_v2')), false)
+      eq(existsSync(join(multiple, '.capgo_key_v2')), false)
+      const recovered = await client.callTool({ name: 'capgo_logout', arguments: { projectDir: multipleApps[0], scope: 'local' } })
+      ok(!recovered.isError, toolText(recovered))
+      ok((await currentDir(client)).includes(`project directory: ${multipleApps[0]} `))
+    })
+  })
+
+  await test('every registered tool accepts projectDir, including tools without inputs and both onboarding flows', async () => {
+    await withServer(undefined, async (client) => {
+      const { tools } = await client.listTools()
+      ok(tools.some(tool => tool.name === 'capgo_list_apps'), 'account tools must be registered')
+      ok(tools.some(tool => tool.name === 'start_capgo_builder_onboarding'), 'builder tools must be registered')
+      ok(tools.some(tool => tool.name === 'start_capgo_live_update_onboarding'), 'live-update tools must be registered')
+      for (const tool of tools)
+        eq(tool.inputSchema.properties.projectDir.type, 'string', `${tool.name} must accept projectDir`)
+    })
+  })
+
+  await test('non-onboarding tools select and retain an app directly without a setter call', async () => {
+    await withServer(undefined, async (client) => {
+      const generated = await client.callTool({ name: 'capgo_generate_encryption_keys', arguments: { projectDir: monorepo } })
+      ok(!generated.isError, toolText(generated))
+      const privateKey = readFileSync(join(mobile, '.capgo_key_v2'), 'utf8')
+      ok(privateKey.startsWith('-----BEGIN RSA PRIVATE KEY-----'), 'key must be created inside the app')
+      const publicKey = readFileSync(join(mobile, '.capgo_key_v2.pub'), 'utf8')
+      eq(JSON.parse(readFileSync(join(mobile, 'capacitor.config.json'), 'utf8')).plugins.CapacitorUpdater.publicKey, publicKey)
+      eq(existsSync(join(monorepo, '.capgo_key_v2')), false, 'workspace root must not receive app keys')
+      eq(existsSync(join(spawnDir, '.capgo_key_v2')), false, 'spawn directory must not receive app keys')
+
+      writeFileSync(join(mobile, '.capgo'), 'example-local-key')
+      writeFileSync(join(other, '.capgo'), 'example-other-key')
+      const logout = await client.callTool({ name: 'capgo_logout', arguments: { scope: 'local' } })
+      ok(!logout.isError, toolText(logout))
+      eq(existsSync(join(mobile, '.capgo')), false, 'subsequent calls must use the selected app')
+      eq(readFileSync(join(other, '.capgo'), 'utf8'), 'example-other-key')
+      const otherLogout = await client.callTool({ name: 'capgo_logout', arguments: { scope: 'local', projectDir: other } })
+      ok(!otherLogout.isError, toolText(otherLogout))
+      eq(existsSync(join(other, '.capgo')), false, 'a later call can select another app')
+
+      const invalid = await client.callTool({ name: 'capgo_generate_encryption_keys', arguments: { projectDir: multiple } })
+      eq(invalid.isError, true)
+      ok(toolText(invalid).includes(multipleApps[0]), toolText(invalid))
+      ok((await currentDir(client)).includes(`project directory: ${other} `), 'failed selection preserves the current app')
+    })
+  })
+
   await test('server follows a workspace root into its nested Capacitor app', async () => {
     await withServer([fileRoot(monorepo)], async (client) => {
       const text = await currentDir(client)

@@ -175,6 +175,8 @@ export const mcpSetProjectDirInputSchema = z.object({
   path: z.string().min(1).describe('Absolute path to the Capacitor app folder (with capacitor.config.* and its package.json), or a workspace containing exactly one Capacitor app. Multiple apps require an explicit app path. Relative paths resolve from the current project directory.'),
 })
 
+export const mcpProjectDirOptionSchema = z.string().trim().min(1).optional().describe('Absolute path of the agent\'s Capacitor app or workspace. Selects the project for this and subsequent calls on every tool. Omit to use MCP roots or the previously selected project.')
+
 export const mcpDoctorInputSchema = z.object({
   packageJson: z.string().describe('Path to package.json for monorepos').optional(),
 })

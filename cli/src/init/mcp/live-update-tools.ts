@@ -22,7 +22,7 @@ import {
 import { getUpdaterInstallState } from '../updater.js'
 import { initOnboardingSteps } from '../ui.js'
 import { reportInitOnboardingStep } from '../onboarding-report.js'
-import { baseKeyV2, findSavedKeySilent, findMainFile, findRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
+import { baseKeyV2, findSavedKeySilent, findMainFile, findProjectRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
 import { formatRunnerCommand } from '../../runner-command.js'
 import { addChannelInternal } from '../../channel/add.js'
 import { uploadBundleInternal } from '../../bundle/upload.js'
@@ -80,15 +80,10 @@ export function buildDeps(
     const packageJsonPath = getProjectTarget()?.packageJsonPath
     if (packageJsonPath)
       return packageJsonPath
-    const appPackageJson = join(cwd, PACKNAME)
-    return existsSync(appPackageJson) ? appPackageJson : join(findRoot(cwd), PACKNAME)
+    return join(findProjectRoot(cwd), PACKNAME)
   }
   const getProjectDir = () => dirname(getPackageJsonPath())
   const getMainFile = async () => getProjectTarget()?.mainFilePath ?? findMainFile(true, getProjectDir())
-  const getNodeModulesPath = () => {
-    const nodeModulesPath = join(findRoot(getProjectDir()), 'node_modules')
-    return existsSync(nodeModulesPath) ? nodeModulesPath : undefined
-  }
   const getAppIdClosure = async (): Promise<string | undefined> => {
     try {
       const ext = await getConfig(true)
@@ -244,7 +239,6 @@ export function buildDeps(
           ignoreChecksumCheck: true,
           key: encrypt ? undefined : false,
           keyV2: encrypt ? privateKeyPath : undefined,
-          nodeModules: getNodeModulesPath(),
           packageJson: packageJsonPath,
           path: webDir ? resolve(projectDir, webDir) : undefined,
           showReplicationProgress: false,

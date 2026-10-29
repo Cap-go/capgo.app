@@ -2,14 +2,13 @@ import type { CapacitorConfig } from '../config'
 import type { AppRow } from '../types/api'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cwd } from 'node:process'
 import { confirm as pConfirm, isCancel as pIsCancel, log, select as pSelect, text as pText } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
 import { addAppInternal, resolveAppGettingStartedMessage } from '../app/add'
 import { getAppListPath } from '../app/list'
 import { extractApplicationIds } from '../build/onboarding/android/gradle-parser'
 import { collectCordovaAppIdCandidates } from '../cordova/project'
-import { createCapgoClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
+import { createCapgoClient, findProjectRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
 import { writeConfigUpdater } from '../config'
 
 const APP_ID_REGEX = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -39,7 +38,7 @@ export function parsePackageJsonOptionPaths(packageJson?: string): string[] | un
 
 export function collectAppIdCandidates(
   config: CapacitorConfig | undefined,
-  projectRoot = findRoot(cwd()),
+  projectRoot = findProjectRoot(),
   packageJsonPaths?: string[],
 ): string[] {
   const candidates = new Set<string>()
@@ -160,7 +159,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
   if (configAppId && isValidAppId(configAppId))
     return configAppId
 
-  const candidates = collectAppIdCandidates(options.config, findRoot(cwd()), options.packageJsonPaths)
+  const candidates = collectAppIdCandidates(options.config, findProjectRoot(), options.packageJsonPaths)
   if (candidates.length === 1) {
     const [onlyCandidate] = candidates
     if (!interactive) {

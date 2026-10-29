@@ -4,7 +4,6 @@ import type { UploadReporter } from './reporter'
 import type { OptionsUpload } from './upload_interface'
 import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
-import { cwd } from 'node:process'
 import { intro, log, outro, spinner } from '@clack/prompts'
 import { parse } from '@std/semver'
 import pack from '../../package.json'
@@ -13,7 +12,7 @@ import { getChecksum } from '../checksum'
 import {
   baseKeyV2,
   canPromptInteractively,
-  findRoot,
+  findProjectRoot,
   formatError,
   getBundleVersion,
   getConfig,
@@ -266,7 +265,7 @@ async function zipBundleCore(appId: string, options: BundleZipOptions, silent: b
     if (checksumSpinner)
       checksumSpinner.start('Calculating checksum')
 
-    const root = findRoot(cwd())
+    const root = findProjectRoot()
     await ensureUpdaterInstalled(options, interactive, silent)
 
     updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, options.packageJson)

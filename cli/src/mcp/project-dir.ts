@@ -31,6 +31,10 @@ function isInside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
+function ambiguousProjectDir(dirs: string[]): Error {
+  return new Error(`Multiple Capacitor apps found. Pass projectDir or call capgo_set_project_dir with the absolute path of the app you are working on:\n${dirs.join('\n')}`)
+}
+
 /** Convert MCP roots to existing local directories. Non-`file://` roots are ignored. */
 export function rootsToDirectories(roots: McpRoot[]): string[] {
   const dirs: string[] = []
@@ -53,8 +57,8 @@ export function rootsToDirectories(roots: McpRoot[]): string[] {
 /**
  * Pick the project directory from the client's roots. Keeps `currentDir` when it is
  * already a Capacitor project inside one of the roots (e.g. a project-scoped install
- * launched from a sub-app of a monorepo); otherwise prefers the first root holding a
- * Capacitor config, then a root's only Capacitor workspace app, then the first root.
+ * launched from a sub-app of a monorepo); otherwise resolves a unique Capacitor app
+ * across the roots and their workspaces, falling back to the first root without an app.
  * Returns undefined when no usable root exists. Multiple apps require explicit selection.
  */
 export async function pickProjectDirFromRoots(roots: McpRoot[], currentDir = process.cwd()): Promise<string | undefined> {
@@ -64,15 +68,15 @@ export async function pickProjectDirFromRoots(roots: McpRoot[], currentDir = pro
   const current = resolve(currentDir)
   if (hasCapacitorConfig(current) && dirs.some(dir => isInside(current, dir)))
     return current
-  const direct = dirs.find(dir => hasCapacitorConfig(dir))
-  if (direct)
-    return direct
+  const candidates = new Set<string>()
   for (const dir of dirs) {
-    const { candidates } = await discoverCapacitorProjects(dir)
-    if (candidates.length === 1)
-      return candidates[0].dir
+    const discovered = await discoverCapacitorProjects(dir)
+    for (const candidate of discovered.candidates)
+      candidates.add(candidate.dir)
   }
-  return dirs[0]
+  if (candidates.size > 1)
+    throw ambiguousProjectDir([...candidates])
+  return candidates.values().next().value ?? dirs[0]
 }
 
 /** Resolve a user/agent-supplied project path (absolute, `~`, or relative to the current dir). */
@@ -91,7 +95,7 @@ export async function resolveProjectDirInput(input: string, currentDir = process
     throw new Error(`Project directory is not a directory: ${dir}`)
   const { candidates } = await discoverCapacitorProjects(dir)
   if (candidates.length > 1)
-    throw new Error(`Multiple Capacitor apps found in ${dir}. Call capgo_set_project_dir with the absolute path of the app you are working on:\n${candidates.map(candidate => candidate.dir).join('\n')}`)
+    throw ambiguousProjectDir(candidates.map(candidate => candidate.dir))
   return candidates[0]?.dir ?? dir
 }
 
@@ -102,6 +106,15 @@ export function switchProjectDir(dir: string): boolean {
     return false
   process.chdir(target)
   return true
+}
+
+export function createProjectDirQueue() {
+  let pending: Promise<unknown> = Promise.resolve()
+  return <T>(run: () => Promise<T>): Promise<T> => {
+    const result = pending.then(run, run)
+    pending = result.then(() => undefined, () => undefined)
+    return result
+  }
 }
 
 export function describeProjectDir(dir = process.cwd()): string {
