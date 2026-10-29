@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, simulatorBillableSeconds, simulatorBillingInstant, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, simulatorBillableSeconds, simulatorBillingInstant, simulatorCreateWasInterrupted, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -54,5 +54,13 @@ describe('simulator sessions', () => {
     expect(startupFailureKeepsSlot('device-1', false)).toBe(true)
     expect(startupFailureKeepsSlot('device-1', true)).toBe(false)
     expect(startupFailureKeepsSlot('', false)).toBe(false)
+    expect(simulatorCreateWasInterrupted(new Error('The operation was aborted.'))).toBe(true)
+    expect(simulatorCreateWasInterrupted(new Error('Simulator did not return a session URL.'))).toBe(false)
+    expect(emulatorSessionCreateBody({
+      id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4',
+      appId: 'ee.forgr.capgo',
+      platform: 'ios',
+      orgId: '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57',
+    }).id).toBe('6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4')
   })
 })

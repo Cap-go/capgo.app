@@ -26,8 +26,9 @@ const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
 const SIMULATOR_HOST_TIMEOUT_MS = 30_000
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export function emulatorSessionCreateBody(input: { appId: string, platform: 'ios' | 'android', orgId: string, name?: string }) {
+export function emulatorSessionCreateBody(input: { id?: string, appId: string, platform: 'ios' | 'android', orgId: string, name?: string }) {
   return {
+    ...(input.id ? { id: input.id } : {}),
     appId: input.appId,
     platform: input.platform,
     orgId: input.orgId,
@@ -189,6 +190,16 @@ export function startupFailureKeepsSlot(emulatorId: string, deviceStopped: boole
   return emulatorId !== '' && !deviceStopped
 }
 
+export function simulatorCreateWasInterrupted(error: unknown): boolean {
+  if (error instanceof SimulatorHostError)
+    return false
+  if (error instanceof Error && error.name === 'HTTPException')
+    return false
+  if (error instanceof Error && error.message === 'Simulator did not return a session URL.')
+    return false
+  return true
+}
+
 export function canFinishSimulatorStop(input: { remoteStatus: number | null, billingRecorded: boolean, seconds: number }): boolean {
   const remoteDone = input.remoteStatus === null || simulatorHostStopIsFinal(input.remoteStatus)
   if (!remoteDone)
@@ -247,7 +258,7 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
   let emulatorId = ''
   try {
     const { accessKey, origin } = simulatorConfig(c)
-    const created = await postEmulator(origin, accessKey, '/v2/device-run-sessions', 'POST', emulatorSessionCreateBody({ appId, platform, orgId, name }))
+    const created = await postEmulator(origin, accessKey, '/v2/device-run-sessions', 'POST', emulatorSessionCreateBody({ id: slot.id, appId, platform, orgId, name }))
     const device = created.data
     if (!device?.id || !device.url)
       throw new Error('Simulator did not return a session URL.')
@@ -265,23 +276,26 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
     })
   }
   catch (error) {
-    await recordStartupFailure(c, slot.id, emulatorId, await createdDeviceStopped(c, emulatorId))
+    const interrupted = emulatorId === '' && simulatorCreateWasInterrupted(error)
+    const deviceId = emulatorId || (interrupted ? slot.id : '')
+    const deviceStopped = deviceId === '' || await createdDeviceStopped(c, deviceId, interrupted)
+    await recordStartupFailure(c, slot.id, deviceStopped ? '' : deviceId, deviceStopped)
     if (error instanceof Error && error.name === 'HTTPException')
       throw error
     throw quickError(502, 'simulator_unavailable', error instanceof Error ? error.message : 'Simulator did not start.', { app_id: appId }, error, { alert: false })
   }
 }
 
-async function createdDeviceStopped(c: Context, emulatorId: string) {
-  if (!emulatorId)
-    return true
+async function createdDeviceStopped(c: Context, emulatorId: string, interrupted = false) {
   try {
     const { accessKey, origin } = simulatorConfig(c)
     await postEmulator(origin, accessKey, `/v2/device-run-sessions/${emulatorId}/stop`, 'POST', {})
     return true
   }
   catch (stopError) {
-    const stopped = stopError instanceof SimulatorHostError && simulatorHostStopIsFinal(stopError.status)
+    const status = stopError instanceof SimulatorHostError ? stopError.status : 0
+    // A lost create can 404 on a host that stored the device under another id.
+    const stopped = interrupted ? status === 200 || status === 204 || status === 409 : simulatorHostStopIsFinal(status)
     if (!stopped)
       cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator startup cleanup could not stop the device', emulatorId, error: stopError })
     return stopped
