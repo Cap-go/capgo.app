@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, simulatorBillableSeconds, simulatorHostStopIsFinal } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, simulatorBillableSeconds, simulatorHostStopIsFinal, simulatorUsageEnd } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -23,6 +23,10 @@ describe('simulator sessions', () => {
     expect(simulatorBillableSeconds(null)).toBe(0)
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.400Z', Date.parse('2026-10-29T12:00:00.600Z'))).toBe(1)
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T14:00:00.000Z'), 40)).toBe(2400)
+    const stoppedAt = '2026-10-29T12:05:00.000Z'
+    const retryAt = Date.parse('2026-10-29T12:15:00.000Z')
+    expect(simulatorUsageEnd(stoppedAt, retryAt)).toBe(Date.parse(stoppedAt))
+    expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', simulatorUsageEnd(stoppedAt, retryAt), 40)).toBe(300)
   })
 
   it('keeps the slot when the device or the billing write is not finished', () => {

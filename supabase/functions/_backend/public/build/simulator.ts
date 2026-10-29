@@ -35,6 +35,13 @@ export function emulatorSessionCreateBody(input: { appId: string, platform: 'ios
   }
 }
 
+export function simulatorUsageEnd(deviceStoppedAt: string | Date | null, now = Date.now()): number {
+  if (!deviceStoppedAt)
+    return now
+  const parsed = deviceStoppedAt instanceof Date ? deviceStoppedAt.getTime() : Date.parse(deviceStoppedAt)
+  return Number.isFinite(parsed) ? parsed : now
+}
+
 export function simulatorBillableSeconds(startedAt: string | null, now = Date.now(), maxDurationMinutes = 40): number {
   if (!startedAt)
     return 0
@@ -112,6 +119,7 @@ interface SimulatorRow {
   url: string | null
   emulator_id: string | null
   started_at: string | null
+  device_stopped_at: string | null
   requested_by: string
   max_duration_minutes: number
 }
@@ -176,7 +184,7 @@ async function ownedSession(c: Context, principal: RlsPrincipal, userId: string,
   await ensureBuildPermission(c, appId, userId)
   const orgId = await getBuildOwnerOrg(c, principal, appId)
   const rows = await queryRead<SimulatorRow>(c, `
-    SELECT id, app_id, platform, status, url, emulator_id, started_at, requested_by, max_duration_minutes
+    SELECT id, app_id, platform, status, url, emulator_id, started_at, device_stopped_at, requested_by, max_duration_minutes
     FROM public.simulator_sessions
     WHERE id = $1::uuid AND owner_org = $2 AND app_id = $3
   `, [sessionId, orgId, appId])
@@ -250,34 +258,49 @@ export async function readSimulator(c: Context, sessionId: string, body: Simulat
   })
 }
 
+async function rememberDeviceStop(c: Context, id: string, stoppedAt: string) {
+  const rows = await queryWrite<{ device_stopped_at: string }>(c, `
+    UPDATE public.simulator_sessions
+    SET device_stopped_at = COALESCE(device_stopped_at, $2::timestamptz),
+        updated_at = now()
+    WHERE id = $1::uuid
+    RETURNING device_stopped_at
+  `, [id, stoppedAt])
+  return rows[0]?.device_stopped_at ?? stoppedAt
+}
+
 export async function stopSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
   const { orgId, row } = await ownedSession(c, principal, userId, appId, sessionId)
   if (row.status === 'stopped' || row.status === 'errored') {
     return c.json({ data: { id: row.id, url: row.url, status: row.status, platform: row.platform, kind: 'simulator' } })
   }
-  const { accessKey, origin } = simulatorConfig(c)
-  let remoteStatus: number | null = null
-  if (row.emulator_id) {
-    try {
-      const stopped = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${row.emulator_id}/stop`, 'POST', {})
-      remoteStatus = stopped.status
-    }
-    catch (error) {
-      if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status)) {
-        remoteStatus = error.status
+  let remoteStatus: number | null = row.device_stopped_at ? 200 : null
+  let stoppedAt = row.device_stopped_at
+  if (!stoppedAt) {
+    if (row.emulator_id) {
+      const { accessKey, origin } = simulatorConfig(c)
+      try {
+        const stopped = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${row.emulator_id}/stop`, 'POST', {})
+        remoteStatus = stopped.status
       }
-      else {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop failed', sessionId, error })
-        throw quickError(502, 'simulator_stop_failed', 'The simulator is still running. Retry stop.', { id: row.id }, error, { alert: false })
+      catch (error) {
+        if (error instanceof SimulatorHostError && simulatorHostStopIsFinal(error.status)) {
+          remoteStatus = error.status
+        }
+        else {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'Simulator stop failed', sessionId, error })
+          throw quickError(502, 'simulator_stop_failed', 'The simulator is still running. Retry stop.', { id: row.id }, error, { alert: false })
+        }
       }
     }
+    stoppedAt = await rememberDeviceStop(c, row.id, new Date().toISOString())
   }
-  const seconds = simulatorBillableSeconds(row.started_at, Date.now(), Number(row.max_duration_minutes) || 40)
+  const seconds = simulatorBillableSeconds(row.started_at, simulatorUsageEnd(stoppedAt), Number(row.max_duration_minutes) || 40)
   const platform = row.platform === 'android' ? 'android' : 'ios'
   let billingRecorded = seconds === 0
   if (seconds > 0) {
-    const billingId = await recordBuildTime(c, orgId, row.requested_by || userId, row.id, platform, seconds, Date.now(), appId)
+    const billingId = await recordBuildTime(c, orgId, row.requested_by || userId, row.id, platform, seconds, simulatorUsageEnd(stoppedAt), appId)
     billingRecorded = billingId !== null
   }
   if (!canFinishSimulatorStop({ remoteStatus, billingRecorded, seconds }))

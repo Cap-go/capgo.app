@@ -14,6 +14,8 @@ CREATE TABLE public.simulator_sessions (
   requested_by uuid NOT NULL,
   max_duration_minutes integer NOT NULL DEFAULT 40 CHECK (max_duration_minutes BETWEEN 1 AND 115),
   started_at timestamptz,
+  -- Set when the device itself has stopped, before build minutes are recorded.
+  device_stopped_at timestamptz,
   finished_at timestamptz
 );
 
@@ -48,7 +50,8 @@ DECLARE
 BEGIN
   FOR session_row IN
     SELECT id, app_id, platform, requested_by, max_duration_minutes,
-           COALESCE(started_at, created_at) AS opened_at
+           COALESCE(started_at, created_at) AS opened_at,
+           COALESCE(device_stopped_at, now()) AS closed_at
     FROM public.simulator_sessions
     WHERE owner_org = p_org_id
       AND status IN ('new', 'queued', 'starting', 'in-progress')
@@ -57,7 +60,7 @@ BEGIN
   LOOP
     elapsed := LEAST(
       session_row.max_duration_minutes * 60,
-      GREATEST(1, floor(extract(epoch FROM (now() - session_row.opened_at)))::bigint)
+      GREATEST(1, floor(extract(epoch FROM (session_row.closed_at - session_row.opened_at)))::bigint)
     );
     -- Write the log here. record_build_time rejects the call unless the request
     -- role is internal, and this sweeper runs from whichever connection holds the slot lock.
