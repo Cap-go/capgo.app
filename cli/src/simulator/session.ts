@@ -1,7 +1,29 @@
 import { stdout } from 'node:process'
+import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { CliUserError } from '../shared/cli-user-error'
 import { findSavedKey, resolveCapgoApiHosts } from '../utils'
+
+function fail(message: string): never {
+  log.error(message)
+  throw new CliUserError(message)
+}
+
+function simulatorErrorText(text: string, status: number) {
+  if (!text)
+    return `Simulator request failed (${status})`
+  try {
+    const body = JSON.parse(text) as { message?: string, error?: string }
+    if (body.message)
+      return body.message
+    if (body.error)
+      return body.error
+  }
+  catch {
+    // The body is already plain text.
+  }
+  return text
+}
 
 export interface SimulatorCommandOptions {
   apikey?: string
@@ -26,7 +48,7 @@ export function simulatorApiRequest(host: string, command: 'start' | 'stop' | 'g
     }
   }
   if (!input.id)
-    throw new CliUserError('session id is required')
+    fail('session id is required')
   if (command === 'stop') {
     return {
       method: 'POST' as const,
@@ -44,10 +66,10 @@ export function simulatorApiRequest(host: string, command: 'start' | 'stop' | 'g
 async function callSimulator(command: 'start' | 'stop' | 'get', appId: string, sessionId: string | undefined, options: SimulatorCommandOptions) {
   const platform = options.platform ?? 'ios'
   if (platform !== 'ios' && platform !== 'android')
-    throw new CliUserError('--platform must be ios or android')
+    fail('--platform must be ios or android')
   const apikey = options.apikey || findSavedKey()
   if (!apikey)
-    throw new CliUserError('Missing API key. Pass --apikey or run capgo login.')
+    fail('Missing API key. Pass --apikey or run capgo login.')
   const { apiHost } = await resolveCapgoApiHosts(options.apiHost)
   const request = simulatorApiRequest(apiHost, command, { appId, platform, name: options.name, id: sessionId })
   const response = await fetch(request.url, {
@@ -60,7 +82,7 @@ async function callSimulator(command: 'start' | 'stop' | 'get', appId: string, s
   })
   const text = await response.text()
   if (!response.ok)
-    throw new CliUserError(text || `Simulator request failed (${response.status})`)
+    fail(simulatorErrorText(text, response.status))
   const payload = text ? JSON.parse(text) as { data?: { id?: string, url?: string, status?: string, kind?: string } } : {}
   if (options.json)
     stdout.write(`${JSON.stringify(payload)}\n`)
@@ -72,18 +94,18 @@ async function callSimulator(command: 'start' | 'stop' | 'get', appId: string, s
 
 export function startSimulatorCommand(appId: string | undefined, options: SimulatorCommandOptions) {
   if (!appId)
-    throw new CliUserError('app id is required')
+    fail('app id is required')
   return callSimulator('start', appId, undefined, options)
 }
 
 export function stopSimulatorCommand(sessionId: string | undefined, appId: string | undefined, options: SimulatorCommandOptions) {
   if (!sessionId || !appId)
-    throw new CliUserError('session id and app id are required')
+    fail('session id and app id are required')
   return callSimulator('stop', appId, sessionId, options)
 }
 
 export function getSimulatorCommand(sessionId: string | undefined, appId: string | undefined, options: SimulatorCommandOptions) {
   if (!sessionId || !appId)
-    throw new CliUserError('session id and app id are required')
+    fail('session id and app id are required')
   return callSimulator('get', appId, sessionId, options)
 }

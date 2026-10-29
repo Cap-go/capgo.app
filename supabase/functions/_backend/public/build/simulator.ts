@@ -42,6 +42,15 @@ export function simulatorUsageEnd(deviceStoppedAt: string | Date | null, now = D
   return Number.isFinite(parsed) ? parsed : now
 }
 
+export function simulatorBillingInstant(startedAt: string | null, stoppedAt: number, maxDurationMinutes = 40): number {
+  if (!startedAt)
+    return stoppedAt
+  const started = Date.parse(startedAt)
+  if (!Number.isFinite(started))
+    return stoppedAt
+  return Math.min(stoppedAt, started + Math.max(1, maxDurationMinutes) * 60_000)
+}
+
 export function simulatorBillableSeconds(startedAt: string | null, now = Date.now(), maxDurationMinutes = 40): number {
   if (!startedAt)
     return 0
@@ -309,11 +318,14 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
     return c.json({ data: { id: row.id, url: row.url, status: row.status, platform: row.platform, kind: 'simulator' } })
   }
   const { remoteStatus, stoppedAt } = await confirmDeviceStopped(c, row, sessionId)
-  const seconds = simulatorBillableSeconds(row.started_at, simulatorUsageEnd(stoppedAt), Number(row.max_duration_minutes) || 40)
+  const usageEnd = simulatorUsageEnd(stoppedAt)
+  const maxMinutes = Number(row.max_duration_minutes) || 40
+  const seconds = simulatorBillableSeconds(row.started_at, usageEnd, maxMinutes)
+  const billedAt = simulatorBillingInstant(row.started_at, usageEnd, maxMinutes)
   const platform = row.platform === 'android' ? 'android' : 'ios'
   let billingRecorded = seconds === 0
   if (seconds > 0) {
-    const billingId = await recordBuildTime(c, orgId, row.requested_by || userId, row.id, platform, seconds, simulatorUsageEnd(stoppedAt), appId)
+    const billingId = await recordBuildTime(c, orgId, row.requested_by || userId, row.id, platform, seconds, billedAt, appId)
     billingRecorded = billingId !== null
   }
   if (!canFinishSimulatorStop({ remoteStatus, billingRecorded, seconds }))
