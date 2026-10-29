@@ -59,14 +59,24 @@ BEGIN
       session_row.max_duration_minutes * 60,
       GREATEST(1, floor(extract(epoch FROM (now() - session_row.opened_at)))::bigint)
     );
-    PERFORM public.record_build_time(
-      p_org_id => p_org_id,
-      p_user_id => session_row.requested_by,
-      p_build_id => session_row.id::varchar,
-      p_platform => session_row.platform,
-      p_build_time_unit => elapsed,
-      p_app_id => session_row.app_id
-    );
+    -- Write the log here. record_build_time rejects the call unless the request
+    -- role is internal, and this sweeper runs from whichever connection holds the slot lock.
+    INSERT INTO public.build_logs (org_id, user_id, build_id, platform, build_time_unit, billable_seconds, app_id)
+    VALUES (
+      p_org_id,
+      session_row.requested_by,
+      session_row.id::varchar,
+      session_row.platform,
+      elapsed,
+      elapsed * CASE session_row.platform WHEN 'ios' THEN 2 ELSE 1 END,
+      session_row.app_id
+    )
+    ON CONFLICT (build_id, org_id) DO UPDATE SET
+      user_id = EXCLUDED.user_id,
+      platform = EXCLUDED.platform,
+      build_time_unit = EXCLUDED.build_time_unit,
+      billable_seconds = EXCLUDED.billable_seconds,
+      app_id = EXCLUDED.app_id;
     UPDATE public.simulator_sessions
     SET status = 'stopped', finished_at = now(), updated_at = now()
     WHERE id = session_row.id;
