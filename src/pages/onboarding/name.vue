@@ -62,8 +62,7 @@ let disposed = false
 const fields = createOnboardingDetailsFieldDebouncer((event, step, properties) => tracker?.trackDetailsEvent(event, step, properties), 500)
 
 function trackField(field: 'first_name' | 'last_name' | 'company_name', value: string) {
-  const event = field === 'company_name' ? 'onboarding_company_name_entered' : field === 'first_name' ? 'onboarding_first_name_entered' : 'onboarding_last_name_entered'
-  fields.schedule(event, field, 'name', value)
+  fields.schedule(`onboarding_${field}_entered`, field, 'name', value)
 }
 
 async function persistProfileProgress(patch: Record<string, Json> | ((current: Json) => Json)) {
