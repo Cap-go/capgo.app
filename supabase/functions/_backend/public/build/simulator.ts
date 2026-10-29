@@ -35,13 +35,15 @@ export function emulatorSessionCreateBody(input: { appId: string, platform: 'ios
   }
 }
 
-export function simulatorBillableSeconds(startedAt: string | null, now = Date.now()): number {
+export function simulatorBillableSeconds(startedAt: string | null, now = Date.now(), maxDurationMinutes = 40): number {
   if (!startedAt)
     return 0
   const started = Date.parse(startedAt)
   if (!Number.isFinite(started))
     return 0
-  return Math.max(1, Math.round((now - started) / 1000))
+  const elapsed = Math.max(1, Math.round((now - started) / 1000))
+  const cap = Math.max(1, maxDurationMinutes) * 60
+  return Math.min(elapsed, cap)
 }
 
 function requirePlatform(value: string | undefined): 'ios' | 'android' {
@@ -111,6 +113,7 @@ interface SimulatorRow {
   emulator_id: string | null
   started_at: string | null
   requested_by: string
+  max_duration_minutes: number
 }
 
 async function markSession(c: Context, id: string, status: 'in-progress' | 'stopped' | 'errored', extra?: { url?: string, emulatorId?: string }) {
@@ -173,7 +176,7 @@ async function ownedSession(c: Context, principal: RlsPrincipal, userId: string,
   await ensureBuildPermission(c, appId, userId)
   const orgId = await getBuildOwnerOrg(c, principal, appId)
   const rows = await queryRead<SimulatorRow>(c, `
-    SELECT id, app_id, platform, status, url, emulator_id, started_at, requested_by
+    SELECT id, app_id, platform, status, url, emulator_id, started_at, requested_by, max_duration_minutes
     FROM public.simulator_sessions
     WHERE id = $1::uuid AND owner_org = $2 AND app_id = $3
   `, [sessionId, orgId, appId])
@@ -270,7 +273,7 @@ export async function stopSimulator(c: Context, sessionId: string, body: Simulat
       }
     }
   }
-  const seconds = simulatorBillableSeconds(row.started_at)
+  const seconds = simulatorBillableSeconds(row.started_at, Date.now(), Number(row.max_duration_minutes) || 40)
   const platform = row.platform === 'android' ? 'android' : 'ios'
   let billingRecorded = seconds === 0
   if (seconds > 0) {

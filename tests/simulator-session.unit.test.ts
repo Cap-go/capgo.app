@@ -22,6 +22,7 @@ describe('simulator sessions', () => {
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T12:00:30.400Z'))).toBe(30)
     expect(simulatorBillableSeconds(null)).toBe(0)
     expect(simulatorBillableSeconds('2026-10-29T12:00:00.400Z', Date.parse('2026-10-29T12:00:00.600Z'))).toBe(1)
+    expect(simulatorBillableSeconds('2026-10-29T12:00:00.000Z', Date.parse('2026-10-29T14:00:00.000Z'), 40)).toBe(2400)
   })
 
   it('keeps the slot when the device or the billing write is not finished', () => {
