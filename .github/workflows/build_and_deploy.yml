@@ -179,9 +179,10 @@ jobs:
   # streams them once its subscription is refreshed. This job still runs on
   # every production release and must stay visible when it fails, but worker
   # deploys no longer wait on it: read_replica_schema already reconciles new
-  # tables on the subscriber, and a refresh failure (for example subscription
-  # ownership) must not block api, files, or plugin releases. Previous workers
-  # keep serving until refresh succeeds manually or on a later run.
+  # tables on the subscriber before primary migrations, and a refresh failure
+  # (for example subscription ownership) must not block api, files, or plugin
+  # releases. Fix refresh out of band; until then new worker code may see empty
+  # replica rows for tables not yet subscribed.
   read_replica_subscription:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' && needs.read_replica_schema.result == 'success' }}
