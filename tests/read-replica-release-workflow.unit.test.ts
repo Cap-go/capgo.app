@@ -105,6 +105,7 @@ describe('production read-replica release gate', () => {
       expect(refreshDef, 'read_replica_subscription must exist in build_and_deploy.yml').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must keep a job-level if').toBeDefined()
       expect(refreshDef?.if, 'read_replica_subscription must not be disabled with if: false').not.toBe(false)
+      expect(refreshJob).toContain('resolve-deploy-tag.ts --assert-current')
       for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker']) {
         const jobDef = parsed.jobs?.[job]
         expect(jobDef, `${job} must exist in build_and_deploy.yml`).toBeDefined()
