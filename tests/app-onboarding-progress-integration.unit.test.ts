@@ -795,6 +795,84 @@ describe('app onboarding progress analytics integration', () => {
     }
   })
 
+  it('keeps the saved company when restart persistence fails and the app name changes', async () => {
+    const previousUser = writerMocks.main.user
+    const previousDialogRole = writerMocks.dialog.lastButtonRole
+    const previousAssignments = writerMocks.abTestAssignments
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const currentOnboarding = {
+      profile_completed_at: '2026-10-20T10:00:00.000Z',
+      abtests: {
+        new_channel: {
+          assigned_at: '2026-09-11T10:00:00.000Z',
+          branch: 'A',
+        },
+      },
+      flow: 'pre_org',
+      intent: 'ota',
+      org_name: 'Saved Company',
+      status: 'in_progress',
+      step: 'organization',
+      updated_at: '2026-09-11T10:01:00.000Z',
+    }
+    writerMocks.dialog.lastButtonRole = 'onboarding-resume-restart'
+    writerMocks.abTestAssignments = currentOnboarding.abtests
+    writerMocks.main.user = { ...previousUser, onboarding: currentOnboarding }
+    writerMocks.replaceUserOnboardingIfUnchanged.mockReset()
+    writerMocks.replaceUserOnboardingIfUnchanged
+      .mockResolvedValueOnce({ data: null, error: new Error('restart write failed') })
+      .mockResolvedValueOnce({ data: null, error: new Error('restart retry failed') })
+      .mockImplementation(async (_userId, _expectedOnboarding, onboarding) => ({
+        data: { ...writerMocks.main.user, onboarding },
+        error: null,
+      }))
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false })),
+    })
+    const container = document.createElement('div')
+    const app = createApp(AppOnboardingFlow, { onboarding: true, preOrg: true })
+    app.config.warnHandler = () => undefined
+
+    try {
+      app.mount(container)
+      await vi.waitFor(() => expect(writerMocks.replaceUserOnboardingIfUnchanged.mock.calls.length).toBeGreaterThanOrEqual(3))
+      await vi.waitFor(() => expect(container.querySelector('[data-test="onboarding-intent-ota"]')).not.toBeNull())
+      expect(writerMocks.main.user.onboarding).toMatchObject({ org_name: 'Saved Company' })
+
+      container.querySelector<HTMLButtonElement>('[data-test="onboarding-intent-ota"]')!.click()
+      await nextTick()
+      container.querySelector<HTMLButtonElement>('[data-test="app-onboarding-continue-intent"]')!.click()
+      await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-name"]')).not.toBeNull())
+
+      const appName = container.querySelector<HTMLInputElement>('[data-test="app-onboarding-name"]')!
+      appName.value = 'Different App'
+      appName.dispatchEvent(new Event('input', { bubbles: true }))
+      await nextTick()
+      container.querySelector<HTMLButtonElement>('[data-test="app-onboarding-continue"]')!.click()
+      await nextTick()
+      container.querySelector<HTMLButtonElement>('[data-test="app-onboarding-continue"]')!.click()
+      await nextTick()
+
+      expect(container.querySelector('[data-test="onboarding-company-name-summary"]')?.textContent).toBe('Saved Company')
+      expect(container.querySelector('[data-test="onboarding-org-name"]')).toBeNull()
+      await vi.waitFor(() => expect(writerMocks.main.user.onboarding).toMatchObject({
+        app_name: 'Different App',
+        org_name: 'Saved Company',
+      }))
+    }
+    finally {
+      app.unmount()
+      writerMocks.main.user = previousUser
+      writerMocks.dialog.lastButtonRole = previousDialogRole
+      writerMocks.abTestAssignments = previousAssignments
+      if (matchMediaDescriptor)
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor)
+      else
+        Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
   it('emits the pending app ready event only after the final setup screen renders', async () => {
     const previousUser = writerMocks.main.user
     const previousRouteQuery = writerMocks.route.query

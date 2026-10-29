@@ -920,6 +920,8 @@ async function resetOnboardingForm() {
   if (resetPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
     resetPersistResult = await persistOnboardingProgress('in_progress', { clearIntent: true, clearProfileDraft: true })
   if (resetPersistResult !== 'persisted') {
+    orgNameInput.value = profileCompanyName.value
+    hasEditedOrgName.value = !!profileCompanyName.value
     if (!onboardingFlowDisposed)
       toast.error(t('account-error'))
     return
@@ -3259,7 +3261,7 @@ defineExpose({
                   {{ t('company-name') }}
                 </p>
                 <p class="mt-2 break-words text-base text-slate-950 dark:text-white" data-test="onboarding-company-name-summary">
-                  {{ orgNameInput }}
+                  {{ profileCompanyName }}
                 </p>
               </div>
               <div v-else>

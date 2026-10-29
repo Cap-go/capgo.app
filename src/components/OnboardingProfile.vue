@@ -26,7 +26,7 @@ const companyName = ref(readOnboardingCompanyName(main.user?.onboarding))
 const needsProfileName = computed(() => props.initial || !main.user?.first_name?.trim() || !main.user?.last_name?.trim())
 const isValid = computed(() => !!main.user?.id
   && (!needsProfileName.value || (!!firstName.value.trim() && !!lastName.value.trim()))
-  && (!props.initial || companyName.value.trim().length >= 3))
+  && (!props.initial || (companyName.value.trim().length >= 3 && companyName.value.trim().length <= 80)))
 let draftGeneration = 0
 let draftTimer: ReturnType<typeof setTimeout> | undefined
 let draftUserId = main.user?.id
