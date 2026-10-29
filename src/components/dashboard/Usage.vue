@@ -405,11 +405,14 @@ async function reloadAllCharts() {
   const last30DaysStart = addUtcDays(todayUtc, -29)
 
   const orgId = effectiveOrganization.value?.gid
+  const scopeKey = currentScopeKey.value
   const request = usageLoading.start()
-  reloadTrigger.value++
   try {
     await Promise.all([
-      dashboardAppsStore.fetchApps(true),
+      dashboardAppsStore.fetchApps(true).then(() => {
+        if (!disposed && scopeKey === currentScopeKey.value)
+          reloadTrigger.value++
+      }),
       orgId ? main.updateDashboard(orgId, last30DaysStart.toISOString(), last30DaysEnd.toISOString()) : Promise.resolve(),
     ])
     if (request.isCurrent())

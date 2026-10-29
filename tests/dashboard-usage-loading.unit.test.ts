@@ -6,10 +6,14 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import Usage from '../src/components/dashboard/Usage.vue'
+import { useDashboardAppsStore } from '../src/stores/dashboardApps'
 import { useMainStore } from '../src/stores/main'
 import { useOrganizationStore } from '../src/stores/organization'
 
-const mocks = vi.hoisted(() => ({ plans: vi.fn(), updateDashboard: vi.fn(), replace: vi.fn() }))
+const mocks = vi.hoisted(() => {
+  const query: Record<string, string> = {}
+  return { plans: vi.fn(), updateDashboard: vi.fn(), replace: vi.fn(), fetchApps: vi.fn(), query }
+})
 vi.mock('~/stores/main', () => ({
   useMainStore: defineStore('usage-loading-main', {
     state: () => ({
@@ -37,13 +41,13 @@ vi.mock('~/stores/organization', () => ({
 vi.mock('~/stores/dashboardApps', () => ({
   useDashboardAppsStore: defineStore('usage-loading-apps', {
     state: () => ({ currentOrgId: 'org-first', isLoaded: true, apps: [{ app_id: 'com.example.app' }], appIds: ['com.example.app'], appNames: {} }),
-    actions: { fetchApps: async () => undefined },
+    actions: { fetchApps: (force?: boolean) => mocks.fetchApps(force) },
   }),
 }))
 vi.mock('~/stores/dialogv2', () => ({ useDialogV2Store: () => ({}) }))
 vi.mock('~/services/console', () => ({ getPlans: () => mocks.plans() }))
 vi.mock('~/services/capgoApi', () => ({ invokeCapgoApi: vi.fn() }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ replace: mocks.replace }) }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: mocks.query }), useRouter: () => ({ replace: mocks.replace }) }))
 vi.mock('../src/components/dashboard/UsageCard.vue', async () => {
   const { defineComponent, h } = await import('vue')
   return { default: defineComponent({
@@ -55,8 +59,8 @@ vi.mock('../src/components/dashboard/UsageCard.vue', async () => {
     }, [h('span', JSON.stringify(props.data)), slots.header?.()]),
   }) }
 })
-vi.mock('../src/components/dashboard/UpdateStatsCard.vue', () => ({ default: { template: '<div data-test="independent-updates" />' } }))
-vi.mock('../src/components/dashboard/DeploymentStatsCard.vue', () => ({ default: { template: '<div data-test="independent-deployments" />' } }))
+vi.mock('../src/components/dashboard/UpdateStatsCard.vue', () => ({ default: { props: ['reloadTrigger'], template: '<div data-test="independent-updates" :data-reload="reloadTrigger" />' } }))
+vi.mock('../src/components/dashboard/DeploymentStatsCard.vue', () => ({ default: { props: ['reloadTrigger'], template: '<div data-test="independent-deployments" :data-reload="reloadTrigger" />' } }))
 
 let mounted: App | undefined
 let container: HTMLDivElement
@@ -74,6 +78,8 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-10-29T12:00:00Z'))
   mocks.plans.mockImplementation(() => new Promise(() => {}))
   mocks.updateDashboard.mockResolvedValue(undefined)
+  mocks.fetchApps.mockResolvedValue(undefined)
+  mocks.query = {}
   container = document.createElement('div')
   window.history.replaceState({}, '', '/')
 })
@@ -96,7 +102,7 @@ function mountUsage(ready = true, planReady = true) {
   mounted = createApp(Usage)
   mounted.use(pinia)
   mounted.use(createI18n({ legacy: false, locale: 'en', missingWarn: false, fallbackWarn: false, messages: { en: {} } }))
-  mounted.component('BundleUploadsCard', { template: '<div data-test="independent-uploads" />' })
+  mounted.component('BundleUploadsCard', { props: ['reloadTrigger'], template: '<div data-test="independent-uploads" :data-reload="reloadTrigger" />' })
   mounted.mount(container)
   return pinia
 }
@@ -120,6 +126,30 @@ describe('independent global usage loading', () => {
     expect(mocks.updateDashboard).toHaveBeenCalledOnce()
     expect(container.querySelector('[data-test="usage-card"]')?.getAttribute('data-loading')).toBe('false')
     expect(container.querySelector('[data-test="usage-card"]')?.textContent).toContain('5')
+  })
+
+  it('refreshes dependent charts after the catalog while fetching metrics in parallel', async () => {
+    let resolveCatalog!: () => void
+    mocks.fetchApps.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveCatalog = resolve }))
+    mocks.query.refresh = 'true'
+    const pinia = mountUsage()
+    await flush()
+
+    expect(mocks.fetchApps).toHaveBeenCalledWith(true)
+    expect(mocks.updateDashboard).toHaveBeenCalledOnce()
+    for (const chart of ['uploads', 'updates', 'deployments'])
+      expect(container.querySelector(`[data-test="independent-${chart}"]`)?.getAttribute('data-reload')).toBe('0')
+    expect(container.querySelector('[data-test="usage-card"]')?.getAttribute('data-loading')).toBe('false')
+
+    const catalog = useDashboardAppsStore(pinia)
+    catalog.apps.push({ app_id: 'com.example.new', name: 'New app' })
+    catalog.appIds.push('com.example.new')
+    resolveCatalog()
+    await flush()
+
+    for (const chart of ['uploads', 'updates', 'deployments'])
+      expect(container.querySelector(`[data-test="independent-${chart}"]`)?.getAttribute('data-reload')).toBe('1')
+    expect(catalog.appIds).toContain('com.example.new')
   })
 
   it('does not turn a recommendation failure into a usage failure when metrics are ready', async () => {
