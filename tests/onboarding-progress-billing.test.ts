@@ -74,3 +74,29 @@ describe('onboarding progress optional billing', () => {
     expect(await response.json()).not.toHaveProperty('billing')
   })
 })
+
+describe('onboarding progress read permissions', () => {
+  it.concurrent.each([{ N: 0, initial: false }, { N: 2, initial: false }, { N: 0, initial: true }])('serves reader observations for %j', async (poll) => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/onboarding_progress'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': readerKey },
+      body: JSON.stringify({ appId, ...poll }),
+    })
+    expect(response.status).toBe(200)
+    const result = await response.json() as any
+    expect(result.checkErrors).toEqual([])
+    expect(result.onboarding.setup.steps.ota.login_cli_mcp.status).toBe('done')
+    if (poll.N === 0)
+      expect(result.hasChannel).toBe(false)
+  })
+
+  it.concurrent('denies the next poll immediately after a reader binding is revoked', async () => {
+    const key = await createDirectApiKeyWithBindings({ key: randomUUID(), name: 'Onboarding revocation test', orgId, appId, appRoleName: 'app_reader' })
+    keys.push(key)
+    await executeSQL('DELETE FROM public.role_bindings WHERE principal_type = \'apikey\' AND principal_id = $1::uuid AND scope_type = \'org\'', [key.rbac_id])
+    expect((await progress(key.key!)).status).toBe(200)
+
+    await executeSQL('DELETE FROM public.role_bindings WHERE principal_type = \'apikey\' AND principal_id = $1::uuid', [key.rbac_id])
+    expect((await progress(key.key!)).status).toBe(403)
+  })
+})
