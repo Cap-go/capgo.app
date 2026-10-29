@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildReadDevicesCFQuery as buildPluginReadDevicesCFQuery } from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
-import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF, readDevicesCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import { readDevicesSB } from '../supabase/functions/_backend/utils/supabase.ts'
 
 const pgMocks = vi.hoisted(() => ({
@@ -49,15 +49,25 @@ describe('buildReadDevicesCFQuery', () => {
     expect(query).toContain('ORDER BY device_id ASC')
   })
 
-  it.concurrent('does not read install source blob on default device listing', () => {
+  const installSourceArgMax = 'argMax(blob9, if(blob9 != \'\', timestamp, toDateTime(\'1970-01-01 00:00:00\'))) AS install_source'
+
+  it.concurrent('reads install_source from blob9 on default device listing', () => {
     const query = buildReadDevicesCFQuery({
       app_id: 'com.example.app',
       limit: 1,
     }, false)
 
-    expect(query).not.toContain('blob9')
-    expect(query).not.toContain('install_source')
+    expect(query).toContain(installSourceArgMax)
     expect(query).not.toContain('blob10')
+  })
+
+  it.concurrent('reads install_source from blob9 in plugin-runtime device listing', () => {
+    const query = buildPluginReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(installSourceArgMax)
   })
 
   it.concurrent('does not read country code for custom id listing without device ids', () => {
@@ -223,6 +233,58 @@ describe('buildReadDevicesCFQuery', () => {
     expect(query).not.toContain(`toLower(blob1)`)
     expect(searchIndex).toBeGreaterThan(groupByIndex)
     expect(query.indexOf('platform = 0')).toBeGreaterThan(groupByIndex)
+  })
+
+  it('maps install_source from Analytics Engine rows in readDevicesCF', async () => {
+    let query = ''
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        meta: [
+          { name: 'device_id', type: 'String' },
+          { name: 'version_name', type: 'String' },
+          { name: 'plugin_version', type: 'String' },
+          { name: 'os_version', type: 'String' },
+          { name: 'custom_id', type: 'String' },
+          { name: 'version_build', type: 'String' },
+          { name: 'default_channel', type: 'String' },
+          { name: 'key_id', type: 'String' },
+          { name: 'install_source', type: 'String' },
+          { name: 'platform', type: 'Float64' },
+          { name: 'is_prod', type: 'Float64' },
+          { name: 'is_emulator', type: 'Float64' },
+          { name: 'updated_at', type: 'DateTime' },
+        ],
+        data: [{
+          device_id: '11111111-1111-4111-8111-111111111111',
+          version_name: '1.0.0',
+          plugin_version: '8.0.0',
+          os_version: '17.0',
+          custom_id: '',
+          version_build: '1',
+          default_channel: 'production',
+          key_id: '',
+          install_source: 'app_store',
+          platform: 1,
+          is_prod: 1,
+          is_emulator: 0,
+          updated_at: '2026-04-04 03:05:59',
+        }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const devices = await readDevicesCF(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(installSourceArgMax)
+    expect(devices).toHaveLength(1)
+    expect(devices[0]?.install_source).toBe('app_store')
   })
 })
 
