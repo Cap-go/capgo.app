@@ -260,9 +260,10 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
     const { accessKey, origin } = simulatorConfig(c)
     const created = await postEmulator(origin, accessKey, '/v2/device-run-sessions', 'POST', emulatorSessionCreateBody({ id: slot.id, appId, platform, orgId, name }))
     const device = created.data
+    if (device?.id)
+      emulatorId = device.id
     if (!device?.id || !device.url)
       throw new Error('Simulator did not return a session URL.')
-    emulatorId = device.id
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
     return c.json({
       data: {
