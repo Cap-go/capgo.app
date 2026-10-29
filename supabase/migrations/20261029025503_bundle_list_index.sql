@@ -42,4 +42,22 @@ $$;
 CREATE INDEX IF NOT EXISTS idx_app_versions_app_deleted_created_at
 ON public.app_versions (app_id, deleted, created_at DESC);
 
+-- A competing prebuild can claim the name after preflight.
+-- Verify the retained index before recording the migration as applied.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_index AS idx
+    WHERE idx.indexrelid = pg_catalog.to_regclass('public.idx_app_versions_app_deleted_created_at')
+      AND idx.indisvalid AND idx.indisready
+      AND pg_catalog.pg_get_indexdef(idx.indexrelid) =
+        'CREATE INDEX idx_app_versions_app_deleted_created_at ON public.app_versions USING btree '
+        || '(app_id, deleted, created_at DESC)'
+  ) THEN
+    RAISE EXCEPTION 'idx_app_versions_app_deleted_created_at failed post-build validation; inspect it before retrying';
+  END IF;
+END
+$$;
+
 RESET lock_timeout;

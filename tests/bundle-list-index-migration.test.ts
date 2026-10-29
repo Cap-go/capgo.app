@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { Pool } from 'pg'
+import { Client, Pool } from 'pg'
 import { afterAll, describe, expect, it } from 'vitest'
 import { POSTGRES_URL } from './test-utils.ts'
 
@@ -121,6 +121,71 @@ describe('bundle-list index migration preflight', () => {
       await client.query('BEGIN')
       await client.query(sql)
       expect(await indexState(client, schema)).toMatchObject({ indisvalid: true, indisready: true })
+    })
+  })
+
+  it.concurrent.each([
+    {
+      name: 'failed concurrent prebuild',
+      create: (schema: string) => `CREATE UNIQUE INDEX CONCURRENTLY ${indexName} ON ${schema}.versions (app_id)`,
+      expectedError: '23505',
+      accepted: false,
+    },
+    {
+      name: 'mismatched concurrent prebuild',
+      create: (schema: string) => `CREATE INDEX CONCURRENTLY ${indexName} ON ${schema}.versions (app_id)`,
+      accepted: false,
+    },
+    {
+      name: 'same-name sequence',
+      create: (schema: string) => `CREATE SEQUENCE ${schema}.${indexName}`,
+      accepted: false,
+    },
+    {
+      name: 'matching concurrent prebuild',
+      create: (schema: string) => `CREATE INDEX CONCURRENTLY ${indexName} ON ${schema}.versions (app_id, deleted, created_at DESC)`,
+      accepted: true,
+    },
+  ])('validates a $name introduced after preflight', async ({ create, expectedError, accepted }) => {
+    await withIndexFixture(async (client, schema, sql) => {
+      const builder = new Client({ connectionString: POSTGRES_URL, statement_timeout: 5000 })
+      try {
+        await builder.connect()
+        await client.query(`INSERT INTO ${schema}.versions(app_id) VALUES ('duplicate'), ('duplicate')`)
+        const createStart = sql.indexOf('\nCREATE INDEX IF NOT EXISTS ')
+        expect(createStart).toBeGreaterThan(0)
+        await client.query('BEGIN')
+        await client.query(sql.slice(0, createStart))
+        const build = builder.query(create(schema))
+        if (expectedError)
+          await expect(build).rejects.toMatchObject({ code: expectedError })
+        else
+          await build
+        if (expectedError)
+          expect(await indexState(client, schema)).toMatchObject({ indisvalid: false })
+        const stateQuery = `SELECT rel.oid, rel.relkind, idx.indisvalid, idx.indisready
+          FROM pg_catalog.pg_class AS rel
+          LEFT JOIN pg_catalog.pg_index AS idx ON idx.indexrelid = rel.oid
+          WHERE rel.oid = pg_catalog.to_regclass($1)`
+        const stateParams = [`${schema}.${indexName}`]
+        const original = (await client.query(stateQuery, stateParams)).rows
+        expect(original).toHaveLength(1)
+        if (accepted) {
+          await client.query(sql.slice(createStart))
+          expect(await indexState(client, schema)).toMatchObject({ indisvalid: true, indisready: true })
+        }
+        else {
+          await expect(client.query(sql.slice(createStart))).rejects.toMatchObject({
+            code: 'P0001',
+            message: `${indexName} failed post-build validation; inspect it before retrying`,
+          })
+        }
+        await client.query('ROLLBACK')
+        expect((await client.query(stateQuery, stateParams)).rows).toEqual(original)
+      }
+      finally {
+        await builder.end()
+      }
     })
   })
 

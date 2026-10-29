@@ -112,9 +112,14 @@ The migration rejects a same-name relation that is not an index, as well as an
 index that is invalid, not ready, or has a different canonical `pg_get_indexdef`
 definition. This includes a different table, key sequence, sort/null ordering,
 uniqueness, expression, or partial predicate. A
-matching valid, ready index is reused with `CREATE INDEX IF NOT EXISTS`; a failed
-or mismatched prebuild cannot silently mark the migration as applied. The operator
-inspection above still verifies the prebuild before automatic deployment. The
+matching valid, ready index is reused with `CREATE INDEX IF NOT EXISTS`. A final
+catalog check repeats the validity, readiness, and exact-definition requirements
+after creation, covering a competing prebuild or name collision introduced after
+preflight. A failed or mismatched prebuild cannot silently mark the migration as
+applied. PostgreSQL regression tests interleave a second session's failed,
+mismatched, or matching concurrent index build, or a same-name sequence, between
+the actual migration's preflight and creation statements. The operator inspection
+above still verifies the prebuild before automatic deployment. The
 five-second lock timeout bounds lock acquisition. Without the prebuild, it performs
 a regular write-blocking build; this fallback is intended for small local and CI
 databases. The prepared-plan regression
