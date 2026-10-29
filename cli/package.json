@@ -135,7 +135,7 @@
     "test:no-redirect-error": "bun test/test-no-redirect-error.mjs",
     "test:onboarding-recovery": "bun test/test-onboarding-recovery.mjs",
     "test:onboarding-progress": "bun test/test-onboarding-progress.mjs",
-    "test:onboarding-run-targets": "bun test/test-onboarding-run-targets.mjs",
+    "test:onboarding-run-targets": "bun test/test-onboarding-run-targets.mjs && bun test ./test/test-ios-simulator-compatibility.mjs",
     "test:run-device-command": "bun test/test-run-device-command.mjs",
     "test:init-app-conflict": "bun test/test-init-app-conflict.mjs",
     "test:channel-add-exists": "bun test/test-channel-add-exists.mjs",

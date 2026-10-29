@@ -24,6 +24,7 @@ import { initOnboardingSteps } from '../ui.js'
 import { reportInitOnboardingStep } from '../onboarding-report.js'
 import { baseKeyV2, findSavedKeySilent, findMainFile, findProjectRoot, getAppId, getBundleVersion, getConfig, getPMAndCommand, PACKNAME, updateConfigUpdater } from '../../utils.js'
 import { formatRunnerCommand } from '../../runner-command.js'
+import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from '../../run/ios-compatibility.js'
 import { addChannelInternal } from '../../channel/add.js'
 import { uploadBundleInternal } from '../../bundle/upload.js'
 import { execSync, spawnSync } from 'node:child_process'
@@ -62,8 +63,19 @@ export function resolveLiveUpdateProjectTarget(input: LiveUpdateProjectTargetInp
   return { packageJsonPath, mainFilePath }
 }
 
-function getRunDeviceCommandForPlatform(platform: Platform, projectDir: string, initialCwd: string): { command: string, cwd?: string } {
+export function getRunDeviceCommandForPlatform(platform: Platform, projectDir: string, initialCwd: string): ReturnType<EngineDeps['getRunDeviceCommand']> {
   const pm = getPMAndCommand()
+  if (platform === 'ios') {
+    const compatibility = checkIosSimulatorCompatibility(projectDir)
+    if (compatibility.kind === 'unsupported') {
+      return {
+        command: formatRunnerCommand(pm.runner, ['cap', 'open', 'ios']),
+        cwd: projectDir,
+        manualInstructions: formatIosSimulatorGuidance(compatibility),
+        iosSimulatorCompatibility: compatibility,
+      }
+    }
+  }
   const args = ['cap', 'run', platform]
   const command = formatRunnerCommand(pm.runner, args)
   return { command, ...(projectDir === initialCwd ? {} : { cwd: projectDir }) }
