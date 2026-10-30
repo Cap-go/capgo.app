@@ -1,6 +1,7 @@
 import type { Queue, R2Bucket } from '@cloudflare/workers-types'
 import type { SnippetEdgeReplay } from './snippetEdgeAnswer.ts'
 import { cloudlog } from './logging.ts'
+import { queueRetryHeaderNames } from './on_error.ts'
 import { markSnippetEdgeReplay } from './snippetEdgeAnswer.ts'
 
 /**
@@ -248,8 +249,16 @@ export function getR2NotificationObjectKey(body: unknown): string | null {
   return typeof object?.key === 'string' ? object.key : null
 }
 
-export function buildReplayRequest(record: SnippetEdgeStatRecord) {
-  const headers = new Headers({ 'Content-Type': 'application/json' })
+const SNIPPET_EDGE_REPLAY_QUEUE_NAME = 'capgo-snippet-edge-stats-replay'
+
+/** Carries the queue retry headers: onError skips the alert of an attempt that gets another one. */
+export function buildReplayRequest(record: SnippetEdgeStatRecord, attempt = 1) {
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    [queueRetryHeaderNames.name]: SNIPPET_EDGE_REPLAY_QUEUE_NAME,
+    [queueRetryHeaderNames.readCount]: String(attempt),
+    [queueRetryHeaderNames.maxReads]: String(MAX_REPLAY_ATTEMPTS),
+  })
   if (record.ip)
     headers.set('cf-connecting-ip', record.ip)
   // Stats read the device country and network from request.cf: workerd takes it from the init.
@@ -286,7 +295,7 @@ async function countRejected(response: Response) {
  * (5xx or a throw: worth another attempt) and counts what the handler
  * rejected (a client error a retry would not change).
  */
-export async function replaySnippetEdgeRecords(records: SnippetEdgeStatRecord[], fetchHandler: FetchHandler) {
+export async function replaySnippetEdgeRecords(records: SnippetEdgeStatRecord[], fetchHandler: FetchHandler, attempt = 1) {
   const failed: SnippetEdgeStatRecord[] = []
   let rejected = 0
   let next = 0
@@ -294,7 +303,7 @@ export async function replaySnippetEdgeRecords(records: SnippetEdgeStatRecord[],
     while (next < records.length) {
       const record = records[next++]!
       try {
-        const response = await fetchHandler(buildReplayRequest(record))
+        const response = await fetchHandler(buildReplayRequest(record, attempt))
         if (response.status >= 500) {
           failed.push(record)
           await response.body?.cancel()
@@ -390,7 +399,7 @@ export async function enqueueSnippetEdgeStatsFile(env: SnippetEdgeStatsEnv, key:
 export async function handleSnippetEdgeStatsMessage(env: SnippetEdgeStatsEnv, requestId: string, body: unknown, fetchHandler: FetchHandler) {
   if (isSnippetEdgeReplayMessage(body)) {
     const attempt = (body.attempt ?? 0) + 1
-    const result = await replaySnippetEdgeRecords(body.snippetEdgeStats, fetchHandler)
+    const result = await replaySnippetEdgeRecords(body.snippetEdgeStats, fetchHandler, attempt)
     const retry = result.failed.length > 0 && attempt < MAX_REPLAY_ATTEMPTS
     // Only the failed records go back: a retry of the message would replay the others twice.
     if (retry) {

@@ -7,7 +7,7 @@ import { SNIPPET_EDGE_ANSWERS_TAG as SETTER_PURGE_TAG } from '../scripts/set-upd
 import { PROVIDER_INFRA_ASNS } from '../supabase/functions/_backend/plugin_runtime/utils/providerAsns.ts'
 import { resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 import { isStaleSnippetEdgeReplay, markSnippetEdgeReplay, setSnippetIpLimitHeader, setSnippetStatsFill, setSnippetUpdatesFill, SNIPPET_EDGE_ANSWERS_TAG, SNIPPET_EDGE_FILL_HEADER, SNIPPET_EDGE_IP_LIMIT_HEADER, SNIPPET_EDGE_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeAnswer.ts'
-import { buildReplayRequest, chunkSnippetEdgeRecords, decodeSnippetEdgeStat, getR2NotificationObjectKey, groupForSendBatch, handleSnippetEdgeStatsMessage, isSnippetEdgeFileResumeMessage, isSnippetEdgeReplayMessage, parseLogpushLine, readLogpushRecords, recordSize, replaySnippetEdgeRecords } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
+import { buildReplayRequest, chunkSnippetEdgeRecords, decodeSnippetEdgeStat, getR2NotificationObjectKey, groupForSendBatch, handleSnippetEdgeStatsMessage, isSnippetEdgeFileResumeMessage, isSnippetEdgeReplayMessage, MAX_REPLAY_ATTEMPTS, parseLogpushLine, readLogpushRecords, recordSize, replaySnippetEdgeRecords } from '../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 
 (globalThis as any).EdgeRuntime = undefined
 
@@ -29,6 +29,21 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pluginEdgeCacheRead
   getAppVersionWithEdgeCache: vi.fn(),
   getChannelByNameWithEdgeCache: vi.fn(),
   getCompatibleChannelsWithEdgeCache: vi.fn(),
+}))
+
+const { capturePosthogException, sendDiscordAlert500 } = vi.hoisted(() => ({
+  capturePosthogException: vi.fn(() => Promise.resolve()),
+  sendDiscordAlert500: vi.fn(() => Promise.resolve()),
+}))
+
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/discord.ts', async importOriginal => ({
+  ...await importOriginal<object>(),
+  sendDiscordAlert500,
+}))
+
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/posthog.ts', async importOriginal => ({
+  ...await importOriginal<object>(),
+  capturePosthogException,
 }))
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/logging.ts', () => ({
@@ -234,6 +249,8 @@ describe('snippet edge stats replay', () => {
     }
     const request = buildReplayRequest({ e: 'updates', b: JSON.stringify(body), n: '1.2.3', ip: '203.0.113.7', country: 'FR' })
     expect(request.headers.get('cf-connecting-ip')).toBe('203.0.113.7')
+    expect(request.headers.get('x-capgo-queue-read-count')).toBe('1')
+    expect(request.headers.get('x-capgo-queue-max-reads')).toBe(String(MAX_REPLAY_ATTEMPTS))
     expect((request as any).cf).toEqual({ country: 'FR' })
     expect((buildReplayRequest({ e: 'stats', b: '{}', country: 'FR', asn: 3215 }) as any).cf).toEqual({ country: 'FR', asn: 3215 })
 
@@ -258,6 +275,30 @@ describe('snippet edge stats replay', () => {
     const body = { app_id: 'com.edge.app', device_id: '00000000-0000-4000-8000-00000000000A', platform: 'ios', version_name: '1.2.3', version_build: '2.0', plugin_version: '7.40.0', is_emulator: false, is_prod: true }
     expect(await replaySnippetEdgeRecords([{ e: 'updates', b: JSON.stringify(body), n: '1.2.3' }], replayRequest => outer.fetch(replayRequest))).toEqual({ replayed: 1, failed: [], rejected: 0 })
     expect(sendStatsAndDevice).not.toHaveBeenCalled()
+  })
+
+  it('alerts on an owner lookup failure only when no replay attempt is left', async () => {
+    const { app } = await import('../supabase/functions/_backend/plugin_runtime/plugins/updates.ts')
+    const pgError = Object.assign(new Error('relation "apps" does not exist'), { code: '42P01' })
+    const { onError } = await import('../supabase/functions/_backend/plugin_runtime/utils/on_error.ts')
+    const lookupFailed = { value: null, hit: false, lookupFailed: true, error: pgError } as any
+    getAppOwnerWithEdgeCache.mockResolvedValueOnce(lookupFailed).mockResolvedValueOnce(lookupFailed)
+    const outer = new Hono()
+    outer.route('/updates', app)
+    outer.onError(onError('plugin'))
+    const body = { app_id: 'com.edge.app', device_id: '00000000-0000-4000-8000-00000000000A', platform: 'ios', version_name: '1.2.3', version_build: '2.0', plugin_version: '7.40.0', is_emulator: false, is_prod: true }
+    const records = [{ e: 'updates' as const, b: JSON.stringify(body), n: '1.2.3' }]
+
+    expect((await replaySnippetEdgeRecords(records, replayRequest => outer.fetch(replayRequest))).failed).toEqual(records)
+    expect(sendDiscordAlert500).not.toHaveBeenCalled()
+    expect(capturePosthogException).not.toHaveBeenCalled()
+
+    expect((await replaySnippetEdgeRecords(records, replayRequest => outer.fetch(replayRequest), MAX_REPLAY_ATTEMPTS)).failed).toEqual(records)
+    expect(sendDiscordAlert500).toHaveBeenCalledOnce()
+    expect(capturePosthogException).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      error: expect.objectContaining({ cause: pgError }),
+      kind: 'unhandled_error',
+    }))
   })
 
   it('returns failed records for another attempt and counts rejected events', async () => {
@@ -393,5 +434,6 @@ describe('snippet edge stats queue', () => {
 
     await handleSnippetEdgeStatsMessage(env, 'm2', { snippetEdgeStats: [records[0]], attempt: 2 }, handler)
     expect(sent).toHaveLength(1)
+    expect(handler.mock.calls.map(([request]) => request.headers.get('x-capgo-queue-read-count'))).toEqual(['1', '1', '3'])
   })
 })
