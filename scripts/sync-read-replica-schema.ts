@@ -109,6 +109,14 @@ export function subscriptionPublicationCheckOutcome(
   publicationTables: readonly string[],
   subscriptionTables: readonly string[],
 ): { exitCode: number, lines: string[] } {
+  if (!publicationTables.length) {
+    return {
+      exitCode: 0,
+      lines: [
+        `::warning title=Read-replica publication empty::${READ_REPLICA_PUBLICATION} returned no public tables on the Supabase primary.`,
+      ],
+    }
+  }
   const missing = publicationTablesMissingFromSubscription(
     publicationTables,
     subscriptionTables,

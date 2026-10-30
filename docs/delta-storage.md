@@ -301,12 +301,19 @@ Around the migrations, the release CI:
 
 - before them, creates `delta_files` and `version_files` on the Google
   subscriber (`read_replica_schema`, `ALLOWED_NEW_REPLICA_TABLES`);
-- after them, refreshes `capgo_google_eu_2_sub` with `copy_data = true` and
-  waits until every replicated table finished its initial copy, then analyzes
-  the newly copied tables (manual `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);` on eu-2 after the deploy warning). The api, files and plugin workers deploy only
-  after that, so they never read a half-copied replica. Until then the previous
-  workers keep serving: they read the subscriber's now frozen `manifest` table
-  and write through the compatibility view on the primary.
+- after primary migrations, production deploy runs
+  `bun scripts/sync-read-replica-schema.ts --check-subscription-publication`,
+  which compares Supabase `pg_publication_tables` for `capgo_google_eu_2_pub`
+  to eu-2 `pg_subscription_rel` for `capgo_google_eu_2_sub`. CI does not run
+  `REFRESH PUBLICATION` or wait for initial copies. When the deploy logs a
+  warning listing missing tables, operators must manually run
+  `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);`
+  on eu-2, wait until each listed table finishes its initial copy, then analyze
+  those tables before relying on them in production. API, files, and plugin
+  workers still deploy after `supabase_deploy`; the warning is operational signal
+  only. Until new tables are copied, previous workers keep serving: they read
+  the subscriber's now frozen `manifest` table and write through the compatibility
+  view on the primary.
 
 After the deploy:
 

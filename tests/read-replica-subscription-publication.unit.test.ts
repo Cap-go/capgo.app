@@ -45,6 +45,12 @@ describe('read-replica subscription publication alignment', () => {
     expect(exitCode).toBe(0)
   })
 
+  it.concurrent('warns when the primary publication returns no tables', () => {
+    const outcome = subscriptionPublicationCheckOutcome([], ['apps'])
+    expect(outcome.exitCode).toBe(0)
+    expect(outcome.lines[0]).toMatch(/^::warning title=Read-replica publication empty::/)
+  })
+
   it.concurrent('fails when a publication query throws', async () => {
     await expect(checkSubscriptionPublicationAlignment({
       queryPublicationTables: async () => {
