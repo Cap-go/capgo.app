@@ -306,7 +306,20 @@ jobs:
           - name: Deploy OTA bundle to Capgo
             # --send-update-notification wakes installed apps with a silent push so they
             # download this bundle in the background instead of waiting for the next launch.
-            run: bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }} --delta --send-update-notification
+            run: |
+              set +e
+              for attempt in 1 2 3 4 5; do
+                bunx @capgo/cli@latest bundle upload --channel ${{ env.CHANNEL }} --delta --send-update-notification
+                exit_code=$?
+                if [ "$exit_code" -eq 0 ]; then
+                  exit 0
+                fi
+                if [ "$attempt" -lt 5 ]; then
+                  echo "Capgo CLI bundle upload failed on attempt $attempt (exit $exit_code); retrying after npm may still be propagating a new release..."
+                  sleep $((attempt * 4))
+                fi
+              done
+              exit "$exit_code"
             env:
               CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
       - name: Create GitHub release

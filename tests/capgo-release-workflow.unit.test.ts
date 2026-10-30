@@ -239,6 +239,7 @@ describe('native-aware Capgo release workflow', () => {
     const ota = getStep(workflow, 'Deploy OTA bundle to Capgo')
 
     expect(ota).toContain('bunx @capgo/cli@latest bundle upload')
+    expect(ota).toContain('retrying after npm may still be propagating')
     expect(ota).not.toContain('native_build_needed')
     expect(workflow.indexOf('Deploy OTA bundle to Capgo')).toBeLessThan(
       workflow.indexOf('Create GitHub release'),

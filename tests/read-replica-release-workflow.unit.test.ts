@@ -64,6 +64,9 @@ describe('production read-replica release gate', () => {
         syncScript.indexOf('await applyPlan(plan)'),
       )
       expect(syncScript).toContain('readReplicaSchemaCatalogFromMigrations')
+      expect(syncScript).toContain('readReplicaSubscriptionIsComplete')
+      expect(syncScript).toContain('isReadReplicaSubscriptionOwnerError')
+      expect(syncScript).toContain('readReplicaSubscriptionManualRefreshWarning')
     },
   )
 

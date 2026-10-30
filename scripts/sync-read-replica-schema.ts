@@ -93,6 +93,31 @@ export function copyingReplicaTables(rows: readonly { table_name: string, state:
   return REPLICA_TABLES.filter(table => !ready.has(table))
 }
 
+/** Every replicated table is listed in pg_subscription_rel and finished its initial copy. */
+export function readReplicaSubscriptionIsComplete(
+  rows: readonly { table_name: string, state: string }[],
+): boolean {
+  const subscribed = rows.map(row => row.table_name)
+  return unsubscribedReplicaTables(subscribed).length === 0
+    && copyingReplicaTables(rows).length === 0
+}
+
+export function isReadReplicaSubscriptionOwnerError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /must be owner/i.test(message)
+}
+
+export function readReplicaSubscriptionManualRefreshWarning(
+  missing: readonly string[],
+): string {
+  return [
+    `The CI service account is not the owner of ${READ_REPLICA_SUBSCRIPTION}.`,
+    'Run the refresh manually on Cloud SQL instance eu-2 (project capgo-394818) as the subscription owner:',
+    READ_REPLICA_REFRESH_SUBSCRIPTION_SQL,
+    `Tables not yet in the subscription: ${missing.join(', ')}.`,
+  ].join(' ')
+}
+
 const SUBSCRIPTION_COPY_POLL_MS = 15_000
 
 /**
@@ -107,15 +132,36 @@ async function refreshSubscription(): Promise<void> {
     await executeGoogleSql(project, instance, database, READ_REPLICA_SUBSCRIBED_TABLES_SQL, deadline),
   ).map(row => ({ table_name: String(row.table_name), state: String(row.state) }))
 
-  const missing = unsubscribedReplicaTables((await subscribed()).map(row => row.table_name))
+  let rows = await subscribed()
+  if (readReplicaSubscriptionIsComplete(rows)) {
+    console.log(
+      `Read-replica subscription ${READ_REPLICA_SUBSCRIPTION} already streams every replicated table; skipping refresh.`,
+    )
+    return
+  }
+
+  let refreshedTables: string[] = []
+  const missing = unsubscribedReplicaTables(rows.map(row => row.table_name))
   if (missing.length) {
     console.log(`Refreshing ${READ_REPLICA_SUBSCRIPTION} for: ${missing.join(', ')}`)
-    await executeGoogleSql(project, instance, database, READ_REPLICA_REFRESH_SUBSCRIPTION_SQL, deadline)
+    try {
+      await executeGoogleSql(project, instance, database, READ_REPLICA_REFRESH_SUBSCRIPTION_SQL, deadline)
+      refreshedTables = missing
+    }
+    catch (error) {
+      if (isReadReplicaSubscriptionOwnerError(error)) {
+        console.log(
+          `::warning title=Read-replica subscription refresh skipped::${readReplicaSubscriptionManualRefreshWarning(missing)}`,
+        )
+        return
+      }
+      throw error
+    }
   }
 
   // Workers that read the replica deploy after this job: wait for the copy.
   for (;;) {
-    const rows = await subscribed()
+    rows = await subscribed()
     const stillMissing = unsubscribedReplicaTables(rows.map(row => row.table_name))
     if (stillMissing.length) {
       throw new Error(
@@ -130,8 +176,27 @@ async function refreshSubscription(): Promise<void> {
     console.log(`Waiting for the read-replica initial copy of: ${copying.join(', ')}`)
     await new Promise(resolve => setTimeout(resolve, SUBSCRIPTION_COPY_POLL_MS))
   }
-  if (missing.length)
-    await executeGoogleSql(project, instance, database, readReplicaAnalyzeSql(missing), deadline)
+  if (refreshedTables.length) {
+    try {
+      await executeGoogleSql(
+        project,
+        instance,
+        database,
+        readReplicaAnalyzeSql(refreshedTables),
+        deadline,
+      )
+    }
+    catch (error) {
+      if (isReadReplicaSubscriptionOwnerError(error)) {
+        console.log(
+          `::warning title=Read-replica ANALYZE skipped::${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      else {
+        throw error
+      }
+    }
+  }
   console.log('Read-replica subscription streams every replicated table.')
 }
 
