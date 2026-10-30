@@ -484,28 +484,6 @@ async function submit(form: { first_name: string, last_name: string, email: stri
   isLoading.value = false
 }
 
-async function logOut() {
-  dialogStore.openDialog({
-    title: t('are-u-sure'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('logout'),
-        role: 'danger',
-        id: 'confirm-button',
-        handler: async () => {
-          await main.logout()
-          await router.replace('/login')
-        },
-      },
-    ],
-  })
-  await dialogStore.onDialogDismiss()
-}
-
 onMounted(async () => {
   // Auto-redirect to Manage 2FA page if setup2fa query param is present
   if (route.query.setup2fa === 'true') {
@@ -540,7 +518,7 @@ onMounted(async () => {
                   </span>
                 </div>
               </div>
-              <button id="change-org-pic" type="button" class="px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 focus:ring-4 focus:ring-blue-300 border-slate-500 dark:hover:bg-gray-600 dark:focus:ring-blue-800 focus:outline-hidden" @click="presentActionSheet">
+              <button id="change-org-pic" type="button" class="btn btn-secondary" @click="presentActionSheet">
                 {{ t('change') }}
               </button>
             </div>
@@ -674,7 +652,7 @@ onMounted(async () => {
               {{ t('account-id') }}:
             </p>
             <div class="md:ml-6">
-              <button type="button" class="px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 focus:ring-4 focus:ring-blue-300 border-slate-500 dark:hover:bg-gray-600 dark:focus:ring-blue-800 focus:outline-hidden" @click.prevent="copyAccountId()">
+              <button type="button" class="btn btn-secondary" @click.prevent="copyAccountId()">
                 {{ t('copy-account-id') }}
               </button>
             </div>
@@ -684,37 +662,43 @@ onMounted(async () => {
           </div>
           <!-- Panel footer -->
           <footer>
-            <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">
-              <div class="flex flex-wrap gap-3 items-center justify-between">
-                <button
-                  type="button"
-                  class="d-btn p-2 text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 border-slate-500 dark:hover:bg-gray-600"
-                  @click="logOut()"
-                >
-                  {{ t('sign-out') }}
-                </button>
-                <div class="flex">
-                  <button type="button" class="p-2 text-red-600 border border-red-400 rounded-lg hover:text-white hover:bg-red-600" @click="deleteAccount()">
-                    {{ t('delete-account') }}
-                  </button>
-                  <button
-                    class="p-2 ml-3 text-white bg-blue-500 rounded-lg hover:bg-blue-600 d-btn"
-                    type="submit"
-                    color="secondary"
-                    shape="round"
-                  >
-                    <span v-if="!isLoading" class="rounded-4xl">
-                      {{ t('update') }}
-                    </span>
-                    <Spinner v-else size="w-8 h-8" class="px-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
-                  </button>
-                </div>
-              </div>
-            </div>
+            <button type="submit" class="btn btn-primary min-w-20" :disabled="isLoading">
+              <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+              <span v-else>{{ t('save') }}</span>
+            </button>
           </footer>
         </div>
       </FormKit>
     </div>
+
+    <!-- Danger zone -->
+    <section
+      data-test="account-danger-zone"
+      class="mt-6 bg-white border border-red-300 shadow-sm md:rounded-xl dark:bg-slate-800/60 dark:border-red-500/40"
+      aria-labelledby="account-danger-zone-title"
+    >
+      <header class="px-6 pt-5 pb-4 border-b border-red-200 dark:border-red-500/30">
+        <h3 id="account-danger-zone-title" class="text-lg font-semibold text-red-600 dark:text-red-400">
+          {{ t('danger-zone') }}
+        </h3>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          {{ t('danger-zone-description') }}
+        </p>
+      </header>
+      <div class="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
+        <div class="min-w-0">
+          <p class="font-medium text-slate-800 dark:text-white">
+            {{ t('delete-account') }}
+          </p>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            {{ t('delete-account-danger-description') }}
+          </p>
+        </div>
+        <button type="button" class="btn btn-danger shrink-0" @click="deleteAccount()">
+          {{ t('delete-account') }}
+        </button>
+      </div>
+    </section>
 
     <!-- Teleport for Organization Deletion Warning -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'delete-account-warning-orgs'" to="#dialog-v2-content" defer>

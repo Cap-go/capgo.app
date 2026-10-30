@@ -393,20 +393,11 @@ async function submit(form: { current_password: string, password: string, passwo
             </div>
             <FormKitMessages />
           </section>
-          <footer>
-            <div class="flex flex-col py-5">
-              <div class="flex self-start">
-                <button
-                  class="p-2 text-white bg-green-500 rounded-sm hover:bg-green-600 d-btn"
-                  type="submit"
-                >
-                  <span v-if="!isVerifying" class="rounded-4xl">
-                    {{ t('verify-password') }}
-                  </span>
-                  <Spinner v-else size="w-8 h-8" class="px-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
-                </button>
-              </div>
-            </div>
+          <footer class="py-5">
+            <button class="btn btn-primary min-w-20" type="submit" :disabled="isVerifying">
+              <Spinner v-if="isVerifying" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+              <span v-else>{{ t('verify-password') }}</span>
+            </button>
           </footer>
         </FormKit>
       </div>
@@ -469,21 +460,10 @@ async function submit(form: { current_password: string, password: string, passwo
           </section>
           <!-- Panel footer -->
           <footer>
-            <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">
-              <div class="flex self-end">
-                <button
-                  class="p-2 ml-3 text-white bg-blue-500 rounded-sm hover:bg-blue-600 d-btn"
-                  type="submit"
-                  color="secondary"
-                  shape="round"
-                >
-                  <span v-if="!isLoading" class="rounded-4xl">
-                    {{ t('update') }}
-                  </span>
-                  <Spinner v-else size="w-8 h-8" class="px-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
-                </button>
-              </div>
-            </div>
+            <button class="btn btn-primary min-w-20" type="submit" :disabled="isLoading">
+              <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+              <span v-else>{{ t('save') }}</span>
+            </button>
           </footer>
         </div>
       </FormKit>

@@ -1,43 +1,28 @@
 <script setup lang="ts">
-import type { Ref } from 'vue'
-import type { Tab } from '~/components/comp_def'
-import { computedAsync } from '@vueuse/core'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import IconBilling from '~icons/mingcute/bill-fill'
 import FailedCard from '~/components/FailedCard.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import Tabs from '~/components/Tabs.vue'
-import { accountTabs } from '~/constants/accountTabs'
-import { organizationTabs as baseOrgTabs } from '~/constants/organizationTabs'
-import { settingsTabs } from '~/constants/settingsTabs'
+import { useSettingsNavigation } from '~/composables/useSettingsNavigation'
 import { stripeEnabled } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
-import { checkPermissions } from '~/services/permissions'
 import { useOrganizationStore } from '~/stores/organization'
-import {
-  BILLING_TAB_KEY,
-  cloneTabs,
-  defaultChild,
-  findActiveChildKey,
-  findActiveTabKey,
-  pathMatchesTab,
-  TEAM_TAB_KEY,
-} from '~/utils/organizationTabs'
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const router = useRouter()
 const route = useRoute()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
-
-const restrictedPurchaseKeys = new Set([
-  '/billing',
-  '/settings/organization/billing',
-  '/settings/organization/credits',
-  '/settings/organization/plans',
-])
+const {
+  flatTabs,
+  activeKey,
+  canManageSecurity,
+  securityAccessEvaluating,
+  canReadAuditLogs,
+  auditLogsAccessEvaluating,
+} = useSettingsNavigation()
 
 // Check if user needs to setup 2FA or update password for organization access
 const needsSecurityCompliance = computed(() => {
@@ -51,47 +36,6 @@ const needsSecurityCompliance = computed(() => {
 const shouldBlockContent = computed(() => {
   return needsSecurityCompliance.value && route.path.startsWith('/settings/organization')
 })
-
-function withoutRestrictedPurchaseTabs(tabs: Tab[]): Tab[] {
-  if (!hideExternalPurchaseFlows)
-    return tabs
-
-  return tabs
-    .map((tab) => {
-      if (!tab.children?.length)
-        return restrictedPurchaseKeys.has(tab.key) ? null : tab
-      const children = tab.children.filter(child => !restrictedPurchaseKeys.has(child.key))
-      if (!children.length)
-        return null
-      return { ...tab, children }
-    })
-    .filter((tab): tab is Tab => tab !== null)
-}
-
-const organizationTabs = ref<Tab[]>(withoutRestrictedPurchaseTabs(cloneTabs(baseOrgTabs))) as Ref<Tab[]>
-
-const canReadBilling = computedAsync(async () => {
-  const orgId = organizationStore.currentOrganization?.gid
-  if (!orgId)
-    return false
-  return await checkPermissions('org.read_billing', { orgId })
-}, false)
-
-const auditLogsAccessEvaluating = ref(false)
-const canReadAuditLogs = computedAsync(async () => {
-  const orgId = organizationStore.currentOrganization?.gid
-  if (!orgId)
-    return false
-  return await checkPermissions('org.read_audit', { orgId })
-}, false, { evaluating: auditLogsAccessEvaluating })
-
-const securityAccessEvaluating = ref(false)
-const canManageSecurity = computedAsync(async () => {
-  const orgId = organizationStore.currentOrganization?.gid
-  if (!orgId)
-    return false
-  return await checkPermissions('org.update_settings', { orgId })
-}, false, { evaluating: securityAccessEvaluating })
 
 // Security-sensitive org routes are gated by their own RBAC permission. When the
 // current user lacks it (e.g. reached the route via a direct link), show a modal
@@ -128,127 +72,24 @@ watchEffect(() => {
   }
 })
 
-watchEffect(() => {
-  const billingEnabled = stripeEnabled.value
-  const tabs = withoutRestrictedPurchaseTabs(cloneTabs(baseOrgTabs))
-
-  const teamTab = tabs.find(tab => tab.key === TEAM_TAB_KEY)
-  if (teamTab?.children) {
-    if (!organizationStore.currentOrganization?.gid)
-      teamTab.children = teamTab.children.filter(child => child.key !== '/settings/organization/groups')
-    if (!canManageSecurity.value)
-      teamTab.children = teamTab.children.filter(child => child.key !== '/settings/organization/security')
-  }
-
-  const billingTab = tabs.find(tab => tab.key === BILLING_TAB_KEY)
-  const needsBillingGroup = billingEnabled && canReadBilling.value
-  if (!needsBillingGroup) {
-    const billingIndex = tabs.findIndex(tab => tab.key === BILLING_TAB_KEY)
-    if (billingIndex >= 0)
-      tabs.splice(billingIndex, 1)
-  }
-  else if (billingTab && !hideExternalPurchaseFlows) {
-    billingTab.children = [
-      ...(billingTab.children ?? []),
-      {
-        label: 'billing-portal-tab',
-        icon: IconBilling,
-        key: '/settings/organization/billing',
-      },
-    ]
-  }
-
-  const needsUsage = billingEnabled && canReadBilling.value
-  if (!needsUsage) {
-    const usageIndex = tabs.findIndex(tab => tab.key === '/settings/organization/usage')
-    if (usageIndex >= 0)
-      tabs.splice(usageIndex, 1)
-  }
-
-  if (!canReadAuditLogs.value) {
-    const auditIndex = tabs.findIndex(tab => tab.key === '/settings/organization/auditlogs')
-    if (auditIndex >= 0)
-      tabs.splice(auditIndex, 1)
-  }
-
-  organizationTabs.value = tabs.filter(tab => !tab.children || tab.children.length > 0)
-})
-
-const activePrimary = computed(() => {
-  const path = route.path
-  if (path.startsWith('/settings/organization') || path === '/billing' || path.startsWith('/billing/'))
-    return '/settings/organization'
-  return '/settings/account'
-})
-
-const secondaryTabs = computed(() => {
-  return activePrimary.value === '/settings/organization' ? organizationTabs.value : accountTabs
-})
-
-const activeSecondary = computed(() => {
-  return findActiveTabKey(secondaryTabs.value, route.path) ?? secondaryTabs.value[0]?.key
-})
-
-const activeSecondaryTab = computed(() => {
-  return secondaryTabs.value.find(tab => tab.key === activeSecondary.value)
-})
-
-const tertiaryTabs = computed(() => {
-  const children = activeSecondaryTab.value?.children ?? []
-  return children.length > 1 ? children : []
-})
-
-const activeTertiary = computed(() => {
-  return findActiveChildKey(activeSecondaryTab.value, route.path)
-})
-
-function activateTab(tab: Tab | undefined) {
-  if (!tab)
-    return
-  if (tab.onClick) {
+function openTab(key: string) {
+  const tab = flatTabs.value.find(item => item.key === key)
+  if (tab?.onClick)
     tab.onClick(tab.key)
-    return
-  }
-  router.push(tab.key)
-}
-
-function handlePrimary(val: string) {
-  // Clicking primary switches to the root of that section
-  router.push(val === '/settings/organization' ? '/settings/organization' : '/settings/account')
-}
-
-function handleSecondary(val: string) {
-  const tab = secondaryTabs.value.find(t => t.key === val)
-  if (!tab)
-    return
-  if (tab.children?.length) {
-    if (pathMatchesTab(tab, route.path))
-      return
-    activateTab(defaultChild(tab))
-    return
-  }
-  activateTab(tab)
-}
-
-function handleTertiary(val: string) {
-  const tab = tertiaryTabs.value.find(t => t.key === val)
-  activateTab(tab)
+  else if (tab)
+    router.push(tab.key)
 }
 </script>
 
 <template>
   <div class="flex flex-col flex-1 h-full min-h-0 overflow-hidden">
+    <!-- Desktop uses the settings sidebar; small screens and the native app keep a tab row. -->
     <Tabs
-      :tabs="settingsTabs"
-      :active-tab="activePrimary"
-      :secondary-tabs="shouldBlockContent ? [] : secondaryTabs"
-      :secondary-active-tab="activeSecondary"
-      :tertiary-tabs="shouldBlockContent ? [] : tertiaryTabs"
-      :tertiary-active-tab="activeTertiary"
+      class="lg:hidden"
+      :tabs="shouldBlockContent ? [] : flatTabs"
+      :active-tab="activeKey ?? ''"
       no-wrap
-      @update:active-tab="handlePrimary"
-      @update:secondary-active-tab="handleSecondary"
-      @update:tertiary-active-tab="handleTertiary"
+      @update:active-tab="openTab"
     />
     <main class="flex relative flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div

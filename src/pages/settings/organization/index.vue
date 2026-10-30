@@ -294,7 +294,7 @@ async function copyOrganizationId() {
                   </span>
                 </div>
               </div>
-              <button id="change-org-pic" type="button" class="px-3 py-2 text-xs font-medium text-center text-black border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 focus:ring-4 focus:ring-blue-300 border-slate-500 dark:hover:bg-gray-600 dark:focus:ring-blue-800 focus:outline-hidden" @click="presentActionSheet">
+              <button id="change-org-pic" type="button" class="btn btn-secondary" @click="presentActionSheet">
                 {{ t('change') }}
               </button>
             </div>
@@ -336,7 +336,7 @@ async function copyOrganizationId() {
                 <code class="flex-1 min-w-0 px-3 py-2 overflow-x-auto font-mono text-sm rounded-lg whitespace-nowrap bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200" data-test="organization-id-value">{{ currentOrganization?.gid }}</code>
                 <button
                   type="button"
-                  class="inline-flex items-center justify-center rounded-lg size-9 shrink-0 border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+                  class="btn btn-secondary px-0 size-9 shrink-0"
                   :aria-label="t('copy-organization-id')"
                   :title="t('copy-organization-id')"
                   @click.prevent="copyOrganizationId()"
@@ -346,6 +346,12 @@ async function copyOrganizationId() {
               </div>
             </div>
           </div>
+          <footer>
+            <button id="save-changes" type="submit" class="btn btn-primary min-w-20" :disabled="isLoading">
+              <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+              <span v-else>{{ t('save') }}</span>
+            </button>
+          </footer>
 
           <section
             v-if="supportChannelUrl && supportChannelType"
@@ -361,50 +367,49 @@ async function copyOrganizationId() {
               :href="supportChannelUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="d-btn d-btn-primary d-btn-sm mt-3"
+              class="btn btn-secondary mt-3"
             >
               {{ t('support-channel-open') }} ({{ supportChannelLabel(supportChannelType) }})
             </a>
           </section>
-
           <OrgCustomDomain v-if="canUpdateOrgSettings && currentOrganization" :key="currentOrganization.gid" :org-id="currentOrganization.gid" />
-
-          <footer class="mt-auto">
-            <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">
-              <div class="flex self-end">
-                <button
-                  class="p-2 text-red-600 border border-red-400 rounded-lg cursor-pointer hover:text-white hover:bg-red-600"
-                  color="secondary"
-                  shape="round"
-                  type="button"
-                  :class="{
-                    invisible: !canDeleteOrg(),
-                  }"
-                  @click="() => deleteOrganization()"
-                >
-                  <span v-if="!isLoading" class="truncate rounded-4xl">
-                    {{ t('delete-org') }}
-                  </span>
-                  <Spinner v-else size="w-4 h-4" class="px-4 pt-0 pb-0" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
-                </button>
-                <button
-                  id="save-changes"
-                  class="p-2 ml-3 text-white bg-blue-500 rounded-lg cursor-pointer hover:bg-blue-600 d-btn"
-                  type="submit"
-                  color="secondary"
-                  shape="round"
-                >
-                  <span v-if="!isLoading" class="rounded-4xl">
-                    {{ t('update') }}
-                  </span>
-                  <Spinner v-else size="w-4 h-4" class="px-4 pt-0 pb-0" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
-                </button>
-              </div>
-            </div>
-          </footer>
         </div>
       </FormKit>
     </div>
+    <!-- Danger zone -->
+    <section
+      v-if="canDeleteOrg()"
+      data-test="organization-danger-zone"
+      class="mt-6 bg-white border border-red-300 shadow-sm md:rounded-xl dark:bg-slate-800/60 dark:border-red-500/40"
+      aria-labelledby="organization-danger-zone-title"
+    >
+      <header class="px-6 pt-5 pb-4 border-b border-red-200 dark:border-red-500/30">
+        <h3 id="organization-danger-zone-title" class="text-lg font-semibold text-red-600 dark:text-red-400">
+          {{ t('danger-zone') }}
+        </h3>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          {{ t('danger-zone-description') }}
+        </p>
+      </header>
+      <div class="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
+        <div class="min-w-0">
+          <p class="font-medium text-slate-800 dark:text-white">
+            {{ t('delete-org') }}
+          </p>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            {{ t('delete-org-danger-description') }}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="btn btn-danger shrink-0"
+          :disabled="isLoading"
+          @click="deleteOrganization()"
+        >
+          {{ t('delete-org') }}
+        </button>
+      </div>
+    </section>
     <DeleteOrgDialog
       ref="dialogRef"
       :org="currentOrganization"

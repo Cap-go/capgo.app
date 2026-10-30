@@ -484,3 +484,17 @@ html {
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
   }
 }
+
+/* Settings button set: one size, three intents. */
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 h-9 px-4 rounded-lg text-sm font-medium whitespace-nowrap cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply bg-azure-500 text-white shadow-xs hover:bg-azure-700 focus-visible:outline-azure-500;
+}
+@utility btn-secondary {
+  @apply border border-slate-300 bg-white text-slate-700 shadow-xs hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-azure-500 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white;
+}
+@utility btn-danger {
+  @apply bg-red-600 text-white shadow-xs hover:bg-red-700 focus-visible:outline-red-500;
+}
