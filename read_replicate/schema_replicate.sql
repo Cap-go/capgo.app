@@ -852,6 +852,13 @@ CREATE INDEX idx_app_id_name_app_versions ON public.app_versions USING btree (ap
 
 
 --
+-- Name: idx_app_versions_app_deleted_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_app_versions_app_deleted_created_at ON public.app_versions USING btree (app_id, deleted, created_at DESC);
+
+
+--
 -- Name: idx_app_versions_created_at; Type: INDEX; Schema: public; Owner: -
 --
 

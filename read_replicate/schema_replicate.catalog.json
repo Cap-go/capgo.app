@@ -2352,6 +2352,13 @@
     },
     {
       "constraintOwned": false,
+      "definition": "CREATE INDEX idx_app_versions_app_deleted_created_at ON public.app_versions USING btree (app_id, deleted, created_at DESC)",
+      "name": "idx_app_versions_app_deleted_created_at",
+      "table": "app_versions",
+      "valid": true
+    },
+    {
+      "constraintOwned": false,
       "definition": "CREATE INDEX idx_app_versions_created_at ON public.app_versions USING btree (created_at)",
       "name": "idx_app_versions_created_at",
       "table": "app_versions",
