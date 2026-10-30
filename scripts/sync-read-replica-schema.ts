@@ -166,7 +166,7 @@ export async function checkSubscriptionPublicationAlignment(
   return outcome.exitCode
 }
 
-async function queryPrimaryPublicationTables(): Promise<string[]> {
+async function queryPrimaryPublicationTables(deadline: number): Promise<string[]> {
   const projectRef = process.env.SUPABASE_PROJECT_ID
   const accessToken = process.env.SUPABASE_ACCESS_TOKEN
   if (!projectRef || !accessToken) {
@@ -184,6 +184,9 @@ async function queryPrimaryPublicationTables(): Promise<string[]> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ query: READ_REPLICA_PUBLICATION_TABLES_SQL }),
+      signal: AbortSignal.timeout(
+        remainingBudgetMs(deadline, 'query the primary publication'),
+      ),
     },
   )
   if (!response.ok) {
@@ -218,16 +221,20 @@ async function queryReplicaSubscriptionRows(
     READ_REPLICA_SUBSCRIBED_TABLES_SQL,
     deadline,
   )
-  return dataApiRows(response).map(row => ({
-    table_name: String(row.table_name),
-    state: String(row.state),
-  }))
+  return dataApiRows(response).map((row) => {
+    if (typeof row.table_name !== 'string' || typeof row.state !== 'string') {
+      throw new Error(
+        'Cloud SQL Data API returned a subscription row without table_name or state.',
+      )
+    }
+    return { table_name: row.table_name, state: row.state }
+  })
 }
 
 async function runSubscriptionPublicationCheckFromEnv(): Promise<number> {
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
   return checkSubscriptionPublicationAlignment({
-    queryPublicationTables: queryPrimaryPublicationTables,
+    queryPublicationTables: () => queryPrimaryPublicationTables(deadline),
     querySubscriptionRows: () => queryReplicaSubscriptionRows(deadline),
   })
 }
