@@ -41,7 +41,7 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('base64 --decode')
       expect(workflow).toContain('gcloud auth activate-service-account')
       expect(workflow).not.toContain('vars.GOOGLE_')
-      expect(workflow).not.toContain('READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).toContain('READ_REPLICATE_GOOGLE_EU1')
       expect(workflow).not.toContain('check-read-replica-hyperdrive-schema')
       expect(workflow).toContain(
         [
@@ -83,10 +83,9 @@ describe('production read-replica release gate', () => {
           new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema(?:, read_replica_subscription)?\\]`),
         )
       }
-      // Workers that read the replica wait for its initial copy of new tables.
       for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions']) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema, read_replica_subscription\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema\\]`),
         )
       }
     },

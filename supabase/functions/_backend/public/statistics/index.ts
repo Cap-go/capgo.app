@@ -834,7 +834,7 @@ function buildDailyPlatformActiveTotals(rows: NativeDailyPlatformRow[], dates: s
   const hasTotalFromRows = Array.from({ length: dates.length }).fill(false) as boolean[]
 
   rows.forEach((row) => {
-    const date = dayjs(row.date).utc().format('YYYY-MM-DD')
+    const date = dayjs.utc(row.date).format('YYYY-MM-DD')
     const index = dateIndexByLabel.get(date)
     if (index === undefined)
       return
@@ -903,7 +903,7 @@ function buildNativeVersionCounts(rows: NativeVersionUsageRow[], dates: string[]
   }, {} as Record<string, Record<string, number>>)
 
   rows.forEach((row) => {
-    const date = dayjs(row.date).utc().format('YYYY-MM-DD')
+    const date = dayjs.utc(row.date).format('YYYY-MM-DD')
     const seriesName = getNativeVersionSeriesName(row)
     if (!dateSet.has(date) || !counts[date] || !seriesNames.includes(seriesName))
       return
