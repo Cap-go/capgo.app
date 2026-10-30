@@ -13,6 +13,7 @@ import process from 'node:process'
 import { assertCloudSqlDataApiResponseSucceeded } from '../read_replicate/cloud_sql_data_api_response.ts'
 import { ALLOWED_NEW_REPLICA_TABLES, planReadReplicaSchemaSync } from '../read_replicate/schema_additive_sync.ts'
 import {
+  READ_REPLICA_SCHEMA_CATALOG_SQL,
   readReplicaSchemaCatalog,
   REPLICA_TABLES,
   stableStringify,
@@ -834,7 +835,7 @@ async function executeGoogleSql(
         `--database=${database}`,
         `--sql=${sql}`,
         '--format=json',
-        '--partial-result-mode=FAIL_PARTIAL_RESULT',
+        '--partial_result_mode=FAIL_PARTIAL_RESULT',
         '--quiet',
       ],
       { stdout: 'pipe', stderr: 'pipe', env: process.env },
@@ -991,16 +992,16 @@ function dataApiCommandError(value: string): Error {
     /0\.5\s*mb|request.*(?:size|limit)|payload.*(?:size|limit)/i.test(output)
   ) {
     return new Error(
-      `Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded. gcloud output: ${output}`,
+      'Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded.',
     )
   }
   if (
-    /10\s*mb|partial result|response.*(?:size|limit)|result.*(?:size|limit)/i.test(
+    /10\s*mb|partial.?result|response.*(?:size|limit)|result.*(?:size|limit)/i.test(
       output,
     )
   ) {
     return new Error(
-      `Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded. gcloud output: ${output}`,
+      'Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded.',
     )
   }
   return new Error(`Cloud SQL Data API query failed: ${output}`)
