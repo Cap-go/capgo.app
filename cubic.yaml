@@ -3,7 +3,8 @@
 version: 1
 
 reviews:
-  # Cubic submits a real GitHub approval on any PR with no open cubic issue.
+  # Cubic submits a real GitHub approval on eligible PRs (internal authors) with
+  # no open cubic issue.
   # Request a human review yourself on PRs you consider risky.
   auto_approve_behavior: live
   auto_approve: always
