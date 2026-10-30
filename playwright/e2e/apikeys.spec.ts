@@ -401,7 +401,7 @@ test.describe('API Key Management', () => {
     const keyRow = keyCell.locator('xpath=ancestor::tr[1]')
 
     await keyRow.locator('[data-test^="delete-key-"]').click()
-    await page.getByRole('button', { name: 'Delete' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
 
     await expect(page.getByText('API key has been successfully deleted', { exact: true })).toBeVisible()
     await expect(page.getByText(keyName, { exact: true })).toHaveCount(0)
