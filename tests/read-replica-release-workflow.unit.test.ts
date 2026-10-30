@@ -1,5 +1,7 @@
+/* eslint-disable no-template-curly-in-string -- Tests assert literal GitHub Actions expressions. */
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { REPLICA_TABLES } from '../read_replicate/schema_catalog.ts'
 import { readReplicaSchemaCatalogFromMigrations } from '../read_replicate/schema_catalog_from_migrations.ts'
 
@@ -80,14 +82,40 @@ describe('production read-replica release gate', () => {
         'deploy_plugin_regions',
       ]) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema(?:, read_replica_subscription)?\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema\\]`),
         )
       }
-      // Workers that read the replica wait for its initial copy of new tables.
-      for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions']) {
-        expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema, read_replica_subscription\\]`),
-        )
+      // Subscription refresh stays a visible release step but must not gate worker deploys.
+      expect(workflow).toContain('read_replica_subscription:')
+      const refreshJob = workflow.slice(
+        workflow.indexOf('\n  read_replica_subscription:'),
+        workflow.indexOf('\n  build_webapp:'),
+      )
+      expect(refreshJob).toContain(
+        githubExpression('needs.changes.result == \'success\' && needs.changes.outputs.supabase == \'true\' && needs.changes.outputs.is_alpha != \'true\' && needs.supabase_deploy.result == \'success\' && needs.read_replica_schema.result == \'success\''),
+      )
+      expect(workflow).not.toMatch(
+        /deploy_(?:api|files|plugin_regions):\n    needs:.*read_replica_subscription/,
+      )
+
+      const parsed = parse(workflow) as {
+        jobs?: Record<string, { if?: unknown, needs?: string[] | string }>
+      }
+      const refreshDef = parsed.jobs?.read_replica_subscription
+      expect(refreshDef, 'read_replica_subscription must exist in build_and_deploy.yml').toBeDefined()
+      expect(refreshDef?.if, 'read_replica_subscription must keep a job-level if').toBeDefined()
+      expect(refreshDef?.if, 'read_replica_subscription must not be disabled with if: false').not.toBe(false)
+      expect(refreshJob).toContain('resolve-deploy-tag.ts --assert-current')
+      for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions', 'deploy_translation_worker']) {
+        const jobDef = parsed.jobs?.[job]
+        expect(jobDef, `${job} must exist in build_and_deploy.yml`).toBeDefined()
+        const needs = jobDef?.needs
+        const needsList = Array.isArray(needs) ? needs : needs ? [needs] : []
+        expect(needsList, `${job} must not need read_replica_subscription`).not.toContain('read_replica_subscription')
+        expect(jobDef?.if, `${job} must keep a job-level if`).toBeDefined()
+        expect(jobDef?.if, `${job} must not be disabled with if: false`).not.toBe(false)
+        expect(String(jobDef?.if), `${job} must gate on needs.changes.result`).toContain('needs.changes.result == \'success\'')
+        expect(String(jobDef?.if), `${job} must not gate on read_replica_subscription`).not.toContain('read_replica_subscription')
       }
     },
   )

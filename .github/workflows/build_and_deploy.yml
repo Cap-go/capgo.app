@@ -176,9 +176,18 @@ jobs:
           bun scripts/sync-read-replica-schema.ts
 
   # Migrations may add tables to the Google publication; the subscriber only
-  # streams them once its subscription is refreshed. Workers that read the
-  # replica (api, files, plugins) deploy once the initial copy is finished;
-  # until then the previous workers keep serving.
+  # streams them once its subscription is refreshed. Migration
+  # 20261029015108_delta_sessions (#3979) adds delta_sessions to the
+  # publication, adds delta_files.path_session_id, and a delta_sessions_move
+  # cron task that NULLs path_session. With a stale replica subscription,
+  # delta_sessions is empty on replicas, so once CAPGO_DELTA_SESSIONS_ENABLED is
+  # turned on, new workers return empty manifests for moved versions and old
+  # workers build S3 paths without the session part. Keep that flag off until
+  # this refresh succeeds and every api, files, and plugin worker runs the new
+  # release. Current prod: flag off, 0 rows moved. This job still runs on every
+  # production release and must stay visible when it fails, but worker deploys
+  # no longer wait on it so releases are not blocked on subscription ownership
+  # errors (read_replica_schema still reconciles table DDL before migrations).
   read_replica_subscription:
     needs: [changes, supabase_deploy, read_replica_schema]
     if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' && needs.read_replica_schema.result == 'success' }}
@@ -202,6 +211,8 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Install dependencies
         run: bun install
+      - name: Assert deploy tag is current
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
       - name: Refresh the Google subscription for newly published tables
         env:
           GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
@@ -364,8 +375,8 @@ jobs:
           prerelease: ${{ needs.changes.outputs.is_alpha == 'true' }}
 
   deploy_api:
-    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.api == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -444,8 +455,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_files:
-    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.files == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -481,8 +492,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   deploy_plugin_regions:
-    needs: [changes, supabase_deploy, read_replica_schema, read_replica_subscription]
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') && (needs.read_replica_subscription.result == 'success' || needs.read_replica_subscription.result == 'skipped') }}
+    needs: [changes, supabase_deploy, read_replica_schema]
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.plugins == 'true' && (needs.supabase_deploy.result == 'success' || needs.supabase_deploy.result == 'skipped') && (needs.read_replica_schema.result == 'success' || needs.read_replica_schema.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
