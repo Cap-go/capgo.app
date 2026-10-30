@@ -835,7 +835,7 @@ async function executeGoogleSql(
         `--database=${database}`,
         `--sql=${sql}`,
         '--format=json',
-        '--partial_result_mode=FAIL_PARTIAL_RESULT',
+        '--partial-result-mode=FAIL_PARTIAL_RESULT',
         '--quiet',
       ],
       { stdout: 'pipe', stderr: 'pipe', env: process.env },
@@ -987,24 +987,7 @@ function remainingBudgetMs(deadline: number, operation: string): number {
 }
 
 function dataApiCommandError(value: string): Error {
-  const output = commandOutput(value)
-  if (
-    /0\.5\s*mb|request.*(?:size|limit)|payload.*(?:size|limit)/i.test(output)
-  ) {
-    return new Error(
-      'Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded.',
-    )
-  }
-  if (
-    /10\s*mb|partial.?result|response.*(?:size|limit)|result.*(?:size|limit)/i.test(
-      output,
-    )
-  ) {
-    return new Error(
-      'Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded.',
-    )
-  }
-  return new Error(`Cloud SQL Data API query failed: ${output}`)
+  return new Error(`Cloud SQL Data API query failed: ${commandOutput(value)}`)
 }
 
 function commandOutput(value: string): string {
