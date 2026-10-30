@@ -6,7 +6,7 @@ import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import * as schema from './postgres_schema.ts'
-import { checkKey, supabaseAdmin } from './supabase.ts'
+import { checkKey } from './supabase.ts'
 
 /** Bento event: the email asking to upgrade the CLI lives in Bento. */
 export const LEGACY_CLI_UPGRADE_EVENT = 'user:cli_upgrade_required'
@@ -38,7 +38,7 @@ export async function notifyLegacyCliUpgrade(c: Context, input: { capgkey: strin
 
   let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
-    const apikey = await checkKey(c, input.capgkey, supabaseAdmin(c))
+    const apikey = await checkKey(c, input.capgkey)
     if (!apikey)
       return
 

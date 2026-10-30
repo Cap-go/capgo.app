@@ -13,6 +13,12 @@
       ],
       "@capgo/capacitor-notifications": [
         "./packages/capacitor-notifications/src/index.ts"
+      ],
+      "vue": [
+        "./node_modules/vue"
+      ],
+      "@vue/*": [
+        "./node_modules/@vue/*"
       ]
     },
     "resolveJsonModule": true,
