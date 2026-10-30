@@ -992,7 +992,7 @@ function dataApiCommandError(value: string): Error {
     /0\.5\s*mb|request.*(?:size|limit)|payload.*(?:size|limit)/i.test(output)
   ) {
     return new Error(
-      'Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded.',
+      `Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded. gcloud output: ${output}`,
     )
   }
   if (
@@ -1001,7 +1001,7 @@ function dataApiCommandError(value: string): Error {
     )
   ) {
     return new Error(
-      'Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded.',
+      `Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded. gcloud output: ${output}`,
     )
   }
   return new Error(`Cloud SQL Data API query failed: ${output}`)
