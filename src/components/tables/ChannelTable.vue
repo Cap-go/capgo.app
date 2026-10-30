@@ -401,7 +401,7 @@ columns.value = [
       },
       {
         icon: IconTrash,
-        title: t('delete'),
+        title: () => t('delete'),
         visible: (elem: Element) => !!canDeleteChannel.value[elem.id],
         onClick: (elem: Element) => deleteOne(elem),
       },

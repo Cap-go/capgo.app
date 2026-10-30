@@ -400,7 +400,7 @@ columns.value = [
       },
       {
         icon: IconTrash,
-        title: t('remove'),
+        title: () => t('remove'),
         visible: (member: OrganizationMemberRow) => canDelete(member),
         onClick: (member: OrganizationMemberRow) => {
           deleteMember(member)
