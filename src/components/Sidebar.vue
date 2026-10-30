@@ -1,9 +1,15 @@
 <script setup lang="ts">
+import type { Tab } from './comp_def'
 import { onClickOutside } from '@vueuse/core'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
+import IconBack from '~icons/lucide/arrow-left'
+import IconSettings from '~icons/lucide/settings'
 import { isSpoofTab, useAppNavigation } from '~/composables/useAppNavigation'
+import { settingsSectionForPath, useSettingsNavigation } from '~/composables/useSettingsNavigation'
 import { useMainStore } from '~/stores/main'
+import { useOrganizationStore } from '~/stores/organization'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 import LogAsDialogField from './LogAsDialogField.vue'
@@ -15,6 +21,8 @@ const props = defineProps<{
 
 const emit = defineEmits(['closeSidebar'])
 const main = useMainStore()
+const organizationStore = useOrganizationStore()
+const route = useRoute()
 const isRail = computed(() => !!props.sidebarCollapsed)
 const { t } = useI18n()
 const sidebar = useTemplateRef('sidebar')
@@ -26,14 +34,49 @@ const {
   spoofLoading,
 } = useAppNavigation({ onNavigate: () => emit('closeSidebar') })
 
+const {
+  section: settingsSection,
+  tabs: settingsTabs,
+  activeKey: activeSettingsKey,
+} = useSettingsNavigation()
+
 onClickOutside(sidebar, () => emit('closeSidebar'))
 
-// Group destinations the way capgo.app groups products: where you work first,
-// then help and community links that open outside the console.
-const navGroups = computed(() => [
-  { key: 'workspace', label: 'section-group-workspace', tabs: tabs.value.filter(tab => !tab.redirect) },
-  { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect) },
-].filter(group => group.tabs.length))
+// "Go back" from settings returns to the last console page visited before them.
+const lastConsolePath = ref('/dashboard')
+watch(() => route.fullPath, (fullPath) => {
+  if (!settingsSectionForPath(route.path))
+    lastConsolePath.value = fullPath
+}, { immediate: true })
+const backTab = computed<Tab>(() => ({ label: 'go-back', icon: IconBack, key: lastConsolePath.value }))
+
+// Settings of the organization currently selected in the switcher.
+const organizationSettingsTab: Tab = { label: 'settings', icon: IconSettings, key: '/settings/organization' }
+
+interface NavGroup { key: string, label?: string, tabs: Tab[] }
+
+const navGroups = computed<NavGroup[]>(() => {
+  // Settings get their own flat navigation: top-level pages first, then one titled group per sub-section.
+  if (settingsSection.value) {
+    return [
+      { key: 'settings', label: settingsSection.value, tabs: settingsTabs.value.filter(tab => !tab.children?.length) },
+      ...settingsTabs.value
+        .filter(tab => tab.children?.length)
+        .map(tab => ({ key: tab.key, label: tab.label, tabs: tab.children! })),
+    ].filter(group => group.tabs.length)
+  }
+  // Group destinations the way capgo.app groups products: where you work first,
+  // then help and community links that open outside the console.
+  const workspaceTabs = tabs.value.filter(tab => !tab.redirect)
+  return [
+    { key: 'workspace', label: 'section-group-workspace', tabs: organizationStore.currentOrganization ? [...workspaceTabs, organizationSettingsTab] : workspaceTabs },
+    { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect) },
+  ].filter(group => group.tabs.length)
+})
+
+function isNavTabActive(tab: Tab) {
+  return settingsSection.value ? tab.key === activeSettingsKey.value : isTabActive(tab.key)
+}
 </script>
 
 <template>
@@ -84,16 +127,31 @@ const navGroups = computed(() => [
           </router-link>
         </div>
 
-        <GettingStartedNav :compact="isRail" />
+        <GettingStartedNav v-if="!settingsSection" :compact="isRail" />
 
-        <!-- Organization dropdown -->
-        <div class="shrink-0 py-2">
+        <button
+          v-if="settingsSection"
+          type="button"
+          data-test="sidebar-settings-back"
+          class="mt-2 mb-2 d-btn d-btn-ghost flex justify-start items-center w-full h-auto min-h-10 p-0 rounded-lg border-none shadow-none font-normal text-slate-400 hover:text-slate-200 hover:bg-slate-700/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
+          :title="isRail ? t('go-back') : undefined"
+          :aria-label="t('go-back')"
+          @click="openTab(backTab)"
+        >
+          <span class="flex w-12 h-10 shrink-0 items-center justify-center">
+            <IconBack class="w-5 h-5" />
+          </span>
+          <span class="pr-3 text-sm font-medium whitespace-nowrap">{{ t('go-back') }}</span>
+        </button>
+
+        <!-- Organization dropdown (hidden in settings: switching org sends you back to the dashboard) -->
+        <div v-if="!settingsSection" class="shrink-0 py-2">
           <dropdown-organization v-if="main.user" :compact="isRail" />
         </div>
 
         <!-- Navigation: product areas first, help and community links after -->
         <nav
-          class="flex-1 overflow-y-auto py-2 transition-[row-gap] duration-500 ease-in-out motion-reduce:!transition-none flex flex-col"
+          class="flex-1 overflow-y-auto overflow-x-hidden py-2 transition-[row-gap] duration-500 ease-in-out motion-reduce:!transition-none flex flex-col"
           :class="isRail ? 'gap-y-2' : 'gap-y-5'"
           :aria-label="t('pages')"
         >
@@ -107,6 +165,7 @@ const navGroups = computed(() => [
             />
             <!-- Collapse the heading's height in the rail so icons don't float under an invisible label. -->
             <h3
+              v-if="group.label"
               class="overflow-hidden pl-12 pr-3 font-mono text-[11px] leading-4 font-semibold tracking-widest uppercase whitespace-nowrap text-slate-500 transition-[opacity,height,margin] duration-300 ease-in-out motion-reduce:!transition-none"
               :class="isRail ? 'h-0 mb-0 opacity-0' : 'h-4 mb-2 opacity-100'"
             >
@@ -120,30 +179,30 @@ const navGroups = computed(() => [
                   :class="{
                     'min-h-11': !tab.redirect,
                     'min-h-10': tab.redirect,
-                    'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isTabActive(tab.key),
-                    'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isTabActive(tab.key),
-                    'cursor-default': isTabActive(tab.key),
+                    'hover:bg-slate-700/50 lg:hover:bg-slate-700/50': !isNavTabActive(tab),
+                    'bg-slate-700 text-white lg:bg-slate-700 lg:text-white': isNavTabActive(tab),
+                    'cursor-default': isNavTabActive(tab),
                     'opacity-50 cursor-not-allowed': isSpoofTab(tab) && spoofLoading,
                   }"
                   :disabled="isSpoofTab(tab) && spoofLoading"
                   :title="isRail ? tabLabel(tab) : undefined"
                   :aria-label="tab.redirect ? `${tabLabel(tab)} (opens in new tab)` : tabLabel(tab)"
-                  :aria-current="isTabActive(tab.key) ? 'page' : undefined"
+                  :aria-current="isNavTabActive(tab) ? 'page' : undefined"
                   @click="openTab(tab)"
                 >
                   <span
-                    v-if="isTabActive(tab.key)"
+                    v-if="isNavTabActive(tab)"
                     class="absolute left-1 w-1 h-5 -translate-y-1/2 rounded-full top-1/2 bg-azure-500"
                     aria-hidden="true"
                   />
                   <span class="flex w-12 h-10 shrink-0 items-center justify-center">
                     <Spinner v-if="isSpoofTab(tab) && spoofLoading" size="w-5 h-5" />
-                    <component :is="tab.icon" v-else class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isTabActive(tab.key), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isTabActive(tab.key) }" />
+                    <component :is="tab.icon" v-else class="w-5 h-5 transition-colors duration-150 shrink-0" :class="{ 'text-blue-500 lg:text-blue-500': isNavTabActive(tab), 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300': !isNavTabActive(tab) }" />
                   </span>
                   <span
                     class="flex items-center pr-3 font-medium capitalize whitespace-nowrap"
                     :class="[
-                      isTabActive(tab.key) ? 'text-blue-500 lg:text-blue-500' : 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300',
+                      isNavTabActive(tab) ? 'text-blue-500 lg:text-blue-500' : 'text-slate-400 group-hover:text-slate-300 lg:text-slate-400 lg:group-hover:text-slate-300',
                       tab.redirect ? 'text-[13px]' : 'text-sm',
                     ]"
                   >
@@ -160,7 +219,7 @@ const navGroups = computed(() => [
         </nav>
 
         <!-- User menu -->
-        <div class="mt-auto shrink-0 pt-2 lg:border-t lg:border-slate-700 lg:mt-0">
+        <div class="mt-auto shrink-0 pt-2 pb-3 lg:border-t lg:border-slate-700 lg:mt-0">
           <div v-if="main.user" class="flex items-center">
             <DropdownProfile class="w-full" :compact="isRail" />
           </div>
