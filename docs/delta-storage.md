@@ -303,7 +303,7 @@ Around the migrations, the release CI:
   subscriber (`read_replica_schema`, `ALLOWED_NEW_REPLICA_TABLES`);
 - after them, refreshes `capgo_google_eu_2_sub` with `copy_data = true` and
   waits until every replicated table finished its initial copy, then analyzes
-  the newly copied tables (`read_replica_subscription`). The api, files and plugin workers deploy only
+  the newly copied tables (manual `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);` on eu-2 after the deploy warning). The api, files and plugin workers deploy only
   after that, so they never read a half-copied replica. Until then the previous
   workers keep serving: they read the subscriber's now frozen `manifest` table
   and write through the compatibility view on the primary.

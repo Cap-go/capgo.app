@@ -57,6 +57,9 @@ describe('production read-replica release gate', () => {
         'sync_schema_types:\n    needs: [changes, read_replica_schema, supabase_deploy]',
       )
       expect(workflow).toContain('needs.read_replica_schema.result == \'success\'')
+      expect(workflow).toContain(
+        'bun scripts/sync-read-replica-schema.ts --check-subscription-publication',
+      )
       expect(workflow).toContain('needs.supabase_deploy.result == \'success\'')
       // The sync script must preflight subscriber compatibility before applying anything.
       // Import-path internals are covered by read-replica-schema-import-sync.unit.test.ts.
@@ -80,7 +83,7 @@ describe('production read-replica release gate', () => {
         'deploy_plugin_regions',
       ]) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema(?:, read_replica_subscription)?\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema\\]`),
         )
       }
     },

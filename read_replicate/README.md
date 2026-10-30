@@ -81,11 +81,13 @@ it can mutate either database.
 New replicated tables are only created when they are listed in
 `ALLOWED_NEW_REPLICA_TABLES` (`schema_additive_sync.ts`), which pins their exact
 `CREATE TABLE` SQL and catalog shape; any other missing table stops the
-release. After primary migrations, the `read_replica_subscription` job lists
-the tables `capgo_google_eu_2_sub` streams and, when a replicated table is
-missing, runs `ALTER SUBSCRIPTION ... REFRESH PUBLICATION WITH (copy_data =
-true)` as a single Data API statement (it cannot run inside the import's
-transaction), then checks the table is streamed.
+release. After primary migrations, production deploy runs
+`bun scripts/sync-read-replica-schema.ts --check-subscription-publication`,
+which compares `pg_publication_tables` on the Supabase primary to
+`pg_subscription_rel` on the Google eu-2 subscriber. Missing tables emit a
+GitHub warning with the exact manual
+`ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);`
+command and do not run the refresh from CI.
 
 This path has no direct PostgreSQL connection from GitHub Actions, no runner IP
 allowlist, no temporary Worker, and no database-side helper, database role,

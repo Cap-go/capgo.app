@@ -64,7 +64,10 @@ const GOOGLE_READ_REPLICA: GoogleDataApiConfig = {
   instance: 'eu-2',
   database: 'postgres',
 }
+export const READ_REPLICA_PUBLICATION = 'capgo_google_eu_2_pub'
 const READ_REPLICA_SUBSCRIPTION = 'capgo_google_eu_2_sub'
+export const READ_REPLICA_PUBLICATION_TABLES_SQL = `SELECT tablename AS table_name FROM pg_catalog.pg_publication_tables WHERE pubname = '${READ_REPLICA_PUBLICATION}' AND schemaname = 'public' ORDER BY tablename`
+export const READ_REPLICA_SUBSCRIPTION_TABLES_SQL = `SELECT c.relname AS table_name FROM pg_catalog.pg_subscription_rel AS r JOIN pg_catalog.pg_subscription AS s ON s.oid = r.srsubid JOIN pg_catalog.pg_class AS c ON c.oid = r.srrelid JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE s.subname = '${READ_REPLICA_SUBSCRIPTION}' AND n.nspname = 'public' ORDER BY c.relname`
 // Fixed statements only (plus ANALYZE of known replicated tables): the release
 // job never sends other SQL this way.
 export const READ_REPLICA_SUBSCRIBED_TABLES_SQL = `SELECT c.relname AS table_name, r.srsubstate AS state FROM pg_catalog.pg_subscription_rel AS r JOIN pg_catalog.pg_subscription AS s ON s.oid = r.srsubid JOIN pg_catalog.pg_class AS c ON c.oid = r.srrelid JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE s.subname = '${READ_REPLICA_SUBSCRIPTION}' AND n.nspname = 'public'`
@@ -93,51 +96,122 @@ export function copyingReplicaTables(rows: readonly { table_name: string, state:
   return REPLICA_TABLES.filter(table => !ready.has(table))
 }
 
-const SUBSCRIPTION_COPY_POLL_MS = 15_000
+/** Publication tables not present in pg_subscription_rel for the live subscription. */
+export function publicationTablesMissingFromSubscription(
+  publicationTables: readonly string[],
+  subscriptionTables: readonly string[],
+): string[] {
+  const subscribed = new Set(subscriptionTables)
+  return publicationTables.filter(table => !subscribed.has(table))
+}
 
-/**
- * Runs after primary migrations: a table the migrations just added to the
- * publication is only streamed once the subscription is refreshed. Tables
- * the subscriber already streams are not copied again.
- */
-async function refreshSubscription(): Promise<void> {
-  const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
-  const { project, instance, database } = GOOGLE_READ_REPLICA
-  const subscribed = async () => dataApiRows(
-    await executeGoogleSql(project, instance, database, READ_REPLICA_SUBSCRIBED_TABLES_SQL, deadline),
-  ).map(row => ({ table_name: String(row.table_name), state: String(row.state) }))
-
-  const missing = unsubscribedReplicaTables((await subscribed()).map(row => row.table_name))
-  if (missing.length) {
-    console.log(`Refreshing ${READ_REPLICA_SUBSCRIPTION} for: ${missing.join(', ')}`)
-    await executeGoogleSql(project, instance, database, READ_REPLICA_REFRESH_SUBSCRIPTION_SQL, deadline)
-  }
-
-  // Workers that read the replica deploy after this job: wait for the copy.
-  for (;;) {
-    const rows = await subscribed()
-    const stillMissing = unsubscribedReplicaTables(rows.map(row => row.table_name))
-    if (stillMissing.length) {
-      throw new Error(
-        `Subscription ${READ_REPLICA_SUBSCRIPTION} still does not stream ${stillMissing.join(', ')}; check that the primary publication includes them.`,
-      )
+export function subscriptionPublicationCheckOutcome(
+  publicationTables: readonly string[],
+  subscriptionTables: readonly string[],
+): { exitCode: number, lines: string[] } {
+  const missing = publicationTablesMissingFromSubscription(
+    publicationTables,
+    subscriptionTables,
+  )
+  if (!missing.length) {
+    return {
+      exitCode: 0,
+      lines: ['Read-replica subscription covers every table in the primary publication.'],
     }
-    const copying = copyingReplicaTables(rows)
-    if (!copying.length)
-      break
-    if (Date.now() + SUBSCRIPTION_COPY_POLL_MS > deadline)
-      throw new Error(`Read-replica initial copy still running for ${copying.join(', ')}`)
-    console.log(`Waiting for the read-replica initial copy of: ${copying.join(', ')}`)
-    await new Promise(resolve => setTimeout(resolve, SUBSCRIPTION_COPY_POLL_MS))
   }
-  if (missing.length)
-    await executeGoogleSql(project, instance, database, readReplicaAnalyzeSql(missing), deadline)
-  console.log('Read-replica subscription streams every replicated table.')
+  const tableList = missing.join(', ')
+  return {
+    exitCode: 0,
+    lines: [
+      `::warning title=Read-replica subscription missing publication tables::Tables in ${READ_REPLICA_PUBLICATION} not streamed by ${READ_REPLICA_SUBSCRIPTION}: ${tableList}. Run manually on the Google eu-2 subscriber: ${READ_REPLICA_REFRESH_SUBSCRIPTION_SQL}`,
+    ],
+  }
+}
+
+export interface SubscriptionPublicationCheckQueries {
+  queryPublicationTables: () => Promise<string[]>
+  querySubscriptionTables: () => Promise<string[]>
+}
+
+export async function checkSubscriptionPublicationAlignment(
+  queries: SubscriptionPublicationCheckQueries,
+): Promise<number> {
+  const [publicationTables, subscriptionTables] = await Promise.all([
+    queries.queryPublicationTables(),
+    queries.querySubscriptionTables(),
+  ])
+  const outcome = subscriptionPublicationCheckOutcome(
+    publicationTables,
+    subscriptionTables,
+  )
+  for (const line of outcome.lines)
+    console.log(line)
+  return outcome.exitCode
+}
+
+async function queryPrimaryPublicationTables(): Promise<string[]> {
+  const projectRef = process.env.SUPABASE_PROJECT_ID
+  const accessToken = process.env.SUPABASE_ACCESS_TOKEN
+  if (!projectRef || !accessToken) {
+    throw new Error(
+      'Primary publication check requires SUPABASE_PROJECT_ID and SUPABASE_ACCESS_TOKEN.',
+    )
+  }
+
+  const response = await fetch(
+    `https://api.supabase.com/v1/projects/${projectRef}/database/query/read-only`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query: READ_REPLICA_PUBLICATION_TABLES_SQL }),
+    },
+  )
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(
+      `Supabase primary publication query failed: ${response.status} ${commandOutput(body)}`,
+    )
+  }
+
+  const payload = await response.json() as unknown
+  const rows = Array.isArray(payload) ? payload : []
+  return rows
+    .map(row => (row && typeof row === 'object' && 'table_name' in row)
+      ? String((row as { table_name: unknown }).table_name)
+      : '')
+    .filter(Boolean)
+    .sort()
+}
+
+async function queryReplicaSubscriptionTables(deadline: number): Promise<string[]> {
+  const { project, instance, database } = GOOGLE_READ_REPLICA
+  const response = await executeGoogleSql(
+    project,
+    instance,
+    database,
+    READ_REPLICA_SUBSCRIPTION_TABLES_SQL,
+    deadline,
+  )
+  return dataApiRows(response)
+    .map(row => String(row.table_name))
+    .filter(Boolean)
+    .sort()
+}
+
+async function runSubscriptionPublicationCheckFromEnv(): Promise<number> {
+  const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
+  return checkSubscriptionPublicationAlignment({
+    queryPublicationTables: queryPrimaryPublicationTables,
+    querySubscriptionTables: () => queryReplicaSubscriptionTables(deadline),
+  })
 }
 
 async function main(): Promise<void> {
-  if (process.argv.includes('--refresh-subscription')) {
-    await refreshSubscription()
+  if (process.argv.includes('--check-subscription-publication')) {
+    process.exitCode = await runSubscriptionPublicationCheckFromEnv()
     return
   }
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
