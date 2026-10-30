@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://cubic.dev/schema/cubic-repository-config.schema.json
+
+version: 1
+
+reviews:
+  # Cubic submits a real GitHub approval on eligible PRs (internal authors) with
+  # no open cubic issue.
+  # Request a human review yourself on PRs you consider risky.
+  auto_approve_behavior: live
+  auto_approve: always
+  auto_approve_rules:
+    # Public repo: never auto-approve external or unverified authors.
+    exclude_external_contributors: true
+    allow_open_issues: none

@@ -1108,7 +1108,7 @@ Only after **all** of these are true:
 
 …then mark the PR **Ready for review** in GitHub (undraft).
 
-Marking Ready is **not** “ready for a human.” It means: **ready for automatic AI review** (CodeRabbit / cubic / whatever the repo runs on ready PRs).
+Marking Ready is **not** “ready for a human.” It means: **ready for automatic AI review** (cubic).
 
 #### 3. Wait for automatic review
 
