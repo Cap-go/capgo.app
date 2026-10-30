@@ -175,43 +175,6 @@ jobs:
           gcloud auth activate-service-account --key-file="$credentials_file"
           bun scripts/sync-read-replica-schema.ts
 
-  # Migrations may add tables to the Google publication; the subscriber only
-  # streams them once its subscription is refreshed. Workers that read the
-  # replica (api, files, plugins) deploy once the initial copy is finished;
-  # until then the previous workers keep serving.
-  read_replica_subscription:
-    needs: [changes, supabase_deploy, read_replica_schema]
-    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.supabase == 'true' && needs.changes.outputs.is_alpha != 'true' && needs.supabase_deploy.result == 'success' && needs.read_replica_schema.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    name: Refresh production read-replica subscription
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.changes.outputs.deploy_sha }}
-          fetch-depth: 0
-          filter: blob:none
-      - name: Setup bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Setup Google Cloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-      - name: Install dependencies
-        run: bun install
-      - name: Refresh the Google subscription for newly published tables
-        env:
-          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-        run: |
-          credentials_file="$(mktemp)"
-          trap 'rm -f "$credentials_file"' EXIT
-          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
-          gcloud auth activate-service-account --key-file="$credentials_file"
-          bun scripts/sync-read-replica-schema.ts --refresh-subscription
-
   # Build the web app while the backend deploys; only publishing waits for it.
   build_webapp:
     needs: changes
