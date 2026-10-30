@@ -96,7 +96,6 @@ describe('native-aware Capgo release workflow', () => {
     const targetCheckout = jobs.changes?.steps?.find(step => step.name === 'Checkout deployment target')
     const deploymentJobs = [
       'supabase_deploy',
-      'read_replica_schema',
       'deploy_webapp',
       'deploy_api',
       'deploy_translation_worker',
@@ -163,7 +162,7 @@ describe('native-aware Capgo release workflow', () => {
     expect(workflow).not.toContain('git pull')
   })
 
-  it.concurrent('synchronizes production schema and types only after both database deployments', async () => {
+  it.concurrent('synchronizes production schema and types after Supabase deployment', async () => {
     const [bumpSource, deploySource] = await Promise.all([
       readWorkflow(workflowPaths.bump),
       readWorkflow(workflowPaths.deploy),
@@ -175,10 +174,9 @@ describe('native-aware Capgo release workflow', () => {
     expect(bumpSource).not.toContain('sync_schema_types:')
     expect(bumpSource).not.toContain('has_migration_changes')
     expect(bumpSource).not.toContain('migration_scope')
-    expect(syncJob?.needs).toEqual(['changes', 'read_replica_schema', 'supabase_deploy'])
+    expect(syncJob?.needs).toEqual(['changes', 'supabase_deploy'])
     expect(syncJob?.if).toContain('needs.changes.outputs.is_alpha != \'true\'')
     expect(syncJob?.if).toContain('needs.changes.outputs.requires_schema_types_sync == \'true\'')
-    expect(syncJob?.if).toContain('needs.read_replica_schema.result == \'success\'')
     expect(syncJob?.if).toContain('needs.supabase_deploy.result == \'success\'')
     expect(syncJob?.permissions?.contents).toBe('write')
     expect(syncStep?.run).toContain('for attempt in 1 2 3')
@@ -192,6 +190,23 @@ describe('native-aware Capgo release workflow', () => {
     expect(syncStep?.run).toContain('scripts/publish-schema-types.ts main "$main_sha"')
     expect(syncStep?.run).not.toContain('git pull')
     expect(syncStep?.run).not.toMatch(/git (?:push )?--force/)
+  })
+
+  it.concurrent('keeps deployment dependencies valid and gates publishing on Supabase migrations', async () => {
+    const workflow = parseWorkflow(await readWorkflow(workflowPaths.deploy))
+    const jobs = workflow.jobs ?? {}
+
+    expect(jobs.supabase_deploy?.needs).toEqual(['changes'])
+    expect(jobs.supabase_deploy?.if).toContain('needs.changes.outputs.supabase == \'true\'')
+    for (const [name, job] of Object.entries(jobs)) {
+      const needs = typeof job.needs === 'string' ? [job.needs] : job.needs ?? []
+      for (const dependency of needs)
+        expect(jobs[dependency], `${name} depends on missing job ${dependency}`).toBeDefined()
+    }
+    for (const name of ['deploy_webapp', 'deploy_api', 'deploy_translation_worker', 'deploy_files', 'deploy_plugin_regions']) {
+      expect(jobs[name]?.needs).toContain('supabase_deploy')
+      expect(jobs[name]?.if).toContain('needs.supabase_deploy.result == \'success\'')
+    }
   })
 
   it.concurrent('decides the Capgo version after tests and before standard-version', async () => {

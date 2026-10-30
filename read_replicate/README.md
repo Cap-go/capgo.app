@@ -62,48 +62,45 @@ and copied fresh by `REFRESH PUBLICATION`); pass `--tables a,b` or `--skip`
 to change that. Rows that changed during the repair are reported; run it again
 to settle them.
 
-## Release reconciliation
+## Manual reconciliation
 
-The release job rebuilds the selected schema catalog from the checked-out local
-migrations through Tinbase/PGlite. It never reads
-`schema_replicate.catalog.json` as a release input.
+Replica schema maintenance and subscription refresh are manual operations.
+Complete the required subscriber changes before deploying primary migrations
+that affect replicated tables. Production releases apply Supabase migrations
+and deploy the application without running replica reconciliation or waiting
+for a subscription refresh.
 
-Before primary Supabase migrations run, the job reads the bounded subscriber
-catalog through Cloud SQL Data API and builds the complete reconciliation plan.
-For an approved non-empty plan, the job writes one `BEGIN`/DDL/`COMMIT`
+The schema helper rebuilds the selected schema catalog from local migrations
+through Tinbase/PGlite and reads the subscriber catalog over the direct
+PostgreSQL URL in `READ_REPLICATE_GOOGLE_EU1`. It never uses
+`schema_replicate.catalog.json` as its expected schema.
+
+For an approved non-empty plan, the helper writes one `BEGIN`/DDL/`COMMIT`
 transaction to the dedicated private Cloud Storage bucket, invokes Cloud SQL's
 server-side import as its existing `postgres` user, removes that object, and
-then re-reads the catalog. The bucket grants the CI service account only
+then re-reads the catalog. The bucket grants the service account only
 bucket-scoped object access and the Cloud SQL service agent only read access.
-Any skipped, unsupported, or non-transactional change stops the release before
-it can mutate either database.
+Any skipped, unsupported, or non-transactional change stops the helper before
+it can mutate the subscriber.
 
 New replicated tables are only created when they are listed in
 `ALLOWED_NEW_REPLICA_TABLES` (`schema_additive_sync.ts`), which pins their exact
 `CREATE TABLE` SQL and catalog shape; any other missing table stops the
-release. After primary migrations, the `read_replica_subscription` job lists
-the tables `capgo_google_eu_2_sub` streams and, when a replicated table is
-missing, runs `ALTER SUBSCRIPTION ... REFRESH PUBLICATION WITH (copy_data =
-true)` as a single Data API statement (it cannot run inside the import's
-transaction), then checks the table is streamed.
-
-This path has no direct PostgreSQL connection from GitHub Actions, no runner IP
-allowlist, no temporary Worker, and no database-side helper, database role,
-privilege, or object-owner setup.
+helper. After adding a table to the primary publication, refresh
+`capgo_google_eu_2_sub` as the subscription owner and verify that its initial
+copy has completed before deploying readers that depend on it.
 
 Verification is directional rather than exact schema equality. The subscriber must
 contain every required publisher object, but it may retain safe legacy
 subscriber-only nullable/default-backed columns, supporting types, sequences,
-functions, and ordinary non-unique indexes. The release stops on incompatible or
+functions, and ordinary non-unique indexes. The helper stops on incompatible or
 missing publisher objects, extra tables or constraints, unique indexes, and
 subscriber-only required columns that can reject replicated rows.
 
-| GitHub repository secret | Value                               |
-| ------------------------ | ----------------------------------- |
-| `GOOGLE_SERVICE_ACCOUNT` | Base64-encoded service-account JSON |
-
+Authenticate `gcloud` with an account that can perform the server-side import
+and set `READ_REPLICATE_GOOGLE_EU1` to the direct subscriber PostgreSQL URL.
 The project, instance, database, and import configuration are fixed in the
-sync script, not supplied as GitHub variables.
+sync script.
 
 ```bash
 bun scripts/sync-read-replica-schema.ts
