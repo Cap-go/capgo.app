@@ -83,6 +83,11 @@ describe('production read-replica release gate', () => {
           new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema(?:, read_replica_subscription)?\\]`),
         )
       }
+      for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions']) {
+        expect(workflow).toMatch(
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema\\]`),
+        )
+      }
     },
   )
 

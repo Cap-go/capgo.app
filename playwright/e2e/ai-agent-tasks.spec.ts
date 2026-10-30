@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { Page, Response } from '@playwright/test'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
@@ -14,6 +14,16 @@ function localAdminClient() {
   if (!key)
     throw new Error('Local Supabase service key is required for AI agent task fixtures')
   return createClient(`http://127.0.0.1:${ports.api}`, key, { auth: { persistSession: false } })
+}
+
+// The table's own channel load is also a `channels` query. The agent baseline is the
+// head count taken when the prompt is copied.
+function isAgentChannelCount(response: Response) {
+  const query = consoleQueryFromResponse(response)
+  if (query?.name !== 'channels')
+    return false
+  const options = query.operations.find(operation => operation.method === 'select')?.args[1]
+  return !!options && typeof options === 'object' && options.head === true
 }
 
 // Copying waits for the API key first, so poll until the prompt lands.
@@ -86,7 +96,7 @@ test.describe('AI agent alternatives to manual actions', () => {
     await page.locator('#dialog-v2-content input[type="text"]').fill('beta')
     // After the copy the table counts channels once as its baseline; wait for it so the
     // channel inserted below counts as the agent's.
-    const baseline = page.waitForResponse(response => consoleQueryFromResponse(response)?.name === 'channels')
+    const baseline = page.waitForResponse(isAgentChannelCount)
     await card.locator('[data-test="ai-task-copy-prompt"]').click()
     const prompt = await readClipboard(page)
     expect(prompt).toContain('{CAPGO_CLI_RUNNER} channel add {CHANNEL_NAME} com.demo.app')
