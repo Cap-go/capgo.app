@@ -34,6 +34,8 @@ const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
 const DO_FETCH_RETRY_DELAY_MS = 250
 
+// # test deploy
+
 const ATTACHMENT_PREFIX = 'attachments'
 const ATTACHMENT_PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth', 'storage']
 const TUS_UPLOAD_CONTENT_TYPE = 'application/offset+octet-stream'
@@ -458,9 +460,9 @@ async function getHandler(c: Context): Promise<Response> {
   const candidateKeys = wantsReceipt
     ? [fileId]
     : [...new Set(
-        getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
-          .flatMap(key => getDotfileDeltaStorageCandidateKeys(key)),
-      )]
+      getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
+        .flatMap(key => getDotfileDeltaStorageCandidateKeys(key)),
+    )]
   const cacheKey = buildFileReadCacheRequest(c.req.raw)
   let response = cache ? await cache.match(cacheKey) : null
   if (response != null) {
@@ -719,7 +721,7 @@ export function calculateBytesTransferred(objLen: number, r2Range: R2Range | und
 
 type ParsedAttachmentByteRange
   = | { kind: 'partial', start: number, end: number, bytesTransferred: number }
-    | { kind: 'invalid' }
+  | { kind: 'invalid' }
 
 export function parseAttachmentByteRange(rangeHeader: string, fileSize: number): ParsedAttachmentByteRange {
   if (!isPositiveFiniteNumber(fileSize)) {
