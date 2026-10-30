@@ -178,7 +178,7 @@ export function createConsoleClient(options: { persistSession?: boolean } = {}) 
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal,
       })
-      if (response.status === 503) {
+      if (response.status === 503 && (await response.json().catch(() => null) as { error?: unknown } | null)?.error === 'events_unavailable') {
         // No events backend (local edge runtime): report once and stop.
         callback('CHANNEL_ERROR')
         return 'stop'

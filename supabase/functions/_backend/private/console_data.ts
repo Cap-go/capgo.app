@@ -30,6 +30,14 @@ const MAX_IMAGE_BYTES = 50 * 1024 * 1024
 const ALLOWED_IMAGE_CONTENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'])
 const imagePathSchema = z.string().min(1).max(1024).refine(path => path.split('/').every(segment => segment !== '.' && segment !== '..'))
 
+/** Cloudflare marks durable object drops (deploys, resets, "Network connection lost.") as retryable. */
+export function isTransientDurableObjectError(error: unknown): boolean {
+  if (!error || typeof error !== 'object')
+    return false
+  const { retryable, message } = error as { retryable?: unknown, message?: unknown }
+  return retryable === true || (typeof message === 'string' && message.toLowerCase().includes('network connection lost'))
+}
+
 /** A bearer user session (role authenticated with a subject); the anon or service key never qualifies. */
 export function isUserSessionToken(authorization: string): boolean {
   if (!authorization.startsWith('Bearer '))
@@ -243,6 +251,12 @@ app.get('/events', middlewareAuth, async (c) => {
   const events = (c.env as { CONSOLE_EVENTS?: DurableObjectNamespace } | undefined)?.CONSOLE_EVENTS
   if (!events)
     return quickError(503, 'events_unavailable', 'Console events are unavailable')
-  const response = await events.get(events.idFromName(orgId.data)).fetch('https://console-events/subscribe')
+  const response = await events.get(events.idFromName(orgId.data)).fetch('https://console-events/subscribe').catch((error: unknown) => {
+    // Cloudflare drops the durable object connection on deploys and resets;
+    // the console reconnects, so answer with a quiet retryable 503.
+    if (!isTransientDurableObjectError(error))
+      throw error
+    return quickError(503, 'events_retryable', 'Console events are temporarily unavailable', { retryAfterSeconds: 1 }, error, { alert: false })
+  })
   return new Response(response.body as unknown as ReadableStream, { headers: Array.from(response.headers.entries()), status: response.status })
 })
