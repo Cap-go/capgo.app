@@ -203,6 +203,7 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Refresh the Google subscription for newly published tables
+        continue-on-error: true
         env:
           GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
         run: |

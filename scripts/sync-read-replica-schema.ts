@@ -995,13 +995,9 @@ function dataApiCommandError(value: string): Error {
       'Cloud SQL Data API rejected the SQL request at its 0.5 MB request limit. Keep the selected schema catalog bounded.',
     )
   }
-  if (
-    /10\s*mb|partial.?result|response.*(?:size|limit)|result.*(?:size|limit)/i.test(
-      output,
-    )
-  ) {
+  if (/10\s*(?:mb|mib)\b/i.test(output)) {
     return new Error(
-      'Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded.',
+      `Cloud SQL Data API rejected the response at its 10 MB response limit. Keep the selected schema catalog bounded. Raw output: ${output}`,
     )
   }
   return new Error(`Cloud SQL Data API query failed: ${output}`)
