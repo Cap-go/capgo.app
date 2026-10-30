@@ -168,6 +168,7 @@ jobs:
       - name: Reconcile the Google subscriber through server-side Cloud SQL import
         env:
           GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          READ_REPLICATE_GOOGLE_EU1: ${{ secrets.READ_REPLICATE_GOOGLE_EU1 }}
         run: |
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
