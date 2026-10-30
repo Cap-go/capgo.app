@@ -107,7 +107,7 @@ export function publicationTablesMissingFromSubscription(
 
 export function subscriptionPublicationCheckOutcome(
   publicationTables: readonly string[],
-  subscriptionTables: readonly string[],
+  subscriptionRows: readonly { table_name: string, state: string }[],
 ): { exitCode: number, lines: string[] } {
   if (!publicationTables.length) {
     return {
@@ -117,40 +117,49 @@ export function subscriptionPublicationCheckOutcome(
       ],
     }
   }
+  const subscriptionTables = subscriptionRows.map(row => row.table_name)
   const missing = publicationTablesMissingFromSubscription(
     publicationTables,
     subscriptionTables,
   )
-  if (!missing.length) {
-    return {
-      exitCode: 0,
-      lines: ['Read-replica subscription covers every table in the primary publication.'],
-    }
+  const copying = subscriptionRows
+    .filter(row => publicationTables.includes(row.table_name) && row.state !== 'r')
+    .map(row => row.table_name)
+    .sort()
+  const lines: string[] = []
+  if (missing.length) {
+    lines.push(
+      `::warning title=Read-replica subscription missing publication tables::Tables in ${READ_REPLICA_PUBLICATION} not streamed by ${READ_REPLICA_SUBSCRIPTION}: ${missing.join(', ')}. Run manually on the Google eu-2 subscriber: ${READ_REPLICA_REFRESH_SUBSCRIPTION_SQL}`,
+    )
   }
-  const tableList = missing.join(', ')
-  return {
-    exitCode: 0,
-    lines: [
-      `::warning title=Read-replica subscription missing publication tables::Tables in ${READ_REPLICA_PUBLICATION} not streamed by ${READ_REPLICA_SUBSCRIPTION}: ${tableList}. Run manually on the Google eu-2 subscriber: ${READ_REPLICA_REFRESH_SUBSCRIPTION_SQL}`,
-    ],
+  if (copying.length) {
+    lines.push(
+      `::warning title=Read-replica subscription initial copy in progress::Tables in ${READ_REPLICA_SUBSCRIPTION} are not ready yet (pg_subscription_rel.srsubstate is not r): ${copying.join(', ')}. Wait until each table reaches srsubstate r before relying on it.`,
+    )
   }
+  if (!lines.length) {
+    lines.push(
+      'Read-replica subscription covers every table in the primary publication and each table is ready (srsubstate r).',
+    )
+  }
+  return { exitCode: 0, lines }
 }
 
 export interface SubscriptionPublicationCheckQueries {
   queryPublicationTables: () => Promise<string[]>
-  querySubscriptionTables: () => Promise<string[]>
+  querySubscriptionRows: () => Promise<Array<{ table_name: string, state: string }>>
 }
 
 export async function checkSubscriptionPublicationAlignment(
   queries: SubscriptionPublicationCheckQueries,
 ): Promise<number> {
-  const [publicationTables, subscriptionTables] = await Promise.all([
+  const [publicationTables, subscriptionRows] = await Promise.all([
     queries.queryPublicationTables(),
-    queries.querySubscriptionTables(),
+    queries.querySubscriptionRows(),
   ])
   const outcome = subscriptionPublicationCheckOutcome(
     publicationTables,
-    subscriptionTables,
+    subscriptionRows,
   )
   for (const line of outcome.lines)
     console.log(line)
@@ -198,26 +207,28 @@ async function queryPrimaryPublicationTables(): Promise<string[]> {
     .sort()
 }
 
-async function queryReplicaSubscriptionTables(deadline: number): Promise<string[]> {
+async function queryReplicaSubscriptionRows(
+  deadline: number,
+): Promise<Array<{ table_name: string, state: string }>> {
   const { project, instance, database } = GOOGLE_READ_REPLICA
   const response = await executeGoogleSql(
     project,
     instance,
     database,
-    READ_REPLICA_SUBSCRIPTION_TABLES_SQL,
+    READ_REPLICA_SUBSCRIBED_TABLES_SQL,
     deadline,
   )
-  return dataApiRows(response)
-    .map(row => String(row.table_name))
-    .filter(Boolean)
-    .sort()
+  return dataApiRows(response).map(row => ({
+    table_name: String(row.table_name),
+    state: String(row.state),
+  }))
 }
 
 async function runSubscriptionPublicationCheckFromEnv(): Promise<number> {
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
   return checkSubscriptionPublicationAlignment({
     queryPublicationTables: queryPrimaryPublicationTables,
-    querySubscriptionTables: () => queryReplicaSubscriptionTables(deadline),
+    querySubscriptionRows: () => queryReplicaSubscriptionRows(deadline),
   })
 }
 

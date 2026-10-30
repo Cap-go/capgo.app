@@ -308,11 +308,13 @@ Around the migrations, the release CI:
   `REFRESH PUBLICATION` or wait for initial copies. When the deploy logs a
   warning listing missing tables, operators must manually run
   `ALTER SUBSCRIPTION capgo_google_eu_2_sub REFRESH PUBLICATION WITH (copy_data = true);`
-  on eu-2, wait until each listed table finishes its initial copy, then analyze
-  those tables before relying on them in production. API, files, and plugin
-  workers still deploy after `supabase_deploy`; the warning is operational signal
-  only. Workers deploy before the copy finishes. Until each listed table finishes its
-  initial copy, version lists that depend on that table are not served.
+  on eu-2, wait until each listed table finishes its initial copy. Also check
+  `pg_subscription_rel.srsubstate` for every replicated table (`r` means ready).
+  Wait for any table not yet `r`, then analyze those tables before relying on
+  them in production. API, files, and plugin workers still deploy after
+  `supabase_deploy`; the warning is operational signal only. Workers deploy
+  before the copy finishes. Until each listed table finishes its initial copy,
+  version lists that depend on that table are not served.
 
 After the deploy:
 
