@@ -311,9 +311,8 @@ Around the migrations, the release CI:
   on eu-2, wait until each listed table finishes its initial copy, then analyze
   those tables before relying on them in production. API, files, and plugin
   workers still deploy after `supabase_deploy`; the warning is operational signal
-  only. Until new tables are copied, previous workers keep serving: they read
-  the subscriber's now frozen `manifest` table and write through the compatibility
-  view on the primary.
+  only. Workers deploy before the copy finishes. Until each listed table finishes its
+  initial copy, version lists that depend on that table are not served.
 
 After the deploy:
 

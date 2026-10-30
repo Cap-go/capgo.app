@@ -185,8 +185,12 @@ async function queryPrimaryPublicationTables(): Promise<string[]> {
   }
 
   const payload = await response.json() as unknown
-  const rows = Array.isArray(payload) ? payload : []
-  return rows
+  if (!Array.isArray(payload)) {
+    throw new Error(
+      'Supabase primary publication query returned a non-array payload.',
+    )
+  }
+  return payload
     .map(row => (row && typeof row === 'object' && 'table_name' in row)
       ? String((row as { table_name: unknown }).table_name)
       : '')
