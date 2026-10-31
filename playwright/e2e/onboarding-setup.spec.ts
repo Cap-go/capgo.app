@@ -40,7 +40,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     await expect(page.locator('[data-test="app-onboarding-cli-step-add_channel"]')).toBeVisible()
     await expect(page.locator('[data-test^="app-onboarding-cli-step-"]')).toHaveCount(7)
     await expect(page.locator('[data-test^="app-onboarding-cli-step-"] button')).toContainText([
-      'Start guided setup Current task',
+      'Start guided setup',
       'Create a channel',
       'Install Capgo Updater',
       'Add the app-ready code',
@@ -619,6 +619,9 @@ test.describe('Actionable onboarding setup checklist', () => {
     expect(returnBox!.x + returnBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width)
     expect(await returnButton.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+    // Tablet width used to place the invite card and footer on one non-wrapping row.
+    await page.setViewportSize({ width: 768, height: 844 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(768)
   })
 
   test('renders desktop, mobile, dark and loading states without console errors', async ({ page }) => {
