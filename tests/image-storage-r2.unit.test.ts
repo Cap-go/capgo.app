@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ORG_ID = '22222222-2222-4222-8222-222222222222'
 const USER_ID = '11111111-1111-4111-8111-111111111111'
@@ -186,6 +186,15 @@ describe('R2 image storage', () => {
 })
 
 describe('image tokens', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T12:00:00.999Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('round-trips the user it was issued to', async () => {
     const issued = await storage.createImageToken(context(), USER_ID)
     expect(issued?.token).toMatch(new RegExp(`^${USER_ID}\\.\\d+\\.[\\w-]+$`))
@@ -208,14 +217,8 @@ describe('image tokens', () => {
     const long = (await storage.createImageToken(context(), USER_ID, 30 * 24 * 3600))!
     expect(long.expiresAt - Math.floor(Date.now() / 1000)).toBe(storage.IMAGE_TOKEN_TTL_SECONDS)
 
-    vi.useFakeTimers()
-    try {
-      vi.setSystemTime(Date.now() + 120_000)
-      await expect(storage.verifyImageToken(context(), short.token)).resolves.toBeNull()
-    }
-    finally {
-      vi.useRealTimers()
-    }
+    vi.setSystemTime(Date.now() + 120_000)
+    await expect(storage.verifyImageToken(context(), short.token)).resolves.toBeNull()
   })
 })
 

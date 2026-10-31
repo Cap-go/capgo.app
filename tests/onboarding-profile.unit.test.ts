@@ -265,10 +265,67 @@ describe('profile draft reset', () => {
 it('prefills and confirms complete names in the mandatory initial screen', async () => {
   state.user.first_name = 'Known'
   state.user.last_name = 'User'
+  state.user.onboarding = { org_name: 'Example Company' }
   const { container, profile } = mount(true)
   expect(container.querySelector<HTMLInputElement>('[data-test="onboarding-first-name"]')?.value).toBe('Known')
   expect(container.querySelector<HTMLInputElement>('[data-test="onboarding-last-name"]')?.value).toBe('User')
+  expect(container.querySelector<HTMLInputElement>('[data-test="onboarding-company-name"]')?.value).toBe('Example Company')
   expect(profile.isValid).toBe(true)
   expect(await profile.save()).toBe(true)
   expect(mocks.update).toHaveBeenCalledWith({ first_name: 'Known', last_name: 'User' })
+})
+
+it('requires a company name on the initial screen and saves it for organization creation', async () => {
+  const { container, profile } = mount(true)
+  await enter(container, 'first-name', 'Example')
+  await enter(container, 'last-name', 'User')
+  expect(profile.isValid).toBe(false)
+  await enter(container, 'company-name', '   ')
+  expect(profile.isValid).toBe(false)
+  await enter(container, 'company-name', 'Ex')
+  expect(profile.isValid).toBe(false)
+  await enter(container, 'company-name', '  Example Company  ')
+  expect(profile.isValid).toBe(true)
+  expect(await profile.save()).toBe(true)
+  expect(state.user.onboarding).toMatchObject({ org_name: 'Example Company' })
+  expect(state.user.onboarding).not.toHaveProperty('profile_draft')
+})
+
+it.each(['saved company', 'profile draft'])('rejects an overlong company restored from %s', async (source) => {
+  const overlongName = 'C'.repeat(81)
+  const maxLengthName = 'C'.repeat(80)
+  state.user.first_name = 'Example'
+  state.user.last_name = 'User'
+  state.user.onboarding = source === 'saved company'
+    ? { org_name: overlongName }
+    : { profile_draft: { company_name: overlongName } }
+  const { container, profile } = mount(true)
+
+  expect(container.querySelector<HTMLInputElement>('[data-test="onboarding-company-name"]')?.value).toBe(overlongName)
+  expect(profile.isValid).toBe(false)
+  expect(await profile.save()).toBe(false)
+  expect(mocks.update).not.toHaveBeenCalled()
+
+  await enter(container, 'company-name', `  ${maxLengthName}  `)
+  expect(profile.isValid).toBe(true)
+  expect(await profile.save()).toBe(true)
+  expect(state.user.onboarding).toMatchObject({ org_name: maxLengthName })
+})
+
+it('restores company drafts after refresh and preserves a deliberately cleared company', async () => {
+  vi.useFakeTimers()
+  state.user.onboarding = { org_name: 'Saved Company' }
+  const { container } = mount(true)
+  await enter(container, 'company-name', 'Draft Company')
+  await vi.advanceTimersByTimeAsync(500)
+  expect(state.user.onboarding).toMatchObject({ org_name: 'Saved Company', profile_draft: { company_name: 'Draft Company' } })
+  app?.unmount()
+  const restored = mount(true)
+  expect(restored.container.querySelector<HTMLInputElement>('[data-test="onboarding-company-name"]')?.value).toBe('Draft Company')
+  await enter(restored.container, 'company-name', '')
+  await vi.advanceTimersByTimeAsync(500)
+  app?.unmount()
+  const cleared = mount(true)
+  expect(cleared.container.querySelector<HTMLInputElement>('[data-test="onboarding-company-name"]')?.value).toBe('')
+  expect(cleared.profile.isValid).toBe(false)
 })
