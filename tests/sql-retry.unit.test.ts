@@ -5,7 +5,7 @@ async function noWait() {}
 const pgError = (code: string) => Object.assign(new Error(`pg ${code}`), { code })
 
 describe('retryTransientSqlError', () => {
-  it.each(['40P01', '40001'])('retries %s and returns the later result', async (code) => {
+  it.each(['40P01', '40001', '53300'])('retries %s and returns the later result', async (code) => {
     const run = vi.fn()
       .mockRejectedValueOnce(pgError(code))
       .mockResolvedValueOnce('ok')
@@ -19,6 +19,13 @@ describe('retryTransientSqlError', () => {
 
     await expect(retryTransientSqlError(run, noWait)).rejects.toThrow('pg 40P01')
     expect(run).toHaveBeenCalledTimes(SQL_MAX_ATTEMPTS)
+  })
+
+  it('waits longer when Postgres has no free connection', async () => {
+    const run = vi.fn().mockRejectedValue(pgError('53300'))
+
+    await expect(retryTransientSqlError(run, noWait)).rejects.toThrow('pg 53300')
+    expect(run).toHaveBeenCalledTimes(8)
   })
 
   it('does not retry other errors', async () => {

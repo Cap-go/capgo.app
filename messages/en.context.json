@@ -4151,5 +4151,15 @@
   "validation-contains-lowercase": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
   "validation-contains-numeric": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
   "validation-contains-symbol": "Used in Capgo web console areas: utils. Role: form validation error shown under an input. Translate for UI; keep Capgo product names, code, and placeholders ({label}, {min}, {max}) unchanged.",
-  "ai-task-request-build-desc": "Used in Capgo web console areas: components/dashboard. Card offering to copy a prompt so the user's AI coding agent requests a native build (Capgo Builder). Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "ai-task-request-build-desc": "Used in Capgo web console areas: components/dashboard. Card offering to copy a prompt so the user's AI coding agent requests a native build (Capgo Builder). Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "simulator": "Used in Capgo web console areas: pages/app, components/dashboard. Role: badge. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "simulator-did-not-start": "Used in Capgo web console areas: components/dashboard. Role: error sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "simulator-sign-in": "Used in Capgo web console areas: components/dashboard. Role: error sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "simulator-slot-minutes": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "simulator-starting": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "start-android-simulator": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "start-ios-simulator": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "simulator-did-not-stop": "Used in Capgo web console areas: components/dashboard. Role: error sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "simulator-stopping": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "stop-simulator": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
