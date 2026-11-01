@@ -5,7 +5,7 @@ import { executeSQL, USER_PASSWORD_HASH } from './test-utils.ts'
 
 function createContext() {
   return {
-    get: (key: string) => key === 'requestId' ? 'stripe-subscribe-dedupe-test' : undefined,
+    get: (key: string) => key === 'requestId' ? 'stripe-subscribe-replay-test' : undefined,
     req: { header: () => undefined },
   } as any
 }
@@ -63,7 +63,7 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
     const movement = stripeEventTestUtils.classifyRevenueMovement(
       { status: 'updated', paid_at: null, price_id: null, product_id: null, is_good_plan: false },
       updateData,
-      await loadRevenuePlans() as Parameters<typeof stripeEventTestUtils.classifyRevenueMovement>[2],
+      [],
     )
 
     const first = await stripeEventTestUtils.persistStripeInfoAndRevenueMovement(
@@ -87,13 +87,3 @@ describe('Stripe webhook replay dedupe (same event.id)', () => {
     expect(replay.status).toBe('duplicate')
   })
 })
-
-async function loadRevenuePlans() {
-  return executeSQL(
-    `SELECT name, stripe_id, stripe_id_us, price_m, price_y, price_m_id, price_y_id,
-            price_m_id_us, price_y_id_us, alt_price_m_ids, alt_price_y_ids, regional_price_ids
-     FROM public.plans
-     WHERE name = ANY($1::varchar[])`,
-    [['Solo', 'Maker', 'Team', 'Enterprise']],
-  )
-}

@@ -828,7 +828,6 @@ async function persistStripeInfoAndRevenueMovement(
   }
   const shouldRecordMovement = hasRevenueMovement(movement)
   const updateStatementPreview = buildStripeInfoUpdateStatement(customerId, transactionUpdateData)
-  const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatementPreview, movement)
 
   if (!updateStatementPreview && !shouldRecordMovement)
     return { status: 'applied', firstPaidAt: null }
@@ -876,7 +875,8 @@ async function persistStripeInfoAndRevenueMovement(
     if (transactionUpdateData.past_due_at === undefined && transactionUpdateData.status && lockedStripeInfo.past_due_at)
       transactionUpdateData.past_due_at = null
 
-    const updateStatement = updateStatementPreview
+    const updateStatement = buildStripeInfoUpdateStatement(customerId, transactionUpdateData)
+    const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatement, movement)
 
     if (shouldRecordProcessedEvent) {
       const processedEvent = await pgClient.query(`
