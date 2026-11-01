@@ -741,6 +741,11 @@ function shouldRecordProcessedStripeEvent(
   return Boolean(updateStatement) || hasRevenueMovement(movement)
 }
 
+/** Subscription subscribe Bento/tracking runs only after a fresh persist, not webhook replays. */
+function shouldSendSubscriptionSubscribeTrackingAfterPersist(didPersist: PersistRevenueMovementStatus) {
+  return didPersist === 'applied'
+}
+
 function getChurnReason(
   currentStripeInfo: Pick<StripeInfoRow, 'past_due_at' | 'status'> | null | undefined,
   nextStripeInfo: Pick<StripeInfoUpdate, 'status'> | null | undefined,
@@ -1440,29 +1445,31 @@ async function createdOrUpdated(
       eventOccurredAtIso,
       revenueMovement,
     )
-    if (didPersist === 'duplicate') {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'Skipping duplicate Stripe subscription event',
-        customerId: stripeData.data.customer_id,
-        eventOccurredAtIso,
-        stripeEventId: c.get('stripeEvent')!.id,
-        subscriptionId: stripeData.data.subscription_id,
-      })
-      return
+    if (!shouldSendSubscriptionSubscribeTrackingAfterPersist(didPersist)) {
+      if (didPersist === 'duplicate') {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'Skipping duplicate Stripe subscription event',
+          customerId: stripeData.data.customer_id,
+          eventOccurredAtIso,
+          stripeEventId: c.get('stripeEvent')!.id,
+          subscriptionId: stripeData.data.subscription_id,
+        })
+        return
+      }
+      if (didPersist === 'stale') {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'Skipping stale Stripe subscription event after row lock',
+          customerId: stripeData.data.customer_id,
+          eventOccurredAtIso,
+          subscriptionId: stripeData.data.subscription_id,
+        })
+        return
+      }
+      if (didPersist === 'missing')
+        return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
     }
-    if (didPersist === 'stale') {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'Skipping stale Stripe subscription event after row lock',
-        customerId: stripeData.data.customer_id,
-        eventOccurredAtIso,
-        subscriptionId: stripeData.data.subscription_id,
-      })
-      return
-    }
-    if (didPersist === 'missing')
-      return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
 
     const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
       firstPaidAt,
@@ -2385,6 +2392,8 @@ export const stripeEventTestUtils = {
   buildSubscriptionSubscribeBentoPayload,
   classifyRevenueMovement,
   shouldRecordProcessedStripeEvent,
+  shouldSendSubscriptionSubscribeTrackingAfterPersist,
+  persistStripeInfoAndRevenueMovement,
   getEventDateId,
   getPaidAtUpdate,
   resolveFirstPaidAt,

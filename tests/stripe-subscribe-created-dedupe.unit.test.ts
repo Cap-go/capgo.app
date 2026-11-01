@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
@@ -93,9 +94,22 @@ describe('subscription subscribe_created Bento dedupe', () => {
       uniqId: 'subscription:user:subscribe_updated:monthly:Solo',
     })
   })
+
+  it.concurrent('runs subscription subscribe tracking after billing tag sync and cache purge in createdOrUpdated', () => {
+    const source = readFileSync(`${import.meta.dirname}/../supabase/functions/_backend/triggers/stripe_event.ts`, 'utf8')
+    const syncMarker = 'await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)'
+    const purgeMarker = 'purgeOnPremCacheForOrg(c, org.id)'
+    const subscribeMarker = 'bento: buildSubscriptionSubscribeBentoPayload(statusName, eventName, plan.name, subscriptionMetadata)'
+    const syncIndex = source.indexOf(syncMarker)
+    const purgeIndex = source.indexOf(purgeMarker, syncIndex)
+    const subscribeIndex = source.indexOf(subscribeMarker, purgeIndex)
+    expect(syncIndex).toBeGreaterThan(0)
+    expect(purgeIndex).toBeGreaterThan(syncIndex)
+    expect(subscribeIndex).toBeGreaterThan(purgeIndex)
+  })
 })
 
-describe('subscribe_created tracking delivery path', () => {
+describe('second created subscription event for the same org', () => {
   const orgId = randomUUID()
 
   beforeEach(() => {
@@ -105,7 +119,7 @@ describe('subscribe_created tracking delivery path', () => {
     notifToOrgMembersMock.mockResolvedValue(true)
   })
 
-  it('routes repeated created subscribe events through the once helper, not cron throttling', async () => {
+  it('delivers subscribe_created Bento at most once per org across a second created webhook', async () => {
     const { sendEventToTracking } = await import('../supabase/functions/_backend/utils/tracking.ts')
     const metadata = { plan_name: 'Solo', plan_type: 'monthly' }
     const payload = {
@@ -129,5 +143,13 @@ describe('subscribe_created tracking delivery path', () => {
 
     expect(notifToOrgMembersOnceWithResultMock).toHaveBeenCalledTimes(2)
     expect(notifToOrgMembersMock).not.toHaveBeenCalled()
+    expect(notifToOrgMembersOnceWithResultMock.mock.calls.every(call => call[5] === payload.bento!.uniqId)).toBe(true)
+  })
+})
+
+describe('webhook replay blocks subscribe tracking before Bento', () => {
+  it.concurrent('does not send subscribe tracking when persist returns duplicate', () => {
+    expect(stripeEventTestUtils.shouldSendSubscriptionSubscribeTrackingAfterPersist('duplicate')).toBe(false)
+    expect(stripeEventTestUtils.shouldSendSubscriptionSubscribeTrackingAfterPersist('applied')).toBe(true)
   })
 })
