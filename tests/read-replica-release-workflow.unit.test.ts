@@ -7,23 +7,75 @@ const workflowUrl = new URL(
   '../.github/workflows/build_and_deploy.yml',
   import.meta.url,
 )
+const syncScriptUrl = new URL(
+  '../scripts/sync-read-replica-schema.ts',
+  import.meta.url,
+)
+
+function githubExpression(value: string): string {
+  return '$' + `{{ ${value} }}`
+}
 
 async function readReleaseWorkflow(): Promise<string> {
   return readFile(workflowUrl, 'utf8')
 }
 
+async function readReplicaSyncScript(): Promise<string> {
+  return readFile(syncScriptUrl, 'utf8')
+}
+
 describe('production read-replica release gate', () => {
   it.concurrent(
-    'does not run read-replica schema sync in the deploy workflow',
+    'warns when the Google subscription lags the primary publication after prod migrations',
     async () => {
-      const workflow = await readReleaseWorkflow()
+      const [workflow, syncScript] = await Promise.all([
+        readReleaseWorkflow(),
+        readReplicaSyncScript(),
+      ])
 
       expect(workflow).not.toContain('read_replica_schema:')
       expect(workflow).not.toContain('read_replica_subscription:')
-      expect(workflow).not.toContain('sync-read-replica-schema.ts')
-      expect(workflow).not.toContain('read_replica_schema')
+      expect(workflow).not.toContain('google-github-actions/auth@v3')
+      expect(workflow).toContain(
+        githubExpression('secrets.GOOGLE_SERVICE_ACCOUNT'),
+      )
+      expect(workflow).toContain('GOOGLE_SERVICE_ACCOUNT_BASE64')
+      expect(workflow).toContain('base64 --decode')
+      expect(workflow).toContain('gcloud auth activate-service-account')
+      expect(workflow).not.toContain('vars.GOOGLE_')
+      expect(workflow).not.toContain('READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).not.toContain('check-read-replica-hyperdrive-schema')
       expect(workflow).toContain('supabase_deploy:\n    needs: [changes]')
-      expect(workflow).toContain('sync_schema_types:\n    needs: [changes, supabase_deploy]')
+      expect(workflow).toContain(
+        'sync_schema_types:\n    needs: [changes, supabase_deploy]',
+      )
+      expect(workflow).toContain(
+        'bun scripts/sync-read-replica-schema.ts --check-subscription-publication',
+      )
+      expect(workflow).toContain('needs.supabase_deploy.result == \'success\'')
+      expect(syncScript.indexOf('preflightCompatibilityIssues')).toBeLessThan(
+        syncScript.indexOf('await applyPlan(plan)'),
+      )
+      expect(syncScript).toContain('readReplicaSchemaCatalogFromMigrations')
+    },
+  )
+
+  it.concurrent(
+    'does not gate downstream release publishing on read-replica schema sync',
+    async () => {
+      const workflow = await readReleaseWorkflow()
+
+      for (const job of [
+        'deploy_webapp',
+        'deploy_api',
+        'deploy_translation_worker',
+        'deploy_files',
+        'deploy_plugin_regions',
+      ]) {
+        expect(workflow).toMatch(
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy\\]`),
+        )
+      }
     },
   )
 
