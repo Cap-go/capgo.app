@@ -30,12 +30,6 @@ describe('Stripe webhook idempotency for subscription persist', () => {
       [ownerId, `stripe_subscribe_dedupe_${orgId.slice(0, 8)}@capgo.app`],
     )
     await executeSQL(
-      `INSERT INTO public.orgs (id, name, created_by, management_email, customer_id)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO NOTHING`,
-      [orgId, 'Subscribe dedupe org', ownerId, 'billing-dedupe@example.com', customerId],
-    )
-    await executeSQL(
       `INSERT INTO public.stripe_info (customer_id, status, product_id, subscription_id, billing_account)
        VALUES ($1, 'updated', (SELECT stripe_id FROM public.plans WHERE name = 'Solo' LIMIT 1), $2, 'ee')
        ON CONFLICT (customer_id) DO UPDATE SET
@@ -43,6 +37,12 @@ describe('Stripe webhook idempotency for subscription persist', () => {
          product_id = EXCLUDED.product_id,
          subscription_id = EXCLUDED.subscription_id`,
       [customerId, `sub_${orgId.slice(0, 8)}`],
+    )
+    await executeSQL(
+      `INSERT INTO public.orgs (id, name, created_by, management_email, customer_id)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (id) DO NOTHING`,
+      [orgId, 'Subscribe dedupe org', ownerId, 'billing-dedupe@example.com', customerId],
     )
   })
 
