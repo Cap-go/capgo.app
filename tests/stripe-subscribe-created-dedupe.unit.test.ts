@@ -65,6 +65,18 @@ describe('subscription subscribe_created Bento dedupe', () => {
     })
   })
 
+  it.concurrent('records processed Stripe events for subscription stripe_info writes without revenue movement', () => {
+    const updateStatement = { text: 'UPDATE public.stripe_info SET status = $2 WHERE customer_id = $1', values: ['cus_x', 'created'] }
+    expect(stripeEventTestUtils.shouldRecordProcessedStripeEvent(
+      updateStatement,
+      stripeEventTestUtils.classifyRevenueMovement(
+        { status: 'updated', paid_at: null, price_id: null, product_id: null, is_good_plan: false },
+        { status: 'created' },
+        [],
+      ),
+    )).toBe(true)
+  })
+
   it.concurrent('keeps cron throttling for updated and succeeded subscribe events', () => {
     const metadata = { plan_name: 'Solo', plan_type: 'monthly' }
     expect(stripeEventTestUtils.buildSubscriptionSubscribeBentoPayload(

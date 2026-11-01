@@ -734,6 +734,13 @@ function hasRevenueMovement(movement: RevenueMovement) {
     || movement.churnMrr > 0
 }
 
+function shouldRecordProcessedStripeEvent(
+  updateStatement: ReturnType<typeof buildStripeInfoUpdateStatement>,
+  movement: RevenueMovement,
+) {
+  return Boolean(updateStatement) || hasRevenueMovement(movement)
+}
+
 function getChurnReason(
   currentStripeInfo: Pick<StripeInfoRow, 'past_due_at' | 'status'> | null | undefined,
   nextStripeInfo: Pick<StripeInfoUpdate, 'status'> | null | undefined,
@@ -816,7 +823,7 @@ async function persistStripeInfoAndRevenueMovement(
   }
   const shouldRecordMovement = hasRevenueMovement(movement)
   const updateStatementPreview = buildStripeInfoUpdateStatement(customerId, transactionUpdateData)
-  const shouldRecordProcessedEvent = Boolean(updateStatementPreview) || shouldRecordMovement
+  const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatementPreview, movement)
 
   if (!updateStatementPreview && !shouldRecordMovement)
     return { status: 'applied', firstPaidAt: null }
@@ -2377,7 +2384,7 @@ export const stripeEventTestUtils = {
   buildSubscriptionEventMetadata,
   buildSubscriptionSubscribeBentoPayload,
   classifyRevenueMovement,
-  persistStripeInfoAndRevenueMovement,
+  shouldRecordProcessedStripeEvent,
   getEventDateId,
   getPaidAtUpdate,
   resolveFirstPaidAt,
