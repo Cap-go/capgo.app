@@ -54,7 +54,7 @@ describe('Stripe webhook idempotency for subscription persist', () => {
     const movement = stripeEventTestUtils.classifyRevenueMovement(
       { status: 'updated', paid_at: null, price_id: null, product_id: null, is_good_plan: false },
       updateData,
-      await loadRevenuePlans(),
+      await loadRevenuePlans() as Parameters<typeof stripeEventTestUtils.classifyRevenueMovement>[2],
     )
 
     const first = await stripeEventTestUtils.persistStripeInfoAndRevenueMovement(
