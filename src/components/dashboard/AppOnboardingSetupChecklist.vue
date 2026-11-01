@@ -244,7 +244,7 @@ function statusLabel(status: string | undefined) {
           <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
             {{ t('setup-checklist-complete-description') }}
           </p>
-          <button type="button" class="d-btn mt-4 min-h-11 self-start border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90" :disabled="hiding || leaving" @click="emit('complete')">
+          <button type="button" class="d-btn mt-4 min-h-11 self-start d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
             {{ completionAction || t('setup-checklist-open-app') }}
             <IconArrowRight class="h-4 w-4" aria-hidden="true" />
           </button>
@@ -279,7 +279,7 @@ function statusLabel(status: string | undefined) {
               {{ t('app-onboarding-command-apikey-loading') }}
             </output>
             <div class="mt-3 flex flex-wrap gap-2" data-test="setup-checklist-start-actions">
-              <button type="button" class="d-btn h-auto min-h-11 border-primary-500 bg-primary-500 px-3 py-2 text-sm text-white hover:border-primary-500 hover:bg-primary-500/90 focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2" data-test="setup-checklist-copy-command" :disabled="!command" @click="emit('copyCommand')">
+              <button type="button" class="d-btn h-auto min-h-11 d-btn-primary px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2" data-test="setup-checklist-copy-command" :disabled="!command" @click="emit('copyCommand')">
                 <IconCopy class="h-4 w-4 shrink-0" aria-hidden="true" />
                 {{ t('setup-checklist-copy-command') }}
               </button>
@@ -288,7 +288,7 @@ function statusLabel(status: string | undefined) {
           <button
             v-if="selectedStep.id === 'add_channel' && selectedStep.status !== 'done'"
             type="button"
-            class="d-btn mt-3 min-h-11 self-start border-primary-500 bg-primary-500 px-4 text-sm text-white hover:border-primary-500 hover:bg-primary-500/90"
+            class="d-btn mt-3 min-h-11 self-start d-btn-primary px-4 text-sm"
             data-test="setup-checklist-create-channel"
             @click="channelFlowOpen = true"
           >

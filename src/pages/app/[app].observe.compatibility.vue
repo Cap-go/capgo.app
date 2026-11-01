@@ -998,7 +998,7 @@ watchEffect(async () => {
           <a
             v-if="resolutionDetailMember?.email"
             :href="`mailto:${resolutionDetailMember.email}`"
-            class="inline-flex items-center px-3 py-1.5 ml-auto text-xs font-medium text-white rounded-md shrink-0 bg-blue-600 hover:bg-blue-700"
+            class="ml-auto shrink-0 d-btn d-btn-sm d-btn-primary"
             data-test="compatibility-email-user"
           >
             {{ t('compatibility-email-user') }}

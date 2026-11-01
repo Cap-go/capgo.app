@@ -1775,7 +1775,7 @@ async function transferAppOwnership() {
               {{ t('delete-app') }}
             </button>
             <button
-              class="p-2 ml-3 text-white bg-blue-500 rounded-lg hover:bg-blue-600 d-btn"
+              class="ml-3 d-btn d-btn-primary"
               type="submit"
               color="secondary"
               shape="round"

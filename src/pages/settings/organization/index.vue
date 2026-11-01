@@ -436,7 +436,7 @@ async function copyOrganizationId() {
                 </button>
                 <button
                   id="save-changes"
-                  class="p-2 ml-3 text-white bg-blue-500 rounded-lg cursor-pointer hover:bg-blue-600 d-btn"
+                  class="ml-3 d-btn d-btn-primary"
                   type="submit"
                   color="secondary"
                   shape="round"

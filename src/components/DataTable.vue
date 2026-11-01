@@ -623,7 +623,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
             :aria-describedby="addDisabled && addTooltip ? addTooltipId : undefined"
             :aria-disabled="addDisabled"
             :title="addDisabled ? addTooltip : t('add-one')"
-            class="inline-flex items-center gap-2 h-9 px-3 text-sm font-semibold text-white rounded-lg bg-blue-600 shadow-xs cursor-pointer transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 aria-disabled:cursor-not-allowed aria-disabled:bg-slate-200 aria-disabled:text-slate-400 aria-disabled:hover:bg-slate-200 dark:aria-disabled:bg-white/10 dark:aria-disabled:text-slate-500"
+            class="d-btn d-btn-primary h-9 min-h-9 gap-2 px-3 text-sm font-semibold rounded-lg aria-disabled:cursor-not-allowed aria-disabled:border-slate-200 aria-disabled:bg-slate-200 aria-disabled:text-slate-400 dark:aria-disabled:border-transparent dark:aria-disabled:bg-white/10 dark:aria-disabled:text-slate-500"
             type="button" @click="handleAddClick"
           >
             <plusOutline v-if="!isAdding" class="w-4 h-4" />
