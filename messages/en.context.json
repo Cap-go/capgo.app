@@ -769,7 +769,6 @@
   "builder-intro-start-first-build": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "builder-promo-arrow": "Used in Capgo web console. Role: UI label about \"builder promo arrow\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "builder-promo-back": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "builder-promo-banner-cta": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "builder-promo-banner-subtitle": "Used in Capgo web console areas: components/dashboard, utils. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "builder-promo-banner-title": "Used in Capgo web console areas: components/dashboard, utils. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "builder-promo-close": "Used in Capgo web console areas: components/dashboard. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
