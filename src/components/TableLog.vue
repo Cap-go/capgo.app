@@ -324,7 +324,7 @@ onMounted(() => {
           v-if="exportable"
           class="d-btn d-btn-outline mr-2 px-3 font-medium"
           type="button"
-          :aria-label="t('export')"
+          :aria-label="t('download-csv')"
           :disabled="isLoading || exportLoading"
           @click="exportData"
         >
