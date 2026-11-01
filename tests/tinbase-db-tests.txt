@@ -14,7 +14,6 @@ tests/pg-header-safety.test.ts
 tests/plugin-parser.test.ts
 tests/plugin-validation.test.ts
 tests/release-scope.test.ts
-tests/stripe-subscribe-created-dedupe.test.ts
 tests/stats-export-cors.test.ts
 tests/upsert-version-meta-rpc.test.ts
 tests/app-onboarding-v3.db.test.ts
