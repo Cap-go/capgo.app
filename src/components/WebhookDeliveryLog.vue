@@ -186,7 +186,7 @@ function formatJson(data: any): string {
         </div>
         <button
           type="button"
-          class="flex items-center gap-1 px-3 py-1.5 ml-auto text-sm font-medium text-gray-600 rounded-lg hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+          class="d-btn d-btn-ghost d-btn-sm ml-auto font-medium"
           :disabled="isLoadingDeliveries"
           @click="loadDeliveries"
         >

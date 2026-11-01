@@ -471,7 +471,7 @@ function back(): void {
             </code>
             <button
               type="button"
-              class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-700 transition-colors hover:border-azure-500/45 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+              class="d-btn d-btn-outline h-auto shrink-0 gap-1.5 rounded-xl px-3.5"
               @click="copy(generatedKey ?? '')"
             >
               <IconClipboard class="h-4 w-4" />
@@ -491,7 +491,7 @@ function back(): void {
             </code>
             <button
               type="button"
-              class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition-colors hover:border-azure-500/45 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+              class="d-btn d-btn-outline h-auto shrink-0 gap-1.5 rounded-xl px-3"
               @click="copy(pasteLine)"
             >
               <IconClipboard class="h-4 w-4" />
@@ -507,7 +507,7 @@ function back(): void {
         <div class="mt-6">
           <button
             type="button"
-            class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base font-semibold text-slate-700 transition-colors hover:border-azure-500/45 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+            class="d-btn d-btn-outline d-btn-lg w-full rounded-xl"
             @click="back"
           >
             <IconArrowLeft class="h-5 w-5" />
