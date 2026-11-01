@@ -76,7 +76,7 @@ async function copyOrgId() {
         <div class="flex flex-wrap gap-3 mt-6">
           <button
             type="button"
-            class="d-btn d-btn-primary"
+            class="d-btn d-btn-warning"
             @click="goToChangePassword"
           >
             {{ t('update-password-now') }}
@@ -84,7 +84,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="d-btn d-btn-outline"
+            class="d-btn d-btn-outline d-btn-warning"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
@@ -112,7 +112,7 @@ async function copyOrgId() {
         <div class="flex flex-wrap gap-3 mt-6">
           <button
             type="button"
-            class="d-btn d-btn-primary"
+            class="d-btn d-btn-warning"
             @click="goToAccountSettings"
           >
             {{ t('setup-2fa-now') }}
@@ -120,7 +120,7 @@ async function copyOrgId() {
           <button
             v-if="showCopyOrgId"
             type="button"
-            class="d-btn d-btn-outline"
+            class="d-btn d-btn-outline d-btn-warning"
             @click="copyOrgId"
           >
             {{ t('copy-organization-id') }}
@@ -148,7 +148,7 @@ async function copyOrgId() {
         <div v-if="!hideExternalPurchaseFlows" class="mt-6">
           <button
             type="button"
-            class="d-btn d-btn-primary"
+            class="d-btn d-btn-error"
             @click="goToPlans"
           >
             {{ t('plan-upgrade-v2') }}

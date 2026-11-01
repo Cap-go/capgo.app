@@ -30,7 +30,7 @@ function goToPlans() {
     <button
       v-if="!hideExternalPurchaseFlows"
       type="button"
-      class="d-btn d-btn-primary"
+      class="d-btn d-btn-warning"
       @click="goToPlans"
     >
       {{ t('plan-upgrade-v2') }}

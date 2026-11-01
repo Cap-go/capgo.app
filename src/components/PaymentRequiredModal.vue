@@ -56,7 +56,7 @@ function goToPlans() {
       <button
         v-if="!hideExternalPurchaseFlows"
         type="button"
-        class="d-btn d-btn-primary"
+        class="d-btn d-btn-warning"
         @click="goToPlans"
       >
         <svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
