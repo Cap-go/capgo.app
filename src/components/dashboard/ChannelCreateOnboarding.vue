@@ -419,7 +419,7 @@ defineExpose({ isSubmitting })
           </div>
         </div>
 
-        <button type="button" class="d-btn mt-6 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-500/90" data-test="channel-create-continue" @click="continueOnboarding">
+        <button type="button" class="d-btn mt-6 min-h-12 w-full d-btn-primary" data-test="channel-create-continue" @click="continueOnboarding">
           {{ t('channel-create-onboarding-continue') }}
           <IconArrowRight class="h-4 w-4" />
         </button>
@@ -551,7 +551,7 @@ defineExpose({ isSubmitting })
           </p>
         </div>
 
-        <button type="submit" class="d-btn mt-5 min-h-12 w-full border-0 bg-primary-500 text-white hover:bg-primary-500/90 disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400" data-test="channel-create-submit" :disabled="!canSubmit">
+        <button type="submit" class="d-btn mt-5 min-h-12 w-full d-btn-primary disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400" data-test="channel-create-submit" :disabled="!canSubmit">
           <IconLoader v-if="isSubmitting" class="h-4 w-4 animate-spin" />
           <template v-else>
             {{ t('channel-create-onboarding-submit') }}

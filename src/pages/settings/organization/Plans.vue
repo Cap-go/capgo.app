@@ -944,7 +944,7 @@ function buttonStyle(p: Plan) {
             </p>
           </div>
           <a
-            class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
+            class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-xs font-semibold d-btn-primary sm:w-auto"
             href="https://capgo.app/premium-support/"
             rel="noopener noreferrer"
             target="_blank"

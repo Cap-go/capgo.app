@@ -662,7 +662,7 @@ watch(open, (value) => {
             />
             <button
               type="submit"
-              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-azure-500 text-white disabled:opacity-40"
+              class="d-btn d-btn-primary d-btn-square size-8 min-h-8 shrink-0 rounded-lg"
               :disabled="!input.trim() || loading"
               :aria-label="t('assistant-send')"
             >

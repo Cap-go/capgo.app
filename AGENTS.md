@@ -875,6 +875,13 @@ Key points:
   and composition-friendly patterns rather than bespoke CSS.
 - Use DaisyUI (`d-` prefixed classes) for buttons, inputs, and other interactive
   primitives to keep behavior and spacing consistent.
+- Buttons: the primary action is always `d-btn d-btn-primary` (size with
+  `d-btn-sm`/`d-btn-xs`); secondary actions use `d-btn-outline` or `d-btn-ghost`,
+  destructive ones `d-btn-error`. Never hand-roll a button with `bg-blue-*`,
+  `bg-azure-*`, `bg-primary-*` + `text-white`. The theme owns the colors (slate in
+  light mode, azure with dark text in dark mode via `--btn-primary-*` in
+  `src/styles/style.css`). Icon-only buttons, tabs and menu items may stay
+  custom but need an accessible name.
 - Konsta components are reserved for the safe area helpers. Avoid importing
   `konsta` anywhere else in the app.
 - Capgo's look centers on deep slate bases with the "Extract" azure highlight

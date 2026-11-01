@@ -87,6 +87,10 @@
   color-scheme: dark;
 
   --color-primary: #515271;
+  /* Primary buttons only: slate is 1.95:1 against the dark base, azure is 5.1:1
+     and keeps 7.1:1 for the label with near-black text. */
+  --btn-primary-bg: #119eff;
+  --btn-primary-fg: #020617;
   --color-secondary: #119eff;
   --color-accent: #1FB2A5;
   --color-neutral: #191D24;
@@ -312,6 +316,15 @@ html {
 
 #the-stunning-bar p {
   padding: 20px;
+}
+
+/* Primary buttons follow --btn-primary-* when the theme sets them (capgodark). */
+.d-btn-primary {
+  --d-btn-color: var(--btn-primary-bg, var(--color-primary));
+}
+
+.d-btn-primary:not(.d-btn-outline, .d-btn-ghost, .d-btn-link, .d-btn-soft, .d-btn-dash) {
+  --d-btn-fg: var(--btn-primary-fg, var(--color-primary-content));
 }
 
 /* Fix outline button appearance in light mode */

@@ -523,7 +523,7 @@ async function submit(form: { current_password: string, password: string, passwo
             <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">
               <div class="flex self-end">
                 <button
-                  class="p-2 ml-3 text-white bg-blue-500 rounded-sm hover:bg-blue-600 d-btn"
+                  class="ml-3 d-btn d-btn-primary"
                   type="submit"
                   color="secondary"
                   shape="round"
