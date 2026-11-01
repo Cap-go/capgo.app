@@ -2160,6 +2160,7 @@ getKeys()
                   <button
                     class="text-red-500 d-btn d-btn-xs d-btn-ghost shrink-0"
                     type="button"
+                    :aria-label="t('remove')"
                     @click="toggleApp(appId)"
                   >
                     <IconTrash class="w-4 h-4" />

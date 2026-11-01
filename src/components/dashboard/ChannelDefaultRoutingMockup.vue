@@ -283,6 +283,7 @@ const {
           v-if="!prefersReducedMotion"
           type="button"
           :class="props.embedded ? 'd-btn d-btn-sm shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10' : 'cr-replay'"
+          :aria-label="t('channel-routing-mockup-replay')"
           @click="replay"
         >
           <IconRefreshCw class="h-4 w-4" aria-hidden="true" />

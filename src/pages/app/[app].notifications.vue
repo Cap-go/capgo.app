@@ -678,6 +678,7 @@ watch(activeNotificationTab, () => {
               :class="activeNotificationTab === tab.key
                 ? 'text-blue-600 dark:text-blue-400 bg-white dark:bg-slate-800 border border-blue-200/70 dark:border-blue-800 shadow-sm hover:ring-1 hover:ring-blue-200 dark:hover:ring-blue-700 hover:bg-blue-50 dark:hover:bg-slate-900 transition-colors'
                 : 'border border-transparent text-slate-500/75 dark:text-slate-400/75 hover:bg-white dark:hover:bg-slate-900 hover:text-slate-700 dark:hover:text-slate-200 transition-colors'"
+              :aria-label="t(tab.label)"
               :aria-current="activeNotificationTab === tab.key ? 'page' : undefined"
               @click="setNotificationTab(tab)"
             >
