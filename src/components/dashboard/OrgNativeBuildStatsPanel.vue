@@ -7,6 +7,7 @@ import IconHammer from '~icons/lucide/hammer'
 import BuildChartControls from '~/components/dashboard/BuildChartControls.vue'
 import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
+import PageHeader from '~/components/PageHeader.vue'
 import Spinner from '~/components/Spinner.vue'
 import { fetchAllRows, formatBuildDuration, getBuildChartWindow, summarizeBuilds } from '~/services/buildCharts'
 import { useConsole } from '~/services/console'
@@ -137,22 +138,16 @@ const kpis = computed(() => [
 
 <template>
   <section class="flex flex-col gap-4" data-testid="org-native-build-stats">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div class="min-w-0">
-        <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
-          {{ t('native-build-stats-title') }}
-        </h2>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ t('native-build-stats-help') }}
-        </p>
-      </div>
-      <BuildChartControls
-        v-model:use-billing-period="useBillingPeriod"
-        v-model:show-cumulative="showCumulative"
-        :is-refreshing="chartsRefreshing"
-        @reload="reloadTrigger++"
-      />
-    </div>
+    <PageHeader :title="t('native-build-stats-title')" :description="t('native-build-stats-help')">
+      <template #actions>
+        <BuildChartControls
+          v-model:use-billing-period="useBillingPeriod"
+          v-model:show-cumulative="showCumulative"
+          :is-refreshing="chartsRefreshing"
+          @reload="reloadTrigger++"
+        />
+      </template>
+    </PageHeader>
 
     <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
       <div
