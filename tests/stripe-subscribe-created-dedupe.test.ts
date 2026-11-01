@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { stripeEventTestUtils } from '../supabase/functions/_backend/triggers/stripe_event.ts'
-import { executeSQL } from './test-utils.ts'
+import { executeSQL, USER_PASSWORD_HASH } from './test-utils.ts'
 
 function createContext() {
   return {
@@ -19,7 +19,13 @@ describe('Stripe webhook idempotency for subscription persist', () => {
   beforeEach(async () => {
     await executeSQL(
       `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at)
-       VALUES ($1, $2, crypt('testtest', gen_salt('bf')), now(), now(), now())
+       VALUES ($1, $2, $3, now(), now(), now())
+       ON CONFLICT (id) DO NOTHING`,
+      [ownerId, `stripe_subscribe_dedupe_${orgId.slice(0, 8)}@capgo.app`, USER_PASSWORD_HASH],
+    )
+    await executeSQL(
+      `INSERT INTO public.users (id, email)
+       VALUES ($1, $2)
        ON CONFLICT (id) DO NOTHING`,
       [ownerId, `stripe_subscribe_dedupe_${orgId.slice(0, 8)}@capgo.app`],
     )
