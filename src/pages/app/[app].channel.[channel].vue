@@ -15,6 +15,7 @@ import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconWarning from '~icons/lucide/alert-triangle'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
 import { BUNDLE_PICKER_COLUMNS } from '~/services/bundleColumns'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
@@ -2212,18 +2213,19 @@ async function copyCurlCommand() {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('channel-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('channel-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
-        {{ t('back-to-channels') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('channel-not-found')"
+      :description="t('channel-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+          {{ t('back-to-channels') }}
+        </button>
+      </template>
+    </EmptyState>
     <!-- Teleport Content for Promote To Channel Dialog -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === promoteDialogId" defer to="#dialog-v2-content">
       <fieldset class="w-full space-y-2" data-test="promote-channel-targets">
