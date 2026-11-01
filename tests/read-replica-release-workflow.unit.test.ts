@@ -51,6 +51,9 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('sync-read-replica-schema.ts --refresh-subscription')
       expect(workflow).toContain('sync-read-replica-schema.ts --guard')
       expect(workflow).toContain(
+        'bun scripts/sync-read-replica-schema.ts --check-subscription-publication',
+      )
+      expect(workflow).toContain(
         [
           'read_replica_schema:',
           '    needs: changes',
@@ -91,12 +94,7 @@ describe('production read-replica release gate', () => {
         'deploy_plugin_regions',
       ]) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema(?:, read_replica_subscription)?\\]`),
-        )
-      }
-      for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions']) {
-        expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema, read_replica_subscription\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, (?:build_webapp, )?supabase_deploy, read_replica_schema, read_replica_subscription\\]`),
         )
       }
     },
