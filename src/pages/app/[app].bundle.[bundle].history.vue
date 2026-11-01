@@ -4,6 +4,7 @@ import { ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import EmptyState from '~/components/EmptyState.vue'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
@@ -73,18 +74,19 @@ watchEffect(async () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('bundle-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('bundle-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
-        {{ t('back-to-bundles') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('bundle-not-found')"
+      :description="t('bundle-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
+          {{ t('back-to-bundles') }}
+        </button>
+      </template>
+    </EmptyState>
   </div>
 </template>
 

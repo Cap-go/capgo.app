@@ -11,6 +11,7 @@ import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
 import IconChevronRight from '~icons/lucide/chevron-right'
 import IconExternalLink from '~icons/lucide/external-link'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
 import PluginAdoptionPanel from '~/components/observe/PluginAdoptionPanel.vue'
 import { comparePackages, hasPlatformChecksumMetadataDrift } from '~/services/bundleCompatibility'
 import { dependencyDiffPath, groupCompatibilityEvents, platformLabel } from '~/services/compatibilityEvents'
@@ -915,18 +916,7 @@ watchEffect(async () => {
       </div>
     </div>
 
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
 
     <!-- Accept dialog content (reason input) -->
     <Teleport

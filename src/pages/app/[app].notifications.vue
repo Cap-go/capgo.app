@@ -8,12 +8,12 @@ import { toast } from 'vue-sonner'
 import IconChartBar from '~icons/heroicons/chart-bar'
 import IconCode from '~icons/heroicons/code-bracket'
 import IconMegaphone from '~icons/heroicons/megaphone'
-import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconCheckCircle from '~icons/lucide/check-circle-2'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSearch from '~icons/lucide/search'
 import IconSend from '~icons/lucide/send'
 import IconZap from '~icons/lucide/zap'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { useDisplayStore } from '~/stores/display'
@@ -1167,18 +1167,7 @@ watch(activeNotificationTab, () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push('/apps')">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
   </div>
 </template>
 

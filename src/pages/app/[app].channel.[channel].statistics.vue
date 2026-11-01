@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import LiveReleaseDashboard from '~/components/dashboard/LiveReleaseDashboard.vue'
+import EmptyState from '~/components/EmptyState.vue'
 import { useConsole } from '~/services/console'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
@@ -111,18 +112,19 @@ watchEffect(async () => {
       <LiveReleaseDashboard :app-id="packageId" :channel-id="id" />
     </div>
 
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-red-500" />
-      <h2 class="text-xl font-semibold text-slate-900 dark:text-white">
-        {{ t('channel-not-found') }}
-      </h2>
-      <p class="mt-2 text-slate-600 dark:text-slate-400">
-        {{ t('channel-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
-        {{ t('back-to-channels') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('channel-not-found')"
+      :description="t('channel-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+          {{ t('back-to-channels') }}
+        </button>
+      </template>
+    </EmptyState>
   </div>
 </template>
 
