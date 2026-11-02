@@ -54,8 +54,9 @@ async function getActivePlanNameOrg(c: Context, orgId: string, requirePaid = fal
     return null
 
   if (requirePaid) {
-    const subscription = await getSubscriptionData(c, org.customer_id, stripeInfo.subscription_id)
-    if (stripeInfo.past_due_at || subscription?.status !== 'active' || subscription.productId !== stripeInfo.product_id)
+    const subscriptionResult = await getSubscriptionData(c, org.customer_id, stripeInfo.subscription_id)
+    const subscription = subscriptionResult.ok ? subscriptionResult.data : null
+    if (stripeInfo.past_due_at || subscription?.status !== 'active' || subscription?.productId !== stripeInfo.product_id)
       return null
   }
 

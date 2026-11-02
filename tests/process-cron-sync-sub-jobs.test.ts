@@ -89,7 +89,7 @@ describe('process_cron_sync_sub_jobs', () => {
 
     expect(rows.length).toBeGreaterThan(0)
     rows.forEach((row: { delay_seconds: number }, index: number) => {
-      expect(row.delay_seconds).toBeCloseTo(Math.floor(index / 500) * 60, -1)
+      expect(row.delay_seconds).toBeCloseTo(Math.floor(index / 120) * 60, -1)
     })
   })
 
@@ -99,7 +99,7 @@ describe('process_cron_sync_sub_jobs', () => {
         FROM public.cron_tasks
         WHERE name = 'per_minute_queues'`,
     )
-    expect(task).toMatchObject({ batch_size: 100, minute_interval: 1, target: ['cron_sync_sub'] })
+    expect(task).toMatchObject({ batch_size: 50, minute_interval: 1, target: ['cron_sync_sub'] })
   })
 })
 
