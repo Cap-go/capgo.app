@@ -168,6 +168,19 @@ describe('stripe subscription sync', () => {
     expect(dbMocks.updateCalls.at(-1)?.status).toBe('canceled')
   })
 
+  it('still writes canceled when an untracked subscription has no replacement in Stripe', async () => {
+    stripeApi.retrieve.mockResolvedValue({
+      ...activeSubscription('sub_unpaid'),
+      status: 'unpaid',
+    })
+    stripeApi.list.mockResolvedValue({ data: [] })
+    const { syncSubscriptionData } = await loadStripeModule()
+
+    await syncSubscriptionData(createContext(), 'cus_unpaid', 'sub_unpaid')
+
+    expect(dbMocks.updateCalls.at(-1)?.status).toBe('canceled')
+  })
+
   it('retries Stripe rate-limit errors with backoff before succeeding', async () => {
     const { StripeRateLimitError } = Stripe.errors
     const rateLimitError = new StripeRateLimitError({ message: 'Too many requests' } as any)

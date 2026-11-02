@@ -472,8 +472,11 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
           })
           return
         }
-        if (subscriptionData.status !== 'canceled')
+        if (subscriptionData.status !== 'canceled') {
           subscriptionData = null
+          if (replacementLookup.reason === 'not_found')
+            stripeConfirmedAbsent = true
+        }
       }
       else {
         subscriptionData = replacementLookup.data
