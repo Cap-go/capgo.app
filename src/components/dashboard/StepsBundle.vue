@@ -278,7 +278,7 @@ onUnmounted(() => {
   <section class="overflow-y-auto py-12 h-full sm:py-16 lg:py-20 max-h-fit bg-slate-100 dark:bg-slate-900">
     <div class="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
       <div class="flex justify-items-center items-center place-content-center">
-        <button v-if="!onboarding" type="button" class="mr-6 text-white bg-gray-800 d-btn d-btn-outline" @click="emit('closeStep')">
+        <button v-if="!onboarding" type="button" class="mr-6 d-btn d-btn-outline" :aria-label="t('go-back')" @click="emit('closeStep')">
           <arrowBack />
         </button>
         <div v-if="props.onboarding" class="text-center">
@@ -343,7 +343,7 @@ onUnmounted(() => {
               </p>
               <button
                 type="button"
-                class="inline-flex items-center py-2 px-4 mt-4 text-sm font-semibold rounded-md transition-colors duration-200 focus:ring-2 focus:ring-offset-2 bg-muted-blue-50 text-muted-blue-800 hover:bg-muted-blue-100 focus:outline-hidden focus:ring-muted-blue-500"
+                class="d-btn d-btn-outline mt-4"
                 @click="openInviteDialog"
               >
                 {{ t('onboarding-invite-option-cta') }}

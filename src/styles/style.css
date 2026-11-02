@@ -101,7 +101,9 @@
   --color-info: #3ABFF8;
   --color-success: #88d4a6;
   --color-warning: #ff7211;
-  --color-error: #456b9a;
+  --color-warning-content: #020617;
+  --color-error: #f87272;
+  --color-error-content: #020617;
   --radius-selector: 1rem;
   --radius-field: 0.5rem;
   --radius-box: 1rem;
@@ -328,12 +330,12 @@ html {
 }
 
 /* Fix outline button appearance in light mode */
-[data-theme="capgolight"] .d-btn-outline {
+[data-theme="capgolight"] .d-btn-outline:not(.d-btn-error, .d-btn-warning, .d-btn-success) {
   --btn-color: #64748b;
   border-color: #cbd5e1;
 }
 
-[data-theme="capgolight"] .d-btn-outline:hover {
+[data-theme="capgolight"] .d-btn-outline:not(.d-btn-error, .d-btn-warning, .d-btn-success):hover {
   --btn-color: #475569;
   border-color: #94a3b8;
   background-color: #f1f5f9;

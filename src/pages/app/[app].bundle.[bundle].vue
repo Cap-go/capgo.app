@@ -903,6 +903,7 @@ async function deleteBundle() {
                     <button
                       type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                      :aria-label="t('copy')"
                       @click="copyToast(version?.checksum ?? '')"
                     >
                       <IconDocumentDuplicate class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -931,6 +932,7 @@ async function deleteBundle() {
                       <button
                         type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                        :aria-label="t('settings')"
                         @click="openChannelSettings(chn)"
                       >
                         <Settings class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -1037,6 +1039,7 @@ async function deleteBundle() {
                       <button
                         type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                        :aria-label="t('download')"
                         @click="openDownload()"
                       >
                         <IconArchiveBoxArrowDown class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -1071,6 +1074,7 @@ async function deleteBundle() {
                     <button
                       type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                      :aria-label="t('delete')"
                       @click="deleteBundle"
                     >
                       <IconTrash class="w-4 h-4 text-red-500 transition-colors cursor-pointer dark:text-red-400 hover:text-red-600" />

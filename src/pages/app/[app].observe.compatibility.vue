@@ -898,7 +898,7 @@ watchEffect(async () => {
                           v-if="!group.resolved"
                           type="button"
                           data-test="compatibility-accept"
-                          class="inline-flex items-center px-3 py-1 text-xs font-medium text-white rounded-md bg-amber-600 hover:bg-amber-700"
+                          class="d-btn d-btn-primary d-btn-xs"
                           @click="openAcceptDialog(group)"
                         >
                           {{ t('compatibility-accept') }}
