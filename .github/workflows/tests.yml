@@ -336,7 +336,7 @@ jobs:
   test_db:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     name: Run DB tests (Tinbase)
     permissions:
