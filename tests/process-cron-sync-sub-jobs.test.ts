@@ -93,13 +93,13 @@ describe('process_cron_sync_sub_jobs', () => {
     })
   })
 
-  it('drains cron_sync_sub in batches of 100 now that it no longer shares the stats API budget', async () => {
+  it('drains cron_sync_sub in batches of 25 capped at 10 calls per minute (250/min)', async () => {
     const [task] = await executeSQL(
       `SELECT batch_size, minute_interval, target::jsonb AS target
         FROM public.cron_tasks
         WHERE name = 'per_minute_queues'`,
     )
-    expect(task).toMatchObject({ batch_size: 50, minute_interval: 1, target: ['cron_sync_sub'] })
+    expect(task).toMatchObject({ batch_size: 25, minute_interval: 1, target: ['cron_sync_sub'] })
   })
 })
 

@@ -1,13 +1,13 @@
 -- Oct 27 raised the daily cron_sync_sub release rate to 500 orgs/min so Stripe
 -- reads spiked during the 04:00 UTC burst and transient API failures were
 -- misread as canceled subscriptions. Throttle the release to 120 orgs/min (~67
--- minutes for ~8,000 orgs) and cap the per-minute consumer at 250 orgs/min so
--- the queue stays ahead of Stripe without hammering it.
+-- minutes for ~8,000 orgs) and cap the per-minute consumer at 250 orgs/min
+-- (process_function_queue sends at most 10 calls per tick, batch_size 25).
 
 UPDATE public.cron_tasks
 SET
-    batch_size = 50,
-    description = 'Consume up to 5 batches of 50 cron_sync_sub messages per minute',
+    batch_size = 25,
+    description = 'Consume up to 10 batches of 25 cron_sync_sub messages per minute (250/min cap)',
     updated_at = pg_catalog.now()
 WHERE name = 'per_minute_queues'
   AND task_type = 'function_queue';
@@ -19,7 +19,7 @@ SET search_path TO ''
 AS $$
 DECLARE
   org_record RECORD;
-  -- per_minute_queues drains up to 250/min; release 120/min to limit Stripe API load.
+  -- process_function_queue drains up to 10 x batch_size (250/min at 25); release 120/min.
   v_per_minute CONSTANT integer := 120;
   v_index integer := 0;
 BEGIN
