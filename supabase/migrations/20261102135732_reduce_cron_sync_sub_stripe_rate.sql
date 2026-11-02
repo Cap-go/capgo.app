@@ -12,6 +12,16 @@ SET
 WHERE name = 'per_minute_queues'
   AND task_type = 'function_queue';
 
+-- Idempotent fix for preview branches that applied an earlier revision with batch_size 50.
+UPDATE public.cron_tasks
+SET
+    batch_size = 25,
+    description = 'Consume up to 10 batches of 25 cron_sync_sub messages per minute (250/min cap)',
+    updated_at = pg_catalog.now()
+WHERE name = 'per_minute_queues'
+  AND task_type = 'function_queue'
+  AND batch_size = 50;
+
 CREATE OR REPLACE FUNCTION "public"."process_cron_sync_sub_jobs"()
 RETURNS void
 LANGUAGE plpgsql

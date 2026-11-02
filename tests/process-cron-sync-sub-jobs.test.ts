@@ -93,7 +93,7 @@ describe('process_cron_sync_sub_jobs', () => {
     })
   })
 
-  it('drains cron_sync_sub in batches of 25 capped at 10 calls per minute (250/min)', async () => {
+  it('configures per_minute_queues to drain cron_sync_sub in batches of 25', async () => {
     const [task] = await executeSQL(
       `SELECT batch_size, minute_interval, target::jsonb AS target
         FROM public.cron_tasks
