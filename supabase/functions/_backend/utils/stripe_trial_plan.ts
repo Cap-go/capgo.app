@@ -289,8 +289,33 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
 
   const newStartUnix = Math.floor(newStart.getTime() / 1000)
   const currentStartUnix = pendingTrialPlanScheduleStartUnix(schedule)
-  if (currentStartUnix === newStartUnix)
+  if (currentStartUnix === newStartUnix) {
+    try {
+      await withTrialPlanLock(c, customerId, async () => {
+        const latest = await findPendingTrialPlanSchedule(stripe, customerId)
+        if (!latest)
+          return
+        await cancelPendingTrialPlanSchedulesExcept(
+          c,
+          stripe,
+          customerId,
+          latest.id,
+          'duplicate trial plan schedule canceled during trial end sync',
+        )
+      })
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'trial plan schedule duplicate cancel failed',
+        customerId,
+        scheduleId: schedule.id,
+        error,
+      })
+      return 'failed'
+    }
     return 'unchanged'
+  }
 
   const phase = schedule.phases[0]
   const scheduledPrice = phase?.items[0]?.price
@@ -306,13 +331,8 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
   try {
     await withTrialPlanLock(c, customerId, async () => {
       let trialAtNow: string | null
-      try {
-        const fromDb = await loadStripeInfoTrialAt(c, customerId)
-        trialAtNow = fromDb ?? (trialAt !== undefined ? trialAt : null)
-      }
-      catch {
-        trialAtNow = trialAt !== undefined ? trialAt : null
-      }
+      const fromDb = await loadStripeInfoTrialAt(c, customerId)
+      trialAtNow = fromDb ?? (trialAt !== undefined ? trialAt : null)
       const lockedStart = getTrialPlanStartDate(trialAtNow)
       if (!lockedStart) {
         await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
@@ -322,8 +342,16 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
       const latest = await findPendingTrialPlanSchedule(stripe, customerId)
       if (!latest)
         return
-      if (pendingTrialPlanScheduleStartUnix(latest) === lockedStartUnix)
+      if (pendingTrialPlanScheduleStartUnix(latest) === lockedStartUnix) {
+        await cancelPendingTrialPlanSchedulesExcept(
+          c,
+          stripe,
+          customerId,
+          latest.id,
+          'duplicate trial plan schedule canceled during trial end sync',
+        )
         return
+      }
       const latestPhase = latest.phases[0]
       const latestPrice = latestPhase?.items[0]?.price
       const latestPriceId = typeof latestPrice === 'string' ? latestPrice : latestPrice?.id
