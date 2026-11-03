@@ -1,6 +1,8 @@
--- When stripe_info.trial_at changes, wake sync_trial_plan_schedule so pending
+-- When stripe_info.trial_at changes, enqueue sync_trial_plan_schedule so pending
 -- trial-end subscription schedules move to the new trial end date.
 SET LOCAL lock_timeout = '2s';
+
+SELECT pgmq.create('sync_trial_plan_schedule');
 
 CREATE OR REPLACE FUNCTION public.wake_sync_trial_plan_schedule(
   p_customer_id text,
@@ -12,20 +14,18 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  PERFORM public.http_dispatch_post(
-    p_target := 'sync_trial_plan_schedule',
-    p_url := public.get_db_url() || '/functions/v1/triggers/sync_trial_plan_schedule',
-    p_headers := pg_catalog.jsonb_build_object(
-      'Content-Type', 'application/json',
-      'apisecret', public.get_apikey()
-    ),
-    p_body := pg_catalog.jsonb_build_object(
-      'customerId', p_customer_id,
-      'trialAt', pg_catalog.to_jsonb(p_trial_at)
-    ),
-    p_timeout_ms := 30000,
-    p_calls := 1
+  PERFORM pgmq.send(
+    'sync_trial_plan_schedule',
+    pg_catalog.jsonb_build_object(
+      'function_name', 'sync_trial_plan_schedule',
+      'function_type', 'cloudflare',
+      'payload', pg_catalog.jsonb_build_object(
+        'customerId', p_customer_id,
+        'trialAt', pg_catalog.to_jsonb(p_trial_at)
+      )
+    )
   );
+  PERFORM public.process_function_queue('sync_trial_plan_schedule', 1);
 END;
 $$;
 
@@ -61,4 +61,4 @@ FOR EACH ROW
 EXECUTE FUNCTION public.trigger_sync_trial_plan_schedule_on_trial_at_change();
 
 COMMENT ON FUNCTION public.wake_sync_trial_plan_schedule(text, timestamptz) IS
-'Internal: POST sync_trial_plan_schedule with the new trial end so Stripe trial plan schedules follow stripe_info.trial_at.';
+'Internal: enqueue sync_trial_plan_schedule with the new trial end so Stripe trial plan schedules follow stripe_info.trial_at.';

@@ -21,10 +21,12 @@ app.post('/', middlewareAPISecret, async (c) => {
   try {
     const result = await syncTrialPlanScheduleForCustomer(c, body.customerId, body.trialAt)
     cloudlog({ requestId: c.get('requestId'), message: 'sync_trial_plan_schedule', customerId: body.customerId, result })
+    if (result === 'failed')
+      throw simpleError('trial_plan_schedule_sync_failed', 'Trial plan schedule sync failed')
     return c.json({ ...BRES, result })
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'sync_trial_plan_schedule failed', customerId: body.customerId, error })
-    return c.json({ ...BRES, result: 'failed' })
+    throw error
   }
 })

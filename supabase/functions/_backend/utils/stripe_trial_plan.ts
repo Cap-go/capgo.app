@@ -252,19 +252,28 @@ function pendingTrialPlanScheduleStartUnix(schedule: Stripe.SubscriptionSchedule
   return null
 }
 
+async function loadStripeInfoTrialAt(c: Context, customerId: string): Promise<string | null> {
+  return singleRowOrNull(await adminQuery(c, client => queryJson<{ trial_at: string | null }>(
+    client,
+    'SELECT trial_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+    [customerId],
+  )))?.trial_at ?? null
+}
+
 // Moves a pending trial-end subscription schedule to match stripe_info.trial_at.
-// Stripe failures leave stripe_info unchanged and return failed.
+// Stripe failures leave stripe_info unchanged and return failed (queue retries).
 export async function syncPendingTrialPlanScheduleWithTrialAt(
   c: Context,
   stripe: Stripe,
   customerId: string,
-  trialAt: string | null | undefined,
+  trialAt?: string | null,
 ): Promise<SyncPendingTrialPlanScheduleResult> {
   const schedule = await findPendingTrialPlanSchedule(stripe, customerId)
   if (!schedule)
     return 'no_schedule'
 
-  const newStart = getTrialPlanStartDate(trialAt)
+  const authoritativeTrialAt = trialAt ?? await loadStripeInfoTrialAt(c, customerId)
+  const newStart = getTrialPlanStartDate(authoritativeTrialAt)
   if (!newStart) {
     try {
       await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
@@ -294,10 +303,17 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
 
   try {
     await withTrialPlanLock(c, customerId, async () => {
+      const trialAtNow = await loadStripeInfoTrialAt(c, customerId)
+      const lockedStart = getTrialPlanStartDate(trialAtNow)
+      if (!lockedStart) {
+        await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
+        return
+      }
+      const lockedStartUnix = Math.floor(lockedStart.getTime() / 1000)
       const latest = await findPendingTrialPlanSchedule(stripe, customerId)
       if (!latest)
         return
-      if (pendingTrialPlanScheduleStartUnix(latest) === newStartUnix)
+      if (pendingTrialPlanScheduleStartUnix(latest) === lockedStartUnix)
         return
       const latestPhase = latest.phases[0]
       const latestPrice = latestPhase?.items[0]?.price
@@ -307,7 +323,7 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
       await stripe.subscriptionSchedules.update(latest.id, {
         phases: [{
           items: [{ price: latestPriceId, quantity: 1 }],
-          start_date: newStartUnix,
+          start_date: lockedStartUnix,
           metadata: {
             ...latestPhase.metadata,
             [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true',
@@ -340,7 +356,7 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
 export async function syncTrialPlanScheduleForCustomer(
   c: Context,
   customerId: string,
-  trialAt: string | null | undefined,
+  trialAt?: string | null,
 ): Promise<SyncPendingTrialPlanScheduleResult> {
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
   return syncPendingTrialPlanScheduleWithTrialAt(c, getStripe(c, billingAccount), customerId, trialAt)
