@@ -21,7 +21,7 @@ export const STRIPE_TAX_ID_TYPES = [
 
 export type StripeTaxIdType = typeof STRIPE_TAX_ID_TYPES[number]
 
-export interface CustomerBillingProfileAddress {
+interface CustomerBillingProfileAddress {
   line1: string | null
   line2: string | null
   city: string | null
@@ -30,13 +30,13 @@ export interface CustomerBillingProfileAddress {
   country: string | null
 }
 
-export interface CustomerBillingProfileTaxId {
+interface CustomerBillingProfileTaxId {
   id: string
   type: StripeTaxIdType
   value: string
 }
 
-export interface CustomerBillingProfile {
+interface CustomerBillingProfile {
   address: CustomerBillingProfileAddress
   taxId: CustomerBillingProfileTaxId | null
 }
@@ -69,6 +69,10 @@ function mapAddress(address: Stripe.Address | null | undefined): CustomerBilling
 
 function isAllowedTaxIdType(value: string): value is StripeTaxIdType {
   return (STRIPE_TAX_ID_TYPES as readonly string[]).includes(value)
+}
+
+export function isStripeBillingProfileTaxIdType(value: string): value is StripeTaxIdType {
+  return isAllowedTaxIdType(value)
 }
 
 function pickPrimaryTaxId(taxIds: Stripe.TaxId[]): CustomerBillingProfileTaxId | null {

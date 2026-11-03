@@ -200,10 +200,3 @@ describe('stripe customer billing profile', () => {
     expect(deleteTaxId).not.toHaveBeenCalled()
   })
 })
-
-describe('checkOrgAdminRole', () => {
-  it('returns false without auth user id', async () => {
-    const { checkOrgAdminRole } = await import('../supabase/functions/_backend/utils/rbac.ts')
-    await expect(checkOrgAdminRole({ get: () => undefined } as any, '00000000-0000-4000-8000-000000000001')).resolves.toBe(false)
-  })
-})

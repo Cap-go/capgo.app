@@ -10,10 +10,10 @@ import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { checkOrgAdminRole, checkPermission } from '../utils/rbac.ts'
 import {
   getCustomerBillingProfile,
+  isStripeBillingProfileTaxIdType,
   updateCustomerBillingProfile,
   type CustomerBillingProfileUpdate,
   type StripeTaxIdType,
-  STRIPE_TAX_ID_TYPES,
 } from '../utils/stripe_customer_billing_profile.ts'
 import {
   createCardSetupIntent,
@@ -161,7 +161,7 @@ function parseBillingProfileUpdateBody(body: Record<string, unknown>): CustomerB
     else if (body.taxId && typeof body.taxId === 'object') {
       const type = typeof (body.taxId as { type?: unknown }).type === 'string' ? (body.taxId as { type: string }).type : null
       const value = typeof (body.taxId as { value?: unknown }).value === 'string' ? (body.taxId as { value: string }).value : null
-      if (!type || !value || !(STRIPE_TAX_ID_TYPES as readonly string[]).includes(type))
+      if (!type || !value || !isStripeBillingProfileTaxIdType(type))
         throw simpleError('invalid_tax_id', 'Invalid tax ID')
       taxId = { type: type as StripeTaxIdType, value }
     }
