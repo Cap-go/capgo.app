@@ -624,7 +624,10 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
         taxId: { id: 'txi_visual', type: 'eu_vat', value: 'PT999999990' },
       } }))
       await page.reload()
-      await page.locator('[data-test="billing-profile"]').waitFor()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.locator('[data-test="billing-profile"]').waitFor()
+      else
+        await page.locator('[data-test="billing-subscription"]').waitFor()
     },
   },
   {

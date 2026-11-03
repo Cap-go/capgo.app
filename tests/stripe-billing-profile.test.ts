@@ -77,7 +77,7 @@ describe('stripe billing profile API', () => {
     await executeSQL(
       `INSERT INTO public.stripe_info (customer_id, status, product_id, subscription_id, billing_account)
        VALUES ($1, 'succeeded', 'prod_LQIregjtNduh4q', $2, 'ee'),
-              ($3, 'succeeded', 'prod_solo_us', $4, 'us')`,
+              ($3, 'succeeded', 'prod_VDt1FTF7XJxyMR', $4, 'us')`,
       [customerEe, `sub_ee_${fixtureId}`, customerUs, `sub_us_${fixtureId}`],
     )
 
