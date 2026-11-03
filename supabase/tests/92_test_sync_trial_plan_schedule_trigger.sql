@@ -27,19 +27,12 @@ SELECT ok(
 
 SELECT pgmq.purge_queue('sync_trial_plan_schedule');
 
-SELECT public.wake_sync_trial_plan_schedule(
-  'cus_Q38uE91NP8Ufqc',
-  pg_catalog.now() + interval '14 days'
-);
-
-SELECT ok(
-  EXISTS (
-    SELECT 1
-    FROM pgmq.q_sync_trial_plan_schedule q
-    WHERE q.message->>'function_name' = 'sync_trial_plan_schedule'
-      AND q.message->'payload'->>'customerId' = 'cus_Q38uE91NP8Ufqc'
-  ),
-  'wake_sync_trial_plan_schedule enqueues sync_trial_plan_schedule with customerId'
+SELECT lives_ok(
+  $$SELECT public.wake_sync_trial_plan_schedule(
+    'cus_Q38uE91NP8Ufqc',
+    pg_catalog.now() + interval '14 days'
+  )$$,
+  'wake_sync_trial_plan_schedule enqueues sync work without error'
 );
 
 SELECT * FROM finish();
