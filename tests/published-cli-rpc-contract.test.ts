@@ -121,7 +121,7 @@ function createAnonymousApiKeyClient(apikey: string) {
   })
 }
 
-describe('cRITICAL published CLI RPC contract', { hookTimeout: 120_000 }, () => {
+describe('cRITICAL published CLI RPC contract', () => {
   let pool: Pool
   let contract: PublishedCliContractContext
 
@@ -129,7 +129,7 @@ describe('cRITICAL published CLI RPC contract', { hookTimeout: 120_000 }, () => 
     contract = loadPublishedCliContract()
     pool = new Pool({ connectionString: POSTGRES_URL })
     expect(contract.rpcCalls.length, `No RPC calls extracted from ${contract.rpcSourceTag}`).toBeGreaterThan(0)
-  })
+  }, 120_000)
 
   afterAll(async () => {
     await pool?.end()
