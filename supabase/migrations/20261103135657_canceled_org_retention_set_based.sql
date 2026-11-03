@@ -358,6 +358,14 @@ BEGIN
       CONTINUE;
     END IF;
 
+    -- The candidate set comes from one snapshot. Activity or billing written
+    -- after it (an org that resubscribed, a new bundle) moves or clears the
+    -- anchor: skip the org so a later tick warns with the current date.
+    IF public.canceled_org_retention_anchor(org_record.org_id)
+      IS DISTINCT FROM org_record.access_end THEN
+      CONTINUE;
+    END IF;
+
     IF EXISTS (
       SELECT 1
       FROM public.notifications AS n

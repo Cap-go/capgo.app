@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(10);
 
 -- The retention batch selectors must stay set-based: one pass over the
 -- canceled orgs, not a per-org may_receive / last-activity call.
@@ -256,6 +256,79 @@ SELECT
         ),
         ARRAY['expiry', 'idle', 'mau'],
         'at a 25-day grace, 30-day-old MAU is past it while newer app, bundle and credit activity is not'
+    );
+
+-- Billing access end is GREATEST(canceled_at, subscription_anchor_end,
+-- trial_at): give each field its own org where it alone is the latest.
+CREATE TEMP TABLE retention_billing_ctx AS
+SELECT
+    v.label,
+    v.org_id,
+    'cus_retention_billing_' || v.label AS customer_id,
+    now() - interval '100 days' AS base_at,
+    now() - interval '40 days' AS latest_at
+FROM (
+    VALUES
+    ('canceled_last', 'b1c2d3e4-0000-4000-8000-000000000011'::uuid),
+    ('anchor_last', 'b1c2d3e4-0000-4000-8000-000000000012'::uuid),
+    ('trial_last', 'b1c2d3e4-0000-4000-8000-000000000013'::uuid)
+) AS v (label, org_id);
+
+INSERT INTO public.stripe_info (
+    customer_id, status, product_id, trial_at, is_good_plan,
+    subscription_anchor_start, subscription_anchor_end, canceled_at
+)
+SELECT
+    customer_id,
+    'canceled'::public.stripe_status,
+    'prod_LQIregjtNduh4q',
+    CASE WHEN label = 'trial_last' THEN latest_at ELSE base_at END,
+    false,
+    base_at,
+    CASE WHEN label = 'anchor_last' THEN latest_at ELSE base_at END,
+    CASE WHEN label = 'canceled_last' THEN latest_at ELSE base_at END
+FROM retention_billing_ctx;
+
+INSERT INTO public.orgs (id, created_by, name, management_email, customer_id)
+SELECT
+    org_id,
+    '6aa76066-55ef-4238-ade6-0b32334a4097',
+    'Retention Billing ' || label,
+    'retention-billing-' || label || '@test.local',
+    customer_id
+FROM retention_billing_ctx;
+
+SELECT
+    is(
+        (
+            SELECT array_agg(ctx.label ORDER BY ctx.label)
+            FROM retention_billing_ctx AS ctx
+            INNER JOIN
+                public.canceled_org_retention_states() AS state
+                ON ctx.org_id = state.org_id
+            WHERE
+                state.access_end = ctx.latest_at
+                AND state.anchor_at = ctx.latest_at
+        ),
+        ARRAY['anchor_last', 'canceled_last', 'trial_last'],
+        'access end and anchor use whichever billing field is latest'
+    );
+
+SELECT
+    is(
+        (
+            SELECT count(*)::integer
+            FROM retention_billing_ctx AS ctx
+            INNER JOIN
+                public.canceled_org_retention_states() AS state
+                ON ctx.org_id = state.org_id
+            WHERE
+                state.anchor_at IS DISTINCT FROM public.canceled_org_retention_anchor(
+                    ctx.org_id
+                )
+        ),
+        0,
+        'set-based anchor matches canceled_org_retention_anchor() for each billing field'
     );
 
 SELECT * FROM finish();
