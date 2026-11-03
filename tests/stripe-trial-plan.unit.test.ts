@@ -13,7 +13,48 @@ import {
   getTrialPriceTier,
   holdTrialPlanLock,
   settleTrialPlanFirstInvoice,
+  syncPendingTrialPlanScheduleWithTrialAt,
+  syncTrialPlanScheduleForCustomer,
 } from '../supabase/functions/_backend/utils/stripe_trial_plan.ts'
+
+const billingAccountMock = vi.hoisted(() => ({ account: 'ee' as 'ee' | 'us' }))
+const stripeClientMock = vi.hoisted(() => ({
+  lastAccount: null as 'ee' | 'us' | null,
+  stripe: null as Stripe | null,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/stripe_billing.ts', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../supabase/functions/_backend/utils/stripe_billing.ts')>()
+  return {
+    ...original,
+    getBillingAccountForCustomer: vi.fn(async () => billingAccountMock.account),
+  }
+})
+
+vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
+  getStripe: vi.fn((_c: unknown, account: 'ee' | 'us') => {
+    stripeClientMock.lastAccount = account
+    return stripeClientMock.stripe
+  }),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>()
+  const client = {
+    query: vi.fn(async (text: string) => {
+      if (text.startsWith('BEGIN') || text.includes('pg_advisory') || text === 'COMMIT' || text === 'ROLLBACK' || text === 'SELECT 1')
+        return { rows: [] }
+      return { rows: [] }
+    }),
+  }
+  return {
+    ...original,
+    getPgClient: vi.fn(async () => ({})),
+    checkoutPgClient: vi.fn(async () => client),
+    releasePgClient: vi.fn(),
+    closeClient: vi.fn(),
+  }
+})
 
 // When set, answers the direct-Postgres reads (as the rows of each statement).
 const adminRows = vi.hoisted(() => ({ override: null as null | ((text: string) => unknown[]) }))
@@ -479,5 +520,74 @@ describe('trial plan lock', () => {
       throw new Error('card_declined')
     })).rejects.toThrow('card_declined')
     expect(queries.at(-1)).toBe('ROLLBACK')
+  })
+})
+
+describe('sync pending trial plan schedule with trial end', () => {
+  const oldStartUnix = Math.floor(Date.parse('2026-10-30T00:00:00.000Z') / 1000)
+  const newTrialAt = '2026-11-14T09:30:00.000Z'
+  const newStartUnix = Math.floor(Date.parse('2026-11-14T00:00:00.000Z') / 1000)
+
+  function pendingSchedule(startUnix = oldStartUnix) {
+    return {
+      id: 'sub_sched_trial',
+      status: 'not_started',
+      created: 1,
+      metadata: { capgo_trial_plan: 'true', org_id: 'org_1' },
+      phases: [{ start_date: startUnix, items: [{ price: 'price_solo_m' }], metadata: { capgo_trial_plan: 'true', org_id: 'org_1' } }],
+    } as unknown as Stripe.SubscriptionSchedule
+  }
+
+  it('moves the schedule start when the trial is extended after picking a plan', async () => {
+    const update = vi.fn(async () => pendingSchedule(newStartUnix))
+    const list = vi.fn(async () => ({ data: [pendingSchedule()], has_more: false }))
+    const stripe = { subscriptionSchedules: { list, update } } as unknown as Stripe
+    stripeClientMock.stripe = stripe
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('updated')
+    expect(update).toHaveBeenCalledWith('sub_sched_trial', {
+      phases: [{
+        items: [{ price: 'price_solo_m', quantity: 1 }],
+        start_date: newStartUnix,
+        metadata: { capgo_trial_plan: 'true', org_id: 'org_1' },
+      }],
+    })
+  })
+
+  it('schedules at the extended trial end when the org picks a plan after an extension', () => {
+    const now = Date.parse('2026-10-21T12:00:00.000Z')
+    expect(getTrialPlanStartDate(newTrialAt, now)?.toISOString()).toBe('2026-11-14T00:00:00.000Z')
+  })
+
+  it('routes Stripe calls through the customer billing account', async () => {
+    billingAccountMock.account = 'us'
+    stripeClientMock.lastAccount = null
+    const list = vi.fn(async () => ({ data: [], has_more: false }))
+    stripeClientMock.stripe = { subscriptionSchedules: { list } } as unknown as Stripe
+    await syncTrialPlanScheduleForCustomer(context, 'cus_us', newTrialAt)
+    expect(stripeClientMock.lastAccount).toBe('us')
+    billingAccountMock.account = 'ee'
+    stripeClientMock.lastAccount = null
+    await syncTrialPlanScheduleForCustomer(context, 'cus_ee', newTrialAt)
+    expect(stripeClientMock.lastAccount).toBe('ee')
+  })
+
+  it('returns failed without throwing when Stripe rejects the schedule update', async () => {
+    const list = vi.fn(async () => ({ data: [pendingSchedule()], has_more: false }))
+    const update = vi.fn(async () => {
+      throw new Error('stripe unavailable')
+    })
+    const stripe = { subscriptionSchedules: { list, update } } as unknown as Stripe
+    stripeClientMock.stripe = stripe
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('failed')
+    expect(update).toHaveBeenCalled()
+  })
+
+  it('leaves the schedule unchanged when the start already matches the trial end', async () => {
+    const list = vi.fn(async () => ({ data: [pendingSchedule(newStartUnix)], has_more: false }))
+    const update = vi.fn()
+    const stripe = { subscriptionSchedules: { list, update } } as unknown as Stripe
+    stripeClientMock.stripe = stripe
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('unchanged')
+    expect(update).not.toHaveBeenCalled()
   })
 })
