@@ -414,6 +414,62 @@ export async function payOpenInvoice(orgId: string): Promise<PayInvoiceResult> {
   return { status: 'paid' }
 }
 
+export interface BillingProfileAddress {
+  line1: string | null
+  line2: string | null
+  city: string | null
+  state: string | null
+  postalCode: string | null
+  country: string | null
+}
+
+export interface BillingProfile {
+  address: BillingProfileAddress
+  taxId: { id: string, type: string, value: string } | null
+}
+
+export const BILLING_PROFILE_TAX_ID_TYPES = [
+  'eu_vat',
+  'gb_vat',
+  'ch_vat',
+  'no_vat',
+  'au_abn',
+  'ca_bn',
+  'ca_qst',
+  'us_ein',
+  'nz_gst',
+  'in_gst',
+  'kr_brn',
+] as const
+
+export type BillingProfileTaxIdType = typeof BILLING_PROFILE_TAX_ID_TYPES[number]
+
+export interface BillingProfileUpdate {
+  address: {
+    line1: string
+    line2?: string | null
+    city?: string | null
+    state?: string | null
+    postalCode?: string | null
+    country: string
+  }
+  taxId: { type: BillingProfileTaxIdType, value: string } | null
+}
+
+export function getBillingProfile(orgId: string) {
+  return invokeCapgoApi<BillingProfile>(`private/stripe_billing/billing-profile?orgId=${encodeURIComponent(orgId)}`, {
+    method: 'GET',
+  }).then(({ data, error }) => {
+    if (error || !data)
+      throw error ?? new Error('Empty billing profile response')
+    return data
+  })
+}
+
+export function saveBillingProfile(orgId: string, update: BillingProfileUpdate) {
+  return callBilling<BillingProfile>('billing-profile', { orgId, address: update.address, taxId: update.taxId })
+}
+
 export function formatStripeAmount(amount: number, currency: string) {
   const value = stripeAmountToMajorUnits(amount, currency)
   try {

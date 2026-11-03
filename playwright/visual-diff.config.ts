@@ -600,6 +600,34 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   {
+    slug: 'org-billing-profile',
+    path: '/settings/organization/billing',
+    auth: true,
+    prepare: async (page) => {
+      await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
+        publishableKey: '',
+        card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030 },
+        subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: new Date(Date.now() + 18 * 86400000).toISOString() },
+        invoices: [],
+        openInvoice: null,
+        trialPlan: null,
+      } }))
+      await page.route('**/private/stripe_billing/billing-profile?**', route => route.fulfill({ json: {
+        address: {
+          line1: 'Rua da Praia 10',
+          line2: null,
+          city: 'Funchal',
+          state: null,
+          postalCode: '9000-100',
+          country: 'PT',
+        },
+        taxId: { id: 'txi_visual', type: 'eu_vat', value: 'PT999999990' },
+      } }))
+      await page.reload()
+      await page.locator('[data-test="billing-profile"]').waitFor()
+    },
+  },
+  {
     slug: 'org-billing-trial-plan-start-now',
     path: '/settings/organization/billing',
     auth: true,

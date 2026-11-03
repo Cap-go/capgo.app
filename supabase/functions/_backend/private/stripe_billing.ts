@@ -6,7 +6,14 @@ import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCan
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
-import { checkPermission } from '../utils/rbac.ts'
+import { checkOrgAdminRole, checkPermission } from '../utils/rbac.ts'
+import {
+  getCustomerBillingProfile,
+  updateCustomerBillingProfile,
+  type CustomerBillingProfileUpdate,
+  type StripeTaxIdType,
+  STRIPE_TAX_ID_TYPES,
+} from '../utils/stripe_customer_billing_profile.ts'
 import {
   createCardSetupIntent,
   getInAppBillingContext,
@@ -89,6 +96,76 @@ async function resolveBillingContext(c: AppContext, orgId: string | undefined, p
     throw simpleError('no_customer', 'No customer')
 
   return await getInAppBillingContext(c, org.customer_id)
+}
+
+async function resolveOrgAdminBillingProfile(c: AppContext, orgId: string | undefined) {
+  if (!orgId)
+    throw simpleError('invalid_body', 'Missing orgId')
+  const authorization = c.get('authorization')
+  if (!authorization || !c.get('auth')?.userId)
+    throw simpleError('not_authorized', 'Not authorized')
+
+  let org: { customer_id: string | null } | null = null
+  try {
+    org = await withRlsContext(c, authPrincipal(c), client => queryJsonOne<{ customer_id: string | null }>(
+      client,
+      'SELECT customer_id FROM public.orgs WHERE id = $1',
+      [orgId],
+    ))
+  }
+  catch {}
+  if (!org)
+    throw simpleError('not_authorized', 'Not authorized')
+  if (!await checkOrgAdminRole(c, orgId))
+    throw simpleError('not_authorized', 'Not authorized')
+  if (!org.customer_id)
+    throw simpleError('no_customer', 'No customer')
+
+  return await getInAppBillingContext(c, org.customer_id)
+}
+
+function parseBillingProfileUpdateBody(body: Record<string, unknown>): CustomerBillingProfileUpdate {
+  const address = body.address
+  if (!address || typeof address !== 'object')
+    throw simpleError('invalid_address', 'Missing billing address')
+
+  const line1 = typeof (address as { line1?: unknown }).line1 === 'string' ? (address as { line1: string }).line1 : null
+  const country = typeof (address as { country?: unknown }).country === 'string' ? (address as { country: string }).country : null
+  if (!line1 || !country)
+    throw simpleError('invalid_address', 'Missing billing address')
+
+  const readOptional = (key: 'line2' | 'city' | 'state' | 'postalCode') => {
+    const value = (address as Record<string, unknown>)[key]
+    return typeof value === 'string' ? value : value == null ? null : undefined
+  }
+
+  let taxId: CustomerBillingProfileUpdate['taxId'] | undefined
+  if ('taxId' in body) {
+    if (body.taxId === null)
+      taxId = null
+    else if (body.taxId && typeof body.taxId === 'object') {
+      const type = typeof (body.taxId as { type?: unknown }).type === 'string' ? (body.taxId as { type: string }).type : null
+      const value = typeof (body.taxId as { value?: unknown }).value === 'string' ? (body.taxId as { value: string }).value : null
+      if (!type || !value || !(STRIPE_TAX_ID_TYPES as readonly string[]).includes(type))
+        throw simpleError('invalid_tax_id', 'Invalid tax ID')
+      taxId = { type: type as StripeTaxIdType, value }
+    }
+    else {
+      throw simpleError('invalid_tax_id', 'Invalid tax ID')
+    }
+  }
+
+  return {
+    address: {
+      line1,
+      country,
+      line2: readOptional('line2'),
+      city: readOptional('city'),
+      state: readOptional('state'),
+      postalCode: readOptional('postalCode'),
+    },
+    ...(taxId !== undefined ? { taxId } : {}),
+  }
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -231,4 +308,18 @@ app.post('/invoice-payment-intent', middlewareAuth, async (c) => {
   if (!secret)
     throw simpleError('no_open_invoice', 'No open invoice to pay')
   return c.json(secret)
+})
+
+app.get('/billing-profile', middlewareAuth, async (c) => {
+  const orgId = c.req.query('orgId') ?? c.req.query('org_id')
+  const ctx = await resolveOrgAdminBillingProfile(c, orgId)
+  return c.json(await getCustomerBillingProfile(c, ctx))
+})
+
+app.post('/billing-profile', middlewareAuth, async (c) => {
+  const body = await parseBody<Record<string, unknown>>(c)
+  const orgId = typeof body.orgId === 'string' ? body.orgId : undefined
+  const ctx = await resolveOrgAdminBillingProfile(c, orgId)
+  const update = parseBillingProfileUpdateBody(body)
+  return c.json(await updateCustomerBillingProfile(c, ctx, update))
 })

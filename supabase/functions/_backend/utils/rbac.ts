@@ -704,6 +704,32 @@ export interface RolePermissionCheckScope {
   channelId?: number | null
 }
 
+export async function checkOrgAdminRole(
+  c: Context<MiddlewareKeyVariables>,
+  orgId: string,
+): Promise<boolean> {
+  const auth = c.get('auth')
+  if (!auth?.userId)
+    return false
+
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const result = await pgClient.query<{ ok: boolean }>(
+      'SELECT public.is_user_org_admin($1::uuid, $2::uuid) AS ok',
+      [auth.userId, orgId],
+    )
+    return result.rows[0]?.ok === true
+  }
+  catch (error) {
+    return handlePermissionCheckError(c, 'org.read_billing', { orgId }, error, 'checkPermission')
+  }
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
+}
+
 /**
  * Returns true when the caller already holds every deploy-capable permission
  * (app/channel/bundle) granted by the role at the binding scope. Org-only
