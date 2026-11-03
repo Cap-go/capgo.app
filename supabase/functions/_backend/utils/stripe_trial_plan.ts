@@ -303,7 +303,13 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
 
   try {
     await withTrialPlanLock(c, customerId, async () => {
-      const trialAtNow = (await loadStripeInfoTrialAt(c, customerId)) ?? trialAt ?? null
+      let trialAtNow: string | null
+      try {
+        trialAtNow = (await loadStripeInfoTrialAt(c, customerId)) ?? trialAt ?? null
+      }
+      catch {
+        trialAtNow = trialAt ?? null
+      }
       const lockedStart = getTrialPlanStartDate(trialAtNow)
       if (!lockedStart) {
         await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
