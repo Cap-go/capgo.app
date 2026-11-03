@@ -38,6 +38,12 @@ afterEach(() => {
 })
 
 describe('stripe customer billing profile', () => {
+  it('validates supported tax id types', async () => {
+    const { isStripeBillingProfileTaxIdType } = await import('../supabase/functions/_backend/utils/stripe_customer_billing_profile.ts')
+    expect(isStripeBillingProfileTaxIdType('eu_vat')).toBe(true)
+    expect(isStripeBillingProfileTaxIdType('not_a_type')).toBe(false)
+  })
+
   it('maps customer address and primary tax id', async () => {
     const stripe = {
       customers: {
