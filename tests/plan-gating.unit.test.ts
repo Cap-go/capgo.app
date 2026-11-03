@@ -23,7 +23,7 @@ const paidPlan = { status: 'succeeded', is_good_plan: true, product_id: 'enterpr
 
 beforeEach(() => {
   vi.resetAllMocks()
-  mocks.subscription.mockResolvedValue({ status: 'active', productId: 'enterprise-product' })
+  mocks.subscription.mockResolvedValue({ ok: true, data: { status: 'active', productId: 'enterprise-product' } })
 })
 function billing(info: Partial<Omit<typeof paidPlan, 'paid_at' | 'past_due_at'> & { paid_at: string | null, past_due_at: string | null }>, plan = 'Enterprise') {
   mocks.single.mockResolvedValueOnce({ data: { customer_id: 'customer-id' } })
@@ -49,13 +49,13 @@ describe('paid Enterprise feature gating', () => {
 
   it.each(['trialing', 'past_due', 'canceled', 'incomplete', undefined])('rejects a live subscription with status %s', async (status) => {
     billing({})
-    mocks.subscription.mockResolvedValueOnce(status ? { status, productId: 'enterprise-product' } : null)
+    mocks.subscription.mockResolvedValueOnce(status ? { ok: true, data: { status, productId: 'enterprise-product' } } : { ok: false, reason: 'not_found' })
     await expect(requireEnterprisePlan(context, 'org-id', 'Custom domains', true)).rejects.toMatchObject({ status: 403 })
   })
 
   it('rejects a stale Enterprise billing row when the live subscription has another product', async () => {
     billing({})
-    mocks.subscription.mockResolvedValueOnce({ status: 'active', productId: 'team-product' })
+    mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status: 'active', productId: 'team-product' } })
     await expect(requireEnterprisePlan(context, 'org-id', 'Custom domains', true)).rejects.toMatchObject({ status: 403 })
   })
 

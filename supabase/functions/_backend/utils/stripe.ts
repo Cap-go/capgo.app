@@ -257,9 +257,97 @@ function getSubscriptionEndDate(subscription: Stripe.Subscription, item: Stripe.
   return stripeTimestampToIso(endSeconds)
 }
 
-export async function getSubscriptionData(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount) {
+export type SubscriptionSyncData = {
+  productId: string | null
+  extraMau: number
+  status: Stripe.Subscription.Status
+  trialPlanFirstInvoiceUnpaid: boolean
+  cycleStart: string | null
+  cycleEnd: string | null
+  canceledAt: string | null
+  subscriptionId: string
+  cancel_at_period_end: boolean
+}
+
+export type SubscriptionLookupResult =
+  | { ok: true, data: SubscriptionSyncData }
+  | { ok: false, reason: 'missing_subscription_id' }
+  | { ok: false, reason: 'stripe_not_configured' }
+  | { ok: false, reason: 'not_found' }
+  | { ok: false, reason: 'read_error', error: unknown }
+
+const STRIPE_RATE_LIMIT_MAX_ATTEMPTS = 5
+const STRIPE_RATE_LIMIT_BASE_DELAY_MS = 250
+
+export function isStripeRateLimitError(error: unknown): boolean {
+  return error instanceof Stripe.errors.StripeRateLimitError
+    || (typeof error === 'object' && error !== null && (error as { statusCode?: number }).statusCode === 429)
+    || (typeof error === 'object' && error !== null && (error as { code?: string }).code === 'rate_limit')
+}
+
+async function sleepMs(ms: number) {
+  await new Promise(resolve => setTimeout(resolve, ms))
+}
+
+export async function callStripeWithRetry<T>(c: Context, fn: () => Promise<T>): Promise<T> {
+  let attempt = 0
+  while (true) {
+    try {
+      return await fn()
+    }
+    catch (error) {
+      if (!isStripeRateLimitError(error) || attempt >= STRIPE_RATE_LIMIT_MAX_ATTEMPTS - 1)
+        throw error
+      const delayMs = STRIPE_RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Stripe rate limit, retrying',
+        attempt: attempt + 1,
+        delayMs,
+      })
+      await sleepMs(delayMs)
+      attempt++
+    }
+  }
+}
+
+function subscriptionDataFromStripeSubscription(c: Context, subscription: Stripe.Subscription): SubscriptionSyncData {
+  const currentItem = getLicensedSubscriptionItem(subscription.items.data)
+  const productId = getSubscriptionProductId(c, currentItem)
+  const cycleStart = stripeTimestampToIso(currentItem?.current_period_start)
+  const cycleEnd = stripeTimestampToIso(currentItem?.current_period_end)
+  const canceledAt = getSubscriptionEndDate(subscription, currentItem)
+
+  const latestInvoice = typeof subscription.latest_invoice === 'object' ? subscription.latest_invoice : null
+  const trialPlanFirstInvoiceUnpaid = subscription.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true'
+    && latestInvoice?.billing_reason === 'subscription_create'
+    && latestInvoice.status !== 'paid'
+
+  return {
+    productId,
+    extraMau: getExtraMau(subscription.items.data),
+    status: subscription.status,
+    trialPlanFirstInvoiceUnpaid,
+    cycleStart,
+    cycleEnd,
+    canceledAt,
+    subscriptionId: subscription.id,
+    cancel_at_period_end: subscription.cancel_at_period_end,
+  }
+}
+
+function stripeLookupErrorFromCatch(c: Context, context: string, subscriptionId: string | null, error: unknown): SubscriptionLookupResult {
+  if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
+    cloudlog({ requestId: c.get('requestId'), message: 'Subscription not found', subscriptionId, error: error.code })
+    return { ok: false, reason: 'not_found' }
+  }
+  cloudlogErr({ requestId: c.get('requestId'), message: context, error })
+  return { ok: false, reason: 'read_error', error }
+}
+
+export async function getSubscriptionData(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount): Promise<SubscriptionLookupResult> {
   if (!subscriptionId)
-    return null
+    return { ok: false, reason: 'missing_subscription_id' }
   try {
     cloudlog({ requestId: c.get('requestId'), message: 'Fetching subscription data', customerId, subscriptionId })
 
@@ -267,82 +355,56 @@ export async function getSubscriptionData(c: Context, customerId: string, subscr
       ? buildStripeContext(c, billingAccount)
       : await getStripeContextForCustomer(c, customerId)
     if (!stripeContext.configured)
-      return null
+      return { ok: false, reason: 'stripe_not_configured' }
 
-    // Retrieve the specific subscription from Stripe
-    const subscription = await stripeContext.stripe.subscriptions.retrieve(subscriptionId, {
-      expand: ['items.data.price', 'latest_invoice'], // Correct expand path for retrieve
-    })
+    const subscription = await callStripeWithRetry(c, () => stripeContext.stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['items.data.price', 'latest_invoice'],
+    }))
 
     cloudlog({
       requestId: c.get('requestId'),
       context: 'getSubscriptionData',
-      // subscriptionsFound: subscriptions.data.length, // Removed - retrieve returns one or throws
       subscriptionId: subscription.id,
       subscriptionStatus: subscription.status,
     })
 
-    const currentItem = getLicensedSubscriptionItem(subscription.items.data)
-    const productId = getSubscriptionProductId(c, currentItem)
-    const cycleStart = stripeTimestampToIso(currentItem?.current_period_start)
-    const cycleEnd = stripeTimestampToIso(currentItem?.current_period_end)
-    const canceledAt = getSubscriptionEndDate(subscription, currentItem)
-
-    // A trial plan subscription only converts once its first invoice is paid (see stripe_trial_plan.ts).
-    const latestInvoice = typeof subscription.latest_invoice === 'object' ? subscription.latest_invoice : null
-    const trialPlanFirstInvoiceUnpaid = subscription.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true'
-      && latestInvoice?.billing_reason === 'subscription_create'
-      && latestInvoice.status !== 'paid'
-
-    return {
-      productId,
-      extraMau: getExtraMau(subscription.items.data),
-      status: subscription.status,
-      trialPlanFirstInvoiceUnpaid,
-      cycleStart,
-      cycleEnd,
-      canceledAt,
-      subscriptionId: subscription.id,
-      cancel_at_period_end: subscription.cancel_at_period_end,
-    }
+    return { ok: true, data: subscriptionDataFromStripeSubscription(c, subscription) }
   }
   catch (error) {
-    // Handle specific Stripe errors if needed, e.g., resource_missing
-    if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
-      cloudlog({ requestId: c.get('requestId'), message: 'Subscription not found', subscriptionId, error: error.code })
-    }
-    else {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'getSubscriptionData', error })
-    }
-    return null
+    return stripeLookupErrorFromCatch(c, 'getSubscriptionData', subscriptionId, error)
   }
 }
 
-async function getActiveSubscription(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount) {
+export async function getActiveSubscription(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount): Promise<SubscriptionLookupResult> {
   cloudlog({ requestId: c.get('requestId'), message: 'Stored subscription not tracked or not found, checking for others.', customerId, storedSubscriptionId: subscriptionId })
 
   const stripeContext = billingAccount
     ? buildStripeContext(c, billingAccount)
     : await getStripeContextForCustomer(c, customerId)
   if (!stripeContext.configured)
-    return null
+    return { ok: false, reason: 'stripe_not_configured' }
 
-  for (const status of TRACKED_STRIPE_SUBSCRIPTION_STATUSES) {
-    const subscriptions = await stripeContext.stripe.subscriptions.list({
-      customer: customerId,
-      status,
-      limit: 1,
-    })
+  try {
+    for (const status of TRACKED_STRIPE_SUBSCRIPTION_STATUSES) {
+      const subscriptions = await callStripeWithRetry(c, () => stripeContext.stripe.subscriptions.list({
+        customer: customerId,
+        status,
+        limit: 1,
+      }))
 
-    if (subscriptions.data.length > 0) {
-      const activeSub = subscriptions.data[0]
-      cloudlog({ requestId: c.get('requestId'), message: 'Found a tracked subscription, fetching its data.', activeSubscriptionId: activeSub.id, status: activeSub.status })
-      return getSubscriptionData(c, customerId, activeSub.id, stripeContext.billingAccount)
+      if (subscriptions.data.length > 0) {
+        const activeSub = subscriptions.data[0]
+        cloudlog({ requestId: c.get('requestId'), message: 'Found a tracked subscription, fetching its data.', activeSubscriptionId: activeSub.id, status: activeSub.status })
+        return getSubscriptionData(c, customerId, activeSub.id, stripeContext.billingAccount)
+      }
     }
-  }
 
-  cloudlog({ requestId: c.get('requestId'), message: 'No other tracked subscriptions found for customer.', customerId })
-  return null
+    cloudlog({ requestId: c.get('requestId'), message: 'No other tracked subscriptions found for customer.', customerId })
+    return { ok: false, reason: 'not_found' }
+  }
+  catch (error) {
+    return stripeLookupErrorFromCatch(c, 'getActiveSubscription', subscriptionId, error)
+  }
 }
 
 export async function syncSubscriptionData(c: Context, customerId: string, subscriptionId: string | null): Promise<void> {
@@ -350,16 +412,85 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return
   try {
-    // Get subscription data from Stripe using the ID stored in our DB
-    let subscriptionData = await getSubscriptionData(c, customerId, subscriptionId, billingAccount)
+    let subscriptionData: SubscriptionSyncData | null = null
+    let stripeConfirmedAbsent = false
+
+    const primaryLookup = await getSubscriptionData(c, customerId, subscriptionId, billingAccount)
+    if (primaryLookup.ok) {
+      subscriptionData = primaryLookup.data
+    }
+    else if (primaryLookup.reason === 'read_error') {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'syncSubscriptionData skipping update after Stripe read error',
+        customerId,
+        subscriptionId,
+        error: primaryLookup.error,
+      })
+      return
+    }
+    else if (primaryLookup.reason === 'stripe_not_configured') {
+      return
+    }
+    else if (primaryLookup.reason === 'not_found') {
+      stripeConfirmedAbsent = true
+    }
 
     if (!subscriptionData) {
-      subscriptionData = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
+      const activeLookup = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
+      if (activeLookup.ok) {
+        subscriptionData = activeLookup.data
+        stripeConfirmedAbsent = false
+      }
+      else if (activeLookup.reason === 'read_error') {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'syncSubscriptionData skipping update after Stripe read error',
+          customerId,
+          subscriptionId,
+          error: activeLookup.error,
+        })
+        return
+      }
+      else if (activeLookup.reason === 'stripe_not_configured') {
+        return
+      }
+      else if (activeLookup.reason === 'not_found') {
+        stripeConfirmedAbsent = true
+      }
     }
     else if (!TRACKED_STRIPE_SUBSCRIPTION_STATUSES.includes(subscriptionData.status as typeof TRACKED_STRIPE_SUBSCRIPTION_STATUSES[number])) {
-      const replacementSubscriptionData = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
-      if (replacementSubscriptionData || subscriptionData.status !== 'canceled')
-        subscriptionData = replacementSubscriptionData
+      const replacementLookup = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
+      if (!replacementLookup.ok) {
+        if (replacementLookup.reason === 'read_error') {
+          cloudlogErr({
+            requestId: c.get('requestId'),
+            message: 'syncSubscriptionData skipping update after Stripe read error',
+            customerId,
+            subscriptionId,
+            error: replacementLookup.error,
+          })
+          return
+        }
+        if (subscriptionData.status !== 'canceled') {
+          subscriptionData = null
+          if (replacementLookup.reason === 'not_found')
+            stripeConfirmedAbsent = true
+        }
+      }
+      else {
+        subscriptionData = replacementLookup.data
+      }
+    }
+
+    if (!subscriptionData && !stripeConfirmedAbsent) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'syncSubscriptionData skipping update without Stripe confirmation',
+        customerId,
+        subscriptionId,
+      })
+      return
     }
 
     let dbStatus: Database['public']['Enums']['stripe_status'] = 'canceled'

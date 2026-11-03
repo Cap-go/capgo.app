@@ -25,11 +25,11 @@ SELECT ok(
 
 SELECT ok(
     (
-        SELECT target::jsonb = '["cron_sync_sub"]'::jsonb AND batch_size = 100
+        SELECT target::jsonb = '["cron_sync_sub"]'::jsonb AND batch_size = 25
         FROM public.cron_tasks
         WHERE name = 'per_minute_queues'
     ),
-    'per_minute_queues keeps cron_sync_sub at batch size 100'
+    'per_minute_queues keeps cron_sync_sub at batch size 25'
 );
 
 SELECT tests.clear_authentication();
