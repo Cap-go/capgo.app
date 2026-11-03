@@ -89,6 +89,10 @@ function normalizeTaxIdValue(value: string) {
   return value.replace(/\s+/g, '').toUpperCase()
 }
 
+function stripeOptionalAddressField(value: string | null | undefined) {
+  return normalizeOptionalString(value) ?? ''
+}
+
 export async function getCustomerBillingProfile(c: Context, ctx: InAppBillingContext): Promise<CustomerBillingProfile> {
   const customer = await ctx.stripe.customers.retrieve(ctx.customerId)
   if (customer.deleted)
@@ -134,10 +138,10 @@ function parseBillingProfileUpdate(body: CustomerBillingProfileUpdate) {
   return {
     address: {
       line1,
-      line2: normalizeOptionalString(body.address.line2) ?? undefined,
-      city: normalizeOptionalString(body.address.city) ?? undefined,
-      state: normalizeOptionalString(body.address.state) ?? undefined,
-      postal_code: normalizeOptionalString(body.address.postalCode) ?? undefined,
+      line2: stripeOptionalAddressField(body.address.line2),
+      city: stripeOptionalAddressField(body.address.city),
+      state: stripeOptionalAddressField(body.address.state),
+      postal_code: stripeOptionalAddressField(body.address.postalCode),
       country,
     },
     taxId,
@@ -153,6 +157,8 @@ async function syncTaxIds(c: Context, ctx: InAppBillingContext, desired: Custome
 
   if (desired === null) {
     for (const taxId of existing.data) {
+      if (!isAllowedTaxIdType(taxId.type))
+        continue
       await ctx.stripe.customers.deleteTaxId(ctx.customerId, taxId.id)
     }
     return
@@ -172,6 +178,8 @@ async function syncTaxIds(c: Context, ctx: InAppBillingContext, desired: Custome
 
   for (const taxId of existing.data) {
     if (taxId.id === created.id)
+      continue
+    if (!isAllowedTaxIdType(taxId.type))
       continue
     await ctx.stripe.customers.deleteTaxId(ctx.customerId, taxId.id)
   }

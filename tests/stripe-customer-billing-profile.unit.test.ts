@@ -114,6 +114,70 @@ describe('stripe customer billing profile', () => {
     expect(update).toHaveBeenCalledWith('cus_test', { address: expect.objectContaining({ line1: 'New', country: 'PT' }) })
   })
 
+  it('sends empty strings when optional address fields are cleared', async () => {
+    const update = vi.fn().mockResolvedValue({ id: 'cus_test', deleted: false, address: { line1: 'Main', country: 'PT' } })
+    const stripe = {
+      customers: {
+        update,
+        createTaxId: vi.fn(),
+        deleteTaxId: vi.fn(),
+        retrieve: vi.fn().mockResolvedValue({ id: 'cus_test', deleted: false, address: { line1: 'Main', country: 'PT' } }),
+        listTaxIds: vi.fn().mockResolvedValue({ data: [] }),
+      },
+    }
+
+    const { updateCustomerBillingProfile } = await import('../supabase/functions/_backend/utils/stripe_customer_billing_profile.ts')
+    await updateCustomerBillingProfile(createContext(), createCtx(stripe as unknown as Stripe), {
+      address: {
+        line1: 'Main',
+        line2: null,
+        city: null,
+        state: null,
+        postalCode: null,
+        country: 'PT',
+      },
+      taxId: null,
+    })
+
+    expect(update).toHaveBeenCalledWith('cus_test', {
+      address: {
+        line1: 'Main',
+        line2: '',
+        city: '',
+        state: '',
+        postal_code: '',
+        country: 'PT',
+      },
+    })
+  })
+
+  it('preserves unsupported tax id types when clearing managed tax ids', async () => {
+    const deleteTaxId = vi.fn().mockResolvedValue({})
+    const stripe = {
+      customers: {
+        update: vi.fn().mockResolvedValue({ id: 'cus_test' }),
+        createTaxId: vi.fn(),
+        deleteTaxId,
+        retrieve: vi.fn().mockResolvedValue({ id: 'cus_test', deleted: false, address: { line1: 'Main', country: 'PT' } }),
+        listTaxIds: vi.fn().mockResolvedValue({
+          data: [
+            { id: 'txi_jp', type: 'jp_cn', value: 'T1234567890123' },
+            { id: 'txi_eu', type: 'eu_vat', value: 'PT123456789' },
+          ],
+        }),
+      },
+    }
+
+    const { updateCustomerBillingProfile } = await import('../supabase/functions/_backend/utils/stripe_customer_billing_profile.ts')
+    await updateCustomerBillingProfile(createContext(), createCtx(stripe as unknown as Stripe), {
+      address: { line1: 'Main', country: 'PT' },
+      taxId: null,
+    })
+
+    expect(deleteTaxId).toHaveBeenCalledTimes(1)
+    expect(deleteTaxId).toHaveBeenCalledWith('cus_test', 'txi_eu')
+  })
+
   it('keeps the existing tax id when Stripe rejects the replacement', async () => {
     const createTaxId = vi.fn().mockRejectedValue(new Stripe.errors.StripeInvalidRequestError({ message: 'Invalid value' } as any))
     const deleteTaxId = vi.fn()
