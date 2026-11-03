@@ -453,7 +453,7 @@ export interface BillingProfileUpdate {
     postalCode?: string | null
     country: string
   }
-  taxId: { type: BillingProfileTaxIdType, value: string } | null
+  taxId?: { type: BillingProfileTaxIdType, value: string } | null
 }
 
 export function getBillingProfile(orgId: string) {
@@ -467,7 +467,10 @@ export function getBillingProfile(orgId: string) {
 }
 
 export function saveBillingProfile(orgId: string, update: BillingProfileUpdate) {
-  return callBilling<BillingProfile>('billing-profile', { orgId, address: update.address, taxId: update.taxId })
+  const body: Record<string, unknown> = { orgId, address: update.address }
+  if ('taxId' in update)
+    body.taxId = update.taxId
+  return callBilling<BillingProfile>('billing-profile', body)
 }
 
 export function formatStripeAmount(amount: number, currency: string) {

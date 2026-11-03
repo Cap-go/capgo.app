@@ -24,6 +24,7 @@ const postalCode = ref('')
 const country = ref('')
 const taxIdType = ref<BillingProfileTaxIdType>('eu_vat')
 const taxIdValue = ref('')
+const hadTaxIdOnLoad = ref(false)
 
 const taxIdTypeOptions = computed(() => BILLING_PROFILE_TAX_ID_TYPES.map(type => ({
   value: type,
@@ -31,7 +32,7 @@ const taxIdTypeOptions = computed(() => BILLING_PROFILE_TAX_ID_TYPES.map(type =>
 })))
 
 const line1Errors = computed(() => validateField(line1.value, [rules.required(t('billing-profile-line1'))]))
-const countryErrors = computed(() => validateField(country.value, [
+const countryErrors = computed(() => validateField(country.value.trim(), [
   rules.required(t('billing-profile-country')),
   rules.matches(/^[a-z]{2}$/i, t('billing-profile-country-format')),
 ]))
@@ -39,6 +40,7 @@ const countryErrors = computed(() => validateField(country.value, [
 let loadRun = 0
 
 function applyProfile(profile: BillingProfile) {
+  hadTaxIdOnLoad.value = profile.taxId !== null
   line1.value = profile.address.line1 ?? ''
   line2.value = profile.address.line2 ?? ''
   city.value = profile.address.city ?? ''
@@ -82,7 +84,7 @@ async function loadProfile() {
 function buildUpdate(): BillingProfileUpdate {
   const normalizedCountry = country.value.trim().toUpperCase()
   const trimmedTaxId = taxIdValue.value.trim()
-  return {
+  const update: BillingProfileUpdate = {
     address: {
       line1: line1.value.trim(),
       line2: line2.value.trim() || null,
@@ -91,10 +93,12 @@ function buildUpdate(): BillingProfileUpdate {
       postalCode: postalCode.value.trim() || null,
       country: normalizedCountry,
     },
-    taxId: trimmedTaxId
-      ? { type: taxIdType.value, value: trimmedTaxId }
-      : null,
   }
+  if (trimmedTaxId)
+    update.taxId = { type: taxIdType.value, value: trimmedTaxId }
+  else if (hadTaxIdOnLoad.value)
+    update.taxId = null
+  return update
 }
 
 async function saveProfile() {
@@ -113,6 +117,7 @@ async function saveProfile() {
   catch (error) {
     console.error('Cannot save billing profile', error)
     toast.error(t('billing-profile-save-error'))
+    void loadProfile()
   }
   finally {
     isSaving.value = false

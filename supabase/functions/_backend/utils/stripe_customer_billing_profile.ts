@@ -105,11 +105,20 @@ export async function getCustomerBillingProfile(c: Context, ctx: InAppBillingCon
   }
 }
 
-function stripeCustomerUpdateError(c: Context, ctx: InAppBillingContext, message: string, error: unknown): never {
+function stripeCustomerUpdateError(
+  c: Context,
+  ctx: InAppBillingContext,
+  message: string,
+  error: unknown,
+  moreInfo: Record<string, unknown> = {},
+): never {
   cloudlogErr({ requestId: c.get('requestId'), message, customerId: ctx.customerId, error })
   if (isDeterministicStripeCustomerUpdateError(error)) {
     const stripeError = error as { message?: string }
-    throw simpleError('stripe_customer_update_failed', stripeError.message ?? 'Stripe rejected the billing update', { stripeCode: (error as { code?: string }).code ?? null })
+    throw simpleError('stripe_customer_update_failed', stripeError.message ?? 'Stripe rejected the billing update', {
+      stripeCode: (error as { code?: string }).code ?? null,
+      ...moreInfo,
+    })
   }
   throw error
 }
@@ -203,7 +212,7 @@ export async function updateCustomerBillingProfile(
     await syncTaxIds(c, ctx, parsed.taxId)
   }
   catch (error) {
-    stripeCustomerUpdateError(c, ctx, 'customer tax id update failed', error)
+    stripeCustomerUpdateError(c, ctx, 'customer tax id update failed', error, { addressSaved: true })
   }
 
   await syncStripeCustomerCountry(c, ctx.customerId).catch((error) => {

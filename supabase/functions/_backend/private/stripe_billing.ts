@@ -5,6 +5,7 @@ import { Hono } from 'hono/tiny'
 import { acceptCancelSaveOffer, declineCancelSaveOffer, parseOfferId, prepareCancelSaveOffer } from '../utils/cancel_save_offer.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
+import { throwDatabaseLookupError } from '../utils/pg_auth_lookup.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { checkOrgAdminRole, checkPermission } from '../utils/rbac.ts'
 import {
@@ -113,7 +114,9 @@ async function resolveOrgAdminBillingProfile(c: AppContext, orgId: string | unde
       [orgId],
     ))
   }
-  catch {}
+  catch (error) {
+    throwDatabaseLookupError(c, 'resolveOrgAdminBillingProfile.org', error, { orgId })
+  }
   if (!org)
     throw simpleError('not_authorized', 'Not authorized')
   if (!await checkOrgAdminRole(c, orgId))
@@ -136,7 +139,11 @@ function parseBillingProfileUpdateBody(body: Record<string, unknown>): CustomerB
 
   const readOptional = (key: 'line2' | 'city' | 'state' | 'postalCode') => {
     const value = (address as Record<string, unknown>)[key]
-    return typeof value === 'string' ? value : value == null ? null : undefined
+    if (value == null)
+      return null
+    if (typeof value !== 'string')
+      throw simpleError('invalid_address', 'Invalid billing address')
+    return value
   }
 
   let taxId: CustomerBillingProfileUpdate['taxId'] | undefined
@@ -318,6 +325,8 @@ app.get('/billing-profile', middlewareAuth, async (c) => {
 
 app.post('/billing-profile', middlewareAuth, async (c) => {
   const body = await parseBody<Record<string, unknown>>(c)
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw simpleError('invalid_body', 'Invalid request body')
   const orgId = typeof body.orgId === 'string' ? body.orgId : undefined
   const ctx = await resolveOrgAdminBillingProfile(c, orgId)
   const update = parseBillingProfileUpdateBody(body)
