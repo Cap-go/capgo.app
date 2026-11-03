@@ -15,7 +15,9 @@ app.post('/', middlewareAPISecret, async (c) => {
   const body = await parseBody<SyncBody>(c)
   if (!body.customerId)
     throw simpleError('invalid_body', 'Missing customerId')
-  if (body.trialAt !== undefined && body.trialAt !== null && Number.isNaN(Date.parse(body.trialAt)))
+  if (body.trialAt === undefined)
+    throw simpleError('invalid_body', 'Missing trialAt')
+  if (body.trialAt !== null && Number.isNaN(Date.parse(body.trialAt)))
     throw simpleError('invalid_body', 'Invalid trialAt')
 
   try {

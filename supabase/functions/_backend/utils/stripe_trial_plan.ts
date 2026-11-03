@@ -291,7 +291,7 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
   const currentStartUnix = pendingTrialPlanScheduleStartUnix(schedule)
   if (currentStartUnix === newStartUnix) {
     try {
-      await withTrialPlanLock(c, customerId, async () => {
+      await withTrialPlanLockForScheduleSync(c, customerId, async () => {
         const latest = await findPendingTrialPlanSchedule(stripe, customerId)
         if (!latest)
           return
@@ -329,7 +329,7 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
     : (typeof phaseMetadata.org_id === 'string' ? phaseMetadata.org_id : undefined)
 
   try {
-    await withTrialPlanLock(c, customerId, async () => {
+    await withTrialPlanLockForScheduleSync(c, customerId, async () => {
       let trialAtNow: string | null
       const fromDb = await loadStripeInfoTrialAt(c, customerId)
       trialAtNow = fromDb ?? (trialAt !== undefined ? trialAt : null)
@@ -758,6 +758,24 @@ async function withTrialPlanLock<T>(c: Context, customerId: string, run: () => P
     const { result, connectionLost } = await holdTrialPlanLock(c, client, customerId, run)
     broken = connectionLost
     return result
+  }
+  finally {
+    releasePgClient(pool, client, broken)
+    closeClient(c, pool)
+  }
+}
+
+// Same lock as withTrialPlanLock, but fails when the DB connection drops so queue retries can reconcile Stripe.
+async function withTrialPlanLockForScheduleSync(c: Context, customerId: string, run: () => Promise<void>): Promise<void> {
+  const pool = await getPgClient(c)
+  let client: Awaited<ReturnType<typeof checkoutPgClient>> | null = null
+  let broken = false
+  try {
+    client = await checkoutPgClient(pool)
+    const { connectionLost } = await holdTrialPlanLock(c, client, customerId, run)
+    broken = connectionLost
+    if (connectionLost)
+      throw new Error('trial plan schedule sync lock connection lost')
   }
   finally {
     releasePgClient(pool, client, broken)

@@ -524,11 +524,14 @@ describe('trial plan lock', () => {
 })
 
 describe('sync pending trial plan schedule with trial end', () => {
+  const fixedNow = Date.parse('2026-10-21T12:00:00.000Z')
   const oldStartUnix = Math.floor(Date.parse('2026-10-30T00:00:00.000Z') / 1000)
   const newTrialAt = '2026-11-14T09:30:00.000Z'
   const newStartUnix = Math.floor(Date.parse('2026-11-14T00:00:00.000Z') / 1000)
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(fixedNow)
     adminRows.override = (text: string) => {
       if (text.includes('SELECT trial_at FROM public.stripe_info'))
         return [{ trial_at: newTrialAt }]
@@ -537,6 +540,7 @@ describe('sync pending trial plan schedule with trial end', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     adminRows.override = null
   })
 
@@ -566,8 +570,7 @@ describe('sync pending trial plan schedule with trial end', () => {
   })
 
   it('schedules at the extended trial end when the org picks a plan after an extension', () => {
-    const now = Date.parse('2026-10-21T12:00:00.000Z')
-    expect(getTrialPlanStartDate(newTrialAt, now)?.toISOString()).toBe('2026-11-14T00:00:00.000Z')
+    expect(getTrialPlanStartDate(newTrialAt)?.toISOString()).toBe('2026-11-14T00:00:00.000Z')
   })
 
   it('routes Stripe calls through the customer billing account', async () => {
