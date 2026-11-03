@@ -337,6 +337,13 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
           },
         }],
       })
+      await cancelPendingTrialPlanSchedulesExcept(
+        c,
+        stripe,
+        customerId,
+        latest.id,
+        'duplicate trial plan schedule canceled during trial end sync',
+      )
     })
     cloudlog({
       requestId: c.get('requestId'),

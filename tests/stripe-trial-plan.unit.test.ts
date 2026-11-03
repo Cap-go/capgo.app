@@ -590,4 +590,31 @@ describe('sync pending trial plan schedule with trial end', () => {
     expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('unchanged')
     expect(update).not.toHaveBeenCalled()
   })
+
+  it('cancels the pending schedule when the trial end is missing or past', async () => {
+    const cancel = vi.fn(async (id: string) => ({ id }))
+    const list = vi.fn(async () => ({ data: [pendingSchedule()], has_more: false }))
+    const stripe = { subscriptionSchedules: { list, cancel } } as unknown as Stripe
+    stripeClientMock.stripe = stripe
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', null)).toBe('canceled')
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', '2020-01-01T00:00:00.000Z')).toBe('canceled')
+    expect(cancel).toHaveBeenCalledWith('sub_sched_trial')
+  })
+
+  it('cancels duplicate pending schedules after moving the kept schedule', async () => {
+    const duplicate = {
+      ...pendingSchedule(),
+      id: 'sub_sched_dup',
+      created: 2,
+    } as unknown as Stripe.SubscriptionSchedule
+    const update = vi.fn(async () => pendingSchedule(newStartUnix))
+    const cancel = vi.fn(async (id: string) => ({ id }))
+    const list = vi.fn(async () => ({ data: [pendingSchedule(), duplicate], has_more: false }))
+    const stripe = { subscriptionSchedules: { list, update, cancel } } as unknown as Stripe
+    stripeClientMock.stripe = stripe
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('updated')
+    expect(update).toHaveBeenCalled()
+    expect(cancel).toHaveBeenCalledWith('sub_sched_dup')
+    expect(cancel).not.toHaveBeenCalledWith('sub_sched_trial')
+  })
 })
