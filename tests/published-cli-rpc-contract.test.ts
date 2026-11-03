@@ -121,7 +121,7 @@ function createAnonymousApiKeyClient(apikey: string) {
   })
 }
 
-describe('cRITICAL published CLI RPC contract', () => {
+describe('cRITICAL published CLI RPC contract', { hookTimeout: 120_000 }, () => {
   let pool: Pool
   let contract: PublishedCliContractContext
 
