@@ -72,6 +72,13 @@ interface CancelOfferBody extends OrgBody {
 
 type AppContext = Context<MiddlewareKeyVariables>
 
+const ORG_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function assertOrgIdUuid(orgId: string) {
+  if (!ORG_ID_UUID_RE.test(orgId))
+    throw simpleError('invalid_body', 'Invalid orgId')
+}
+
 async function resolveBillingContext(c: AppContext, orgId: string | undefined, permission: Permission) {
   if (!orgId)
     throw simpleError('invalid_body', 'Missing orgId')
@@ -102,6 +109,7 @@ async function resolveBillingContext(c: AppContext, orgId: string | undefined, p
 async function resolveOrgAdminBillingProfile(c: AppContext, orgId: string | undefined) {
   if (!orgId)
     throw simpleError('invalid_body', 'Missing orgId')
+  assertOrgIdUuid(orgId)
   const authorization = c.get('authorization')
   if (!authorization || !c.get('auth')?.userId)
     throw simpleError('not_authorized', 'Not authorized')
