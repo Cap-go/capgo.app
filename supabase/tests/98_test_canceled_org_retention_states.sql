@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(10);
+SELECT plan(11);
 
 -- The retention batch selectors must stay set-based: one pass over the
 -- canceled orgs, not a per-org may_receive / last-activity call.
@@ -24,6 +24,16 @@ SELECT
         ) ILIKE '%public.canceled_org_last_activity_at(%',
         false,
         'canceled_org_retention_states() does not call the per-org activity scan'
+    );
+
+SELECT
+    is(
+        (
+            SELECT prosrc FROM pg_proc
+            WHERE oid = 'public.canceled_org_retention_states()'::regprocedure
+        ) ILIKE '%public.canceled_org_retention_anchor(%',
+        false,
+        'canceled_org_retention_states() does not call the per-org anchor helper'
     );
 
 -- Canceled orgs covering each anchor and exemption source:
