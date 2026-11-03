@@ -24,7 +24,7 @@ function createContext() {
   } as any
 }
 
-function createCtx(stripe: unknown, customerId = 'cus_test') {
+function createCtx(stripe: Stripe, customerId = 'cus_test') {
   return {
     customerId,
     billingAccount: 'ee' as const,
@@ -53,7 +53,7 @@ describe('stripe customer billing profile', () => {
     }
 
     const { getCustomerBillingProfile } = await import('../supabase/functions/_backend/utils/stripe_customer_billing_profile.ts')
-    const profile = await getCustomerBillingProfile(createContext(), createCtx(stripe))
+    const profile = await getCustomerBillingProfile(createContext(), createCtx(stripe as unknown as Stripe))
 
     expect(profile.address).toMatchObject({
       line1: 'Rua Example 1',
@@ -82,7 +82,7 @@ describe('stripe customer billing profile', () => {
     }
 
     const { updateCustomerBillingProfile } = await import('../supabase/functions/_backend/utils/stripe_customer_billing_profile.ts')
-    await updateCustomerBillingProfile(createContext(), createCtx(stripe), {
+    await updateCustomerBillingProfile(createContext(), createCtx(stripe as unknown as Stripe), {
       address: { line1: 'New', country: 'PT' },
       taxId: { type: 'eu_vat', value: 'PT999999990' },
     })
@@ -106,7 +106,7 @@ describe('stripe customer billing profile', () => {
     }
 
     const { updateCustomerBillingProfile } = await import('../supabase/functions/_backend/utils/stripe_customer_billing_profile.ts')
-    await expect(updateCustomerBillingProfile(createContext(), createCtx(stripe), {
+    await expect(updateCustomerBillingProfile(createContext(), createCtx(stripe as unknown as Stripe), {
       address: { line1: 'Line', country: 'PT' },
       taxId: { type: 'eu_vat', value: 'BAD' },
     })).rejects.toMatchObject({ cause: { error: 'stripe_customer_update_failed' } })

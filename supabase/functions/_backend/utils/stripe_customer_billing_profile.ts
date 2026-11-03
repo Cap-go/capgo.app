@@ -134,10 +134,10 @@ function parseBillingProfileUpdate(body: CustomerBillingProfileUpdate) {
   return {
     address: {
       line1,
-      line2: normalizeOptionalString(body.address.line2),
-      city: normalizeOptionalString(body.address.city),
-      state: normalizeOptionalString(body.address.state),
-      postal_code: normalizeOptionalString(body.address.postalCode),
+      line2: normalizeOptionalString(body.address.line2) ?? undefined,
+      city: normalizeOptionalString(body.address.city) ?? undefined,
+      state: normalizeOptionalString(body.address.state) ?? undefined,
+      postal_code: normalizeOptionalString(body.address.postalCode) ?? undefined,
       country,
     },
     taxId,
