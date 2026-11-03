@@ -272,7 +272,9 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
   if (!schedule)
     return 'no_schedule'
 
-  const authoritativeTrialAt = trialAt ?? await loadStripeInfoTrialAt(c, customerId)
+  const authoritativeTrialAt = trialAt !== undefined
+    ? trialAt
+    : await loadStripeInfoTrialAt(c, customerId)
   const newStart = getTrialPlanStartDate(authoritativeTrialAt)
   if (!newStart) {
     try {
@@ -305,10 +307,11 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
     await withTrialPlanLock(c, customerId, async () => {
       let trialAtNow: string | null
       try {
-        trialAtNow = (await loadStripeInfoTrialAt(c, customerId)) ?? trialAt ?? null
+        const fromDb = await loadStripeInfoTrialAt(c, customerId)
+        trialAtNow = fromDb ?? (trialAt !== undefined ? trialAt : null)
       }
       catch {
-        trialAtNow = trialAt ?? null
+        trialAtNow = trialAt !== undefined ? trialAt : null
       }
       const lockedStart = getTrialPlanStartDate(trialAtNow)
       if (!lockedStart) {
