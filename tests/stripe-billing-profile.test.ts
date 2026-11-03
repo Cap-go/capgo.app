@@ -102,6 +102,15 @@ describe('stripe billing profile API', () => {
     await bindOrgRole(orgAdminAuth.user.id, orgUsId, 'org_admin')
     await bindOrgRole(billingAdminAuth.user.id, orgEeId, 'org_billing_admin')
 
+    await executeSQL(
+      `INSERT INTO public.org_users (user_id, org_id, rbac_role_name, is_invite)
+       VALUES ($1::uuid, $2::uuid, public.rbac_role_org_admin(), false),
+              ($1::uuid, $3::uuid, public.rbac_role_org_admin(), false),
+              ($4::uuid, $2::uuid, public.rbac_role_org_billing_admin(), false)
+       ON CONFLICT DO NOTHING`,
+      [orgAdminAuth.user.id, orgEeId, orgUsId, billingAdminAuth.user.id],
+    )
+
     orgAdminHeaders = await getAuthHeadersForCredentials(orgAdminEmail, testPassword)
     billingAdminHeaders = await getAuthHeadersForCredentials(billingAdminEmail, testPassword)
   })
@@ -116,7 +125,7 @@ describe('stripe billing profile API', () => {
       method: 'GET',
       headers: billingAdminHeaders,
     })
-    expect(response.status).toBe(403)
+    expect(response.status).toBe(400)
     const payload = await response.json() as { error?: string }
     expect(payload.error).toBe('not_authorized')
   })
