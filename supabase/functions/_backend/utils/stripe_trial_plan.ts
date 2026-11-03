@@ -249,8 +249,6 @@ function pendingTrialPlanScheduleStartUnix(schedule: Stripe.SubscriptionSchedule
   const phaseStart = schedule.phases[0]?.start_date
   if (typeof phaseStart === 'number')
     return phaseStart
-  if (typeof schedule.start_date === 'number')
-    return schedule.start_date
   return null
 }
 
