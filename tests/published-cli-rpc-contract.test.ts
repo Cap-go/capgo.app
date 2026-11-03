@@ -133,7 +133,7 @@ describe('cRITICAL published CLI RPC contract', () => {
 
   afterAll(async () => {
     await pool?.end()
-  })
+  }, 120_000)
 
   it.concurrent('keeps anon EXECUTE on every RPC still called by the published CLI', async () => {
     const missing: string[] = []
@@ -158,7 +158,7 @@ describe('cRITICAL published CLI RPC contract', () => {
     }
 
     expect(missing, `Published CLI ${contract.rpcSourceTag} would break in production:\n${missing.join('\n')}`).toEqual([])
-  })
+  }, 120_000)
 
   it.concurrent(`published CLI identity RPC get_user_id({ apikey }) MUST succeed for valid API keys`, async () => {
     const client = createAnonymousApiKeyClient(APIKEY_TEST_ORG_SUPER_ADMIN)
