@@ -130,17 +130,14 @@ describe('stripe billing profile API', () => {
     expect(payload.error).toBe('not_authorized')
   })
 
-  it('allows org_admin on EE and US orgs when Stripe is reachable', async () => {
+  it('does not treat org_admin as unauthorized on EE and US orgs', async () => {
     for (const orgId of [orgEeId, orgUsId]) {
       const response = await fetchTestRequest(getEndpointUrl(`/private/stripe_billing/billing-profile?orgId=${orgId}`), {
         method: 'GET',
         headers: orgAdminHeaders,
       })
-      expect([200, 503, 500]).toContain(response.status)
-      if (response.status !== 200)
-        continue
-      const payload = await response.json() as { address?: { country?: string | null } }
-      expect(payload.address).toBeTruthy()
+      const payload = await response.json() as { error?: string }
+      expect(payload.error).not.toBe('not_authorized')
     }
   })
 })

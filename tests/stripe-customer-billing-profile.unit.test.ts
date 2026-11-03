@@ -63,6 +63,28 @@ describe('stripe customer billing profile', () => {
     expect(profile.taxId).toEqual({ id: 'txi_1', type: 'eu_vat', value: 'PT123456789' })
   })
 
+  it('reads billing profile on the US Stripe account context', async () => {
+    const stripe = {
+      customers: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: 'cus_us',
+          deleted: false,
+          address: { line1: '1 Main St', country: 'US', postal_code: '94105' },
+        }),
+        listTaxIds: vi.fn().mockResolvedValue({ data: [] }),
+      },
+    }
+
+    const { getCustomerBillingProfile } = await import('../supabase/functions/_backend/utils/stripe_customer_billing_profile.ts')
+    const profile = await getCustomerBillingProfile(createContext(), {
+      ...createCtx(stripe as unknown as Stripe, 'cus_us'),
+      billingAccount: 'us',
+    })
+
+    expect(profile.address.country).toBe('US')
+    expect(stripe.customers.retrieve).toHaveBeenCalledWith('cus_us')
+  })
+
   it('creates a tax id before deleting the previous one', async () => {
     const createTaxId = vi.fn().mockResolvedValue({ id: 'txi_new', type: 'eu_vat', value: 'PT999999990' })
     const deleteTaxId = vi.fn().mockResolvedValue({})
