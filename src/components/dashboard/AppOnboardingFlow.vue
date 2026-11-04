@@ -2950,7 +2950,7 @@ defineExpose({
                 {{ t('app-onboarding-manual-cli-title') }}
               </h2>
               <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {{ t('app-onboarding-manual-cli-desc') }}
+                {{ manualSetupUsesBuilder(main.user?.onboarding) ? t('app-onboarding-manual-cli-desc-builder') : t('app-onboarding-manual-cli-desc-ota') }}
               </p>
             </div>
             <button
