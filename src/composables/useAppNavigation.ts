@@ -8,6 +8,7 @@ import { toast } from 'vue-sonner'
 import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
+import IconSparkles from '~icons/heroicons/sparkles'
 import IconDiscord from '~icons/ic/round-discord'
 import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
@@ -243,6 +244,11 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         icon: IconSparkles,
         key: '/changelog',
         group: 'help',
+      },
+      {
+        label: 'ai-assistants',
+        icon: IconSparkles,
+        key: '/mcp',
       },
       {
         label: 'documentation',

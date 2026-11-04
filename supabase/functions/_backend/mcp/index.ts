@@ -5,8 +5,10 @@ import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from '.
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
 import { cloudlog } from '../utils/logging.ts'
+import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
+import { backgroundTask } from '../utils/utils.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
 
@@ -122,6 +124,32 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
   }
 }
 
+const MCP_KEY_PREFIX = 'MCP · '
+
+/**
+ * PostHog event for one hosted MCP tool call, so hosted usage sits next to the CLI's
+ * `MCP Tool Invoked`. `client` is the OAuth client name from the key ("MCP · Claude"),
+ * or `api_key` for a pasted key whose name is user-chosen and is not sent.
+ */
+export function hostedMcpToolEvent(message: unknown, response: JsonRpcResponse | null | undefined, caller: McpCaller) {
+  const msg = message as { method?: unknown, params?: { name?: unknown } } | null
+  if (msg?.method !== 'tools/call')
+    return null
+  const toolName = typeof msg.params?.name === 'string' ? msg.params.name.slice(0, 100) : 'unknown'
+  const result = response?.result as { isError?: unknown } | undefined
+  const success = Boolean(response) && !response?.error && !result?.isError
+  const client = caller.apikeyName.startsWith(MCP_KEY_PREFIX)
+    ? caller.apikeyName.slice(MCP_KEY_PREFIX.length).slice(0, 100)
+    : 'api_key'
+  return {
+    channel: 'mcp-hosted',
+    event: 'Hosted MCP Tool Invoked',
+    user_id: caller.userId,
+    setPersonProperties: false,
+    nonPersonTags: { tool_name: toolName, success, client },
+  }
+}
+
 export function createMcpApp(dispatch: McpDispatch) {
   const app = new Hono<MiddlewareKeyVariables>()
 
@@ -183,6 +211,9 @@ export function createMcpApp(dispatch: McpDispatch) {
       if (method === 'tools/call')
         cloudlog({ requestId: c.get('requestId'), message: 'mcp_tool_call', tool: (message as { params?: { name?: unknown } }).params?.name, apikeyId: caller.apikeyId })
       const response = await handleJsonRpcMessage(message, ctx)
+      const event = hostedMcpToolEvent(message, response, caller)
+      if (event)
+        await backgroundTask(c, trackPosthogEvent(c, event))
       if (response)
         responses.push(response)
     }

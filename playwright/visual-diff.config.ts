@@ -1027,6 +1027,12 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await hashed.first().waitFor({ state: 'visible', timeout: 30_000 })
     },
   },
+  {
+    slug: 'mcp-connect',
+    path: '/mcp',
+    auth: true,
+    prepare: page => page.locator('[data-test="mcp-connect-card"]').waitFor({ state: 'visible', timeout: 30_000 }),
+  },
 ]
 
 export const visualDiffViewport = {

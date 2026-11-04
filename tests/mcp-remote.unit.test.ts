@@ -16,6 +16,7 @@ import {
   sanitizeClientName,
   verifyPkceS256,
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
+import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
 import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
 
@@ -692,5 +693,27 @@ describe('hosted MCP errors always give a way out', () => {
   it.concurrent('points to tools/list for an unknown tool', async () => {
     const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_nope', arguments: {} } }, failingContext(500, null))
     expect(response?.error?.message).toContain('tools/list')
+  })
+})
+
+describe('hosted MCP tool analytics', () => {
+  const caller = { userId: 'user-1', apikeyId: 1, apikeyName: 'MCP · Claude', apikeyExpiresAt: null }
+  const call = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_list_apps' } }
+
+  it('tracks a successful tool call with the OAuth client name', () => {
+    const event = hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { content: [] } }, caller)
+    expect(event).toMatchObject({ event: 'Hosted MCP Tool Invoked', user_id: 'user-1', setPersonProperties: false })
+    expect(event?.nonPersonTags).toEqual({ tool_name: 'capgo_list_apps', success: true, client: 'Claude' })
+  })
+
+  it('marks isError results and JSON-RPC errors as failures', () => {
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { isError: true } }, caller)?.nonPersonTags.success).toBe(false)
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad' } }, caller)?.nonPersonTags.success).toBe(false)
+  })
+
+  it('never sends a user-chosen key name and ignores non-tool messages', () => {
+    const pasted = hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: {} }, { ...caller, apikeyName: 'my secret prod key' })
+    expect(pasted?.nonPersonTags.client).toBe('api_key')
+    expect(hostedMcpToolEvent({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 1, result: {} }, caller)).toBeNull()
   })
 })

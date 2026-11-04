@@ -1774,9 +1774,10 @@ getKeys()
             </div>
           </section>
 
+          <McpConnectCard placement="apikeys" class="mb-4" :class="{ 'mt-5': !showCliLoginGuidance }" />
+
           <div
             class="flex flex-col overflow-hidden overflow-y-auto bg-white md:rounded-xl md:border md:shadow-sm border-slate-200 dark:border-white/10 dark:bg-slate-800/60"
-            :class="{ 'md:mt-5': !showCliLoginGuidance }"
           >
             <DataTable
               v-model:current-page="currentPage"
