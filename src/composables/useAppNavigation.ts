@@ -246,7 +246,7 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         group: 'help',
       },
       {
-        label: 'ai-assistants',
+        label: 'ai-assistant',
         icon: IconSparkles,
         key: '/mcp',
       },

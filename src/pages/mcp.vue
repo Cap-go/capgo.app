@@ -11,7 +11,7 @@ const LOCAL_MCP_COMMAND = 'npx @capgo/cli@latest mcp'
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const displayStore = useDisplayStore()
-displayStore.NavTitle = t('ai-assistants')
+displayStore.NavTitle = t('ai-assistant')
 
 async function copyLocalCommand() {
   try {
@@ -34,7 +34,7 @@ async function copyLocalCommand() {
 <template>
   <div class="h-full overflow-y-auto px-4 pt-6 pb-8 sm:px-6 md:pt-8 lg:px-8">
     <div class="mx-auto flex max-w-9xl flex-col gap-4">
-      <McpConnectCard placement="mcp_page" />
+      <McpConnectCard />
 
       <div class="grid gap-4 lg:grid-cols-2">
         <section data-test="mcp-local" class="rounded-xl border border-slate-200 bg-white px-5 py-5 shadow-sm md:px-6 dark:border-white/10 dark:bg-slate-800/60">

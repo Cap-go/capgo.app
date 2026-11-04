@@ -1756,6 +1756,9 @@ getKeys()
                   <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
                     {{ t('cli-login-guidance-description') }}
                   </p>
+                  <RouterLink to="/mcp" data-test="cli-login-guidance-mcp-link" class="mt-2 inline-block text-sm font-medium text-primary-500 hover:underline dark:text-primary-400">
+                    {{ t('cli-login-guidance-mcp-link') }}
+                  </RouterLink>
                 </div>
               </div>
 
@@ -1774,10 +1777,9 @@ getKeys()
             </div>
           </section>
 
-          <McpConnectCard placement="apikeys" class="mb-4" :class="{ 'mt-5': !showCliLoginGuidance }" />
-
           <div
             class="flex flex-col overflow-hidden overflow-y-auto bg-white md:rounded-xl md:border md:shadow-sm border-slate-200 dark:border-white/10 dark:bg-slate-800/60"
+            :class="{ 'md:mt-5': !showCliLoginGuidance }"
           >
             <DataTable
               v-model:current-page="currentPage"

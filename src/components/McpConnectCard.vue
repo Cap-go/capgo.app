@@ -6,11 +6,6 @@ import IconSparkles from '~icons/heroicons/sparkles'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
-const props = defineProps<{
-  /** Where the card is shown, for analytics. The API keys page shows the short version. */
-  placement: 'apikeys' | 'mcp_page'
-}>()
-
 const HOSTED_MCP_URL = 'https://api.capgo.app/mcp'
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -28,7 +23,6 @@ async function copyHostedUrl() {
     channel: 'console-mcp',
     event: 'MCP Connect URL Copied',
     org_id: organizationStore.currentOrganization?.gid,
-    nonPersonTags: { placement: props.placement },
   }).catch(() => {})
 }
 </script>
@@ -56,9 +50,6 @@ async function copyHostedUrl() {
             <a href="https://capgo.app/docs/ai/mcp/" target="_blank" rel="noopener noreferrer" class="text-primary-500 hover:underline dark:text-primary-400">
               {{ t('mcp-connect-setup-guide') }}
             </a>
-            <RouterLink v-if="placement === 'apikeys'" to="/mcp" class="text-primary-500 hover:underline dark:text-primary-400">
-              {{ t('mcp-connect-more-options') }}
-            </RouterLink>
           </p>
         </div>
       </div>
