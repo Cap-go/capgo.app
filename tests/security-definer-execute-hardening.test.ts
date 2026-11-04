@@ -40,6 +40,8 @@ const SERVICE_ONLY_PROCS = [
   'public.canceled_org_retention_anchor(uuid)',
   'public.canceled_org_retention_uniq_id(uuid, text)',
   'public.canceled_org_retention_warning_meets_lead_time(uuid, text, integer)',
+  'public.canceled_org_retention_warning_meets_lead_time_at(uuid, text, timestamp with time zone, integer)',
+  'public.canceled_org_retention_states()',
   'public.process_free_trial_expired()',
   'public.soft_delete_versions_for_long_canceled_orgs(integer)',
   'public.cleanup_audit_logs_for_long_canceled_orgs(integer, integer, integer)',
