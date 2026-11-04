@@ -7,6 +7,7 @@ import { onboardingPlanStops } from '../src/utils/onboardingPlanStops'
 import {
   AI_ONBOARDING_PATH,
   aiGoalToIntent,
+  aiIntentEventProperties,
   aiOnboardingPathFor,
   checklistTaskListMode,
   defaultAiOrganizationName,
@@ -189,6 +190,12 @@ describe('AI onboarding goal', () => {
     expect(aiGoalToIntent('unsure')).toBe('exploring')
     expect(readAiOnboardingGoal({})).toBeNull()
     expect(readAiOnboardingGoal({ intent: 'publish' })).toBeNull()
+  })
+
+  it.concurrent('adds the saved intent to analytics only once a goal is chosen', () => {
+    expect(aiIntentEventProperties('builder')).toEqual({ intent: 'builder' })
+    expect(aiIntentEventProperties('unsure')).toEqual({ intent: 'exploring' })
+    expect(aiIntentEventProperties(null)).toEqual({})
   })
 
   it.concurrent('opens the task list for AI setup and hides it for new manual signups only', () => {
