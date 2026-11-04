@@ -37,7 +37,7 @@
   "6-characters-minimum": "Used in Capgo web console areas: pages, pages/onboarding. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "7-days": "Used in Capgo web console areas: services. Role: filter or date-range option label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "90-days": "Used in Capgo web console areas: services. Role: filter or date-range option label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "ai-assistants": "Used in Capgo web console areas: composables. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "ai-assistants": "Used in Capgo web console areas: composables, pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "Bandwidth": "Used in Capgo web console areas: components/dashboard, pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "Current": "Used in Capgo web console areas: pages/settings/organization. Role: filter or date-range option label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "Filters": "Used in Capgo web console areas: components, components/tables. Role: filter or date-range option label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

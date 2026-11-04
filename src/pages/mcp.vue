@@ -4,11 +4,14 @@ import { toast } from 'vue-sonner'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import McpConnectCard from '~/components/McpConnectCard.vue'
 import { sendEvent } from '~/services/tracking'
+import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
 
 const LOCAL_MCP_COMMAND = 'npx @capgo/cli@latest mcp'
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
+const displayStore = useDisplayStore()
+displayStore.NavTitle = t('ai-assistants')
 
 async function copyLocalCommand() {
   try {
