@@ -410,6 +410,24 @@ function getPlanChangeTrackingEventName(statusName: string) {
   return statusName === 'upgraded' ? 'User Upgraded' : 'User Plan Changed'
 }
 
+function buildSubscriptionSubscribeBentoPayload(
+  statusName: string,
+  eventName: string,
+  planName: string,
+  subscriptionMetadata: Record<string, string>,
+) {
+  const base = {
+    data: subscriptionMetadata,
+    event: eventName,
+    preferenceKey: 'credit_usage' as const,
+    uniqId: `subscription:${eventName}:${planName}`,
+    audience: 'billing' as const,
+  }
+  if (statusName === 'created')
+    return { ...base, once: true as const }
+  return { ...base, cron: '* * * * *' as const }
+}
+
 function getEventDateId(eventOccurredAtIso: string) {
   return new Date(eventOccurredAtIso).toISOString().slice(0, 10)
 }
@@ -716,6 +734,18 @@ function hasRevenueMovement(movement: RevenueMovement) {
     || movement.churnMrr > 0
 }
 
+function shouldRecordProcessedStripeEvent(
+  updateStatement: ReturnType<typeof buildStripeInfoUpdateStatement>,
+  movement: RevenueMovement,
+) {
+  return Boolean(updateStatement) || hasRevenueMovement(movement)
+}
+
+/** Subscription subscribe Bento/tracking runs only after a fresh persist, not webhook replays. */
+function shouldSendSubscriptionSubscribeTrackingAfterPersist(didPersist: PersistRevenueMovementStatus) {
+  return didPersist === 'applied'
+}
+
 function getChurnReason(
   currentStripeInfo: Pick<StripeInfoRow, 'past_due_at' | 'status'> | null | undefined,
   nextStripeInfo: Pick<StripeInfoUpdate, 'status'> | null | undefined,
@@ -797,8 +827,9 @@ async function persistStripeInfoAndRevenueMovement(
     last_stripe_event_at: eventOccurredAtIso,
   }
   const shouldRecordMovement = hasRevenueMovement(movement)
+  const updateStatementPreview = buildStripeInfoUpdateStatement(customerId, transactionUpdateData)
 
-  if (Object.keys(transactionUpdateData).length === 0 && !shouldRecordMovement)
+  if (!updateStatementPreview && !shouldRecordMovement)
     return { status: 'applied', firstPaidAt: null }
 
   // Pin one connection: BEGIN/COMMIT on the request-shared Pool could land on different ones.
@@ -845,8 +876,9 @@ async function persistStripeInfoAndRevenueMovement(
       transactionUpdateData.past_due_at = null
 
     const updateStatement = buildStripeInfoUpdateStatement(customerId, transactionUpdateData)
+    const shouldRecordProcessedEvent = shouldRecordProcessedStripeEvent(updateStatement, movement)
 
-    if (shouldRecordMovement) {
+    if (shouldRecordProcessedEvent) {
       const processedEvent = await pgClient.query(`
         INSERT INTO public.processed_stripe_events (
           event_id,
@@ -1413,29 +1445,31 @@ async function createdOrUpdated(
       eventOccurredAtIso,
       revenueMovement,
     )
-    if (didPersist === 'duplicate') {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'Skipping duplicate Stripe subscription event',
-        customerId: stripeData.data.customer_id,
-        eventOccurredAtIso,
-        stripeEventId: c.get('stripeEvent')!.id,
-        subscriptionId: stripeData.data.subscription_id,
-      })
-      return
+    if (!shouldSendSubscriptionSubscribeTrackingAfterPersist(didPersist)) {
+      if (didPersist === 'duplicate') {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'Skipping duplicate Stripe subscription event',
+          customerId: stripeData.data.customer_id,
+          eventOccurredAtIso,
+          stripeEventId: c.get('stripeEvent')!.id,
+          subscriptionId: stripeData.data.subscription_id,
+        })
+        return
+      }
+      if (didPersist === 'stale') {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'Skipping stale Stripe subscription event after row lock',
+          customerId: stripeData.data.customer_id,
+          eventOccurredAtIso,
+          subscriptionId: stripeData.data.subscription_id,
+        })
+        return
+      }
+      if (didPersist === 'missing')
+        return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
     }
-    if (didPersist === 'stale') {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'Skipping stale Stripe subscription event after row lock',
-        customerId: stripeData.data.customer_id,
-        eventOccurredAtIso,
-        subscriptionId: stripeData.data.subscription_id,
-      })
-      return
-    }
-    if (didPersist === 'missing')
-      return quickError(404, 'succeeded_customer_id_not_found', `succeeded: customer_id not found`, { stripeData })
 
     const openAIFirstPaymentAt = getOpenAIFirstPaymentAt({
       firstPaidAt,
@@ -1511,25 +1545,6 @@ async function createdOrUpdated(
     const eventName = `user:subscribe_${statusName}:${isMonthly ? 'monthly' : 'yearly'}`
     const subscriptionMetadata = buildSubscriptionEventMetadata(stripeData, plan, previousPlan)
     await syncBillingBentoTags(c, org, stripeData.data.customer_id, segment)
-    await sendEventToTracking(c, {
-      bento: {
-        cron: '* * * * *',
-        data: subscriptionMetadata,
-        event: eventName,
-        preferenceKey: 'credit_usage',
-        uniqId: `subscription:${eventName}:${plan.name}`,
-        audience: 'billing',
-      },
-      channel: 'usage',
-      event: isNewSubscription ? 'User subscribe' : 'User update subscribe',
-      sentToBento: true,
-      user_id: org.id,
-      groups: { organization: org.id },
-      tags: {
-        ...subscriptionMetadata,
-        ...(isNewSubscription ? {} : await loadSignupAttributionTags()),
-      },
-    })
 
     await backgroundTask(c, groupIdentifyPosthog(c, {
       groupType: 'organization',
@@ -1563,6 +1578,19 @@ async function createdOrUpdated(
         purgeOnPremCacheForOrg(c, org.id),
       ]))
     }
+
+    await sendEventToTracking(c, {
+      bento: buildSubscriptionSubscribeBentoPayload(statusName, eventName, plan.name, subscriptionMetadata),
+      channel: 'usage',
+      event: isNewSubscription ? 'User subscribe' : 'User update subscribe',
+      sentToBento: true,
+      user_id: org.id,
+      groups: { organization: org.id },
+      tags: {
+        ...subscriptionMetadata,
+        ...(isNewSubscription ? {} : await loadSignupAttributionTags()),
+      },
+    })
   }
   else {
     const segment = await customerToSegmentOrg(c, org, stripeData.data.price_id)
@@ -2361,7 +2389,11 @@ export const stripeEventTestUtils = {
   getConsoleBillingUrl,
   uniqueBillingEmails,
   buildSubscriptionEventMetadata,
+  buildSubscriptionSubscribeBentoPayload,
   classifyRevenueMovement,
+  shouldRecordProcessedStripeEvent,
+  shouldSendSubscriptionSubscribeTrackingAfterPersist,
+  persistStripeInfoAndRevenueMovement,
   getEventDateId,
   getPaidAtUpdate,
   resolveFirstPaidAt,
