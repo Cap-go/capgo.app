@@ -38,6 +38,7 @@ assert.equal(categorizeCliError(stringNetworkCause), 'timeout')
 assert.equal(isTransientNetworkError(stringNetworkCause), true)
 
 assert.equal(categorizeCliError({ code: 'commander.help' }), 'commander')
+assert.equal(categorizeCliError(new CliUserError('No Capgo API key found. Run `npx @capgo/cli@latest login` first, then retry this command.')), 'missing_apikey')
 
 assert.equal(categorizeCliError(new Error('something weird')), 'unknown')
 assert.equal(categorizeCliError(undefined), 'unknown')

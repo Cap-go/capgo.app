@@ -9,6 +9,7 @@ export type CliErrorCategory
     | 'validation_error'
     | 'server_error'
     | 'commander'
+    | 'missing_apikey'
     | 'unknown'
 
 function getStatusFromObject(error: object): number | undefined {
@@ -101,6 +102,8 @@ export function categorizeCliError(error: unknown): CliErrorCategory {
   }
 
   const message = getMessage(error).toLowerCase()
+  if (message.includes('no capgo api key found'))
+    return 'missing_apikey'
   if (/econnrefused|econnreset|enotfound|eai_again|fetch failed|failed to fetch|connect timeout|und_err/.test(message))
     return 'network_error'
   if (/timed out|timeout|etimedout|aborted/.test(message))

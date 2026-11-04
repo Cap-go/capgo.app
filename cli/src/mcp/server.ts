@@ -864,7 +864,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   server.registerTool(
     'capgo_doctor',
     {
-      description: 'Run diagnostics on the Capgo installation and get system information',
+      description: 'Run diagnostics on the Capgo installation and get system information. Outdated Capgo/Capacitor packages are listed in outdatedDependencies, with updateCommand to fix them.',
       inputSchema: mcpDoctorInputSchema,
     },
     async ({ packageJson }) => {
