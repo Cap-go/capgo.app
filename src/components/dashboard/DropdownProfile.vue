@@ -3,6 +3,7 @@ import { onClickOutside, onKeyStroke, useEventListener } from '@vueuse/core'
 import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { toast } from 'vue-sonner'
 import IconLogout from '~icons/lucide/log-out'
 import IconUser from '~icons/lucide/user-round-cog'
 import { useMainStore } from '~/stores/main'
@@ -77,6 +78,25 @@ useEventListener(window, 'resize', () => {
 })
 watch(() => route.fullPath, () => close())
 
+// Tab out of the menu closes it, like an outside click.
+function onMenuFocusout(event: FocusEvent) {
+  const next = event.relatedTarget as Node | null
+  if (next && !menu.value?.contains(next) && !trigger.value?.contains(next))
+    close()
+}
+
+function onMenuKeydown(event: KeyboardEvent) {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')
+    return
+  const items = Array.from(menu.value?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])
+  if (!items.length)
+    return
+  event.preventDefault()
+  const current = items.indexOf(document.activeElement as HTMLElement)
+  const step = event.key === 'ArrowDown' ? 1 : -1
+  items[(current + step + items.length) % items.length]?.focus()
+}
+
 function allowPendingOnboardingDashboardExploration() {
   const resumeAppId = typeof route.query.resume === 'string' ? route.query.resume : null
   if (route.path === '/app/new' && resumeAppId)
@@ -96,6 +116,10 @@ async function logOut() {
   try {
     await main.logout()
     await router.replace('/login')
+  }
+  catch (error) {
+    console.error('Sign out failed', error)
+    toast.error(t('something-went-wrong-try-again-later'))
   }
   finally {
     isLoggingOut.value = false
@@ -143,6 +167,8 @@ async function logOut() {
         class="p-1.5 rounded-xl border border-slate-600/70 bg-slate-800 text-slate-200 shadow-2xl shadow-black/40"
         :class="props.compact ? 'fixed z-[100] w-60' : 'absolute inset-x-0 bottom-full mb-1.5 z-50'"
         :style="props.compact ? compactMenuStyle : undefined"
+        @keydown="onMenuKeydown"
+        @focusout="onMenuFocusout"
       >
         <button
           type="button"

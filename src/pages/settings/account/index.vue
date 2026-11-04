@@ -535,6 +535,31 @@ async function submit(form: { first_name: string, last_name: string, email: stri
   isLoading.value = false
 }
 
+// Native shells have no sidebar profile menu, so sign out stays on this page there.
+const isNativeApp = Capacitor.isNativePlatform()
+
+async function logOut() {
+  dialogStore.openDialog({
+    title: t('are-u-sure'),
+    buttons: [
+      {
+        text: t('button-cancel'),
+        role: 'cancel',
+      },
+      {
+        text: t('logout'),
+        role: 'danger',
+        id: 'confirm-button',
+        handler: async () => {
+          await main.logout()
+          await router.replace('/login')
+        },
+      },
+    ],
+  })
+  await dialogStore.onDialogDismiss()
+}
+
 onMounted(async () => {
   // Auto-redirect to Manage 2FA page if setup2fa query param is present
   if (route.query.setup2fa === 'true') {
@@ -725,10 +750,13 @@ onMounted(async () => {
             <IconVersion /> <span class="pl-2"> {{ version }}</span>
           </div>
           <!-- Panel footer -->
-          <footer>
+          <footer class="flex flex-wrap gap-3">
             <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading">
               <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
               <span v-else>{{ t('save') }}</span>
+            </button>
+            <button v-if="isNativeApp" type="button" class="d-btn d-btn-outline" data-test="account-sign-out" @click="logOut()">
+              {{ t('sign-out') }}
             </button>
           </footer>
         </div>
