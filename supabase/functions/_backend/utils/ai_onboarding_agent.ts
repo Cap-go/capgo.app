@@ -79,13 +79,13 @@ export async function markAiOnboardingAgentConnected(
     // The console page only sees these markers while it is open, so the funnel events are
     // sent from here, once, when the marker is first written.
     const events = row
-      ? [row.agent_first && 'onboarding_ai_agent_connected', row.mcp_first && 'onboarding_ai_mcp_connected'].filter(event => typeof event === 'string')
+      ? [row.agent_first && 'onboarding_ai_agent_connected', row.mcp_first && 'onboarding_ai_mcp_connected'].filter(name => typeof name === 'string')
       : []
     if (row && events.length) {
       const orgId = row.org_id ?? undefined
-      await backgroundTask(c, Promise.all(events.map(event => trackPosthogEvent(c, {
+      await backgroundTask(c, Promise.all(events.map(name => trackPosthogEvent(c, {
         channel: 'onboarding',
-        event,
+        event: name,
         user_id: auth.userId,
         groups: orgId ? { organization: orgId } : undefined,
         nonPersonTags: { source, ...(row.intent ? { intent: row.intent } : {}), ...(orgId ? { org_id: orgId } : {}) },
