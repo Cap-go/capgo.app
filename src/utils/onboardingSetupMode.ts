@@ -184,16 +184,17 @@ export function withSetupMethod(onboarding: Json, method: SetupMethod): Json {
   return { ...asObject(onboarding), setup_method: method } as Json
 }
 
-/**
- * The single CLI command shown first on the manual setup, so users leaving the AI path
- * still run one command in their project. Same commands as the setup step of the wizard:
- * Builder setup for native builds, live update `init` otherwise.
- */
+/** Builder intents get the Builder setup command; every other intent gets live update `init`. */
 export function manualSetupUsesBuilder(onboarding: Json | unknown) {
   const intent = asObject(onboarding).intent
   return intent === 'builder' || intent === 'publish'
 }
 
+/**
+ * The single CLI command shown first on the manual setup, so users leaving the AI path
+ * still run one command in their project. Same commands as the setup step of the wizard:
+ * Builder setup for native builds, live update `init` otherwise.
+ */
 export function manualSetupCliCommand(onboarding: Json | unknown, apiKey: string, apiHostArgs = '') {
   return manualSetupUsesBuilder(onboarding)
     ? `npx @capgo/cli@latest build init -a ${apiKey}${apiHostArgs}`
