@@ -1031,7 +1031,8 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     slug: 'mcp-connect',
     path: '/mcp',
     auth: true,
-    prepare: page => page.locator('[data-test="mcp-connect-card"]').waitFor({ state: 'visible', timeout: 30_000 }),
+    // /mcp does not exist on the base commit yet: the "before" capture shows the 404 page instead of failing.
+    prepare: page => page.locator('[data-test="mcp-connect-card"]').waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {}),
   },
 ]
 
