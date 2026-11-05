@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { getAttachmentFileIdFromReadPath, hasDeletedFileMarker } from '../../supabase/functions/_backend/files/file_read_cache.ts'
 import { app as files } from '../../supabase/functions/_backend/files/files.ts'
-import { handlePreviewRequest, isPreviewSubdomain } from '../../supabase/functions/_backend/files/preview.ts'
+import { handlePreviewSubdomain, isPreviewSubdomain, withPreviewHostHeaders } from '../../supabase/functions/_backend/files/preview.ts'
 import { app as download_link } from '../../supabase/functions/_backend/private/download_link.ts'
 import { app as upload_link } from '../../supabase/functions/_backend/private/upload_link.ts'
 import { app as ok } from '../../supabase/functions/_backend/public/ok.ts'
@@ -30,7 +30,7 @@ app.use('/*', async (c, next) => {
   const hostname = c.req.header('host') || ''
   if (isPreviewSubdomain(hostname)) {
     // Handle preview requests directly within this context
-    return handlePreviewRequest(c)
+    return handlePreviewSubdomain(c)
   }
   return next()
 })
@@ -68,17 +68,17 @@ export default {
       }
     }
     if (fileId && await hasDeletedFileMarker(fileId)) {
-      return new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
+      return withPreviewHostHeaders(request, new Response(JSON.stringify({ error: 'not_found', message: 'Not found' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
-      })
+      }))
     }
 
     const cacheKey = buildWorkersCacheKey(request)
     const cachedFiles = ctx.exports?.CachedFiles
     if (cacheKey && cachedFiles)
-      return cachedFiles.fetch(request, { cf: { cacheKey } })
+      return withPreviewHostHeaders(request, await cachedFiles.fetch(request, { cf: { cacheKey } }))
 
-    return app.fetch(request, env, ctx)
+    return withPreviewHostHeaders(request, await app.fetch(request, env, ctx))
   },
 }

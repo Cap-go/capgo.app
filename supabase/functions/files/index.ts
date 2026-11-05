@@ -1,5 +1,5 @@
 import { app as files } from '../_backend/files/files.ts'
-import { handlePreviewRequest, isPreviewSubdomain } from '../_backend/files/preview.ts'
+import { handlePreviewSubdomain, isPreviewSubdomain } from '../_backend/files/preview.ts'
 
 import { createAllCatch, createHono } from '../_backend/utils/hono.ts'
 import { version } from '../_backend/utils/version.ts'
@@ -12,7 +12,7 @@ appGlobal.use('/*', async (c, next) => {
   const hostname = c.req.header('host') || ''
   if (isPreviewSubdomain(hostname)) {
     // Handle preview requests directly within this context
-    return handlePreviewRequest(c)
+    return handlePreviewSubdomain(c)
   }
   return next()
 })
