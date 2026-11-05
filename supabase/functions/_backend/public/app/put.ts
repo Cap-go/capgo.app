@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { PgQueryClient } from '../../utils/pg.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { eq, sql } from 'drizzle-orm'
 import { HTTPException } from 'hono/http-exception'
@@ -17,11 +18,12 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../../utils/org_onboarding_intent.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, applyRlsContext, authPrincipal, queryJson, queryJsonOne, servicePrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { apps } from '../../utils/postgres_schema.ts'
 import { trackPosthogEvent } from '../../utils/posthog.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
-import { supabaseAdmin, supabaseApikey, supabaseWithAuth } from '../../utils/supabase.ts'
+import { MAX_BUILD_TIMEOUT_SECONDS, MIN_BUILD_TIMEOUT_SECONDS, normalizeBuildTimeoutSeconds } from '../../utils/build_timeout.ts'
 import { backgroundTask, isValidAppId } from '../../utils/utils.ts'
 
 interface UpdateApp {
@@ -30,20 +32,17 @@ interface UpdateApp {
   retention?: number
   expose_metadata?: boolean
   allow_device_custom_id?: boolean
-  need_onboarding?: boolean
-  existing_app?: boolean
-  block_provider_infra_requests?: boolean
   allow_preview?: boolean
   build_timeout_seconds?: number
   default_upload_channel?: string
+  need_onboarding?: boolean
+  existing_app?: boolean
+  block_provider_infra_requests?: boolean
   device_data_collection?: unknown
   ios_store_url?: string | null
   android_store_url?: string | null
   onboarding?: unknown
 }
-
-export const MIN_BUILD_TIMEOUT_SECONDS = 300
-export const MAX_BUILD_TIMEOUT_SECONDS = 21600
 
 type AppSettings = Pick<Database['public']['Tables']['apps']['Update'], 'name' | 'icon_url' | 'retention' | 'expose_metadata' | 'allow_device_custom_id'
   | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests' | 'device_data_collection'
@@ -61,6 +60,40 @@ function validateDeviceDataCollectionPatch(patch: unknown): Record<string, boole
       throw simpleError('invalid_device_data_collection', `device_data_collection.${key} must be a boolean`, { key })
   }
   return patch as Record<string, boolean>
+}
+
+// applyRlsContext speaks node-postgres (`$n` placeholders); bind them through the Drizzle transaction.
+function drizzleQueryClient(tx: Pick<ReturnType<typeof getDrizzleClient>, 'execute'>) {
+  return {
+    query: (text: string, values: unknown[] = []) => {
+      const parts = text.split(/\$(\d+)/)
+      return tx.execute(sql.join(parts.map((part, index) => index % 2 === 0 ? sql.raw(part) : sql`${values[Number(part) - 1]}`)))
+    },
+  }
+}
+
+type AppRow = Database['public']['Tables']['apps']['Row']
+
+async function updateAppSettings(client: PgQueryClient, appId: string, settings: AppSettings): Promise<{ data: AppRow | undefined, error: unknown }> {
+  const columns = Object.entries(settings).filter(([, value]) => value !== undefined).map(([column]) => column)
+  // PostgREST answered an empty PATCH with PGRST116 under .single()
+  if (columns.length === 0)
+    return { data: undefined, error: { code: 'PGRST116', message: 'Cannot coerce the result to a single JSON object' } }
+  try {
+    // json_populate_record applies the same JSON-to-column conversion PostgREST used.
+    const data = await queryJsonOne<AppRow>(
+      client,
+      `UPDATE public.apps AS a SET ${columns.map(column => `"${column}" = p."${column}"`).join(', ')}
+       FROM pg_catalog.json_populate_record(NULL::public.apps, $2::json) AS p
+       WHERE a.app_id = $1
+       RETURNING a.*`,
+      [appId, JSON.stringify(settings)],
+    )
+    return { data: data ?? undefined, error: data ? null : { code: 'PGRST116', message: 'Cannot coerce the result to a single JSON object' } }
+  }
+  catch (error) {
+    return { data: undefined, error }
+  }
 }
 
 export async function persistAppOnboarding(
@@ -99,19 +132,17 @@ export async function persistAppOnboarding(
         }
         // Settings retain caller RLS inside this same transaction. Restore the
         // internal role/context before merging backend-owned progress fields.
-        const saved = (await tx.execute<{ role: string, claims: string | null, sub: string | null, headers: string | null }>(sql`
+        const saved = (await tx.execute<{ role: string, claims: string | null, sub: string | null, claimRole: string | null, headers: string | null }>(sql`
           SELECT current_user AS role,
             pg_catalog.current_setting('request.jwt.claims', true) AS claims,
             pg_catalog.current_setting('request.jwt.claim.sub', true) AS sub,
+            pg_catalog.current_setting('request.jwt.claim.role', true) AS "claimRole",
             pg_catalog.current_setting('request.headers', true) AS headers
         `)).rows[0]
-        const jwt = auth?.authType === 'jwt'
-        await tx.execute(sql`SELECT
-          pg_catalog.set_config('request.jwt.claims', ${JSON.stringify(jwt ? { ...auth.claims, sub: userId, role: 'authenticated' } : { role: 'anon' })}, true),
-          pg_catalog.set_config('request.jwt.claim.sub', ${jwt ? userId : ''}, true),
-          pg_catalog.set_config('request.headers', ${JSON.stringify(jwt ? {} : { capgkey: key })}, true)
-        `)
-        await tx.execute(jwt ? sql`SET LOCAL ROLE authenticated` : sql`SET LOCAL ROLE anon`)
+        const callerPrincipal: RlsPrincipal = auth?.authType === 'jwt'
+          ? { kind: 'jwt', userId, claims: auth.claims }
+          : key ? apikeyPrincipal(c, key) : { kind: 'anon' }
+        await applyRlsContext(drizzleQueryClient(tx), callerPrincipal)
         const updated = await tx.update(apps).set(settings).where(eq(apps.app_id, appId)).returning({ app_id: apps.app_id })
         if (!updated[0])
           throw quickError(401, 'cannot_access_app', 'You can\'t access this app', { app_id: appId })
@@ -126,6 +157,7 @@ export async function persistAppOnboarding(
         await tx.execute(sql`SELECT
           pg_catalog.set_config('request.jwt.claims', ${saved.claims ?? ''}, true),
           pg_catalog.set_config('request.jwt.claim.sub', ${saved.sub ?? ''}, true),
+          pg_catalog.set_config('request.jwt.claim.role', ${saved.claimRole ?? ''}, true),
           pg_catalog.set_config('request.headers', ${saved.headers ?? ''}, true)
         `)
       }
@@ -195,6 +227,23 @@ export async function persistAppOnboarding(
   }
 }
 
+async function loadOrgForOnboardingCompletion(c: Context<MiddlewareKeyVariables>, orgId: string) {
+  const pg = await getPgClient(c)
+  try {
+    const { rows } = await pg.query<Pick<Database['public']['Tables']['orgs']['Row'], 'management_email' | 'name' | 'website' | 'onboarding'>>(
+      'SELECT management_email, name, website, onboarding FROM public.orgs WHERE id = $1',
+      [orgId],
+    )
+    return { data: rows[0] ?? null, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
 export async function put(c: Context<MiddlewareKeyVariables>, appId: string, body: UpdateApp, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   if (!appId) {
     throw quickError(400, 'missing_app_id', 'Missing app_id')
@@ -211,29 +260,43 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   }
   if (body.allow_preview !== undefined && typeof body.allow_preview !== 'boolean')
     throw quickError(400, 'invalid_allow_preview', 'allow_preview must be a boolean', { allow_preview: body.allow_preview })
-  if (body.build_timeout_seconds !== undefined
-    && (!Number.isInteger(body.build_timeout_seconds) || body.build_timeout_seconds < MIN_BUILD_TIMEOUT_SECONDS || body.build_timeout_seconds > MAX_BUILD_TIMEOUT_SECONDS)) {
-    throw quickError(400, 'invalid_build_timeout', `build_timeout_seconds must be an integer between ${MIN_BUILD_TIMEOUT_SECONDS} and ${MAX_BUILD_TIMEOUT_SECONDS}`, { build_timeout_seconds: body.build_timeout_seconds })
-  }
   if (body.default_upload_channel !== undefined && (typeof body.default_upload_channel !== 'string' || body.default_upload_channel.trim() === ''))
     throw quickError(400, 'invalid_default_upload_channel', 'default_upload_channel must be a channel name', { default_upload_channel: body.default_upload_channel })
+
+  if (body.build_timeout_seconds !== undefined) {
+    // Validate the raw value: normalizeBuildTimeoutSeconds clamps, so checking after it never fails.
+    const rawTimeout: unknown = body.build_timeout_seconds
+    if (typeof rawTimeout !== 'number' || !Number.isFinite(rawTimeout)
+      || rawTimeout < MIN_BUILD_TIMEOUT_SECONDS || rawTimeout > MAX_BUILD_TIMEOUT_SECONDS) {
+      throw quickError(400, 'invalid_build_timeout_seconds', 'Build timeout must be between 5 and 360 minutes', { build_timeout_seconds: body.build_timeout_seconds })
+    }
+    body.build_timeout_seconds = normalizeBuildTimeoutSeconds(rawTimeout)
+  }
 
   const onboardingPatch = parseAppOnboardingPatch(body.onboarding)
   const canUpdateSettings = await checkPermission(c, 'app.update_settings', { appId })
   const auth = c.get('auth')
-  const callerClient = auth ? supabaseWithAuth(c, auth) : supabaseApikey(c, apikey.key)
+  const callerPrincipal = auth ? authPrincipal(c, auth) : apikeyPrincipal(c, apikey.key)
 
   // Service-role load is used when the key cannot update settings: pending
   // onboarding completion, or a valid onboarding progress patch. Authorization
   // still runs after this read and blocks unauthorized callers.
-  const previousAppClient = canUpdateSettings || (body.need_onboarding !== false && !onboardingPatch)
-    ? callerClient
-    : supabaseAdmin(c)
-  const { data: previousApp, error: previousAppError } = await previousAppClient
-    .from('apps')
-    .select('need_onboarding, owner_org, name, app_id, onboarding, device_data_collection')
-    .eq('app_id', appId)
-    .single()
+  const previousAppPrincipal = canUpdateSettings || (body.need_onboarding !== false && !onboardingPatch)
+    ? callerPrincipal
+    : servicePrincipal
+  type PreviousApp = Pick<AppRow, 'need_onboarding' | 'owner_org' | 'name' | 'app_id' | 'onboarding' | 'device_data_collection'>
+  let previousApp: PreviousApp | null = null
+  let previousAppError: unknown = null
+  try {
+    previousApp = await withRlsContext(c, previousAppPrincipal, client => queryJsonOne<PreviousApp>(
+      client,
+      'SELECT need_onboarding, owner_org, name, app_id, onboarding, device_data_collection FROM public.apps WHERE app_id = $1',
+      [appId],
+    ))
+  }
+  catch (error) {
+    previousAppError = error
+  }
 
   if (previousAppError || !previousApp) {
     if (!canUpdateSettings) {
@@ -263,6 +326,9 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.retention,
     body.expose_metadata,
     body.allow_device_custom_id,
+    body.allow_preview,
+    body.build_timeout_seconds,
+    body.default_upload_channel,
     body.existing_app,
     body.block_provider_infra_requests,
     body.allow_preview,
@@ -296,13 +362,14 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   if (body.icon !== undefined && body.icon !== '' && !normalizedIcon)
     throw simpleError('invalid_icon_path', 'Icon path must belong to this app organization')
   if (body.default_upload_channel !== undefined) {
-    const { data: uploadChannel, error: uploadChannelError } = await callerClient
-      .from('channels')
-      .select('id')
-      .eq('app_id', appId)
-      .eq('name', body.default_upload_channel)
-      .maybeSingle()
-    if (uploadChannelError || !uploadChannel)
+    const defaultUploadChannel = body.default_upload_channel
+    // .maybeSingle() errored on more than one row, so only exactly one match is valid
+    const uploadChannels = await withRlsContext(c, callerPrincipal, client => queryJson<{ id: number }>(
+      client,
+      'SELECT id FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+      [appId, defaultUploadChannel],
+    )).catch(() => null)
+    if (uploadChannels?.length !== 1)
       throw quickError(400, 'channel_not_found', 'default_upload_channel must be an existing channel of this app', { app_id: appId, channel: body.default_upload_channel })
   }
   // Validate before taking the onboarding lock so a bad payload cannot leak it.
@@ -324,19 +391,19 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     retention: body.retention,
     expose_metadata: body.expose_metadata,
     allow_device_custom_id: body.allow_device_custom_id,
-    need_onboarding: body.need_onboarding,
-    existing_app: body.existing_app,
-    block_provider_infra_requests: body.block_provider_infra_requests,
     allow_preview: body.allow_preview,
     build_timeout_seconds: body.build_timeout_seconds,
     default_upload_channel: body.default_upload_channel,
+    need_onboarding: body.need_onboarding,
+    existing_app: body.existing_app,
+    block_provider_infra_requests: body.block_provider_infra_requests,
     device_data_collection: deviceDataCollection,
     ios_store_url: body.ios_store_url,
     android_store_url: body.android_store_url,
   }
 
   let data: Database['public']['Tables']['apps']['Row'] | undefined
-  let dbError: { message?: string } | null = null
+  let dbError: unknown = null
   let completedPendingOnboarding = false
   let onboardingStepHistoryChanges: ReturnType<typeof getAppOnboardingStepHistoryChanges> = []
 
@@ -379,13 +446,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
       }
     }
     else {
-      const updateResult = await callerClient
-        .from('apps')
-        .update(settingsPayload)
-        .eq('app_id', appId)
-        .select()
-        .single()
-      data = updateResult.data ?? undefined
+      const updateResult = await withRlsContext(c, callerPrincipal, client => updateAppSettings(client, appId, settingsPayload))
+      data = updateResult.data
       dbError = updateResult.error
       if (data)
         completedPendingOnboarding = previousApp.need_onboarding === true && data.need_onboarding === false
@@ -426,11 +488,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
   }
 
   if (completedPendingOnboarding) {
-    const { data: orgData, error: orgError } = await supabaseAdmin(c)
-      .from('orgs')
-      .select('management_email, name, website, onboarding')
-      .eq('id', data.owner_org)
-      .single()
+    const { data: orgData, error: orgError } = await loadOrgForOnboardingCompletion(c, data.owner_org)
 
     if (orgError || !orgData) {
       cloudlog({ requestId: c.get('requestId'), message: 'Cannot load organization for onboarding completion side effects', error: orgError, app_id: appId })

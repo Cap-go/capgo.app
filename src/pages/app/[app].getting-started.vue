@@ -4,7 +4,10 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import AppOnboardingFlow from '~/components/dashboard/AppOnboardingFlow.vue'
 import AppPageFrame from '~/components/dashboard/AppPageFrame.vue'
+import OnboardingChoosePlanStep from '~/components/dashboard/OnboardingChoosePlanStep.vue'
 import { useAppPage } from '~/composables/useAppPage'
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
+import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { readOnboardingSetupHandoff } from '~/utils/onboardingRedirect'
@@ -17,10 +20,27 @@ const route = useRoute('/app/[app].getting-started')
 // Only a single explicit opt-in enables checklist viewing; arrays and values
 // such as "0", "false", or an empty query value keep the normal redirect.
 const showChecklist = computed(() => route.query.showChecklist === '1')
+const initialChecklistPath = computed(() => route.query.path === 'builder' ? 'builder' as const : undefined)
 const { id, app, isLoading } = useAppPage({
   routeName: '/app/[app].getting-started',
   navTitle: t('getting-started'),
 })
+
+// Direct-offer orgs (no free trial, never paid) can create their app but cannot
+// publish updates until they subscribe. This page is where they land after
+// signup, so choosing a plan is shown as the first step, before setup. It hides
+// as soon as the org pays (or has credits), since the org is no longer failed.
+const hideExternalPurchaseFlows = isNativeAppStoreContext()
+// Scope to the org that owns this app, and wait until it is the current org so
+// currentOrganizationFailed describes it (not the previously selected org).
+const unpaidOrgId = computed(() => {
+  const appOrgId = id.value ? organizationStore.getOrgByAppId(id.value)?.gid : undefined
+  if (!appOrgId || organizationStore.currentOrganization?.gid !== appOrgId)
+    return undefined
+  return organizationStore.currentOrganizationFailed ? appOrgId : undefined
+})
+const { trialSkipped } = useBillingPaidAt(unpaidOrgId, hideExternalPurchaseFlows)
+const showChoosePlanStep = computed(() => !!unpaidOrgId.value && trialSkipped.value)
 
 // Getting started always renders the onboarding setup UI inside the dashboard
 // shell. Read once per app: the flow reads its analytics flow at mount.
@@ -53,13 +73,15 @@ watch(() => app.value?.app_id, (appId) => {
 </script>
 
 <template>
-  <AppPageFrame :found="!!app" :loading="isLoading">
+  <AppPageFrame flush :found="!!app" :loading="isLoading">
+    <OnboardingChoosePlanStep v-if="showChoosePlanStep" />
     <AppOnboardingFlow
       v-if="app && setupFlowAppId === app.app_id"
       :key="`${setupFlowAppId}:${showChecklist}`"
       data-test="getting-started-setup"
       :setup-app-id="setupFlowAppId"
       :show-checklist="showChecklist"
+      :initial-checklist-path="initialChecklistPath"
       :pre-org="setupPreOrg"
       onboarding
     />

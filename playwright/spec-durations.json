@@ -2,8 +2,6 @@
   "apikeys.spec.ts": 36,
   "app-dashboard-tabs.spec.ts": 8,
   "auth.spec.ts": 9,
-  "bundle-adoption.spec.ts": 3,
-  "channel-rollout-ux-screenshots.spec.ts": 1,
   "compatibility-events.spec.ts": 7,
   "confirmation-redirect.spec.ts": 3,
   "credits-top-up.spec.ts": 4,

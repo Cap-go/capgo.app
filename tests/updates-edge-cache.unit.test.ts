@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
+import { CacheHelper, purgeLocalTaggedKeys } from '../supabase/functions/_backend/plugin_runtime/utils/cache.ts'
 import { createLazyPgClient, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getLazyPgQueryCount, isLazyPgConnectError } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache, getChannelByNameWithEdgeCache, getCompatibleChannelsWithEdgeCache } from '../supabase/functions/_backend/plugin_runtime/utils/pluginEdgeCacheReads.ts'
+import { replicationLagCacheRequest, resetReplicationLagMemory, setReplicationLagMemoryEntry } from '../supabase/functions/_backend/plugin_runtime/utils/replicaFreshness.ts'
 import { updatesCacheTagForScope } from '../supabase/functions/_backend/plugin_runtime/utils/updatesCacheTag.ts'
 import { getCachedAppOwner, getCachedAppVersion, getCachedChannelLookup, getCachedDefaultChannel, getUpdatesEdgeCacheBps, getUpdatesEdgeCacheTtlSeconds, isUpdatesEdgeCacheEnabled, planValidityTtlCapSeconds, shouldUseUpdatesEdgeCache, updatesAppCacheTag, updatesCacheTags, updatesEdgeCacheBucket, updatesVersionsCacheTag } from '../supabase/functions/_backend/plugin_runtime/utils/updatesEdgeCache.ts'
 import { chunk, drainUpdatesCachePurge, purgeUpdatesCacheTags, resetPurgeZoneCache, shouldForwardPurge } from '../supabase/functions/_backend/triggers/updates_cache_purge.ts'
@@ -155,6 +156,37 @@ describe('updates edge cache', () => {
     const [stored] = [...store.values()]
     expect(stored.headers.get('Cache-Tag')).toBe('capgo-updates-com.example.app')
     expect(stored.headers.get('Cache-Control')).toBe('public, s-maxage=3600')
+  })
+
+  it('caches a refill from a replica measured behind for 30s only', async () => {
+    const { store } = stubCaches()
+    const base = makeContext()
+    const c = { ...base, get: (key: string) => key === 'databaseSource' ? 'HYPERDRIVE_CAPGO_READ_OC' : base.get(key) }
+    const ttlOf = async (appId: string) => {
+      await getCachedAppOwner(c, appId, 'mau', vi.fn().mockResolvedValue({ owner_org: 'org-1', plan_valid: true }))
+      return [...store.entries()].find(([url]) => url.includes(encodeURIComponent(appId)) || url.includes(appId))![1].headers.get('Cache-Control')
+    }
+    try {
+      // No lag figure anywhere: fail open, same TTL as before (no extra refills).
+      await expect(ttlOf('com.example.unmeasured')).resolves.toBe('public, s-maxage=3600')
+      // That miss is memoized for 10s; start the next case without it.
+      resetReplicationLagMemory()
+      // A cold isolate still sees the data center's figure. The OC incident:
+      // the replica is minutes behind after the last re-purge.
+      const helper = new CacheHelper(c)
+      await helper.putJson(replicationLagCacheRequest(helper, 'HYPERDRIVE_CAPGO_READ_OC'), { status: 'lagging', max_lag_seconds: 2400, expiresAt: Date.now() + 60_000 }, 60)
+      await expect(ttlOf('com.example.colo-lagging')).resolves.toBe('public, s-maxage=30')
+      // This isolate's own figure wins.
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_OC', { status: 'ok', max_lag_seconds: 90 })
+      await expect(ttlOf('com.example.slow')).resolves.toBe('public, s-maxage=30')
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_OC', { status: 'ok', max_lag_seconds: 2 })
+      await expect(ttlOf('com.example.fresh')).resolves.toBe('public, s-maxage=3600')
+      setReplicationLagMemoryEntry('HYPERDRIVE_CAPGO_READ_OC', { status: 'unknown', max_lag_seconds: null })
+      await expect(ttlOf('com.example.unknown')).resolves.toBe('public, s-maxage=3600')
+    }
+    finally {
+      resetReplicationLagMemory()
+    }
   })
 
   it('caches a missing app for a shorter time', async () => {
@@ -555,9 +587,22 @@ describe('edge-cached plugin reads', () => {
     const c = makeContext()
     const { drizzle } = fakeDrizzle(new Error('statement timeout'))
     await expect(getAppVersionWithEdgeCache(c, 'com.example.app', '1.0.0', drizzle)).resolves.toBeNull()
-    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', drizzle, ['mau'])).resolves.toEqual({ value: null, hit: false, lookupFailed: true })
+    // A missing owner is answered as a cached on_premise_app 429, so a failed
+    // owner read must fail the request instead.
+    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', drizzle, ['mau'])).rejects.toMatchObject({ cause: { message: 'statement timeout' } })
     await expect(getChannelByNameWithEdgeCache(c, 'com.example.app', 'production', drizzle)).resolves.toBeNull()
     await expect(getCompatibleChannelsWithEdgeCache(c, 'com.example.app', 'ios', false, true, drizzle)).resolves.toEqual([])
+    expect(cache.put).not.toHaveBeenCalled()
+  })
+
+  it.concurrent.each([
+    ['53300', 'remaining connection slots are reserved for roles with privileges of the "pg_use_reserved_connections" role'],
+    ['40001', 'canceling statement due to conflict with recovery'],
+  ])('never reports a missing app when a replica answers %s', async (code, message) => {
+    const { cache } = stubCaches()
+    const c = makeContext()
+    const { drizzle } = fakeDrizzle(Object.assign(new Error(message), { code }))
+    await expect(getAppOwnerWithEdgeCache(c, 'com.example.app', drizzle, ['mau'])).rejects.toMatchObject({ cause: { message, code } })
     expect(cache.put).not.toHaveBeenCalled()
   })
 

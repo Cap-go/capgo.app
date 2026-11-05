@@ -3,7 +3,7 @@ import type { MiddlewareKeyVariables } from './hono.ts'
 import { middlewareAPISecret, quickError } from './hono.ts'
 import { getClaimsFromJWT } from './hono_jwt.ts'
 import { cloudlogErr } from './logging.ts'
-import { supabaseClient } from './supabase.ts'
+import { withRlsContext } from './pg_rls.ts'
 
 type PlatformAdminContext = Context<MiddlewareKeyVariables>
 
@@ -40,9 +40,14 @@ export async function validatePlatformAdminOrApiSecret(
     jwt: authorization,
   })
 
-  const userClient = supabaseClient(c, authorization)
-  const { data: isAdmin, error: adminError } = await userClient.rpc('is_platform_admin')
-  if (adminError) {
+  let isAdmin: boolean | null
+  try {
+    isAdmin = await withRlsContext(c, { kind: 'jwt', userId: claims.sub, claims }, async (client) => {
+      const result = await client.query<{ is_admin: boolean | null }>('SELECT public.is_platform_admin() AS is_admin')
+      return result.rows[0]?.is_admin ?? null
+    })
+  }
+  catch (adminError) {
     cloudlogErr({ requestId: c.get('requestId'), message: `${options.logPrefix}_is_admin_error`, error: adminError })
     throw quickError(500, 'is_admin_error', 'Unable to verify admin rights')
   }

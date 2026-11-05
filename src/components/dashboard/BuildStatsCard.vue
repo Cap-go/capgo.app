@@ -14,10 +14,12 @@ import {
   emptyBuildSeries,
   fetchAllRows,
 } from '~/services/buildCharts'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps({
   appId: { type: String, default: '' },
+  // When set, aggregate builds across every app of the organization instead of one app.
+  orgId: { type: String, default: '' },
   useBillingPeriod: { type: Boolean, default: false },
   accumulated: { type: Boolean, default: false },
   reloadTrigger: { type: Number, default: 0 },
@@ -26,7 +28,7 @@ const props = defineProps({
 const emit = defineEmits<{ 'update:loading': [value: boolean] }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 interface BuildRow { created_at: string | null, platform: string | null, status: string | null }
 interface BuildStatsResult { dataBySeries: BuildSeriesData, total: number, evolution: number }
@@ -34,10 +36,10 @@ interface BuildStatsResult { dataBySeries: BuildSeriesData, total: number, evolu
 const { isLoading, result } = useBuildCardStats<BuildStatsResult>(props, emit, {
   empty: () => ({ dataBySeries: emptyBuildSeries(), total: 0, evolution: 0 }),
   load: async (window) => {
-    const rows = await fetchAllRows<BuildRow>((from, to) => supabase
+    const rows = await fetchAllRows<BuildRow>((from, to) => capgo
       .from('build_requests')
       .select('created_at, platform, status')
-      .eq('app_id', props.appId)
+      .eq(props.orgId ? 'owner_org' : 'app_id', props.orgId || props.appId)
       .gte('created_at', window.startISO)
       .lte('created_at', window.endISO)
       .order('created_at')
@@ -87,7 +89,7 @@ const hasData = computed(() => totalBuilds.value > 0)
     :has-data="hasData"
   >
     <BuildStatsChart
-      :key="`${appId}:${JSON.stringify(dataBySeries)}`"
+      :key="`${orgId || appId}:${JSON.stringify(dataBySeries)}`"
       :data-by-series="dataBySeries"
       :use-billing-period="useBillingPeriod"
       :accumulated="accumulated"

@@ -30,7 +30,7 @@ const organizationStore = vi.hoisted(() => ({
   organizations: [{ gid: 'org-1', name: 'Test organization', app_count: 1 }],
   getAppsByOrgId: vi.fn((orgId: string) => organizationApps.get(orgId) ?? []),
 }))
-const supabase = vi.hoisted(() => ({
+const capgo = vi.hoisted(() => ({
   channel: vi.fn(),
   from: vi.fn(),
   removeChannel: vi.fn(),
@@ -47,8 +47,8 @@ vi.mock('vue-sonner', () => ({
 
 vi.mock('~/services/cliLogin', () => cliLoginMocks)
 
-vi.mock('~/services/supabase', () => ({
-  useSupabase: () => supabase,
+vi.mock('~/services/console', () => ({
+  useConsole: () => capgo,
 }))
 
 vi.mock('~/stores/main', () => ({
@@ -60,9 +60,6 @@ vi.mock('~/stores/organization', () => ({
   useOrganizationStore: () => organizationStore,
 }))
 
-const pagePath = resolve(process.cwd(), 'src/pages/login-cli.vue')
-const auth = readFileSync(resolve(process.cwd(), 'src/modules/auth.ts'), 'utf8')
-const organizationStoreSource = readFileSync(resolve(process.cwd(), 'src/stores/organization.ts'), 'utf8')
 const messages = JSON.parse(readFileSync(resolve(process.cwd(), 'messages/en.json'), 'utf8')) as Record<string, string>
 const preparedKey = 'capgo_ai_setup_secret'
 const mountedApps: App[] = []
@@ -110,103 +107,67 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-describe('/login-cli page contract', () => {
-  it.concurrent('uses the naked layout and does not reuse connect controls', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain('layout: naked')
-    expect(page).not.toContain('ConnectAppPicker')
-    expect(page).not.toContain('tokenName')
-    expect(page).not.toContain('selectedOrgIds')
+async function copyAiPrompt(container: HTMLElement) {
+  const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+    .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
+  expect(copyButton).toBeDefined()
+  copyButton?.click()
+  await flushPromises()
+  expect(clipboardWrite).toHaveBeenCalledOnce()
+  return clipboardWrite.mock.calls[0]?.[0] as string
+}
+
+describe('/login-cli page', () => {
+  it('does not prepare a key in direct mode without a valid CLI session', async () => {
+    route.query = {}
+    cliLoginMocks.isValidCliLoginSession.mockReturnValueOnce(false)
+    mountLoginCliPage()
+    await flushPromises()
+
+    expect(cliLoginMocks.prepareCliLoginKey).not.toHaveBeenCalled()
   })
 
-  it.concurrent('keeps a fake key in the DOM until explicit reveal', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain(`const hiddenKey = 'capgo_xxxxxxxxxxxxxxxxxxxx'`)
-    expect(page).toContain('revealed.value && secret.value ? secret.value : hiddenKey')
-    expect(page).toContain('revealDialogOpen.value = true')
-    expect(page).toContain('revealed.value = true')
-    expect(page).toContain('await navigator.clipboard.writeText(secret.value)')
-    expect(page).toContain('await copyKey()')
-    expect(page).toContain('secret.value = null')
+  it('keeps the prepared key out of the DOM until explicit reveal in direct mode', async () => {
+    route.query = { session: 'AbCdEfGhIjKlMnOpQrStUv' }
+    const channel = { on: vi.fn(() => channel), subscribe: vi.fn((callback: (status: string) => void) => {
+      callback('SUBSCRIBED')
+      return channel
+    }) }
+    capgo.channel.mockReturnValue(channel)
+    const container = mountLoginCliPage()
+    await flushPromises()
+    await vi.waitFor(() => expect(container.textContent).toContain('capgo_xxxxxxxxxxxxxxxxxxxx'))
+
+    expect(cliLoginMocks.prepareCliLoginKey).toHaveBeenCalledOnce()
+    expect(container.innerHTML).not.toContain(preparedKey)
   })
 
-  it.concurrent('shows preparation progress and a three-action reveal dialog', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain('d-loading d-loading-spinner')
-    expect(page).toContain('IconEyeSlash v-if="revealed"')
-    expect(page).toContain('IconEye v-else')
-    expect(page).toContain('@click="closeRevealDialog"')
-    expect(page).toContain('@click="copyFromRevealDialog"')
-    expect(page).toContain('@click="confirmReveal"')
-    expect(page).toContain('aria-labelledby="cli-login-reveal-dialog-title"')
-  })
+  it('stops waiting for a silent event stream after the fallback delay', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      route.query = { session: 'AbCdEfGhIjKlMnOpQrStUv' }
+      // The channel never reports a status, as when the events request hangs.
+      const channel = { on: vi.fn(() => channel), subscribe: vi.fn(() => channel) }
+      capgo.channel.mockReturnValue(channel)
+      const container = mountLoginCliPage()
+      await flushPromises()
+      expect(container.textContent).not.toContain(messages['cli-login-realtime-unavailable'])
 
-  it.concurrent('traps reveal-dialog focus and restores it to the reveal button', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain('ref="revealButtonRef"')
-    expect(page).toContain('ref="revealDialogRef"')
-    expect(page).toContain(`window.addEventListener('keydown', onRevealDialogKeydown)`)
-    expect(page).toContain(`if (event.key !== 'Tab')`)
-    expect(page).toContain('revealButtonRef.value?.focus()')
-  })
-
-  it.concurrent('animates the waiting state and keeps reused-key info as a final footnote', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    const waitingStatus = page.indexOf('d-loading d-loading-dots')
-    const reusedFootnote = page.indexOf(`t('cli-login-reused')`)
-    const readyStateEnd = page.indexOf(`      </div>\n\n      <div v-else-if="state === 'success'"`)
-
-    expect(waitingStatus).toBeGreaterThanOrEqual(0)
-    expect(reusedFootnote).toBeGreaterThan(waitingStatus)
-    expect(reusedFootnote).toBeLessThan(readyStateEnd)
-    expect(page).toContain('text-xs text-slate-400')
-    expect(page).toContain('<span aria-hidden="true">*</span>')
-    expect(page).toContain('<output v-if="!aiMode"')
-    expect(page).not.toContain('<p v-if="!aiMode" role="status"')
-  })
-
-  it.concurrent('keeps the full revealed key visible without truncation', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain('whitespace-normal break-all')
-    expect(page).not.toContain('flex-1 truncate')
-  })
-
-  it.concurrent('gates key preparation strictly in non-AI mode', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain('const session = route.query.session')
-    expect(page).toContain('if (!aiMode.value && !isValidCliLoginSession(session))')
-    expect(page.indexOf('if (!aiMode.value && !isValidCliLoginSession(session))'))
-      .toBeLessThan(page.indexOf('prepareCliLoginKey('))
-  })
-
-  it.concurrent('supports a direct AI setup prompt containing the prepared key', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    expect(page).toContain('const aiMode = computed(() => isCliAiQuery(route.query.ai))')
-    expect(page).toContain('route.query.intent')
-    expect(page).toContain('buildCliAiSetupPrompt({')
-    expect(page).toContain('organizationStore.getAppsByOrgId(organization.gid)')
-    expect(page).toContain('const onboarding = parseAppOnboarding(app.onboarding)')
-    expect(page).toContain('todoListVersion: onboarding.todo_list_version')
-    expect(page).toContain('otaTodoListVersion: onboarding.ota_todo_list_version')
-    expect(page).toContain('eligibleIds.has(organization.gid)')
-    expect(page).toContain('await navigator.clipboard.writeText(aiPrompt.value)')
-    expect(page).toContain(`v-if="aiMode"`)
-    expect(page).toContain(`t('cli-login-ai-copy')`)
+      await vi.advanceTimersByTimeAsync(15_000)
+      await flushPromises()
+      expect(container.textContent).toContain(messages['cli-login-realtime-unavailable'])
+      expect(container.textContent).toContain('capgo_xxxxxxxxxxxxxxxxxxxx')
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('copies a prompt containing the prepared key in AI mode', async () => {
     const container = mountLoginCliPage()
     await flushPromises()
 
-    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
-    expect(copyButton).toBeDefined()
-
-    copyButton?.click()
-    await flushPromises()
-
-    expect(clipboardWrite).toHaveBeenCalledOnce()
-    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
+    const copiedPrompt = await copyAiPrompt(container)
     expect(copiedPrompt).toContain(`login ${preparedKey}`)
     expect(copiedPrompt).toContain('Organization: "Test organization" (organization ID: `org-1`)')
     expect(copiedPrompt).toContain('App: "Test App" (Capgo app ID: `com.test.app`)')
@@ -219,94 +180,28 @@ describe('/login-cli page contract', () => {
     const container = mountLoginCliPage()
     await flushPromises()
 
-    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
-    copyButton?.click()
-    await flushPromises()
-
-    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
+    const copiedPrompt = await copyAiPrompt(container)
     expect(copiedPrompt).toContain(`login ${preparedKey}`)
     expect(copiedPrompt).toContain('start_capgo_builder_onboarding')
     expect(copiedPrompt).not.toContain('## 8. Test the first live update')
   })
 
-  it('copies v3 checklist checkpoints only for explicit OTA intent and a v3 app', async () => {
+  it.each([
+    [3, true],
+    [2, false],
+  ])('copies OTA checklist checkpoints for explicit OTA intent and a v%s app: %s', async (todoListVersion, expectChecklist) => {
     route.query = { ai: '1', intent: 'ota' }
     organizationStore.getAppsByOrgId.mockReturnValueOnce([{
       app_id: 'com.test.app',
       name: 'Test App',
       owner_org: 'org-1',
-      onboarding: { setup: { todo_list_version: 3 } },
+      onboarding: { setup: { todo_list_version: todoListVersion } },
     }])
     const container = mountLoginCliPage()
     await flushPromises()
 
-    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
-    copyButton?.click()
-    await flushPromises()
-
-    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
-    expect(copiedPrompt).toContain('OTA todo list progress checks')
-    expect(copiedPrompt).toContain('app todo {SELECTED_CAPGO_APP_ID}')
-  })
-
-  it('keeps explicit OTA guidance unchanged for a v2 app', async () => {
-    route.query = { ai: '1', intent: 'ota' }
-    const container = mountLoginCliPage()
-    await flushPromises()
-
-    const copyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes(messages['cli-login-ai-copy']))
-    copyButton?.click()
-    await flushPromises()
-
-    const copiedPrompt = clipboardWrite.mock.calls[0]?.[0] as string
-    expect(copiedPrompt).not.toContain('app todo {SELECTED_CAPGO_APP_ID}')
-  })
-
-  it.concurrent('keeps the route out of normal onboarding redirects', () => {
-    expect(auth).toContain('const isCliLoginRoute = isCliLoginPath(to.path)')
-    expect(auth.match(/if \(isCliLoginRoute\)/g)).toHaveLength(3)
-  })
-
-  it.concurrent('defers organization image signing on the CLI login route', () => {
-    expect(auth).toContain('const organizationFetchOptions = { loadImages: !isCliLoginRoute }')
-    expect(auth).toContain('organizationStore.fetchOrganizations(organizationFetchOptions)')
-    expect(auth).toContain('organizationStore.dedupFetchOrganizations(organizationFetchOptions)')
-    expect(organizationStoreSource).not.toContain('let loadOrganizationImages')
-    expect(organizationStoreSource).toContain('const loadImages = options.loadImages ?? true')
-    expect(organizationStoreSource).toContain('loadOrganizationApps(selectableOrganizations, loadImages)')
-    expect(organizationStoreSource).toContain('loadPendingOrganizationImages()')
-    expect(organizationStoreSource).toContain('if (pendingOrganizationImageLoad)')
-    expect(organizationStoreSource).toContain('pendingOrganizationImageLoadRequested = true')
-    expect(organizationStoreSource).toContain('if (pendingOrganizationImageLoadRequested)')
-  })
-
-  it.concurrent('contains focused key, paste, warning, waiting, and success copy', () => {
-    expect(messages['cli-login-direct-description']).toContain(`{'@'}capgo/cli{'@'}latest`)
-    expect(messages['cli-login-paste-instruction']).toContain('terminal')
-    expect(messages['cli-login-security-warning']).toContain('rotate')
-    expect(messages['cli-login-security-warning']).toContain('Capgo API key')
-    expect(messages['cli-login-security-warning']).toContain('trusted terminal or tool')
-    expect(messages['cli-login-copy-note']).toContain('hidden')
-    expect(messages['cli-login-waiting']).toContain('Waiting')
-    expect(messages['cli-login-success-title']).toContain('successful')
-    expect(messages['cli-login-ai-description']).toContain('AI assistant')
-    expect(messages['cli-login-ai-security-warning']).toContain('API key')
-    expect(messages).not.toHaveProperty('cli-login-ai-prompt')
-  })
-
-  it.concurrent('uses prefixed DaisyUI primitives and resolves the destination before success', () => {
-    const page = readFileSync(pagePath, 'utf8')
-    const resolveDestination = page.indexOf('destination.value = await resolveDestination()')
-    const assignSuccess = page.indexOf(`state.value = 'success'`)
-
-    expect(page).toContain('class="d-btn')
-    expect(page).toContain('class="d-alert')
-    expect(page).not.toMatch(/class="(?:btn|alert)(?:\s|")/)
-    expect(resolveDestination).toBeGreaterThanOrEqual(0)
-    expect(assignSuccess).toBeGreaterThanOrEqual(0)
-    expect(resolveDestination).toBeLessThan(assignSuccess)
+    const copiedPrompt = await copyAiPrompt(container)
+    expect(copiedPrompt.includes('app todo {SELECTED_CAPGO_APP_ID}')).toBe(expectChecklist)
+    expect(copiedPrompt.includes('OTA todo list progress checks')).toBe(expectChecklist)
   })
 })

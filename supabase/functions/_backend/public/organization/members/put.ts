@@ -10,7 +10,6 @@ import { closeClient, getDrizzleClient, getPgClient } from '../../../utils/pg.ts
 import { schema } from '../../../utils/postgres_schema.ts'
 import { checkPermission, checkPermissionPg } from '../../../utils/rbac.ts'
 import { safeParseSchema } from '../../../utils/schema_validation.ts'
-import { supabaseAdmin } from '../../../utils/supabase.ts'
 import { inviteTypeSchema, normalizeInviteRole } from './post.ts'
 
 const updateRoleBodySchema = z.object({
@@ -43,36 +42,40 @@ export async function updateMemberRole(c: Context<MiddlewareKeyVariables>, bodyR
   if (!(await checkPermission(c, 'org.update_user_roles', { orgId: body.orgId })))
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
 
-  const adminClient = supabaseAdmin(c)
-  const { data: targetUser, error: targetUserError } = await adminClient
-    .from('users')
-    .select('id')
-    .eq('email', body.email)
-    .single()
-  if (targetUserError || !targetUser)
-    throw quickError(404, 'user_not_found', 'User not found')
-  if (targetUser.id === auth.userId)
-    throw simpleError('cannot_change_own_role', 'You cannot change your own role')
-
-  const { data: org, error: orgError } = await adminClient
-    .from('orgs')
-    .select('created_by')
-    .eq('id', body.orgId)
-    .single()
-  if (orgError || !org)
-    throw quickError(404, 'organization_not_found', 'Organization not found', { orgId: body.orgId })
-  if (org.created_by === targetUser.id)
-    throw simpleError('cannot_change_owner_role', 'The organization owner role cannot be changed', { orgId: body.orgId })
-
-  const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
-  const callerPrincipalId = auth.authType === 'apikey' ? auth.apikey?.rbac_id : auth.userId
-  if (!callerPrincipalId)
-    throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
-
   let pgClient: Awaited<ReturnType<typeof getPgClient>> | undefined
+  let targetUserId: string
   try {
     pgClient = await getPgClient(c)
     const drizzle = getDrizzleClient(pgClient)
+
+    // single(): a missing or ambiguous email is not found.
+    const targetUsers = await drizzle
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.email, body.email))
+      .limit(2)
+      .catch(() => null)
+    if (targetUsers?.length !== 1)
+      throw quickError(404, 'user_not_found', 'User not found')
+    targetUserId = targetUsers[0].id
+    if (targetUserId === auth.userId)
+      throw simpleError('cannot_change_own_role', 'You cannot change your own role')
+
+    const [org] = await drizzle
+      .select({ created_by: schema.orgs.created_by })
+      .from(schema.orgs)
+      .where(eq(schema.orgs.id, body.orgId))
+      .catch(() => [])
+    if (!org)
+      throw quickError(404, 'organization_not_found', 'Organization not found', { orgId: body.orgId })
+    if (org.created_by === targetUserId)
+      throw simpleError('cannot_change_owner_role', 'The organization owner role cannot be changed', { orgId: body.orgId })
+
+    const apikeyString = auth.apikey?.key ?? c.get('capgkey') ?? null
+    const callerPrincipalId = auth.authType === 'apikey' ? auth.apikey?.rbac_id : auth.userId
+    if (!callerPrincipalId)
+      throw simpleError('cannot_access_organization', 'You can\'t access this organization', { orgId: body.orgId })
+
     await drizzle.transaction(async (tx) => {
       const txDrizzle = tx as unknown as DrizzleClient
       await lockRbacOrgs(txDrizzle, [body.orgId])
@@ -94,7 +97,7 @@ export async function updateMemberRole(c: Context<MiddlewareKeyVariables>, bodyR
         .from(schema.role_bindings)
         .where(and(
           eq(schema.role_bindings.principal_type, 'user'),
-          eq(schema.role_bindings.principal_id, targetUser.id),
+          eq(schema.role_bindings.principal_id, targetUserId),
           eq(schema.role_bindings.scope_type, 'org'),
           eq(schema.role_bindings.org_id, body.orgId),
           isNull(schema.role_bindings.app_id),
@@ -126,6 +129,6 @@ export async function updateMemberRole(c: Context<MiddlewareKeyVariables>, bodyR
       await closeClient(c, pgClient)
   }
 
-  cloudlog({ requestId: c.get('requestId'), message: 'Organization member role updated', data: { user_id: targetUser.id, org_id: body.orgId, role: roleName } })
+  cloudlog({ requestId: c.get('requestId'), message: 'Organization member role updated', data: { user_id: targetUserId, org_id: body.orgId, role: roleName } })
   return c.json(BRES)
 }

@@ -17,6 +17,7 @@ import {
   resolveNewOrgBillingAccount,
   resolvePlanCreditProductId,
 } from '../supabase/functions/_backend/utils/stripe_billing.ts'
+import { isUsBillingCountry } from '../supabase/functions/_backend/utils/us_billing_countries.ts'
 
 const mockedEnv: Record<string, string> = {}
 
@@ -106,18 +107,12 @@ describe('stripe billing account helpers', () => {
     const context = createContext()
     const lookupError = { message: 'connection refused', code: 'PGRST000' }
 
-    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
+    const pgRlsModule = await import('../supabase/functions/_backend/utils/pg_rls.ts')
     const billingModule = await import('../supabase/functions/_backend/utils/stripe_billing.ts')
 
-    const lookupErrorSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValueOnce({
-      from: () => ({
-        select: () => ({
-          eq: () => ({
-            maybeSingle: async () => ({ data: null, error: lookupError }),
-          }),
-        }),
-      }),
-    } as any)
+    const lookupErrorSpy = vi.spyOn(pgRlsModule, 'withRlsContext').mockImplementationOnce(async () => {
+      throw lookupError
+    })
     try {
       await expect(billingModule.getBillingAccountForCustomer(context, 'cus_test')).rejects.toEqual(lookupError)
     }
@@ -127,10 +122,10 @@ describe('stripe billing account helpers', () => {
   })
 
   it('rejects US checkout for products missing from plans', async () => {
-    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
-    const spy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValue({
-      from: () => ({ select: () => ({ or: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
-    } as any)
+    const pgRlsModule = await import('../supabase/functions/_backend/utils/pg_rls.ts')
+    const spy = vi.spyOn(pgRlsModule, 'withRlsContext').mockImplementation(async (_c, _principal, run) => run({
+      query: async () => ({ rows: [] }),
+    } as any, {} as any))
     try {
       await expect(resolveCheckoutPlanProductId(createContext(), 'prod_unknown', 'us')).rejects.toBeInstanceOf(IncompleteUsPlanConfigError)
       await expect(resolveCheckoutPlanProductId(createContext(), 'prod_unknown', 'ee')).resolves.toBe('prod_unknown')
@@ -143,17 +138,11 @@ describe('stripe billing account helpers', () => {
   it('propagates plan lookup errors before selecting checkout product id', async () => {
     const context = createContext()
     const lookupError = { message: 'connection refused', code: 'PGRST000' }
-    const adminModule = await import('../supabase/functions/_backend/utils/supabase.ts')
+    const pgRlsModule = await import('../supabase/functions/_backend/utils/pg_rls.ts')
 
-    const lookupErrorSpy = vi.spyOn(adminModule, 'supabaseAdmin').mockReturnValue({
-      from: () => ({
-        select: () => ({
-          or: () => ({
-            maybeSingle: async () => ({ data: null, error: lookupError }),
-          }),
-        }),
-      }),
-    } as any)
+    const lookupErrorSpy = vi.spyOn(pgRlsModule, 'withRlsContext').mockImplementation(async () => {
+      throw lookupError
+    })
     try {
       await expect(resolveCheckoutPlanProductId(context, 'prod_test', 'ee')).rejects.toEqual(lookupError)
     }
@@ -188,7 +177,7 @@ describe('new org billing account from location', () => {
     expect(resolveNewOrgBillingAccount(createGeoContext('US'), 'us')).toBe('us')
   })
 
-  it('defaults US visitors to us and everyone else to ee', () => {
+  it('defaults offered visitors to us and everyone else to ee', () => {
     expect(resolveNewOrgBillingAccount(createGeoContext('US'))).toBe('ee')
     mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
     mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
@@ -197,14 +186,20 @@ describe('new org billing account from location', () => {
     expect(resolveNewOrgBillingAccount(createGeoContext())).toBe('ee')
   })
 
-  it('only offers the US entity to US visitors', () => {
+  it('offers the US entity in the Americas and Asia-Pacific only', () => {
     mockedEnv.STRIPE_SECRET_KEY_US = 'sk_test_us'
     mockedEnv.STRIPE_WEBHOOK_SECRET_US = 'whsec_test_us'
-    expect(canChooseUsBillingAccount(createGeoContext('US'))).toBe(true)
-    expect(canChooseUsBillingAccount(createGeoContext('FR'))).toBe(false)
+    for (const country of ['US', 'CA', 'BR', 'MX', 'JP', 'AU', 'IN', 'SG', 'TK'])
+      expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(true)
+    for (const country of ['FR', 'DE', 'GB', 'CH', 'AE', 'ZA', 'NG', 'GF', 'CU', 'KP', 'AF', 'KZ', 'UZ'])
+      expect(canChooseUsBillingAccount(createGeoContext(country))).toBe(false)
     expect(canChooseUsBillingAccount(createGeoContext())).toBe(false)
-    // US bills without automatic tax, so a non-US caller cannot pick it through the API.
+    expect(isUsBillingCountry('ca')).toBe(true)
+    expect(isUsBillingCountry(null)).toBe(false)
+    expect(getSuggestedBillingAccount(createGeoContext('JP'))).toBe('us')
+    // US bills without automatic tax, so a European caller cannot pick it through the API.
     expect(resolveNewOrgBillingAccount(createGeoContext('FR'), 'us')).toBe('ee')
+    expect(resolveNewOrgBillingAccount(createGeoContext('BR'), 'us')).toBe('us')
   })
 
   it('falls back to ee when us is requested but not configured', () => {

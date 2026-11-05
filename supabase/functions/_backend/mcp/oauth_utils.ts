@@ -44,7 +44,7 @@ export async function sha256Hex(value: string): Promise<string> {
   return [...await sha256(value)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-function timingSafeEqual(left: string, right: string): boolean {
+export function timingSafeEqual(left: string, right: string): boolean {
   if (left.length !== right.length)
     return false
   let diff = 0

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -15,10 +14,11 @@ import IconShield from '~icons/heroicons/shield-check'
 import IconUser from '~icons/heroicons/user'
 import SsoConfiguration from '~/components/organizations/SsoConfiguration.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
+import { getCurrentPlanNameOrg, useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
@@ -48,7 +48,7 @@ const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const isLoading = ref(true)
 const isSaving = ref(false)
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
@@ -56,7 +56,7 @@ const hideExternalPurchaseFlows = isNativeAppStoreContext()
 displayStore.NavTitle = t('security')
 
 const { currentOrganization } = storeToRefs(organizationStore)
-const SUPABASE_MAX_PASSWORD_LENGTH = 72
+const AUTH_MAX_PASSWORD_LENGTH = 72
 
 // Hashed API keys enforcement state
 const enforceHashedApiKeys = ref(false)
@@ -204,7 +204,7 @@ function acronym(email: string) {
 }
 
 async function hasVerified2faFactor() {
-  const { data: mfaFactors, error } = await supabase.auth.mfa.listFactors()
+  const { data: mfaFactors, error } = await capgo.auth.mfa.listFactors()
   if (error) {
     console.error('Error checking your 2FA status:', error)
     return null
@@ -231,7 +231,7 @@ function loadPolicyFromOrg() {
   const config = currentOrganization.value?.password_policy_config
   if (config?.enabled) {
     policyEnabled.value = config.enabled
-    minLength.value = Math.min(config.min_length ?? 10, SUPABASE_MAX_PASSWORD_LENGTH)
+    minLength.value = Math.min(config.min_length ?? 10, AUTH_MAX_PASSWORD_LENGTH)
     requireUppercase.value = config.require_uppercase ?? true
     requireNumber.value = config.require_number ?? true
     requireSpecial.value = config.require_special ?? true
@@ -265,7 +265,7 @@ async function loadData() {
 
   try {
     // Load current org's security settings
-    const { data: orgData, error: orgError } = await supabase
+    const { data: orgData, error: orgError } = await capgo
       .from('orgs')
       .select('enforcing_2fa, enforce_hashed_api_keys, enforce_encrypted_bundles, required_encryption_key')
       .eq('id', currentOrganization.value.gid)
@@ -318,7 +318,7 @@ async function loadMembersWithMfaStatus() {
 
   try {
     // Get org members
-    const { data: members, error: membersError } = await supabase
+    const { data: members, error: membersError } = await capgo
       .rpc('get_org_members', {
         guild_id: currentOrganization.value.gid,
       })
@@ -329,7 +329,7 @@ async function loadMembersWithMfaStatus() {
     }
 
     // Get 2FA status for all members
-    const { data: mfaStatus, error: mfaError } = await supabase
+    const { data: mfaStatus, error: mfaError } = await capgo
       .rpc('check_org_members_2fa_enabled', {
         org_id: currentOrganization.value.gid,
       })
@@ -386,7 +386,7 @@ async function loadMembersWithPasswordPolicyStatus() {
 
   try {
     // Get org members
-    const { data: members, error: membersError } = await supabase
+    const { data: members, error: membersError } = await capgo
       .rpc('get_org_members', {
         guild_id: currentOrganization.value.gid,
       })
@@ -397,7 +397,7 @@ async function loadMembersWithPasswordPolicyStatus() {
     }
 
     // Get password policy compliance status for all members
-    const { data: complianceStatus, error: complianceError } = await supabase
+    const { data: complianceStatus, error: complianceError } = await capgo
       .rpc('check_org_members_password_policy', {
         org_id: currentOrganization.value.gid,
       })
@@ -581,7 +581,7 @@ async function countNonCompliantBundles(): Promise<{ non_encrypted_count: number
   if (!currentOrganization.value)
     return 'error'
 
-  const { data, error } = await supabase.rpc('count_non_compliant_bundles', {
+  const { data, error } = await capgo.rpc('count_non_compliant_bundles', {
     org_id: currentOrganization.value.gid,
     required_key: requiredEncryptionKey.value || undefined,
   })
@@ -673,7 +673,7 @@ async function saveEncryptedBundlesEnforcement(enable: boolean, keyFingerprint: 
   try {
     // If enabling and we need to delete non-compliant bundles, do that first
     if (enable && deleteNonCompliant) {
-      const { error: deleteError } = await supabase.rpc('delete_non_compliant_bundles', {
+      const { error: deleteError } = await capgo.rpc('delete_non_compliant_bundles', {
         org_id: currentOrganization.value.gid,
         required_key: keyFingerprint || undefined,
       })
@@ -841,7 +841,7 @@ async function checkPasswordPolicyImpact(): Promise<boolean> {
   if (!impact)
     return false
 
-  const { data: members, error } = await supabase.rpc('get_org_members', {
+  const { data: members, error } = await capgo.rpc('get_org_members', {
     guild_id: currentOrganization.value.gid,
   })
   if (error) {
@@ -916,14 +916,14 @@ async function handlePolicyToggle() {
   await updatePasswordPolicy()
 }
 
-// Update password policy via Supabase SDK directly
+// Update the organization password policy
 async function updatePasswordPolicy() {
   if (!currentOrganization.value || !hasOrgPerm.value) {
     toast.error(t('no-permission'))
     return
   }
 
-  const sanitizedMinLength = Math.min(Math.max(minLength.value, 6), SUPABASE_MAX_PASSWORD_LENGTH)
+  const sanitizedMinLength = Math.min(Math.max(minLength.value, 6), AUTH_MAX_PASSWORD_LENGTH)
   minLength.value = sanitizedMinLength
 
   isSaving.value = true
@@ -936,7 +936,7 @@ async function updatePasswordPolicy() {
     require_special: requireSpecial.value,
   }
 
-  const { error } = await supabase
+  const { error } = await capgo
     .from('orgs')
     .update({ password_policy_config: policyConfig })
     .eq('id', currentOrganization.value.gid)
@@ -1130,7 +1130,7 @@ onMounted(async () => {
                       class="px-3 py-2 text-xs font-medium text-center border rounded-lg cursor-pointer text-amber-700 dark:text-amber-300 hover:bg-amber-100 focus:ring-4 focus:ring-amber-300 border-amber-400 dark:border-amber-600 dark:hover:bg-amber-800/30 dark:focus:ring-amber-800 focus:outline-hidden"
                       @click="goToMembersPage()"
                     >
-                      {{ t('view') }} {{ t('members') }}
+                      {{ t('view-members') }}
                     </button>
                     <button
                       type="button"
@@ -1430,7 +1430,7 @@ onMounted(async () => {
                     class="px-3 py-2 text-xs font-medium text-center border rounded-lg cursor-pointer text-amber-700 dark:text-amber-300 hover:bg-amber-100 focus:ring-4 focus:ring-amber-300 border-amber-400 dark:border-amber-600 dark:hover:bg-amber-800/30 dark:focus:ring-amber-800 focus:outline-hidden"
                     @click="goToMembersPage()"
                   >
-                    {{ t('view') }} {{ t('members') }}
+                    {{ t('view-members') }}
                   </button>
                   <button
                     type="button"
@@ -1652,7 +1652,7 @@ onMounted(async () => {
             class="px-3 py-2 text-xs font-medium text-center border rounded-lg cursor-pointer text-amber-700 dark:text-amber-300 hover:bg-amber-100 focus:ring-4 focus:ring-amber-300 border-amber-400 dark:border-amber-600 dark:hover:bg-amber-800/30 dark:focus:ring-amber-800 focus:outline-hidden"
             @click="goToMembersPage(true)"
           >
-            {{ t('view') }} {{ t('members') }}
+            {{ t('view-members') }}
           </button>
           <button
             type="button"
@@ -1687,7 +1687,7 @@ onMounted(async () => {
           class="px-3 py-2 mt-4 text-xs font-medium text-center border rounded-lg cursor-pointer text-red-700 dark:text-red-300 hover:bg-red-100 focus:ring-4 focus:ring-red-200 border-red-300 dark:border-red-600 dark:hover:bg-red-900/30 dark:focus:ring-red-900 focus:outline-hidden"
           @click="goToMembersPage(true)"
         >
-          {{ t('view') }} {{ t('members') }}
+          {{ t('view-members') }}
         </button>
         <p class="mt-3 text-sm text-red-600 dark:text-red-400">
           {{ t('users-must-change-password') }}

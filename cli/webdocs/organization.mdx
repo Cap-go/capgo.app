@@ -30,8 +30,8 @@ npx @capgo/cli@latest organization list
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-add"></a> ➕ **Add**
 
@@ -56,8 +56,8 @@ npx @capgo/cli@latest organization add --name "My Company" --email admin@mycompa
 | **-n** | <code>string</code> | Organization name |
 | **-e** | <code>string</code> | Management email for the organization |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members"></a> 🔹 **Members**
 
@@ -84,8 +84,8 @@ npx @capgo/cli@latest organization members ORG_ID
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members-invite"></a> 🔹 **Members-invite**
 
@@ -108,8 +108,8 @@ npx @capgo/cli@latest organization members-invite ORG_ID --email teammate@exampl
 | **-e** | <code>string</code> | Email of the user to invite |
 | **-r** | <code>string</code> | Role: org_member, org_billing_admin, org_admin or org_super_admin |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members-role"></a> 🔹 **Members-role**
 
@@ -132,8 +132,8 @@ npx @capgo/cli@latest organization members-role ORG_ID --email teammate@example.
 | **-e** | <code>string</code> | Email of the member |
 | **-r** | <code>string</code> | Role: org_member, org_billing_admin, org_admin or org_super_admin |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members-remove"></a> 🔹 **Members-remove**
 
@@ -155,8 +155,8 @@ npx @capgo/cli@latest organization members-remove ORG_ID --email teammate@exampl
 | -------------- | ------------- | -------------------- |
 | **-e** | <code>string</code> | Email of the member to remove |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-set"></a> ⚙️ **Set**
 
@@ -203,8 +203,8 @@ npx @capgo/cli@latest organization set ORG_ID --name "New Name"
 | **--required-encryption-key** | <code>string</code> | Only accept bundles encrypted with this public key fingerprint (null to clear) |
 | **--email-preference** | <code>string</code> | Organization email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, onboarding, builder_onboarding |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-delete"></a> 🗑️ **Delete**
 
@@ -228,6 +228,6 @@ npx @capgo/cli@latest organization delete ORG_ID
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 

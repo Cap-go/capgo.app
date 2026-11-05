@@ -15,7 +15,7 @@ function parseApiUrl(value: string): URL | undefined {
 
 export function isTrustedOnboardingApiHost(
   apiHost: string,
-  options: Pick<OnboardingCheckOptions, 'supaHost' | 'supaAnon'>,
+  options: Pick<OnboardingCheckOptions, 'apiHost'>,
   trustedOrigins: readonly string[],
 ): boolean {
   const destination = parseApiUrl(apiHost)
@@ -29,7 +29,7 @@ export function isTrustedOnboardingApiHost(
   if (destination.origin === new URL(defaultApiHost).origin)
     return true
   // An explicit CLI self-host selection authorizes that origin, not project config alone.
-  const explicitHost = options.supaHost && options.supaAnon ? parseApiUrl(options.supaHost) : undefined
+  const explicitHost = options.apiHost ? parseApiUrl(options.apiHost) : undefined
   if (explicitHost?.origin === destination.origin)
     return true
   return trustedOrigins.some((origin) => {

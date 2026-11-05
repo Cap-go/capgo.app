@@ -7,16 +7,15 @@ The generic allocator supports `treatment_percentage_by_intent`, common
 no cycles) and resolved in canonical topological order in the same locked user
 transaction. Intent-specific requirements extend common requirements.
 
-- `new_emails`: new allocations are 50% treatment for self-signup accounts with
-  exact `exploring` or `both` intent. Eligible existing A/B branches are retained;
-  OTA, Builder and unknown intents lose stale assignments and provider tags.
-- `new_emails_v2`: prospective self-signup enrollment only. Invited accounts do
-  not enroll or receive v2 assignments; stale v2 assignments and tags are removed.
-  OTA selects 50% by a stable hash of experiment name and user ID. Other OTA users
-  have **no assignment and neither v2 tag**, rather than a control assignment.
-  Builder selects 100% of enrolled accounts whose resolved
-  `builder_todo_list_v4` assignment is treatment A. Existing Builder controls stay
-  controls. Prerequisite experiments keep their existing allocation behavior.
+- `new_emails`: every account, self-signup or invited, with a supported intent
+  (`ota`, `builder`, `both`, `exploring`, `publish`) gets treatment A
+  (`ab:new_emails`). The Bento "Aha moment" flow routes on that tag. The control
+  branch moved from B to C, so stored B assignments from the earlier 50/50 split
+  are re-rolled to A on the next lookup. Missing or unknown intents get no
+  assignment.
+- `new_emails_v2` was removed because no Bento flow or template used its tag.
+  Stored v2 assignments, enrollment entries and Bento tags are ignored and left
+  in place.
 - Enrollment requires both an account creation time at or after the configured
   cutoff and a server-written `onboarding.abtests_enrolled` entry. Only the user
   creation handler writes that entry. An on-demand request cannot enroll a prior
@@ -48,14 +47,14 @@ Backend database/service-role writes remain authorized.
 The persisted assignment representation remains:
 
 ```json
-{ "new_emails_v2": { "branch": "A", "assigned_at": "2026-10-18T00:00:00.000Z" } }
+{ "new_emails": { "branch": "A", "assigned_at": "2026-10-18T00:00:00.000Z" } }
 ```
 
-Lifecycle evaluation must **read** the original organization's creator and that
-person's current protected enrollment and assignment. Require a self-signup
-creator, v2 branch A, a valid assignment timestamp, the prospective creation
-cutoff and exact matching intent; Builder also requires current checklist
-treatment A. Fail closed when
+Lifecycle evaluation of an enrollment-gated experiment must **read** the original
+organization's creator and that person's current protected enrollment and
+assignment. Require the configured audience, the treatment branch, a valid
+assignment timestamp, the prospective creation cutoff, exact matching intent and
+any required prerequisite assignments. Fail closed when
 creator or assignment cannot be resolved. Do not call the enrollment API from a
 scheduler, interpret a Bento tag as authority, or use the current caller/app
 creator/billing owner in place of the original creator. Recipient consent and

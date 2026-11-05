@@ -139,32 +139,23 @@ afterAll(async () => {
   await cleanupPostgresClient()
 })
 
+async function seedOnePublicChannelPerPlatform(appId: string, versionId: number) {
+  const iosPublic = `ios-public-${randomUUID().slice(0, 8)}`
+  const androidPublic = `android-public-${randomUUID().slice(0, 8)}`
+  const electronPublic = `electron-public-${randomUUID().slice(0, 8)}`
+
+  await insertChannel(appId, versionId, iosPublic, { public: true, ios: true, android: false, electron: false })
+  await insertChannel(appId, versionId, androidPublic, { public: true, ios: false, android: true, electron: false })
+  await insertChannel(appId, versionId, electronPublic, { public: true, ios: false, android: false, electron: true })
+
+  return { iosPublic, androidPublic, electronPublic }
+}
+
 describe('public channel uniqueness', () => {
   it('allows one public channel per platform', async () => {
     const appId = `com.public.channel.platform-defaults.${randomUUID()}`
     const versionId = await createAppFixture(appId)
-    const iosPublic = `ios-public-${randomUUID().slice(0, 8)}`
-    const androidPublic = `android-public-${randomUUID().slice(0, 8)}`
-    const electronPublic = `electron-public-${randomUUID().slice(0, 8)}`
-
-    await insertChannel(appId, versionId, iosPublic, {
-      public: true,
-      ios: true,
-      android: false,
-      electron: false,
-    })
-    await insertChannel(appId, versionId, androidPublic, {
-      public: true,
-      ios: false,
-      android: true,
-      electron: false,
-    })
-    await insertChannel(appId, versionId, electronPublic, {
-      public: true,
-      ios: false,
-      android: false,
-      electron: true,
-    })
+    const { iosPublic, androidPublic, electronPublic } = await seedOnePublicChannelPerPlatform(appId, versionId)
 
     const states = await getChannelStates(appId, [iosPublic, androidPublic, electronPublic])
 
@@ -176,29 +167,9 @@ describe('public channel uniqueness', () => {
   it('demotes overlapping public electron channels on insert while preserving other platforms', async () => {
     const appId = `com.public.channel.insert.${randomUUID()}`
     const versionId = await createAppFixture(appId)
-    const iosPublic = `ios-public-${randomUUID().slice(0, 8)}`
-    const androidPublic = `android-public-${randomUUID().slice(0, 8)}`
-    const electronPublic = `electron-public-${randomUUID().slice(0, 8)}`
+    const { iosPublic, androidPublic, electronPublic } = await seedOnePublicChannelPerPlatform(appId, versionId)
     const nextElectronPublic = `electron-next-${randomUUID().slice(0, 8)}`
 
-    await insertChannel(appId, versionId, iosPublic, {
-      public: true,
-      ios: true,
-      android: false,
-      electron: false,
-    })
-    await insertChannel(appId, versionId, androidPublic, {
-      public: true,
-      ios: false,
-      android: true,
-      electron: false,
-    })
-    await insertChannel(appId, versionId, electronPublic, {
-      public: true,
-      ios: false,
-      android: false,
-      electron: true,
-    })
     await insertChannel(appId, versionId, nextElectronPublic, {
       public: true,
       ios: false,
@@ -217,29 +188,9 @@ describe('public channel uniqueness', () => {
   it('demotes overlapping public electron channels on update while preserving other platforms', async () => {
     const appId = `com.public.channel.update.${randomUUID()}`
     const versionId = await createAppFixture(appId)
-    const iosPublic = `ios-public-${randomUUID().slice(0, 8)}`
-    const androidPublic = `android-public-${randomUUID().slice(0, 8)}`
-    const electronPublic = `electron-public-${randomUUID().slice(0, 8)}`
+    const { iosPublic, androidPublic, electronPublic } = await seedOnePublicChannelPerPlatform(appId, versionId)
     const privateCandidate = `electron-private-${randomUUID().slice(0, 8)}`
 
-    await insertChannel(appId, versionId, iosPublic, {
-      public: true,
-      ios: true,
-      android: false,
-      electron: false,
-    })
-    await insertChannel(appId, versionId, androidPublic, {
-      public: true,
-      ios: false,
-      android: true,
-      electron: false,
-    })
-    await insertChannel(appId, versionId, electronPublic, {
-      public: true,
-      ios: false,
-      android: false,
-      electron: true,
-    })
     await insertChannel(appId, versionId, privateCandidate, {
       public: false,
       ios: false,

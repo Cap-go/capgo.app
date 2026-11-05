@@ -105,7 +105,9 @@ describe('[POST] /private/invite_existing_user_to_org', () => {
         JOIN public.org_users ou ON ou.id = r.org_user_id WHERE ou.org_id = $1
       `, [fixture.orgId])
       const body = { email: USER_EMAIL_NONMEMBER, org_id: fixture.orgId }
-      expect((await postInviteExistingUserToOrg(authHeaders, body)).status).toBe(200)
+      const first = await postInviteExistingUserToOrg(authHeaders, body)
+      expect(first.status).toBe(200)
+      expect(await first.json()).toMatchObject({ status: 'ok' })
       const after = await executeSQL<{ id: string }>(`
         SELECT r.id FROM public.org_invitation_email_requests r
         JOIN public.org_users ou ON ou.id = r.org_user_id WHERE ou.org_id = $1
@@ -114,29 +116,13 @@ describe('[POST] /private/invite_existing_user_to_org', () => {
       const response = await postInviteExistingUserToOrg(authHeaders, body)
       expect(response.status).toBe(409)
       expect(await response.json()).toMatchObject({
-        error: 'user_already_invited', moreInfo: { reason: 'invite_recently_sent', cooldown_minutes: 5 },
+        error: 'user_already_invited',
+        moreInfo: { reason: 'invite_recently_sent', cooldown_minutes: 5 },
       })
       const jobs = await executeSQL<{ count: string }>(`
         SELECT count(*) FROM pgmq.q_send_email WHERE message->'payload'->>'org_invitation_id' = $1
       `, [after[0]!.id])
       expect(Number(jobs[0]?.count)).toBe(1)
-    }
-    finally {
-      await fixture.cleanup()
-    }
-  })
-
-  it.concurrent('returns ok for an existing user with a pending org invitation', async () => {
-    const fixture = await createInviteTestFixture()
-    try {
-      const response = await postInviteExistingUserToOrg(authHeaders, {
-        email: USER_EMAIL_NONMEMBER,
-        org_id: fixture.orgId,
-      })
-
-      expect(response.status).toBe(200)
-      const data = await response.json() as { status: string }
-      expect(data.status).toBe('ok')
     }
     finally {
       await fixture.cleanup()

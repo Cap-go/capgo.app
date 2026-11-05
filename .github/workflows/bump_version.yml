@@ -160,7 +160,6 @@ jobs:
       published: ${{ steps.publish.outputs.published }}
       native_build: ${{ steps.capgo_version.outputs.native_build }}
       capgo_tag: ${{ steps.capgo_tag.outputs.tag }}
-      graphify: ${{ needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' }}
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -343,49 +342,6 @@ jobs:
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
-  # The Graphify graph is an agent aid, not release content. Refresh it after the
-  # tags are published so its ~90s generation never delays a release.
-  graphify:
-    needs: bump-version
-    if: ${{ needs.bump-version.outputs.published == 'true' && needs.bump-version.outputs.graphify == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    name: Refresh Graphify code graph
-    concurrency:
-      group: graphify-${{ github.ref }}
-      cancel-in-progress: true
-    permissions:
-      contents: read
-    steps:
-      - name: Check out
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.ref_name }}
-          token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
-      - name: Install Graphify
-        run: python3 -m pip install --user graphifyy==0.8.31
-      - name: Commit refreshed graph
-        run: |
-          set -euo pipefail
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-
-          for attempt in 1 2 3; do
-            git fetch --depth 1 origin "$GITHUB_REF_NAME"
-            git reset --hard FETCH_HEAD
-            python3 scripts/generate_graphify_graph.py
-            git add graphify-out
-            if git diff --cached --quiet; then
-              echo "Graphify graph already up to date."
-              exit 0
-            fi
-            git commit -m "chore(auto-sync): refresh Graphify code graph"
-            if git push origin "HEAD:$GITHUB_REF_NAME"; then
-              exit 0
-            fi
-            echo "$GITHUB_REF_NAME advanced during generation; retrying ($attempt/3)."
-          done
-          echo "::warning::Could not push the refreshed Graphify graph."
   # A native change needs a new store binary: build both platforms from the new
   # tag and submit them for store review without manual dispatch.
   native-store-release:

@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { state, sendTracking, cloudlog, checkPermission, broadcast, recordBento, queueSend, from, markChecklist, markLogin } = vi.hoisted(() => ({
+const { state, sendTracking, cloudlog, checkPermission, broadcast, recordBento, queueSend, from, markChecklist, markLogin, markAiAgent } = vi.hoisted(() => ({
   state: { actorId: 'actor-a' },
   sendTracking: vi.fn(),
   cloudlog: vi.fn(),
@@ -13,6 +13,7 @@ const { state, sendTracking, cloudlog, checkPermission, broadcast, recordBento, 
   from: vi.fn(),
   markChecklist: vi.fn(),
   markLogin: vi.fn(),
+  markAiAgent: vi.fn(),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
@@ -37,11 +38,18 @@ vi.mock('../supabase/functions/_backend/utils/tracking.ts', () => ({
   sendEventToTracking: sendTracking,
   addAuthenticatedApiKeyIdToTrackingPayload: (payload: unknown) => payload,
 }))
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ supabaseWithAuth: () => ({ from }) }))
+// Caller-scoped lookups: `from` receives the table each SQL statement reads and returns its rows.
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: async () => ({}), closeClient: vi.fn() }))
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  authPrincipal: () => ({ kind: 'jwt', userId: state.actorId }),
+  withRlsTransaction: (_pg: unknown, _principal: unknown, run: (client: unknown) => Promise<unknown>) => run({}),
+  queryJson: async (_client: unknown, text: string) => from(/FROM public\.(\w+)/.exec(text)?.[1]),
+}))
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/realtime_broadcast.ts', () => ({ broadcastCLIEvent: broadcast }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({ backgroundTask: (_c: Context, promise: Promise<unknown>) => promise }))
 vi.mock('../supabase/functions/_backend/utils/app_onboarding_login.ts', () => ({ markAppOnboardingLoginFromTracking: markLogin }))
+vi.mock('../supabase/functions/_backend/utils/ai_onboarding_agent.ts', () => ({ markAiOnboardingAgentConnected: markAiAgent }))
 vi.mock('../supabase/functions/_backend/utils/builder_onboarding_checklist.ts', () => ({ markBuilderChecklistFromAnalytics: markChecklist }))
 vi.mock('../supabase/functions/_backend/utils/user_bento_events.ts', () => ({ recordUserBentoEvent: recordBento }))
 vi.mock('../supabase/functions/_backend/utils/onboarding_copy_tracking.ts', () => ({ buildAiInstructionsCopiedBentoEvent: () => undefined }))
@@ -63,13 +71,11 @@ beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(acceptedAt)
   queueSend.mockResolvedValue(undefined)
   from.mockImplementation((table: string) => {
-    const query = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({ data: table === 'apps' ? { owner_org: 'org-a', name: 'Example app' } : { id: 'org-a', name: 'Example org' } }),
-      maybeSingle: vi.fn().mockResolvedValue({ data: null }),
-    }
-    return query
+    if (table === 'apps')
+      return [{ owner_org: 'org-a', name: 'Example app' }]
+    if (table === 'orgs')
+      return [{ id: 'org-a', name: 'Example org' }]
+    return []
   })
   sendTracking.mockResolvedValue(undefined)
   checkPermission.mockResolvedValue(true)
@@ -192,6 +198,59 @@ describe('/private/events durable acceptance', () => {
     expect(sendTracking).not.toHaveBeenCalled()
     expect(recordBento).not.toHaveBeenCalled()
   })
+
+  it('maps Checkout Started to the user:checkout_started Bento event when billing can be updated', async () => {
+    const response = await request({
+      event: 'Checkout Started',
+      org_id: 'org-a',
+      tags: {
+        product_id: 'prod_team',
+        plan_name: 'Team',
+        recurrence: 'month',
+        checkout_source: 'plans_upgrade',
+        current_plan_name: 'Maker',
+        plan_price: 49,
+        plan_price_monthly: 49,
+        plan_price_yearly: 490,
+      },
+    })
+    expect(response.status).toBe(200)
+    expect(checkPermission).toHaveBeenCalledWith(expect.anything(), 'org.update_billing', { orgId: 'org-a' })
+    expect(sendTracking.mock.calls[0][1]).toMatchObject({
+      event: 'Checkout Started',
+      sentToBento: true,
+      bento: {
+        event: 'user:checkout_started',
+        audience: 'billing',
+        data: {
+          org_id: 'org-a',
+          org_name: 'Example org',
+          product_id: 'prod_team',
+          plan_name: 'Team',
+          plan_type: 'monthly',
+          recurrence: 'month',
+          checkout_source: 'plans_upgrade',
+          current_plan_name: 'Maker',
+          plan_price: 49,
+          plan_price_monthly: 49,
+          plan_price_yearly: 490,
+        },
+      },
+    })
+  })
+
+  it('rejects Checkout Started when the caller cannot update billing', async () => {
+    checkPermission.mockImplementation(async (_c, permission) => permission !== 'org.update_billing')
+    expect((await request({ event: 'Checkout Started', org_id: 'org-a' })).status).toBe(403)
+    expect(queueSend).not.toHaveBeenCalled()
+    expect(sendTracking).not.toHaveBeenCalled()
+  })
+
+  it('rejects Checkout Started without a verified organization', async () => {
+    expect((await request({ event: 'Checkout Started' })).status).toBe(403)
+    expect(queueSend).not.toHaveBeenCalled()
+    expect(sendTracking).not.toHaveBeenCalled()
+  })
 })
 
 describe('queue persistence boundary', () => {
@@ -207,11 +266,13 @@ describe('queue persistence boundary', () => {
     expect(sendTracking).not.toHaveBeenCalled()
     expect(markChecklist).not.toHaveBeenCalled()
     expect(markLogin).not.toHaveBeenCalled()
+    expect(markAiAgent).not.toHaveBeenCalled()
     expect(recordBento).not.toHaveBeenCalled()
     persist()
     expect((await response).status).toBe(200)
     expect(from.mock.calls.length).toBeGreaterThan(1)
     expect(sendTracking).toHaveBeenCalledWith(expect.anything(), expect.anything(), { posthog: false })
+    expect(markAiAgent).toHaveBeenCalledOnce()
   })
 
   it.each(['missing', 'failed'])('fails closed when the queue is %s without later side effects', async (mode) => {
@@ -223,6 +284,7 @@ describe('queue persistence boundary', () => {
     expect(from).not.toHaveBeenCalled()
     expect(markChecklist).not.toHaveBeenCalled()
     expect(markLogin).not.toHaveBeenCalled()
+    expect(markAiAgent).not.toHaveBeenCalled()
     expect(recordBento).not.toHaveBeenCalled()
     expect(JSON.stringify(cloudlog.mock.calls)).not.toContain('secret queue error')
   })
@@ -290,6 +352,7 @@ describe('queue persistence boundary', () => {
     expect(sendTracking).not.toHaveBeenCalled()
     expect(markChecklist).not.toHaveBeenCalled()
     expect(markLogin).not.toHaveBeenCalled()
+    expect(markAiAgent).not.toHaveBeenCalled()
     expect(recordBento).not.toHaveBeenCalled()
     vi.spyOn(Date, 'now').mockReturnValue(acceptedAt + 10000)
     const retry = await request({ ...payload, client_event_id: failure.moreInfo.client_event_id, timestamp: failure.moreInfo.timestamp })

@@ -8,10 +8,10 @@ import { log } from '@clack/prompts'
 import { isCI } from 'ci-info'
 import { InvalidArgumentError, Option, program } from 'commander'
 import pack from '../package.json'
+import { enableApiInstrumentation } from './analytics/api-perf'
 import { setCurrentCliCommand } from './analytics/cli-headers'
 import { categorizeCliError } from './analytics/error-category'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from './analytics/opt-out'
-import { enableSupabaseInstrumentation } from './analytics/supabase-perf'
 import { deferCommandInvocation, extractCommandContext, flushAnalytics, trackCommandFailed, trackCommandInvoked, trackCommandSucceeded } from './analytics/track'
 import { addApp } from './app/add'
 import { debugApp } from './app/debug'
@@ -25,6 +25,7 @@ import { clearCredentialsCommand, listCredentialsCommand, migrateCredentialsComm
 import { exportCredentialsCommand, isCredentialsExportInvocation } from './build/credentials-export-command'
 import { sanitizeCredentialsExportTerminalText, writeCredentialsExportStderr } from './build/credentials-export-terminal'
 import { manageCredentialsCommand } from './build/credentials-manage'
+import { deleteRemoteCredentialsCommand, pushRemoteCredentialsCommand, remoteCredentialsStatusCommand } from './build/credentials-remote'
 import { syncIosMarketingVersionCommand } from './build/ios-marketing-version'
 import { iosProvisioningCommand } from './build/ios-provisioning-command'
 import { lastOutputCommand } from './build/last-output-command'
@@ -33,6 +34,7 @@ import { createAppleKeyCommand } from './build/onboarding/asc-key/command'
 import { onboardingBuilderCommand } from './build/onboarding/command'
 import { prescanCommand } from './build/prescan/command'
 import { requestBuildCommand } from './build/request'
+import { zipBuildCommand } from './build/zip-command'
 import { cleanupBundle } from './bundle/cleanup'
 import { checkCompatibility } from './bundle/compatibility'
 import { decryptZip } from './bundle/decrypt'
@@ -63,6 +65,7 @@ import { observeCommand } from './observe/command'
 import { startOnboardingChecks } from './onboarding/background'
 import { waitForOnboardingChecks } from './onboarding/background-shutdown'
 import { finishOnboardingCommand } from './onboarding/background-workers'
+import { setNoticeOutputOptions } from './onboarding/setup-notice-policy'
 import { setupDebug } from './onboarding/setup-diagnostics'
 import { addOrganization, deleteOrganization, inviteMember, listMembers, listOrganizations, removeMember, setMemberRole, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
@@ -74,14 +77,14 @@ import { ORG_EMAIL_PREFERENCE_KEYS, USER_EMAIL_PREFERENCE_KEYS } from './shared/
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
 import { getAccount, setAccount } from './user/settings'
 import { whoami } from './user/whoami'
-import { formatError } from './utils'
+import { formatError, setCapgoHostOverride } from './utils'
 import { normalizeAutoBumpInput } from './versionHelpers'
 
 // Common option descriptions used across multiple commands
 const optionDescriptions = {
   apikey: `API key to link to your account`,
-  supaHost: `Custom Supabase host URL (for self-hosting or Capgo development)`,
-  supaAnon: `Custom Supabase anon key (for self-hosting)`,
+  apiHost: `Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST)`,
+  filesHost: `Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST)`,
   packageJson: `Paths to package.json files for monorepos (comma-separated)`,
   nodeModules: `Paths to node_modules directories for monorepos (comma-separated)`,
   capacitorConfig: `Capacitor config source to update (useful with dynamic monorepo configs)`,
@@ -103,17 +106,29 @@ program
   .version(pack.version, '-v, --version', `output the current version`)
   .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
 
-// Turn on client-side Supabase perf tracking for the CLI. (Off by default so
-// the SDK bundle, which transitively imports createSupabaseClient, stays clean.)
-enableSupabaseInstrumentation()
+// Turn on client-side API perf tracking for the CLI. (Off by default so
+// the SDK bundle, which transitively imports invokeCapgoCliApi, stays clean.)
+enableApiInstrumentation()
+
+/**
+ * Pin the process to the selected backend so every request (API, files, uploads,
+ * remote config) uses it.
+ */
+function applyHostOptions(command: Command) {
+  const { apiHost, filesHost } = command.opts()
+  if (apiHost || filesHost)
+    setCapgoHostOverride({ apiHost, filesHost })
+}
 
 let currentCommandPath = 'unknown'
 let currentActionCommand: Command | undefined
 
 program.hook('preAction', (_thisCommand, actionCommand) => {
+  applyHostOptions(actionCommand)
   setConfigWriteTarget(resolveCapacitorConfigTargetPath(actionCommand.optsWithGlobals().capacitorConfig, cwd(), { logError: true }))
   currentCommandPath = getCommandPath(actionCommand)
   currentActionCommand = actionCommand
+  setNoticeOutputOptions(actionCommand.optsWithGlobals())
   setCurrentCliCommand(currentCommandPath)
   applyCommandAnalyticsOptOut(currentCommandPath, actionCommand.opts())
   startOnboardingChecks(actionCommand, currentCommandPath, isCI)
@@ -146,14 +161,15 @@ program
 This includes adding code for updates, building, uploading your app, and verifying update functionality.
 Capgo bundles are web assets and can be fetched by anyone who knows the URL. Use encryption for banking, regulated, or other high-security apps.
 During the iOS run-on-device step, choose a physical iPhone/iPad or simulator. If you choose a physical device, the CLI lets you connect, unlock, and check again before it launches the app.
+If the selected Xcode uses Device Hub and Capacitor's native-run cannot open it, onboarding gives you a manual launch path. Run npx cap open ios, select the simulator in Xcode, choose Product > Run, and confirm that the baseline app opens before continuing. MCP live-update onboarding gives the same instructions and waits for deviceRunConfirmed: true. Run npx @capgo/cli@latest doctor for the upstream fix status and upgrade guidance.
 
 Example: npx @capgo/cli@latest init YOUR_API_KEY com.example.app`)
   .action(initApp)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('-n, --name <name>', `App name for display in Capgo Cloud`)
   .option('-i, --icon <icon>', `App icon path for display in Capgo Cloud`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
   .option('--package-json <path>', 'Package JSON for the Capacitor app to onboard (useful in monorepos)')
   .option('--main-file <path>', 'Application entry file to update (useful in monorepos)')
   .option('--capacitor-config <path>', optionDescriptions.capacitorConfig)
@@ -171,6 +187,7 @@ If you omit the platform in an interactive terminal, the command asks whether to
 The command lists available devices and simulators, lets you reload the list, and runs with your selection.
 For iOS, this asks whether to use a physical iPhone/iPad or simulator before showing devices.
 Use --no-launch to print the resolved command without starting the app.
+When the selected Xcode uses Device Hub and Capacitor's native-run lacks support, simulator selection prints instructions to run the app from Xcode with npx cap open ios and Product > Run. It does not attempt the incompatible simulator command. Physical-device selection remains available in interactive mode. Run npx @capgo/cli@latest doctor for the upstream fix status and upgrade guidance.
 
 Example: npx @capgo/cli@latest run device ios --no-launch`)
   .action(testRunDeviceCommand)
@@ -199,6 +216,10 @@ program
 
 This command helps diagnose issues with your setup.
 
+For local iOS projects on macOS, doctor also checks whether the selected Xcode uses Device Hub and whether the native-run resolved by your app's @capacitor/cli supports it. An incompatible version fails diagnostics with manual launch instructions. Installing a separate top-level native-run does not necessarily update the copy used by Capacitor.
+Xcode 27 removed Simulator.app. As of October 29, 2026, the Device Hub fix is merged but unreleased, and the latest published native-run is 2.0.3. There is no released minimum Capacitor version for this fix yet, including with Capacitor CLI 8.6.0. See the upstream issue and temporary package-manager patch: https://github.com/ionic-team/capacitor/issues/8620
+Until the fixed dependency is available, use npx cap open ios, select the simulator in Xcode, and choose Product > Run. You can also use a physical device or select an older installed Xcode that includes Simulator.app. After the fix ships, update the dependency used by @capacitor/cli and your lockfile, then run doctor again. Keep the Capacitor packages on the same major version; a major upgrade is not required just to change simulator launching.
+
 Example: npx @capgo/cli@latest doctor`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .action(async (...args) => {
@@ -217,8 +238,8 @@ Example: npx @capgo/cli@latest login YOUR_API_KEY`)
   .action(login)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--local', `Only save in local folder, git ignored for security.`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 program
   .command('get-qr [appId] [target]')
@@ -240,8 +261,8 @@ Examples:
   .option('--url', `Print preview URLs only (web and deep link), without a terminal QR code`)
   .option('--web-url', `Encode the web preview URL in the QR code and PNG instead of the capgo:// deep link`)
   .addOption(new Option('--preview-env <env>', `Preview web URL environment`).choices(['prod', 'preprod', 'dev']).default('prod'))
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 const bundle = program
   .command('bundle')
@@ -339,8 +360,8 @@ Cordova example: npx @capgo/cli@latest bundle upload com.example.app --mode cord
   .option('--self-assign', `Allow devices to auto-join this channel (updates channel setting)`)
   .option('--qr-preview', `Print a terminal QR code for this bundle preview after upload`)
   .option('--send-update-notification', `Send a native update-check notification to devices after updating linked channel bundles`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
   .option('--verbose', optionDescriptions.verbose)
 
 bundle
@@ -354,8 +375,8 @@ Example: npx @capgo/cli@latest bundle compatibility com.example.app --channel pr
   .option('--text', `Output text instead of emojis`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 bundle
   .command('releaseType [appId]')
@@ -367,8 +388,8 @@ Example: npx @capgo/cli@latest bundle releaseType com.example.app --channel prod
   .option('-c, --channel <channel>', `Channel to compare against`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 bundle
   .command('delete [bundleId] [appId]')
@@ -380,8 +401,8 @@ Example: npx @capgo/cli@latest bundle delete BUNDLE_ID com.example.app`)
     await deleteBundle(bundleId, appId, options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 bundle
   .command('list [appId]')
@@ -393,8 +414,8 @@ Example: npx @capgo/cli@latest bundle list com.example.app`)
     await listBundle(appId, options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 bundle
   .command('cleanup [appId]')
@@ -412,8 +433,8 @@ Example: npx @capgo/cli@latest bundle cleanup com.example.app --bundle=1.0 --kee
   .option('-k, --keep <keep>', `Number of versions to keep`)
   .option('-f, --force', `Force removal`)
   .option('--ignore-channel', `Delete bundles even if linked to channels (WARNING: deletes channels too)`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 bundle
   .command('encrypt [zipPath] [checksum]')
@@ -446,8 +467,13 @@ bundle
   .description(`🗜️ Create a zip file of your app bundle.
 
 Returns checksum for use with encryption. Use --json for machine-readable output.
+Works offline: no API key and no calls to Capgo.
 
-Example: npx @capgo/cli@latest bundle zip com.example.app --path ./dist`)
+--for-upload produces exactly what 'bundle upload' would send (same checksum, v2 encryption, native packages metadata)
+so the zip can be uploaded through a signed URL. --delta-pack also writes the delta (manifest) files.
+
+Example: npx @capgo/cli@latest bundle zip com.example.app --path ./dist
+Example: npx @capgo/cli@latest bundle zip com.example.app --for-upload --delta-pack ./delta.zip --json`)
   .action(zipBundle)
   .option('-p, --path <path>', `Path of the folder to upload, if not provided it will use the webDir set in capacitor.config`)
   .option('-b, --bundle <bundle>', `Bundle version number to name the zip file`)
@@ -455,8 +481,17 @@ Example: npx @capgo/cli@latest bundle zip com.example.app --path ./dist`)
   .option('-j, --json', `Output in JSON`)
   .option('--no-code-check', `Ignore checking if notifyAppReady() is called in source code and index present in root folder`)
   .option('--ignore-notify-app-ready', optionDescriptions.ignoreNotifyAppReady)
-  .option('--key-v2', `Use encryption v2`)
+  .option('--key-v2 [key]', `Use encryption v2. With --for-upload: custom path for private signing key (v2 system), defaults to .capgo_key_v2`)
+  .option('--key-data-v2 <keyDataV2>', `Private signing key (v2 system), used with --for-upload`)
+  .option('--no-key', `Ignore signing key and produce a clear bundle (with --for-upload)`)
+  .option('--for-upload', `Produce the exact artifact and metadata 'bundle upload' would send (encryption, checksum, native packages)`)
+  .option('--delta-pack <file>', `Also write a delta pack zip (manifest + per-file upload bytes) for delta uploads. Implies --for-upload`)
+  .option('--encrypt-delta', `Encrypt delta update files (auto-enabled for updater >= 6.14.4)`)
+  .option('--encrypt-partial', `[DEPRECATED] Use --encrypt-delta instead. Encrypt delta update files`)
+  .option('--disable-brotli', `Completely disable brotli compression even if updater version supports it`)
+  .option('--force-crc32-checksum', `Force CRC32 checksum for upload (override auto-detection)`)
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
+  .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
 
 const app = program
   .command('app')
@@ -474,8 +509,8 @@ Example: npx @capgo/cli@latest app add com.example.app --name "My App" --icon ./
   .option('-n, --name <name>', `App name for display in Capgo Cloud`)
   .option('-i, --icon <icon>', `App icon path for display in Capgo Cloud`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 app
   .command('delete [appId]')
@@ -486,8 +521,8 @@ Example: npx @capgo/cli@latest app delete com.example.app`)
     await deleteApp(appId, options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 app
   .command('list')
@@ -503,8 +538,8 @@ Example: npx @capgo/cli@latest app list`)
   .option('--show-org', 'Show the organization name for each app')
   .option('--show-org-id', 'Show the organization ID for each app')
   .option('--output-text', 'Print plain text with a CSV app table and no interactive formatting')
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 app
   .command('todo [appId]')
@@ -519,8 +554,8 @@ Example: npx @capgo/cli@latest app todo com.example.app`)
   .action(appTodo)
   .addOption(new Option('--list <list>', 'Show one todo list and exit; required for dual checklists in non-interactive mode').choices(['builder', 'ota']))
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 app
   .command('debug  [appId]')
@@ -532,8 +567,8 @@ Optionally target a specific device for detailed diagnostics.
 Example: npx @capgo/cli@latest app debug com.example.app --device DEVICE_ID`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('-d, --device <device>', `The specific device ID to debug`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 app
   .command('setting [path]')
@@ -591,8 +626,8 @@ Example: npx @capgo/cli@latest app set com.example.app --name "Updated App" --re
   .option('--default-upload-channel <channel>', `Default upload channel name for this app`)
   .option('--default-download-channel <channel>', `Default download channel name for this app (sets channel public=true)`)
   .option('--disable-download-channels', `Disable Capgo download channels for this app (sets all channels public=false)`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 const channel = program
   .command('channel')
@@ -608,8 +643,8 @@ Example: npx @capgo/cli@latest channel add production com.example.app --default`
   .option('-d, --default', `Set the channel as default`)
   .option('--self-assign', `Allow device to self-assign to this channel`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 channel
   .command('delete [channelName] [appId]')
@@ -623,8 +658,8 @@ Example: npx @capgo/cli@latest channel delete production com.example.app`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--delete-bundle', `Delete the bundle associated with the channel`)
   .option('--success-if-not-found', `Success if the channel is not found`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 channel
   .command('list [appId]')
@@ -636,8 +671,8 @@ Example: npx @capgo/cli@latest channel list com.example.app`)
     await listChannels(appId, options)
   })
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 channel
   .command('currentBundle [channel] [appId]')
@@ -650,8 +685,8 @@ Example: npx @capgo/cli@latest channel currentBundle production com.example.app`
   .option('-c, --channel <channel>', `Channel to get the current bundle from`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--quiet', `Only print the bundle version`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 channel
   .command('promote [fromChannel] [toChannel] [appId]')
@@ -665,8 +700,8 @@ Example: npx @capgo/cli@latest channel promote staging production com.example.ap
   .option('--send-update-notification', `Send a native update-check notification to devices after updating the linked channel bundle`)
   .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)
   .option('--accept-incompatible', `${optionDescriptions.acceptIncompatibleChannel} Cannot be combined with --ignore-metadata-check.`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 channel
   .command('set [channelName] [appId]')
@@ -730,8 +765,8 @@ Example: npx @capgo/cli@latest channel set production com.example.app --bundle 1
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--ignore-metadata-check', `Ignore checking node_modules compatibility if present in the bundle`)
   .option('--accept-incompatible', `${optionDescriptions.acceptIncompatibleChannel} Cannot be combined with --ignore-metadata-check.`)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 const key = program
   .command('key')
@@ -791,8 +826,8 @@ account.command('get')
 Example: npx @capgo/cli@latest account get`)
   .action(getAccount)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 account.command('set')
   .alias('s')
@@ -814,8 +849,8 @@ Example: npx @capgo/cli@latest account set --no-newsletter --email-preference we
   .option('--no-newsletter', `Unsubscribe from the newsletter`)
   .option('--email-preference <key=bool>', `Email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: ${USER_EMAIL_PREFERENCE_KEYS.join(', ')}`, collect, [])
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 const organization = program
   .command('organization')
@@ -829,8 +864,8 @@ organization
 Example: npx @capgo/cli@latest organization list`)
   .action(listOrganizations)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organization
   .command('add')
@@ -842,8 +877,8 @@ Example: npx @capgo/cli@latest organization add --name "My Company" --email admi
   .option('-n, --name <name>', `Organization name`)
   .option('-e, --email <email>', `Management email for the organization`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organization
   .command('members [orgId]')
@@ -858,8 +893,8 @@ Note: Viewing 2FA status requires super_admin rights in the organization.
 Example: npx @capgo/cli@latest organization members ORG_ID`)
   .action(listMembers)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 const memberRoleDescription = `Role: org_member, org_billing_admin, org_admin or org_super_admin`
 
@@ -872,8 +907,8 @@ Example: npx @capgo/cli@latest organization members-invite ORG_ID --email teamma
   .option('-e, --email <email>', `Email of the user to invite`)
   .option('-r, --role <role>', memberRoleDescription)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organization
   .command('members-role [orgId]')
@@ -884,8 +919,8 @@ Example: npx @capgo/cli@latest organization members-role ORG_ID --email teammate
   .option('-e, --email <email>', `Email of the member`)
   .option('-r, --role <role>', memberRoleDescription)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organization
   .command('members-remove [orgId]')
@@ -895,8 +930,8 @@ Example: npx @capgo/cli@latest organization members-remove ORG_ID --email teamma
   .action(removeMember)
   .option('-e, --email <email>', `Email of the member to remove`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organization
   .command('set [orgId]')
@@ -947,8 +982,8 @@ Example: npx @capgo/cli@latest organization set ORG_ID --enforce-hashed-api-keys
   .option('--required-encryption-key <key>', `Only accept bundles encrypted with this public key fingerprint (null to clear)`)
   .option('--email-preference <key=bool>', `Organization email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: ${ORG_EMAIL_PREFERENCE_KEYS.join(', ')}`, collect, [])
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organization
   .command('delete [orgId]')
@@ -960,8 +995,8 @@ Only organization owners can delete organizations.
 Example: npx @capgo/cli@latest organization delete ORG_ID`)
   .action(deleteOrganization)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 // Deprecated alias for backward compatibility
 function warnDeprecated() {
@@ -979,8 +1014,8 @@ organisation
   .description(`[DEPRECATED] Use "organization list" instead.`)
   .action(listOrganizations)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organisation
   .command('add')
@@ -990,8 +1025,8 @@ organisation
   .option('-n, --name <name>', `Organization name`)
   .option('-e, --email <email>', `Management email for the organization`)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organisation
   .command('set [orgId]')
@@ -1034,8 +1069,8 @@ organisation
   .option('--required-encryption-key <key>', `Only accept bundles encrypted with this public key fingerprint (null to clear)`)
   .option('--email-preference <key=bool>', `Organization email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: ${ORG_EMAIL_PREFERENCE_KEYS.join(', ')}`, collect, [])
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 organisation
   .command('delete [orgId]')
@@ -1043,8 +1078,8 @@ organisation
   .description(`[DEPRECATED] Use "organization delete" instead.`)
   .action(deleteOrganization)
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 const build = program
   .command('build')
@@ -1071,8 +1106,8 @@ Example:
   .option('--package-json <packageJson>', optionDescriptions.packageJson)
   .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
   .option('--verbose', optionDescriptions.verbose)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
 
 build
   .command('init')
@@ -1081,8 +1116,8 @@ build
   .description('Set up build credentials interactively (iOS: certificates + profiles automated; Android: keystore + Google OAuth provisions GCP service account and Play Console invite)')
   .option('-a, --apikey <apikey>', 'API key to link to your account')
   .option('-p, --platform <platform>', 'Platform to onboard (ios or android). If omitted, uses the saved platform for Builder-only checklists, then auto-detects a single native folder or prompts.')
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
   .option('--no-analytics', 'Disable build onboarding analytics and terminal replay for this run')
   // Self-update and workspace discovery are enabled ONLY here (the genuine
   // `build init` entrypoint), never for wrapper commands that reach onboarding
@@ -1146,7 +1181,8 @@ Examples:
   .option('--ios-scheme <scheme>', 'iOS: Xcode scheme to build (default: App)')
   .option('--ios-target <target>', 'iOS: Xcode target for reading build settings (default: same as scheme)')
   .option('--xcode-version <version>', 'iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1, 27). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_XCODE_VERSION) > saved credentials')
-  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']).default('app_store'))
+  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download.').choices(['app_store', 'ad_hoc']))
+  .option('--use-stored-credentials', 'Use the signing credentials stored on Capgo for this app (see "build credentials push"). Requires app admin rights (app settings permission) on the app. Credentials given by flags, env or a local saved file still take precedence; Capgo validates the merged set.')
   .option('--ios-provisioning-profile <mapping>', 'iOS: Provisioning profile path or bundleId=path mapping (repeatable)', collect, [])
   .option('--no-cache', 'Disable Xcode compilation cache for this build (default: cache enabled)')
   .option('--cache-key <key>', 'Custom compilation cache key for this build (e.g. rc, prod, feature-branch). Use to share or isolate cache between environments. Precedence over the default appId-only key; ignored when --no-cache is set.')
@@ -1174,8 +1210,10 @@ Examples:
   .option('--output-upload', 'Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR), plus a link to the debug symbols (iOS dSYMs, Android mapping.txt) for crash reporters. Use with --no-playstore-upload (Android) or --ios-distribution ad_hoc (iOS) when you only need the artifact and are not publishing to the store yet. Precedence: CLI > env > saved credentials')
   .option('--no-output-upload', 'Do not upload the finished IPA/APK/AAB to Capgo storage (no download link). Store upload still happens when Play/TestFlight credentials are configured. Precedence: CLI > env > saved credentials')
   .option('--output-retention <duration>', 'Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials')
+  .option('--symbols-upload', 'Keep the debug symbols (iOS dSYMs zip, Android mapping.txt) in Capgo storage and print a time-limited download link for crash reporters (Crashlytics, Sentry). If output upload is enabled, also pass --no-output-upload to avoid keeping the IPA/APK/AAB. Use with store builds. Link TTL follows --output-retention. Precedence: CLI > env > saved credentials')
+  .option('--no-symbols-upload', 'Do not keep debug symbols unless output upload is enabled. --output-upload still includes debug symbols. Precedence: CLI > env > saved credentials')
   .option('--build-env <KEY|KEY=VALUE>', 'Pass an env var to the cloud build (repeatable). KEY alone takes the value from your environment, so CI secrets stay off the command line. Sent like other build credentials, never logged; Gradle and Xcode build phases see it (e.g. SENTRY_AUTH_TOKEN for the Sentry Gradle plugin). Also read from CAPGO_BUILD_ENV (comma-separated names).', collect, [])
-  .option('--output-record <path>', 'After a successful build, write a JSON record (jobId, status, outputUrl, symbolsUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. symbolsUrl is the iOS dSYMs zip or Android mapping.txt download link (with --output-upload) for crash reporters like Sentry. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`.')
+  .option('--output-record <path>', 'After a successful build, write a JSON record (jobId, status, outputUrl, symbolsUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. symbolsUrl is the iOS dSYMs zip or Android mapping.txt download link (with --output-upload or --symbols-upload) for crash reporters like Sentry. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`.')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing. Uses whatever version is already in the project files.')
   .option('--no-skip-build-number-bump', 'Override saved credentials to re-enable automatic build number incrementing for this build only.')
   .option('--skip-marketing-version-bump', 'Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released.')
@@ -1194,8 +1232,27 @@ Examples:
   .option('--verbose', optionDescriptions.verbose)
   .optionsGroup('Capgo options:')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
+
+build
+  .command('zip [appId]')
+  .summary('Zip the native project for a build, offline')
+  .description(`Zip the native project exactly like 'build request' does, without uploading it.
+
+Works offline: no API key and no calls to Capgo. Use it when an agent uploads the archive
+through a signed URL (Capgo MCP). With --json, prints the archive path, size, sha256 and the
+non-secret build options derived from the project.
+
+Example: npx @capgo/cli@latest build zip com.example.app --platform ios --json`)
+  .action(zipBuildCommand)
+  .option('--platform <platform>', `Target platform: ios or android (required)`)
+  .option('--path <path>', `Path to the project directory to build (default: current directory)`)
+  .option('--node-modules <nodeModules>', optionDescriptions.nodeModules)
+  .option('--sync-ios-version', 'iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration.')
+  .option('--sync-android-version', 'Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal.')
+  .option('--output <file>', `Path of the zip file to write (default: <appId>_<platform>_native.zip)`)
+  .option('-j, --json', `Output in JSON`)
 
 build
   .command('sync-ios-version')
@@ -1231,8 +1288,8 @@ Example:
   .option('--skip <checkId>', 'Skip specific check(s) by id (repeatable or comma-separated). Alias of --prescan-skip on build request.', collect, [])
   .option('--warn <checkId>', 'Downgrade specific check(s) to warning by id (repeatable or comma-separated). Alias of --prescan-warn on build request.', collect, [])
   .option('--verbose', optionDescriptions.verbose)
-  .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-  .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--files-host <filesHost>', optionDescriptions.filesHost)
   .action(prescanCommand)
 
 build
@@ -1362,6 +1419,8 @@ Examples:
   .option('--output-upload', 'Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links')
   .option('--no-output-upload', 'Do not upload build outputs (IPA/APK/AAB) to Capgo storage')
   .option('--output-retention <duration>', 'Output link TTL: 1h to 7d (default: 1h). Examples: 1h, 6h, 2d')
+  .option('--symbols-upload', 'Keep debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link. Also pass --no-output-upload to avoid keeping the IPA/APK/AAB when output upload is enabled')
+  .option('--no-symbols-upload', 'Do not keep debug symbols on future builds unless output upload is enabled. --output-upload still includes debug symbols')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing on future builds')
   .option('--no-skip-build-number-bump', 'Re-enable automatic build number incrementing (default behavior)')
   .option('--skip-marketing-version-bump', 'Skip automatic marketing version bump on future builds when the app is already released')
@@ -1429,7 +1488,7 @@ Examples:
   .option('--apple-id <email>', 'iOS: Apple ID email for app-specific password uploads (alternative to App Store Connect API key)')
   .option('--apple-app-specific-password <password>', 'iOS: App-specific password (xxxx-xxxx-xxxx-xxxx) for TestFlight uploads')
   .option('--apple-app-id <id>', 'iOS: Numeric App Store Connect app id (required together with --apple-id and --apple-app-specific-password)')
-  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode').choices(['app_store', 'ad_hoc']).default('app_store'))
+  .addOption(new Option('--ios-distribution <mode>', 'iOS: Distribution mode').choices(['app_store', 'ad_hoc']))
   // Android options
   .optionsGroup('Android options:')
   .option('--keystore <path>', 'Path to keystore file (.keystore or .jks)')
@@ -1443,6 +1502,8 @@ Examples:
   .option('--output-upload', 'Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links')
   .option('--no-output-upload', 'Do not upload build outputs (IPA/APK/AAB) to Capgo storage')
   .option('--output-retention <duration>', 'Output link TTL: 1h to 7d. Examples: 1h, 6h, 2d')
+  .option('--symbols-upload', 'Keep debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link. Also pass --no-output-upload to avoid keeping the IPA/APK/AAB when output upload is enabled')
+  .option('--no-symbols-upload', 'Do not keep debug symbols on future builds unless output upload is enabled. --output-upload still includes debug symbols')
   .option('--skip-build-number-bump', 'Skip automatic build number/version code incrementing on future builds')
   .option('--no-skip-build-number-bump', 'Re-enable automatic build number incrementing (default behavior)')
   .option('--skip-marketing-version-bump', 'Skip automatic marketing version bump on future builds when the app is already released')
@@ -1502,6 +1563,53 @@ Example:
   .option('--platform <platform>', 'Platform (only ios is supported)')
   .option('--local', 'Migrate from local .capgo-credentials.json instead of global')
 
+buildCredentials
+  .command('push [appId]')
+  .summary('Store saved credentials encrypted on Capgo')
+  .description(`Store this machine's saved build credentials for one platform on Capgo, encrypted.
+
+Builds can then use them without sending secrets (build request --use-stored-credentials,
+or the hosted Capgo MCP). Requires app settings permission (app admin) on the app, and so
+do builds that use the stored credentials. Custom env names that load code into every
+build (NODE_OPTIONS, JAVA_TOOL_OPTIONS, GRADLE_OPTS, LD_PRELOAD, PATH, ...) cannot be stored.
+Only key names are printed; values never are.
+
+Examples:
+  npx @capgo/cli@latest build credentials push com.example.app --platform ios
+  npx @capgo/cli@latest build credentials push --platform android --mode merge`)
+  .action(pushRemoteCredentialsCommand)
+  .option('--platform <platform>', 'Platform to store: ios or android (required)')
+  .addOption(new Option('--mode <mode>', 'replace: overwrite stored keys (default). merge: keep stored keys not in the local set').choices(['replace', 'merge']))
+  .option('--local', 'Read from local .capgo-credentials.json only')
+  .option('--global', 'Read from ~/.capgo-credentials/credentials.json only')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+buildCredentials
+  .command('remote-status [appId]')
+  .summary('Show credentials stored on Capgo')
+  .description(`Show which build credentials are stored on Capgo for an app (key names and
+non-secret facts only) and what is still missing to build.
+
+Example: npx @capgo/cli@latest build credentials remote-status com.example.app`)
+  .action(remoteCredentialsStatusCommand)
+  .option('--platform <platform>', 'Only show ios or android')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+buildCredentials
+  .command('remote-delete [appId]')
+  .summary('Delete credentials stored on Capgo')
+  .description(`Delete the build credentials stored on Capgo for one platform. Local saved
+credentials are not touched.
+
+Example: npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes`)
+  .action(deleteRemoteCredentialsCommand)
+  .option('--platform <platform>', 'Platform to delete: ios or android (required)')
+  .option('-y, --yes', 'Do not ask for confirmation')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
 program
   .command('notifications')
   .description(`🔔 Set up Capgo native notifications in your Capacitor app.`)
@@ -1539,8 +1647,8 @@ function addObserveQueryOptions(command: Command) {
     .option('--limit <limit>', 'Max rows to return')
     .option('--version-name <versionName>', 'Filter by bundle version name')
     .option('--json', 'Output as JSON')
-    .option('--supa-host <supaHost>', optionDescriptions.supaHost)
-    .option('--supa-anon <supaAnon>', optionDescriptions.supaAnon)
+    .option('--api-host <apiHost>', optionDescriptions.apiHost)
+    .option('--files-host <filesHost>', optionDescriptions.filesHost)
 }
 
 const observe = program
@@ -1653,7 +1761,13 @@ Selected tools exposed via MCP:
   - capgo_star_all_repositories
   - capgo_get_account_id, capgo_get_account, capgo_update_account, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_generate_encryption_keys
-  - capgo_search_docs
+  - capgo_search_docs, capgo_set_project_dir
+
+The project directory follows the client's MCP roots (the agent's workspace), so a global
+install works from any folder. Clients without roots can call capgo_set_project_dir.
+Workspace roots with exactly one Capacitor app automatically select that app, including
+when the server starts there without client roots. Multiple apps require an explicit app path.
+If @capacitor/core appears missing, select the absolute app folder before installing anything.
 
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:
@@ -1688,7 +1802,7 @@ void (async () => {
     await flushAnalytics()
     setupDebug('analytics before wait finished', { duration_ms: Date.now() - analyticsStarted })
     if (currentActionCommand)
-      await waitForOnboardingChecks(currentActionCommand, currentCommandPath)
+      await waitForOnboardingChecks(currentActionCommand, currentCommandPath, analyticsStarted)
   }
   catch (error: unknown) {
     if (typeof error === 'object' && error !== null && 'code' in error) {

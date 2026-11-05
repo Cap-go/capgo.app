@@ -1,4 +1,5 @@
 import type { OnboardingCheckOptions } from './onboarding/background'
+import type { PreparedOnboardingCheck } from './onboarding/background-check'
 import type { LocalOnboardingStep } from './onboarding/setup-notices'
 import { randomUUID } from 'node:crypto'
 import { exit } from 'node:process'
@@ -8,9 +9,10 @@ import { prepareOnboardingCheck } from './onboarding/background-preparation'
 import { relaySetupDebug, setupDebug, setupError } from './onboarding/setup-diagnostics'
 import { readSetupProgress } from './onboarding/setup-notice-evaluation'
 import { shouldRefreshSetupProgress } from './onboarding/setup-notice-policy'
-import { getSetupNotice, reconcileSetupProgress } from './onboarding/setup-notices'
+import { getSetupNotice, getTrialNotice, reconcileSetupProgress } from './onboarding/setup-notices'
+import { sendEvent } from './utils'
 
-function runScanWorker(workerUrl: URL, data: object, scan: string): Promise<LocalOnboardingStep | undefined> {
+function runScanWorker(workerUrl: URL, data: PreparedOnboardingCheck, scan: string): Promise<LocalOnboardingStep | undefined> {
   return new Promise((resolve) => {
     try {
       setupDebug('scan worker starting', { scan })
@@ -18,14 +20,23 @@ function runScanWorker(workerUrl: URL, data: object, scan: string): Promise<Loca
       worker.stdout?.destroy()
       worker.stderr?.destroy()
       let reported: LocalOnboardingStep | undefined
+      const analytics: Promise<void>[] = []
       worker.on('message', (message) => {
         relaySetupDebug(message)
+        if (message?.type === 'onboarding-analytics') {
+          const started = Date.now()
+          setupDebug('scan telemetry started', { scan, event: message.payload.event, budget_ms: 2_000 })
+          analytics.push(sendEvent(data.apikey, message.payload, false, AbortSignal.timeout(2_000), data.apiHost, 'error')
+            .catch(error => setupDebug('scan telemetry failed', { scan, error: setupError(error) }))
+            .finally(() => setupDebug('scan telemetry finished', { scan, event: message.payload.event, duration_ms: Date.now() - started })))
+        }
         if (message?.type === 'onboarding-step' && (message.step === 'add_code' || message.step === 'add_updater'))
           reported = message.step
       })
       worker.on('error', error => setupDebug('scan worker failed', { scan, error: setupError(error) }))
-      worker.once('exit', (code) => {
+      worker.once('exit', async (code) => {
         setupDebug('scan worker exited', { scan, exit_code: code, reported: reported ?? 'none' })
+        await Promise.allSettled(analytics)
         resolve(reported)
       })
     }
@@ -76,6 +87,7 @@ async function runOnboardingChecks(options: OnboardingCheckOptions): Promise<voi
   if (progress) {
     const updated = reports.filter((step): step is LocalOnboardingStep => step !== undefined)
     const notice = getSetupNotice(prepared.project.appId, reconcileSetupProgress(progress, updated), prepared.webHost)
+      ?? getTrialNotice(prepared.project.appId, progress, prepared.webHost)
     if (notice) {
       setupDebug('notice ready', { kind: notice.kind })
       parentPort?.postMessage({ type: 'setup-notice', notice })

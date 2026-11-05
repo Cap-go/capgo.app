@@ -48,7 +48,7 @@ describe('onboarding progress optional billing', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('no-store')
     const result = await response.json() as any
-    expect(result.billing).toEqual({ status: 'available', orgId, trialEndsAt: expect.any(String), isPaying: true, hasCredits: true })
+    expect(result.billing).toEqual({ status: 'available', orgId, orgCreatedAt: expect.any(String), trialEndsAt: expect.any(String), hasPaid: false, isPaying: true, hasCredits: true })
     expect(new Date(result.billing.trialEndsAt).toISOString()).toBe(trialEndsAt)
     expect(result.onboarding.setup.steps.ota.login_cli_mcp.status).toBe('done')
     expect(JSON.stringify(result)).not.toContain(customerId)
@@ -72,5 +72,31 @@ describe('onboarding progress optional billing', () => {
     const response = await progress(keys[0].key!, true, `com.test.unrelated.${fixture}`)
     expect(response.status).toBe(403)
     expect(await response.json()).not.toHaveProperty('billing')
+  })
+})
+
+describe('onboarding progress read permissions', () => {
+  it.concurrent.each([{ N: 0, initial: false }, { N: 2, initial: false }, { N: 0, initial: true }])('serves reader observations for %j', async (poll) => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/onboarding_progress'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': readerKey },
+      body: JSON.stringify({ appId, ...poll }),
+    })
+    expect(response.status).toBe(200)
+    const result = await response.json() as any
+    expect(result.checkErrors).toEqual([])
+    expect(result.onboarding.setup.steps.ota.login_cli_mcp.status).toBe('done')
+    if (poll.N === 0)
+      expect(result.hasChannel).toBe(false)
+  })
+
+  it.concurrent('denies the next poll immediately after a reader binding is revoked', async () => {
+    const key = await createDirectApiKeyWithBindings({ key: randomUUID(), name: 'Onboarding revocation test', orgId, appId, appRoleName: 'app_reader' })
+    keys.push(key)
+    await executeSQL('DELETE FROM public.role_bindings WHERE principal_type = \'apikey\' AND principal_id = $1::uuid AND scope_type = \'org\'', [key.rbac_id])
+    expect((await progress(key.key!)).status).toBe(200)
+
+    await executeSQL('DELETE FROM public.role_bindings WHERE principal_type = \'apikey\' AND principal_id = $1::uuid', [key.rbac_id])
+    expect((await progress(key.key!)).status).toBe(403)
   })
 })

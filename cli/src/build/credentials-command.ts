@@ -31,6 +31,7 @@ interface SaveCredentialsOptions {
 
   outputUpload?: boolean
   outputRetention?: string
+  symbolsUpload?: boolean
   skipBuildNumberBump?: boolean
   skipMarketingVersionBump?: boolean
 
@@ -227,6 +228,9 @@ export async function saveCredentialsCommand(options: SaveCredentialsOptions): P
     else {
       credentials.BUILD_OUTPUT_RETENTION_SECONDS = String(MIN_OUTPUT_RETENTION_SECONDS)
       log.info(`ℹ️  --output-retention not specified, defaulting to ${MIN_OUTPUT_RETENTION_SECONDS}s (1 hour)`)
+    }
+    if (options.symbolsUpload !== undefined) {
+      credentials.BUILD_SYMBOLS_UPLOAD_ENABLED = parseOptionalBoolean(options.symbolsUpload) ? 'true' : 'false'
     }
     if (options.skipBuildNumberBump !== undefined) {
       credentials.SKIP_BUILD_NUMBER_BUMP = parseOptionalBoolean(options.skipBuildNumberBump) ? 'true' : 'false'
@@ -719,7 +723,7 @@ export async function updateCredentialsCommand(options: SaveCredentialsOptions):
       || options.appleTeamId || options.appleId || options.appleAppSpecificPassword || options.appleAppId)
     const hasAndroidOptions = !!(options.keystore || options.keystoreAlias || options.keystoreKeyPassword
       || options.keystoreStorePassword || options.playConfig || options.androidFlavor || options.inAppUpdatePriority !== undefined)
-    const hasCrossPlatformOptions = options.outputUpload !== undefined || options.outputRetention !== undefined || options.skipBuildNumberBump !== undefined || options.skipMarketingVersionBump !== undefined
+    const hasCrossPlatformOptions = options.outputUpload !== undefined || options.outputRetention !== undefined || options.symbolsUpload !== undefined || options.skipBuildNumberBump !== undefined || options.skipMarketingVersionBump !== undefined
 
     let platform = options.platform
     if (!platform) {
@@ -781,6 +785,10 @@ export async function updateCredentialsCommand(options: SaveCredentialsOptions):
     if (options.outputRetention) {
       const outputRetentionSeconds = parseOutputRetentionSeconds(options.outputRetention)
       credentials.BUILD_OUTPUT_RETENTION_SECONDS = String(outputRetentionSeconds)
+    }
+
+    if (options.symbolsUpload !== undefined) {
+      credentials.BUILD_SYMBOLS_UPLOAD_ENABLED = parseOptionalBoolean(options.symbolsUpload) ? 'true' : 'false'
     }
 
     if (options.skipBuildNumberBump !== undefined) {

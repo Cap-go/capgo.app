@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { isBentoConfigured, trackBentoEvents, updateBentoFields } from './bento.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
-import { checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
+import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
 import { backgroundTask } from './utils.ts'
 
 export type TelemetryValue = string | number | boolean
@@ -400,7 +400,7 @@ async function persistUserBentoObservation(
     let transactionOpen = false
     let rollbackError: Error | undefined
     try {
-      await client.query('BEGIN')
+      await beginWriteTransaction(client)
       transactionOpen = true
       const result = await client.query<{ onboarding: unknown }>(LOCK_USER_SQL, [userId])
       const lockedUser = result.rows[0]
@@ -480,7 +480,7 @@ export async function deliverPendingUserBentoEvents(
     let transactionOpen = false
     let rollbackError: Error | undefined
     try {
-      await client.query('BEGIN')
+      await beginWriteTransaction(client)
       transactionOpen = true
       const result = await client.query<{ email: string, onboarding: unknown }>(LOCK_USER_SQL, [userId])
       const lockedUser = result.rows[0]

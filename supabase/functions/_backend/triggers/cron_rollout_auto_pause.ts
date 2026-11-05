@@ -1,9 +1,12 @@
+import type { Context } from 'hono'
+import type { PgClient } from '../utils/pg.ts'
 import type { AutoPauseAction } from '../utils/rollout.ts'
 import { BRES, createHono, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 import { evaluateAutoPausePolicy } from '../utils/rollout.ts'
 import { readStatsVersion } from '../utils/stats.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { version } from '../utils/version.ts'
 
@@ -53,25 +56,38 @@ function buildReason(channel: RolloutAutoPauseChannel, versionName: string, resu
   return `Auto-pause ${result.action} for ${channel.name} rollout ${versionName}: fail ${result.failureRateBps}bps, confidence lower bound ${result.lowerBoundBps}bps, threshold ${result.thresholdBps}bps, attempts ${result.attempts}.`
 }
 
-async function updateCurrentRolloutChannel(supabase: ReturnType<typeof supabaseAdmin>, channel: RolloutAutoPauseChannel, patch: Record<string, unknown>) {
-  const { data, error } = await supabase
-    .from('channels')
-    .update(patch as any)
-    .eq('id', channel.id)
-    .eq('rollout_version', channel.rollout_version)
-    .eq('rollout_enabled', true)
-    .gt('rollout_percentage_bps', 0)
-    .is('rollout_paused_at', null)
-    .select('id')
-    .maybeSingle()
+const CHANNEL_PATCH_COLUMNS = new Set([
+  'auto_pause_last_checked_at',
+  'auto_pause_last_triggered_at',
+  'rollout_pause_reason',
+  'rollout_paused_at',
+  'rollout_enabled',
+  'rollout_percentage_bps',
+  'rollout_version',
+])
 
-  if (error)
-    throw error
+async function updateCurrentRolloutChannel(pg: PgClient, channel: RolloutAutoPauseChannel, patch: Record<string, unknown>) {
+  const entries = Object.entries(patch)
+  for (const [column] of entries) {
+    if (!CHANNEL_PATCH_COLUMNS.has(column))
+      throw new Error(`Unexpected channel patch column ${column}`)
+  }
+  const assignments = entries.map(([column], index) => `"${column}" = $${index + 3}`).join(', ')
+  const result = await pg.query(
+    `UPDATE public.channels SET ${assignments}
+    WHERE id = $1
+      AND rollout_version = $2
+      AND rollout_enabled = true
+      AND rollout_percentage_bps > 0
+      AND rollout_paused_at IS NULL
+    RETURNING id`,
+    [channel.id, channel.rollout_version, ...entries.map(([, value]) => value)],
+  )
 
-  return Boolean(data)
+  return (result.rowCount ?? 0) > 0
 }
 
-async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase: ReturnType<typeof supabaseAdmin>, channel: RolloutAutoPauseChannel, now: Date) {
+async function evaluateChannel(c: Context, pg: PgClient, channel: RolloutAutoPauseChannel, now: Date) {
   const versionName = getRolloutVersionName(channel)
   if (!versionName)
     return { skipped: true, reason: 'missing_rollout_version_name' }
@@ -101,7 +117,7 @@ async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase:
   })
 
   if (!result.shouldTrigger) {
-    const updated = await updateCurrentRolloutChannel(supabase, channel, { auto_pause_last_checked_at: now.toISOString() })
+    const updated = await updateCurrentRolloutChannel(pg, channel, { auto_pause_last_checked_at: now.toISOString() })
     if (!updated)
       return { skipped: true, reason: 'stale_rollout_state' }
     return { triggered: false, reason: result.reason, result }
@@ -115,7 +131,7 @@ async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase:
   } as any
 
   if (result.action === 'pause') {
-    const updated = await updateCurrentRolloutChannel(supabase, channel, {
+    const updated = await updateCurrentRolloutChannel(pg, channel, {
       ...basePatch,
       rollout_paused_at: now.toISOString(),
     })
@@ -123,7 +139,7 @@ async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase:
       return { skipped: true, reason: 'stale_rollout_state' }
   }
   else if (result.action === 'rollback') {
-    const updated = await updateCurrentRolloutChannel(supabase, channel, {
+    const updated = await updateCurrentRolloutChannel(pg, channel, {
       ...basePatch,
       rollout_enabled: false,
       rollout_percentage_bps: 0,
@@ -134,7 +150,7 @@ async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase:
       return { skipped: true, reason: 'stale_rollout_state' }
   }
   else {
-    const updated = await updateCurrentRolloutChannel(supabase, channel, basePatch)
+    const updated = await updateCurrentRolloutChannel(pg, channel, basePatch)
     if (!updated)
       return { skipped: true, reason: 'stale_rollout_state' }
     await sendEventToTracking(c, {
@@ -156,45 +172,48 @@ async function evaluateChannel(c: Parameters<typeof supabaseAdmin>[0], supabase:
   return { triggered: true, reason, result }
 }
 
-async function loadAutoPauseChannels(supabase: ReturnType<typeof supabaseAdmin>) {
+async function loadAutoPauseChannels(pg: Parameters<typeof queryJson>[0]) {
   const channels: RolloutAutoPauseChannel[] = []
   let page = 0
 
   while (true) {
     const from = page * AUTO_PAUSE_CHANNEL_PAGE_SIZE
-    const to = from + AUTO_PAUSE_CHANNEL_PAGE_SIZE - 1
-    const { data, error } = await supabase
-      .from('channels')
-      .select(`
-        id,
-        name,
-        app_id,
-        owner_org,
-        rollout_version,
-        auto_pause_enabled,
-        auto_pause_window_minutes,
-        auto_pause_failure_rate_bps,
-        auto_pause_confidence,
-        auto_pause_min_attempts,
-        auto_pause_min_failures,
-        auto_pause_action,
-        auto_pause_cooldown_minutes,
-        auto_pause_last_triggered_at,
-        rollout_paused_at,
-        rollout_version_info:app_versions!channels_rollout_version_fkey(name)
-      `)
-      .eq('rollout_enabled', true)
-      .eq('auto_pause_enabled', true)
-      .gt('rollout_percentage_bps', 0)
-      .not('rollout_version', 'is', null)
-      .is('rollout_paused_at', null)
-      .order('id', { ascending: true })
-      .range(from, to)
-
-    if (error)
+    let pageRows: RolloutAutoPauseChannel[]
+    try {
+      pageRows = await queryJson<RolloutAutoPauseChannel>(
+        pg,
+        `SELECT
+          ch.id,
+          ch.name,
+          ch.app_id,
+          ch.owner_org,
+          ch.rollout_version,
+          ch.auto_pause_enabled,
+          ch.auto_pause_window_minutes,
+          ch.auto_pause_failure_rate_bps,
+          ch.auto_pause_confidence,
+          ch.auto_pause_min_attempts,
+          ch.auto_pause_min_failures,
+          ch.auto_pause_action,
+          ch.auto_pause_cooldown_minutes,
+          ch.auto_pause_last_triggered_at,
+          ch.rollout_paused_at,
+          (SELECT json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_version_info
+        FROM public.channels ch
+        WHERE ch.rollout_enabled = true
+          AND ch.auto_pause_enabled = true
+          AND ch.rollout_percentage_bps > 0
+          AND ch.rollout_version IS NOT NULL
+          AND ch.rollout_paused_at IS NULL
+        ORDER BY ch.id ASC
+        LIMIT $1 OFFSET $2`,
+        [AUTO_PAUSE_CHANNEL_PAGE_SIZE, from],
+      )
+    }
+    catch (error) {
       return { data: null, error }
+    }
 
-    const pageRows = (data ?? []) as unknown as RolloutAutoPauseChannel[]
     channels.push(...pageRows)
 
     if (pageRows.length < AUTO_PAUSE_CHANNEL_PAGE_SIZE)
@@ -205,33 +224,38 @@ async function loadAutoPauseChannels(supabase: ReturnType<typeof supabaseAdmin>)
 }
 
 app.post('/', middlewareAPISecret, async (c) => {
-  const supabase = supabaseAdmin(c)
-  const now = new Date()
+  const pg = await getPgClient(c)
+  try {
+    const now = new Date()
 
-  const { data, error } = await loadAutoPauseChannels(supabase)
+    const { data, error } = await loadAutoPauseChannels(pg)
 
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot load rollout auto-pause channels', error })
-    throw error
-  }
-
-  const channels = (data ?? []) as unknown as RolloutAutoPauseChannel[]
-  let triggered = 0
-  let checked = 0
-
-  for (const channel of channels) {
-    try {
-      const evaluation = await evaluateChannel(c, supabase, channel, now)
-      checked += 1
-      if ('triggered' in evaluation && evaluation.triggered)
-        triggered += 1
+    if (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot load rollout auto-pause channels', error })
+      throw error
     }
-    catch (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause channel evaluation failed', channelId: channel.id, appId: channel.app_id, error })
-    }
-  }
 
-  return c.json({ ...BRES, checked, triggered })
+    const channels = data ?? []
+    let triggered = 0
+    let checked = 0
+
+    for (const channel of channels) {
+      try {
+        const evaluation = await evaluateChannel(c, pg, channel, now)
+        checked += 1
+        if ('triggered' in evaluation && evaluation.triggered)
+          triggered += 1
+      }
+      catch (error) {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'Rollout auto-pause channel evaluation failed', channelId: channel.id, appId: channel.app_id, error })
+      }
+    }
+
+    return c.json({ ...BRES, checked, triggered })
+  }
+  finally {
+    closeClient(c, pg)
+  }
 })
 
 export const __rolloutAutoPauseTestUtils__ = {

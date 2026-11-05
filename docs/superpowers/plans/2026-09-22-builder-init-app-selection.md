@@ -93,10 +93,9 @@ assert.match(manyAppsFrame, /Select a different app/)
 - [ ] **Step 2: Run** telemetry tests; expect missing event assertions to fail.
 - [ ] **Step 3: Add best-effort telemetry** on the existing `builder-onboarding` channel. Record app-selection as the latest step before any decision and use the authenticated key. Failure to send must not block the UI.
 - [ ] **Step 4: Run** `bun run cli:check` from the repository root; fix any lint, typecheck, build, or test failure introduced by this PR. Run the full relevant CLI suite and manually inspect the wide and narrow alternate-screen paths.
-- [ ] **Step 5: Review** the merge-base diff for only intended CLI and test changes; ensure `graphify-out/` is absent and `codedb.snapshot` remains untouched; commit remaining fixes.
+- [ ] **Step 5: Review** the merge-base diff for only intended CLI and test changes; ensure `codedb.snapshot` remains untouched; commit remaining fixes.
 
 ### Task 6: PR readiness
 
 - [ ] **Step 1:** Push the branch and open a non-draft PR with a concise summary, test evidence, and the selection/creation split.
-- [ ] **Step 2:** Follow the `ignore-graphify-when-creating-a-pr` skill and verify the remote PR changed-file list has no `graphify-out/` artifacts.
-- [ ] **Step 3:** Follow the `pr-ready` skill through required CI, review, mergeability, and two stable-green observations at least five minutes apart.
+- [ ] **Step 2:** Follow the `pr-ready` skill through required CI, review, mergeability, and two stable-green observations at least five minutes apart.

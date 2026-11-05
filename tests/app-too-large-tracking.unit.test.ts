@@ -23,8 +23,21 @@ describe('buildAppTooLargeBentoEvent', () => {
         app_id: 'com.demo.app',
         app_name: 'Demo',
         size_mb: 42,
+        recommended_size_mb: 20,
+        size_over_recommended_mb: 22,
+        size_ratio: 2.1,
       },
     })
+  })
+
+  it.concurrent('uses the recommended size sent by the CLI', () => {
+    const result = buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: 60, recommended_size_mb: '30' } })
+    expect(result?.data).toMatchObject({ size_mb: 60, recommended_size_mb: 30, size_over_recommended_mb: 30, size_ratio: 2 })
+  })
+
+  it.concurrent('falls back to the default recommended size when the tag is invalid', () => {
+    const result = buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: 42, recommended_size_mb: 0 } })
+    expect(result?.data.recommended_size_mb).toBe(20)
   })
 
   it.concurrent('parses size_mb from a string tag', () => {
@@ -37,6 +50,8 @@ describe('buildAppTooLargeBentoEvent', () => {
     expect(buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: 'nope' } })?.data).not.toHaveProperty('size_mb')
     expect(buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: '   ' } })?.data).not.toHaveProperty('size_mb')
     expect(buildAppTooLargeBentoEvent({ ...base, tags: { size_mb: -1 } })?.data).not.toHaveProperty('size_mb')
+    expect(buildAppTooLargeBentoEvent({ ...base, tags: undefined })?.data).not.toHaveProperty('size_ratio')
+    expect(buildAppTooLargeBentoEvent({ ...base, tags: undefined })?.data.recommended_size_mb).toBe(20)
   })
 
   it.concurrent('returns undefined for other event names', () => {

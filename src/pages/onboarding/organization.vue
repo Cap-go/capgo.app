@@ -20,16 +20,17 @@ import BillingRegionChoice from '~/components/dashboard/BillingRegionChoice.vue'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
 import OrganizationOnboardingInvite from '~/components/dashboard/OrganizationOnboardingInvite.vue'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
 import { createOnboardingAppFromDraft } from '~/services/onboardingAppCreate'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import { clearOnboardingAppDraft, loadOnboardingAppDraft } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
+import { readOnboardingCompanyName } from '~/utils/onboardingProfile'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 
 type OnboardingStep = 'details' | 'logo' | 'invite'
@@ -51,7 +52,7 @@ interface UserCountStop {
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
@@ -61,6 +62,13 @@ const step = ref<OnboardingStep>('details')
 const mode = ref<OnboardingMode>(null)
 const websiteInput = ref('')
 const orgNameInput = ref('')
+const profileCompanyName = computed(() => organizationStore.hasOrganizations ? '' : readOnboardingCompanyName(main.user?.onboarding))
+watch(profileCompanyName, (name) => {
+  if (name && !orgNameInput.value) {
+    orgNameInput.value = name
+    mode.value = 'name'
+  }
+}, { immediate: true })
 const discordUsername = ref(main.user?.discord_username ?? '')
 watch(() => main.user?.discord_username, (value) => {
   if (!discordUsername.value && value)
@@ -347,7 +355,8 @@ async function fetchWebsitePreview() {
     }
 
     websitePreview.value = data as WebsitePreview
-    orgNameInput.value = data.name || deriveNameFromWebsitePreview(data.hostname)
+    if (!profileCompanyName.value)
+      orgNameInput.value = data.name || deriveNameFromWebsitePreview(data.hostname)
     return websitePreview.value
   }
   finally {
@@ -368,7 +377,7 @@ async function saveSupportUsernames() {
   if (nextDiscordUsername === (main.user.discord_username || null))
     return
 
-  const { data: user, error } = await supabase
+  const { data: user, error } = await capgo
     .from('users')
     .update({
       discord_username: nextDiscordUsername,
@@ -595,7 +604,7 @@ async function finishOnboarding() {
     isSubmitting.value = true
     try {
       const { app, appIdFeedback } = await createOnboardingAppFromDraft(
-        supabase,
+        capgo,
         orgId,
         draft,
         activeOrgName.value,
@@ -830,13 +839,13 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <div class="border-t border-slate-200 pt-6 dark:border-white/15">
+              <div v-if="!profileCompanyName" class="border-t border-slate-200 pt-6 dark:border-white/15">
                 <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
                   {{ t('organization-onboarding-question') }}
                 </h2>
               </div>
 
-              <div class="grid gap-3" :class="appDraft ? 'sm:grid-cols-3' : 'sm:grid-cols-2'">
+              <div v-if="!profileCompanyName" class="grid gap-3" :class="appDraft ? 'sm:grid-cols-3' : 'sm:grid-cols-2'">
                 <button
                   v-if="appDraft"
                   type="button"
@@ -954,15 +963,15 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <div>
+                <div v-if="!profileCompanyName">
                   <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                    {{ t('organization-name') }}
+                    {{ t('company-name') }}
                   </label>
                   <input
                     id="onboarding-org-name-input"
                     v-model="orgNameInput"
                     type="text"
-                    :placeholder="t('organization-name')"
+                    :placeholder="t('company-name')"
                     data-test="onboarding-org-name"
                     class="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/10 sm:text-sm dark:border-white/20 dark:bg-slate-950/90 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-primary-500 dark:focus:ring-primary-500/30"
                   >

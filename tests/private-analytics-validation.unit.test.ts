@@ -63,6 +63,21 @@ async function expectRejectedDevicesBody(body: Record<string, unknown>) {
   expect(countDevicesMock).not.toHaveBeenCalled()
 }
 
+const exportDeviceRow = {
+  device_id: '00000000-0000-0000-0000-000000000001',
+  custom_id: '',
+  platform: 'android',
+  os_version: '14',
+  version_name: '1.2.3',
+  version_build: '1.0.0',
+  plugin_version: '6.0.0',
+  updated_at: '2026-08-19T00:00:00.000Z',
+  is_prod: true,
+  is_emulator: false,
+  install_source: 'play_store',
+  country_code: 'US',
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   checkPermissionMock.mockResolvedValue(true)
@@ -129,6 +144,8 @@ describe('private analytics route validation', () => {
     ['decimal limits', { limit: 1.5 }],
     ['boolean limits', { limit: true }],
     ['invalid platform', { platform: 'windows' }],
+    ['multiple versionNames for numeric bundle operators', { versionNames: ['1.0.0', '2.0.0'], versionNameOp: 'gte' }],
+    ['non-numeric osVersion', { osVersion: 'not-a-version', osVersionOp: 'gte' }],
   ])('rejects %s on /private/devices', async (_label, body) => {
     await expectRejectedDevicesBody(body)
   })
@@ -279,33 +296,9 @@ describe('private analytics route validation', () => {
     )
   })
 
-  it('rejects multiple versionNames for numeric bundle operators', async () => {
-    await expectRejectedDevicesBody({
-      versionNames: ['1.0.0', '2.0.0'],
-      versionNameOp: 'gte',
-    })
-  })
-
-  it('rejects non-numeric osVersion on /private/devices', async () => {
-    await expectRejectedDevicesBody({ osVersion: 'not-a-version', osVersionOp: 'gte' })
-  })
-
   it('exports devices as csv on /private/devices/export', async () => {
     readDevicesMock.mockResolvedValue({
-      data: [{
-        device_id: '00000000-0000-0000-0000-000000000001',
-        custom_id: '',
-        platform: 'android',
-        os_version: '14',
-        version_name: '1.2.3',
-        version_build: '1.0.0',
-        plugin_version: '6.0.0',
-        updated_at: '2026-08-19T00:00:00.000Z',
-        is_prod: true,
-        is_emulator: false,
-        install_source: 'play_store',
-        country_code: 'US',
-      }],
+      data: [exportDeviceRow],
       nextCursor: undefined,
       hasMore: false,
     })
@@ -329,20 +322,7 @@ describe('private analytics route validation', () => {
 
   it('exports devices as json on /private/devices/export', async () => {
     readDevicesMock.mockResolvedValue({
-      data: [{
-        device_id: '00000000-0000-0000-0000-000000000001',
-        custom_id: '',
-        platform: 'android',
-        os_version: '14',
-        version_name: '1.2.3',
-        version_build: '1.0.0',
-        plugin_version: '6.0.0',
-        updated_at: '2026-08-19T00:00:00.000Z',
-        is_prod: true,
-        is_emulator: false,
-        install_source: 'play_store',
-        country_code: 'US',
-      }],
+      data: [exportDeviceRow],
       nextCursor: undefined,
       hasMore: false,
     })

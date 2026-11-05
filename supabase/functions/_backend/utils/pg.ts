@@ -7,7 +7,8 @@ import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
 import { Client, Pool } from 'pg'
-import { closePrimaryReadClient, configureTransactionAccessMode, getPgAccessMode, inheritPgAccessMode, isPrimaryReadSession, readOnlyStartupOptions, restrictPrimaryReadClient } from '../plugin_runtime/utils/pg_transaction_mode.ts'
+import { BEGIN_WRITE_TRANSACTION_SQL, configureTransactionAccessMode, getPgAccessMode, inheritPgAccessMode, readOnlyStartupOptions, setPgAccessMode, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
+export { BEGIN_WRITE_TRANSACTION_SQL, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
 import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
 import { backgroundTask, existInEnv, getEnv } from '../utils/utils.ts'
 import { CacheHelper } from './cache.ts'
@@ -19,6 +20,8 @@ import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
+import type { VersionManifestRow } from './version_manifest_sql.ts'
+import { completeVersionManifest, versionManifestJsonSql, versionManifestRowsSql } from './version_manifest_sql.ts'
 
 /**
  * PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -32,8 +35,169 @@ export type PgQueryClient = PoolClient | Client
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
 
+/**
+ * Outside workerd, one request shares one Pool per database URL: each helper
+ * that calls getPgClient/closeClient takes a reference, and the Pool ends when
+ * the last one closes. A Pool hands every checkout its own connection, so
+ * transactions stay isolated; without sharing, every helper call opened its own
+ * Pool and a busy request could exhaust Postgres connections.
+ */
+interface SharedPool { pool: Pool, refs: number }
+const sharedPoolsByRequest = new WeakMap<object, Map<string, SharedPool>>()
+const sharedPoolKeys = new WeakMap<Pool, { request: object, key: string }>()
+
+function acquireSharedPool(c: Context, key: string): Pool | null {
+  const entry = sharedPoolsByRequest.get(c)?.get(key)
+  if (!entry)
+    return null
+  entry.refs++
+  return entry.pool
+}
+
+function registerSharedPool(c: Context, key: string, pool: Pool) {
+  let pools = sharedPoolsByRequest.get(c)
+  if (!pools) {
+    pools = new Map()
+    sharedPoolsByRequest.set(c, pools)
+  }
+  pools.set(key, { pool, refs: 1 })
+  sharedPoolKeys.set(pool, { request: c, key })
+}
+
+/**
+ * On workerd, Hyperdrive wants a fresh `pg.Client` per request and never `end()`, so before this
+ * every getPgClient call paid a new connection handshake. Within one request, a Client whose holder
+ * called closeClient while it was idle outside a transaction goes back to an idle list and the next
+ * getPgClient with the same key reuses it.
+ *
+ * Holders get a Proxy handle, never the Client: closing revokes the handle, so a holder that keeps
+ * querying after closeClient gets its own dedicated connection instead of sharing the reused one.
+ * Two holders therefore never run on the same connection at once, and transaction-local RLS
+ * settings cannot cross between them.
+ */
+interface HyperdriveLease { client: Client, key: string, request: object, revoked: boolean, detached?: Promise<Client> }
+const idleHyperdriveClients = new WeakMap<object, Map<string, Client[]>>()
+const hyperdriveLeases = new WeakMap<object, HyperdriveLease>()
+const brokenHyperdriveClients = new WeakSet<Client>()
+
+function isReusableHyperdriveClient(client: Client): boolean {
+  const status = (client as Client & { getTransactionStatus?: () => string | null }).getTransactionStatus?.()
+  return status === 'I' && (client as Client & { readyForQuery?: boolean }).readyForQuery === true && !brokenHyperdriveClients.has(client)
+}
+
+function takeIdleHyperdriveClient(c: Context, key: string): Client | null {
+  const idle = idleHyperdriveClients.get(c)?.get(key)
+  while (idle?.length) {
+    const client = idle.pop()!
+    if (isReusableHyperdriveClient(client))
+      return client
+  }
+  return null
+}
+
+function leaseHyperdriveClient(c: Context, key: string, client: Client, connect: () => Promise<Client>): Client {
+  const lease: HyperdriveLease = { client, key, request: c, revoked: false }
+  const handle = new Proxy(client, {
+    get(target, prop) {
+      if (lease.revoked && prop === 'query') {
+        // Use after closeClient: never touch the Client another holder may now own.
+        return async (...args: unknown[]) => {
+          lease.detached ??= connect()
+          const detached = await lease.detached
+          return (detached.query as (...queryArgs: unknown[]) => unknown).apply(detached, args)
+        }
+      }
+      // Methods run with the handle as `this`; pg.Client has no private fields and every
+      // property read or write goes through these traps to the Client.
+      return Reflect.get(target, prop, target)
+    },
+    set(target, prop, value) {
+      return Reflect.set(target, prop, value, target)
+    },
+  })
+  hyperdriveLeases.set(handle, lease)
+  skipEndClients.add(handle)
+  return handle
+}
+
+/** Hyperdrive handle closed: hand the Client back to this request's idle list when it is clean. */
+function releaseHyperdriveLease(db: PgClient): boolean {
+  const lease = hyperdriveLeases.get(db)
+  if (!lease)
+    return false
+  if (lease.revoked)
+    return true
+  lease.revoked = true
+  if (!isReusableHyperdriveClient(lease.client))
+    return true
+  let byKey = idleHyperdriveClients.get(lease.request)
+  if (!byKey) {
+    byKey = new Map()
+    idleHyperdriveClients.set(lease.request, byKey)
+  }
+  const idle = byKey.get(lease.key) ?? []
+  idle.push(lease.client)
+  byKey.set(lease.key, idle)
+  return true
+}
+
+/**
+ * Postgres refuses new connections with 53300 when max_connections is reached. PostgREST queued
+ * requests on its own fixed pool instead, so on a direct connection (no Hyperdrive or pooler in
+ * front) back off and retry the checkout briefly rather than failing the request. pg-pool creates
+ * a fresh Client per attempt, and `pool.query` checks out through `connect`, so both are covered.
+ */
+const TOO_MANY_CONNECTIONS_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1000]
+
+function isTooManyConnectionsError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === '53300'
+}
+
+function retryPoolConnectOnTooManyConnections(pool: Pool) {
+  if (typeof pool.connect !== 'function')
+    return
+  const rawConnect = pool.connect.bind(pool) as () => Promise<PoolClient>
+  const connectWithRetry = async (): Promise<PoolClient> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await rawConnect()
+      }
+      catch (error) {
+        const delay = TOO_MANY_CONNECTIONS_RETRY_DELAYS_MS[attempt]
+        if (delay === undefined || !isTooManyConnectionsError(error))
+          throw error
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+  }
+  pool.connect = ((callback?: (error: Error | undefined, client?: PoolClient, done?: (release?: boolean | Error) => void) => void) => {
+    const result = connectWithRetry()
+    if (!callback)
+      return result
+    result.then(client => callback(undefined, client, client.release.bind(client)), error => callback(error))
+    return undefined
+  }) as Pool['connect']
+}
+
+/** Drops one reference; true while other callers in the request still use the Pool. */
+function releaseSharedPool(db: PgClient): boolean {
+  const owner = sharedPoolKeys.get(db as Pool)
+  if (!owner)
+    return false
+  const pools = sharedPoolsByRequest.get(owner.request)
+  const entry = pools?.get(owner.key)
+  if (!entry || entry.pool !== db)
+    return false
+  entry.refs--
+  if (entry.refs > 0)
+    return true
+  pools!.delete(owner.key)
+  sharedPoolKeys.delete(db as Pool)
+  return false
+}
+
 export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
-  if (skipEndClients.has(pg) || isPrimaryReadSession(pg))
+  if (skipEndClients.has(pg))
     return pg as Client
   const client = await (pg as Pool).connect()
   inheritPgAccessMode(pg, client)
@@ -41,8 +205,15 @@ export async function checkoutPgClient(pg: PgClient): Promise<PgQueryClient> {
 }
 
 export function releasePgClient(pg: PgClient | null | undefined, client: object | null | undefined, error?: boolean | Error): void {
-  if (!pg || !client || skipEndClients.has(pg) || isPrimaryReadSession(pg))
+  if (!pg || !client)
     return
+  if (skipEndClients.has(pg)) {
+    // A failed release may leave session state (an advisory lock): never reuse that connection.
+    const lease = hyperdriveLeases.get(pg)
+    if (error && lease)
+      brokenHyperdriveClients.add(lease.client)
+    return
+  }
   if ('release' in client && typeof client.release === 'function')
     client.release(error)
 }
@@ -198,18 +369,37 @@ function toReplicationLagSeconds(value: unknown): number | null {
 }
 
 /**
- * Query replication lag from the REPLICA database using pg_stat_subscription.
- * Uses the existing pool - no new connections.
+ * Replica lag SQL: logical subscriber (pg_stat_subscription) or physical
+ * standby (replay position / timestamp). Same query as
+ * plugin_runtime/utils/replicaFreshness.ts, duplicated on purpose (runtime
+ * isolation, see plugin_runtime/README.md): keep both in sync.
+ */
+const REPLICA_LAG_QUERY = `
+  SELECT CASE
+    WHEN pg_is_in_recovery() THEN
+      CASE
+        WHEN pg_last_wal_receive_lsn() IS NOT NULL
+          AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
+          AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
+          THEN 0
+        ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
+      END
+    ELSE (
+      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
+      FROM pg_stat_subscription
+      WHERE last_msg_receipt_time IS NOT NULL
+    )
+  END AS lag_seconds
+`
+
+/**
+ * Query replication lag from the REPLICA database (see REPLICA_LAG_QUERY:
+ * logical subscriber and physical standbys). Uses the existing pool - no new
+ * connections.
  */
 async function queryReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagStatus> {
   try {
-    const query = `
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))) AS lag_seconds
-      FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
-    `
-
-    const result = await pool.query(query)
+    const result = await pool.query(REPLICA_LAG_QUERY)
     const lagSeconds = toReplicationLagSeconds(result.rows[0]?.lag_seconds)
 
     let status: ReplicationStatus = 'unknown'
@@ -432,19 +622,32 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
   const isWorkerd = getRuntimeKey() === 'workerd'
   // Match on the actual connection string so the Hyperdrive Client contract cannot
   // silently become Pool+end() if c.set is missed.
+  const sharedPoolKey = `${readOnly ? 'ro' : 'rw'}|${appName}-${dbName}|${dbUrl}`
   if (isWorkerd && isHyperdriveConnectionString(c, dbUrl)) {
-    const client = new Client({
-      connectionString: dbUrl,
-      application_name: `${appName}-${dbName}`,
-      connectionTimeoutMillis: 10000,
-      options: readOnlyOptions,
-    })
-    client.on('error', (err: Error) => {
-      cloudlogErr({ requestId, message: 'PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
-    })
-    await client.connect()
-    skipEndClients.add(client)
-    return restrictPrimaryReadClient(client, dbName, readOnly, true)
+    const connect = async () => {
+      const client = new Client({
+        connectionString: dbUrl,
+        application_name: `${appName}-${dbName}`,
+        connectionTimeoutMillis: 10000,
+        options: readOnlyOptions,
+      })
+      client.on('error', (err: Error) => {
+        brokenHyperdriveClients.add(client)
+        cloudlogErr({ requestId, message: 'PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
+      })
+      client.on('end', () => brokenHyperdriveClients.add(client))
+      await client.connect()
+      skipEndClients.add(client)
+      return client
+    }
+    const client = takeIdleHyperdriveClient(c, sharedPoolKey) ?? await connect()
+    return setPgAccessMode(leaseHyperdriveClient(c, sharedPoolKey, client, connect), readOnly)
+  }
+
+  if (!isWorkerd) {
+    const shared = acquireSharedPool(c, sharedPoolKey)
+    if (shared)
+      return shared
   }
 
   const pool = new Pool({
@@ -466,21 +669,58 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PgClien
     cloudlogErr({ requestId, message: 'PG Pool Error', databaseSource: dbName, error: serializePostgresError(err) })
   })
 
-  return restrictPrimaryReadClient(pool, dbName, readOnly, false)
+  // pg-pool drops its idle error listener while a client is checked out. Keep a
+  // permanent one so a server-side kill (e.g. idle_in_transaction_session_timeout)
+  // during a transaction rejects the next query instead of crashing the worker.
+  // Idle-client errors are already logged as 'PG Pool Error', so only log here
+  // while the client is checked out.
+  const checkedOut = new WeakSet<object>()
+  pool.on('acquire', client => checkedOut.add(client))
+  pool.on('release', (_err, client) => checkedOut.delete(client))
+  pool.on('connect', (client) => {
+    client.on('error', (err: Error) => {
+      if (checkedOut.has(client))
+        cloudlogErr({ requestId, message: 'PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
+    })
+  })
+
+  const modedPool = setPgAccessMode(pool, readOnly)
+  if (!isWorkerd) {
+    retryPoolConnectOnTooManyConnections(pool)
+    registerSharedPool(c, sharedPoolKey, modedPool)
+  }
+  return modedPool
 }
 
 // Transactions must run on one checked-out connection: BEGIN/COMMIT issued on
 // the Pool itself can land on different connections and leave one idle in
 // transaction, holding row locks until the server kills it.
-export async function withPgTransaction<T>(pgPool: PgClient, run: (client: PgQueryClient) => Promise<T>): Promise<T> {
-  if (isPrimaryReadSession(pgPool))
-    throw new Error('Cannot start a root transaction inside a primary read session')
+// Structural typing: Pool/Client query overloads and local transaction client
+// interfaces are not assignable to Pick<PgQueryClient, 'query'>.
+export async function beginWriteTransaction(client: { query: (queryText: string, values?: unknown[]) => Promise<unknown> }): Promise<void> {
+  await client.query(BEGIN_WRITE_TRANSACTION_SQL)
+}
+
+// One simple query: BEGIN plus the timeouts, and any trusted setup that must
+// share that round trip. appendSql is server-built SQL, never a console filter.
+export function transactionBeginSql(accessMode: 'read only' | 'read write', appendSql?: string): string {
+  const begin = accessMode === 'read only' ? 'BEGIN READ ONLY' : 'BEGIN READ WRITE'
+  const statement = `${begin}; SET LOCAL statement_timeout = 10000; SET LOCAL idle_in_transaction_session_timeout = ${TRANSACTION_IDLE_TIMEOUT_MS}`
+  if (!appendSql)
+    return statement
+  return `${statement}; ${appendSql}`
+}
+
+export async function withPgTransaction<T>(pgPool: PgClient, run: (client: PgQueryClient) => Promise<T>, options?: { appendSql?: string }): Promise<T> {
   const client = await checkoutPgClient(pgPool)
   try {
-    await client.query(getPgAccessMode(pgPool) === 'read only' ? 'BEGIN READ ONLY' : 'BEGIN READ WRITE')
+    // Bound the transaction on the same round trip as BEGIN so an abandoned
+    // request cannot pin the Hyperdrive origin connection with no timeout.
+    // BEGIN stays inside this try: appended setup can fail after the
+    // transaction is open, and that failure has to roll it back.
+    const accessMode = getPgAccessMode(pgPool) === 'read only' ? 'read only' : 'read write'
     try {
-      await client.query('SET LOCAL statement_timeout = 10000')
-      await client.query('SET LOCAL idle_in_transaction_session_timeout = 15000')
+      await client.query(transactionBeginSql(accessMode, options?.appendSql))
       const result = await run(client)
       await client.query('COMMIT')
       return result
@@ -515,16 +755,14 @@ export function logPgError(c: Context, functionName: string, error: unknown) {
 }
 
 export function closeClient(c: Context, db: PgClient) {
-  const closingRead = closePrimaryReadClient(db)
-  if (closingRead) {
-    return backgroundTask(c, closingRead.catch((error: unknown) => {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'PG read transaction cleanup failed', error: serializePostgresError(error) })
-    }))
-  }
-
   // Hyperdrive: do not end() — connection-lifecycle docs say GC cleans the edge hop.
   // https://developers.cloudflare.com/hyperdrive/concepts/connection-lifecycle/
-  if (skipEndClients.has(db))
+  if (skipEndClients.has(db)) {
+    releaseHyperdriveLease(db)
+    return
+  }
+  // Another helper in this request still uses the shared Pool.
+  if (releaseSharedPool(db))
     return
 
   // Non-Hyperdrive Pool: must end() or we leak sockets (the old workerd sawtooth).
@@ -606,13 +844,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     rollout_cache_ttl_seconds: channelAlias.rollout_cache_ttl_seconds,
     paused_at: channelAlias.paused_at,
   }
-  const manifestSelect = sql<{ file_name: string, file_hash: string, s3_path: string }[]>`COALESCE(json_agg(
-        json_build_object(
-          'file_name', ${schema.manifest.file_name},
-          'file_hash', ${schema.manifest.file_hash},
-          's3_path', ${schema.manifest.s3_path}
-        )
-      ) FILTER (WHERE ${schema.manifest.file_name} IS NOT NULL), '[]'::json)`
+  const manifestSelect = versionManifestJsonSql(versionAlias.id)
   return { versionSelect, rolloutVersionSelect, channelDevicesAlias, channelAlias, channelSelect, manifestSelect, versionAlias, rolloutVersionAlias }
 }
 
@@ -660,9 +892,7 @@ export function requestInfosChannelDevicePostgres(
     .innerJoin(channelAlias, eq(channelDevicesAlias.channel_id, channelAlias.id))
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelDevice = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelDevice = baseQuery
     .where(and(
       eq(channelDevicesAlias.device_id, device_id),
       eq(channelDevicesAlias.app_id, app_id),
@@ -790,9 +1020,7 @@ export function requestInfosChannelByIdPostgres(
     .from(channelAlias)
     .innerJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channel = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channel = baseQuery
     .where(and(
       eq(channelAlias.app_id, app_id),
       eq(channelAlias.id, channelId),
@@ -830,9 +1058,7 @@ export function requestInfosChannelPostgres(
     .from(channelAlias)
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelQuery = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelQuery = baseQuery
     .where(and(
       defaultChannel
         ? and(
@@ -865,17 +1091,9 @@ export function requestManifestEntriesPostgres(
   versionId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ) {
-  const manifestQuery = drizzleClient
-    .select({
-      file_name: schema.manifest.file_name,
-      file_hash: schema.manifest.file_hash,
-      s3_path: schema.manifest.s3_path,
-    })
-    .from(schema.manifest)
-    .where(eq(schema.manifest.app_version_id, versionId))
-
-  cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', manifestQuery: manifestQuery.toSQL() })
-  return manifestQuery
+  cloudlog({ requestId: c.get('requestId'), message: 'rollout manifest Query:', versionId })
+  return drizzleClient.execute<VersionManifestRow>(versionManifestRowsSql(sql`${versionId}::bigint`))
+    .then(result => completeVersionManifest(result.rows))
 }
 
 export function requestInfosChannelByIdPostgresRollout(

@@ -92,11 +92,23 @@ const navGroups = computed(() => [
         </div>
 
         <!-- Navigation: product areas first, help and community links after -->
-        <nav class="flex-1 space-y-5 overflow-y-auto py-2" :aria-label="t('pages')">
-          <div v-for="group in navGroups" :key="group.key" :data-test="`sidebar-group-${group.key}`">
+        <nav
+          class="flex-1 overflow-y-auto py-2 transition-[row-gap] duration-500 ease-in-out motion-reduce:!transition-none flex flex-col"
+          :class="isRail ? 'gap-y-2' : 'gap-y-5'"
+          :aria-label="t('pages')"
+        >
+          <div v-for="group, groupIndex in navGroups" :key="group.key" :data-test="`sidebar-group-${group.key}`">
+            <!-- The rail hides group headings, so a short rule keeps the groups visually apart. -->
+            <div
+              v-if="groupIndex > 0"
+              class="mx-3 h-px bg-slate-700 transition-[opacity,margin] duration-300 ease-in-out motion-reduce:!transition-none"
+              :class="isRail ? 'mb-2 opacity-100' : 'mb-0 opacity-0'"
+              aria-hidden="true"
+            />
+            <!-- Collapse the heading's height in the rail so icons don't float under an invisible label. -->
             <h3
-              class="pl-12 pr-3 mb-2 font-mono text-[11px] font-semibold tracking-widest uppercase whitespace-nowrap text-slate-500 transition-opacity duration-300"
-              :class="isRail ? 'opacity-0' : 'opacity-100'"
+              class="overflow-hidden pl-12 pr-3 font-mono text-[11px] leading-4 font-semibold tracking-widest uppercase whitespace-nowrap text-slate-500 transition-[opacity,height,margin] duration-300 ease-in-out motion-reduce:!transition-none"
+              :class="isRail ? 'h-0 mb-0 opacity-0' : 'h-4 mb-2 opacity-100'"
             >
               {{ t(group.label) }}
             </h3>

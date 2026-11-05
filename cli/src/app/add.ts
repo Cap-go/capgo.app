@@ -5,19 +5,20 @@ import { existsSync, readFileSync } from 'node:fs'
 import { intro, log, outro } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { getInvocationSource, trackEvent } from '../analytics/track'
-import { getAppIconStoragePath, newIconPath } from '../api/app'
+import { getAppIconStoragePath, newIconPath, uploadAppIconHttp } from '../api/app'
 import { getAppListPath } from './list'
 import { checkAlerts } from '../api/update'
 import { isAiAgentEnvironment } from '../init/onboarding-source'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   assertCliPermission,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatCapgoApiErrorBody,
   formatError,
   getAppId,
   getCapgoCliHttpStatus,
+  defaultApiHost,
   defaultHostWeb,
   getConfig,
   getContentType,
@@ -41,17 +42,17 @@ export function formatAppGettingStartedMessage(appId: string, hostWeb = defaultH
   return `Continue setup at ${appGettingStartedUrl(appId, hostWeb)}`
 }
 
-export function shouldPrintAppGettingStartedUrl(hostWeb: string, usesCustomSupabase: boolean): boolean {
-  return !usesCustomSupabase || normalizeConsoleHost(hostWeb) !== defaultHostWeb
+export function shouldPrintAppGettingStartedUrl(hostWeb: string, usesCustomApi: boolean): boolean {
+  return !usesCustomApi || normalizeConsoleHost(hostWeb) !== defaultHostWeb
 }
 
 export async function resolveAppGettingStartedMessage(
   appId: string,
-  options: { supaHost?: string, supaAnon?: string } = {},
+  options: { apiHost?: string } = {},
 ): Promise<string | null> {
   const localConfig = await getLocalConfig(true)
-  const usesCustomSupabase = Boolean(options.supaHost || localConfig.supaHost)
-  if (!shouldPrintAppGettingStartedUrl(localConfig.hostWeb, usesCustomSupabase))
+  const usesCustomApi = Boolean(options.apiHost) || localConfig.hostApi !== defaultApiHost
+  if (!shouldPrintAppGettingStartedUrl(localConfig.hostWeb, usesCustomApi))
     return null
   return formatAppGettingStartedMessage(appId, localConfig.hostWeb)
 }
@@ -117,6 +118,19 @@ export function isDuplicateAppCreateError(error: unknown, httpStatus?: number) {
   return message.includes('app_id_already_exists') || message.includes('app id already exists')
 }
 
+/** Error text for an app ID registered by another organization, with the ways forward (shown by the CLI and the MCP). */
+export function buildAppIdTakenMessage(appId: string) {
+  const alternative = appId.toLowerCase().endsWith('.app') ? `${appId}.mobile` : `${appId}.app`
+  return [
+    `App ID ${appId} already exists in another Capgo organization.`,
+    'How to fix:',
+    '- If you or your team own it: ask an admin of that organization to invite you, or log in with that account, and use the existing app.',
+    '- To move it here: an admin of the owning organization can transfer it in the Capgo console (App settings > Transfer app ownership).',
+    `- Or register a different Capgo app ID, e.g. ${alternative}, and set plugins.CapacitorUpdater.appId to it in capacitor.config (your native bundle ID stays the same), then run npx cap sync.`,
+    '- If nobody on your team created it and you own the store listing, contact support@capgo.app.',
+  ].join('\n')
+}
+
 export type AppAddDuplicateOutcome = 'duplicate_owned' | 'duplicate_taken' | 'not_duplicate'
 
 type AppListRow = { app_id?: string }
@@ -125,7 +139,7 @@ async function isAppListedInOrganization(
   apikey: string,
   appId: string,
   ownerOrg: string,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
 ): Promise<boolean | null> {
   let page = 0
   while (true) {
@@ -135,8 +149,7 @@ async function isAppListedInOrganization(
         apikey,
         method: 'GET',
         body: undefined,
-        supaHost: options?.supaHost,
-        supaAnon: options?.supaAnon,
+        apiHost: options?.apiHost,
       },
     )
 
@@ -160,7 +173,7 @@ async function isAppInTargetOrganization(
   apikey: string,
   appId: string,
   ownerOrg: string,
-  options?: { supaHost?: string, supaAnon?: string },
+  options?: { apiHost?: string },
 ): Promise<boolean | null> {
   const { data, error } = await invokeCapgoCliApi<{ owner_org?: string }>(
     `app/${encodeURIComponent(appId)}`,
@@ -168,8 +181,7 @@ async function isAppInTargetOrganization(
       apikey,
       method: 'GET',
       body: undefined,
-      supaHost: options?.supaHost,
-      supaAnon: options?.supaAnon,
+      apiHost: options?.apiHost,
     },
   )
 
@@ -190,8 +202,7 @@ async function isDuplicateAppOwnedByCaller(
     apikey: string
     appId: string
     ownerOrg: string
-    supaHost?: string
-    supaAnon?: string
+    apiHost?: string
   },
   deps: {
     isAppInTargetOrganization?: typeof isAppInTargetOrganization
@@ -203,7 +214,7 @@ async function isDuplicateAppOwnedByCaller(
     params.apikey,
     params.appId,
     params.ownerOrg,
-    { supaHost: params.supaHost, supaAnon: params.supaAnon },
+    { apiHost: params.apiHost },
   )
 
   if (appInTargetOrg === true)
@@ -216,7 +227,7 @@ async function isDuplicateAppOwnedByCaller(
     params.apikey,
     params.appId,
     params.ownerOrg,
-    { supaHost: params.supaHost, supaAnon: params.supaAnon },
+    { apiHost: params.apiHost },
   )
   if (listedInOrg === true)
     return true
@@ -233,8 +244,7 @@ export async function resolveAppAddDuplicateOutcome(
     ownerOrg: string
     createError: unknown
     httpStatus?: number
-    supaHost?: string
-    supaAnon?: string
+    apiHost?: string
   },
   deps: {
     isAppInTargetOrganization?: typeof isAppInTargetOrganization
@@ -262,25 +272,18 @@ async function createAppViaApi(
     iconUrl?: string
     createdFromOnboarding: boolean
     onboardingSource?: 'cli' | 'mcp' | 'ai'
-    supaHost?: string
-    supaAnon?: string
+    apiHost?: string
   },
 ) {
-  // Prefer Capgo API host (or self-hosted /functions/v1) with the API key.
-  // Avoid supabase.functions.invoke: it always sends Authorization: Bearer <anon>.
+  // Capgo API host (cloud or self-hosted), authenticated by the API key.
   const apiHost = await resolveCapgoPublicApiHost({
-    supaHost: params.supaHost,
-    supaAnon: params.supaAnon,
+    apiHost: params.apiHost,
   })
-  const usesFunctionsV1 = apiHost.includes('/functions/v1')
-  const authorization = usesFunctionsV1 && params.supaAnon
-    ? `Bearer ${params.supaAnon}`
-    : apikey
   const response = await fetch(`${apiHost}/app`, {
     method: 'POST',
     headers: buildCliRequestHeaders({
       'Content-Type': 'application/json',
-      'Authorization': authorization,
+      'Authorization': apikey,
       'capgkey': apikey,
     }),
     body: JSON.stringify({
@@ -331,15 +334,15 @@ export async function addAppInternal(
 
   ensureOptions(appId, options, silent)
 
-  const supabase = await createSupabaseClient(options.apikey!, options.supaHost, options.supaAnon)
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey!, options.apiHost)
+  const userId = await resolveUserIdFromApiKey(client, options.apikey)
 
   if (!organization)
-    organization = await getOrganizationWithPermission(supabase, options.apikey, 'org.create_app')
+    organization = await getOrganizationWithPermission(client, options.apikey, 'org.create_app')
 
   const organizationUid = organization.gid
 
-  await assertCliPermission(supabase, options.apikey, 'org.create_app', { orgId: organizationUid }, {
+  await assertCliPermission(client, options.apikey, 'org.create_app', { orgId: organizationUid }, {
     message: `Insufficient permissions to create an app in organization ${organizationUid}`,
     silent,
   })
@@ -384,23 +387,26 @@ export async function addAppInternal(
   // Icon upload is best-effort. Storage RLS issues must not block app creation;
   // the web onboarding path already continues without an icon on upload failure.
   if (iconBuff && iconType) {
-    // TODO(cli-http): icon upload still requires supabase storage
-    const { error } = await supabase.storage
-      .from('images')
-      .upload(iconPath, iconBuff, {
-        contentType: iconType,
-        // A duplicate app add must not overwrite the existing app's icon before POST returns 409.
-        upsert: false,
-      })
+    const uploadResult = await uploadAppIconHttp(options.apikey!, {
+      appId,
+      orgId: organizationUid,
+      contentBase64: iconBuff.toString('base64'),
+      contentType: iconType,
+      upsert: false,
+      apiHost: options.apiHost,
+    })
 
-    if (error && !isStorageObjectConflict(error)) {
+    if (uploadResult.error && !uploadResult.conflict) {
       if (!silent)
-        log.warn(`Could not upload app icon (${formatError(error)}). Continuing without an icon.`)
+        log.warn(`Could not upload app icon (${formatError(uploadResult.error)}). Continuing without an icon.`)
     }
-    else {
+    else if (uploadResult.path) {
       // A conflict can be an orphaned icon from an earlier attempt whose POST failed.
       // Reusing its path is safe because upsert:false did not mutate the stored object,
       // and POST /app remains authoritative for duplicate app IDs.
+      iconUrl = uploadResult.path
+    }
+    else {
       iconUrl = iconPath
     }
   }
@@ -412,8 +418,8 @@ export async function addAppInternal(
 
   let appAlreadyExists = false
   try {
-    // Use the same authorized API path as the web console. Direct PostgREST inserts
-    // hit apps/storage RLS and fail for common API-key + pending-onboarding setups.
+    // Use the same authorized API path as the web console, so API-key and
+    // pending-onboarding setups get the same permission checks.
     await createAppViaApi(options.apikey!, {
       ownerOrg: organizationUid,
       appId,
@@ -421,8 +427,7 @@ export async function addAppInternal(
       iconUrl,
       createdFromOnboarding: appCreateSource === 'onboarding',
       onboardingSource,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
   }
   catch (error) {
@@ -434,8 +439,7 @@ export async function addAppInternal(
         ownerOrg: organizationUid,
         createError: error,
         httpStatus: (error as { httpStatus?: number }).httpStatus,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
     }
     catch (ownershipError) {
@@ -449,7 +453,7 @@ export async function addAppInternal(
       appAlreadyExists = true
     }
     else if (duplicateOutcome === 'duplicate_taken') {
-      const takenMessage = `App ID ${appId} already exists`
+      const takenMessage = buildAppIdTakenMessage(appId)
       if (!silent)
         log.error(`Could not add app: ${takenMessage}`)
       throw new CliUserError(`Could not add app: ${takenMessage}`)

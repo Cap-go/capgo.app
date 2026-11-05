@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { createClient } from '@supabase/supabase-js'
 import { findAppInOrganization } from '../src/api/app.ts'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from '../src/init/app-conflict.ts'
 import { isChannelAlreadyExistsError } from '../src/init/channel-conflict.ts'
@@ -143,14 +142,11 @@ await t('findAppInOrganization returns null for another org or missing app', asy
 
 async function withChannelSelection(channels, answers, run, lookupError) {
   const calls = { reuse: [], chooseName: [], create: [] }
-  const supabase = createClient('https://example.supabase.co', 'test-key', {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
+  const client = { apikey: 'test-key', apiHost: 'https://example.self-host.test/functions/v1', filesHost: 'https://example.self-host.test/functions/v1' }
   mockAppFetch(async (url) => {
     const request = new URL(url)
-    assert.equal(request.pathname, '/rest/v1/channels')
-    assert.equal(request.searchParams.get('app_id'), 'eq.com.example.app')
-    assert.equal(request.searchParams.get('select'), 'name,public')
+    assert.equal(request.pathname, '/functions/v1/private/cli/channels')
+    assert.equal(request.searchParams.get('app_id'), 'com.example.app')
     return jsonResponse(lookupError ?? channels, lookupError ? 403 : 200)
   })
   const prompts = {
@@ -176,7 +172,7 @@ async function withChannelSelection(channels, answers, run, lookupError) {
     },
   }
   try {
-    await run(() => selectOnboardingChannel(supabase, 'com.example.app', answers.preferredName ?? 'production', prompts), calls)
+    await run(() => selectOnboardingChannel(client, 'com.example.app', answers.preferredName ?? 'production', prompts), calls)
   }
   finally {
     globalThis.fetch = originalFetch

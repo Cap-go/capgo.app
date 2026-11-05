@@ -1,21 +1,8 @@
-export const BUILDER_TODO_LIST_VERSION = '1'
+import { BUILDER_STEP_IDS } from '../../supabase/functions/_backend/utils/onboardingMissedSteps.ts'
 
-export const BUILDER_STEP_IDS = {
-  ios: [
-    'start_setup',
-    'choose_destination',
-    'connect_app_store',
-    'prepare_certificate',
-    'prepare_profile',
-    'successful_cloud_build',
-  ],
-  android: [
-    'start_setup',
-    'prepare_keystore',
-    'connect_google_play',
-    'successful_cloud_build',
-  ],
-} as const
+export { BUILDER_STEP_IDS } from '../../supabase/functions/_backend/utils/onboardingMissedSteps.ts'
+
+export const BUILDER_TODO_LIST_VERSION = '1'
 
 export type BuilderPlatform = keyof typeof BUILDER_STEP_IDS
 export type BuilderStepId = typeof BUILDER_STEP_IDS[BuilderPlatform][number]

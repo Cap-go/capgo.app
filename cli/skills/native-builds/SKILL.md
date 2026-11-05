@@ -152,6 +152,8 @@ interface BuildLogger {
 
 - `--output-upload`: upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Pair with `--no-playstore-upload` (Android) or `--ios-distribution ad_hoc` (iOS) for artifact-only builds
 - `--no-output-upload`: skip Capgo storage upload (no download link); store upload can still happen when store credentials are set
+- `--symbols-upload`: keep the debug symbols (iOS dSYMs zip, Android `mapping.txt`) and print a time-limited download link for crash reporters (Crashlytics, Sentry). If output upload is enabled by a flag, environment variable, or saved credentials, also pass `--no-output-upload` to avoid keeping the IPA/APK/AAB. Use with store builds. Off by default: Capgo keeps nothing unless you opt in. TTL follows `--output-retention`
+- `--no-symbols-upload`: do not keep debug symbols unless output upload is enabled. `--output-upload` still includes debug symbols
 - `--no-playstore-upload`: Android — skip Google Play upload for this build (ignores saved Play credentials). Requires `--output-upload`. Use when the Play app does not exist yet or you only need the AAB download
 - `--submit-to-store-review`: submit after upload instead of leaving a draft/inactive store release. Android completes the Google Play release; iOS submits to TestFlight external review.
 - `--store-release-name <name>`: Android Google Play version_name/release label.
@@ -164,6 +166,14 @@ interface BuildLogger {
 - `--cache-key <key>`: custom compilation cache namespace for this build (e.g. `rc`, `prod`, `feature/my-branch`). Use to share cache within an environment or isolate cache between RC and production. Ignored when `--no-cache` is set. Example RC vs PROD:
   - RC: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key rc`
   - PROD: `npx @capgo/cli@latest build request com.example.app --platform ios --cache-key prod`
+
+### `build zip [appId]`
+
+- Example: `npx @capgo/cli@latest build zip com.example.app --platform ios --json`
+- Writes the exact native project archive `build request` uploads (same file filter, path rewriting, `--sync-ios-version` / `--sync-android-version`, config resolution) without uploading it. Use it when an agent uploads the archive through a Capgo MCP signed URL.
+- Offline: no API key, no calls to Capgo.
+- JSON output: `app_id`, `platform`, `filename`, `size_bytes`, `sha256`, optional `ios_dependency_manager` (`cocoapods` or `spm`), and `build_options` (non-secret options derived from the project: `platform`, `iosSourceDir`/`iosAppDir`/`iosProjectDir` or `androidSourceDir`/`androidAppDir`/`androidProjectDir`).
+- Options: `--platform <platform>`, `--path <path>`, `--node-modules <nodeModules>`, `--sync-ios-version`, `--sync-android-version`, `--output <file>` (default `<appId>_<platform>_native.zip`), `-j, --json`.
 
 ## Local credential management
 
@@ -206,6 +216,7 @@ npx @capgo/cli@latest build credentials save --platform android \
   - `--local`
   - `--output-upload`, `--no-output-upload`
   - `--output-retention <duration>`
+  - `--symbols-upload`, `--no-symbols-upload`
   - `--skip-build-number-bump`, `--no-skip-build-number-bump`
 
 #### iOS credential save options
@@ -250,6 +261,20 @@ npx @capgo/cli@latest build credentials save --platform android \
   - `--platform <platform>`
   - `--local`
 
+### `build credentials push` / `remote-status` / `remote-delete`
+
+Store the locally saved credentials for one platform on Capgo, encrypted (AES-256-GCM, bound to the app and platform), so builds can use them without sending secrets each time (for example from the hosted Capgo MCP). Writing or deleting requires app settings permission (app admin), and so does building with them (`build request --use-stored-credentials` or the MCP `capgo_request_build`), because build scripts can read the secrets; reading the summary requires native build permission. Env names that load code into every build (`NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `GRADLE_OPTS`, `LD_PRELOAD`, `DYLD_*`, `PATH`, ...) cannot be stored; pass them per build with `--build-env`. Only key names and non-secret facts (iOS distribution, team id, provisioning profile names and expiry, what is still missing) are ever shown.
+
+- Examples:
+  - `npx @capgo/cli@latest build credentials push com.example.app --platform ios`
+  - `npx @capgo/cli@latest build credentials push --platform android --mode merge`
+  - `npx @capgo/cli@latest build credentials remote-status com.example.app`
+  - `npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes`
+- `push` options: `--platform <platform>` (required), `--mode replace|merge` (default `replace`), `--local`, `--global`, `-a, --apikey`, `--api-host`
+- `remote-status` options: `--platform <platform>`, `-a, --apikey`, `--api-host`
+- `remote-delete` options: `--platform <platform>` (required), `-y, --yes`, `-a, --apikey`, `--api-host`
+- Agents with a shell can also upload a credentials file without the secrets entering the chat: `POST /build/credentials/upload-url` returns a 10-minute `PUT` URL that accepts the raw `credentials.json` file.
+
 ### `build credentials update`
 
 - Use to update specific credential fields without re-entering all data.
@@ -264,6 +289,7 @@ npx @capgo/cli@latest build credentials save --platform android \
   - `--overwrite-ios-provisioning-map`
   - `--output-upload`, `--no-output-upload`
   - `--output-retention <duration>`
+  - `--symbols-upload`, `--no-symbols-upload`
   - `--skip-build-number-bump`, `--no-skip-build-number-bump`
 - Supports the same iOS and Android credential fields as `build credentials save`.
 

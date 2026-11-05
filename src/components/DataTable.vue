@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { TableColumn } from './comp_def'
-import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
 import {
   computed,
@@ -18,7 +17,7 @@ import IconPrev from '~icons/ic/round-keyboard-arrow-left'
 import IconNext from '~icons/ic/round-keyboard-arrow-right'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
 import IconFastForward from '~icons/ic/round-keyboard-double-arrow-right'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import plusOutline from '~icons/ion/add-outline'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
@@ -27,9 +26,9 @@ import IconDownload from '~icons/lucide/download'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import FilterModal from '~/components/FilterModal.vue'
+import FormField from '~/components/forms/FormField.vue'
 import { RenderCell } from '~/components/RenderCell'
 import { createClearedFilters } from '~/composables/useFilterModal'
-import { sanitizeHtml } from '~/utils/sanitize'
 
 interface Props {
   isLoading?: boolean
@@ -419,10 +418,7 @@ watch(
 function displayValueKey(elem: any, col: TableColumn | undefined) {
   if (!col)
     return ''
-  const text = col.displayFunction ? col.displayFunction(elem) : elem[col.key]
-  if (col.sanitizeHtml)
-    return sanitizeHtml(text)
-  return text
+  return col.displayFunction ? col.displayFunction(elem) : elem[col.key]
 }
 
 function getActionTitle(action: NonNullable<TableColumn['actions']>[number], elem: any): string {
@@ -433,10 +429,6 @@ function getActionTitle(action: NonNullable<TableColumn['actions']>[number], ele
 
 function isActionDisabled(action: NonNullable<TableColumn['actions']>[number], elem: any): boolean {
   return Boolean(action.disabled && action.disabled(elem))
-}
-
-function tooltipIdFor(rowIndex: number, actionIndex: number): string {
-  return `datatable-action-tooltip-${rowIndex}-${actionIndex}`
 }
 
 const displayElemRange = computed(() => {
@@ -564,7 +556,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
     <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 overflow-visible md:flex-nowrap">
       <div class="flex h-10 shrink-0 items-center gap-2">
         <button
-          class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
           type="button"
           :aria-label="t('reload')"
           :title="t('reload')"
@@ -583,7 +575,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <button
             ref="exportTriggerRef"
             type="button"
-            class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
             :disabled="isLoading || exportLoading"
             data-test="data-table-export"
             :aria-label="t('export')"
@@ -631,7 +623,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
             :aria-describedby="addDisabled && addTooltip ? addTooltipId : undefined"
             :aria-disabled="addDisabled"
             :title="addDisabled ? addTooltip : t('add-one')"
-            class="inline-flex items-center gap-2 h-9 px-3 text-sm font-semibold text-white rounded-lg bg-blue-600 shadow-xs cursor-pointer transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 aria-disabled:cursor-not-allowed aria-disabled:bg-slate-200 aria-disabled:text-slate-400 aria-disabled:hover:bg-slate-200 dark:aria-disabled:bg-white/10 dark:aria-disabled:text-slate-500"
+            class="d-btn d-btn-primary h-9 min-h-9 gap-2 px-3 text-sm font-semibold rounded-lg aria-disabled:cursor-not-allowed aria-disabled:border-slate-200 aria-disabled:bg-slate-200 aria-disabled:text-slate-400 dark:aria-disabled:border-transparent dark:aria-disabled:bg-white/10 dark:aria-disabled:text-slate-500"
             type="button" @click="handleAddClick"
           >
             <plusOutline v-if="!isAdding" class="w-4 h-4" />
@@ -645,7 +637,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
           <button
             ref="filterOpenButtonRef"
             type="button"
-            class="relative inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="relative d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
             data-test="data-table-filters-open"
             :aria-expanded="isFilterModalOpen"
             aria-haspopup="dialog"
@@ -712,7 +704,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
       </div>
       <button
         v-if="isSelectAllEnabled"
-        class="ml-auto inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="ml-auto d-btn d-btn-outline h-9 min-h-9 gap-2 px-3 text-sm font-medium rounded-lg"
         type="button" @click="
           selectedRows = selectedRows.map(() => true);
           emit('selectRow', selectedRows);
@@ -722,8 +714,11 @@ const paginationClass = computed(() => props.mobileFixedPagination
       </button>
       <button
         v-if="isSelectAllEnabled"
-        class="inline-flex items-center gap-2 h-9 px-3 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 shadow-xs cursor-pointer transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-50 disabled:cursor-not-allowed hover:border-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
-        type="button" @click="emit('massDelete')"
+        class="d-btn d-btn-outline d-btn-error h-9 min-h-9 px-3 rounded-lg"
+        type="button"
+        :aria-label="t('delete')"
+        :title="t('delete')"
+        @click="emit('massDelete')"
       >
         <IconTrash class="w-4 h-4 text-red-500" />
       </button>
@@ -733,13 +728,11 @@ const paginationClass = computed(() => props.mobileFixedPagination
         </div>
         <div class="min-w-0 w-full overflow-hidden sm:w-auto sm:max-w-[13rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs">
           <label :for="searchInputId" class="sr-only">{{ searchAriaLabel }}</label>
-          <FormKit
+          <FormField
             :id="searchInputId"
             v-model="searchVal" :placeholder="searchPlaceholder" :prefix-icon="IconSearch"
-            :attrs="{ 'aria-label': searchAriaLabel }"
-            :disabled="isLoading" enterkeyhint="send" :classes="{
-              outer: 'mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80',
-            }"
+            :aria-label="searchAriaLabel"
+            :disabled="isLoading" enterkeyhint="send" outer-class="mb-0! w-full sm:w-52 md:w-56 lg:w-64 xl:w-80"
           />
         </div>
       </div>
@@ -813,7 +806,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                           <button
                             type="button"
                             :disabled="isActionDisabled(action, elem)"
-                            :aria-describedby="getActionTitle(action, elem) ? tooltipIdFor(i, actionIndex) : undefined"
+                            :aria-label="getActionTitle(action, elem)"
                             :data-test="action.testId ? (typeof action.testId === 'function' ? action.testId(elem) : action.testId) : undefined"
                             class="inline-flex items-center justify-center size-8 text-slate-400 rounded-md cursor-pointer transition-colors hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
                             @click.stop="action.onClick(elem)"
@@ -822,8 +815,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                           </button>
                           <span
                             v-if="getActionTitle(action, elem)"
-                            :id="tooltipIdFor(i, actionIndex)"
-                            role="tooltip"
+                            aria-hidden="true"
                             class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg transition-opacity duration-150 group-hover:block group-focus-within:block dark:bg-slate-100 dark:text-slate-900"
                           >
                             {{ getActionTitle(action, elem) }}
@@ -835,6 +827,7 @@ const paginationClass = computed(() => props.mobileFixedPagination
                       <button
                         type="button"
                         class="inline-flex items-center justify-center size-8 text-slate-400 rounded-md cursor-pointer transition-colors hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-white/10 dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azure-500"
+                        :aria-label="col.label"
                         @click.stop="col.onClick ? col.onClick(elem) : () => { }"
                       >
                         <component :is="col.icon" />

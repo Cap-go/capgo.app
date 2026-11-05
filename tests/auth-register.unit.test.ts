@@ -7,6 +7,7 @@ const {
   signUpMock,
   usersUpsertMock,
   deleteUserMock,
+  updateUserByIdMock,
   usersDeleteMock,
 } = vi.hoisted(() => ({
   getEnvMock: vi.fn((_c: unknown, key: string) => {
@@ -30,9 +31,10 @@ const {
     },
     error: null,
   })),
-  usersUpsertMock: vi.fn(async () => ({ error: null })),
+  usersUpsertMock: vi.fn(async (_row: unknown) => ({ error: null })),
   deleteUserMock: vi.fn(async () => ({ error: null })),
-  usersDeleteMock: vi.fn(async () => ({ error: null })),
+  updateUserByIdMock: vi.fn<(id: string, attributes: unknown) => Promise<{ error: Error | null }>>(async () => ({ error: null })),
+  usersDeleteMock: vi.fn(async (_id: unknown) => ({ error: null })),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
@@ -50,24 +52,44 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
     },
   }),
   supabaseAdmin: () => ({
-    rpc: rpcMock,
-    from(table: string) {
-      if (table === 'users') {
-        return {
-          upsert: usersUpsertMock,
-          delete: () => ({
-            eq: usersDeleteMock,
-          }),
-        }
-      }
-      throw new Error(`unexpected table ${table}`)
-    },
     auth: {
       admin: {
         deleteUser: deleteUserMock,
+        updateUserById: updateUserByIdMock,
       },
     },
   }),
+}))
+
+// Route the direct-Postgres statements back to the same mocks the supabase-js calls used.
+async function unwrap(result: Promise<{ data?: unknown, error: unknown }>) {
+  const { data, error } = await result
+  if (error)
+    throw error
+  return data
+}
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({
+    async query(text: string, values: unknown[] = []) {
+      if (text.includes('public.is_not_deleted')) {
+        const data = await unwrap(rpcMock())
+        return { rows: [{ not_deleted: data }] }
+      }
+      if (text.includes('INSERT INTO public.users')) {
+        expect(text).toContain('ON CONFLICT (id) DO UPDATE')
+        const [id, email, first_name, last_name, opt_for_newsletters] = values
+        await unwrap(usersUpsertMock({ id, email, first_name, last_name, enable_notifications: true, opt_for_newsletters }))
+        return { rows: [] }
+      }
+      if (text.includes('DELETE FROM public.users')) {
+        await unwrap(usersDeleteMock(values[0]))
+        return { rows: [] }
+      }
+      throw new Error(`unexpected query ${text}`)
+    },
+  }),
+  closeClient: () => {},
 }))
 
 const { app } = await import('../supabase/functions/_backend/auth/register.ts')
@@ -93,14 +115,18 @@ describe('pOST /auth/register unit', () => {
     vi.clearAllMocks()
   })
 
-  it('requires captcha when CAPTCHA_SECRET_KEY is configured', async () => {
+  it.each([
+    { label: 'names supplied', names: {} },
+    { label: 'both names omitted', names: { first_name: undefined, last_name: undefined } },
+  ])('requires captcha when CAPTCHA_SECRET_KEY is configured ($label)', async ({ names }) => {
     const response = await postRegister({
       ...validBody,
+      ...names,
       captcha_token: undefined,
     })
     expect(response.status).toBe(422)
-    const body = await response.json() as { error: string }
-    expect(body.error).toBe('captcha_failed')
+    expect(await response.json()).toMatchObject({ error: 'captcha_failed' })
+    expect(rpcMock).not.toHaveBeenCalled()
     expect(signUpMock).not.toHaveBeenCalled()
   })
 
@@ -118,6 +144,30 @@ describe('pOST /auth/register unit', () => {
         },
       },
     })
+  })
+
+  it('stores offer=direct in server-only app metadata before creating the profile', async () => {
+    const response = await postRegister({ ...validBody, offer: 'direct' })
+    expect(response.status).toBe(200)
+    expect(updateUserByIdMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111', { app_metadata: { offer: 'direct' } })
+    expect(updateUserByIdMock.mock.invocationCallOrder[0]).toBeLessThan(usersUpsertMock.mock.invocationCallOrder[0])
+    const signUpOptions = (signUpMock.mock.calls[0] as unknown as [{ options: { data: Record<string, unknown> } }])[0].options
+    expect(signUpOptions.data).not.toHaveProperty('offer')
+  })
+
+  it('ignores any other offer value', async () => {
+    const response = await postRegister({ ...validBody, offer: 'Direct' })
+    expect(response.status).toBe(200)
+    expect(updateUserByIdMock).not.toHaveBeenCalled()
+  })
+
+  it('rolls back the signup when the direct offer cannot be stored', async () => {
+    updateUserByIdMock.mockResolvedValueOnce({ error: new Error('auth unavailable') })
+    const response = await postRegister({ ...validBody, offer: 'direct' })
+    expect(response.status).toBe(500)
+    expect(await response.json()).toMatchObject({ error: 'registration_failed' })
+    expect(usersUpsertMock).not.toHaveBeenCalled()
+    expect(deleteUserMock).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111')
   })
 
   it.each([
@@ -153,7 +203,7 @@ describe('pOST /auth/register unit', () => {
       last_name: lastName ?? '',
       enable_notifications: true,
       opt_for_newsletters: false,
-    }, { onConflict: 'id' })
+    })
   })
 
   it.each([
@@ -172,19 +222,6 @@ describe('pOST /auth/register unit', () => {
     expect(rpcMock).not.toHaveBeenCalled()
     expect(signUpMock).not.toHaveBeenCalled()
     expect(usersUpsertMock).not.toHaveBeenCalled()
-  })
-
-  it('still requires captcha when both names are omitted', async () => {
-    const response = await postRegister({
-      ...validBody,
-      first_name: undefined,
-      last_name: undefined,
-      captcha_token: undefined,
-    })
-    expect(response.status).toBe(422)
-    expect(await response.json()).toMatchObject({ error: 'captcha_failed' })
-    expect(rpcMock).not.toHaveBeenCalled()
-    expect(signUpMock).not.toHaveBeenCalled()
   })
 
   it.each(['password', 'Password!', 'Password123', 'PASSWORD123!', ''])('still rejects weak passwords without names: %j', async (password) => {
@@ -231,7 +268,7 @@ describe('pOST /auth/register unit', () => {
       last_name: '',
       enable_notifications: true,
       opt_for_newsletters: newsletter,
-    }, { onConflict: 'id' })
+    })
   })
 
   it('rejects non-boolean newsletter preferences before signup', async () => {
@@ -251,16 +288,28 @@ describe('pOST /auth/register unit', () => {
     expect(body.error).toBe('captcha_failed')
   })
 
-  it('does not map weak_password 422 to email_exists', async () => {
+  it('returns weak_password with the GoTrue reason instead of a generic 500', async () => {
     signUpMock.mockResolvedValueOnce({
       data: { user: null, session: null },
       error: { code: 'weak_password', message: 'Password is too weak', status: 422 },
     } as unknown as Awaited<ReturnType<typeof signUpMock>>)
     const response = await postRegister(validBody)
-    expect(response.status).toBe(500)
-    const body = await response.json() as { error: string }
-    expect(body.error).not.toBe('email_exists')
-    expect(body.error).toBe('registration_failed')
+    expect(response.status).toBe(422)
+    const body = await response.json() as { error: string, message: string }
+    expect(body.error).toBe('weak_password')
+    expect(body.message).toBe('Password is too weak')
+  })
+
+  it('tells the user to pick another password when GoTrue finds it in a breach list', async () => {
+    signUpMock.mockResolvedValueOnce({
+      data: { user: null, session: null },
+      error: { code: 'weak_password', message: 'Password is known to be weak and easy to guess, please choose a different one.', status: 422, reasons: ['pwned'] },
+    } as unknown as Awaited<ReturnType<typeof signUpMock>>)
+    const response = await postRegister(validBody)
+    expect(response.status).toBe(422)
+    const body = await response.json() as { error: string, message: string }
+    expect(body.error).toBe('weak_password')
+    expect(body.message).toBe('This password appeared in a data breach. Choose a different one.')
   })
 
   it('returns 429 when GoTrue reports a rate limit', async () => {

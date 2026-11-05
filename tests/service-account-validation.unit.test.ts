@@ -83,10 +83,12 @@ function makeMockFetch(handlers: FetchHandlers): { fetch: typeof fetch, calls: F
   return { fetch: fetchImpl, calls }
 }
 
-const goodTokenResponse = () => new Response(
-  JSON.stringify({ access_token: 'fake-token', expires_in: 3600, token_type: 'Bearer' }),
-  { status: 200, headers: { 'Content-Type': 'application/json' } },
-)
+function goodTokenResponse() {
+  return new Response(
+    JSON.stringify({ access_token: 'fake-token', expires_in: 3600, token_type: 'Bearer' }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )
+}
 
 // ─── parseServiceAccountKey (synchronous shape checks) ──────────────
 
@@ -98,64 +100,36 @@ describe('parseServiceAccountKey', () => {
     expect(key.token_uri).toBe('https://oauth2.googleapis.com/token')
   })
 
-  it('throws on malformed JSON', () => {
-    expect(() => parseServiceAccountKey(Buffer.from('not json'))).toThrow(/not valid JSON/)
-  })
-
-  it('throws when `type` is not "service_account"', () => {
-    const buf = Buffer.from(JSON.stringify({ type: 'authorized_user', client_email: 'x', private_key: 'y', project_id: 'z', token_uri: 'u' }))
-    expect(() => parseServiceAccountKey(buf)).toThrow(/not a service account key/)
-  })
-
-  it('throws on missing private_key', () => {
-    const buf = buildSaJson({ private_key: undefined })
+  it.each([
+    ['malformed JSON', Buffer.from('not json'), /not valid JSON/],
+    ['a non-service-account `type`', Buffer.from(JSON.stringify({ type: 'authorized_user', client_email: 'x', private_key: 'y', project_id: 'z', token_uri: 'u' })), /not a service account key/],
     // JSON.stringify drops undefined keys, so the field is genuinely missing
-    expect(() => parseServiceAccountKey(buf)).toThrow(/missing required field "private_key"/)
-  })
-
-  it('throws on empty client_email', () => {
-    const buf = buildSaJson({ client_email: '' })
-    expect(() => parseServiceAccountKey(buf)).toThrow(/missing required field "client_email"/)
+    ['a missing private_key', buildSaJson({ private_key: undefined }), /missing required field "private_key"/],
+    ['an empty client_email', buildSaJson({ client_email: '' }), /missing required field "client_email"/],
+  ])('throws on %s', (_name, buf, message) => {
+    expect(() => parseServiceAccountKey(buf)).toThrow(message)
   })
 })
 
 // ─── validateServiceAccountJson — failure modes ────────────────────
 
 describe('validateServiceAccountJson — shape errors', () => {
-  it('returns shape-error for malformed JSON', async () => {
+  it.each([
+    ['malformed JSON', Buffer.from('garbage'), undefined],
+    ['private_key is missing', buildSaJson({ private_key: undefined }), /private_key/],
+    ['type !== "service_account"', Buffer.from(JSON.stringify({ type: 'user', client_email: 'x', private_key: 'y', project_id: 'z', token_uri: 'u' })), undefined],
+  ])('returns shape-error when %s', async (_name, jsonBytes, message) => {
     const result = await validateServiceAccountJson({
-      jsonBytes: Buffer.from('garbage'),
-      packageName: TEST_PACKAGE,
-      fetchImpl: makeMockFetch({}).fetch,
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok)
-      expect(result.kind).toBe('shape-error')
-  })
-
-  it('returns shape-error when private_key is missing', async () => {
-    const result = await validateServiceAccountJson({
-      jsonBytes: buildSaJson({ private_key: undefined }),
+      jsonBytes,
       packageName: TEST_PACKAGE,
       fetchImpl: makeMockFetch({}).fetch,
     })
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.kind).toBe('shape-error')
-      expect(result.message).toMatch(/private_key/)
+      if (message)
+        expect(result.message).toMatch(message)
     }
-  })
-
-  it('returns shape-error when type !== "service_account"', async () => {
-    const buf = Buffer.from(JSON.stringify({ type: 'user', client_email: 'x', private_key: 'y', project_id: 'z', token_uri: 'u' }))
-    const result = await validateServiceAccountJson({
-      jsonBytes: buf,
-      packageName: TEST_PACKAGE,
-      fetchImpl: makeMockFetch({}).fetch,
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok)
-      expect(result.kind).toBe('shape-error')
   })
 })
 

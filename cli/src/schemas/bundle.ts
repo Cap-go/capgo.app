@@ -80,10 +80,36 @@ export type OptionsUpload = z.infer<typeof optionsUploadSchema>
 // Bundle Result Schemas
 // ============================================================================
 
+export const nativePackageMetadataSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  requested_version: z.string().optional(),
+  ios_checksum: z.string().optional(),
+  android_checksum: z.string().optional(),
+})
+
 export const zipResultSchema = z.object({
   bundle: z.string(),
   filename: z.string(),
+  // With --for-upload and v2 encryption this is the signed checksum `bundle upload` stores.
   checksum: z.string(),
+  // Upload metadata (additive; same values `bundle upload` computes).
+  app_id: z.string().optional(),
+  updater_version: z.string().optional(),
+  updater_package: z.string().optional(),
+  checksum_algorithm: z.enum(['sha256', 'crc32']).optional(),
+  size_bytes: z.number().int().optional(),
+  cli_version: z.string().optional(),
+  // --for-upload only
+  encryption_method: z.enum(['none', 'v2']).optional(),
+  session_key: z.string().optional(),
+  key_id: z.string().optional(),
+  native_packages: z.array(nativePackageMetadataSchema).optional(),
+  // --delta-pack only
+  delta_pack: z.string().optional(),
+  delta_pack_entries: z.number().int().optional(),
+  delta_file_hash_format: z.enum(['sha256_hex', 'rsa_v2_base64', 'rsa_v3_hex']).optional(),
+  delta_encryption: z.object({ enabled: z.boolean() }).optional(),
 })
 
 export type ZipResult = z.infer<typeof zipResultSchema>
@@ -131,8 +157,19 @@ export const bundleZipOptionsSchema = optionsBaseSchema.extend({
   ignoreNotifyAppReady: z.boolean().optional(),
   name: z.string().optional(),
   json: z.boolean().optional(),
-  keyV2: z.boolean().optional(),
+  // `true` (bare --key-v2) or a private key path, same as `bundle upload --key-v2`.
+  keyV2: z.union([z.string(), z.boolean()]).optional(),
+  keyDataV2: z.string().optional(),
+  // false when --no-key is passed
+  key: z.boolean().optional(),
   packageJson: z.string().optional(),
+  nodeModules: z.string().optional(),
+  forUpload: z.boolean().optional(),
+  deltaPack: z.string().optional(),
+  encryptDelta: z.boolean().optional(),
+  encryptPartial: z.boolean().optional(),
+  disableBrotli: z.boolean().optional(),
+  forceCrc32Checksum: z.boolean().optional(),
 })
 
 export type BundleZipOptions = z.infer<typeof bundleZipOptionsSchema>

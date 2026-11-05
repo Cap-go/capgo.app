@@ -7,6 +7,7 @@ const nativeExternalPurchaseRestrictedPaths = [
   '/onboarding/invitation',
   '/onboarding/organization',
   '/register',
+  '/settings/organization/billing',
   '/settings/organization/credits',
   '/settings/organization/plans',
 ]
@@ -52,7 +53,8 @@ export function getNativeExternalPurchaseRedirect(path: string) {
   }
 
   if (
-    normalizedPath === '/settings/organization/credits'
+    normalizedPath === '/settings/organization/billing'
+    || normalizedPath === '/settings/organization/credits'
     || normalizedPath.startsWith('/settings/organization/credits/')
     || normalizedPath === '/settings/organization/plans'
     || normalizedPath.startsWith('/settings/organization/plans/')

@@ -22,7 +22,7 @@ async function open(args = []) {
     '--import', fileURLToPath(new URL('./fixtures/todo-api-preload.mjs', import.meta.url)),
     fileURLToPath(new URL('../dist/index.js', import.meta.url)),
     'app', 'todo', appId, '--apikey', 'example-todo-key',
-    '--supa-host', 'https://todo.fixture.invalid', '--supa-anon', 'example-anon-key', ...args,
+    '--api-host', 'https://todo.fixture.invalid', ...args,
   ], { cwd, env: environment })
   let output = ''
   let result

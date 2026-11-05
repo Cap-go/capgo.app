@@ -1,3 +1,4 @@
+import type { PublishedCliRpcCall } from '../scripts/published-cli-contract.ts'
 /**
  * CRITICAL — Published CLI RPC contract (do not break old CLI)
  *
@@ -9,20 +10,20 @@
  * CI job: CRITICAL — Published CLI / do not break old CLI
  * Do NOT invert these tests to expect permission denied (42501). Success is the contract.
  */
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
-  extractPublishedCliRpcCalls,
   formatPublishedCliRpcCall,
+
   resolveLatestPublishedCliTag,
   resolvePublishedCliNpmInstallVersion,
+  resolvePublishedCliRpcContract,
   resolvePublishedCliRpcSourceTag,
   rpcCallMatchesOverload,
-  type PublishedCliRpcCall,
 } from '../scripts/published-cli-contract.ts'
 import {
   APIKEY_TEST_ORG_SUPER_ADMIN,
@@ -56,12 +57,12 @@ function loadPublishedCliContract(): PublishedCliContractContext {
   if (!publishedCliContract) {
     const tag = resolveLatestPublishedCliTag()
     const npmVersion = resolvePublishedCliNpmInstallVersion(tag)
-    const rpcSourceTag = resolvePublishedCliRpcSourceTag(tag, npmVersion)
+    const { rpcSourceTag, rpcCalls } = resolvePublishedCliRpcContract(resolvePublishedCliRpcSourceTag(tag, npmVersion))
     publishedCliContract = {
       tag,
       npmVersion,
       rpcSourceTag,
-      rpcCalls: extractPublishedCliRpcCalls(rpcSourceTag),
+      rpcCalls,
     }
   }
 
@@ -120,7 +121,7 @@ function createAnonymousApiKeyClient(apikey: string) {
   })
 }
 
-describe('CRITICAL published CLI RPC contract', () => {
+describe('cRITICAL published CLI RPC contract', () => {
   let pool: Pool
   let contract: PublishedCliContractContext
 
@@ -131,7 +132,7 @@ describe('CRITICAL published CLI RPC contract', () => {
   })
 
   afterAll(async () => {
-    await pool.end()
+    await pool?.end()
   })
 
   it.concurrent('keeps anon EXECUTE on every RPC still called by the published CLI', async () => {
@@ -177,10 +178,9 @@ describe('CRITICAL published CLI RPC contract', () => {
       'list',
       '-a',
       APIKEY_TEST_ORG_SUPER_ADMIN,
-      '--supa-host',
-      SUPABASE_URL,
-      '--supa-anon',
-      SUPABASE_ANON_KEY,
+      // Published CLI >= 8.90 talks only to the versioned Capgo API (no Supabase SDK).
+      '--api-host',
+      `${SUPABASE_URL}/functions/v1`,
       '--output-text',
     ], {
       timeout: 180_000,

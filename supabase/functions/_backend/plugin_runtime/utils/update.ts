@@ -20,7 +20,7 @@ import { BRES, simpleError200 } from './hono.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader, withReadOnlyPgTransientRetry } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getReadReplicaBinding, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader, withReadOnlyPgTransientRetry } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
@@ -28,7 +28,7 @@ import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
 import { getClientIP } from './rate_limit.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { s3 } from './s3.ts'
-import { getSnippetEdgeAnswerBps, setSnippetUpdatesFill } from './snippetEdgeAnswer.ts'
+import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetUpdatesFill } from './snippetEdgeAnswer.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { getUpdateResponseKind, resToVersion, updateResponseSupportsManifest } from './update_response.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
@@ -200,6 +200,9 @@ function updateError200(c: Context, errorCode: string, message: string, moreInfo
 }
 
 async function getProviderInfrastructureInfo(c: Context) {
+  // The snippet answered only devices outside the provider networks.
+  if (getSnippetEdgeReplay(c))
+    return null
   const requestIp = getClientIP(c)
   if (requestIp === 'unknown')
     return null
@@ -606,7 +609,7 @@ export async function updateWithPG(
   }
 
   const version = channelOverride?.version ?? channelData.version
-  let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+  let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Views']['manifest']['Row']>[]
   const updatePackage = resolveChannelUpdatePackage(
     channelData.channels.update_package,
     isOnBuiltinVersion(version_name, version_build),
@@ -700,7 +703,7 @@ export async function updateWithPG(
     // Same contract as the read cache: the answer holds for every device of
     // this (app, platform, defaultChannel) already on this bundle.
     if (readCachePayload) {
-      setSnippetUpdatesFill(c, app_id, readCachePayload, {
+      await setSnippetUpdatesFill(c, app_id, readCachePayload, {
         blockProviderInfraRequests: Boolean(appOwner.block_provider_infra_requests),
         legacyChannelSelfStore: hasChannelSelfStoreBinding(c),
       })
@@ -913,7 +916,7 @@ export async function updateWithPG(
       deferredManifestPromise ?? Promise.resolve(null),
     ])
     if (needsDeferredManifest)
-      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Views']['manifest']['Row']>[]
     if (url) {
       // only count the size of the bundle if it's not external and zip for now
       signedURL = url
@@ -1004,9 +1007,11 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
   await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }], false, deviceDataCollection)
   if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
     c.header('X-Updates-Cache', 'hit')
-  setSnippetUpdatesFill(c, body.app_id, cachedRead, {
+  await setSnippetUpdatesFill(c, body.app_id, cachedRead, {
     blockProviderInfraRequests: Boolean(appStatus.block_provider_infra_requests),
     legacyChannelSelfStore: hasChannelSelfStoreBinding(c),
+    // No query ran: the read cache entry was filled from this region's replica.
+    replicaSource: getReadReplicaBinding(c),
   })
   return updateError200(c, 'no_new_version_available', 'No new version available')
 }

@@ -7,6 +7,14 @@ import { APP_NAME, getBaseData, getEndpointUrl, getSupabaseClient, resetAndSeedA
 const id = randomUUID()
 const APP_NAME_KEY_ID = `${APP_NAME}.${id}`
 const USE_CLOUDFLARE = env.USE_CLOUDFLARE_WORKERS === 'true'
+const TOO_LONG_KEY_ID = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' // 26 characters, limit is 20
+
+// [endpoint, extra body fields, key_id sent by a new client]
+const endpoints = [
+  ['/updates', {}, 'MIIB'],
+  ['/stats', { action: 'set' }, 'TEST'],
+  ['/channel_self', {}, 'CHAN'],
+] as const
 
 beforeAll(async () => {
   await resetAndSeedAppData(APP_NAME_KEY_ID)
@@ -17,279 +25,69 @@ afterAll(async () => {
   await resetAppDataStats(APP_NAME_KEY_ID)
 })
 
-describe.skipIf(USE_CLOUDFLARE)('e2E: /updates endpoint with key_id', () => {
-  const supabase = getSupabaseClient()
+function postPlugin(path: string, deviceId: string, extra: Record<string, unknown>) {
+  const baseData = getBaseData(APP_NAME_KEY_ID)
+  baseData.device_id = deviceId
+  return fetch(getEndpointUrl(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...baseData, ...extra }),
+  })
+}
 
-  it('should accept request WITHOUT key_id (old client)', async () => {
+async function getDeviceKeyId(deviceId: string) {
+  const { data } = await getSupabaseClient()
+    .from('devices')
+    .select('*')
+    .eq('app_id', APP_NAME_KEY_ID)
+    .eq('device_id', deviceId)
+    .maybeSingle() as { data: any }
+  return data?.key_id
+}
+
+describe.skipIf(USE_CLOUDFLARE)('e2E: plugin endpoints with key_id', () => {
+  it.each(endpoints)('%s accepts a request WITHOUT key_id (old client)', async (path, extra) => {
     const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/updates'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(baseData),
-    })
+    const response = await postPlugin(path, deviceId, extra)
 
     expect(response.status).toBe(200)
-
-    // Verify device was saved without key_id
-    const { data } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('app_id', APP_NAME_KEY_ID)
-      .eq('device_id', deviceId)
-      .maybeSingle() as { data: any }
-
-    expect(data?.key_id).toBeNull()
+    expect(await getDeviceKeyId(deviceId)).toBeNull()
   })
 
-  it('should accept request WITH key_id (new client with encryption)', async () => {
+  it.each(endpoints)('%s accepts and stores key_id (new client)', async (path, extra, keyId) => {
     const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/updates'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'MIIB',
-      }),
-    })
+    const response = await postPlugin(path, deviceId, { ...extra, key_id: keyId })
 
     expect(response.status).toBe(200)
-
-    // Verify device was saved with key_id
-    const { data } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('app_id', APP_NAME_KEY_ID)
-      .eq('device_id', deviceId)
-      .maybeSingle() as { data: any }
-
-    expect(data?.key_id).toBe('MIIB')
+    expect(await getDeviceKeyId(deviceId)).toBe(keyId)
   })
 
-  it('should reject key_id longer than 20 characters', async () => {
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-
-    const response = await fetch(getEndpointUrl('/updates'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', // 26 characters
-      }),
-    })
+  it.each(endpoints)('%s rejects key_id longer than 20 characters', async (path, extra) => {
+    const response = await postPlugin(path, randomUUID().toLowerCase(), { ...extra, key_id: TOO_LONG_KEY_ID })
 
     expect(response.status).toBe(400)
   })
 
-  it('should update key_id on key rotation', async () => {
+  it('/updates updates key_id on key rotation', async () => {
     const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
+    await postPlugin('/updates', deviceId, { key_id: 'KEY1' })
+    await postPlugin('/updates', deviceId, { key_id: 'KEY2' })
 
-    // First request with key1
-    await fetch(getEndpointUrl('/updates'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'KEY1',
-      }),
-    })
-
-    // Second request with key2 (rotation)
-    await fetch(getEndpointUrl('/updates'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'KEY2',
-      }),
-    })
-
-    // Verify key was updated
-    const { data } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('app_id', APP_NAME_KEY_ID)
-      .eq('device_id', deviceId)
-      .maybeSingle() as { data: any }
-
-    expect(data?.key_id).toBe('KEY2')
-  })
-})
-
-describe.skipIf(USE_CLOUDFLARE)('e2E: /stats endpoint with key_id', () => {
-  const supabase = getSupabaseClient()
-
-  it('should accept request WITHOUT key_id (old client)', async () => {
-    const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/stats'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        action: 'set',
-      }),
-    })
-
-    expect(response.status).toBe(200)
-
-    // Verify device was saved without key_id
-    const { data } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('app_id', APP_NAME_KEY_ID)
-      .eq('device_id', deviceId)
-      .maybeSingle() as { data: any }
-
-    expect(data?.key_id).toBeNull()
+    expect(await getDeviceKeyId(deviceId)).toBe('KEY2')
   })
 
-  it('should accept request WITH key_id (new client)', async () => {
-    const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/stats'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        action: 'set',
-        key_id: 'TEST',
-      }),
-    })
-
-    expect(response.status).toBe(200)
-
-    // Verify device was saved with key_id
-    const { data } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('app_id', APP_NAME_KEY_ID)
-      .eq('device_id', deviceId)
-      .maybeSingle() as { data: any }
-
-    expect(data?.key_id).toBe('TEST')
-  })
-
-  it('should reject key_id longer than 20 characters', async () => {
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-
-    const response = await fetch(getEndpointUrl('/stats'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        action: 'set',
-        key_id: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-      }),
-    })
-
-    expect(response.status).toBe(400)
-  })
-})
-
-describe.skipIf(USE_CLOUDFLARE)('e2E: /channel_self endpoint with key_id', () => {
-  const supabase = getSupabaseClient()
-
-  it('should accept POST request WITHOUT key_id (old client)', async () => {
-    const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/channel_self'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(baseData),
-    })
-
-    expect(response.status).toBe(200)
-
-    // Verify device was saved without key_id
-    const { data } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('app_id', APP_NAME_KEY_ID)
-      .eq('device_id', deviceId)
-      .maybeSingle() as { data: any }
-
-    expect(data?.key_id).toBeNull()
-  })
-
-  it('should accept POST request WITH key_id (new client)', async () => {
-    const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/channel_self'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'CHAN',
-      }),
-    })
-
-    expect(response.status).toBe(200)
-
-    // Verify device was saved with key_id
-    const { data } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('app_id', APP_NAME_KEY_ID)
-      .eq('device_id', deviceId)
-      .maybeSingle() as { data: any }
-
-    expect(data?.key_id).toBe('CHAN')
-  })
-
-  it('should reject key_id longer than 20 characters in POST', async () => {
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-
-    const response = await fetch(getEndpointUrl('/channel_self'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-      }),
-    })
-
-    expect(response.status).toBe(400)
-  })
-
-  it('should accept GET request WITHOUT key_id (old client)', async () => {
+  it.each([
+    ['WITHOUT key_id (old client)', undefined],
+    ['WITH key_id (new client)', 'GETS'],
+  ])('/channel_self accepts a GET request %s', async (_name, keyId) => {
     const baseData = getBaseData(APP_NAME_KEY_ID)
     const params = new URLSearchParams()
     params.append('app_id', baseData.app_id!)
     params.append('platform', baseData.platform!)
     params.append('is_emulator', baseData.is_emulator!.toString())
     params.append('is_prod', baseData.is_prod!.toString())
-
-    const response = await fetch(`${getEndpointUrl('/channel_self')}?${params}`, {
-      method: 'GET',
-    })
-
-    expect(response.status).toBe(200)
-  })
-
-  it('should accept GET request WITH key_id (new client)', async () => {
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    const params = new URLSearchParams()
-    params.append('app_id', baseData.app_id!)
-    params.append('platform', baseData.platform!)
-    params.append('is_emulator', baseData.is_emulator!.toString())
-    params.append('is_prod', baseData.is_prod!.toString())
-    params.append('key_id', 'GETS')
+    if (keyId)
+      params.append('key_id', keyId)
 
     const response = await fetch(`${getEndpointUrl('/channel_self')}?${params}`, {
       method: 'GET',
@@ -300,71 +98,17 @@ describe.skipIf(USE_CLOUDFLARE)('e2E: /channel_self endpoint with key_id', () =>
 })
 
 describe.skipIf(!USE_CLOUDFLARE)('e2E: Cloudflare plugin endpoints with key_id', () => {
-  const supabase = getSupabaseClient()
+  it.each(endpoints)('returns %s success without persisting key_id', async (path, extra, keyId) => {
+    const deviceId = randomUUID().toLowerCase()
+    const response = await postPlugin(path, deviceId, { ...extra, key_id: keyId })
 
-  async function expectNoDeviceRow(deviceId: string) {
-    const { count, error } = await supabase
+    expect(response.status).toBe(200)
+    const { count, error } = await getSupabaseClient()
       .from('devices')
       .select('*', { count: 'exact', head: true })
       .eq('app_id', APP_NAME_KEY_ID)
       .eq('device_id', deviceId)
-
     expect(error).toBeNull()
     expect(count).toBe(0)
-  }
-
-  it('returns /updates success without persisting key_id', async () => {
-    const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/updates'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'MIIB',
-      }),
-    })
-
-    expect(response.status).toBe(200)
-    await expectNoDeviceRow(deviceId)
-  })
-
-  it('returns /stats success without persisting key_id', async () => {
-    const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/stats'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        action: 'set',
-        key_id: 'TEST',
-      }),
-    })
-
-    expect(response.status).toBe(200)
-    await expectNoDeviceRow(deviceId)
-  })
-
-  it('returns /channel_self success without persisting key_id', async () => {
-    const deviceId = randomUUID().toLowerCase()
-    const baseData = getBaseData(APP_NAME_KEY_ID)
-    baseData.device_id = deviceId
-
-    const response = await fetch(getEndpointUrl('/channel_self'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...baseData,
-        key_id: 'CHAN',
-      }),
-    })
-
-    expect(response.status).toBe(200)
-    await expectNoDeviceRow(deviceId)
   })
 })

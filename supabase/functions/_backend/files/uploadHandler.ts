@@ -63,6 +63,12 @@ interface StoredUploadInfo {
   checksum?: Uint8Array
   multipartUploadId?: string
   contentType?: string
+  // Storage key bound at creation; later PATCH/HEAD requests must target the same key.
+  r2Key?: string
+}
+
+function isUploadKeyMismatch(uploadInfo: StoredUploadInfo | undefined, r2Key: string): boolean {
+  return uploadInfo?.r2Key != null && uploadInfo.r2Key !== r2Key
 }
 
 const TUS_UPLOAD_CONTENT_TYPE = 'application/offset+octet-stream'
@@ -360,7 +366,7 @@ export class UploadHandler extends DurableObject {
       hasContent,
     })
 
-    const uploadInfo: StoredUploadInfo = {}
+    const uploadInfo: StoredUploadInfo = { r2Key }
 
     const expiration = new Date(Date.now() + UPLOAD_EXPIRATION_MS)
     await this.ctx.storage.setAlarm(expiration)
@@ -426,6 +432,10 @@ export class UploadHandler extends DurableObject {
     }
     else {
       const info: StoredUploadInfo | undefined = await this.ctx.storage.get(UPLOAD_INFO_KEY)
+      if (isUploadKeyMismatch(info, r2Key)) {
+        cloudlog({ requestId: c.get('requestId'), message: 'in DO files head upload key mismatch', r2Key })
+        return quickError(400, 'upload_key_mismatch', 'Upload key does not match the created upload')
+      }
       uploadLength = info?.uploadLength
     }
 
@@ -483,6 +493,10 @@ export class UploadHandler extends DurableObject {
     const uploadInfo: StoredUploadInfo | undefined = await this.ctx.storage.get(UPLOAD_INFO_KEY)
     if (uploadInfo == null) {
       throw new UnrecoverableError('existing upload should have had uploadInfo', r2Key)
+    }
+    if (isUploadKeyMismatch(uploadInfo, r2Key)) {
+      cloudlog({ requestId: c.get('requestId'), message: 'in DO files patch upload key mismatch', r2Key })
+      return quickError(400, 'upload_key_mismatch', 'Upload key does not match the created upload')
     }
     const headerUploadLength = readIntFromHeader(c.req.raw.headers, 'Upload-Length')
     if (uploadInfo.uploadLength != null && !Number.isNaN(headerUploadLength) && uploadInfo.uploadLength !== headerUploadLength) {

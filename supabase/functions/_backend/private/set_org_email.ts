@@ -7,7 +7,8 @@ import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { updateCustomerEmail } from '../utils/stripe.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
 const bodySchema = z.object({
   email: z.email(),
@@ -30,12 +31,18 @@ app.post('/', middlewareAuth(), async (c) => {
   const safeBody = parsedBodyResult.data
 
   // Use authenticated client for data queries - RLS will enforce access
-  const supabase = supabaseWithAuth(c, auth)
-
-  const { data: organization, error: organizationError } = await supabase.from('orgs')
-    .select('customer_id, management_email, created_by, name')
-    .eq('id', safeBody.org_id)
-    .maybeSingle()
+  let organization: { customer_id: string | null, management_email: string, created_by: string, name: string } | null = null
+  let organizationError: unknown = null
+  try {
+    organization = await withRlsContext(c, authPrincipal(c, auth), client => queryJsonOne<{ customer_id: string | null, management_email: string, created_by: string, name: string }>(
+      client,
+      'SELECT customer_id, management_email, created_by, name FROM public.orgs WHERE id = $1',
+      [safeBody.org_id],
+    ))
+  }
+  catch (error) {
+    organizationError = error
+  }
 
   if (organizationError) {
     return quickError(500, 'internal_error', 'Failed to fetch organization', { orgId: safeBody.org_id, organizationError })
@@ -56,11 +63,19 @@ app.post('/', middlewareAuth(), async (c) => {
   await updateCustomerEmail(c, organization.customer_id, safeBody.email)
 
   // Update supabase
-  const { data: updatedOrg, error: updateOrgErr } = await supabaseAdmin(c).from('orgs')
-    .update({ management_email: safeBody.email })
-    .eq('id', safeBody.org_id)
-    .select('id')
-    .maybeSingle()
+  let updatedOrg: { id: string } | undefined
+  let updateOrgErr: unknown = null
+  const pg = await getPgClient(c)
+  try {
+    const result = await pg.query<{ id: string }>('UPDATE public.orgs SET management_email = $1 WHERE id = $2 RETURNING id', [safeBody.email, safeBody.org_id])
+    updatedOrg = result.rows[0]
+  }
+  catch (error) {
+    updateOrgErr = error
+  }
+  finally {
+    closeClient(c, pg)
+  }
 
   if (updateOrgErr || !updatedOrg) {
     // revert stripe

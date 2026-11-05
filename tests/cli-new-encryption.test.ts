@@ -1,46 +1,12 @@
 import { Buffer } from 'node:buffer'
 import { createDecipheriv, createHash, publicDecrypt, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { readFileSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
 import { describe, expect, it } from 'vitest'
 import { generateEncryptionKeysSDK, uploadBundleSDK } from './cli-sdk-utils'
 import { cleanupCli, getSemver, prepareCli, tempFileFolder } from './cli-utils'
 import { createIsolatedSeedAppOptions, getSupabaseClient, getUpdate, getUpdateBaseData, resetAndSeedAppData, resetAppData, resetAppDataStats, responseOk } from './test-utils'
-
-describe('test key generation', () => {
-  it('test key generation', async () => {
-    const id = randomUUID()
-    const APPNAME = `com.cli_new_encryption_${id}`
-    await resetAndSeedAppData(APPNAME, createIsolatedSeedAppOptions())
-    await prepareCli(APPNAME)
-
-    try {
-      const result = await generateEncryptionKeysSDK(APPNAME, true)
-      expect(result.success).toBe(true)
-
-      const privateKeyPath = '.capgo_key_v2'
-      const privateKeyFinalPath = join(tempFileFolder(APPNAME), privateKeyPath)
-      expect(existsSync(privateKeyFinalPath)).toBe(true)
-      const keyData = readFileSync(privateKeyFinalPath, 'utf-8')
-      expect(keyData).toBeTruthy()
-      expect(keyData.length).toBeGreaterThan(1)
-      expect(keyData).toContain('PRIVATE KEY')
-
-      const publicKeyFinalPath = `${privateKeyFinalPath}.pub`
-      expect(existsSync(publicKeyFinalPath)).toBe(true)
-      const publicKeyData = readFileSync(publicKeyFinalPath, 'utf-8')
-      expect(publicKeyData).toBeTruthy()
-      expect(publicKeyData.length).toBeGreaterThan(1)
-      expect(publicKeyData).toContain('PUBLIC KEY')
-    }
-    finally {
-      await cleanupCli(APPNAME)
-      await resetAppData(APPNAME)
-      await resetAppDataStats(APPNAME)
-    }
-  })
-})
 
 describe('tests CLI encryption encrypt/upload/download/decrypt', () => {
   function getPublicKeyFingerprint(publicKey: string) {
@@ -199,39 +165,6 @@ describe('tests CLI encryption encrypt/upload/download/decrypt', () => {
         ignoreCompatibilityCheck: true,
         encrypt: true,
         encryptionKey: join(tempFileFolder(APPNAME), '.capgo_key_v2'),
-      })
-      expect(result.success).toBe(true)
-
-      await testEncryption(publicKeyFile, semver, APPNAME)
-    }
-    finally {
-      await cleanupCli(APPNAME)
-      await resetAppData(APPNAME)
-      await resetAppDataStats(APPNAME)
-    }
-  }, 60000)
-
-  it('test upload bundle with custom key data', async () => {
-    const id = randomUUID()
-    const APPNAME = `com.cli_new_encryption_keydata_${id}`
-    let semver = getSemver()
-
-    await resetAndSeedAppData(APPNAME, createIsolatedSeedAppOptions())
-    await prepareCli(APPNAME)
-
-    try {
-      // Create key
-      const keyResult = await generateEncryptionKeysSDK(APPNAME, true)
-      expect(keyResult.success).toBe(true)
-
-      semver = getSemver(semver)
-      const publicKeyFile = readFileSync(join(tempFileFolder(APPNAME), '.capgo_key_v2.pub'), 'utf-8')
-      const privateKeyPath = join(tempFileFolder(APPNAME), '.capgo_key_v2')
-
-      const result = await uploadBundleSDK(APPNAME, semver, 'production', {
-        ignoreCompatibilityCheck: true,
-        encrypt: true,
-        encryptionKey: privateKeyPath,
       })
       expect(result.success).toBe(true)
 

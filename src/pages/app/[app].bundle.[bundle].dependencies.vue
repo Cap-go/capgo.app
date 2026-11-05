@@ -1,17 +1,20 @@
 <script setup lang="ts">
+import type { BundleSummaryWithNativePackages } from '~/services/bundleColumns'
 import type { IncompatibilityReason, NativePackage, PackageComparison, PackageStatus } from '~/services/bundleCompatibility'
-import type { Database } from '~/types/supabase.types'
-import { FormKit } from '@formkit/vue'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconExternalLink from '~icons/heroicons/arrow-top-right-on-square'
 import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import EmptyState from '~/components/EmptyState.vue'
+import FormField from '~/components/forms/FormField.vue'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '~/services/bundleCompatibility'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 type VersionRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name' | 'created_at' | 'manifest_count' | 'app_id'>
@@ -41,12 +44,12 @@ const route = useRoute()
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
 const tableLoading = ref(false)
-const version = ref<Database['public']['Tables']['app_versions']['Row']>()
+const version = ref<BundleSummaryWithNativePackages>()
 const selectedCompareVersion = ref<VersionRow | null>(null)
 const baselinePackages = ref<NativePackage[]>([])
 const baselinePackagesCache = ref<Record<number, NativePackage[]>>({})
@@ -262,7 +265,7 @@ function openNpmPackage(packageName: string) {
 async function fetchBaselinePackages(versionId: number) {
   if (!packageId.value)
     return []
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .select('id, native_packages')
     .eq('app_id', packageId.value)
@@ -282,9 +285,9 @@ async function getVersion() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('app_versions')
-      .select()
+      .select(`${BUNDLE_SUMMARY_COLUMNS}, native_packages`)
       .eq('app_id', packageId.value)
       .eq('id', id.value)
       .single()
@@ -345,7 +348,7 @@ async function restoreCompareFromQuery() {
   // bundle or one without native packages (which the picker excludes), else the
   // baseline load would coerce missing packages to [] and report every
   // dependency as newly added/incompatible. Scrub the param if it doesn't match.
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .select('id, name, created_at, manifest_count, app_id')
     .eq('app_id', packageId.value)
@@ -558,12 +561,13 @@ watch(bundleRouteKey, async (key) => {
 
               <div class="px-2 pb-2 relative">
                 <div class="px-2 py-3">
-                  <FormKit
+                  <FormField
                     v-model="search"
                     :prefix-icon="IconSearch"
                     :placeholder="t('search-by-name')"
+                    :aria-label="t('search-by-name')"
                     :disabled="tableLoading"
-                    :classes="{ outer: 'mb-0! w-full md:w-96' }"
+                    outer-class="mb-0! w-full md:w-96"
                   />
                 </div>
 
@@ -739,18 +743,19 @@ watch(bundleRouteKey, async (key) => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('bundle-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('bundle-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
-        {{ t('back-to-bundles') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('bundle-not-found')"
+      :description="t('bundle-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
+          {{ t('back-to-bundles') }}
+        </button>
+      </template>
+    </EmptyState>
   </div>
 </template>
 

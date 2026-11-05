@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { invokeCapgoApi } from '~/services/capgoApi'

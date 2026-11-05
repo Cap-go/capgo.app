@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0" stop-color="#06304d"/>
+      <stop offset="1" stop-color="#001827"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#119eff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#119eff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="topBase" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2aa8ff"/>
+      <stop offset="1" stop-color="#119eff"/>
+    </linearGradient>
+    <linearGradient id="topBaseAccent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2ccdbd"/>
+      <stop offset="1" stop-color="#14a0c8"/>
+    </linearGradient>
+    <linearGradient id="topLit" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8fd3ff"/>
+      <stop offset="1" stop-color="#119eff"/>
+    </linearGradient>
+    <linearGradient id="topAccent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7ff0de"/>
+      <stop offset="0.5" stop-color="#1FB2A5"/>
+      <stop offset="1" stop-color="#119eff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <ellipse cx="512" cy="556" rx="380" ry="260" fill="url(#glow)"/>
+  <g stroke="#8fd3ff" stroke-opacity="0.3" stroke-width="5" stroke-linejoin="round" stroke-dasharray="16 12">
+    <polygon points="282,332 512,447 512,493 282,378" fill="#0b3350" fill-opacity="0.35"/>
+    <polygon points="512,447 742,332 742,378 512,493" fill="#0b3350" fill-opacity="0.25"/>
+    <polygon points="512,217 742,332 512,447 282,332" fill="#0b3350" fill-opacity="0.45"/>
+  </g>
+  <g stroke="#8fd3ff" stroke-opacity="0.3" stroke-width="5" stroke-linejoin="round" stroke-dasharray="16 12">
+    <polygon points="282,444 512,559 512,605 282,490" fill="#0b3350" fill-opacity="0.35"/>
+    <polygon points="512,559 742,444 742,490 512,605" fill="#0b3350" fill-opacity="0.25"/>
+    <polygon points="512,329 742,444 512,559 282,444" fill="#0b3350" fill-opacity="0.45"/>
+  </g>
+  <g stroke-linejoin="round">
+    <polygon points="282,668 512,783 512,829 282,714" fill="#0b7fd1"/>
+    <polygon points="512,783 742,668 742,714 512,829" fill="#0763a8"/>
+    <polygon points="512,553 742,668 512,783 282,668" fill="url(#topBase)" stroke="#ffffff" stroke-opacity="0.25" stroke-width="4"/>
+  </g>
+  <g stroke-linejoin="round">
+    <polygon points="282,556 512,671 512,717 282,602" fill="#0b7fd1"/>
+    <polygon points="512,671 742,556 742,602 512,717" fill="#0763a8"/>
+    <polygon points="512,441 742,556 512,671 282,556" fill="url(#topLit)" stroke="#ffffff" stroke-opacity="0.55" stroke-width="4"/>
+  </g>
+</svg>

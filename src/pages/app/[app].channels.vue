@@ -1,24 +1,22 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { ref, watchEffect } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import IconAlertCircle from '~icons/lucide/alert-circle'
-import { useSupabase } from '~/services/supabase'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
-const { t } = useI18n()
 const id = ref('')
 const route = useRoute('/app/[app].channels')
 const lastPath = ref('')
 const isLoading = ref(false)
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 
 async function loadAppInfo() {
   try {
-    const { data: dataApp } = await supabase
+    const { data: dataApp } = await capgo
       .from('apps')
       .select()
       .eq('app_id', id.value)
@@ -57,25 +55,14 @@ watchEffect(async () => {
     <div v-if="app || isLoading">
       <div class="mt-0">
         <div class="w-full h-full px-0 pt-6 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
-          <SectionIntro section="channels" />
+          <SectionIntro section="channels" hide-explanation />
           <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
             <ChannelTable :app-id="id" />
           </div>
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
   </div>
 </template>
 

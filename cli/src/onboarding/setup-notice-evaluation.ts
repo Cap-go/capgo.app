@@ -5,7 +5,7 @@ import { trimTrailingSlashes } from '../utils'
 import { setupDebug, setupError } from './setup-diagnostics'
 
 export const SETUP_PROGRESS_TIMEOUT_MS = 15_000
-export async function readSetupProgress(prepared: Omit<PreparedOnboardingCheck, 'attemptId'>, cancellation?: AbortSignal): Promise<AppTodoProgress | undefined> {
+export async function readSetupProgress(prepared: Pick<PreparedOnboardingCheck, 'apiHost' | 'apikey'> & { project: { appId: string } }, cancellation?: AbortSignal): Promise<AppTodoProgress | undefined> {
   const started = Date.now()
   setupDebug('progress request started', { budget_ms: SETUP_PROGRESS_TIMEOUT_MS, include_billing: true })
   const controller = new AbortController()
@@ -18,11 +18,11 @@ export async function readSetupProgress(prepared: Omit<PreparedOnboardingCheck, 
       (async () => {
         const response = await fetch(`${trimTrailingSlashes(prepared.apiHost)}/private/onboarding_progress`, {
           method: 'POST',
-          redirect: 'error',
+          redirect: 'manual',
           signal: controller.signal,
           headers: buildCliRequestHeaders({
             'Content-Type': 'application/json',
-            'Authorization': prepared.apiHost.includes('/functions/v1') && prepared.anonKey ? `Bearer ${prepared.anonKey}` : prepared.apikey,
+            'Authorization': prepared.apikey,
             'capgkey': prepared.apikey,
           }),
           body: JSON.stringify({ appId: prepared.project.appId, N: 0, initial: true, includeBilling: true }),

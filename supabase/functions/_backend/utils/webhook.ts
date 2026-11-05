@@ -1,9 +1,36 @@
 import type { Context } from 'hono'
+import type { PgClient } from './pg.ts'
+import type { Database } from './supabase.types.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
+import { queryJson } from './pg_rls.ts'
 import { getPublicHostnameValidationError, getPublicUrlSyntaxValidationError } from './publicUrl.ts'
-import { supabaseAdmin } from './supabase.ts'
 import { getEnv } from './utils.ts'
+
+type WebhookRow = Database['public']['Tables']['webhooks']['Row']
+type WebhookDeliveryRow = Database['public']['Tables']['webhook_deliveries']['Row']
+
+async function withAdminPg<T>(c: Context, run: (pg: PgClient) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await run(pg)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
+// Runs an UPDATE whose failure the callers only log.
+async function updateOrLog(c: Context, message: string, text: string, values: unknown[]): Promise<boolean> {
+  try {
+    await withAdminPg(c, pg => pg.query(text, values))
+    return true
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message, error: serializeError(error) })
+    return false
+  }
+}
 
 // Webhook payload structure sent to user endpoints
 export interface WebhookPayload {
@@ -202,20 +229,17 @@ export async function findWebhooksForEvent(
   orgId: string,
   tableName: string,
 ) {
-  // Note: Using type assertion as webhooks table types are not yet generated
-  const { data: webhooks, error } = await supabaseAdmin(c)
-    .from('webhooks')
-    .select('*')
-    .eq('org_id', orgId)
-    .eq('enabled', true)
-    .contains('events', [tableName])
-
-  if (error) {
+  try {
+    return await withAdminPg(c, pg => queryJson<WebhookRow>(
+      pg,
+      'SELECT * FROM public.webhooks WHERE org_id = $1 AND enabled = true AND events @> ARRAY[$2]::text[]',
+      [orgId, tableName],
+    ))
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error finding webhooks', error: serializeError(error) })
     return []
   }
-
-  return webhooks || []
 }
 
 /**
@@ -232,27 +256,20 @@ export async function createDeliveryRecord(
 ) {
   const requestPayload = buildWebhookDeliveryPayload(payload, deliveryVersion)
 
-  // Note: Using type assertion as webhook_deliveries table types are not yet generated
-  const { data: delivery, error } = await supabaseAdmin(c)
-    .from('webhook_deliveries')
-    .insert({
-      webhook_id: webhookId,
-      org_id: orgId,
-      audit_log_id: auditLogId,
-      event_type: eventType,
-      request_payload: requestPayload as any,
-      delivery_version: deliveryVersion,
-      status: 'pending',
-    })
-    .select()
-    .single()
-
-  if (error) {
+  try {
+    const [delivery] = await withAdminPg(c, pg => queryJson<WebhookDeliveryRow>(
+      pg,
+      `INSERT INTO public.webhook_deliveries (webhook_id, org_id, audit_log_id, event_type, request_payload, delivery_version, status)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, 'pending')
+       RETURNING *`,
+      [webhookId, orgId, auditLogId, eventType, JSON.stringify(requestPayload), deliveryVersion],
+    ))
+    return delivery ?? null
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error creating delivery record', error: serializeError(error) })
     return null
   }
-
-  return delivery
 }
 
 /**
@@ -579,20 +596,12 @@ export async function updateDeliveryResult(
   responseBody: string | null,
   duration: number,
 ): Promise<void> {
-  const { error } = await supabaseAdmin(c)
-    .from('webhook_deliveries')
-    .update({
-      status: success ? 'success' : 'failed',
-      response_status: responseStatus,
-      response_body: responseBody,
-      completed_at: new Date().toISOString(),
-      duration_ms: duration,
-    })
-    .eq('id', deliveryId)
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error updating delivery result', error: serializeError(error) })
-  }
+  await updateOrLog(
+    c,
+    'Error updating delivery result',
+    'UPDATE public.webhook_deliveries SET status = $2, response_status = $3, response_body = $4, completed_at = $5, duration_ms = $6 WHERE id = $1',
+    [deliveryId, success ? 'success' : 'failed', responseStatus, responseBody, new Date().toISOString(), duration],
+  )
 }
 
 /**
@@ -602,25 +611,28 @@ export async function incrementAttemptCount(
   c: Context,
   deliveryId: string,
 ): Promise<number> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('webhook_deliveries')
-    .select('attempt_count')
-    .eq('id', deliveryId)
-    .single()
+  return withAdminPg(c, async (pg) => {
+    let attemptCount: number | undefined
+    let error: unknown = null
+    try {
+      attemptCount = (await pg.query<{ attempt_count: number }>('SELECT attempt_count FROM public.webhook_deliveries WHERE id = $1', [deliveryId])).rows[0]?.attempt_count
+    }
+    catch (lookupError) {
+      error = lookupError
+    }
+    if (attemptCount === undefined) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting attempt count', error: serializeError(error) })
+      return 0
+    }
 
-  if (error || !data) {
+    const newCount = attemptCount + 1
+    // As before, a failed write is not reported: the caller proceeds with the new count.
+    await pg.query('UPDATE public.webhook_deliveries SET attempt_count = $2 WHERE id = $1', [deliveryId, newCount]).catch(() => {})
+    return newCount
+  }).catch((error: unknown) => {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting attempt count', error: serializeError(error) })
     return 0
-  }
-
-  const newCount = data.attempt_count + 1
-
-  await supabaseAdmin(c)
-    .from('webhook_deliveries')
-    .update({ attempt_count: newCount })
-    .eq('id', deliveryId)
-
-  return newCount
+  })
 }
 
 /**
@@ -636,17 +648,12 @@ export async function scheduleRetry(
   const retryDelaySeconds = getWebhookRetryDelaySeconds(attemptCount, retryAfter, responseStatus)
   const nextRetryAt = new Date(Date.now() + retryDelaySeconds * 1000).toISOString()
 
-  const { error } = await supabaseAdmin(c)
-    .from('webhook_deliveries')
-    .update({
-      next_retry_at: nextRetryAt,
-      status: 'pending',
-    })
-    .eq('id', deliveryId)
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error scheduling retry', error: serializeError(error) })
-  }
+  await updateOrLog(
+    c,
+    'Error scheduling retry',
+    'UPDATE public.webhook_deliveries SET next_retry_at = $2, status = \'pending\' WHERE id = $1',
+    [deliveryId, nextRetryAt],
+  )
 
   cloudlog({
     requestId: c.get('requestId'),
@@ -668,15 +675,8 @@ export async function disableWebhook(
   c: Context,
   webhookId: string,
 ): Promise<void> {
-  const { error } = await supabaseAdmin(c)
-    .from('webhooks')
-    .update({ enabled: false })
-    .eq('id', webhookId)
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error disabling webhook', error: serializeError(error) })
+  if (!await updateOrLog(c, 'Error disabling webhook', 'UPDATE public.webhooks SET enabled = false WHERE id = $1', [webhookId]))
     return
-  }
 
   cloudlog({
     requestId: c.get('requestId'),
@@ -692,17 +692,12 @@ export async function markDeliveryFailed(
   c: Context,
   deliveryId: string,
 ): Promise<void> {
-  const { error } = await supabaseAdmin(c)
-    .from('webhook_deliveries')
-    .update({
-      status: 'failed',
-      next_retry_at: null,
-    })
-    .eq('id', deliveryId)
-
-  if (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Error marking delivery failed', error: serializeError(error) })
-  }
+  await updateOrLog(
+    c,
+    'Error marking delivery failed',
+    'UPDATE public.webhook_deliveries SET status = \'failed\', next_retry_at = NULL WHERE id = $1',
+    [deliveryId],
+  )
 }
 
 /**
@@ -712,18 +707,23 @@ export async function getWebhookById(
   c: Context,
   webhookId: string,
 ) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('webhooks')
-    .select('*, orgs!inner(management_email)')
-    .eq('id', webhookId)
-    .single()
-
-  if (error) {
+  try {
+    const rows = await withAdminPg(c, pg => queryJson<WebhookRow & { orgs: { management_email: string } }>(
+      pg,
+      `SELECT w.*, pg_catalog.json_build_object('management_email', o.management_email) AS orgs
+       FROM public.webhooks AS w
+       INNER JOIN public.orgs AS o ON o.id = w.org_id
+       WHERE w.id = $1`,
+      [webhookId],
+    ))
+    if (rows.length !== 1)
+      throw Object.assign(new Error('JSON object requested, multiple (or no) rows returned'), { code: 'PGRST116' })
+    return rows[0]
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting webhook', error: serializeError(error) })
     return null
   }
-
-  return data
 }
 
 /**
@@ -733,18 +733,16 @@ export async function getDeliveryById(
   c: Context,
   deliveryId: string,
 ) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('webhook_deliveries')
-    .select('*')
-    .eq('id', deliveryId)
-    .single()
-
-  if (error) {
+  try {
+    const rows = await withAdminPg(c, pg => queryJson<WebhookDeliveryRow>(pg, 'SELECT * FROM public.webhook_deliveries WHERE id = $1', [deliveryId]))
+    if (rows.length !== 1)
+      throw Object.assign(new Error('JSON object requested, multiple (or no) rows returned'), { code: 'PGRST116' })
+    return rows[0]
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error getting delivery', error: serializeError(error) })
     return null
   }
-
-  return data
 }
 
 /**

@@ -4,24 +4,22 @@ import FakeTimers from '@sinonjs/fake-timers'
 import { readSetupProgress, SETUP_PROGRESS_TIMEOUT_MS } from '../src/onboarding/setup-notice-evaluation.ts'
 
 const prepared = { project: { appId: 'com.example.request' }, apikey: 'fake-key', apiHost: 'https://api.example.com' }
-test('the sole progress request explicitly asks for billing and preserves both auth forms', async () => {
+test('the sole progress request explicitly asks for billing and sends the API key as both auth headers', async () => {
   const nativeFetch = globalThis.fetch
   const data = { onboarding: { setup: { todo_list_version: 4 } }, billing: { status: 'unavailable' } }
   try {
-    for (const options of [prepared, { ...prepared, apiHost: 'http://localhost:54321/functions/v1', anonKey: 'fake-anon' }]) {
-      let calls = 0
-      globalThis.fetch = async (url, init) => {
-        calls++
-        assert.equal(url, options.apiHost + '/private/onboarding_progress')
-        assert.equal(init.redirect, 'error')
-        assert.equal(init.headers.capgkey, options.apikey)
-        assert.equal(init.headers.Authorization, options.anonKey ? 'Bearer fake-anon' : 'fake-key')
-        assert.deepEqual(JSON.parse(init.body), { appId: prepared.project.appId, N: 0, initial: true, includeBilling: true })
-        return Response.json(data)
-      }
-      assert.deepEqual(await readSetupProgress(options), data)
-      assert.equal(calls, 1, 'no config, owner, Stripe or billing RPC fan-out')
+    let calls = 0
+    globalThis.fetch = async (url, init) => {
+      calls++
+      assert.equal(url, prepared.apiHost + '/private/onboarding_progress')
+      assert.equal(init.redirect, 'manual')
+      assert.equal(init.headers.capgkey, prepared.apikey)
+      assert.equal(init.headers.Authorization, prepared.apikey)
+      assert.deepEqual(JSON.parse(init.body), { appId: prepared.project.appId, N: 0, initial: true, includeBilling: true })
+      return Response.json(data)
     }
+    assert.deepEqual(await readSetupProgress(prepared), data)
+    assert.equal(calls, 1, 'no config, owner, Stripe or billing RPC fan-out')
   }
   finally { globalThis.fetch = nativeFetch }
 })

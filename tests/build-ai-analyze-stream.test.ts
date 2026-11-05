@@ -2,17 +2,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { aiAnalyzeStreamBuild } from '../supabase/functions/_backend/public/build/ai_analyze_stream'
 
-const { mockSupabaseApikey, mockSupabaseAdmin, mockCheckPermission, mockGetEnv, mockSendEventToTracking } = vi.hoisted(() => ({
-  mockSupabaseApikey: vi.fn(),
-  mockSupabaseAdmin: vi.fn(),
+const { mockRlsQuery, mockAdminQuery, mockCheckPermission, mockGetEnv, mockSendEventToTracking } = vi.hoisted(() => ({
+  mockRlsQuery: vi.fn(),
+  mockAdminQuery: vi.fn(),
   mockCheckPermission: vi.fn(),
   mockGetEnv: vi.fn(),
   mockSendEventToTracking: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: mockSupabaseApikey,
-  supabaseAdmin: mockSupabaseAdmin,
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mockRlsQuery }),
+  }
+})
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  getPgClient: async () => ({ query: mockAdminQuery }),
+  closeClient: () => {},
 }))
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({ checkPermission: mockCheckPermission }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({ getEnv: mockGetEnv }))
@@ -42,33 +49,22 @@ interface MockDbOpts {
   claimRows?: Array<{ builder_job_id: string }>
 }
 
-// Wires the user-context SELECT chain and the admin claim/refund UPDATE chain.
-// Claim chain: .update({ai_analyzed:true}).eq(jobId).eq(appId).eq('ai_analyzed', false).select(...)
-// Refund chain: .update({ai_analyzed:false}).eq(jobId).eq(appId).select(...)
+// Wires the API-key RLS SELECT and the admin claim/refund UPDATE.
+// Claim: SET ai_analyzed = true ... AND ai_analyzed = false. Refund: SET ai_analyzed = false.
 function mockDb(opts: MockDbOpts = {}) {
   const row = opts.row === undefined ? { app_id: appId, status: 'failed', owner_org: orgId } : opts.row
-  const eqAppId = { maybeSingle: vi.fn().mockResolvedValue({ data: row, error: null }) }
-  const eqJob = { eq: vi.fn().mockReturnValue(eqAppId) }
-  const select = { eq: vi.fn().mockReturnValue(eqJob) }
-  mockSupabaseApikey.mockReturnValue({
-    from: vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue(select) }),
-  })
+  mockRlsQuery.mockResolvedValue({ rows: row ? [{ row }] : [] })
 
   const claimRows = opts.claimRows ?? [{ builder_job_id: jobId }]
   const updateCalls: Array<Record<string, unknown>> = []
-  const adminUpdate = vi.fn().mockImplementation((values: Record<string, unknown>) => {
-    updateCalls.push(values)
-    // Claim has three .eq() calls; refund has two. Support both via a chain
-    // where every .eq() returns the same object and .select() resolves.
-    const chain: any = {}
-    chain.eq = vi.fn().mockReturnValue(chain)
-    chain.select = vi.fn().mockResolvedValue({
-      data: values.ai_analyzed === true ? claimRows : [{ builder_job_id: jobId }],
-      error: null,
-    })
-    return chain
+  const adminUpdate = mockAdminQuery.mockImplementation(async (text: string, params: unknown[]) => {
+    const value = params[2] as boolean
+    updateCalls.push({ ai_analyzed: value })
+    if (value)
+      expect(text).toContain('AND ai_analyzed = false')
+    const rows = value ? claimRows : [{ builder_job_id: jobId }]
+    return { rows, rowCount: rows.length }
   })
-  mockSupabaseAdmin.mockReturnValue({ from: vi.fn().mockReturnValue({ update: adminUpdate }) })
   return { adminUpdate, updateCalls }
 }
 
@@ -94,8 +90,8 @@ function resultEvents() {
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  mockSupabaseApikey.mockReset()
-  mockSupabaseAdmin.mockReset()
+  mockRlsQuery.mockReset()
+  mockAdminQuery.mockReset()
   mockCheckPermission.mockReset()
   mockGetEnv.mockReset()
   mockSendEventToTracking.mockReset()
@@ -110,13 +106,12 @@ describe('aiAnalyzeStreamBuild', () => {
   it('claims the flag BEFORE calling the builder, with the conditional ai_analyzed=false guard', async () => {
     const { adminUpdate } = mockDb()
     const order: string[] = []
-    adminUpdate.mockImplementationOnce((values: Record<string, unknown>) => {
+    adminUpdate.mockImplementationOnce(async (text: string, params: unknown[]) => {
       order.push('claim')
-      const chain: any = {}
-      chain.eq = vi.fn().mockReturnValue(chain)
-      chain.select = vi.fn().mockResolvedValue({ data: [{ builder_job_id: jobId }], error: null })
-      expect(values).toEqual({ ai_analyzed: true })
-      return chain
+      expect(text).toContain('SET ai_analyzed = $3')
+      expect(text).toContain('AND ai_analyzed = false')
+      expect(params).toEqual([jobId, appId, true])
+      return { rows: [{ builder_job_id: jobId }], rowCount: 1 }
     })
     ;(globalThis.fetch as any).mockImplementation(() => {
       order.push('fetch')

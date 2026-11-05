@@ -277,7 +277,8 @@ export async function isAPIKeyRateLimited(c: Context, apiKeyId: number, scope: A
     return { limited: false }
 
   const limit = getAPIKeyRateLimit(c, scope)
-  const isLimited = data.count >= limit
+  // Usage is recorded before this check, so the request that brings the count to the limit is still allowed.
+  const isLimited = data.count > limit
 
   if (isLimited) {
     cloudlog({
@@ -298,17 +299,47 @@ export async function isAPIKeyRateLimited(c: Context, apiKeyId: number, scope: A
  * Tracks the number of calls per API key within the configured time window.
  * This should be awaited to ensure accurate counting before checking limits.
  */
-export async function recordAPIKeyUsage(c: Context, apiKeyId: number, scope: APIKeyRateLimitScope = 'default'): Promise<void> {
+export async function recordAPIKeyUsage(c: Context, apiKeyId: number, scope: APIKeyRateLimitScope = 'default'): Promise<RateLimitData> {
   const cacheHelper = new CacheHelper(c)
   const cacheKey = cacheHelper.buildRequest(getAPIKeyRateLimitPath(scope), { id: String(apiKeyId) })
   const existingData = await cacheHelper.matchJson<RateLimitData>(cacheKey)
 
+  // Fixed window: keep the running window's reset time so continued (or rejected) calls cannot extend it.
+  const now = Date.now()
+  const windowOpen = typeof existingData?.resetAt === 'number' && existingData.resetAt > now
   const newData: RateLimitData = {
-    count: (existingData?.count ?? 0) + 1,
-    resetAt: Date.now() + API_KEY_RATE_LIMIT_TTL * 1000,
+    count: (windowOpen ? existingData.count : 0) + 1,
+    resetAt: windowOpen ? existingData.resetAt : now + API_KEY_RATE_LIMIT_TTL * 1000,
   }
 
-  await cacheHelper.putJson(cacheKey, newData, API_KEY_RATE_LIMIT_TTL)
+  await cacheHelper.putJson(cacheKey, newData, getRateLimitWindowSeconds(newData.resetAt!, now))
+  return newData
+}
+
+function formatRateLimitPolicy(name: string, quota: number, windowSeconds: number) {
+  return `"${name}";q=${quota};w=${windowSeconds}`
+}
+
+/**
+ * Advertise the per-IP failed-auth policy (draft-ietf-httpapi-ratelimit-headers) before a key is resolved,
+ * so 401 responses still tell clients how many bad attempts they get. Replaced once a key authenticates.
+ */
+export function setFailedAuthRateLimitPolicyHeader(c: Context) {
+  c.header('RateLimit-Policy', formatRateLimitPolicy('failed-auth', getFailedAuthLimit(c), FAILED_AUTH_TTL))
+}
+
+/**
+ * Expose the API key quota (draft-ietf-httpapi-ratelimit-headers) so agents can self-throttle:
+ * RateLimit-Policy: "apikey";q=2000;w=60 and RateLimit: "apikey";r=<remaining>;t=<seconds to reset>.
+ */
+export function setAPIKeyRateLimitHeaders(c: Context, scope: APIKeyRateLimitScope, usage: RateLimitData) {
+  const name = scope === 'upload' ? 'apikey-upload' : 'apikey'
+  const limit = getAPIKeyRateLimit(c, scope)
+  const resetSeconds = usage.resetAt === undefined
+    ? API_KEY_RATE_LIMIT_TTL
+    : Math.max(0, Math.ceil((usage.resetAt - Date.now()) / 1000))
+  c.header('RateLimit-Policy', formatRateLimitPolicy(name, limit, API_KEY_RATE_LIMIT_TTL))
+  c.header('RateLimit', `"${name}";r=${Math.max(0, limit - usage.count)};t=${resetSeconds}`)
 }
 
 /**

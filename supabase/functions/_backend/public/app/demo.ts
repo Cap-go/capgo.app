@@ -4,9 +4,9 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { lockOnboardingApp, unlockOnboardingApp } from '../../utils/demo.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
-import { closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { beginWriteTransaction, closeClient, getPgClient, logPgError } from '../../utils/pg.ts'
+import { queryJson } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 
 /** Request body for creating a demo app */
 export interface CreateDemoApp {
@@ -281,7 +281,7 @@ async function seedOnboardingDemoDataInTransaction(
   let shouldRollback = false
 
   try {
-    await pgClient.query('BEGIN')
+    await beginWriteTransaction(pgClient)
     shouldRollback = true
 
     await pgClient.query('SELECT public.reset_onboarding_demo_app_data($1::uuid)', [options.appUuid])
@@ -384,44 +384,48 @@ async function seedOnboardingDemoDataInTransaction(
       options.seedId,
     )
 
-    const manifestResult = await pgClient.query<{ id: number }>(
-      `WITH input AS (
-        SELECT *
-        FROM jsonb_to_recordset($1::jsonb) AS manifest_data(
-          version_name text,
-          file_name text,
-          s3_path text,
-          file_hash text,
-          file_size bigint
-        )
-      )
-      INSERT INTO public.manifest (
-        app_version_id,
-        file_name,
-        s3_path,
-        file_hash,
-        file_size
-      )
+    // Demo files go into the shared delta tables like real uploads; their
+    // version_files rows follow the tracked demo versions on reset.
+    const manifestInput = `
       SELECT
-        app_versions.id,
-        input.file_name,
-        input.s3_path,
-        input.file_hash,
-        input.file_size
-      FROM input
+        app_versions.id AS version_id,
+        app_versions.app_id,
+        entry.ord,
+        data.file_name,
+        data.s3_path,
+        data.file_hash,
+        COALESCE(data.file_size, 0) AS file_size,
+        public.delta_path_key(data.s3_path) AS path_key,
+        public.delta_entry_key(data.s3_path, data.file_name, data.file_hash) AS entry_key
+      FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS entry(value, ord)
+      CROSS JOIN LATERAL jsonb_to_record(entry.value) AS data(
+        version_name text,
+        file_name text,
+        s3_path text,
+        file_hash text,
+        file_size bigint
+      )
       INNER JOIN public.app_versions
         ON app_versions.app_id = $2::text
-        AND app_versions.name = input.version_name
-      RETURNING id`,
+        AND app_versions.name = data.version_name`
+    await pgClient.query(
+      `INSERT INTO public.delta_files AS df (app_id, s3_path, file_name, file_hash, file_size, path_key, entry_key)
+      SELECT DISTINCT ON (input.entry_key)
+        input.app_id, input.s3_path, input.file_name, input.file_hash, input.file_size, input.path_key, input.entry_key
+      FROM (${manifestInput}) AS input
+      ORDER BY input.entry_key, input.file_size DESC
+      ON CONFLICT (entry_key) DO UPDATE SET file_size = EXCLUDED.file_size
+      WHERE df.file_size = 0 AND EXCLUDED.file_size > 0`,
       [JSON.stringify(options.manifestRows), options.appId],
     )
-    await trackOnboardingDemoRowsInTransaction(
-      pgClient,
-      options.appId,
-      options.ownerOrg,
-      'manifest',
-      manifestResult.rows.map(row => row.id),
-      options.seedId,
+    await pgClient.query(
+      `INSERT INTO public.version_files (app_version_id, file_ids)
+      SELECT input.version_id, array_agg(df.id ORDER BY input.ord)
+      FROM (${manifestInput}) AS input
+      INNER JOIN public.delta_files AS df ON df.entry_key = input.entry_key
+      GROUP BY input.version_id
+      ON CONFLICT (app_version_id) DO UPDATE SET file_ids = EXCLUDED.file_ids`,
+      [JSON.stringify(options.manifestRows), options.appId],
     )
 
     const channelResult = await pgClient.query<{ id: number, name: string, is_demo_shape: boolean }>(
@@ -761,30 +765,45 @@ async function seedOnboardingDemoDataInTransaction(
   }
 }
 
+type AppRow = Database['public']['Tables']['apps']['Row']
+
+async function queryApps<T>(c: Context<MiddlewareKeyVariables>, text: string, values: unknown[]): Promise<{ data: T[] | null, error: unknown }> {
+  let pgClient: PgClient | undefined
+  try {
+    pgClient = await getPgClient(c)
+    return { data: await queryJson<T>(pgClient, text, values), error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+  finally {
+    if (pgClient)
+      await closeClient(c, pgClient)
+  }
+}
+
 async function getExistingPendingApp(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseAdmin>,
   ownerOrg: string,
   appId: string,
 ) {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('*')
-    .eq('owner_org', ownerOrg)
-    .eq('app_id', appId)
-    .eq('need_onboarding', true)
-    .single()
+  // LIMIT 2 keeps .single()/.maybeSingle(): more than one row was an error
+  const { data: pendingApps, error } = await queryApps<AppRow>(
+    c,
+    'SELECT * FROM public.apps WHERE owner_org = $1 AND app_id = $2 AND need_onboarding = true LIMIT 2',
+    [ownerOrg, appId],
+  )
 
-  if (!error && data) {
-    return data
+  if (!error && pendingApps?.length === 1) {
+    return pendingApps[0]
   }
 
-  const { data: existingApp, error: existingAppError } = await supabase
-    .from('apps')
-    .select('id, need_onboarding')
-    .eq('owner_org', ownerOrg)
-    .eq('app_id', appId)
-    .maybeSingle()
+  const { data: existingApps, error: existingAppError } = await queryApps<Pick<AppRow, 'id' | 'need_onboarding'>>(
+    c,
+    'SELECT id, need_onboarding FROM public.apps WHERE owner_org = $1 AND app_id = $2 LIMIT 2',
+    [ownerOrg, appId],
+  )
+  const existingApp = existingApps?.length === 1 ? existingApps[0] : null
 
   if (!existingAppError && existingApp && existingApp.need_onboarding !== true) {
     cloudlog({ requestId: c.get('requestId'), message: 'Attempted demo seeding on completed app', app_id: appId })
@@ -797,16 +816,13 @@ async function getExistingPendingApp(
 
 async function getLatestPendingAppForOrg(
   c: Context<MiddlewareKeyVariables>,
-  supabase: ReturnType<typeof supabaseAdmin>,
   ownerOrg: string,
 ) {
-  const { data, error } = await supabase
-    .from('apps')
-    .select('*')
-    .eq('owner_org', ownerOrg)
-    .eq('need_onboarding', true)
-    .order('created_at', { ascending: false })
-    .limit(2)
+  const { data, error } = await queryApps<AppRow>(
+    c,
+    'SELECT * FROM public.apps WHERE owner_org = $1 AND need_onboarding = true ORDER BY created_at DESC LIMIT 2',
+    [ownerOrg],
+  )
 
   if (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'Error loading pending onboarding app for org', error, owner_org: ownerOrg })
@@ -865,16 +881,15 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
     throw simpleError('cannot_access_organization', 'You can\'t access this organization', { org_id: body.owner_org })
   }
 
-  const supabase = supabaseAdmin(c)
   const requestedAppId = body.app_id?.trim()
   const resolvedApp = requestedAppId
     ? { app_id: requestedAppId }
-    : await getLatestPendingAppForOrg(c, supabase, body.owner_org)
+    : await getLatestPendingAppForOrg(c, body.owner_org)
   const lockedAppId = resolvedApp.app_id
   const onboardingLock = await lockOnboardingApp(c, lockedAppId)
 
   try {
-    const appData = await getExistingPendingApp(c, supabase, body.owner_org, lockedAppId)
+    const appData = await getExistingPendingApp(c, body.owner_org, lockedAppId)
     if (!appData.id) {
       throw simpleError('cannot_find_app', 'Cannot find app for demo onboarding', { owner_org: body.owner_org, app_id: lockedAppId })
     }
@@ -920,7 +935,7 @@ export async function createDemoApp(c: Context<MiddlewareKeyVariables>, body: Cr
       }
     })
 
-    // Insert manifest entries into the manifest table for each version
+    // File entries of each demo version (stored in delta_files/version_files)
     // This is required for the bundle file list to show in the UI
     const manifestRows: Array<Record<string, unknown>> = []
 

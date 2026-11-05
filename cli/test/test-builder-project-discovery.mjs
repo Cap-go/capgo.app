@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { render } from 'ink'
@@ -563,17 +563,9 @@ try {
   })
 
   await test('provides an actionable five-second discovery timeout message', () => {
-    assert.equal(typeof builderOnboardingCommand.builderProjectTimeoutMessage, 'function')
     const message = builderOnboardingCommand.builderProjectTimeoutMessage()
     assert.match(message, /timed out after 5 seconds/i)
     assert.match(message, /npx @capgo\/cli@latest build init/)
-  })
-
-  await test('does not render an opening interstitial after project selection', () => {
-    const commandSource = readFileSync(new URL('../src/build/onboarding/command.ts', import.meta.url), 'utf8')
-    const discoveryUiSource = readFileSync(new URL('../src/build/onboarding/ui/project-discovery.tsx', import.meta.url), 'utf8')
-    assert.doesNotMatch(commandSource, /BuilderProjectOpeningApp/)
-    assert.doesNotMatch(discoveryUiSource, /Opening .*candidate\.relativeDir/)
   })
 }
 finally {

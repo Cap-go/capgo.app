@@ -167,7 +167,7 @@ describe('manifest upload response contract', () => {
   it('calls the private endpoint with the complete request', async () => {
     let calledPath = ''
     let calledOptions: unknown
-    const resolved = await requestManifestUpload('api-key', request, { supaHost: 'https://supabase.example.test', supaAnon: 'anon' }, async (path, options) => {
+    const resolved = await requestManifestUpload('api-key', request, { apiHost: 'https://supabase.example.test/functions/v1' }, async (path, options) => {
       calledPath = path
       calledOptions = options
       return { data: response(), error: null }
@@ -177,8 +177,7 @@ describe('manifest upload response contract', () => {
     expect(calledOptions).toMatchObject({
       apikey: 'api-key',
       body: request,
-      supaHost: 'https://supabase.example.test',
-      supaAnon: 'anon',
+      apiHost: 'https://supabase.example.test/functions/v1',
     })
     expect(resolved.entries).toHaveLength(3)
   })
@@ -204,7 +203,7 @@ describe('manifest upload response contract', () => {
     let calls = 0
     const unavailable = requestManifestUpload('api-key', request, {}, async () => {
       calls++
-      return { data: null, error: Object.assign(new Error('unavailable'), { context: new Response('{}', { status: 503 }) }) }
+      return { data: null, error: Object.assign(new Error('unavailable'), { context: new Response(JSON.stringify({ error: 'upload_authorization_unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } }) }) }
     }, async () => {})
     await expect(unavailable).rejects.toThrow('Cannot request manifest upload')
     expect(calls).toBe(3)
@@ -355,7 +354,7 @@ describe('manifest upload existence probe', () => {
       expect(requestedUrl).not.toMatch(/\.htaccess/i)
       expect(requestedHeaders?.['x-cli-version']).toBeTruthy()
       expect(requestedHeaders?.range).toBeUndefined()
-      expect(redirectMode).toBe('error')
+      expect(redirectMode).toBe('manual')
     }
     finally {
       globalThis.fetch = originalFetch

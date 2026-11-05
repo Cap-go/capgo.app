@@ -369,7 +369,7 @@ function runSupabaseStreaming(args: string[], repoRoot: string): Promise<{ statu
   })
 }
 
-export type TransientSupabaseStartFailure = 'docker_image_pull' | 'docker_port_bind'
+export type TransientSupabaseStartFailure = 'docker_image_pull' | 'docker_port_bind' | 'edge_runtime_health_check'
 
 /**
  * Classify only infrastructure failures that are safe to retry before tests run.
@@ -388,6 +388,16 @@ export function getTransientSupabaseStartFailure(output: string): TransientSupab
     const nearbyOutput = lines.slice(Math.max(0, index - 3), index + 4).join('\n')
     if (dockerPullContext.test(nearbyOutput) && transientPullSignal.test(nearbyOutput))
       return 'docker_image_pull'
+  }
+
+  // The edge runtime bundles every function before it answers its health
+  // check; on a loaded runner that can outlast the CLI's wait, which then
+  // dumps the container logs and exits with "Error status 503". The same
+  // commit starts on a rerun, so retry it like the Docker failures.
+  if (/Waiting for health checks/.test(output)
+    && /supabase_edge_runtime_\S+ container logs:/.test(output)
+    && /^Error status 503:/m.test(output)) {
+    return 'edge_runtime_health_check'
   }
 
   return null
@@ -549,9 +559,15 @@ async function runSupabaseStartWithRetry(args: string[], repoRoot: string): Prom
       console.error(`SUPABASE_START_FINAL_FAILURE=${transientFailure ?? 'non_transient'}`)
       return status
     }
-    const reason = transientFailure === 'docker_port_bind' ? 'Docker port bind' : 'Docker image pull'
+    const reason = {
+      docker_image_pull: 'Docker image pull',
+      docker_port_bind: 'Docker port bind',
+      edge_runtime_health_check: 'edge runtime health check',
+    }[transientFailure]
     console.error(`Supabase start hit a transient ${reason} failure (attempt ${attempt}/${maxAttempts}); stopping and retrying...`)
-    runSupabase(['stop', '--no-backup'], repoRoot)
+    // The edge runtime fails after the database is up and may be reusing a
+    // developer's volumes: keep them. Docker failures happen before any data.
+    runSupabase(transientFailure === 'edge_runtime_health_check' ? ['stop'] : ['stop', '--no-backup'], repoRoot)
     removeLeftoverWorktreeContainers(cfg.projectId)
     freeHostPorts(ports)
     // Back off so docker-proxy / TIME_WAIT can release before the next bind.

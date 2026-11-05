@@ -3,47 +3,28 @@ import { classifyBuildTransition, mapBuildFailureCategory } from '../supabase/fu
 import { getBuilderXcodeVersion } from '../supabase/functions/_backend/utils/builder_machine.ts'
 
 describe('classifyBuildTransition', () => {
-  it.concurrent('returns "started" when pending becomes running', () => {
-    expect(classifyBuildTransition({ previous: 'pending', next: 'running', timeoutApplied: false })).toBe('started')
-  })
-
-  it.concurrent('returns "started" when queued becomes running', () => {
-    expect(classifyBuildTransition({ previous: 'queued', next: 'running', timeoutApplied: false })).toBe('started')
-  })
-
-  it.concurrent('returns "succeeded" when any non-terminal becomes success', () => {
-    expect(classifyBuildTransition({ previous: 'running', next: 'succeeded', timeoutApplied: false })).toBe('succeeded')
-    expect(classifyBuildTransition({ previous: 'pending', next: 'succeeded', timeoutApplied: false })).toBe('succeeded')
-  })
-
-  it.concurrent('returns "failed" when any non-terminal becomes failed', () => {
-    expect(classifyBuildTransition({ previous: 'running', next: 'failed', timeoutApplied: false })).toBe('failed')
-  })
-
-  it.concurrent('returns "timed_out" when timeoutApplied is true', () => {
-    expect(classifyBuildTransition({ previous: 'running', next: 'failed', timeoutApplied: true })).toBe('timed_out')
-    expect(classifyBuildTransition({ previous: 'running', next: 'succeeded', timeoutApplied: true })).toBe('timed_out')
-  })
-
-  it.concurrent('returns null when previous status is already terminal (idempotency)', () => {
-    expect(classifyBuildTransition({ previous: 'succeeded', next: 'succeeded', timeoutApplied: false })).toBeNull()
-    expect(classifyBuildTransition({ previous: 'failed', next: 'failed', timeoutApplied: false })).toBeNull()
-    expect(classifyBuildTransition({ previous: 'cancelled', next: 'cancelled', timeoutApplied: false })).toBeNull()
-    expect(classifyBuildTransition({ previous: 'expired', next: 'expired', timeoutApplied: false })).toBeNull()
-    expect(classifyBuildTransition({ previous: 'released', next: 'released', timeoutApplied: false })).toBeNull()
-  })
-
-  it.concurrent('returns null when previous is terminal even if timeoutApplied is true', () => {
-    expect(classifyBuildTransition({ previous: 'failed', next: 'failed', timeoutApplied: true })).toBeNull()
-  })
-
-  it.concurrent('returns null when no state change happened (no transition)', () => {
-    expect(classifyBuildTransition({ previous: 'pending', next: 'pending', timeoutApplied: false })).toBeNull()
-    expect(classifyBuildTransition({ previous: 'running', next: 'running', timeoutApplied: false })).toBeNull()
-  })
-
-  it.concurrent('returns "timed_out" even when previous === next (timeout overrides no-change)', () => {
-    expect(classifyBuildTransition({ previous: 'running', next: 'running', timeoutApplied: true })).toBe('timed_out')
+  it.concurrent.each([
+    ['pending', 'running', false, 'started'],
+    ['queued', 'running', false, 'started'],
+    ['running', 'succeeded', false, 'succeeded'],
+    ['pending', 'succeeded', false, 'succeeded'],
+    ['running', 'failed', false, 'failed'],
+    ['running', 'failed', true, 'timed_out'],
+    ['running', 'succeeded', true, 'timed_out'],
+    // timeout overrides no-change
+    ['running', 'running', true, 'timed_out'],
+    // previous already terminal (idempotency), even with timeoutApplied
+    ['succeeded', 'succeeded', false, null],
+    ['failed', 'failed', false, null],
+    ['cancelled', 'cancelled', false, null],
+    ['expired', 'expired', false, null],
+    ['released', 'released', false, null],
+    ['failed', 'failed', true, null],
+    // no state change
+    ['pending', 'pending', false, null],
+    ['running', 'running', false, null],
+  ] as const)('%s -> %s (timeoutApplied=%s) is %s', (previous, next, timeoutApplied, expected) => {
+    expect(classifyBuildTransition({ previous, next, timeoutApplied })).toBe(expected)
   })
 })
 

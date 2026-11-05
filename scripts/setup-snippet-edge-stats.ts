@@ -60,7 +60,7 @@ export function logpushJobBody(destination: string) {
     output_options: {
       output_type: 'ndjson',
       timestamp_format: 'unixnano',
-      field_names: ['ClientIP', 'ClientCountry', 'ClientRequestHost', 'ClientRequestPath', 'EdgeStartTimestamp', 'RayID', 'ResponseHeaders'],
+      field_names: ['ClientIP', 'ClientCountry', 'ClientASN', 'ClientRequestHost', 'ClientRequestPath', 'EdgeStartTimestamp', 'RayID', 'ResponseHeaders'],
     },
     // Only plugin calls; the consumer keeps the lines that carry the stat header.
     filter: JSON.stringify({ where: { or: PLUGIN_PATHS.map(value => ({ key: 'ClientRequestPath', operator: 'eq', value })) } }),

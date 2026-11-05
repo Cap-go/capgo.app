@@ -136,6 +136,67 @@ describe.sequential('sendNotifOrgOnce', () => {
     )
   })
 
+  it('records a delivery marker only after Bento accepts the send when asked to', async () => {
+    trackBentoEventMock.mockResolvedValue(true)
+    const { client } = createWriteClient()
+    const valuesMock = vi.fn(() => ({ onConflictDoNothing: () => ({ returning: vi.fn().mockResolvedValue([{}]) }) }))
+    client.insert = vi.fn(() => ({ values: valuesMock }))
+
+    const { sendNotifOrgOnce } = await import('../supabase/functions/_backend/utils/notifications.ts')
+    const send = (options?: { recordDelivery?: boolean }) => sendNotifOrgOnce(
+      createContext(),
+      'org:apps_will_be_deleted',
+      { org_id: 'org-123' },
+      'org-123',
+      'retention:app_deletion_warning:2026-01-01T00:00:00Z:recipient',
+      'billing@example.com',
+      {} as any,
+      client,
+      options,
+    )
+
+    await expect(send()).resolves.toEqual({ sent: true, cleanupFailed: false })
+    expect(valuesMock).toHaveBeenCalledTimes(1)
+
+    valuesMock.mockClear()
+    await expect(send({ recordDelivery: true })).resolves.toEqual({ sent: true, cleanupFailed: false })
+    expect(valuesMock).toHaveBeenCalledTimes(2)
+    expect(valuesMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      uniq_id: 'retention:app_deletion_warning:2026-01-01T00:00:00Z:recipient:delivered',
+    }))
+
+    valuesMock.mockClear()
+    trackBentoEventMock.mockResolvedValue(false)
+    await expect(send({ recordDelivery: true })).resolves.toEqual({ sent: false, cleanupFailed: false })
+    expect(valuesMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('still reports a sent email when the delivery marker write fails', async () => {
+    trackBentoEventMock.mockResolvedValue(true)
+    const { client, deleteMock } = createWriteClient()
+    const claimReturning = vi.fn()
+      .mockResolvedValueOnce([{}])
+      .mockRejectedValueOnce(new Error('marker write failed'))
+    client.insert = vi.fn(() => ({ values: () => ({ onConflictDoNothing: () => ({ returning: claimReturning }) }) }))
+
+    const { sendNotifOrgOnce } = await import('../supabase/functions/_backend/utils/notifications.ts')
+    const sent = await sendNotifOrgOnce(
+      createContext(),
+      'org:apps_will_be_deleted',
+      { org_id: 'org-123' },
+      'org-123',
+      'retention:app_deletion_warning:2026-01-01T00:00:00Z:recipient',
+      'billing@example.com',
+      {} as any,
+      client,
+      { recordDelivery: true },
+    )
+
+    expect(sent).toEqual({ sent: true, cleanupFailed: false })
+    expect(deleteMock).not.toHaveBeenCalled()
+    expect(logPgErrorMock).toHaveBeenCalledWith(expect.anything(), 'sendNotifOrgOnce delivery marker', expect.any(Error))
+  })
+
   it('surfaces cleanup failure when the recipient claim cannot be deleted', async () => {
     trackBentoEventMock.mockResolvedValue(false)
     const { client } = createWriteClient({ deleteError: new Error('delete exploded') })

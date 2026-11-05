@@ -5,7 +5,8 @@ import type { WebhookDeliveryVersion } from '../../utils/webhook.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { queryJsonOne } from '../../utils/pg_rls.ts'
 import { getWebhookLogUrlMetadata, getWebhookPublicUrlValidationError, isWebhookEventType, parseWebhookDeliveryVersion, WEBHOOK_EVENT_TYPES } from '../../utils/webhook.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 import { webhookPublicSelect } from './response.ts'
@@ -98,46 +99,55 @@ export async function put(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
   const deliveryVersion = parseRequestedDeliveryVersion(body.deliveryVersion ?? body.delivery_version)
 
   // Direct RLS access to webhook tables is intentionally denied; use service-role only after explicit permission checks.
-  const supabase = supabaseAdmin(c)
+  const pg = await getPgClient(c)
+  try {
+    // Verify webhook belongs to org
+    const existingWebhook = await pg.query<{ id: string, org_id: string }>('SELECT id, org_id FROM public.webhooks WHERE id = $1', [body.webhookId])
+      .then(result => result.rows[0] ?? null)
+      .catch(() => null)
 
-  // Verify webhook belongs to org
-  const { data: existingWebhook, error: fetchError } = await supabase
-    .from('webhooks')
-    .select('id, org_id')
-    .eq('id', body.webhookId)
-    .single()
+    if (!existingWebhook) {
+      throw simpleError('webhook_not_found', 'Webhook not found', { webhookId: body.webhookId })
+    }
 
-  if (fetchError || !existingWebhook) {
-    throw simpleError('webhook_not_found', 'Webhook not found', { webhookId: body.webhookId })
+    if (existingWebhook.org_id !== body.orgId) {
+      throw simpleError('no_permission', 'Webhook does not belong to this organization', { webhookId: body.webhookId })
+    }
+
+    validateEvents(body.events)
+    await validateWebhookUrl(c, body.url)
+
+    // Build update object
+    const updateData = buildWebhookUpdateData(body, deliveryVersion)
+    if (Object.keys(updateData).length === 0) {
+      throw simpleError('no_updates', 'No fields to update')
+    }
+
+    // Update webhook. Column names come from buildWebhookUpdateData's fixed keys only.
+    const columns = Object.keys(updateData) as (keyof typeof updateData)[]
+    let data: unknown = null
+    let error: unknown = null
+    try {
+      data = await queryJsonOne(
+        pg,
+        `UPDATE public.webhooks SET ${columns.map((column, index) => `${column} = $${index + 2}`).join(', ')} WHERE id = $1 RETURNING ${webhookPublicSelect}`,
+        [body.webhookId, ...columns.map(column => updateData[column])],
+      )
+    }
+    catch (updateError) {
+      error = updateError
+    }
+
+    if (error || !data) {
+      throw simpleError('cannot_update_webhook', 'Cannot update webhook', { error })
+    }
+
+    return c.json({
+      status: 'Webhook updated',
+      webhook: data,
+    })
   }
-
-  if (existingWebhook.org_id !== body.orgId) {
-    throw simpleError('no_permission', 'Webhook does not belong to this organization', { webhookId: body.webhookId })
+  finally {
+    closeClient(c, pg)
   }
-
-  validateEvents(body.events)
-  await validateWebhookUrl(c, body.url)
-
-  // Build update object
-  const updateData = buildWebhookUpdateData(body, deliveryVersion)
-  if (Object.keys(updateData).length === 0) {
-    throw simpleError('no_updates', 'No fields to update')
-  }
-
-  // Update webhook
-  const { data, error } = await supabase
-    .from('webhooks')
-    .update(updateData)
-    .eq('id', body.webhookId)
-    .select(webhookPublicSelect)
-    .single()
-
-  if (error) {
-    throw simpleError('cannot_update_webhook', 'Cannot update webhook', { error })
-  }
-
-  return c.json({
-    status: 'Webhook updated',
-    webhook: data,
-  })
 }

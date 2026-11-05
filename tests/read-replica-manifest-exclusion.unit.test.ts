@@ -43,7 +43,7 @@ describe('manifest-per-version replication exclusion', () => {
       await database.query(migration)
       await database.query(migration)
 
-      const publication = await database.query("SELECT pubname, tablename FROM pg_catalog.pg_publication_tables WHERE pubname IN ('capgo_google_eu_2_pub', 'capgo_google_replicate') ORDER BY pubname, tablename")
+      const publication = await database.query('SELECT pubname, tablename FROM pg_catalog.pg_publication_tables WHERE pubname IN (\'capgo_google_eu_2_pub\', \'capgo_google_replicate\') ORDER BY pubname, tablename')
       expect(publication.rows.map(row => [row.pubname, row.tablename])).toEqual([
         ['capgo_google_eu_2_pub', 'apps'],
         ['capgo_google_replicate', 'apps'],

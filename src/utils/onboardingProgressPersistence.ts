@@ -5,6 +5,7 @@ export type OnboardingPersistResult = 'persisted' | 'retryable_failure' | 'confl
 export interface OnboardingPersistOptions {
   allowDisposed?: boolean
   clearIntent?: boolean
+  clearProfileDraft?: boolean
 }
 
 interface CreateOnboardingProgressPersistenceOptions {

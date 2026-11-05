@@ -16,8 +16,7 @@ try {
     fileURLToPath(new URL('../dist/index.js', import.meta.url)),
     'app', 'todo', appId,
     '--apikey', 'example-demo-key',
-    '--supa-host', 'https://todo.fixture.invalid',
-    '--supa-anon', 'example-anon-key',
+    '--api-host', 'https://todo.fixture.invalid',
     ...process.argv.slice(2),
   ], {
     cwd,

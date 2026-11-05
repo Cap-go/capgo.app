@@ -1,22 +1,25 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { BundleSummaryRow } from '~/services/bundleColumns'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconSettings from '~icons/lucide/settings'
-import { useSupabase } from '~/services/supabase'
+import EmptyState from '~/components/EmptyState.vue'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 const route = useRoute()
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
-const version = ref<Database['public']['Tables']['app_versions']['Row']>()
+const version = ref<BundleSummaryRow>()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 
 type PreviewState = 'loading' | 'preview-disabled' | 'ready'
@@ -42,9 +45,9 @@ async function getVersion() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('app_versions')
-      .select()
+      .select(BUNDLE_SUMMARY_COLUMNS)
       .eq('app_id', packageId.value)
       .eq('id', id.value)
       .single()
@@ -67,7 +70,7 @@ async function getVersion() {
 
 async function getApp() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select()
       .eq('app_id', packageId.value)
@@ -125,32 +128,33 @@ watchEffect(async () => {
     <PageLoader v-if="loading" />
 
     <!-- Version Not Found -->
-    <div v-else-if="!version" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('bundle-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('bundle-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
-        {{ t('back-to-bundles') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else-if="!version"
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('bundle-not-found')"
+      :description="t('bundle-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
+          {{ t('back-to-bundles') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <!-- Preview Disabled State -->
-    <div v-else-if="previewState === 'preview-disabled'" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconSettings class="w-16 h-16 mb-4 text-muted-foreground" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('preview-disabled') }}
-      </h2>
-      <p class="mt-2 text-center text-muted-foreground max-w-md">
-        {{ t('preview-disabled-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
-        {{ t('preview-enable-settings') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else-if="previewState === 'preview-disabled'"
+      :icon="IconSettings"
+      :title="t('preview-disabled')"
+      :description="t('preview-disabled-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
+          {{ t('preview-enable-settings') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <!-- Ready State - Show Preview -->
     <div v-else-if="previewState === 'ready'" class="h-full min-h-0 w-full overflow-y-auto">

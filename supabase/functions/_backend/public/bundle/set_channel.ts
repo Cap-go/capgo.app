@@ -4,7 +4,7 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { checkoutPgClient, closeClient, getDrizzleClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
+import { beginWriteTransaction, checkoutPgClient, closeClient, getDrizzleClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { checkPermissionPg } from '../../utils/rbac.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
@@ -150,7 +150,7 @@ export async function setChannel(c: Context<MiddlewareKeyVariables>, body: SetCh
   let result: SetChannelResult | null = null
   try {
     dbClient = await checkoutPgClient(pgClient)
-    await dbClient.query('BEGIN')
+    await beginWriteTransaction(dbClient)
     transactionStarted = true
     result = await setChannelInTransaction(c, body, apikey, dbClient)
     await dbClient.query('COMMIT')

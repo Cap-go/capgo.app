@@ -36,7 +36,7 @@ async function run({ putStatus = 200, command = 'bundle list', mutation = false,
       return
     }
     assert.equal(request.headers.capgkey, 'fake-key')
-    assert.equal(request.headers.authorization, 'Bearer fake-anon')
+    assert.equal(request.headers.authorization, 'fake-key')
     if (request.url.endsWith('/private/onboarding_progress')) {
       const readNumber = requests.filter(entry => entry.path.endsWith('/private/onboarding_progress')).length
       assert.deepEqual(body, { appId, N: 0, initial: true, includeBilling: true })
@@ -51,7 +51,7 @@ async function run({ putStatus = 200, command = 'bundle list', mutation = false,
       response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data))
       return
     }
-    assert.equal(request.url, `/functions/v1/app/${appId}`)
+    assert.equal(request.url, `/app/${appId}`)
     assert.equal(request.method, 'PUT')
     const puts = requests.filter(entry => entry.method === 'PUT')
     if (puts.length === 2) {
@@ -71,7 +71,7 @@ async function run({ putStatus = 200, command = 'bundle list', mutation = false,
     writeFileSync(join(fixture, 'src/main.ts'), "import { CapacitorUpdater } from '@capgo/capacitor-updater'; CapacitorUpdater.notifyAppReady()")
     mkdirSync(join(fixture, 'node_modules/@capgo/capacitor-updater'), { recursive: true })
     writeFileSync(join(fixture, 'node_modules/@capgo/capacitor-updater/package.json'), JSON.stringify({ name: '@capgo/capacitor-updater', version: '8.0.0' }))
-    const data = { cwd: fixture, command, appId, apikey: 'fake-key', supaHost: api, supaAnon: 'fake-anon', setupNotice: true }
+    const data = { cwd: fixture, command, appId, apikey: 'fake-key', apiHost: api, setupNotice: true }
     const runner = `
       import { Worker } from 'node:worker_threads'
       const worker = new Worker(new URL(${JSON.stringify(workerUrl.href)}), { workerData: ${JSON.stringify(data)}, execArgv: [] })
@@ -136,6 +136,6 @@ test('diagnostics relay both scanner threads and the request result without cred
   assert.match(diagnostics, /local scan finished.*scan=add_code.*result=found/)
   assert.match(diagnostics, /local scan finished.*scan=add_updater.*result=found/)
   assert.match(diagnostics, /notice ready.*kind=plan/)
-  assert.doesNotMatch(diagnostics, /fake-key|fake-anon|fixture-org|com\.example/)
+  assert.doesNotMatch(diagnostics, /fake-key|fixture-org|com\.example/)
   assert.equal(notices.length, 1)
 }, 15000)

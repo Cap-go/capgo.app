@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { CacheHelper } from './cache.ts'
 import { withFreshReads } from './hyperdriveFreshRead.ts'
+import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
 
@@ -163,10 +164,11 @@ async function cachedLookup<T>(
   const cap = ttlCapSeconds?.(value)
   if (cap !== undefined)
     ttl = Math.max(1, Math.min(ttl, cap))
-  await backgroundTask(c, helper.putJson(request, { v: value } satisfies CachedValue<T>, ttl, {
+  // A replica measured behind after the last re-purge must not pin its answer.
+  await backgroundTask(c, edgeCacheTtlForReplicaLag(c, ttl).then(replicaTtl => helper.putJson(request, { v: value } satisfies CachedValue<T>, replicaTtl, {
     tags,
     timeoutMs: UPDATES_EDGE_CACHE_PUT_TIMEOUT_MS,
-  }))
+  })))
   return { value, hit: false }
 }
 

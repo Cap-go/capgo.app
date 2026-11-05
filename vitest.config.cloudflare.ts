@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => ({
       // Raw Postgres / queue / auth-trigger suites do not need workerd; keep them on
       // backend so Cloudflare shards stay light enough for concurrency.
       'tests/cleanup_swap_memory.test.ts',
+      'tests/file-read-cache-deleted-lookup.test.ts',
       'tests/manifest-deletion.test.ts',
       'tests/hashed-apikey-rls.test.ts',
       'tests/mfa-email-otp-trigger.test.ts',

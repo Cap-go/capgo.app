@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types.ts'
+import type { Database } from '../src/types/database.types.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
@@ -55,10 +55,10 @@ function createKey(headers: Record<string, string>, bindings: Record<string, unk
 }
 
 beforeAll(async () => {
-  const supabase = getSupabaseClient()
+  const capgo = getSupabaseClient()
   adminHeaders = await getAuthHeaders()
 
-  const { error: stripeError } = await supabase.from('stripe_info').insert({
+  const { error: stripeError } = await capgo.from('stripe_info').insert({
     customer_id: CUSTOMER_ID,
     product_id: 'prod_LQIregjtNduh4q',
     status: 'succeeded',
@@ -66,7 +66,7 @@ beforeAll(async () => {
   })
   if (stripeError)
     throw stripeError
-  const { error: orgError } = await supabase.from('orgs').insert({
+  const { error: orgError } = await capgo.from('orgs').insert({
     id: ORG_ID,
     created_by: USER_ID,
     name: `App Creator Org ${TEST_ID}`,
@@ -75,11 +75,11 @@ beforeAll(async () => {
   })
   if (orgError)
     throw orgError
-  const { error: adminMembershipError } = await supabase.from('org_users').insert({ org_id: ORG_ID, user_id: USER_ID, rbac_role_name: 'org_super_admin' })
+  const { error: adminMembershipError } = await capgo.from('org_users').insert({ org_id: ORG_ID, user_id: USER_ID, rbac_role_name: 'org_super_admin' })
   if (adminMembershipError)
     throw adminMembershipError
 
-  const { data: member, error: memberError } = await supabase.auth.admin.createUser({
+  const { data: member, error: memberError } = await capgo.auth.admin.createUser({
     email: MEMBER_EMAIL,
     password: MEMBER_PASSWORD,
     email_confirm: true,
@@ -87,16 +87,16 @@ beforeAll(async () => {
   if (memberError || !member.user)
     throw memberError ?? new Error('Failed to create member user')
   memberId = member.user.id
-  const { error: profileError } = await supabase.from('users').upsert({ id: memberId, email: MEMBER_EMAIL })
+  const { error: profileError } = await capgo.from('users').upsert({ id: memberId, email: MEMBER_EMAIL })
   if (profileError)
     throw profileError
-  const { error: memberMembershipError } = await supabase.from('org_users').insert({ org_id: ORG_ID, user_id: memberId, rbac_role_name: 'org_member' })
+  const { error: memberMembershipError } = await capgo.from('org_users').insert({ org_id: ORG_ID, user_id: memberId, rbac_role_name: 'org_member' })
   if (memberMembershipError)
     throw memberMembershipError
-  const { data: memberRole, error: memberRoleError } = await supabase.from('roles').select('id').eq('name', 'org_member').single()
+  const { data: memberRole, error: memberRoleError } = await capgo.from('roles').select('id').eq('name', 'org_member').single()
   if (memberRoleError)
     throw memberRoleError
-  const { error: memberBindingError } = await supabase.from('role_bindings').insert({
+  const { error: memberBindingError } = await capgo.from('role_bindings').insert({
     principal_type: 'user',
     principal_id: memberId,
     role_id: memberRole.id,
@@ -110,17 +110,17 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  const supabase = getSupabaseClient()
+  const capgo = getSupabaseClient()
   for (const keyId of createdKeyIds)
-    await supabase.from('apikeys').delete().eq('id', keyId)
+    await capgo.from('apikeys').delete().eq('id', keyId)
   for (const appId of createdAppIds)
-    await supabase.from('apps').delete().eq('app_id', appId)
-  await supabase.from('role_bindings').delete().eq('org_id', ORG_ID)
-  await supabase.from('org_users').delete().eq('org_id', ORG_ID)
-  await supabase.from('orgs').delete().eq('id', ORG_ID)
-  await supabase.from('stripe_info').delete().eq('customer_id', CUSTOMER_ID)
+    await capgo.from('apps').delete().eq('app_id', appId)
+  await capgo.from('role_bindings').delete().eq('org_id', ORG_ID)
+  await capgo.from('org_users').delete().eq('org_id', ORG_ID)
+  await capgo.from('orgs').delete().eq('id', ORG_ID)
+  await capgo.from('stripe_info').delete().eq('customer_id', CUSTOMER_ID)
   if (memberId)
-    await supabase.auth.admin.deleteUser(memberId)
+    await capgo.auth.admin.deleteUser(memberId)
 })
 
 describe.skipIf(USE_CLOUDFLARE)('app creators and app-scoped API keys', () => {

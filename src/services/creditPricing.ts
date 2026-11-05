@@ -1,4 +1,4 @@
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { formatNumber } from '~/services/formatLocale'
 
 export type CreditMetricType = Database['public']['Enums']['credit_metric_type']

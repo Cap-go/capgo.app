@@ -151,214 +151,9 @@ describe('[POST] /private/create_device - Error Cases', () => {
     const data = await response.json() as { status: string }
     expect(data.status).toBe('ok')
   })
-
-  it('should return 401 when not authorized', async () => {
-    const response = await fetch(getEndpointUrl('/private/create_device'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Missing authorization header
-      },
-      body: JSON.stringify({
-        app_id: APPNAME,
-        org_id: NON_OWNER_ORG_ID,
-        device_id: randomUUID(),
-        platform: 'android',
-        version: 1,
-      }),
-    })
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_jwt_apikey_or_subkey')
-  })
-
-  it('should return 400 for invalid JSON body', async () => {
-    const response = await fetch(getEndpointUrl('/private/create_device'), {
-      method: 'POST',
-      headers,
-      body: 'invalid json',
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_json_parse_body')
-  })
-
-  it('should return 404 when app not found', async () => {
-    // Use testOrgId where user has super_admin rights to properly test app not found
-    const response = await fetch(getEndpointUrl('/private/create_device'), {
-      method: 'POST',
-      headers: testOrgHeaders,
-      body: JSON.stringify({
-        app_id: 'nonexistent.app',
-        org_id: testOrgId,
-        device_id: randomUUID(),
-        platform: 'android',
-        version_name: '1.0.0',
-      }),
-    })
-    expect(response.status).toBe(404)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('app_not_found')
-  })
-
-  it('should return 401 when not authorized for specific app', async () => {
-    const response = await fetch(getEndpointUrl('/private/create_device'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'com.demoadmin.app', // Use the admin app that test user doesn't have access to
-        org_id: NON_OWNER_ORG_ID,
-        device_id: randomUUID(),
-        platform: 'android',
-        version_name: '1.0.0',
-      }),
-    })
-
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('not_authorized')
-  })
-})
-
-describe('[POST] /private/upload_link - Error Cases', () => {
-  it('should return 500 when user not found', async () => {
-    const response = await fetch(getEndpointUrl('/private/upload_link'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'nonexistent.app',
-        version: '1.0.0',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('app_access_denied')
-  })
-
-  it('should return 400 when user cannot access app', async () => {
-    const response = await fetch(getEndpointUrl('/private/upload_link'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'nonexistent.app',
-        version: '1.0.0',
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('app_access_denied')
-  })
-
-  it('should return 500 when app not found', async () => {
-    const response = await fetch(getEndpointUrl('/private/upload_link'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: APPNAME,
-        version: '1.0.0',
-      }),
-    })
-
-    expect(response.status).toBe(404)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('error_version_not_found')
-  })
-
-  it('should return 500 when version already exists', async () => {
-    const response = await fetch(getEndpointUrl('/private/upload_link'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: APPNAME,
-        version: 'unknown', // This version likely exists
-      }),
-    })
-
-    expect(response.status).toBe(404)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('error_version_not_found')
-  })
-})
-
-describe('[POST] /private/download_link - Error Cases', () => {
-  it('should return 400 when authorization cannot be found', async () => {
-    const response = await fetch(getEndpointUrl('/private/download_link'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Missing authorization
-      },
-      body: JSON.stringify({
-        app_id: APPNAME,
-        version: '1.0.0',
-      }),
-    })
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_jwt_apikey_or_subkey')
-  })
-
-  it('should return 401 when not authorized', async () => {
-    const response = await fetch(getEndpointUrl('/private/download_link'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'unauthorized.app',
-        version: '1.0.0',
-      }),
-    })
-
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_jwt')
-  })
-
-  it('should return 401 when user cannot access app', async () => {
-    const response = await fetch(getEndpointUrl('/private/download_link'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'nonexistent.app',
-        version: '1.0.0',
-      }),
-    })
-
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_jwt')
-  })
 })
 
 describe('[DELETE] /private/delete_failed_version', () => {
-  it('should return 401 when user cannot access app', async () => {
-    const response = await fetch(getEndpointUrl('/private/delete_failed_version'), {
-      method: 'DELETE',
-      headers,
-      body: JSON.stringify({
-        app_id: 'nonexistent.app',
-        name: '1.0.0',
-      }),
-    })
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('not_authorized')
-  })
-
-  it('should return 400 when bundle name missing', async () => {
-    const response = await fetch(getEndpointUrl('/private/delete_failed_version'), {
-      method: 'DELETE',
-      headers,
-      body: JSON.stringify({
-        app_id: APPNAME,
-        // Missing name
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('error_bundle_name_missing')
-  })
-
   it('allows app_uploader keys to clean up incomplete r2-direct versions', async () => {
     const bundleName = `1.0.0-failed-upload-${id.slice(0, 8)}`
     const createdApikey = await createDirectApiKeyWithBindings({
@@ -434,92 +229,93 @@ describe('[DELETE] /private/delete_failed_version', () => {
   })
 })
 
-describe('[POST] /private/log_as - Error Cases', () => {
-  it('should return 401 when not authorized', async () => {
-    const response = await fetch(getEndpointUrl('/private/log_as'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Missing authorization
-      },
-      body: JSON.stringify({
-        user_id: randomUUID(),
-      }),
-    })
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_jwt_apikey_or_subkey')
+type HeaderMode = 'none' | 'default' | 'testOrg' | 'statsKey'
+
+interface ErrorCase {
+  method?: 'GET' | 'POST' | 'DELETE'
+  auth?: HeaderMode
+  body?: Record<string, unknown> | string
+}
+
+function resolveHeaders(mode: HeaderMode): Record<string, string> {
+  switch (mode) {
+    case 'none':
+      return { 'Content-Type': 'application/json' }
+    case 'testOrg':
+      return testOrgHeaders
+    case 'statsKey':
+      return { 'Content-Type': 'application/json', 'capgkey': APIKEY_STATS }
+    default:
+      return headers
+  }
+}
+
+function requestPrivate(path: string, { method = 'POST', auth = 'default', body }: ErrorCase) {
+  return fetch(getEndpointUrl(path), {
+    method,
+    headers: resolveHeaders(auth),
+    body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
   })
+}
 
-  it('should return 401 for invalid JWT with malformed body', async () => {
-    const response = await fetch(getEndpointUrl('/private/log_as'), {
-      method: 'POST',
-      headers,
-      body: 'invalid json',
-    })
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_jwt')
-  })
+// [label, path, request, expected status, expected error code (null = only check status)]
+// Bodies are built lazily so they can reference fixtures created in beforeAll.
+const errorCases: Array<[string, string, () => ErrorCase, number, string | null]> = [
+  // create_device
+  ['create_device without auth', '/private/create_device', () => ({ auth: 'none', body: { app_id: APPNAME, org_id: NON_OWNER_ORG_ID, device_id: randomUUID(), platform: 'android', version: 1 } }), 401, 'no_jwt_apikey_or_subkey'],
+  ['create_device invalid JSON body', '/private/create_device', () => ({ body: 'invalid json' }), 400, 'invalid_json_parse_body'],
+  ['create_device unknown app in an org the key administers', '/private/create_device', () => ({ auth: 'testOrg', body: { app_id: 'nonexistent.app', org_id: testOrgId, device_id: randomUUID(), platform: 'android', version_name: '1.0.0' } }), 404, 'app_not_found'],
+  ['create_device for an app the user cannot access', '/private/create_device', () => ({ body: { app_id: 'com.demoadmin.app', org_id: NON_OWNER_ORG_ID, device_id: randomUUID(), platform: 'android', version_name: '1.0.0' } }), 401, 'not_authorized'],
+  // upload_link
+  ['upload_link for an app the user cannot access', '/private/upload_link', () => ({ body: { app_id: 'nonexistent.app', version: '1.0.0' } }), 400, 'app_access_denied'],
+  ['upload_link for an unknown version', '/private/upload_link', () => ({ body: { app_id: APPNAME, version: '1.0.0' } }), 404, 'error_version_not_found'],
+  ['upload_link for the placeholder unknown version', '/private/upload_link', () => ({ body: { app_id: APPNAME, version: 'unknown' } }), 404, 'error_version_not_found'],
+  // download_link
+  ['download_link without auth', '/private/download_link', () => ({ auth: 'none', body: { app_id: APPNAME, version: '1.0.0' } }), 401, 'no_jwt_apikey_or_subkey'],
+  ['download_link with an API key instead of a JWT', '/private/download_link', () => ({ body: { app_id: 'nonexistent.app', version: '1.0.0' } }), 401, 'invalid_jwt'],
+  // delete_failed_version
+  ['delete_failed_version for an app the user cannot access', '/private/delete_failed_version', () => ({ method: 'DELETE', body: { app_id: 'nonexistent.app', name: '1.0.0' } }), 401, 'not_authorized'],
+  ['delete_failed_version without bundle name', '/private/delete_failed_version', () => ({ method: 'DELETE', body: { app_id: APPNAME } }), 400, 'error_bundle_name_missing'],
+  // log_as
+  ['log_as without auth', '/private/log_as', () => ({ auth: 'none', body: { user_id: randomUUID() } }), 401, 'no_jwt_apikey_or_subkey'],
+  ['log_as with an API key and malformed body', '/private/log_as', () => ({ body: 'invalid json' }), 401, 'invalid_jwt'],
+  ['log_as with an API key instead of a JWT', '/private/log_as', () => ({ body: { user_id: randomUUID() } }), 401, 'invalid_jwt'],
+  ['log_as with an API key for an unknown user id', '/private/log_as', () => ({ body: { user_id: 'nonexistent-user-id' } }), 401, 'invalid_jwt'],
+  // set_org_email
+  ['set_org_email without auth', '/private/set_org_email', () => ({ auth: 'none', body: { org_id: testOrgId, email: 'test@example.com' } }), 401, 'no_jwt_apikey_or_subkey'],
+  ['set_org_email invalid JSON body', '/private/set_org_email', () => ({ body: 'invalid json' }), 400, 'invalid_json_parse_body'],
+  ['set_org_email for an org the scoped key cannot read', '/private/set_org_email', () => ({ auth: 'testOrg', body: { org_id: NON_OWNER_ORG_ID, email: 'test@example.com' } }), 400, 'org_not_found'],
+  // accept_invitation
+  ['accept_invitation with missing fields', '/private/accept_invitation', () => ({ body: {} }), 400, 'invalid_json_body'],
+  ['accept_invitation for an unknown invitation', '/private/accept_invitation', () => ({ body: { password: 'ValidPassword123!!', magic_invite_string: 'nonexistent-invitation-id', opt_for_newsletters: false, captchaToken: 'test-captcha-token' } }), 404, 'failed_to_accept_invitation'],
+  // invite_new_user_to_org: auth validation runs before org lookup or captcha verification
+  ['invite_new_user_to_org with an API key before captcha validation', '/private/invite_new_user_to_org', () => ({ body: { org_id: testOrgId, email: 'existing@example.com', invite_type: 'org_member', captcha_token: 'test-captcha-token', first_name: 'Test', last_name: 'User' } }), 401, 'invalid_jwt'],
+  ['invite_new_user_to_org with an API key for a nonexistent org', '/private/invite_new_user_to_org', () => ({ body: { org_id: randomUUID(), email: 'test@example.com', invite_type: 'org_member', captcha_token: 'test-captcha-token', first_name: 'Test', last_name: 'User' } }), 401, 'invalid_jwt'],
+  // stats
+  ['stats for an app the user cannot access', '/private/stats', () => ({ body: { appId: 'nonexistent.app' } }), 400, 'app_access_denied'],
+  ['stats with a key lacking app access', '/private/stats', () => ({ auth: 'statsKey', body: { appId: APPNAME } }), 400, 'app_access_denied'],
+  ['stats without auth', '/private/stats', () => ({ auth: 'none', body: { appId: APPNAME } }), 401, 'no_jwt_apikey_or_subkey'],
+  ['stats with a valid API key', '/private/stats', () => ({ body: { appId: APPNAME } }), 200, null],
+  // smoke checks for read-only private endpoints
+  ['plans', '/private/plans', () => ({ method: 'GET' }), 200, null],
+  ['public plan prices without auth', '/private/plan_prices/public', () => ({ method: 'GET', auth: 'none' }), 200, null],
+  ['org plan prices without auth', `/private/plan_prices?orgId=${ORG_ID}`, () => ({ method: 'GET', auth: 'none' }), 401, 'no_jwt_apikey_or_subkey'],
+  ['latency', '/private/latency', () => ({ method: 'GET' }), 200, null],
+  ['config', '/private/config', () => ({ method: 'GET' }), 200, null],
+]
 
-  it('should return 401 when JWT is invalid', async () => {
-    const response = await fetch(getEndpointUrl('/private/log_as'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        user_id: randomUUID(),
-      }),
-    })
+describe('private endpoint error cases', () => {
+  it.each(errorCases)('%s', async (_label, path, buildRequest, status, error) => {
+    const response = await requestPrivate(path, buildRequest())
+    const data = await response.json() as { error?: string }
 
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_jwt')
-  })
-
-  it('should return 401 when JWT is invalid for unknown user', async () => {
-    const response = await fetch(getEndpointUrl('/private/log_as'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        user_id: 'nonexistent-user-id',
-      }),
-    })
-
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_jwt')
+    expect(response.status, JSON.stringify(data)).toBe(status)
+    if (error)
+      expect(data.error).toBe(error)
   })
 })
 
-describe('[POST] /private/set_org_email - Error Cases', () => {
-  it('should return 401 when not authorized', async () => {
-    const response = await fetch(getEndpointUrl('/private/set_org_email'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Missing authorization
-      },
-      body: JSON.stringify({
-        org_id: testOrgId,
-        email: 'test@example.com',
-      }),
-    })
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_jwt_apikey_or_subkey')
-  })
-
-  it('should return 400 for invalid JSON body', async () => {
-    const response = await fetch(getEndpointUrl('/private/set_org_email'), {
-      method: 'POST',
-      headers,
-      body: 'invalid json',
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_json_parse_body')
-  })
-
+describe('[POST] /private/set_org_email - customer requirement', () => {
   it('should return 400 when org does not have customer', async () => {
     // Temporarily remove customer_id from the org to test the error case
     await getSupabaseClient().from('orgs').update({ customer_id: null }).eq('id', testOrgId)
@@ -539,208 +335,5 @@ describe('[POST] /private/set_org_email - Error Cases', () => {
 
     // Restore customer_id for other tests
     await getSupabaseClient().from('orgs').update({ customer_id: testCustomerId }).eq('id', testOrgId)
-  })
-
-  it('should return 400 when the scoped API key cannot read the org', async () => {
-    const response = await fetch(getEndpointUrl('/private/set_org_email'), {
-      method: 'POST',
-      headers: testOrgHeaders,
-      body: JSON.stringify({
-        org_id: NON_OWNER_ORG_ID,
-        email: 'test@example.com',
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('org_not_found')
-  })
-})
-
-describe('[POST] /private/accept_invitation - Error Cases', () => {
-  it('should return 400 for invalid request', async () => {
-    const response = await fetch(getEndpointUrl('/private/accept_invitation'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        // Missing required fields
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_json_body')
-  })
-
-  it('should return 404 when invitation not found', async () => {
-    const response = await fetch(getEndpointUrl('/private/accept_invitation'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        password: 'ValidPassword123!!',
-        magic_invite_string: 'nonexistent-invitation-id',
-        opt_for_newsletters: false,
-        captchaToken: 'test-captcha-token',
-      }),
-    })
-
-    expect(response.status).toBe(404)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('failed_to_accept_invitation')
-  })
-})
-
-describe('[POST] /private/invite_new_user_to_org - Error Cases', () => {
-  it('should return 401 when JWT is invalid before captcha validation', async () => {
-    // Auth validation runs before captcha verification.
-    const response = await fetch(getEndpointUrl('/private/invite_new_user_to_org'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        org_id: testOrgId,
-        email: 'existing@example.com',
-        invite_type: 'org_member',
-        captcha_token: 'test-captcha-token',
-        first_name: 'Test',
-        last_name: 'User',
-      }),
-    })
-
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_jwt')
-  })
-
-  it('should return 401 when JWT is invalid for nonexistent org', async () => {
-    // Auth validation runs before org lookup or captcha verification.
-    const response = await fetch(getEndpointUrl('/private/invite_new_user_to_org'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        org_id: randomUUID(),
-        email: 'test@example.com',
-        invite_type: 'org_member',
-        captcha_token: 'test-captcha-token',
-        first_name: 'Test',
-        last_name: 'User',
-      }),
-    })
-
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_jwt')
-  })
-})
-
-describe('[POST] /private/stats - Error Cases', () => {
-  it('should return 400 when user not found', async () => {
-    const response = await fetch(getEndpointUrl('/private/stats'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        appId: 'nonexistent.app',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('app_access_denied')
-  })
-
-  it('should return 400 when user cannot access app', async () => {
-    const response = await fetch(getEndpointUrl('/private/stats'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        appId: 'unauthorized.app',
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('app_access_denied')
-  })
-
-  it('should work when used with APIKEY', async () => {
-    const response = await fetch(getEndpointUrl('/private/stats'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        appId: APPNAME,
-      }),
-    })
-
-    expect(response.status).toBe(200)
-    const data = await response.json() as { error: string }
-    console.log(data)
-    expect(data).toBeDefined()
-  })
-
-  it('should return 400 when wrong auth', async () => {
-    const response = await fetch(getEndpointUrl('/private/stats'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'capgkey': APIKEY_STATS,
-      },
-      body: JSON.stringify({
-        appId: APPNAME,
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('app_access_denied')
-  })
-  it('should return 401 when no auth', async () => {
-    const response = await fetch(getEndpointUrl('/private/stats'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        appId: APPNAME,
-      }),
-    })
-
-    expect(response.status).toBe(401)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_jwt_apikey_or_subkey')
-  })
-})
-
-describe('[POST] /private/plans - Error Cases', () => {
-  it('should return 500 when plans cannot be retrieved', async () => {
-    const response = await fetch(getEndpointUrl('/private/plans'), {
-      method: 'GET',
-      headers,
-    })
-
-    expect(response.status).toBe(200)
-    const data = await response.json() as { error: string }
-    expect(data).toBeDefined()
-  })
-})
-
-describe('[POST] /private/latency - Error Cases', () => {
-  it('should return 400 when latency post fails', async () => {
-    const response = await fetch(getEndpointUrl('/private/latency'), {
-      method: 'GET',
-      headers,
-    })
-
-    expect(response.status).toBe(200)
-    const data = await response.json() as { error: string }
-    expect(data).toBeDefined()
-  })
-})
-
-describe('[POST] /private/config - Error Cases', () => {
-  it('should return 500 when config cannot be retrieved', async () => {
-    const response = await fetch(getEndpointUrl('/private/config'), {
-      method: 'GET',
-      headers,
-    })
-
-    expect(response.status).toBe(200)
-    const data = await response.json() as { error: string }
-    expect(data).toBeDefined()
   })
 })

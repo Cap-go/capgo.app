@@ -6,7 +6,8 @@ import { app as eeApp } from '../supabase/functions/_backend/triggers/stripe_eve
 import { app as usApp } from '../supabase/functions/_backend/triggers/stripe_event_us.ts'
 
 const mocks = vi.hoisted(() => ({
-  from: vi.fn(),
+  table: vi.fn(),
+  query: vi.fn(),
   getStripe: vi.fn(),
   retrieve: vi.fn(),
   syncCountry: vi.fn(),
@@ -27,9 +28,16 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', async importOriginal =
   syncStripeCustomerCountry: mocks.syncCountry,
   ensureCustomerMetadata: mocks.ensureMetadata,
 }))
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', async importOriginal => ({
-  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/supabase.ts')>(),
-  supabaseAdmin: () => ({ from: mocks.from }),
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>(),
+  closeClient: () => undefined,
+  getPgClient: async () => ({ query: mocks.query }),
+}))
+// pg.ts is part of an import cycle, so modules loaded while it initializes keep the real
+// getPgClient; route RLS-context queries to the same fake explicitly.
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>(),
+  withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown, drizzle: unknown) => unknown) => run({ query: mocks.query }, null),
 }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../supabase/functions/_backend/utils/logging.ts')>(),
@@ -81,27 +89,26 @@ function customerEvent(type: 'customer.created' | 'customer.updated' = 'customer
 }
 
 function database(account: BillingAccount, linked = true, storedAccount: BillingAccount = account) {
-  mocks.from.mockImplementation((table: string) => {
-    let columns: string | undefined
-    const query = {
-      select: vi.fn((value?: string) => {
-        columns = value
-        return query
-      }),
-      eq: vi.fn(() => query),
-      update: vi.fn((patch: unknown) => {
-        mocks.orgUpdates(patch)
-        return query
-      }),
-      single: vi.fn(async () => ({ data: { customer_id: org.customer_id, billing_account: storedAccount }, error: null })),
-      maybeSingle: vi.fn(async () => ({
-        data: table === 'orgs'
-          ? (linked ? org : null)
-          : (columns === 'billing_account' ? { billing_account: storedAccount } : null),
-        error: null,
-      })),
+  mocks.query.mockImplementation(async (text: string, values: unknown[] = []) => {
+    const table = /(?:FROM|UPDATE|INTO)\s+public\.(\w+)/.exec(text)?.[1]
+    if (!table)
+      return { rows: [] }
+    mocks.table(table)
+    let rows: unknown[] = []
+    if (table === 'orgs' && text.includes('UPDATE')) {
+      mocks.orgUpdates({ management_email: values[0] })
+      rows = [{ id: org.id }]
     }
-    return query
+    else if (table === 'orgs') {
+      rows = linked ? [org] : []
+    }
+    else if (table === 'stripe_info' && text.includes('SELECT billing_account')) {
+      rows = [{ billing_account: storedAccount }]
+    }
+    else if (table === 'stripe_info' && text.includes('SELECT *')) {
+      rows = [{ customer_id: org.customer_id, billing_account: storedAccount }]
+    }
+    return { rows: text.includes('to_json(q.*)') ? rows.map(row => ({ row })) : rows }
   })
 }
 
@@ -159,8 +166,8 @@ describe.each(['ee', 'us'] as const)('%s Stripe customer creation forwarding', (
         org_id: org.id,
       },
     }] })
-    expect(mocks.from.mock.calls.map(([table]) => table)).not.toContain('users')
-    expect(mocks.from.mock.calls.map(([table]) => table)).not.toContain('org_users')
+    expect(mocks.table.mock.calls.map(([table]) => table)).not.toContain('users')
+    expect(mocks.table.mock.calls.map(([table]) => table)).not.toContain('org_users')
     expect(mocks.memberEmails).not.toHaveBeenCalled()
     expect(mocks.syncCountry).toHaveBeenCalledOnce()
     expect(mocks.ensureMetadata).toHaveBeenCalledOnce()
@@ -179,7 +186,7 @@ describe.each(['ee', 'us'] as const)('%s Stripe customer creation forwarding', (
     database(account, false)
     expect((await deliver(account)).status).toBe(200)
     expect(mocks.fetch).toHaveBeenCalledOnce()
-    expect(mocks.from).toHaveBeenCalledExactlyOnceWith('orgs')
+    expect(mocks.table).toHaveBeenCalledExactlyOnceWith('orgs')
     expect(mocks.retrieve).not.toHaveBeenCalled()
     expect(mocks.syncCountry).not.toHaveBeenCalled()
     expect(mocks.ensureMetadata).not.toHaveBeenCalled()
@@ -253,7 +260,7 @@ describe.each(['ee', 'us'] as const)('%s Stripe customer creation forwarding', (
       : signature
     const response = await deliver(account, event, { signature: header })
     expect(response.status).toBeGreaterThanOrEqual(400)
-    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.table).not.toHaveBeenCalled()
     expect(mocks.fetch).not.toHaveBeenCalled()
   })
 

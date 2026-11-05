@@ -1,4 +1,5 @@
-// Shared helpers for the per-app build charts (Builds by status + Build time).
+// Shared helpers for the build charts (Builds by status + Build time) and the
+// org-wide native build summary.
 
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
 
@@ -85,9 +86,9 @@ export function dayIndexInWindow(date: Date, windowStart: Date): number {
   return Math.floor((date.getTime() - windowStart.getTime()) / DAY_IN_MS)
 }
 
-// Paginate a Supabase range query so apps above the configured max_rows cap are
+// Paginate a range query so apps above the configured max_rows cap are
 // not silently undercounted. `runRange` must apply `.range(from, to)` and return
-// the supabase result.
+// the capgo result.
 export async function fetchAllRows<T>(runRange: (from: number, to: number) => PromiseLike<{ data: T[] | null, error: unknown }>): Promise<T[]> {
   const PAGE_SIZE = 1000
   const rows: T[] = []
@@ -158,4 +159,121 @@ export function transformSeries(source: number[], accumulated: boolean, labelCou
   }
 
   return { display, base }
+}
+
+export interface BuildSummaryRow {
+  app_id: string
+  status: string | null
+  created_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  runner_wait_seconds: number | null
+}
+
+export interface BuildTotals {
+  total: number
+  succeeded: number
+  failed: number
+  inProgress: number
+  // Share of finished builds that succeeded, 0-100, or null when nothing finished.
+  successRate: number | null
+  // Mean run time (started_at -> completed_at) of finished builds, in seconds.
+  avgDurationSeconds: number | null
+  // Mean time spent waiting for a runner, in seconds.
+  avgWaitSeconds: number | null
+}
+
+export interface AppBuildSummary extends BuildTotals {
+  appId: string
+  lastBuildAt: string | null
+}
+
+interface BuildAccumulator {
+  total: number
+  succeeded: number
+  failed: number
+  durationSum: number
+  durationCount: number
+  waitSum: number
+  waitCount: number
+  lastBuildAt: string | null
+}
+
+function emptyAccumulator(): BuildAccumulator {
+  return { total: 0, succeeded: 0, failed: 0, durationSum: 0, durationCount: 0, waitSum: 0, waitCount: 0, lastBuildAt: null }
+}
+
+function addToAccumulator(acc: BuildAccumulator, row: BuildSummaryRow) {
+  acc.total += 1
+  const outcome = bucketBuildStatus(row.status)
+  if (outcome === 'succeeded')
+    acc.succeeded += 1
+  else if (outcome === 'failed')
+    acc.failed += 1
+
+  if (outcome && row.started_at && row.completed_at) {
+    const seconds = (new Date(row.completed_at).getTime() - new Date(row.started_at).getTime()) / 1000
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      acc.durationSum += seconds
+      acc.durationCount += 1
+    }
+  }
+
+  if (row.started_at && row.runner_wait_seconds != null && row.runner_wait_seconds >= 0) {
+    acc.waitSum += row.runner_wait_seconds
+    acc.waitCount += 1
+  }
+
+  if (row.created_at && (!acc.lastBuildAt || row.created_at > acc.lastBuildAt))
+    acc.lastBuildAt = row.created_at
+}
+
+function toTotals(acc: BuildAccumulator): BuildTotals {
+  const finished = acc.succeeded + acc.failed
+  return {
+    total: acc.total,
+    succeeded: acc.succeeded,
+    failed: acc.failed,
+    inProgress: acc.total - finished,
+    successRate: finished > 0 ? (acc.succeeded / finished) * 100 : null,
+    avgDurationSeconds: acc.durationCount > 0 ? acc.durationSum / acc.durationCount : null,
+    avgWaitSeconds: acc.waitCount > 0 ? acc.waitSum / acc.waitCount : null,
+  }
+}
+
+// Aggregate build requests into org-wide totals plus a per-app breakdown
+// (sorted by build count, busiest app first).
+export function summarizeBuilds(rows: BuildSummaryRow[]): { totals: BuildTotals, apps: AppBuildSummary[] } {
+  const overall = emptyAccumulator()
+  const byApp = new Map<string, BuildAccumulator>()
+
+  for (const row of rows) {
+    addToAccumulator(overall, row)
+    let appAcc = byApp.get(row.app_id)
+    if (!appAcc) {
+      appAcc = emptyAccumulator()
+      byApp.set(row.app_id, appAcc)
+    }
+    addToAccumulator(appAcc, row)
+  }
+
+  const apps = [...byApp.entries()]
+    .map(([appId, acc]) => ({ appId, lastBuildAt: acc.lastBuildAt, ...toTotals(acc) }))
+    .sort((a, b) => b.total - a.total || a.appId.localeCompare(b.appId))
+
+  return { totals: toTotals(overall), apps }
+}
+
+// Compact human duration (e.g. "45s", "3m 20s", "1h 05m").
+export function formatBuildDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds))
+    return '-'
+  const rounded = Math.round(seconds)
+  if (rounded < 60)
+    return `${rounded}s`
+  const minutes = Math.floor(rounded / 60)
+  if (minutes < 60)
+    return `${minutes}m ${String(rounded % 60).padStart(2, '0')}s`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`
 }

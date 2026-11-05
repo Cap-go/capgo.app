@@ -43,6 +43,7 @@ declare global {
   const eagerComputed: typeof import('@vueuse/core').eagerComputed
   const effectScope: typeof import('vue').effectScope
   const extendRef: typeof import('@vueuse/core').extendRef
+  const formatLegacyPluginVersions: typeof import('./composables/useReleaseLive').formatLegacyPluginVersions
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
@@ -66,6 +67,7 @@ declare global {
   const makeDestructurable: typeof import('@vueuse/core').makeDestructurable
   const manualResetRef: typeof import('@vueuse/core').manualResetRef
   const markRaw: typeof import('vue').markRaw
+  const nativeNavbarSegmentsSupported: typeof import('./composables/useNativeChrome').nativeNavbarSegmentsSupported
   const nextTick: typeof import('vue').nextTick
   const normalizeNavigationPath: typeof import('./composables/useAppNavigation').normalizeNavigationPath
   const onActivated: typeof import('vue').onActivated
@@ -182,6 +184,7 @@ declare global {
   const useDark: typeof import('@vueuse/core').useDark
   const useDashboardAppsStore: typeof import('./stores/dashboardApps').useDashboardAppsStore
   const useDashboardDailyChartCycle: typeof import('./composables/useOrgBillingCycleChart').useDashboardDailyChartCycle
+  const useDashboardRequestState: typeof import('./composables/useDashboardRequestState').useDashboardRequestState
   const useDateFormat: typeof import('@vueuse/core').useDateFormat
   const useDebounce: typeof import('@vueuse/core').useDebounce
   const useDebounceFn: typeof import('@vueuse/core').useDebounceFn
@@ -245,6 +248,7 @@ declare global {
   const useMousePressed: typeof import('@vueuse/core').useMousePressed
   const useMutationObserver: typeof import('@vueuse/core').useMutationObserver
   const useNativeChrome: typeof import('./composables/useNativeChrome').useNativeChrome
+  const useNativeNavbarSegments: typeof import('./composables/useNativeChrome').useNativeNavbarSegments
   const useNativeObserveStats: typeof import('./composables/useNativeObserveStats').useNativeObserveStats
   const useNavigatorLanguage: typeof import('@vueuse/core').useNavigatorLanguage
   const useNetwork: typeof import('@vueuse/core').useNetwork
@@ -366,7 +370,7 @@ declare global {
   export type { UpdateEndpointRequest } from './composables/useDeviceUpdateFormat'
   import('./composables/useDeviceUpdateFormat')
   // @ts-ignore
-  export type { ReleaseLiveDeployment, ReleaseLiveChannel, ReleaseLiveBucket, ReleaseLiveRollout, ReleaseLiveResponse } from './composables/useReleaseLive'
+  export type { ReleaseLiveDeployment, ReleaseLiveChannel, ReleaseLiveBucket, ReleaseLiveRollout, LegacyCheckFailures, ReleaseLiveResponse } from './composables/useReleaseLive'
   import('./composables/useReleaseLive')
   // @ts-ignore
   export type { CheckDomainResponse } from './composables/useSSORouting'
@@ -430,6 +434,7 @@ declare module 'vue' {
     readonly eagerComputed: UnwrapRef<typeof import('@vueuse/core')['eagerComputed']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
     readonly extendRef: UnwrapRef<typeof import('@vueuse/core')['extendRef']>
+    readonly formatLegacyPluginVersions: UnwrapRef<typeof import('./composables/useReleaseLive')['formatLegacyPluginVersions']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
     readonly getCurrentWatcher: UnwrapRef<typeof import('vue')['getCurrentWatcher']>
@@ -452,6 +457,7 @@ declare module 'vue' {
     readonly isSuperAdminRole: UnwrapRef<typeof import('./stores/organization')['isSuperAdminRole']>
     readonly makeDestructurable: UnwrapRef<typeof import('@vueuse/core')['makeDestructurable']>
     readonly markRaw: UnwrapRef<typeof import('vue')['markRaw']>
+    readonly nativeNavbarSegmentsSupported: UnwrapRef<typeof import('./composables/useNativeChrome')['nativeNavbarSegmentsSupported']>
     readonly nextTick: UnwrapRef<typeof import('vue')['nextTick']>
     readonly normalizeNavigationPath: UnwrapRef<typeof import('./composables/useAppNavigation')['normalizeNavigationPath']>
     readonly onActivated: UnwrapRef<typeof import('vue')['onActivated']>
@@ -566,6 +572,7 @@ declare module 'vue' {
     readonly useDark: UnwrapRef<typeof import('@vueuse/core')['useDark']>
     readonly useDashboardAppsStore: UnwrapRef<typeof import('./stores/dashboardApps')['useDashboardAppsStore']>
     readonly useDashboardDailyChartCycle: UnwrapRef<typeof import('./composables/useOrgBillingCycleChart')['useDashboardDailyChartCycle']>
+    readonly useDashboardRequestState: UnwrapRef<typeof import('./composables/useDashboardRequestState')['useDashboardRequestState']>
     readonly useDateFormat: UnwrapRef<typeof import('@vueuse/core')['useDateFormat']>
     readonly useDebounce: UnwrapRef<typeof import('@vueuse/core')['useDebounce']>
     readonly useDebounceFn: UnwrapRef<typeof import('@vueuse/core')['useDebounceFn']>
@@ -629,6 +636,7 @@ declare module 'vue' {
     readonly useMousePressed: UnwrapRef<typeof import('@vueuse/core')['useMousePressed']>
     readonly useMutationObserver: UnwrapRef<typeof import('@vueuse/core')['useMutationObserver']>
     readonly useNativeChrome: UnwrapRef<typeof import('./composables/useNativeChrome')['useNativeChrome']>
+    readonly useNativeNavbarSegments: UnwrapRef<typeof import('./composables/useNativeChrome')['useNativeNavbarSegments']>
     readonly useNativeObserveStats: UnwrapRef<typeof import('./composables/useNativeObserveStats')['useNativeObserveStats']>
     readonly useNavigatorLanguage: UnwrapRef<typeof import('@vueuse/core')['useNavigatorLanguage']>
     readonly useNetwork: UnwrapRef<typeof import('@vueuse/core')['useNetwork']>

@@ -1,9 +1,11 @@
 import type { SDKResult } from '../schemas/sdk'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 import { McpServer } from '@modelcontextprotocol/server'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
+import { z } from 'zod'
 import pack from '../../package.json'
-import { enableSupabaseInstrumentation, setInvocationSource, trackMcpServerStarted, withMcpToolTracking } from '../analytics/track'
+import { enableApiInstrumentation, setInvocationSource, trackMcpServerStarted, withMcpToolTracking } from '../analytics/track'
 import { parseSchema } from '../schemas/schema_validation'
 import { promoteChannelOptionsSchema, starAllRepositoriesOptionsSchema, starRepoOptionsSchema, updateChannelOptionsSchema } from '../schemas/sdk'
 import {
@@ -33,6 +35,9 @@ import {
   mcpOrganizationMemberRoleInputSchema,
   mcpOrgIdInputSchema,
   mcpRemoveOrganizationMemberInputSchema,
+  mcpSetProjectDirInputSchema,
+  mcpProjectDirOptionSchema,
+  mcpCwdOptionSchema,
   mcpUpdateAccountInputSchema,
   mcpUpdateOrganizationInputSchema,
 } from './tool-schemas'
@@ -43,9 +48,12 @@ import { clearSavedKey, getLoginState, loginSuccessMessage, logoutMessage, valid
 import { mcpLoginInputSchema, mcpLogoutInputSchema } from '../schemas/auth'
 import { findSavedKeySilent, formatError } from '../utils'
 import { registerOnboardingTools } from '../build/onboarding/mcp/onboarding-tools'
+import { withCwd } from '../build/cwd'
 import { registerLiveUpdateTools } from '../init/mcp/live-update-tools'
+import { withErrorGuidance, withGuidedErrorResults } from './error-guidance'
 import { buildServerInstructions } from './instructions'
 import { installMcpStdoutGuard } from './stdout-guard'
+import { createProjectDirQueue, describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, resolveProjectDirOptions } from './project-dir'
 
 /**
  * Format an SDK result error for MCP response.
@@ -107,12 +115,87 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   )
 
   setInvocationSource('mcp')
-  enableSupabaseInstrumentation()
+  enableApiInstrumentation()
 
-  // Auto-track every tool invocation without touching each registration.
+  // Project directory: the server reads the user's project (capacitor config, package.json,
+  // native folders, ./.capgo) from process.cwd(). A user-scoped install is spawned from the
+  // client's dir (often ~ or /), not the agent's workspace, so follow the client's MCP roots
+  // once initialized and on roots/list_changed. capgo_set_project_dir overrides both.
+  let projectDirSync: Promise<void> = Promise.resolve()
+  let selectedProjectDir = process.cwd()
+  let projectDirPinned = false
+  let projectDirError: unknown
+  const runInProjectDir = createProjectDirQueue()
+  const syncProjectDirFromRoots = (): Promise<void> => runInProjectDir(async () => {
+    if (projectDirPinned)
+      return
+    try {
+      const { roots } = server.server.getClientCapabilities()?.roots
+        ? await server.server.listRoots(undefined, { timeout: 5000 })
+        : { roots: [{ uri: pathToFileURL(selectedProjectDir).href }] }
+      let dir: string | undefined
+      try {
+        dir = await pickProjectDirFromRoots(roots, selectedProjectDir)
+        projectDirError = undefined
+      }
+      catch (error) {
+        projectDirError = error
+        return
+      }
+      if (!projectDirPinned && dir && dir !== selectedProjectDir) {
+        selectedProjectDir = dir
+        refreshSdkForProject()
+      }
+    }
+    catch {
+      // Client advertised roots but did not answer: keep the spawn dir; the agent can
+      // still call capgo_set_project_dir.
+    }
+  })
+  server.server.oninitialized = () => {
+    projectDirSync = syncProjectDirFromRoots()
+  }
+  server.server.setNotificationHandler('notifications/roots/list_changed', () => {
+    projectDirSync = syncProjectDirFromRoots()
+  })
+
+  // Auto-track every tool invocation without touching each registration. Every tool waits
+  // for a pending roots sync so its first call already runs in the agent's project.
   const originalRegisterTool = server.registerTool.bind(server)
   ;(server as unknown as { registerTool: typeof server.registerTool }).registerTool = (name: string, config: Parameters<typeof server.registerTool>[1], handler: Parameters<typeof server.registerTool>[2]) => {
-    return originalRegisterTool(name, config, withMcpToolTracking(String(name), handler as any) as typeof handler)
+    const tracked = withMcpToolTracking(String(name), async (...args: unknown[]) => (handler as (...args: unknown[]) => unknown)(...args))
+    // Never leave the agent in a dead end: every error result (or throw) gets a way out appended.
+    const waitForProjectDir = async (...args: unknown[]) => {
+      await projectDirSync
+      return runInProjectDir(async () => {
+        const { projectDir, cwd, ...input } = (args[0] ?? {}) as { projectDir?: string, cwd?: string }
+        const dir = await resolveProjectDirOptions({ projectDir, cwd }, selectedProjectDir)
+        const isProjectDirSetter = name === 'capgo_set_project_dir'
+        const baseDir = dir ?? selectedProjectDir
+        const workingDir = isProjectDirSetter
+          ? await resolveProjectDirInput(mcpSetProjectDirInputSchema.parse(input).path, baseDir)
+          : baseDir
+        if (projectDirError && !isProjectDirSetter && !dir)
+          throw projectDirError
+        return withCwd(workingDir, async () => {
+          if (dir || isProjectDirSetter) {
+            if (workingDir !== selectedProjectDir) {
+              selectedProjectDir = workingDir
+              refreshSdkForProject()
+            }
+            projectDirPinned = true
+            projectDirError = undefined
+          }
+          return tracked(input, ...args.slice(1))
+        })
+      })
+    }
+    const guided = withErrorGuidance(String(name), waitForProjectDir)
+    const contextFields = { projectDir: mcpProjectDirOptionSchema, cwd: mcpCwdOptionSchema }
+    const inputSchema = config.inputSchema instanceof z.ZodObject
+      ? config.inputSchema.safeExtend(contextFields)
+      : z.object({ ...config.inputSchema, ...contextFields })
+    return originalRegisterTool(name, { ...config, inputSchema } as unknown as typeof config, guided as typeof handler)
   }
 
   // Initialize the SDK from any saved key. Silent lookup (env -> ~/.capgo -> ./.capgo):
@@ -123,6 +206,20 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // `let` (not `const`): capgo_login/capgo_logout reassign this so the running session
   // re-authenticates without a restart. Tool handlers close over the binding, not the value.
   let sdk = new CapgoSDK({ apikey: savedApiKey })
+  // On a project switch, drop the startup key so calls re-resolve credentials (env ->
+  // ~/.capgo -> ./.capgo) from the new project, matching what capgo_whoami reports.
+  function refreshSdkForProject(): void {
+    sdk = new CapgoSDK({})
+  }
+
+  server.registerTool(
+    'capgo_set_project_dir',
+    {
+      description: 'Point the Capgo MCP at the project the agent is working in. Call this FIRST with the absolute Capacitor app path when the project or @capacitor/core appears missing. A workspace with one Capacitor app resolves automatically; multiple apps require selecting an app path. Check the project path before installing dependencies.',
+      inputSchema: mcpSetProjectDirInputSchema,
+    },
+    async () => ({ content: [{ type: 'text' as const, text: describeProjectDir(selectedProjectDir) }] }),
+  )
 
   // ============================================================================
   // App Management Tools
@@ -849,15 +946,16 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
       description: 'Request a native iOS/Android build from Capgo Cloud',
       inputSchema: mcpRequestBuildInputSchema,
     },
-    async ({ appId, platform, path, nodeModules, cache, cacheKey }) => {
+    async ({ appId, platform, path, nodeModules, useStoredCredentials, cache, cacheKey }) => {
       const result = await sdk.requestBuild({
         appId,
         platform,
         path,
         nodeModules,
+        useStoredCredentials,
         cache,
         cacheKey,
-        // Credentials should be pre-saved using the CLI
+        // Credentials come from the locally saved file and, with useStoredCredentials, from Capgo
       })
       if (!result.success) {
         return formatMcpError(result)
@@ -1003,7 +1101,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // Build-time gated: ships enabled in this release. The flag enables dead-code
   // elimination when the feature is disabled; release builds define it to true.
   if (liveUpdateEnabled)
-    registerLiveUpdateTools(server, sdk)
+    registerLiveUpdateTools(server, () => sdk) // live accessor: honors login/logout and project switches
 
   // Start the server with stdio transport. The stdout guard installed at the top of this
   // function already routed ambient stdout (stray clack/console output from any tool or
@@ -1011,6 +1109,10 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // reads; otherwise the transport drops ("Transport closed"). Keep the config target
   // for this server's lifetime because tool calls happen after the CLI action completes.
   const transport = new StdioServerTransport(process.stdin, transportStdout)
+  // Last safety net: error results the SDK builds before a handler runs (invalid arguments,
+  // output validation) also leave the agent a way out.
+  const send = transport.send.bind(transport)
+  transport.send = (message: Parameters<typeof send>[0]) => send(withGuidedErrorResults(message))
   transport.onclose = restoreConfigWriteTarget
   await server.connect(transport)
   trackMcpServerStarted(Boolean(savedApiKey))

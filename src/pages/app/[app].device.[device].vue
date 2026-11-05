@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { greaterThan, parse } from '@std/semver'
 import { computedAsync, onClickOutside } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
@@ -12,11 +12,12 @@ import IconCode from '~icons/heroicons/code-bracket'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
+import EmptyState from '~/components/EmptyState.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { useDeviceUpdateFormat } from '~/composables/useDeviceUpdateFormat'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate, formatDistanceToNow } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
@@ -28,7 +29,7 @@ const displayStore = useDisplayStore()
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute('/app/[app].device.[device]')
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<string>()
 const isLoading = ref(true)
@@ -58,7 +59,7 @@ onClickOutside(channelDropdown, () => closeChannelDropdown())
 
 async function getChannels() {
   try {
-    const { data } = await supabase
+    const { data } = await capgo
       .from('channels')
       .select(`
         id,
@@ -79,7 +80,7 @@ async function getChannels() {
 
 async function getChannelOverride() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channel_devices')
       .select(`
         device_id,
@@ -112,7 +113,7 @@ async function getChannelOverride() {
 
 async function getVersionInfo() {
   if (device.value?.version && !device.value?.version_name) {
-    const { data: dataVersion } = await supabase
+    const { data: dataVersion } = await capgo
       .from('app_versions')
       .select(`
           name
@@ -124,7 +125,7 @@ async function getVersionInfo() {
       device.value.version_name = dataVersion.name
   }
   if (!device.value?.version && device.value?.version_name) {
-    const { data: dataVersion } = await supabase
+    const { data: dataVersion } = await capgo
       .from('app_versions')
       .select(`
           id
@@ -153,7 +154,7 @@ async function getDevice() {
   }
 
   try {
-    const { data: currentSession } = await supabase.auth.getSession()!
+    const { data: currentSession } = await capgo.auth.getSession()!
     if (!currentSession.session)
       return
     const currentJwt = currentSession.session.access_token
@@ -224,7 +225,7 @@ async function loadData() {
 }
 
 async function upsertDevChannel(device: string, channelId: number) {
-  const { data: currentSession } = await supabase.auth.getSession()!
+  const { data: currentSession } = await capgo.auth.getSession()!
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt)
     throw new Error('Missing session')
@@ -246,7 +247,7 @@ async function upsertDevChannel(device: string, channelId: number) {
 }
 
 async function delDevChannel(device: string) {
-  const { data: currentSession } = await supabase.auth.getSession()!
+  const { data: currentSession } = await capgo.auth.getSession()!
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt)
     throw new Error('Missing session')
@@ -556,18 +557,19 @@ async function copyCurlCommand() {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('device-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('device-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
-        {{ t('back-to-devices') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('device-not-found')"
+      :description="t('device-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
+          {{ t('back-to-devices') }}
+        </button>
+      </template>
+    </EmptyState>
   </div>
 </template>
 

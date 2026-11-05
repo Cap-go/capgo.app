@@ -4,15 +4,8 @@
     "lib": [
       "es2023"
     ],
-    "ignoreDeprecations": "6.0",
-    "baseUrl": "src",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "paths": {
-      "*": [
-        "./src/types/*"
-      ]
-    },
     "resolveJsonModule": true,
     "typeRoots": ["src/types", "node_modules/@types"],
     "strict": true,

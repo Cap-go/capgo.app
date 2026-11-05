@@ -667,6 +667,30 @@ describe('[Encrypted Bundles Enforcement]', () => {
         expect(data).toBe(true) // Should allow
       })
     })
+
+    it('check_org_encrypted_bundle_enforcement is not executable by anon or authenticated callers', async () => {
+      await withEncryptedBundleEnforcement(async () => {
+        const callers: Array<[string, Record<string, string>]> = [
+          ['anon', { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }],
+          ['authenticated org member', authHeadersEncrypted],
+        ]
+
+        for (const [label, headers] of callers) {
+          const response = await fetch(`${SUPABASE_BASE_URL}/rest/v1/rpc/check_org_encrypted_bundle_enforcement`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              apikey: SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({ org_id: ORG_ID_ENCRYPTED, session_key: '' }),
+          })
+          const body = await response.json() as { code?: string }
+
+          expect(response.status, label).not.toBe(200)
+          expect(body.code, label).toBe('42501')
+        }
+      })
+    })
   })
 
   describe('cleanup RPC authorization', () => {

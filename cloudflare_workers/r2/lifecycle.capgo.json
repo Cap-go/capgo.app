@@ -14,6 +14,19 @@
       }
     },
     {
+      "id": "delete-upload-sessions-after-1-day",
+      "enabled": true,
+      "conditions": {
+        "prefix": "upload-sessions-expire-after-1-day/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 86400
+        }
+      }
+    },
+    {
       "id": "Default Multipart Abort Rule",
       "enabled": true,
       "conditions": {

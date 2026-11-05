@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 
 export interface CheckDomainResponse {
   has_sso: boolean
@@ -8,7 +8,7 @@ export interface CheckDomainResponse {
 }
 
 export function useSSORouting() {
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const hasSso = ref(false)
   const isChecking = ref(false)
   const error = ref<string | null>(null)
@@ -18,7 +18,7 @@ export function useSSORouting() {
     error.value = null
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession()
+      const { data: sessionData } = await capgo.auth.getSession()
       const token = sessionData?.session?.access_token
 
       const headers: Record<string, string> = {
@@ -57,7 +57,7 @@ export function useSSORouting() {
     error.value = null
 
     try {
-      const { data, error: ssoError } = await supabase.auth.signInWithSSO({
+      const { data, error: ssoError } = await capgo.auth.signInWithSSO({
         domain,
         options: {
           redirectTo: `${window.location.origin}/sso-callback`,

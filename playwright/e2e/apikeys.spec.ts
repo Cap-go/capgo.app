@@ -165,8 +165,8 @@ test.describe('API Key Management', () => {
       userId: USER_ID,
       stripeCustomerId: INHERITED_CUSTOMER_ID,
     })
-    const supabase = getSupabaseClient()
-    const { data: role, error: roleError } = await supabase
+    const capgo = getSupabaseClient()
+    const { data: role, error: roleError } = await capgo
       .from('roles')
       .select('id')
       .eq('name', 'org_super_admin')
@@ -174,7 +174,7 @@ test.describe('API Key Management', () => {
     expect(roleError).toBeNull()
     expect(role).not.toBeNull()
 
-    const { data: binding, error: bindingError } = await supabase
+    const { data: binding, error: bindingError } = await capgo
       .from('role_bindings')
       .update({
         role_id: role!.id,
@@ -194,11 +194,11 @@ test.describe('API Key Management', () => {
 
   test.afterAll(async () => {
     await resetAppData(INHERITED_APP_ID)
-    const supabase = getSupabaseClient()
-    await supabase.from('role_bindings').delete().eq('org_id', INHERITED_ORG_ID)
-    await supabase.from('org_users').delete().eq('org_id', INHERITED_ORG_ID)
-    await supabase.from('orgs').delete().eq('id', INHERITED_ORG_ID)
-    await supabase.from('stripe_info').delete().eq('customer_id', INHERITED_CUSTOMER_ID)
+    const capgo = getSupabaseClient()
+    await capgo.from('role_bindings').delete().eq('org_id', INHERITED_ORG_ID)
+    await capgo.from('org_users').delete().eq('org_id', INHERITED_ORG_ID)
+    await capgo.from('orgs').delete().eq('id', INHERITED_ORG_ID)
+    await capgo.from('stripe_info').delete().eq('customer_id', INHERITED_CUSTOMER_ID)
   })
 
   test.beforeEach(async ({ page }) => {
@@ -291,8 +291,8 @@ test.describe('API Key Management', () => {
     await expect(reloadedKeyRow).toContainText('App Preview')
     await expect(reloadedKeyRow.locator('td').nth(1)).toContainText('-')
 
-    const supabase = getSupabaseClient()
-    const { data: key, error: keyError } = await supabase
+    const capgo = getSupabaseClient()
+    const { data: key, error: keyError } = await capgo
       .from('apikeys')
       .select('id, rbac_id')
       .eq('name', keyName)
@@ -301,7 +301,7 @@ test.describe('API Key Management', () => {
     expect(key?.rbac_id).toBeTruthy()
 
     const assertAppOnlyBindings = async () => {
-      const { data: bindings, error: bindingsError } = await supabase
+      const { data: bindings, error: bindingsError } = await capgo
         .from('role_bindings')
         .select('scope_type, app_id, roles(name)')
         .eq('principal_type', 'apikey')
@@ -388,7 +388,7 @@ test.describe('API Key Management', () => {
     const keyName = uniqueKeyName('Inherited')
     const keyRow = await createInheritedOrgAdminApiKey(page, keyName)
 
-    await expectChannelPermissionOverridePersists(page, keyRow, 'Seeded App · App Admin')
+    await expectChannelPermissionOverridePersists(page, keyRow, 'Seeded App · App admin')
   })
 
   test('should delete API key', async ({ page }) => {
@@ -401,7 +401,7 @@ test.describe('API Key Management', () => {
     const keyRow = keyCell.locator('xpath=ancestor::tr[1]')
 
     await keyRow.locator('[data-test^="delete-key-"]').click()
-    await page.getByRole('button', { name: 'Delete' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
 
     await expect(page.getByText('API key has been successfully deleted', { exact: true })).toBeVisible()
     await expect(page.getByText(keyName, { exact: true })).toHaveCount(0)

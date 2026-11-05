@@ -12,14 +12,14 @@ const {
   usersUpdateMaybeSingleMock,
   verifyCaptchaTokenMock,
 } = vi.hoisted(() => {
-  type UsersRow = {
+  interface UsersRow {
     id: string
     email: string
     enable_notifications: boolean
     opt_for_newsletters: boolean
     email_preferences: Record<string, boolean>
   }
-  type UsersQueryResult = {
+  interface UsersQueryResult {
     data: UsersRow | null
     error: { message: string } | null
   }
@@ -66,28 +66,27 @@ vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({
   getClientIP: () => '203.0.113.10',
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({
-    from(table: string) {
-      if (table !== 'users')
-        throw new Error(`unexpected table ${table}`)
-      return {
-        select: () => ({
-          ilike: () => ({
-            maybeSingle: usersMaybeSingleMock,
-          }),
-        }),
-        update: (payload: unknown) => {
-          usersUpdateEqMock(payload)
-          return {
-            eq: () => ({
-              select: () => ({
-                maybeSingle: usersUpdateMaybeSingleMock,
-              }),
-            }),
-          }
-        },
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: () => undefined,
+  getPgClient: async () => ({
+    async query(text: string, values: unknown[] = []) {
+      const run = async (result: Promise<{ data: unknown, error: unknown }>) => {
+        const { data, error } = await result
+        if (error)
+          throw error
+        return { rows: data ? [data] : [] }
       }
+      if (/^SELECT .* FROM public\.users WHERE email ILIKE \$1/s.test(text))
+        return run(usersMaybeSingleMock())
+      if (/^UPDATE public\.users/s.test(text)) {
+        usersUpdateEqMock({
+          email_preferences: JSON.parse(values[0] as string),
+          enable_notifications: values[1],
+          opt_for_newsletters: values[2],
+        })
+        return run(usersUpdateMaybeSingleMock())
+      }
+      throw new Error(`unexpected query ${text}`)
     },
   }),
 }))
@@ -377,7 +376,7 @@ describe('public email preferences endpoint', () => {
     expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
   })
 
-  it('resolves uuid posts through Bento then applies opt-outs', async () => {
+  it.each([VISITOR_UUID, VISITOR_UUID_BENTO])('resolves uuid %s posts through Bento then applies opt-outs', async (uuid) => {
     getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
     const user = {
       id: '11111111-1111-4111-8111-111111111111',
@@ -396,7 +395,7 @@ describe('public email preferences endpoint', () => {
     })
 
     const response = await postPreferences({
-      uuid: VISITOR_UUID,
+      uuid,
       preferences: { onboarding: false },
     })
 
@@ -445,10 +444,15 @@ describe('public email preferences endpoint', () => {
     expect(usersMaybeSingleMock).toHaveBeenCalled()
   })
 
-  it('resolves uuid on GET so the public page can prefill without email in the URL', async () => {
+  it.each([
+    `?uuid=${VISITOR_UUID}`,
+    `?email=${VISITOR_UUID}`,
+    `?uuid=${VISITOR_UUID_BENTO}`,
+    `?email=${VISITOR_UUID_BENTO}`,
+  ])('resolves GET %s so the public page can prefill without email in the URL', async (query) => {
     getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
 
-    const response = await getPreferences(`?uuid=${VISITOR_UUID}`)
+    const response = await getPreferences(query)
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: 'ok', email: 'user@example.com' })
@@ -462,30 +466,12 @@ describe('public email preferences endpoint', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'email_preferences_not_found' })
   })
 
-  it('rejects GET without a visitor uuid', async () => {
-    const response = await getPreferences('')
+  it.each(['', '?email=user@example.com'])('rejects GET %j without a visitor uuid and never looks up by email', async (query) => {
+    const response = await getPreferences(query)
 
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
     expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
-  })
-
-  it('does not look up GET by email address', async () => {
-    const response = await getPreferences('?email=user@example.com')
-
-    expect(response.status).toBe(400)
-    await expect(response.json()).resolves.toMatchObject({ error: 'invalid_payload' })
-    expect(getBentoSubscriberEmailByUuidMock).not.toHaveBeenCalled()
-  })
-
-  it('resolves GET when a visitor uuid was sent as the legacy email query param', async () => {
-    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
-
-    const response = await getPreferences(`?email=${VISITOR_UUID}`)
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({ status: 'ok', email: 'user@example.com' })
-    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID_BENTO)
   })
 
   it('accepts POST when uuid was sent in the email field by mistake', async () => {
@@ -524,17 +510,6 @@ describe('public email preferences endpoint', () => {
     expect(usersUpdateEqMock).not.toHaveBeenCalled()
   })
 
-  it('resolves GET for 32-hex visitor ids in uuid and legacy email params', async () => {
-    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
-
-    const uuidResponse = await getPreferences(`?uuid=${VISITOR_UUID_BENTO}`)
-    expect(uuidResponse.status).toBe(200)
-
-    const emailResponse = await getPreferences(`?email=${VISITOR_UUID_BENTO}`)
-    expect(emailResponse.status).toBe(200)
-    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID_BENTO)
-  })
-
   it('returns ok for unknown uuid emails when Bento resolves but Capgo has no user', async () => {
     getBentoSubscriberEmailByUuidMock.mockResolvedValue('nobody@example.com')
 
@@ -546,29 +521,5 @@ describe('public email preferences endpoint', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: 'ok' })
     expect(usersUpdateEqMock).not.toHaveBeenCalled()
-  })
-
-  it('accepts POST with a 32-hex visitor id', async () => {
-    getBentoSubscriberEmailByUuidMock.mockResolvedValue('user@example.com')
-    const user = {
-      id: '11111111-1111-4111-8111-111111111111',
-      email: 'user@example.com',
-      enable_notifications: true,
-      opt_for_newsletters: true,
-      email_preferences: { onboarding: true },
-    }
-    usersMaybeSingleMock.mockResolvedValue({ data: user, error: null })
-    usersUpdateMaybeSingleMock.mockResolvedValue({
-      data: { ...user, email_preferences: { onboarding: false } },
-      error: null,
-    })
-
-    const response = await postPreferences({
-      uuid: VISITOR_UUID_BENTO,
-      preferences: { onboarding: false },
-    })
-
-    expect(response.status).toBe(200)
-    expect(getBentoSubscriberEmailByUuidMock).toHaveBeenCalledWith(expect.anything(), VISITOR_UUID_BENTO)
   })
 })

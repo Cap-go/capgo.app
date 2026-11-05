@@ -4,10 +4,10 @@ const mockGetSession = vi.fn()
 const mockSignOut = vi.fn()
 const mockGetSpoofedAdminJwt = vi.fn()
 
-vi.mock('~/services/supabase', () => ({
+vi.mock('~/services/console', () => ({
   defaultApiHost: 'https://api.capgo.test',
   getSpoofedAdminJwt: mockGetSpoofedAdminJwt,
-  useSupabase: () => ({
+  useConsole: () => ({
     auth: {
       getSession: mockGetSession,
       signOut: mockSignOut,
@@ -73,17 +73,6 @@ describe('sso enforcement redirect handling', () => {
     mockSignOut.mockResolvedValue({ error: null })
   })
 
-  it('checks persisted Apple sessions when an organization requires SSO', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'apple-session', user: { id: 'apple-user', email: 'apple@example.com', app_metadata: { provider: 'apple' } } } } })
-    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ allowed: false }) } as Response)
-    const guard = await getGuard()
-    const next = vi.fn()
-    await guard({ path: '/dashboard' }, {}, next)
-    expect(fetch).toHaveBeenCalled()
-    expect(mockSignOut).toHaveBeenCalled()
-    expect(next).toHaveBeenCalledWith('/login?sso_required=true')
-  })
-
   it('redirects to a technical error when the enforcement endpoint returns a non-ok response', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: false,
@@ -112,6 +101,34 @@ describe('sso enforcement redirect handling', () => {
 
     expect(mockSignOut).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith('/login?sso_required=true')
+  })
+
+  it('reuses the check started at navigation start and still fails closed on denial', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ allowed: false }),
+    } as unknown as Response)
+
+    const guard = await getGuard()
+    const { prefetchSsoEnforcement } = await import('../src/modules/sso-enforcement.ts')
+    prefetchSsoEnforcement('/dashboard')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const next = vi.fn()
+
+    await guard({ path: '/dashboard' }, { path: '/login' }, next)
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(mockSignOut).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/login?sso_required=true')
+  })
+
+  it('does not start a check for public routes', async () => {
+    const { prefetchSsoEnforcement } = await import('../src/modules/sso-enforcement.ts')
+    prefetchSsoEnforcement('/login')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(mockGetSession).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('sends the stored admin token for backend-verified impersonation bypass', async () => {

@@ -3,18 +3,18 @@ import type { ChartData, ChartOptions } from 'chart.js'
 import type { ReleaseLiveChannel, ReleaseLiveDeployment, ReleaseLiveResponse } from '~/composables/useReleaseLive'
 import { useDark, useDocumentVisibility, useNow } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
-import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconChevronDown from '~icons/lucide/chevron-down'
+import IconInfo from '~icons/lucide/info'
 import IconRefresh from '~icons/lucide/refresh-cw'
+import { Bar } from '~/components/dashboard/lazyCharts'
 import Spinner from '~/components/Spinner.vue'
-import { buildDemoReleaseLive, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } from '~/composables/useReleaseLive'
-import { registerDashboardCharts } from '~/services/dashboardChartRegister'
+import { buildDemoReleaseLive, formatLegacyPluginVersions, RELEASE_LIVE_POLL_INTERVAL_MS, useReleaseLive } from '~/composables/useReleaseLive'
+import { useConsole } from '~/services/console'
 import { formatDistanceToNow, formatLocalDateShort, formatLocalDateTime, formatLocalTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
 
 const props = withDefaults(defineProps<{
   appId: string
@@ -36,8 +36,6 @@ const emit = defineEmits<{
   // instead of polling release_live a second time.
   live: [value: ReleaseLiveResponse | null]
 }>()
-
-registerDashboardCharts()
 
 const { t } = useI18n()
 const isDark = useDark()
@@ -104,7 +102,7 @@ interface ChannelRolloutState {
   percentage: number
   status: 'running' | 'paused' | 'zero'
 }
-const supabase = useSupabase()
+const capgo = useConsole()
 const channelRollout = ref<ChannelRolloutState | null>(null)
 let channelRolloutRequest = 0
 type VersionRelation = { name?: string } | { name?: string }[] | null | undefined
@@ -117,7 +115,7 @@ async function loadChannelRollout(channelId: number | undefined) {
     channelRollout.value = null
     return
   }
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('channels')
     .select('rollout_enabled, rollout_percentage_bps, rollout_paused_at, version:app_versions!channels_version_fkey(name), rollout_version_info:app_versions!channels_rollout_version_fkey(name)')
     .eq('id', channelId)
@@ -183,6 +181,18 @@ const fallbackRate = computed(() => {
 
 const failures = computed(() => live.value?.failures ?? [])
 const failedDevices = computed(() => live.value?.failed_devices ?? null)
+// Old updater plugins report failed update checks as download_fail; the
+// backend leaves those out, and the notice says why and how to get exact data.
+const legacyCheckFailures = computed(() => {
+  const value = live.value?.legacy_check_failures
+  if (!value || value.excluded <= 0)
+    return null
+  return t('release-live-legacy-plugin-help', {
+    count: formatCount(value.excluded),
+    versions: formatLegacyPluginVersions(value.plugin_versions),
+    version: value.fixed_in,
+  })
+})
 const hasActivity = computed(() => totals.value.get + totals.value.install + totals.value.fail > 0)
 const isPolling = computed(() => !props.forceDemo && visibility.value === 'visible')
 
@@ -607,6 +617,22 @@ watch(() => props.appId, () => {
           >
             {{ t('release-live-view-channel') }}
           </RouterLink>
+        </div>
+      </div>
+
+      <div
+        v-if="legacyCheckFailures"
+        class="flex gap-3 px-4 py-3 text-sm border rounded-lg border-blue-200 bg-blue-50 text-slate-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-slate-200"
+        data-testid="release-live-legacy-plugin"
+      >
+        <IconInfo class="w-4 h-4 mt-0.5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+        <div class="min-w-0">
+          <p class="font-medium text-slate-900 dark:text-white">
+            {{ t('release-live-legacy-plugin-title') }}
+          </p>
+          <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-300">
+            {{ legacyCheckFailures }}
+          </p>
         </div>
       </div>
 

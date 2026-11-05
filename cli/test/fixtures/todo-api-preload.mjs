@@ -14,10 +14,11 @@ globalThis.fetch = async (input, init) => {
   if (!url.startsWith('http'))
     return nativeFetch(input, init)
   const scenario = process.env.CAPGO_TODO_FIXTURE_SCENARIO
-  if (url.includes('/private/config'))
-    return Response.json({ supaHost: 'https://todo.fixture.invalid', supaKey: 'example-anon-key' })
-  if (url.includes('/rpc/reject_access_due_to_2fa_for_app'))
-    return Response.json(scenario === 'two-factor')
+  if (url.includes('/private/cli/preflight')) {
+    if (scenario === 'two-factor')
+      return Response.json({ error: '2fa_required', message: 'Two-factor authentication is required by this organization' }, { status: 403 })
+    return Response.json({ user_id: 'todo-user', org_id: 'todo-org', warnings: [] })
+  }
   if (url.includes('/private/onboarding_progress')) {
     if (scenario === 'denied')
       return Response.json({ error: 'app_access_denied' }, { status: 403 })
@@ -33,6 +34,9 @@ globalThis.fetch = async (input, init) => {
       setup.paths = ['ota']
     if (scenario === 'partial')
       progress.checkErrors = ['add_channel']
+    // Like the backend, billing is only returned when the CLI asks for it.
+    if (scenario === 'trial' && JSON.parse(init.body).includeBilling === true)
+      progress.billing = { status: 'available', orgId: 'todo-org', trialEndsAt: '2099-01-01T12:00:00Z', isPaying: false, hasCredits: false }
     return Response.json(progress)
   }
   return Response.json({ status: 'ok' })

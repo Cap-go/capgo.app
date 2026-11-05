@@ -415,51 +415,6 @@ describe('[POST] /apikey operations', () => {
     expect(verifyData.name).toBe(keyName)
   })
 
-  it('create api key latency', async () => {
-    const createdIds: number[] = []
-    try {
-      const warmup = await postApiKey(orgKeyBody(`latency-warmup-${id.slice(0, 8)}`))
-      expect(warmup.status).toBe(200)
-      const warmupData = await warmup.json<{ id: number }>()
-      createdIds.push(warmupData.id)
-
-      const samples: number[] = []
-      for (let index = 0; index < 5; index += 1) {
-        const body = orgKeyBody(`latency-${id.slice(0, 8)}-${index}`)
-        const startedAt = performance.now()
-        const response = await fetch(`${BASE_URL}/apikey`, {
-          method: 'POST',
-          headers: authHeaders,
-          body: JSON.stringify(body),
-        })
-        samples.push(performance.now() - startedAt)
-        expect(response.status).toBe(200)
-        const data = await response.json<{ id: number }>()
-        createdIds.push(data.id)
-      }
-
-      samples.sort((left, right) => left - right)
-      const p50 = samples[Math.floor(samples.length / 2)] ?? 0
-      console.log(`apikey_create_latency_ms p50=${p50.toFixed(1)} samples=${samples.map(sample => sample.toFixed(1)).join(',')}`)
-    }
-    finally {
-      await Promise.all(createdIds.map(async (keyId) => {
-        try {
-          const response = await fetch(`${BASE_URL}/apikey/${keyId}`, {
-            method: 'DELETE',
-            headers: authHeaders,
-          })
-          if (!response.ok) {
-            console.warn(`apikey latency cleanup delete ${keyId} status=${response.status}`)
-          }
-        }
-        catch (error) {
-          console.warn(`apikey latency cleanup delete ${keyId} failed`, error)
-        }
-      }))
-    }
-  })
-
   it.concurrent('creates an app-only preview key bound to its owning organization', async () => {
     const appBindings = await appApiKeyBindings(APPNAME, 'app_preview')
     const response = await postApiKey({
@@ -987,15 +942,11 @@ describe('[POST] /apikey operations', () => {
     await expect(createResponse.json()).resolves.toHaveProperty('error', 'cannot_create_apikey')
   })
 
-  it('create api key with missing name', async () => {
-    const response = await postApiKey({}, authHeaders)
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data).toHaveProperty('error', 'name_is_required')
-  })
-
-  it('create api key with empty name', async () => {
-    const response = await postApiKey({ name: '' }, authHeaders)
+  it.each([
+    ['missing', {}],
+    ['empty', { name: '' }],
+  ])('create api key with %s name', async (_label, body) => {
+    const response = await postApiKey(body, authHeaders)
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data).toHaveProperty('error', 'name_is_required')
@@ -1171,60 +1122,19 @@ describe('[PUT] /apikey/:id operations', () => {
     expect(data).toHaveProperty('error')
   })
 
-  it('update api key with unsupported field has no valid fields', async () => {
-    // Using seeded API key ID 12 (dedicated test key)
-    const response = await fetch(`${BASE_URL}/apikey/12`, {
-      method: 'PUT',
-      headers: authHeaders,
-      body: JSON.stringify({
-        unsupported_field: 'invalid',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toContain('no_valid_fields_provided_for_update')
-  })
-
-  it('update api key with unsupported app scope field has no valid fields', async () => {
-    // Using seeded API key ID 13 (dedicated test key for update apps)
-    const response = await fetch(`${BASE_URL}/apikey/13`, {
-      method: 'PUT',
-      headers: authHeaders,
-      body: JSON.stringify({
-        unsupported_app_scope: 'not_an_array',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toContain('no_valid_fields_provided_for_update')
-  })
-
-  it('update api key with unsupported org scope field has no valid fields', async () => {
-    // Create a temporary key for this test
-    const createResponse = await postApiKey(orgKeyBody('temp-test-key'), authHeaders)
+  it.each([
+    ['an unsupported field', { unsupported_field: 'invalid' }],
+    ['an unsupported app scope field', { unsupported_app_scope: 'not_an_array' }],
+    ['an unsupported org scope field', { unsupported_org_scope: 'not_an_array' }],
+    ['no fields', {}],
+  ])('update api key with %s has no valid fields', async (label, body) => {
+    const createResponse = await postApiKey(orgKeyBody(`temp-no-valid-fields-${label.replaceAll(' ', '-')}`), authHeaders)
     const createData = await createResponse.json<{ id: number }>()
 
     const response = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
       method: 'PUT',
       headers: authHeaders,
-      body: JSON.stringify({
-        unsupported_org_scope: 'not_an_array',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toContain('no_valid_fields_provided_for_update')
-  })
-
-  it('update api key with no valid fields', async () => {
-    // Create a temporary key for this test
-    const createResponse = await postApiKey(orgKeyBody('temp-test-key-2'), authHeaders)
-    const createData = await createResponse.json<{ id: number }>()
-
-    const response = await fetch(`${BASE_URL}/apikey/${createData.id}`, {
-      method: 'PUT',
-      headers: authHeaders,
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     })
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }

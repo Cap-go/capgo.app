@@ -335,7 +335,7 @@ function selectReason(reason: AppDeletionReason) {
           {{ t('button-cancel') }}
         </button>
         <button type="button" class="d-btn d-btn-warning" :disabled="!canConfirm || deleting" @click="emit('confirm')">
-          <span v-if="deleting" class="loading loading-spinner loading-sm" />
+          <span v-if="deleting" class="d-loading d-loading-spinner d-loading-sm" />
           {{ t('app-delete-delete-permanently') }}
         </button>
       </div>

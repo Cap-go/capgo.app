@@ -11,6 +11,7 @@ const {
 }))
 
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
+  accessLog: vi.fn(),
   cloudlog: cloudlogMock,
 }))
 
@@ -77,6 +78,7 @@ describe('canceled_org_retention_alerts', () => {
           event: 'org:bundles_will_be_deleted',
           preferenceKey: 'usage_limit',
           audience: 'billing',
+          recordDelivery: true,
           uniqId: 'retention:bundles_deletion_warning:2026-05-01T00:00:00Z',
           data: expect.objectContaining({
             org_id: ORG_BUNDLES,
@@ -116,50 +118,19 @@ describe('canceled_org_retention_alerts', () => {
     )
   })
 
-  it('rejects unsupported alert types', async () => {
-    const response = await postRetentionAlert({
-      org_id: ORG_BAD,
-      alert_type: 'not_a_real_alert',
-    })
-
-    expect(response.status).toBeGreaterThanOrEqual(400)
-    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
-  })
-
-  it.each(['constructor', 'toString', 'valueOf'])('rejects prototype key %s as alert type', async (alertType) => {
-    const response = await postRetentionAlert({
-      org_id: ORG_PROTO,
-      alert_type: alertType,
-    })
-
-    expect(response.status).toBeGreaterThanOrEqual(400)
-    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
-  })
-
-  it('rejects missing org_id', async () => {
-    const response = await postRetentionAlert({
-      alert_type: 'bundles_deletion_warning',
-    })
-
-    expect(response.status).toBeGreaterThanOrEqual(400)
-    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
-  })
-
-  it('rejects null JSON body without 500', async () => {
-    const response = await postRetentionAlert(null)
+  it.each([
+    ['an unsupported alert type', { org_id: ORG_BAD, alert_type: 'not_a_real_alert' }],
+    ['prototype key constructor as alert type', { org_id: ORG_PROTO, alert_type: 'constructor' }],
+    ['prototype key toString as alert type', { org_id: ORG_PROTO, alert_type: 'toString' }],
+    ['prototype key valueOf as alert type', { org_id: ORG_PROTO, alert_type: 'valueOf' }],
+    ['a missing org_id', { alert_type: 'bundles_deletion_warning' }],
+    ['a non-uuid org_id', { org_id: 'not-a-uuid', alert_type: 'bundles_deletion_warning' }],
+    ['a null JSON body', null],
+  ])('rejects %s with a 4xx and no tracking', async (_label, body) => {
+    const response = await postRetentionAlert(body)
 
     expect(response.status).toBeGreaterThanOrEqual(400)
     expect(response.status).toBeLessThan(500)
-    expect(sendEventToTrackingMock).not.toHaveBeenCalled()
-  })
-
-  it('rejects non-uuid org_id', async () => {
-    const response = await postRetentionAlert({
-      org_id: 'not-a-uuid',
-      alert_type: 'bundles_deletion_warning',
-    })
-
-    expect(response.status).toBeGreaterThanOrEqual(400)
     expect(sendEventToTrackingMock).not.toHaveBeenCalled()
   })
 
@@ -186,13 +157,10 @@ describe('canceled_org_retention_alerts', () => {
     )
   })
 
-  it('registers the trigger on Cloudflare and Supabase routers', () => {
-    const cloudflareRouter = readFileSync(new URL('../cloudflare_workers/api/index.ts', import.meta.url), 'utf8')
+  it('registers the trigger on the Supabase triggers router', () => {
+    // The Supabase entrypoint calls Deno.serve, so it cannot be imported here; the Cloudflare route is exercised below.
     const supabaseRouter = readFileSync(new URL('../supabase/functions/triggers/index.ts', import.meta.url), 'utf8')
-    const route = "route('/canceled_org_retention_alerts', canceled_org_retention_alerts)"
-
-    expect(cloudflareRouter).toContain(route)
-    expect(supabaseRouter).toContain(route)
+    expect(supabaseRouter).toContain('route(\'/canceled_org_retention_alerts\', canceled_org_retention_alerts)')
   })
 
   it('serves POST /triggers/canceled_org_retention_alerts on the Cloudflare API worker', async () => {

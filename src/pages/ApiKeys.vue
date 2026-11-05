@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
-import type { Database } from '~/types/supabase.types'
-import { FormKit } from '@formkit/vue'
+import type { Database } from '~/types/database.types'
 import { VueDatePicker } from '@vuepic/vue-datepicker'
 import { useDark, useNow } from '@vueuse/core'
 import dayjs from 'dayjs'
@@ -12,11 +11,13 @@ import IconArrowPath from '~icons/heroicons/arrow-path'
 import IconCalendar from '~icons/heroicons/calendar'
 import IconClipboard from '~icons/heroicons/clipboard-document'
 import IconCommandLine from '~icons/heroicons/command-line'
+import IconLockClosed from '~icons/heroicons/lock-closed'
 import IconPencil from '~icons/heroicons/pencil'
 import IconShield from '~icons/heroicons/shield-check'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
 import ApiKeyHiddenScopeNotice from '~/components/ApiKeyHiddenScopeNotice.vue'
+import FormField from '~/components/forms/FormField.vue'
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import {
@@ -30,14 +31,15 @@ import {
 } from '~/services/apikeys'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { shouldShowCliLoginGuidance } from '~/services/cliLogin'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { getRbacRoleI18nKey, useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 import '@vuepic/vue-datepicker/dist/main.css'
 
 interface Role {
@@ -107,7 +109,7 @@ const hasInitialScopeFilterInUrl = new URLSearchParams(window.location.search).h
 const defaultScopeFilterKey = ref<string | null>(null)
 const scopePicker = ref<ScopePickerState | null>(null)
 const scopePickerQuery = ref('')
-const supabase = useSupabase()
+const capgo = useConsole()
 const keys = ref<ApiKeyRow[]>([])
 const hasLoadedKeys = ref(false)
 const now = useNow({ interval: 60_000 })
@@ -125,6 +127,13 @@ const allBindings = ref<RoleBindingRow[]>([])
 
 // State for API key dialog
 const newApiKeyName = ref('')
+const newApiKeyNameErrors = computed(() => {
+  const errors = validateField(newApiKeyName.value, [rules.required(t('name'))])
+  // Names are 1 to 32 characters, with the page's custom length message.
+  if (newApiKeyName.value.length > 32)
+    errors.push(t('name-length-error'))
+  return errors
+})
 const editingApiKey = ref<ApiKeyRow | null>(null)
 
 // State for hashed key creation
@@ -168,12 +177,12 @@ const orgCache = ref(new Map<string, string>())
 const appCache = ref(new Map<string, string>())
 const organizationNameById = computed(() => new Map(organizationStore.organizations.map(org => [org.gid, org.name])))
 
-// Function to truncate strings (show first 5 and last 5 characters)
+// Function to truncate strings (show first 3 and last 3 characters)
 function hideString(str: string | null) {
   if (!str)
     return ''
-  const first = str.slice(0, 5)
-  const last = str.slice(-5)
+  const first = str.slice(0, 3)
+  const last = str.slice(-3)
   return `${first}...${last}`
 }
 
@@ -595,7 +604,7 @@ async function fetchOrgAndAppNames() {
   if (uncachedOrgIds.length > 0) {
     const orgPromises = uncachedOrgIds.map(async (orgId) => {
       try {
-        const { data, error } = await supabase
+        const { data, error } = await capgo
           .from('orgs')
           .select('id, name')
           .eq('id', orgId)
@@ -618,7 +627,7 @@ async function fetchOrgAndAppNames() {
 
   if (uncachedAppIds.length > 0) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('apps')
         .select('id, app_id, name')
         .in('id', uncachedAppIds)
@@ -806,9 +815,20 @@ columns.value = [
     key: 'key',
     label: t('api-key'),
     head: true,
-    displayFunction: (row: Database['public']['Tables']['apikeys']['Row']) => {
+    class: 'w-28 max-w-[7rem]',
+    renderFunction: (row: Database['public']['Tables']['apikeys']['Row']) => {
       if (isHashedKey(row)) {
-        return t('secure-key-hidden')
+        return h('span', {
+          'class': 'inline-flex items-center justify-center rounded-md bg-emerald-50 p-1.5 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400',
+          'role': 'img',
+          'title': t('secure-key-hidden'),
+          'aria-label': t('secure-key-hidden'),
+        }, [
+          h(IconLockClosed, {
+            'class': 'h-4 w-4 shrink-0',
+            'aria-hidden': 'true',
+          }),
+        ])
       }
       return hideString(row.key)
     },
@@ -949,7 +969,7 @@ async function copyCliLoginCommand() {
 }
 
 async function fetchRoles() {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('roles')
     .select('id, name, scope_type, description, priority_rank')
     .eq('is_assignable', true)
@@ -974,7 +994,7 @@ async function fetchAllBindings() {
     return
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('role_bindings')
     .select('id, principal_type, principal_id, scope_type, org_id, app_id, role_id, roles(name)')
     .eq('principal_type', 'apikey')
@@ -1004,7 +1024,7 @@ async function loadAllApps() {
       availableApps.value = []
       return
     }
-    const { data: apps, error } = await supabase
+    const { data: apps, error } = await capgo
       .from('apps')
       .select('id, app_id, name, owner_org')
       .in('owner_org', orgIds)
@@ -1086,7 +1106,7 @@ async function createApiKey() {
   }
 
   try {
-    const { data: claimsData } = await supabase.auth.getClaims()
+    const { data: claimsData } = await capgo.auth.getClaims()
     const userId = claimsData?.claims?.sub
 
     if (!userId) {
@@ -1353,7 +1373,7 @@ async function regenrateKey(apikey: Database['public']['Tables']['apikeys']['Row
   if (!await confirmApiKeyRegeneration(dialogStore, t))
     return
 
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   const userId = claimsData?.claims?.sub
 
   if (!userId) {
@@ -1396,7 +1416,7 @@ async function deleteKey(key: Database['public']['Tables']['apikeys']['Row']) {
   if (!await confirmApiKeyDeletion(dialogStore, t))
     return
 
-  const { error } = await supabase
+  const { error } = await capgo
     .from('apikeys')
     .delete()
     .eq('id', key.id)
@@ -1526,7 +1546,7 @@ async function loadApiKeyChannelPermissionApps(key: Database['public']['Tables']
 
     const directAppIds = Array.from(directAppRoleById.keys())
     if (directAppIds.length > 0) {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('apps')
         .select('id, app_id, name, owner_org')
         .in('id', directAppIds)
@@ -1537,7 +1557,7 @@ async function loadApiKeyChannelPermissionApps(key: Database['public']['Tables']
     }
 
     if (adminOrgIds.length > 0) {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('apps')
         .select('id, app_id, name, owner_org')
         .in('owner_org', adminOrgIds)
@@ -1633,7 +1653,7 @@ async function copyKey(apikey: ApiKeyRow) {
   // List endpoint omits the raw key; load it on demand for plain keys only.
   let key = apikey.key
   if (!key) {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apikeys')
       .select('key')
       .eq('id', apikey.id)
@@ -1724,7 +1744,7 @@ getKeys()
 
             <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
               <div class="flex min-w-0 gap-4">
-                <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500/10 text-primary-500 ring-1 ring-primary-500/15 dark:bg-primary-500/25 dark:text-primary-300 dark:ring-primary-500/30">
+                <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-500/10 text-primary-500 ring-1 ring-primary-500/15 dark:bg-primary-500/25 dark:text-slate-300 dark:ring-primary-500/30">
                   <IconCommandLine class="h-6 w-6" aria-hidden="true" />
                 </div>
                 <div class="min-w-0">
@@ -1746,7 +1766,7 @@ getKeys()
                 @click="copyCliLoginCommand"
               >
                 <code class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ cliLoginCommand }}</code>
-                <span class="flex shrink-0 items-center gap-2 text-xs font-semibold text-primary-500 dark:text-primary-300">
+                <span class="flex shrink-0 items-center gap-2 text-xs font-semibold text-primary-500 dark:text-slate-300">
                   <IconClipboard class="h-4 w-4" aria-hidden="true" />
                   {{ t('copy') }}
                 </span>
@@ -1873,17 +1893,14 @@ getKeys()
           <!-- The dialog autofocuses this field. Showing "required" on blur would push the -->
           <!-- form down between mousedown and mouseup and swallow the first click below it. -->
           <div>
-            <FormKit
+            <FormField
               v-model="newApiKeyName"
               type="text"
               data-test="create-key-name"
               :label="t('name')"
               :placeholder="t('type-new-name')"
-              validation="required|length:1,32"
+              :errors="newApiKeyNameErrors"
               validation-visibility="dirty"
-              :validation-messages="{
-                length: t('name-length-error'),
-              }"
             />
           </div>
 
@@ -1894,7 +1911,7 @@ getKeys()
                 id="create-as-hashed"
                 v-model="createAsHashed"
                 type="checkbox"
-                class="mt-1 border-blue-500 dark:border-blue-400 checkbox checkbox-primary"
+                class="mt-1 border-blue-500 dark:border-blue-400 d-checkbox d-checkbox-primary"
               >
               <div>
                 <label for="create-as-hashed" class="font-medium text-blue-800 cursor-pointer dark:text-blue-200">
@@ -2143,6 +2160,7 @@ getKeys()
                   <button
                     class="text-red-500 d-btn d-btn-xs d-btn-ghost shrink-0"
                     type="button"
+                    :aria-label="t('remove')"
                     @click="toggleApp(appId)"
                   >
                     <IconTrash class="w-4 h-4" />
@@ -2158,7 +2176,7 @@ getKeys()
               id="set-expiration"
               v-model="setExpirationCheckbox"
               type="checkbox"
-              class="border-gray-500 dark:border-gray-700 checkbox"
+              class="border-gray-500 dark:border-gray-700 d-checkbox"
             >
             <label for="set-expiration" class="text-sm">
               {{ t('set-expiration-date') }}

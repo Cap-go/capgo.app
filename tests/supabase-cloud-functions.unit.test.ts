@@ -2,31 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCapgoCloudSupabaseDeployArgs,
   CAPGO_CLOUD_SUPABASE_FUNCTIONS,
-  CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION,
-  CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION_UNTIL,
-  CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER,
   listCapgoCloudSkippedSupabaseFunctions,
   listLocalSupabaseFunctions,
 } from '../scripts/supabase-cloud-functions'
 
 describe('supabase cloud function allowlist', () => {
-  it.concurrent('keeps pg_net triggers forever and CLI-deprecated functions until sunset', () => {
-    expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS_FOREVER]).toEqual(['triggers'])
-    expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION]).toEqual([
-      'bundle',
-      'channel',
-      'files',
-      'private',
-    ])
-    expect(CAPGO_CLOUD_SUPABASE_FUNCTIONS_CLI_DEPRECATION_UNTIL).toBe('2026-10-28')
-    expect([...CAPGO_CLOUD_SUPABASE_FUNCTIONS]).toEqual([
-      'triggers',
-      'bundle',
-      'channel',
-      'files',
-      'private',
-    ])
-    expect(buildCapgoCloudSupabaseDeployArgs()).toEqual([...CAPGO_CLOUD_SUPABASE_FUNCTIONS])
+  it.concurrent('deploys pg_net triggers plus the CLI-deprecated functions by default', () => {
+    expect(buildCapgoCloudSupabaseDeployArgs()).toEqual(['triggers', 'bundle', 'channel', 'files', 'private'])
   })
 
   it.concurrent('no longer publishes console-only invoke targets on Capgo cloud Supabase', () => {

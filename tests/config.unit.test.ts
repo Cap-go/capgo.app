@@ -6,10 +6,14 @@ const connect = vi.hoisted(() => vi.fn(() => {
   throw new Error('No database lookup expected')
 }))
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: connect, closeClient: vi.fn() }))
+const notifyLegacyCliUpgrade = vi.hoisted(() => vi.fn(async () => {}))
+vi.mock('../supabase/functions/_backend/utils/legacy_cli_notice.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/legacy_cli_notice.ts')>(),
+  notifyLegacyCliUpgrade,
+}))
 
 beforeEach(() => {
   vi.clearAllMocks()
-  for (const key of ['APPLE_SIGN_IN_CLIENT_ID', 'APPLE_SIGN_IN_TEAM_ID', 'APPLE_SIGN_IN_KEY_ID', 'APPLE_SIGN_IN_PRIVATE_KEY']) vi.stubEnv(key, 'configured-example')
   vi.stubEnv('SUPABASE_URL', 'https://testproject.supabase.co')
   vi.stubEnv('SUPABASE_ANON_KEY', 'test-anon-key')
 })
@@ -32,22 +36,6 @@ describe('get /private/config', () => {
     expect(connect).not.toHaveBeenCalled()
   })
 
-  it('preserves the deprecated Apple response field as false without backend discovery', async () => {
-    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No provider readiness request expected'))
-    try {
-      const response = await app.request('http://local/', { method: 'GET' })
-
-      expect(response.status).toBe(200)
-      const body = await response.json() as Record<string, unknown>
-      expect(body).toHaveProperty('nativeAppleLoginEnabled', false)
-      expect(typeof body.nativeAppleLoginEnabled).toBe('boolean')
-      expect(connect).not.toHaveBeenCalled()
-      expect(fetch).not.toHaveBeenCalled()
-    }
-    finally {
-      fetch.mockRestore()
-    }
-  })
 
   it('forwards CLI usage to the admin RPC binding without blocking the response', async () => {
     const record = vi.fn().mockRejectedValue(new Error('admin ingest unavailable'))
@@ -77,5 +65,20 @@ describe('get /private/config', () => {
 
     expect(response.status).toBe(200)
     expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('asks the owner of an old CLI to upgrade, off the response path', async () => {
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const response = await app.request('http://local/', { method: 'GET', headers: { 'x-cli-version': '8.90.0', 'capgkey': 'fake-key' } })
+
+    expect(response.status).toBe(200)
+    await vi.waitFor(() => expect(notifyLegacyCliUpgrade).toHaveBeenCalledWith(expect.anything(), { capgkey: 'fake-key', cliVersion: '8.90.0' }))
+  })
+
+  it('leaves current and anonymous CLIs alone', async () => {
+    await app.request('http://local/', { method: 'GET', headers: { 'x-cli-version': '8.90.1', 'capgkey': 'fake-key' } })
+    await app.request('http://local/', { method: 'GET', headers: { 'x-cli-version': '8.90.0' } })
+
+    expect(notifyLegacyCliUpgrade).not.toHaveBeenCalled()
   })
 })

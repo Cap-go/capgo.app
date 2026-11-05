@@ -1,33 +1,33 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages, reset } from '@formkit/vue'
 import dayjs from 'dayjs'
-import { computed, onMounted, ref, unref, useTemplateRef } from 'vue'
+import { computed, onMounted, ref, unref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
 import IconVersion from '~icons/heroicons/arrow-path'
-import iconEmail from '~icons/heroicons/envelope?raw'
-import iconFlag from '~icons/heroicons/flag?raw'
-import iconName from '~icons/heroicons/user?raw'
+import IconEmail from '~icons/heroicons/envelope'
+import IconFlag from '~icons/heroicons/flag'
+import IconName from '~icons/heroicons/user'
 import GitHubProfileDialog from '~/components/dashboard/GitHubProfileDialog.vue'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
+import { getCurrentPlanNameOrg, isPayingOrg, useConsole } from '~/services/console'
 import { getRecentEmailOtpVerification } from '~/services/emailOtp'
 import { getFormatLocaleOptions, resolveFormatLocale } from '~/services/formatLocale'
 import { pickPhoto, takePhoto } from '~/services/photos'
-import { getCurrentPlanNameOrg, isPayingOrg, useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isSuperAdminRole, useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 import { safeResetTurnstile } from '~/utils/turnstile'
 // tabs handled by settings layout
 
 const version = import.meta.env.VITE_APP_VERSION
 const { locale, t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 displayStore.NavTitle = t('account')
 const router = useRouter()
@@ -43,6 +43,35 @@ const deleteAccountCaptchaRef = ref<InstanceType<typeof VueTurnstile> | null>(nu
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const organizationsToDelete = ref<string[]>([])
 const formatLocaleOptions = computed(() => getFormatLocaleOptions(locale.value))
+
+// Account form values, seeded from the user profile.
+const firstName = ref('')
+const lastName = ref('')
+const accountEmail = ref('')
+const country = ref('')
+const discordUsername = ref('')
+const formatLocaleValue = ref('')
+const accountSubmitted = ref(false)
+const accountFormErrors = ref<string[]>([])
+
+function seedAccountForm() {
+  const user = main.user
+  firstName.value = user?.first_name ?? ''
+  lastName.value = user?.last_name ?? ''
+  accountEmail.value = user?.email ?? ''
+  country.value = user?.country ?? ''
+  discordUsername.value = user?.discord_username ?? ''
+  formatLocaleValue.value = resolveFormatLocale(user?.format_locale)
+}
+seedAccountForm()
+// The profile can load after the page mounts.
+watch(() => main.user?.id, seedAccountForm)
+
+const firstNameErrors = computed(() => validateField(firstName.value, [rules.required(t('first-name'), { trim: true })]))
+const lastNameErrors = computed(() => validateField(lastName.value, [rules.required(t('last-name'), { trim: true })]))
+const accountEmailErrors = computed(() => validateField(accountEmail.value, [rules.required(t('email'), { trim: true }), rules.email()]))
+const countryErrors = computed(() => validateField(country.value, [rules.required(t('country'), { trim: true })]))
+const discordUsernameErrors = computed(() => validateField(discordUsername.value, [rules.length(t('discord-username'), 0, 32)]))
 const paidOrganizationsToDelete = ref<Array<{ name: string, planName: string }>>([])
 const githubDialog = useTemplateRef('githubDialog')
 const githubUsername = computed(() => unref(githubDialog.value?.githubUsername) ?? '')
@@ -67,7 +96,7 @@ async function ensureRecentEmailVerification() {
     return false
 
   try {
-    const { isVerified } = await getRecentEmailOtpVerification(supabase, main.auth.id)
+    const { isVerified } = await getRecentEmailOtpVerification(capgo, main.auth.id)
     if (isVerified)
       return true
   }
@@ -82,11 +111,8 @@ async function ensureRecentEmailVerification() {
 }
 
 async function checkOrganizationImpact() {
-  // Wait for organizations and main store to load
-  await Promise.all([
-    organizationStore.awaitInitialLoad(),
-    main.awaitInitialLoad(),
-  ])
+  // Dashboard statistics never load for accounts without organizations.
+  await organizationStore.awaitInitialLoad()
 
   // Get all organizations where user is super_admin
   const superAdminOrgs = organizationStore.organizations.filter(org => isSuperAdminRole(org.role))
@@ -101,7 +127,7 @@ async function checkOrganizationImpact() {
   // Check each organization to see if user is the only super_admin
   for (const org of superAdminOrgs) {
     try {
-      const { data: members, error } = await supabase
+      const { data: members, error } = await capgo
         .rpc('get_org_members_rbac', { p_org_id: org.gid })
 
       if (error) {
@@ -124,7 +150,7 @@ async function checkOrganizationImpact() {
             const planNameFromDb = await getCurrentPlanNameOrg(org.gid)
             // Get the actual plan object to get the real plan name
             const actualPlan = main.plans.find(p => p.name === planNameFromDb)
-            const planName = actualPlan?.name || planNameFromDb || 'Unknown Plan'
+            const planName = actualPlan?.name || planNameFromDb || t('unknown-plan')
 
             paidOrgsToBeDeleted.push({
               name: org.name,
@@ -263,7 +289,7 @@ async function deleteAccount() {
 async function performAccountDeletion(password: string) {
   if (!main.auth || main.auth?.email == null)
     return false
-  const supabaseClient = useSupabase()
+  const capgoClient = useConsole()
 
   if (!password) {
     toast.error(t('password-placeholder'))
@@ -280,7 +306,7 @@ async function performAccountDeletion(password: string) {
 
   isDeletingAccount.value = true
   try {
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { error: signInError } = await capgo.auth.signInWithPassword({
       email: main.auth.email,
       password,
       options: captchaKey.value ? { captchaToken: deleteAccountCaptchaToken.value } : undefined,
@@ -296,14 +322,14 @@ async function performAccountDeletion(password: string) {
       return false
     }
 
-    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims()
+    const { data: claimsData, error: claimsError } = await capgo.auth.getClaims()
     const userId = claimsData?.claims?.sub
     if (claimsError || !userId) {
       toast.error(t('something-went-wrong-try-again-later'))
       return false
     }
 
-    const { data: user } = await supabaseClient
+    const { data: user } = await capgoClient
       .from('users')
       .select()
       .eq('id', userId)
@@ -314,7 +340,7 @@ async function performAccountDeletion(password: string) {
     }
 
     if (user.email.endsWith('review@capgo.app') && Capacitor.isNativePlatform()) {
-      const { error: banErr } = await supabase
+      const { error: banErr } = await capgo
         .from('users')
         .update({ ban_time: dayjs().add(5, 'minutes').toDate().toISOString() })
         .eq('id', user.id)
@@ -331,7 +357,7 @@ async function performAccountDeletion(password: string) {
     }
 
     // Delete user using RPC function
-    const { error: deleteError } = await supabase.rpc('delete_user')
+    const { error: deleteError } = await capgo.rpc('delete_user')
 
     if (deleteError) {
       console.error('Delete error:', deleteError)
@@ -429,6 +455,23 @@ async function presentActionSheet() {
   return dialogStore.onDialogDismiss()
 }
 
+async function onSubmit() {
+  accountSubmitted.value = true
+  const hasErrors = [firstNameErrors, lastNameErrors, accountEmailErrors, countryErrors, discordUsernameErrors]
+    .some(errors => errors.value.length > 0)
+  if (hasErrors)
+    return
+  accountFormErrors.value = []
+  await submit({
+    first_name: firstName.value,
+    last_name: lastName.value,
+    email: accountEmail.value,
+    country: country.value,
+    discord_username: discordUsername.value,
+    format_locale: formatLocaleValue.value,
+  })
+}
+
 async function submit(form: { first_name: string, last_name: string, email: string, country: string, discord_username: string, format_locale: string }) {
   if (isLoading.value || !main.user?.id)
     return
@@ -452,23 +495,27 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     email: main.user.email,
     country: form.country,
     discord_username: form.discord_username || null,
-    format_locale: formatLocale,
+    // Keep "follow UI language" (null) unless the user picked a different format.
+    format_locale: !main.user.format_locale && formatLocale === currentFormatLocale ? null : formatLocale,
   }
 
   if (main.user?.email !== form.email) {
-    const data = await supabase.auth.updateUser({ email: form.email })
-    reset('update-account', useMainStore().user)
+    const data = await capgo.auth.updateUser({ email: form.email })
+    // The new address only applies once confirmed; keep showing the current one. The other
+    // fields keep the user's edits until the profile save below returns.
+    accountEmail.value = main.user.email ?? ''
+    accountSubmitted.value = false
     if (data.error && data.error.name === 'AuthApiError') {
       isLoading.value = false
-      return toast.error('email already taken')
+      return toast.error(t('email-already-taken'))
     }
-    toast.success('A confirmation email was sent click to link to confirm your new email', {
+    toast.success(t('confirm-new-email-sent'), {
       duration: 10000,
     })
-    updateData.email = form.email
+    // public.users.email follows the auth email; it syncs once the change is confirmed.
   }
 
-  const { data: usr, error: dbError } = await supabase
+  const { data: usr, error: dbError } = await capgo
     .from('users')
     .upsert(updateData, { onConflict: 'id' })
     .select()
@@ -476,13 +523,15 @@ async function submit(form: { first_name: string, last_name: string, email: stri
 
   if (dbError || !usr) {
     isLoading.value = false
-    setErrors('update-account', [t('account-error')], {})
+    accountFormErrors.value = [t('account-error')]
     return
   }
   else {
     toast.success(t('account-updated-succ'))
   }
   main.user = usr
+  // Show what was actually saved (e.g. trimmed or normalized values).
+  seedAccountForm()
   isLoading.value = false
 }
 
@@ -519,7 +568,7 @@ onMounted(async () => {
 <template>
   <div>
     <div class="flex flex-col h-full pb-8 overflow-hidden overflow-y-auto bg-white border shadow-sm md:pb-0 max-h-fit grow md:rounded-xl dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
-      <FormKit id="update-account" type="form" :actions="false" @submit="submit">
+      <form id="update-account" novalidate @submit.prevent="onSubmit">
         <!-- Panel body -->
         <div class="p-6 space-y-6">
           <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
@@ -552,74 +601,79 @@ onMounted(async () => {
           <section>
             <div class="mt-5 space-y-4 sm:flex sm:items-center sm:space-y-0 sm:space-x-4">
               <div class="sm:w-1/2">
-                <FormKit
+                <FormField
+                  v-model="firstName"
                   type="text"
                   name="first_name"
                   autocomplete="given-name"
-                  :prefix-icon="iconName"
+                  :prefix-icon="IconName"
                   :disabled="isLoading"
-                  :value="main.user?.first_name ?? ''"
-                  validation="required:trim"
+                  :errors="firstNameErrors"
+                  :submitted="accountSubmitted"
                   enterkeyhint="next"
                   autofocus
                   :label="t('first-name')"
                 />
               </div>
               <div class="sm:w-1/2">
-                <FormKit
+                <FormField
+                  v-model="lastName"
                   type="text"
                   name="last_name"
                   autocomplete="family-name"
-                  :prefix-icon="iconName"
+                  :prefix-icon="IconName"
                   :disabled="isLoading"
                   enterkeyhint="next"
-                  :value="main.user?.last_name ?? ''"
-                  validation="required:trim"
+                  :errors="lastNameErrors"
+                  :submitted="accountSubmitted"
                   :label="t('last-name')"
                 />
               </div>
             </div>
             <div class="mt-5 space-y-4 sm:flex sm:items-center sm:space-y-0 sm:space-x-4">
               <div class="sm:w-1/2">
-                <FormKit
+                <FormField
+                  v-model="accountEmail"
                   type="email"
                   name="email"
-                  :prefix-icon="iconEmail"
-                  :value="main.user?.email"
+                  :prefix-icon="IconEmail"
                   enterkeyhint="next"
-                  validation="required:trim|email"
+                  :errors="accountEmailErrors"
+                  :submitted="accountSubmitted"
                   :label="t('email')"
                 />
               </div>
               <div class="sm:w-1/2">
-                <FormKit
+                <FormField
+                  v-model="country"
                   type="text"
                   name="country"
-                  :prefix-icon="iconFlag"
+                  :prefix-icon="IconFlag"
                   :disabled="isLoading"
-                  :value="main.user?.country ?? ''"
                   enterkeyhint="send"
-                  validation="required:trim"
+                  :errors="countryErrors"
+                  :submitted="accountSubmitted"
                   :label="t('country')"
                 />
               </div>
             </div>
             <div class="mt-5 space-y-4 sm:flex sm:items-center sm:space-y-0 sm:space-x-4">
               <div class="sm:w-1/2">
-                <FormKit
+                <FormField
+                  v-model="discordUsername"
                   type="text"
                   name="discord_username"
                   autocomplete="off"
                   :disabled="isLoading"
-                  :value="main.user?.discord_username ?? ''"
-                  validation="length:0,32"
+                  :errors="discordUsernameErrors"
+                  :submitted="accountSubmitted"
                   enterkeyhint="next"
                   :label="t('discord-username')"
                   :help="t('discord-username-help')"
                 />
               </div>
               <div class="sm:w-1/2">
-                <FormKit
+                <FormField
                   type="text"
                   name="github_username"
                   :model-value="githubUsername"
@@ -635,7 +689,11 @@ onMounted(async () => {
                 />
               </div>
             </div>
-            <FormKitMessages />
+            <ul v-if="accountFormErrors.length" role="alert" class="mb-1.5">
+              <li v-for="e in accountFormErrors" :key="e" class="text-xs text-red-600 dark:text-red-400">
+                {{ e }}
+              </li>
+            </ul>
           </section>
           <h3 class="mt-2 mb-5 text-2xl font-bold dark:text-white text-slate-800">
             {{ t('settings') }}
@@ -660,14 +718,18 @@ onMounted(async () => {
               </p>
             </div>
             <div class="md:ml-6 md:min-w-96">
-              <FormKit
-                type="select"
+              <select
+                id="account-format-locale"
+                v-model="formatLocaleValue"
                 name="format_locale"
+                class="d-select w-full"
                 :disabled="isLoading"
-                :value="resolveFormatLocale(main.user?.format_locale)"
-                :options="formatLocaleOptions"
-                :classes="{ outer: 'mb-0!', input: 'd-select w-full' }"
-              />
+                :aria-label="t('date-number-format')"
+              >
+                <option v-for="option in formatLocaleOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
             </div>
           </section>
 
@@ -700,7 +762,7 @@ onMounted(async () => {
                     {{ t('delete-account') }}
                   </button>
                   <button
-                    class="p-2 ml-3 text-white bg-blue-500 rounded-lg hover:bg-blue-600 d-btn"
+                    class="ml-3 d-btn d-btn-primary"
                     type="submit"
                     color="secondary"
                     shape="round"
@@ -715,7 +777,7 @@ onMounted(async () => {
             </div>
           </footer>
         </div>
-      </FormKit>
+      </form>
     </div>
 
     <!-- Teleport for Organization Deletion Warning -->
@@ -757,10 +819,10 @@ onMounted(async () => {
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'delete-account-confirm'" to="#dialog-v2-content" defer>
       <div class="text-base text-gray-500 dark:text-gray-400">
         <p class="mb-4">
-          This action cannot be undone. Your account and all associated data will be permanently deleted.
+          {{ t('delete-account-irreversible') }}
         </p>
         <p class="font-medium text-gray-700 dark:text-gray-300">
-          Your account will be deleted after 30 days
+          {{ t('delete-account-after-30-days') }}
         </p>
         <div class="mt-6">
           <label for="delete-account-password" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -775,7 +837,6 @@ onMounted(async () => {
             class="w-full p-3 border border-gray-300 rounded-lg dark:text-white dark:bg-gray-800 dark:border-gray-600"
             autocomplete="current-password"
             @keydown.enter="$event.preventDefault()"
-          >
           >
         </div>
         <div v-if="captchaKey" class="mt-4">

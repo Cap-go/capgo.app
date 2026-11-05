@@ -7,8 +7,8 @@ import { safeParseSchema } from '../utils/schema_validation.ts'
 import { syncLegacyChannelSelfOverrideDeleteForDevice, syncLegacyChannelSelfOverrideForDevice } from '../utils/channelSelfStore.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
 import { isValidAppId } from '../utils/utils.ts'
 
 const setBodySchema = z.object({
@@ -73,13 +73,18 @@ async function requireManageForcedDevices(c: Context<MiddlewareKeyVariables>, ap
 async function getWritableChannel(c: Context<MiddlewareKeyVariables>, body: SetChannelDeviceBody): Promise<ChannelRow> {
   assertValidAppId(body.app_id)
 
-  const supabase = supabaseWithAuth(c, requireAuth(c))
-  const { data: channel, error } = await supabase
-    .from('channels')
-    .select('id, app_id, owner_org, public')
-    .eq('app_id', body.app_id)
-    .eq('id', body.channel_id)
-    .single()
+  let channel: ChannelRow | null = null
+  let error: unknown = null
+  try {
+    channel = await withRlsContext(c, authPrincipal(c, requireAuth(c)), client => queryJsonOne<ChannelRow>(
+      client,
+      'SELECT id, app_id, owner_org, public FROM public.channels WHERE app_id = $1 AND id = $2',
+      [body.app_id, body.channel_id],
+    ))
+  }
+  catch (channelError) {
+    error = channelError
+  }
 
   if (error || !channel) {
     quickError(404, 'channel_not_found', 'Cannot find channel', { appId: body.app_id, channelId: body.channel_id, error })
@@ -95,26 +100,22 @@ async function getWritableChannel(c: Context<MiddlewareKeyVariables>, body: SetC
 async function getExistingChannelDeviceOverride(c: Context<MiddlewareKeyVariables>, body: DeleteChannelDeviceBody): Promise<ChannelDeviceRow | null> {
   assertValidAppId(body.app_id)
 
-  const supabase = supabaseWithAuth(c, requireAuth(c))
-  const { data: override, error } = await supabase
-    .from('channel_devices')
-    .select('app_id, channel_id, owner_org')
-    .eq('device_id', body.device_id.toLowerCase())
-    .eq('app_id', body.app_id)
-    .maybeSingle()
-
-  if (error) {
+  try {
+    return await withRlsContext(c, authPrincipal(c, requireAuth(c)), client => queryJsonOne<ChannelDeviceRow>(
+      client,
+      'SELECT app_id, channel_id, owner_org FROM public.channel_devices WHERE device_id = $1 AND app_id = $2',
+      [body.device_id.toLowerCase(), body.app_id],
+    ))
+  }
+  catch (error) {
     quickError(500, 'channel_device_error', 'Error loading channel override', { error })
   }
-
-  return override
 }
 
 export async function setChannelDeviceOverride(c: Context<MiddlewareKeyVariables>, body: SetChannelDeviceBody) {
   const channel = await getWritableChannel(c, body)
   await requireManageForcedDevices(c, channel.app_id, channel.id)
 
-  const supabase = supabaseWithAuth(c, requireAuth(c))
   const override = {
     app_id: body.app_id,
     channel_id: channel.id,
@@ -124,15 +125,24 @@ export async function setChannelDeviceOverride(c: Context<MiddlewareKeyVariables
     is_self_set: false,
   }
 
-  const { error } = await supabase
-    .from('channel_devices')
-    .upsert(override, { onConflict: 'app_id,device_id' })
-
-  if (error) {
+  try {
+    await withRlsContext(c, authPrincipal(c, requireAuth(c)), client => client.query(
+      `INSERT INTO public.channel_devices (app_id, channel_id, device_id, owner_org, is_self_set)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (app_id, device_id) DO UPDATE SET
+        app_id = EXCLUDED.app_id,
+        channel_id = EXCLUDED.channel_id,
+        device_id = EXCLUDED.device_id,
+        owner_org = EXCLUDED.owner_org,
+        is_self_set = EXCLUDED.is_self_set`,
+      [override.app_id, override.channel_id, override.device_id, override.owner_org, override.is_self_set],
+    ))
+  }
+  catch (error) {
     quickError(500, 'channel_device_error', 'Error setting channel override', { error })
   }
 
-  if (!(await syncLegacyChannelSelfOverrideForDevice(c, supabase, override))) {
+  if (!(await syncLegacyChannelSelfOverrideForDevice(c, authPrincipal(c, requireAuth(c)), override))) {
     quickError(500, 'channel_self_store_error', 'Error syncing channel override store')
   }
 
@@ -146,18 +156,17 @@ export async function deleteChannelDeviceOverride(c: Context<MiddlewareKeyVariab
   else
     await requireManageDevices(c, body.app_id)
 
-  const supabase = supabaseWithAuth(c, requireAuth(c))
-  const { error } = await supabase
-    .from('channel_devices')
-    .delete()
-    .eq('device_id', body.device_id.toLowerCase())
-    .eq('app_id', body.app_id)
-
-  if (error) {
+  try {
+    await withRlsContext(c, authPrincipal(c, requireAuth(c)), client => client.query(
+      'DELETE FROM public.channel_devices WHERE device_id = $1 AND app_id = $2',
+      [body.device_id.toLowerCase(), body.app_id],
+    ))
+  }
+  catch (error) {
     quickError(500, 'channel_device_error', 'Error deleting channel override', { error })
   }
 
-  if (!(await syncLegacyChannelSelfOverrideDeleteForDevice(c, supabase, body.app_id, body.device_id))) {
+  if (!(await syncLegacyChannelSelfOverrideDeleteForDevice(c, authPrincipal(c, requireAuth(c)), body.app_id, body.device_id))) {
     quickError(500, 'channel_self_store_error', 'Error syncing channel override store')
   }
 

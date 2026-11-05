@@ -4,8 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import pack from '../cli/package.json'
 import {
   buildCliRequestHeaders,
-  CAPGO_CLI_API_VERSION,
-  getCurrentCliCommand,
   setCurrentCliCommand,
 } from '../cli/src/analytics/cli-headers.ts'
 import { hasCliUsageIngest, resolveCliUsageIdentity, trackCliUsage } from '../supabase/functions/_backend/utils/cli_usage.ts'
@@ -44,7 +42,6 @@ describe('buildCliRequestHeaders', () => {
     setCurrentCliCommand('bundle upload')
     const headers = buildCliRequestHeaders()
     expect(headers.capgo_api).toBe('2025-10-01')
-    expect(headers.capgo_api).toBe(CAPGO_CLI_API_VERSION)
     expect(headers['x-cli-version']).toBe(pack.version)
     expect(headers['x-cli-command']).toBe('bundle upload')
     expect(headers['x-cli-node']).toBeTruthy()
@@ -57,11 +54,6 @@ describe('buildCliRequestHeaders', () => {
     expect(headers.Authorization).toBe('Bearer x')
     expect(headers.capgkey).toBe('key-1')
     expect(headers['x-cli-version']).toBe(pack.version)
-  })
-
-  it('tracks command via setters', () => {
-    setCurrentCliCommand('app list')
-    expect(getCurrentCliCommand()).toBe('app list')
   })
 })
 

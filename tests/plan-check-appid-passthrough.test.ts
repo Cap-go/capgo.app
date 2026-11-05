@@ -6,7 +6,7 @@
 // two-argument function shape compatible while proving the three-argument
 // overload does not widen an app-scoped API key to sibling apps.
 
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'

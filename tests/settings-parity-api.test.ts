@@ -112,7 +112,7 @@ describe('app settings parity', () => {
   it('rejects build timeouts outside 300..21600 seconds', async () => {
     const response = await api(`/app/${appId}`, 'PUT', { build_timeout_seconds: 60 })
     expect(response.status).toBe(400)
-    expect(response.data.error).toBe('invalid_build_timeout')
+    expect(response.data.error).toBe('invalid_build_timeout_seconds')
   })
 
   it('rejects a default upload channel that does not exist', async () => {

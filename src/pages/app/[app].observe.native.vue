@@ -5,9 +5,7 @@ import type { DeviceDataCollectionKey } from '~/services/deviceDataCollection'
 import type { NativeReleaseSeriesInput } from '~/services/nativeReleaseStats'
 import type { ObserveSignalCategory } from '~/services/statsActions'
 import type { PeriodDayOption } from '~/utils/periodDays'
-import { BarElement, CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, useTemplateRef, watch } from 'vue'
-import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconActivity from '~icons/lucide/activity'
@@ -16,6 +14,7 @@ import IconTimer from '~icons/lucide/timer'
 import { provideChartCardCompact } from '~/components/dashboard/chartCardDensity'
 import DeviceDataCollectionGate from '~/components/dashboard/DeviceDataCollectionGate.vue'
 import DevicesStats from '~/components/dashboard/DevicesStats.vue'
+import { Bar, Line } from '~/components/dashboard/lazyCharts'
 import NativeReleaseStatsPanel from '~/components/dashboard/NativeReleaseStatsPanel.vue'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import VersionGroupSelector from '~/components/dashboard/VersionGroupSelector.vue'
@@ -27,8 +26,6 @@ import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, observeSignalCategory, observeSignalHelpKey } from '~/services/statsActions'
 import { useDisplayStore } from '~/stores/display'
-
-Chart.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Legend)
 
 type NullableSeries = Array<number | null>
 

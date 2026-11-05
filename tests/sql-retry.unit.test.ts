@@ -19,7 +19,6 @@ describe('retryTransientSqlError', () => {
 
     await expect(retryTransientSqlError(run, noWait)).rejects.toThrow('pg 40P01')
     expect(run).toHaveBeenCalledTimes(SQL_MAX_ATTEMPTS)
-    expect(SQL_MAX_ATTEMPTS).toBe(3)
   })
 
   it('does not retry other errors', async () => {

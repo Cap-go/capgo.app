@@ -1,25 +1,27 @@
 // register vue composition api globally
 import type { RouteLocationNormalized, Router } from 'vue-router'
-import { CapacitorUpdater } from '@capgo/capacitor-updater'
+import { Capacitor } from '@capacitor/core'
 import { setupLayouts } from 'virtual:generated-layouts'
 import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from 'vue-router/auto-routes'
-import { prepareAppleOAuthLanding } from '~/services/appleOAuth'
+import { isGuestRoutePath } from '~/constants/guestRoutes'
+import { prefetchSsoEnforcement } from '~/modules/sso-enforcement'
+import { getLocalConfig } from '~/services/console'
 import { installDeepLinkHandler } from '~/services/deepLinks'
 import { isDocumentNavigationPending, replaceDocument } from '~/services/documentNavigation'
 import { getNativeExternalPurchaseRedirect, isNativeAppStoreContext, isNativeExternalPurchaseRestrictedPath } from '~/services/nativeCompliance'
 import { posthogLoader } from '~/services/posthog'
 import { captureConsoleAttributionFromLocation } from '~/services/signupAttribution'
 import { getErrorMessage, isComponentResolutionErrorMessage, isKnownCrawlerNoiseErrorMessage, isStaleAssetErrorMessage } from '~/services/staleAssetErrors'
-import { getLocalConfig } from '~/services/supabase'
+import { installConsoleImageFallback } from '~/services/storage'
 import { getAllowedConfirmationHosts, resolveConfirmationUrl } from '~/utils/safeRedirect'
 import App from './App.vue'
-import { getRemoteConfig } from './services/supabase'
+import { defaultApiHost, getRemoteConfig } from './services/console'
+import { resolveConsoleApiBase } from './services/consoleAuth'
+import '@fontsource-variable/inter'
 // your custom styles here
 import './styles/style.css'
-
-prepareAppleOAuthLanding()
 
 // Handle chunk load errors (stale chunks after deployment)
 // When a new version is deployed, old chunk URLs return 404/HTML instead of JS
@@ -147,8 +149,6 @@ window.addEventListener('vite:preloadError', (event) => {
   handleChunkError(message)
 })
 
-const guestPath = new Set(['/login', '/delete_account', '/confirm-signup', '/forgot_password', '/resend_email', '/onboarding', '/register', '/invitation', '/email-preferences', '/scan', '/sso-callback'])
-
 function redirectAppPath(suffix: string) {
   return (to: RouteLocationNormalized) => ({
     path: `/app/${encodeURIComponent(String((to.params as { app: string }).app))}${suffix}`,
@@ -157,13 +157,16 @@ function redirectAppPath(suffix: string) {
   })
 }
 
-function isGuestRoutePath(path: string) {
-  return guestPath.has(path) || path === '/preview' || path.startsWith('/preview/')
-}
-
 getRemoteConfig()
 const app = createApp(App)
-CapacitorUpdater.notifyAppReady()
+installConsoleImageFallback()
+// The updater only does work inside the native shell; keep it out of the web entry chunk.
+async function notifyNativeAppReady() {
+  const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
+  await CapacitorUpdater.notifyAppReady()
+}
+if (Capacitor.isNativePlatform())
+  notifyNativeAppReady().catch(error => console.error('Cannot notify the updater that the app is ready', error))
 console.log(`Capgo Version : "${import.meta.env.VITE_APP_VERSION}"`)
 // setup up pages with layouts
 const newRoutes = routes.map((route) => {
@@ -276,12 +279,26 @@ router.onError((error, to) => {
     handleChunkError(message, to?.fullPath)
 })
 
+// vue-router only fetches lazy route chunks after every beforeEach guard resolved, and the auth
+// guard waits on the API. Start the chunk downloads and the SSO enforcement request now so they
+// run in parallel with it; the router's own import() later reuses the same module request.
+router.beforeEach((to) => {
+  prefetchSsoEnforcement(to.path)
+  for (const record of to.matched) {
+    for (const component of Object.values(record.components ?? {})) {
+      if (typeof component === 'function' && !('displayName' in component) && !('props' in component))
+        void (component as () => Promise<unknown>)()?.catch?.(() => {})
+    }
+  }
+})
+
 router.beforeEach((to, from, next) => {
   if (to.path === '/confirm-signup' || to.path === '/confirm-signup/') {
     try {
       const confirmationUrl = resolveConfirmationUrl(to.query, {
         allowedHosts: getAllowedConfirmationHosts(),
         allowLocalDev: import.meta.env.DEV,
+        apiHost: resolveConsoleApiBase(defaultApiHost),
       })
       if (confirmationUrl) {
         replaceDocument(confirmationUrl)
@@ -307,19 +324,21 @@ router.beforeEach((to, from, next) => {
 })
 
 const config = getLocalConfig()
-posthogLoader(config.supaHost)
+posthogLoader(config.apiHost)
 captureConsoleAttributionFromLocation()
 
 // install all modules under `modules/`
-type UserModule = (ctx: { app: typeof app, router: Router }) => void
+type UserModule = (ctx: { app: typeof app, router: Router }) => void | Promise<void>
 
-Object.values(import.meta.glob<{ install: UserModule }>('./modules/*.ts', { eager: true }))
-  .forEach(i => i.install?.({ app, router }))
+// Modules may return a promise (i18n loads the user's locale) that must settle before mount.
+// allSettled: a failing module must never keep the app from mounting.
+const moduleSetup = Promise.allSettled(Object.values(import.meta.glob<{ install: UserModule }>('./modules/*.ts', { eager: true }))
+  .map(i => i.install?.({ app, router })))
 
 app.use(router)
 void installDeepLinkHandler(router)
 
-router.isReady().then(async () => {
+void Promise.all([router.isReady(), moduleSetup]).then(async () => {
   if (isDocumentNavigationPending())
     return
 

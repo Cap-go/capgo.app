@@ -1,11 +1,11 @@
 import type { Context } from 'hono'
-import type { PublicLiveUpdateMetrics } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PublicDailyPlatformMetric, PublicLiveUpdateMetrics } from '../utils/public_live_update_metrics.ts'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { getPublicLiveUpdateMetricsCF } from '../utils/cloudflare.ts'
 import { useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
+import { getPublicLiveUpdateMetricsCF } from '../utils/public_live_update_metrics.ts'
 import { countAllApps, countAllUpdates, countAllUpdatesExternal } from '../utils/stats.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -27,10 +27,6 @@ const LIVE_UPDATE_METRICS_HEADERS = {
   'Cache-Control': 'public, max-age=300, s-maxage=300, stale-while-revalidate=600',
 }
 
-type LiveUpdateMetricsResponse = PublicLiveUpdateMetrics & {
-  period_days: number
-  updated_at: string
-}
 
 function sanitizePublicPercent(value: number) {
   return Number(Number(value).toFixed(1))
@@ -40,6 +36,10 @@ function sanitizePublicRate(value: number | null | undefined) {
   if (value === null || value === undefined)
     return null
   return sanitizePublicPercent(value)
+}
+
+function sanitizePlatformRows(rows: PublicDailyPlatformMetric[]) {
+  return rows.map(row => ({ date: row.date, ios: sanitizePublicRate(row.ios), android: sanitizePublicRate(row.android) }))
 }
 
 function sanitizeBreakdown(rows: PublicLiveUpdateMetrics['platforms']) {
@@ -68,10 +68,16 @@ export function sanitizePublicLiveUpdateMetrics(metrics: PublicLiveUpdateMetrics
     rollback_rate: sanitizePublicRate(metrics.rollback_rate),
     zip_success_rate: sanitizePublicRate(metrics.zip_success_rate),
     delta_success_rate: sanitizePublicRate(metrics.delta_success_rate),
+    period_days: metrics.period_days,
+    daily_window_days: metrics.daily_window_days,
+    updated_at: metrics.updated_at,
     daily: metrics.daily.map(row => ({
       date: row.date,
       success_rate: sanitizePublicPercent(row.success_rate),
     })),
+    daily_platforms: sanitizePlatformRows(metrics.daily_platforms),
+    daily_platforms_sparkline: sanitizePlatformRows(metrics.daily_platforms_sparkline),
+    hourly_platforms: sanitizePlatformRows(metrics.hourly_platforms),
     failures: metrics.failures.map(row => ({
       reason: row.reason,
       share: sanitizePublicPercent(row.share),
@@ -169,16 +175,11 @@ app.get('/', async (c) => {
 app.get('/live_updates', async (c) => {
   const cache = new CacheHelper(c)
   const cacheKey = cache.buildRequest(LIVE_UPDATE_METRICS_CACHE_PATH)
-  let response = await cache.matchJson<LiveUpdateMetricsResponse>(cacheKey)
+  let response = await cache.matchJson<PublicLiveUpdateMetrics>(cacheKey)
 
   if (!response) {
     try {
-      const metrics = sanitizePublicLiveUpdateMetrics(await getPublicLiveUpdateMetricsCF(c))
-      response = {
-        period_days: 30,
-        updated_at: new Date().toISOString(),
-        ...metrics,
-      }
+      response = sanitizePublicLiveUpdateMetrics(await getPublicLiveUpdateMetricsCF(c))
       await cache.putJson(cacheKey, response, LIVE_UPDATE_METRICS_CACHE_TTL_SECONDS)
     }
     catch (error) {

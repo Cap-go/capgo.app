@@ -19,6 +19,21 @@ export interface SendNotifOrgOnceResult {
   sent: boolean
 }
 
+export interface SendNotifOrgOnceOptions {
+  /**
+   * After the provider accepts the email, also write a `${uniqId}:delivered`
+   * row. The pre-send claim alone only proves an attempt (it survives when a
+   * failed send cannot delete it), so gates that must know an email went out
+   * (canceled-org retention cleanup) read this marker instead.
+   */
+  recordDelivery?: boolean
+}
+
+/** Delivery marker uniq_id written by sendNotifOrgOnce when `recordDelivery` is set. */
+export function buildNotifDeliveryUniqId(uniqId: string): string {
+  return `${uniqId}:delivered`
+}
+
 const NOTIF_CACHE_PATH = '/.notif-sendable'
 
 interface NotifCachePayload {
@@ -369,6 +384,7 @@ export async function sendNotifOrgOnce(
   recipientEmail: string,
   _drizzleClient: ReturnType<typeof getDrizzleClient>,
   writeClient?: ReturnType<typeof createDrizzleClient>,
+  options: SendNotifOrgOnceOptions = {},
 ): Promise<SendNotifOrgOnceResult> {
   if (shouldSkipSupabaseNotificationWrites(c)) {
     logSkippedSupabaseWrite(c, 'sendNotifOrgOnce')
@@ -403,6 +419,16 @@ export async function sendNotifOrgOnce(
       }
 
       cloudlog({ requestId: c.get('requestId'), message: 'send one-time notif done', eventName, email: recipientEmail, uniqId })
+      if (options.recordDelivery) {
+        try {
+          await insertNotificationClaim(effectiveWriteClient, eventName, orgId, buildNotifDeliveryUniqId(uniqId))
+        }
+        catch (markerError) {
+          // The email already went out, so do not report a failed send. Without
+          // the marker, delivery-gated callers stay conservative and wait.
+          logPgError(c, 'sendNotifOrgOnce delivery marker', markerError)
+        }
+      }
       return { sent: true, cleanupFailed: false }
     }
     catch (e: unknown) {

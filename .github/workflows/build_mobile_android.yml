@@ -34,10 +34,13 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag }}
       - name: Validate tag
+        # Ask the remote for this one tag instead of fetching every branch and tag
+        # (`git fetch --all --tags` took ~4 minutes on this repository).
+        env:
+          TAG: ${{ github.event.inputs.tag }}
         run: |
-          git fetch --all --tags
-          if ! git tag -l | grep -q "^${{ github.event.inputs.tag }}$"; then
-            echo "Error: Tag ${{ github.event.inputs.tag }} does not exist."
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null; then
+            echo "Error: Tag ${TAG} does not exist."
             exit 1
           fi
       - name: Setup bun

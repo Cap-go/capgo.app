@@ -18,7 +18,7 @@ import process from 'node:process'
 
 const DEFAULT_CONFIG_ENDPOINT = 'https://api.capgo.app/private/config/builder'
 
-/** Override the config endpoint via env var (useful for staging / local Supabase). */
+/** Override the config endpoint via env var (useful for staging / a local backend). */
 const CONFIG_ENDPOINT_ENV = 'CAPGO_BUILDER_CONFIG_URL'
 
 /**

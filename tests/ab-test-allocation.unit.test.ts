@@ -1,10 +1,12 @@
 import type { ABTestConfig } from '../supabase/functions/_backend/utils/ab_test_allocation.ts'
 import { describe, expect, it } from 'vitest'
-import { createABTestAssignments, resolveABTestAssignments, validateABTestsConfig } from '../supabase/functions/_backend/utils/ab_test_allocation.ts'
+import { AB_TEST_INTENTS, createABTestAssignments, resolveABTestAssignments, validateABTestsConfig } from '../supabase/functions/_backend/utils/ab_test_allocation.ts'
 import rawConfig from '../supabase/functions/_backend/utils/ab_tests.json'
+import { PROSPECTIVE_COHORT_FIXTURE } from './helpers/ab-test-prospective-cohort.ts'
 
 const timestamp = '2026-10-18T00:00:00.000Z'
 const assignment = (branch = 'A') => ({ branch, assigned_at: timestamp })
+const cohortConfig = validateABTestsConfig({ ...rawConfig, ...PROSPECTIVE_COHORT_FIXTURE })
 const user = (intent: unknown, extra = {}) => ({ id: 'new-account-1', created_at: timestamp, created_via_invite: false, intent, abtests_enrolled: ['new_emails_v2'], ...extra })
 function experiment(name: string, extra: Partial<ABTestConfig> = {}): ABTestConfig {
   return {
@@ -67,7 +69,7 @@ describe('generic intent allocation', () => {
   })
 
   it('fails closed when a prior account forges a prospective marker', () => {
-    const result = createABTestAssignments(user('builder', { created_at: '2026-01-01T00:00:00.000Z' }), validateABTestsConfig(rawConfig), () => 0)
+    const result = createABTestAssignments(user('builder', { created_at: '2026-01-01T00:00:00.000Z' }), cohortConfig, () => 0)
     expect(result).not.toHaveProperty('new_emails_v2')
   })
 
@@ -81,29 +83,28 @@ describe('generic intent allocation', () => {
   })
 
   it.each([undefined, null, '', 'unknown', 'OTA', 'publish'])('defers v2 for missing or unsupported intent %s', (intent) => {
-    expect(createABTestAssignments(user(intent), validateABTestsConfig(rawConfig))).not.toHaveProperty('new_emails_v2')
+    expect(createABTestAssignments(user(intent), cohortConfig)).not.toHaveProperty('new_emails_v2')
   })
 
-  it.each(['exploring', 'both'].flatMap(intent => [
-    { intent, roll: 0, branch: 'A' },
-    { intent, roll: 0.4999, branch: 'A' },
-    { intent, roll: 0.5, branch: 'B' },
-    { intent, roll: 0.9999, branch: 'B' },
-  ]))('splits legacy emails 50/50 for $intent at random draw $roll', ({ intent, roll, branch }) => {
-    const result = createABTestAssignments(user(intent), validateABTestsConfig(rawConfig), () => roll)
-    expect(result.new_emails?.branch).toBe(branch)
+  it.each(AB_TEST_INTENTS.flatMap(intent => [false, true].map(invited => ({ intent, invited }))))('assigns new emails to every $intent user (invited: $invited)', ({ intent, invited }) => {
+    const result = createABTestAssignments(user(intent, { created_via_invite: invited }), validateABTestsConfig(rawConfig), () => 0.9999)
+    expect(result.new_emails?.branch).toBe('A')
     expect(result).not.toHaveProperty('new_emails_v2')
   })
 
-  it('allocates 50% OTA deterministically and leaves the remainder out of both email experiments', () => {
-    const config = validateABTestsConfig(rawConfig)
+  it.each([undefined, null, 'unknown'])('does not assign new emails for missing or unsupported intent %s', (intent) => {
+    expect(createABTestAssignments(user(intent), validateABTestsConfig(rawConfig), () => 0)).not.toHaveProperty('new_emails')
+  })
+
+  it('allocates 50% OTA deterministically and leaves the remainder out of the v2 cohort', () => {
+    const config = cohortConfig
     let treatmentCount = 0
     for (let index = 0; index < 10000; index++) {
       const account = user('ota', { id: `account-${index}` })
       const first = createABTestAssignments(account, config, () => 0, () => new Date(timestamp))
       const retry = createABTestAssignments(account, config, () => 0.9999, () => new Date(timestamp))
       expect(first).toEqual(retry)
-      expect(first).not.toHaveProperty('new_emails')
+      expect(first.new_emails?.branch).toBe('A')
       if (first.new_emails_v2) {
         expect(first.new_emails_v2.branch).toBe('A')
         treatmentCount++
@@ -114,7 +115,7 @@ describe('generic intent allocation', () => {
   })
 
   it('enrolls new self-signup builder treatment users and excludes checklist controls', () => {
-    const config = validateABTestsConfig(rawConfig)
+    const config = cohortConfig
     const account = user('builder')
     expect(createABTestAssignments(account, config, () => 0).new_emails_v2?.branch).toBe('A')
     expect(createABTestAssignments(account, config, () => 0.99).new_emails_v2?.branch).toBe('A')
@@ -122,7 +123,7 @@ describe('generic intent allocation', () => {
   })
 
   it.each(['ota', 'builder'])('excludes invited %s users from new and stored v2 assignments', (intent) => {
-    const config = validateABTestsConfig(rawConfig)
+    const config = cohortConfig
     const eligible = Array.from({ length: 100 }, (_, index) => user(intent, { id: `self-signup-${index}` }))
       .find(account => createABTestAssignments(account, config, () => 0).new_emails_v2)
     expect(eligible).toBeDefined()
@@ -137,21 +138,22 @@ describe('generic intent allocation', () => {
     const result = resolveABTestAssignments(user('builder', { abtests_enrolled: undefined }), {
       builder_todo_list_v4: assignment(),
       retired_experiment: assignment(),
-    }, validateABTestsConfig(rawConfig))
-    expect(result.assignments).toEqual({ builder_todo_list_v4: assignment() })
+    }, cohortConfig)
+    expect(result.assignments.builder_todo_list_v4).toEqual(assignment())
+    expect(result.assignments).not.toHaveProperty('new_emails_v2')
     expect(result.nextAssignments.retired_experiment).toEqual(assignment())
   })
 
-  it('preserves eligible legacy control branches but revokes legacy email assignments for OTA and builder', () => {
+  it.each(AB_TEST_INTENTS)('moves a stored old-email control to new emails and keeps retired v2 data for %s', (intent) => {
     const config = validateABTestsConfig(rawConfig)
-    expect(resolveABTestAssignments(user('exploring'), { new_emails: assignment('B') }, config).assignments.new_emails).toEqual(assignment('B'))
-    for (const intent of ['ota', 'builder']) {
-      expect(resolveABTestAssignments(user(intent, { abtests_enrolled: [] }), { new_emails: assignment() }, config).nextAssignments).not.toHaveProperty('new_emails')
-    }
+    const result = resolveABTestAssignments(user(intent), { new_emails: assignment('B'), new_emails_v2: assignment() }, config, () => 0.9999, () => new Date(timestamp))
+    expect(result.assignments.new_emails).toEqual(assignment())
+    expect(result.nextAssignments.new_emails_v2).toEqual(assignment())
+    expect(resolveABTestAssignments(user(intent), { new_emails: assignment() }, config).assignments.new_emails).toEqual(assignment())
   })
 
   it('keeps an OTA exclusion stable after switching through Builder treatment', () => {
-    const config = validateABTestsConfig(rawConfig)
+    const config = cohortConfig
     const excluded = Array.from({ length: 100 }, (_, index) => user('ota', { id: `account-${index}` }))
       .find(account => !createABTestAssignments(account, config).new_emails_v2)!
     const builder = resolveABTestAssignments({ ...excluded, intent: 'builder' }, { builder_todo_list_v4: assignment() }, config)
@@ -160,7 +162,7 @@ describe('generic intent allocation', () => {
   })
 
   it('revokes dependents when prerequisites or intent stop matching without rerolling unrelated branches', () => {
-    const config = validateABTestsConfig(rawConfig)
+    const config = cohortConfig
     const result = resolveABTestAssignments(user('builder'), {
       new_emails_v2: assignment(),
       builder_todo_list_v4: assignment('B'),

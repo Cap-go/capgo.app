@@ -1,7 +1,8 @@
+import type { AppOnboardingPatch } from '../supabase/functions/_backend/utils/appOnboarding.ts'
 import { describe, expect, it } from 'vitest'
 import { INIT_ONBOARDING_STEP_IDS } from '../cli/src/init/onboarding-steps'
+import messages from '../messages/en.json'
 import {
-  type AppOnboardingPatch,
   APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION,
   APP_ONBOARDING_OTA_V1_STEP_IDS,
   APP_ONBOARDING_V1_STEP_IDS,
@@ -10,6 +11,7 @@ import {
   appendAppOnboardingStepHistory,
   applyAppOnboardingPatch,
   applyAppOnboardingStepAnnotations,
+
   defaultAppOnboarding,
   filterAppOnboardingReportedPatch,
   getAppOnboardingStepHistoryChanges,
@@ -42,6 +44,11 @@ describe('app onboarding merge', () => {
     expect(getAppOnboardingStepIds(1)).toBe(APP_ONBOARDING_V1_STEP_IDS)
     expect(getAppOnboardingStepIds(2)).toBe(APP_ONBOARDING_V2_STEP_IDS)
     expect(getAppOnboardingStepIds(99)).toBe(APP_ONBOARDING_V2_STEP_IDS)
+  })
+
+  it.concurrent('translates every OTA step title, which the checklist looks up by dynamic key', () => {
+    for (const id of APP_ONBOARDING_OTA_V1_STEP_IDS)
+      expect((messages as Record<string, string>)[`setup-checklist-step-${id}`]).toBeTruthy()
   })
 
   it.concurrent('defaults missing onboarding to manual in progress', () => {

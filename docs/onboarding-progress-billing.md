@@ -11,7 +11,9 @@ An authorized response adds:
   "billing": {
     "status": "available",
     "orgId": "11111111-1111-4111-8111-111111111112",
+    "orgCreatedAt": "2030-01-01T03:04:05.123+00:00",
     "trialEndsAt": "2030-01-02T03:04:05.123+00:00",
+    "hasPaid": false,
     "isPaying": false,
     "hasCredits": false
   }
@@ -20,7 +22,14 @@ An authorized response adds:
 
 `orgId` is the requested app's owning organization, suitable for the CLI's
 organization plans link. `trialEndsAt` is the stored trial expiry timestamp
-(nullable); the CLI calculates remaining time. `isPaying` matches
+(nullable); the CLI calculates remaining time. `orgCreatedAt` is the
+organization's creation time (nullable). A `trialEndsAt` within a day of
+`orgCreatedAt` means the organization was created without a free trial (direct
+offer from paid ads); the CLI then shows "choose a plan to start" copy instead
+of trial copy. `hasPaid` is true once the organization has ever paid
+(`stripe_info.paid_at` is set), so a churned organization is not treated as a
+never-paid direct-offer one. Older servers omit `orgCreatedAt` and `hasPaid`;
+clients must then keep the trial copy. `isPaying` matches
 `is_paying_org` (`stripe_info.status = 'succeeded'`). `hasCredits` matches
 `has_usage_credits_org` (the materialized `orgs.has_usage_credits` flag).
 These fields describe stored billing state, not a fresh Stripe synchronization

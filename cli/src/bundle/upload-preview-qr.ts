@@ -5,7 +5,6 @@ export function buildBundleUploadPreviewQrOptions(options: OptionsUpload, bundle
   return {
     apikey: options.apikey,
     bundle,
-    supaAnon: options.supaAnon,
-    supaHost: options.supaHost,
+    apiHost: options.apiHost,
   }
 }

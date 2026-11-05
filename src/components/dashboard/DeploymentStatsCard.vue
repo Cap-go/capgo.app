@@ -1,9 +1,13 @@
 <script setup lang="ts">
+import type { Database } from '~/types/database.types'
 import colors from 'tailwindcss/colors'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useDashboardRequestState } from '~/composables/useDashboardRequestState'
 import { computeLastDayEvolution } from '~/services/buildCharts'
-import { formatUtcDateParam, normalizeToUtcStartOfDay } from '~/services/date'
+import { useConsole } from '~/services/console'
+import { readAllConsoleRows } from '~/services/consoleRows'
+import { normalizeToUtcStartOfDay } from '~/services/date'
 import {
   calculateDemoEvolution,
   calculateDemoTotal,
@@ -12,12 +16,10 @@ import {
   generateDemoDeploymentData,
   getDemoDayCount,
 } from '~/services/demoChartData'
-import { useSupabase } from '~/services/supabase'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useOrganizationStore } from '~/stores/organization'
 import { filterDailySeriesToBillingPeriod, resolveDashboardDailySeriesWindow } from '~/utils/chartOptimizations'
 import { shouldShowDashboardDemoData } from '~/utils/dashboardDemoMode'
-import { ensureMinDelay } from '~/utils/minDelay'
 import ChartCard from './ChartCard.vue'
 import DeploymentStatsChart from './DeploymentStatsChart.vue'
 
@@ -47,8 +49,7 @@ const props = defineProps({
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const dashboardAppsStore = useDashboardAppsStore()
-const supabase = useSupabase()
-let latestRequestToken = 0
+const capgo = useConsole()
 
 const totalDeployments = ref(0)
 const lastDayEvolution = ref(0)
@@ -60,7 +61,9 @@ const channelAppIds = ref<{ [channelId: string]: string }>({})
 // For dashboard view: breakdown by app
 const deploymentDataByApp = ref<{ [appId: string]: number[] }>({})
 const appNames = ref<{ [appId: string]: string }>({})
-const isLoading = ref(true)
+const dataScope = computed(() => `${organizationStore.currentOrganization?.gid}:${props.appId}:${props.useBillingPeriod}:${props.forceDemo}`)
+const loading = useDashboardRequestState(dataScope)
+const { isLoading, isRefreshing, error: loadError } = loading
 
 // Generate consistent demo data where total is derived from per-app breakdown
 const consistentDemoData = computed(() => {
@@ -91,42 +94,42 @@ const hasData = computed(() => effectiveTotalDeployments.value > 0 || isDemoMode
 const isSingleAppMode = computed(() => !!props.appId)
 
 // Per-org cache for raw API data: Map<orgId, {data, channelNames, channelAppIds}>
-const cacheByOrg = new Map<string, { data: any[], channelNames: { [channelId: string]: string }, channelAppIds: { [channelId: string]: string } }>()
-// Track current org for change detection
-const currentCacheOrgId = ref<string | null>(null)
+type DeployDailyCount = Database['public']['Functions']['get_deploy_daily_counts']['Returns'][number]
+
+const cacheByOrg = new Map<string, { data: DeployDailyCount[], channelNames: { [channelId: string]: string }, channelAppIds: { [channelId: string]: string } }>()
 
 async function calculateStats(forceRefetch = false) {
-  const startTime = Date.now()
-  const requestToken = ++latestRequestToken
-
-  isLoading.value = true
-
-  // Reset display data
-  totalDeployments.value = 0
-  lastDayEvolution.value = 0
-  deploymentDataByChannel.value = {}
-  channelNames.value = {}
-  channelAppIds.value = {}
-  deploymentDataByApp.value = {}
-  appNames.value = {}
-  deploymentData.value = []
+  const request = loading.start()
+  if (request.isInitial) {
+    totalDeployments.value = 0
+    lastDayEvolution.value = 0
+    deploymentDataByChannel.value = {}
+    channelNames.value = {}
+    channelAppIds.value = {}
+    deploymentDataByApp.value = {}
+    appNames.value = {}
+    deploymentData.value = []
+  }
 
   const fallbackData = Array.from({ length: 30 }).fill(0) as number[]
 
   const currentOrgId = organizationStore.currentOrganization?.gid ?? null
-  const orgChanged = currentCacheOrgId.value !== currentOrgId
-  currentCacheOrgId.value = currentOrgId
 
   try {
+    if (props.forceDemo)
+      return
     await organizationStore.dedupFetchOrganizations()
-    await organizationStore.awaitInitialLoad()
+    if (props.appId)
+      await organizationStore.awaitInitialLoad()
+    if (!request.isCurrent())
+      return
 
     const targetOrganization = props.appId
       ? organizationStore.getOrgByAppId(props.appId) ?? organizationStore.currentOrganization
       : organizationStore.currentOrganization
 
     if (!targetOrganization) {
-      if (requestToken === latestRequestToken)
+      if (request.isCurrent())
         deploymentData.value = fallbackData
       return
     }
@@ -137,10 +140,7 @@ async function calculateStats(forceRefetch = false) {
       props.useBillingPeriod,
       billingStart,
     )
-
-    // Date-only exclusive upper bound so today's UTC deployments are included
-    const startDate = formatUtcDateParam(last30DaysStart)
-    const endDateExclusive = formatUtcDateParam(exclusiveEnd)
+    const cacheKey = `${currentOrgId}:${props.appId}:${last30DaysStart.toISOString()}:${exclusiveEnd.toISOString()}`
 
     let targetAppIds: string[] = []
 
@@ -148,13 +148,18 @@ async function calculateStats(forceRefetch = false) {
       targetAppIds = [props.appId]
     }
     else {
-      // Fetch apps if not loaded OR if org changed (to get fresh app list)
-      await dashboardAppsStore.fetchApps(orgChanged)
+      await dashboardAppsStore.fetchApps()
+      if (!request.isCurrent())
+        return
+      if (!dashboardAppsStore.isLoaded)
+        throw new Error('App catalog unavailable')
       targetAppIds = [...dashboardAppsStore.appIds]
     }
 
     if (targetAppIds.length === 0) {
-      if (requestToken === latestRequestToken) {
+      if (request.isCurrent()) {
+        totalDeployments.value = 0
+        lastDayEvolution.value = 0
         deploymentData.value = fallbackData
         deploymentDataByChannel.value = {}
         channelNames.value = {}
@@ -169,10 +174,10 @@ async function calculateStats(forceRefetch = false) {
     let totalDeploymentsCount = 0
 
     // Check per-org cache - only use if not forcing refetch
-    let data: any[] | null = null
+    let data: DeployDailyCount[] | null = null
     let localChannelNames: { [channelId: string]: string } = {}
     let localChannelAppIds: { [channelId: string]: string } = {}
-    const cachedData = currentOrgId ? cacheByOrg.get(currentOrgId) : null
+    const cachedData = cacheByOrg.get(cacheKey)
 
     if (cachedData && !forceRefetch) {
       data = cachedData.data
@@ -180,22 +185,22 @@ async function calculateStats(forceRefetch = false) {
       localChannelAppIds = cachedData.channelAppIds
     }
     else {
-      // Fetch deployment history with channel info for all channels
-      const result = await supabase
-        .from('deploy_history')
-        .select(`
-          deployed_at,
-          app_id,
-          channel_id,
-          channels(
-            id,
-            name
-          )
-        `)
-        .in('app_id', targetAppIds)
-        .gte('deployed_at', startDate)
-        .lt('deployed_at', endDateExclusive)
-        .order('deployed_at')
+      // Per-day deploy counts per channel, aggregated in the database instead of
+      // downloading every deployment of the window.
+      const result = await readAllConsoleRows<DeployDailyCount>((from, to) => {
+        if (!request.isCurrent())
+          return Promise.resolve({ data: [], error: null })
+        return capgo
+          .rpc('get_deploy_daily_counts', {
+            p_app_ids: targetAppIds,
+            p_start: last30DaysStart.toISOString(),
+            p_end: exclusiveEnd.toISOString(),
+          })
+          .range(from, to)
+      })
+
+      if (!request.isCurrent())
+        return
 
       if (result.error)
         throw result.error
@@ -204,17 +209,17 @@ async function calculateStats(forceRefetch = false) {
 
       // Extract channel names and app IDs from the data
       if (data) {
-        data.forEach((deployment: any) => {
-          if (deployment.channel_id && deployment.channels?.name) {
-            localChannelNames[deployment.channel_id] = deployment.channels.name
-            localChannelAppIds[deployment.channel_id] = deployment.app_id
+        for (const row of data) {
+          if (row.channel_id && row.channel_name) {
+            localChannelNames[row.channel_id] = row.channel_name
+            localChannelAppIds[row.channel_id] = row.app_id
           }
-        })
+        }
       }
 
       // Store in per-org cache
       if (data && currentOrgId) {
-        cacheByOrg.set(currentOrgId, { data, channelNames: localChannelNames, channelAppIds: localChannelAppIds })
+        cacheByOrg.set(cacheKey, { data, channelNames: localChannelNames, channelAppIds: localChannelAppIds })
       }
     }
 
@@ -228,38 +233,28 @@ async function calculateStats(forceRefetch = false) {
     const perApp: { [appId: string]: number[] } = {}
     const localAppNames: { [appId: string]: string } = {}
 
-    if (data && data.length > 0) {
-      data.forEach((deployment: any) => {
-        if (!deployment.deployed_at || !deployment.channel_id)
-          return
+    for (const row of data ?? []) {
+      if (!row.channel_id || row.day_index < 0 || row.day_index >= dayCount)
+        continue
+      const deploys = Number(row.deploys)
 
-        const deployDate = new Date(deployment.deployed_at)
+      dailyCounts30Days[row.day_index] += deploys
+      totalDeploymentsCount += deploys
 
-        // Calculate days since start of series window
-        const daysDiff = Math.floor((deployDate.getTime() - last30DaysStart.getTime()) / (1000 * 60 * 60 * 24))
+      // Initialize channel array if not already (for channels discovered during iteration)
+      if (!perChannel[row.channel_id])
+        perChannel[row.channel_id] = Array.from({ length: dayCount }).fill(0) as number[]
+      perChannel[row.channel_id][row.day_index] += deploys
 
-        if (daysDiff < 0 || daysDiff >= dayCount)
-          return
-
-        dailyCounts30Days[daysDiff] += 1
-        totalDeploymentsCount += 1
-
-        // Initialize channel array if not already (for channels discovered during iteration)
-        if (!perChannel[deployment.channel_id]) {
-          perChannel[deployment.channel_id] = Array.from({ length: dayCount }).fill(0) as number[]
+      // For multi-app mode: aggregate by app_id
+      if (!isSingleAppMode.value && row.app_id) {
+        if (!perApp[row.app_id]) {
+          perApp[row.app_id] = Array.from({ length: dayCount }).fill(0) as number[]
+          // Get app name from dashboardAppsStore
+          localAppNames[row.app_id] = dashboardAppsStore.appNames[row.app_id] || row.app_id
         }
-        perChannel[deployment.channel_id][daysDiff] += 1
-
-        // For multi-app mode: aggregate by app_id
-        if (!isSingleAppMode.value && deployment.app_id) {
-          if (!perApp[deployment.app_id]) {
-            perApp[deployment.app_id] = Array.from({ length: dayCount }).fill(0) as number[]
-            // Get app name from dashboardAppsStore
-            localAppNames[deployment.app_id] = dashboardAppsStore.appNames[deployment.app_id] || deployment.app_id
-          }
-          perApp[deployment.app_id][daysDiff] += 1
-        }
-      })
+        perApp[row.app_id][row.day_index] += deploys
+      }
     }
 
     let finalDeploymentData = dailyCounts30Days
@@ -290,7 +285,7 @@ async function calculateStats(forceRefetch = false) {
 
     const evolution = computeLastDayEvolution(finalDeploymentData)
 
-    if (requestToken !== latestRequestToken)
+    if (!request.isCurrent())
       return
 
     deploymentData.value = finalDeploymentData
@@ -303,59 +298,19 @@ async function calculateStats(forceRefetch = false) {
     lastDayEvolution.value = evolution
   }
   catch (error) {
-    console.error('Error fetching deployment stats:', error)
-    if (requestToken === latestRequestToken) {
-      deploymentData.value = fallbackData
-      deploymentDataByChannel.value = {}
-      channelNames.value = {}
-      channelAppIds.value = {}
-      deploymentDataByApp.value = {}
-      appNames.value = {}
-      totalDeployments.value = 0
-      lastDayEvolution.value = 0
+    if (request.isCurrent()) {
+      request.fail()
+      console.error('Error fetching deployment stats:', error)
     }
   }
   finally {
-    if (requestToken === latestRequestToken) {
-      await ensureMinDelay(startTime)
-      isLoading.value = false
-    }
+    request.finish()
   }
 }
 
-// Watch for organization changes - use per-org cache (no need to force refetch)
-watch(() => organizationStore.currentOrganization?.gid, async (newOrgId, oldOrgId) => {
-  if (newOrgId && oldOrgId && newOrgId !== oldOrgId) {
-    // Per-org cache will be checked in calculateStats
-    await calculateStats(false)
-  }
-})
-
-// Watch for billing period mode changes - reprocess cached data
-watch(() => props.useBillingPeriod, async () => {
-  await calculateStats(false)
-})
-
-// Watch for app target changes - need to refetch
-watch(() => props.appId, async () => {
-  await calculateStats(true) // Force refetch for new app
-})
-
-// Watch for accumulated mode changes - reprocess cached data
-watch(() => props.accumulated, async () => {
-  await calculateStats(false)
-})
-
-// Watch for reload trigger - force refetch from API
-watch(() => props.reloadTrigger, async (newVal) => {
-  if (newVal > 0) {
-    await calculateStats(true)
-  }
-})
-
-onMounted(async () => {
-  await calculateStats(true) // Initial fetch
-})
+watch([dataScope, () => props.reloadTrigger], (_values, previous) => {
+  void calculateStats(!previous || previous[1] !== props.reloadTrigger)
+}, { immediate: true })
 </script>
 
 <template>
@@ -364,11 +319,12 @@ onMounted(async () => {
     :total="effectiveTotalDeployments"
     :last-day-evolution="effectiveLastDayEvolution"
     :is-loading="isLoading"
+    :is-refreshing="isRefreshing"
+    :error-message="loadError ? t('error-loading-data') : undefined"
     :has-data="hasData"
     :is-demo-data="isDemoMode"
   >
     <DeploymentStatsChart
-      :key="isSingleAppMode ? JSON.stringify(deploymentDataByChannel) : JSON.stringify(effectiveDeploymentDataByApp)"
       :title="t('deployment_statistics')"
       :colors="colors.blue"
       :data="effectiveDeploymentData"

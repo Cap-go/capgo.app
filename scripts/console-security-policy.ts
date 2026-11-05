@@ -47,11 +47,8 @@ function addConnectOrigin(sources: Set<string>, raw: string) {
 
 function getDeployTimeConnectOverrides(): string[] {
   const overrides: string[] = []
-  const supaUrl = process.env.SUPA_URL
   const apiDomain = process.env.API_DOMAIN
 
-  if (typeof supaUrl === 'string' && supaUrl)
-    overrides.push(supaUrl)
   if (typeof apiDomain === 'string' && apiDomain)
     overrides.push(apiDomain)
 
@@ -65,10 +62,6 @@ function getConfiguredConnectSources(dev: boolean): string[] {
     : (['prod'] as const)
 
   for (const env of envKeys) {
-    const supaUrl = configs.supa_url?.[env]
-    if (typeof supaUrl === 'string')
-      addConnectOrigin(sources, supaUrl)
-
     const apiDomain = configs.api_domain?.[env]
     if (typeof apiDomain === 'string')
       addConnectOrigin(sources, apiDomain)
@@ -95,6 +88,8 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://challenges.cloudflare.com', // Cloudflare Turnstile
     'https://static.cloudflareinsights.com', // Cloudflare Web Analytics (if enabled)
     'https://psthg.capgo.app', // first-party PostHog reverse proxy
+    'https://js.stripe.com', // Stripe.js for embedded Checkout / Payment Element
+    'https://*.js.stripe.com',
   ])
 
   const styleSrc = joinSources([
@@ -124,14 +119,18 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
   const connectSrc = joinSources([
     '\'self\'',
     'blob:',
-    'https://*.supabase.co',
-    'wss://*.supabase.co',
     'https://psthg.capgo.app',
     'https://eu.posthog.com',
     'https://eu.i.posthog.com',
     'https://challenges.cloudflare.com',
     'https://api.github.com',
     'https://registry.npmjs.org',
+    'https://api.stripe.com', // Stripe.js API calls
+    'https://checkout.stripe.com', // embedded Checkout
+    'https://merchant-ui-api.stripe.com',
+    'https://hooks.stripe.com',
+    'https://auth.openai.com', // assistant ChatGPT sign-in token exchange
+    'https://api.openai.com', // assistant model calls
     ...PREVIEW_CONNECT_SOURCES,
     ...getConfiguredConnectSources(dev),
     ...(dev
@@ -150,6 +149,8 @@ export function buildConsoleContentSecurityPolicy(options: ConsoleCspOptions = {
     'https://checkout.stripe.com',
     'https://billing.stripe.com',
     'https://js.stripe.com',
+    'https://*.js.stripe.com',
+    'https://hooks.stripe.com', // 3DS challenge frames
     ...PREVIEW_CONNECT_SOURCES,
   ])
 

@@ -1,5 +1,7 @@
 import type { Context } from 'hono'
 import { ALLOWED_STATS_ACTIONS } from '../plugins/stats_actions.ts'
+import { PROVIDER_INFRA_ASNS } from './providerAsns.ts'
+import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { hasUpdatesPurgeTarget, parseEdgeShareBps } from './updatesEdgeCache.ts'
 import { getEnv, isListedLimitedApp } from './utils.ts'
@@ -10,7 +12,11 @@ import { getEnv, isListedLimitedApp } from './utils.ts'
  * so they never invoke, and never bill, a worker:
  * - /updates when the device already runs the bundle its channel serves
  *   (`no_new_version_available`)
- * - /stats when the app is a cloud app with a valid plan
+ * - /stats of any app (snippet STATS_ANSWER_ALL): the replay runs the full
+ *   handler, so plan, on-prem, provider network and LIMITED_APPS checks
+ *   still apply. A share of the requests without a fill keeps reaching the
+ *   worker, so on-prem / plan-upgrade 429s and the provider networks of a
+ *   stats fill are still learned.
  *
  * The worker teaches the snippet. An answer the snippet may repeat carries
  * `X-Capgo-Edge-Fill`; the snippet stores it in the cache of its own data
@@ -26,7 +32,8 @@ import { getEnv, isListedLimitedApp } from './utils.ts'
  * Switch: worker secret `SNIPPET_EDGE_ANSWER` (off | on | N% of devices,
  * unset = SNIPPET_EDGE_ANSWER_DEFAULT_SHARE). Keep it off until the Logpush
  * -> R2 -> queue pipeline runs, otherwise the stats of answered requests are
- * lost. The secret only stops new fills:
+ * lost. The secret does not stop the /stats answers of STATS_ANSWER_ALL
+ * (the snippet constants do), and it only stops new fills:
  * `bun run snippet-edge-answer:set` also purges SNIPPET_EDGE_ANSWERS_TAG, and
  * so must a LIMITED_APPS change (`bun run snippet-edge-answer:purge`).
  */
@@ -48,12 +55,21 @@ export const SNIPPET_EDGE_ANSWERS_TAG = 'capgo-snippet-edge-answers'
 export const SNIPPET_EDGE_STATS_ACTIONS = ALLOWED_STATS_ACTIONS.filter(action => action !== 'set' && !action.endsWith('_fail'))
 
 interface SnippetFillBase {
-  v: 2
+  /**
+   * 3 when `pa` is set: snippets older than the provider network check
+   * reject it, so they never answer an app that blocks provider IPs.
+   */
+  v: 2 | 3
   /** Share of devices the snippet answers, in basis points. */
   bps: number
   ttl: number
   /** Cache-Tag value of the snippet entry. */
   tags: string
+  /**
+   * The app blocks provider infrastructure: networks (ASNs) the snippet must
+   * send to the worker, which runs the IP lookup the snippet cannot.
+   */
+  pa?: number[]
 }
 
 export interface SnippetUpdatesFill extends SnippetFillBase {
@@ -111,23 +127,25 @@ export function getSnippetEdgeAnswerTtlSeconds(c: Context) {
   return Math.min(Math.max(raw, SNIPPET_EDGE_ANSWER_MIN_TTL_SECONDS), SNIPPET_EDGE_ANSWER_MAX_TTL_SECONDS)
 }
 
-function fillBase(c: Context, appId: string, blockProviderInfraRequests: boolean, planValidUntil: number | null): SnippetFillBase | null {
+async function fillBase(c: Context, appId: string, blockProviderInfraRequests: boolean, planValidUntil: number | null, replicaSource?: string | null): Promise<SnippetFillBase | null> {
   // A replayed request has no snippet in front of it.
   if (getSnippetEdgeReplay(c))
     return null
-  // The snippet cannot run the provider IP check or the LIMITED_APPS throttle.
-  if (blockProviderInfraRequests || isListedLimitedApp(c, appId))
+  // The snippet cannot run the LIMITED_APPS throttle.
+  if (isListedLimitedApp(c, appId))
     return null
   const bps = getSnippetEdgeAnswerBps(c)
   if (bps <= 0)
     return null
   // A trial ends at midnight UTC without a write, so without a purge.
-  const ttl = planValidUntil === null
+  const planTtl = planValidUntil === null
     ? getSnippetEdgeAnswerTtlSeconds(c)
     : Math.min(getSnippetEdgeAnswerTtlSeconds(c), Math.floor((planValidUntil - Date.now()) / 1000))
-  if (ttl < 1)
+  if (planTtl < 1)
     return null
-  return {
+  // The answer was read from the local replica: same lag rule as the worker cache.
+  const ttl = await edgeCacheTtlForReplicaLag(c, planTtl, replicaSource ?? undefined)
+  const base: SnippetFillBase = {
     v: 2,
     bps,
     ttl,
@@ -135,6 +153,13 @@ function fillBase(c: Context, appId: string, blockProviderInfraRequests: boolean
     // served bundle row (versions tag: deleted, key_id).
     tags: `${updatesAppCacheTag(appId)},${updatesVersionsCacheTag(appId)},${SNIPPET_EDGE_ANSWERS_TAG}`,
   }
+  // The snippet cannot look the IP up: it answers only devices outside the
+  // provider networks, the worker checks the rest.
+  if (blockProviderInfraRequests) {
+    base.v = 3
+    base.pa = PROVIDER_INFRA_ASNS
+  }
+  return base
 }
 
 function setFillHeader(c: Context, fill: SnippetUpdatesFill | SnippetStatsFill) {
@@ -146,9 +171,11 @@ function setFillHeader(c: Context, fill: SnippetUpdatesFill | SnippetStatsFill) 
  * Call right before returning `no_new_version_available` from an answer
  * that holds for every device of (app, platform, defaultChannel) on that
  * bundle: no override, no rollout, valid plan (the read-cache contract).
+ * `replicaSource`: the replica the answer came from when this request read no
+ * database (read cache hit); defaults to the request's database source.
  */
-export function setSnippetUpdatesFill(c: Context, appId: string, answer: SnippetUpdatesAnswer, opts: { blockProviderInfraRequests: boolean, legacyChannelSelfStore: boolean }) {
-  const base = fillBase(c, appId, opts.blockProviderInfraRequests, answer.planValidUntil)
+export async function setSnippetUpdatesFill(c: Context, appId: string, answer: SnippetUpdatesAnswer, opts: { blockProviderInfraRequests: boolean, legacyChannelSelfStore: boolean, replicaSource?: string | null }) {
+  const base = await fillBase(c, appId, opts.blockProviderInfraRequests, answer.planValidUntil, opts.replicaSource)
   if (!base)
     return
   setFillHeader(c, {
@@ -160,9 +187,12 @@ export function setSnippetUpdatesFill(c: Context, appId: string, answer: Snippet
   })
 }
 
-/** Call on an all-ok /stats answer of a cloud app with a valid plan. */
-export function setSnippetStatsFill(c: Context, appId: string, opts: { blockProviderInfraRequests: boolean, planValidUntil: number | null }) {
-  const base = fillBase(c, appId, opts.blockProviderInfraRequests, opts.planValidUntil)
+/**
+ * Call on an all-ok /stats answer of a cloud app with a valid plan.
+ * `replicaSource`: as for setSnippetUpdatesFill (edge cache hits read no database).
+ */
+export async function setSnippetStatsFill(c: Context, appId: string, opts: { blockProviderInfraRequests: boolean, planValidUntil: number | null, replicaSource?: string | null }) {
+  const base = await fillBase(c, appId, opts.blockProviderInfraRequests, opts.planValidUntil, opts.replicaSource)
   if (!base)
     return
   setFillHeader(c, { ...base, e: 'stats', actions: SNIPPET_EDGE_STATS_ACTIONS })

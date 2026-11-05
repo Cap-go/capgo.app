@@ -3,11 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   createSignedUrl: vi.fn(),
   getEnv: vi.fn(),
-  supabaseAdmin: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: mocks.supabaseAdmin,
+vi.mock('../supabase/functions/_backend/utils/image_storage.ts', () => ({
+  presignImageUrl: (_c: unknown, path: string) => mocks.createSignedUrl(path),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
@@ -27,7 +26,6 @@ const {
 describe('image path ownership for signed URLs', () => {
   beforeEach(() => {
     mocks.createSignedUrl.mockReset()
-    mocks.supabaseAdmin.mockReset()
     mocks.getEnv.mockReset()
     mocks.getEnv.mockImplementation((_: unknown, key: string) => {
       if (key === 'SUPABASE_URL')
@@ -35,13 +33,6 @@ describe('image path ownership for signed URLs', () => {
       if (key === 'SUPABASE_REPLICATE_URL')
         return 'https://replica.example.supabase.co'
       return ''
-    })
-    mocks.supabaseAdmin.mockReturnValue({
-      storage: {
-        from: () => ({
-          createSignedUrl: mocks.createSignedUrl,
-        }),
-      },
     })
   })
 
@@ -88,16 +79,13 @@ describe('image path ownership for signed URLs', () => {
     expect(mocks.createSignedUrl).not.toHaveBeenCalled()
   })
 
-  it('signs allowed org paths with the admin storage client', async () => {
-    mocks.createSignedUrl.mockResolvedValue({
-      data: { signedUrl: 'https://signed.example/org-1.png' },
-      error: null,
-    })
+  it('signs allowed org paths with an R2 presigned URL', async () => {
+    mocks.createSignedUrl.mockResolvedValue('https://signed.example/org-1.png')
     const context = {} as Parameters<typeof createSignedImageUrl>[0]
     await expect(createSignedImageUrl(context, 'org/org-1/logo/a.png', { orgId: 'org-1' }))
       .resolves
       .toBe('https://signed.example/org-1.png')
-    expect(mocks.createSignedUrl).toHaveBeenCalledWith('org/org-1/logo/a.png', expect.any(Number))
+    expect(mocks.createSignedUrl).toHaveBeenCalledWith('org/org-1/logo/a.png')
   })
 
   it('refuses to sign bare filenames without ownership', async () => {

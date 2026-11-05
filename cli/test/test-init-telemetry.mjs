@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from '../src/init/telemetry.ts'
 
 console.log('🧪 Testing init telemetry context...\n')
@@ -17,14 +16,6 @@ function create(options = {}) {
   telemetry.setAuth('org', 'key')
   telemetry.setScope('app')
   return { events, telemetry }
-}
-
-function assertBefore(source, first, second, message) {
-  const firstIndex = source.indexOf(first)
-  const secondIndex = source.indexOf(second)
-  assert.ok(firstIndex >= 0, `${message}: missing ${first}`)
-  assert.ok(secondIndex >= 0, `${message}: missing ${second}`)
-  assert.ok(firstIndex < secondIndex, message)
 }
 
 {
@@ -129,50 +120,6 @@ function assertBefore(source, first, second, message) {
   await telemetry.recordMilestone('event-scoped-milestone', undefined, 'checked')
   await telemetry.recordRunEnded('cancelled', 0)
   assert.deepEqual(events.map(event => event.appId), ['checked', 'scoped-app'], 'event scope does not replace the retained lifecycle app')
-}
-
-{
-  const command = readFileSync(new URL('../src/init/command.ts', import.meta.url), 'utf8')
-  const resume = command.slice(command.indexOf('async function tryResumeOnboarding'), command.indexOf('\nfunction cleanupStepsDone'))
-  const markStepDone = command.slice(command.indexOf('function markStepDone'), command.indexOf('\ninterface ResumeResult'))
-  const initApp = command.slice(command.indexOf('export async function initApp'))
-  const createAppTemplate = command.slice(command.indexOf('async function runCreateAppTemplate'), command.indexOf('\nasync function ensureWorkspaceReadyForInit'))
-  const recordInitEvent = command.slice(command.indexOf('async function recordInitEvent'), command.indexOf('\nasync function markStep'))
-  const exitAfterFinishingReplay = command.slice(command.indexOf('async function exitAfterFinishingReplay'), command.indexOf('\nconst frameworkSetupGuides'))
-  const allExitCalls = [...command.matchAll(/(?<!function )exitAfterFinishingReplay\([^)]*\)/g)]
-  const exitCalls = [...command.matchAll(/(?<!function )exitAfterFinishingReplay\('(completed|cancelled|failed)', (0|1)\)/g)]
-
-  assert.ok(command.includes("import { createInitTelemetry, mergeInitProgressTelemetry, parseInitProgressTelemetry } from './telemetry'"), 'classic init imports telemetry helpers')
-  assert.ok(command.includes('let activeInitTelemetry: ReturnType<typeof createInitTelemetry> | undefined'), 'classic init owns one active telemetry context')
-  assertBefore(initApp, "activeInitTelemetry?.setAuth('', options.apikey)", 'let resumed = await tryResumeOnboarding', 'authentication is set before no-resume lifecycle telemetry')
-  assertBefore(initApp, 'let resumed = await tryResumeOnboarding', 'await activeInitTelemetry?.recordRunStarted()', 'fresh paths record a run after resume detection')
-  assert.ok(resume.indexOf('parseInitProgressTelemetry(progress)') >= 0, 'resume parses nested telemetry from the full saved progress object')
-  assertBefore(resume, 'prepareResumeCandidate(savedTelemetry, step_done, initOnboardingSteps.length)', 'await activeInitTelemetry?.recordRunStarted()', 'resume candidate precedes lifecycle start')
-  assertBefore(resume, 'await activeInitTelemetry?.recordRunStarted()', 'await activeInitTelemetry?.recordResumePromptViewed()', 'resume lifecycle start precedes prompt telemetry')
-  assertBefore(resume, 'await activeInitTelemetry?.recordResumePromptViewed()', 'const resumeChoice = await pSelect', 'resume prompt telemetry precedes the resume selector')
-  const continueBranch = resume.slice(resume.indexOf("if (resumeChoice === 'yes')"), resume.indexOf('// User chose to start over'))
-  assertBefore(continueBranch, "recordResumeDecision('continue')", 'getProgressMetadata()', 'continue records its decision before reading progress telemetry')
-  assertBefore(continueBranch, 'getProgressMetadata()', 'writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, progressMetadata)))', 'continue persists current telemetry immediately after reading it')
-  assertBefore(continueBranch, 'writeFileSync(getTmpObjectPath(), JSON.stringify(mergeInitProgressTelemetry(progress, progressMetadata)))', 'const resumedTargets = resolveResumedInitTargets', 'continue persists telemetry before restoring targets')
-  assert.match(continueBranch, /if \(!resumedTargets\) \{[\s\S]*?activeInitTelemetry\?\.clearScope\(\)[\s\S]*?cleanupStepsDone\(\)[\s\S]*?return undefined\n      \}/, 'invalid resumed targets clear saved scope before cleanup and fresh-flow return')
-  const restartBranch = resume.slice(resume.indexOf('// User chose to start over'))
-  assertBefore(restartBranch, "recordResumeDecision('restart')", 'clearScope()', 'restart records its decision before clearing scope')
-  assertBefore(restartBranch, 'clearScope()', 'cleanupStepsDone()', 'restart clears scope before cleanup')
-  assert.match(resume, /catch \(err\) \{[\s\S]*?activeInitTelemetry\?\.clearScope\(\)[\s\S]*?return undefined\n  \}/, 'generic resume fallback clears saved scope before returning to fresh onboarding')
-  assert.ok(markStepDone.indexOf('const progress = {') >= 0 && markStepDone.indexOf('mergeInitProgressTelemetry(progress, activeInitTelemetry?.getProgressMetadata())') >= 0, 'checkpoints merge telemetry into the existing operational progress payload')
-  assert.ok(markStepDone.includes('formatError(error)'), 'progress reporting formats user-visible errors')
-  assert.ok(recordInitEvent.includes('activeInitTelemetry?.setAuth(orgId, apikey)'), 'classic milestones set active authentication')
-  assert.ok(!recordInitEvent.includes('setScope('), 'classic milestones do not persist event-only app associations')
-  assert.ok(recordInitEvent.includes('activeInitTelemetry.recordMilestone(event, undefined, appId ?? null)'), 'classic milestones use the telemetry context and preserve their app')
-  assert.ok(recordInitEvent.includes("return sendCliEvent('onboarding-v2', orgId, apikey, event, appId"), 'classic milestones retain the isolated sendCliEvent fallback')
-  assert.equal(exitCalls.length, allExitCalls.length, 'every shared exit has an explicit outcome and code')
-  assert.ok(exitCalls.every(([, outcome, code]) => outcome === 'cancelled' || (outcome === 'completed' ? code === '0' : code === '1')), 'shared exits use valid outcome/code pairs')
-  assert.equal(exitCalls.filter(([, outcome]) => outcome === 'completed').length, 1, 'only final onboarding completion is completed')
-  assert.match(createAppTemplate, /Capacitor app template creation failed[\s\S]*?exitAfterFinishingReplay\('failed', 1\)/, 'template failures are failed')
-  assert.match(initApp, /Error during onboarding:[\s\S]*?exitAfterFinishingReplay\('failed', 1\)/, 'onboarding failures are failed')
-  assert.ok(initApp.includes('await maybeStarCapgoRepo(didChooseSkills).catch(error => pLog.warn(`Cannot offer GitHub support actions: ${formatError(error)}`))'), 'optional support failures do not block completion telemetry')
-  assert.doesNotMatch(command.replace(exitAfterFinishingReplay, ''), /\bexit\(/, 'terminal exits do not bypass lifecycle telemetry')
-  assertBefore(exitAfterFinishingReplay, 'recordRunEnded(outcome, code)', 'finishActiveCliReplay()', 'run end is recorded before replay finishes')
 }
 
 console.log('✅ Init telemetry context tests passed')

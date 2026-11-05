@@ -1,0 +1,154 @@
+BEGIN;
+
+SELECT plan(11);
+
+-- audit_logs RLS computes a bounded org set once per statement.
+SELECT
+    is(
+        (SELECT provolatile FROM pg_proc WHERE oid = 'public.audit_logs_allowed_orgs()'::regprocedure),
+        's'::"char",
+        'audit_logs_allowed_orgs() is STABLE'
+    );
+
+SELECT
+    is(
+        (SELECT prosrc FROM pg_proc WHERE oid = 'public.audit_logs_allowed_orgs()'::regprocedure) ILIKE '%FROM public.orgs%',
+        false,
+        'audit_logs_allowed_orgs() does not scan every org'
+    );
+
+-- The org owner (direct org_super_admin binding) can read its audit logs.
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"c591b04e-cf29-4945-b9a0-776d0672061a","role":"authenticated","aal":"aal2"}', true);
+SELECT
+    ok(
+        '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid = ANY(public.audit_logs_allowed_orgs()),
+        'org owner reads the org audit logs'
+    );
+RESET ROLE;
+
+-- An API key without org-level audit permission reads nothing.
+INSERT INTO public.apikeys (id, user_id, key, name, rbac_id) VALUES
+(95001, '6aa76066-55ef-4238-ade6-0b32334a4097', 'perf-audit-app-key', 'perf audit app', '00000000-0000-4000-8000-000000009501');
+INSERT INTO public.role_bindings (principal_type, principal_id, role_id, scope_type, org_id, app_id, granted_by)
+SELECT
+    'apikey',
+    '00000000-0000-4000-8000-000000009501',
+    (SELECT id FROM public.roles WHERE name = 'app_admin'),
+    'app',
+    '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
+    (SELECT id FROM public.apps WHERE app_id = 'com.demo.app'),
+    '6aa76066-55ef-4238-ade6-0b32334a4097';
+
+SET LOCAL ROLE anon;
+SELECT set_config('request.jwt.claims', '', true);
+SELECT set_config('request.headers', '{"capgkey":"perf-audit-app-key"}', true);
+SELECT
+    is(
+        public.audit_logs_allowed_orgs(),
+        '{}'::uuid[],
+        'app-scoped API key cannot read org audit logs'
+    );
+RESET ROLE;
+SELECT set_config('request.headers', '', true);
+
+-- seed_get_app_metrics_caches() returns one row per org app and day, with
+-- daily_version summed across versions and missing days filled with zeros.
+-- It writes the org's daily_* rows and app_metrics_cache, so it uses the
+-- dedicated seed org 95f0a1b2-... and its two apps.
+-- Every column gets a distinct value and two days hold data, so a swapped
+-- column or a cross-day join cannot pass the assertions below.
+INSERT INTO public.daily_mau (app_id, date, mau) VALUES
+('com.test.appmetrics.seed', DATE '2023-03-02', 13),
+('com.test.appmetrics.seed', DATE '2023-03-03', 31);
+INSERT INTO public.daily_storage (app_id, date, storage) VALUES
+('com.test.appmetrics.seed', DATE '2023-03-02', 17),
+('com.test.appmetrics.seed', DATE '2023-03-03', 37);
+INSERT INTO public.daily_bandwidth (app_id, date, bandwidth) VALUES
+('com.test.appmetrics.seed', DATE '2023-03-02', 19),
+('com.test.appmetrics.seed', DATE '2023-03-03', 41);
+INSERT INTO public.daily_build_time (app_id, date, build_time_unit, build_count) VALUES
+('com.test.appmetrics.seed', DATE '2023-03-02', 29, 1),
+('com.test.appmetrics.seed', DATE '2023-03-03', 43, 2);
+INSERT INTO public.daily_version (app_id, date, version_name, get, fail, install, uninstall) VALUES
+('com.test.appmetrics.seed', DATE '2023-03-02', '1.0.0', 3, 1, 2, 0),
+('com.test.appmetrics.seed', DATE '2023-03-02', '1.0.1', 4, 2, 9, 5),
+('com.test.appmetrics.seed', DATE '2023-03-03', '1.0.1', 20, 21, 22, 23);
+
+CREATE TEMP TABLE perf_metrics AS
+SELECT m.*
+FROM
+    pg_catalog.jsonb_to_recordset(
+        (public.seed_get_app_metrics_caches('95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b', DATE '2023-03-01', DATE '2023-03-03')).response
+    ) AS m (
+        app_id character varying,
+        date date,
+        mau bigint,
+        storage bigint,
+        bandwidth bigint,
+        build_time_unit bigint,
+        get bigint,
+        fail bigint,
+        install bigint,
+        uninstall bigint
+    );
+
+SELECT
+    is(
+        (SELECT count(*) FROM perf_metrics),
+        (
+            SELECT 3 * count(*)
+            FROM (
+                SELECT app_id FROM public.apps WHERE owner_org = '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b'
+                UNION
+                SELECT app_id FROM public.deleted_apps WHERE owner_org = '95f0a1b2-c3d4-4e5f-8a6b-7c8d9e0f1a2b'
+            ) org_apps
+        ),
+        'metrics cover every org app for every day of the range'
+    );
+
+SELECT
+    is(
+        (SELECT count(*) FROM perf_metrics GROUP BY app_id, date ORDER BY 1 DESC LIMIT 1),
+        1::bigint,
+        'metrics have exactly one row per app and day'
+    );
+
+SELECT
+    is(
+        (SELECT ARRAY[mau, storage, bandwidth, build_time_unit, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-02'),
+        ARRAY[13, 17, 19, 29, 7, 3, 11, 5]::bigint[],
+        'daily_version is summed across versions for the day'
+    );
+
+SELECT
+    is(
+        (SELECT ARRAY[mau, storage, bandwidth, build_time_unit, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-03'),
+        ARRAY[31, 37, 41, 43, 20, 21, 22, 23]::bigint[],
+        'each day keeps its own metrics'
+    );
+
+SELECT
+    is(
+        (SELECT ARRAY[mau, storage, bandwidth, build_time_unit, get, fail, install, uninstall] FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed' AND date = DATE '2023-03-01'),
+        ARRAY[0, 0, 0, 0, 0, 0, 0, 0]::bigint[],
+        'days without stats are zero-filled'
+    );
+
+SELECT
+    is(
+        (SELECT array_agg(date ORDER BY date) FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed'),
+        ARRAY[DATE '2023-03-01', DATE '2023-03-02', DATE '2023-03-03'],
+        'metrics are limited to the requested range'
+    );
+
+SELECT
+    is(
+        (SELECT sum(mau + storage + bandwidth + build_time_unit + get + fail + install + uninstall) FROM perf_metrics WHERE app_id = 'com.test.appmetrics.seed2'),
+        0::numeric,
+        'metrics of one app do not leak into another app of the org'
+    );
+
+SELECT * FROM finish();
+
+ROLLBACK;

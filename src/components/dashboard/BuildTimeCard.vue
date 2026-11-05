@@ -5,10 +5,12 @@ import BuildTimeChart from '~/components/dashboard/BuildTimeChart.vue'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
 import { useBuildCardStats } from '~/composables/useBuildCardStats'
 import { computeLastDayEvolution, dayIndexInWindow, fetchAllRows } from '~/services/buildCharts'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps({
   appId: { type: String, default: '' },
+  // When set, aggregate build time across every app of the organization instead of one app.
+  orgId: { type: String, default: '' },
   useBillingPeriod: { type: Boolean, default: false },
   accumulated: { type: Boolean, default: false },
   reloadTrigger: { type: Number, default: 0 },
@@ -17,7 +19,7 @@ const props = defineProps({
 const emit = defineEmits<{ 'update:loading': [value: boolean] }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 interface BuildLogRow { created_at: string | null, billable_seconds: number | null }
 interface BuildTimeResult { minutesPerDay: number[], total: number, evolution: number }
@@ -25,10 +27,10 @@ interface BuildTimeResult { minutesPerDay: number[], total: number, evolution: n
 const { isLoading, result } = useBuildCardStats<BuildTimeResult>(props, emit, {
   empty: () => ({ minutesPerDay: [], total: 0, evolution: 0 }),
   load: async (window) => {
-    const rows = await fetchAllRows<BuildLogRow>((from, to) => supabase
+    const rows = await fetchAllRows<BuildLogRow>((from, to) => capgo
       .from('build_logs')
       .select('created_at, billable_seconds')
-      .eq('app_id', props.appId)
+      .eq(props.orgId ? 'org_id' : 'app_id', props.orgId || props.appId)
       .gte('created_at', window.startISO)
       .lte('created_at', window.endISO)
       .order('created_at')
@@ -70,7 +72,7 @@ const hasData = computed(() => totalMinutes.value > 0)
     :has-data="hasData"
   >
     <BuildTimeChart
-      :key="`${appId}:${JSON.stringify(minutesPerDay)}`"
+      :key="`${orgId || appId}:${JSON.stringify(minutesPerDay)}`"
       :data="minutesPerDay"
       :use-billing-period="useBillingPeriod"
       :accumulated="accumulated"

@@ -1,15 +1,14 @@
 import type { CapacitorConfig } from '../config'
-import type { Database } from '../types/supabase.types'
+import type { AppRow } from '../types/api'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cwd } from 'node:process'
 import { confirm as pConfirm, isCancel as pIsCancel, log, select as pSelect, text as pText } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
 import { addAppInternal, resolveAppGettingStartedMessage } from '../app/add'
 import { getAppListPath } from '../app/list'
 import { extractApplicationIds } from '../build/onboarding/android/gradle-parser'
 import { collectCordovaAppIdCandidates } from '../cordova/project'
-import { createSupabaseClient, findRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
+import { createCapgoClient, findProjectRoot, findSavedKeySilent, formatError, getAppId, getConfigForWrite, getOrganizationWithPermission, invokeCapgoCliApi, PACKNAME } from '../utils'
 import { writeConfigUpdater } from '../config'
 
 const APP_ID_REGEX = /^[a-z0-9]+(?:\.[\w-]+)+$/i
@@ -39,7 +38,7 @@ export function parsePackageJsonOptionPaths(packageJson?: string): string[] | un
 
 export function collectAppIdCandidates(
   config: CapacitorConfig | undefined,
-  projectRoot = findRoot(cwd()),
+  projectRoot = findProjectRoot(),
   packageJsonPaths?: string[],
 ): string[] {
   const candidates = new Set<string>()
@@ -76,13 +75,13 @@ export function collectAppIdCandidates(
   return [...candidates]
 }
 
-async function fetchCapgoApps(apikey: string, supaHost?: string, supaAnon?: string) {
-  const all: Database['public']['Tables']['apps']['Row'][] = []
+async function fetchCapgoApps(apikey: string, apiHost?: string) {
+  const all: AppRow[] = []
   let page = 0
   while (true) {
-    const { data, error } = await invokeCapgoCliApi<Database['public']['Tables']['apps']['Row'][]>(
+    const { data, error } = await invokeCapgoCliApi<AppRow[]>(
       getAppListPath(page),
-      { apikey, method: 'GET', body: undefined, supaHost, supaAnon },
+      { apikey, method: 'GET', body: undefined, apiHost },
     )
     if (error)
       throw new Error(`Cannot list Capgo apps: ${formatError(error)}`)
@@ -122,8 +121,7 @@ export interface ResolveAppIdOptions {
   packageJsonPaths?: string[]
   interactive?: boolean
   json?: boolean
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
 }
 
 function buildCiAppIdMessage() {
@@ -161,7 +159,7 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
   if (configAppId && isValidAppId(configAppId))
     return configAppId
 
-  const candidates = collectAppIdCandidates(options.config, findRoot(cwd()), options.packageJsonPaths)
+  const candidates = collectAppIdCandidates(options.config, findProjectRoot(), options.packageJsonPaths)
   if (candidates.length === 1) {
     const [onlyCandidate] = candidates
     if (!interactive) {
@@ -187,10 +185,10 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
 
   while (true) {
     const resolvedApikey = options.apikey || findSavedKeySilent()
-    let remoteApps: Database['public']['Tables']['apps']['Row'][] = []
+    let remoteApps: AppRow[] = []
     if (resolvedApikey) {
       try {
-        remoteApps = await fetchCapgoApps(resolvedApikey, options.supaHost, options.supaAnon)
+        remoteApps = await fetchCapgoApps(resolvedApikey, options.apiHost)
       }
       catch (error) {
         log.warn(formatError(error))
@@ -274,14 +272,13 @@ export async function resolveAppIdWithRecovery(options: ResolveAppIdOptions): Pr
       if (pIsCancel(entered))
         continue
       const appId = (entered as string).trim()
-      const supabase = await createSupabaseClient(resolvedApikey, options.supaHost, options.supaAnon)
-      const organization = await getOrganizationWithPermission(supabase, resolvedApikey, 'org.create_app')
-      await addAppInternal(appId, { apikey: resolvedApikey, supaHost: options.supaHost, supaAnon: options.supaAnon }, organization, true)
+      const client = await createCapgoClient(resolvedApikey, options.apiHost)
+      const organization = await getOrganizationWithPermission(client, resolvedApikey, 'org.create_app')
+      await addAppInternal(appId, { apikey: resolvedApikey, apiHost: options.apiHost }, organization, true)
       await persistAppIdToConfig(appId)
       log.success(`Created app ${appId} in Capgo`)
       const gettingStartedMessage = await resolveAppGettingStartedMessage(appId, {
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
       if (gettingStartedMessage)
         log.info(gettingStartedMessage)

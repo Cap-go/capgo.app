@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mockGetEnv, mockCloudlog, mockCloudlogErr } = vi.hoisted(() => ({
   mockGetEnv: vi.fn(),
@@ -22,44 +22,47 @@ function createContext() {
   } as any
 }
 
+async function deliver(id: string, url = 'https://example.com/webhook', version: 'standard' | 'legacy' = 'standard') {
+  const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
+  const payload = {
+    type: 'app_versions.INSERT',
+    event: 'app_versions.INSERT',
+    event_id: `event-${id}`,
+    timestamp: new Date().toISOString(),
+    org_id: 'org-1',
+    data: {
+      table: 'app_versions',
+      operation: 'INSERT',
+      record_id: `record-${id}`,
+      old_record: null,
+      new_record: null,
+      changed_fields: null,
+    },
+  }
+  // Omitting the delivery version exercises the legacy default.
+  return version === 'standard'
+    ? deliverWebhook(createContext(), `delivery-${id}`, url, payload, 'secret', 'standard')
+    : deliverWebhook(createContext(), `delivery-${id}`, url, payload, 'secret')
+}
+
+beforeEach(() => {
+  mockGetEnv.mockReturnValue('')
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   mockGetEnv.mockReset()
   mockCloudlog.mockReset()
   mockCloudlogErr.mockReset()
-  mockGetEnv.mockReturnValue('')
 })
 
 describe('webhook delivery redirect handling', () => {
   it('sends webhook requests with manual redirect handling', async () => {
-    mockGetEnv.mockReturnValue('')
     const fetchMock = vi.fn().mockImplementation(async () => new Response('ok', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
-    const result = await deliverWebhook(
-      createContext(),
-      'delivery-1',
-      'https://example.com/webhook',
-      {
-        type: 'app_versions.INSERT',
-        event: 'app_versions.INSERT',
-        event_id: 'event-1',
-        timestamp: new Date().toISOString(),
-        org_id: 'org-1',
-        data: {
-          table: 'app_versions',
-          operation: 'INSERT',
-          record_id: 'record-1',
-          old_record: null,
-          new_record: null,
-          changed_fields: null,
-        },
-      },
-      'secret',
-      'standard',
-    )
+    const result = await deliver('1')
 
     expect(result.success).toBe(true)
     const webhookCalls = fetchMock.mock.calls.filter(([url]) => url === 'https://example.com/webhook')
@@ -75,32 +78,10 @@ describe('webhook delivery redirect handling', () => {
   })
 
   it('uses the legacy payload and headers by default', async () => {
-    mockGetEnv.mockReturnValue('')
     const fetchMock = vi.fn().mockImplementation(async () => new Response('ok', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
-    const result = await deliverWebhook(
-      createContext(),
-      'delivery-legacy',
-      'https://example.com/webhook',
-      {
-        type: 'app_versions.INSERT',
-        event: 'app_versions.INSERT',
-        event_id: 'event-legacy',
-        timestamp: new Date().toISOString(),
-        org_id: 'org-1',
-        data: {
-          table: 'app_versions',
-          operation: 'INSERT',
-          record_id: 'record-legacy',
-          old_record: null,
-          new_record: null,
-          changed_fields: null,
-        },
-      },
-      'secret',
-    )
+    const result = await deliver('legacy', undefined, 'legacy')
 
     expect(result.success).toBe(true)
     const webhookCalls = fetchMock.mock.calls.filter(([url]) => url === 'https://example.com/webhook')
@@ -116,8 +97,7 @@ describe('webhook delivery redirect handling', () => {
   })
 
   it('does not treat redirect responses as successful deliveries', async () => {
-    mockGetEnv.mockReturnValue('')
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('redirect blocked', {
       status: 302,
       headers: {
         location: 'http://169.254.169.254/latest/meta-data/',
@@ -125,38 +105,15 @@ describe('webhook delivery redirect handling', () => {
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
-    const result = await deliverWebhook(
-      createContext(),
-      'delivery-2',
-      'https://example.com/webhook',
-      {
-        type: 'app_versions.INSERT',
-        event: 'app_versions.INSERT',
-        event_id: 'event-2',
-        timestamp: new Date().toISOString(),
-        org_id: 'org-1',
-        data: {
-          table: 'app_versions',
-          operation: 'INSERT',
-          record_id: 'record-2',
-          old_record: null,
-          new_record: null,
-          changed_fields: null,
-        },
-      },
-      'secret',
-      'standard',
-    )
+    const result = await deliver('2')
 
-    expect(result.success).toBe(false)
-    expect(result.status).toBe(302)
+    expect(result).toMatchObject({ success: false, status: 302, body: 'redirect blocked' })
     const webhookCalls = fetchMock.mock.calls.filter(([url]) => url === 'https://example.com/webhook')
     expect(webhookCalls).toHaveLength(1)
+    expect(webhookCalls[0]?.[1]).toMatchObject({ method: 'POST', redirect: 'manual' })
   })
 
   it('caps response bodies while reading webhook delivery previews', async () => {
-    mockGetEnv.mockReturnValue('')
     let streamCancelled = false
     const oversizedChunk = new Uint8Array(12000).fill('a'.codePointAt(0) ?? 0)
     const responseBody = new ReadableStream<Uint8Array>({
@@ -170,29 +127,7 @@ describe('webhook delivery redirect handling', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(responseBody, { status: 500 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
-    const result = await deliverWebhook(
-      createContext(),
-      'delivery-large-body',
-      'https://example.com/webhook',
-      {
-        type: 'app_versions.INSERT',
-        event: 'app_versions.INSERT',
-        event_id: 'event-large-body',
-        timestamp: new Date().toISOString(),
-        org_id: 'org-1',
-        data: {
-          table: 'app_versions',
-          operation: 'INSERT',
-          record_id: 'record-large-body',
-          old_record: null,
-          new_record: null,
-          changed_fields: null,
-        },
-      },
-      'secret',
-      'standard',
-    )
+    const result = await deliver('large-body')
 
     expect(result.success).toBe(false)
     expect(result.body).toHaveLength(10000)
@@ -200,7 +135,6 @@ describe('webhook delivery redirect handling', () => {
   })
 
   it('does not log raw webhook URLs or query secrets', async () => {
-    mockGetEnv.mockReturnValue('')
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const urlString = String(input)
       const url = new URL(urlString)
@@ -215,29 +149,7 @@ describe('webhook delivery redirect handling', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
-    const result = await deliverWebhook(
-      createContext(),
-      'delivery-sensitive-url',
-      'https://example.com/hooks/capgo?token=secret-token',
-      {
-        type: 'app_versions.INSERT',
-        event: 'app_versions.INSERT',
-        event_id: 'event-sensitive-url',
-        timestamp: new Date().toISOString(),
-        org_id: 'org-1',
-        data: {
-          table: 'app_versions',
-          operation: 'INSERT',
-          record_id: 'record-sensitive-url',
-          old_record: null,
-          new_record: null,
-          changed_fields: null,
-        },
-      },
-      'secret',
-      'standard',
-    )
+    const result = await deliver('sensitive-url', 'https://example.com/hooks/capgo?token=secret-token')
 
     expect(result.success).toBe(true)
     const deliveryLog = mockCloudlog.mock.calls
@@ -259,33 +171,10 @@ describe('webhook delivery redirect handling', () => {
   })
 
   it('does not log raw webhook URLs when delivery fails before a response', async () => {
-    mockGetEnv.mockReturnValue('')
     const fetchMock = vi.fn().mockRejectedValue(new Error('receiver unavailable'))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
-    const result = await deliverWebhook(
-      createContext(),
-      'delivery-sensitive-failure',
-      'https://example.com/hooks/capgo?token=secret-token',
-      {
-        type: 'app_versions.INSERT',
-        event: 'app_versions.INSERT',
-        event_id: 'event-sensitive-failure',
-        timestamp: new Date().toISOString(),
-        org_id: 'org-1',
-        data: {
-          table: 'app_versions',
-          operation: 'INSERT',
-          record_id: 'record-sensitive-failure',
-          old_record: null,
-          new_record: null,
-          changed_fields: null,
-        },
-      },
-      'secret',
-      'standard',
-    )
+    const result = await deliver('sensitive-failure', 'https://example.com/hooks/capgo?token=secret-token')
 
     expect(result.success).toBe(false)
     const deliveryLog = mockCloudlogErr.mock.calls
@@ -307,7 +196,6 @@ describe('webhook delivery redirect handling', () => {
   })
 
   it('blocks webhook hosts that resolve to private addresses before delivery', async () => {
-    mockGetEnv.mockReturnValue('')
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const urlString = String(input)
       const url = new URL(urlString)
@@ -323,29 +211,7 @@ describe('webhook delivery redirect handling', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const { deliverWebhook } = await import('../supabase/functions/_backend/utils/webhook.ts')
-    const result = await deliverWebhook(
-      createContext(),
-      'delivery-3',
-      'https://private.example/webhook?token=secret-token',
-      {
-        type: 'app_versions.INSERT',
-        event: 'app_versions.INSERT',
-        event_id: 'event-3',
-        timestamp: new Date().toISOString(),
-        org_id: 'org-1',
-        data: {
-          table: 'app_versions',
-          operation: 'INSERT',
-          record_id: 'record-3',
-          old_record: null,
-          new_record: null,
-          changed_fields: null,
-        },
-      },
-      'secret',
-      'standard',
-    )
+    const result = await deliver('3', 'https://private.example/webhook?token=secret-token')
 
     expect(result).toMatchObject({
       success: false,

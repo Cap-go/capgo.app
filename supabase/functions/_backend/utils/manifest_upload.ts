@@ -58,7 +58,6 @@ export interface ManifestUploadCapabilityOptions {
   publicBaseUrl: string
   nowUnix?: number
   concurrency?: number
-  reservePaths?: (prefix: string, suffixes: string[], sizes: number[]) => Promise<string[]>
 }
 
 const TOP_LEVEL_FIELDS = new Set([
@@ -277,9 +276,7 @@ export async function createManifestUploadResponse(
     },
   )
 
-  const suffixes = options.reservePaths
-    ? await options.reservePaths(defaultS3PathPrefix, originalSuffixes, request.entries.map(entry => entry.uploaded_bytes_size))
-    : originalSuffixes
+  const suffixes = originalSuffixes
   const entries = await mapWithConcurrency(suffixes, DEFAULT_CRYPTO_CONCURRENCY, async (suffix, index) => {
     const path = `${defaultS3PathPrefix}${suffix}`
     if (path.length > MAX_S3_PATH_LENGTH || !suffix || suffixes.length !== request.entries.length)

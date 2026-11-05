@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Pool } from 'pg'
@@ -45,7 +45,18 @@ beforeAll(async () => {
     throw orgUserError
 })
 
-async function withEnforcedSsoPasswordUser(callback: (context: { targetAuthHeaders: Record<string, string>, email: string }) => Promise<void>) {
+function postCheckEnforcement(headers: Record<string, string>) {
+  return fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      email: 'ignored@example.com',
+      auth_type: 'password',
+    }),
+  })
+}
+
+async function withEnforcedSsoPasswordUser(callback: (context: { targetAuthHeaders: Record<string, string>, email: string }) => Promise<void>, enforceSso = true) {
   const enforcementOrgId = randomUUID()
   const enforcementCustomerId = `cus_sso_impersonation_${randomUUID()}`
   const providerId = randomUUID()
@@ -90,7 +101,7 @@ async function withEnforcedSsoPasswordUser(callback: (context: { targetAuthHeade
       domain,
       provider_id: externalProviderId,
       status: 'active',
-      enforce_sso: true,
+      enforce_sso: enforceSso,
       dns_verification_token: `dns-${randomUUID()}`,
     })
     if (providerError)
@@ -203,80 +214,13 @@ describe('[POST] /private/sso/check-domain', () => {
 
 describe('[POST] /private/sso/check-enforcement', () => {
   it.concurrent('should return allowed=true when a matching SSO provider exists but enforcement is disabled', async () => {
-    const enforcementOrgId = randomUUID()
-    const enforcementCustomerId = `cus_sso_enforcement_${randomUUID()}`
-    const providerId = randomUUID()
-    const externalProviderId = randomUUID()
-    const domain = `${randomUUID()}.sso.test`
-    const email = `user@${domain}`
-    const password = 'testtest'
-
-    const { data: createdUser, error: createUserError } = await getSupabaseClient().auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-    })
-    if (createUserError || !createdUser.user) {
-      throw createUserError ?? new Error('Failed to create dedicated SSO enforcement auth user')
-    }
-
-    try {
-      const { error: enforcementStripeError } = await getSupabaseClient().from('stripe_info').insert({
-        customer_id: enforcementCustomerId,
-        status: 'succeeded',
-        product_id: 'prod_LQIregjtNduh4q',
-        subscription_id: `sub_sso_enforcement_${randomUUID()}`,
-        trial_at: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
-        is_good_plan: true,
-      })
-      if (enforcementStripeError)
-        throw enforcementStripeError
-
-      const { error: enforcementOrgError } = await getSupabaseClient().from('orgs').insert({
-        id: enforcementOrgId,
-        name: `SSO Enforcement Org ${enforcementOrgId}`,
-        management_email: `sso-enforcement-${enforcementOrgId}@capgo.app`,
-        created_by: USER_ID,
-        customer_id: enforcementCustomerId,
-      })
-      if (enforcementOrgError)
-        throw enforcementOrgError
-
-      const { error: providerError } = await (getSupabaseClient().from as any)('sso_providers').insert({
-        id: providerId,
-        org_id: enforcementOrgId,
-        domain,
-        provider_id: externalProviderId,
-        status: 'active',
-        enforce_sso: false,
-        dns_verification_token: `dns-${randomUUID()}`,
-      })
-      if (providerError)
-        throw providerError
-
-      const isolatedAuthHeaders = await getAuthHeadersForCredentials(email, password)
-
-      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
-        method: 'POST',
-        headers: isolatedAuthHeaders,
-        body: JSON.stringify({
-          email: 'ignored@example.com',
-          auth_type: 'password',
-        }),
-      })
+    await withEnforcedSsoPasswordUser(async ({ targetAuthHeaders }) => {
+      const response = await postCheckEnforcement(targetAuthHeaders)
 
       expect(response.status).toBe(200)
       const data = await response.json() as { allowed: boolean }
       expect(data.allowed).toBe(true)
-    }
-    finally {
-      await Promise.allSettled([
-        (getSupabaseClient().from as any)('sso_providers').delete().eq('id', providerId),
-        getSupabaseClient().from('orgs').delete().eq('id', enforcementOrgId),
-        getSupabaseClient().from('stripe_info').delete().eq('customer_id', enforcementCustomerId),
-        getSupabaseClient().auth.admin.deleteUser(createdUser.user.id),
-      ])
-    }
+    }, false)
   })
 
   it('should return allowed=true for password auth when no SSO is configured', async () => {
@@ -298,16 +242,9 @@ describe('[POST] /private/sso/check-enforcement', () => {
     await withEnforcedSsoPasswordUser(async ({ targetAuthHeaders }) => {
       const adminHeaders = await getAuthHeadersForCredentials(USER_ADMIN_EMAIL, 'adminadmin')
 
-      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
-        method: 'POST',
-        headers: {
-          ...targetAuthHeaders,
-          'X-Capgo-Spoof-Admin-Authorization': adminHeaders.Authorization,
-        },
-        body: JSON.stringify({
-          email: 'ignored@example.com',
-          auth_type: 'password',
-        }),
+      const response = await postCheckEnforcement({
+        ...targetAuthHeaders,
+        'X-Capgo-Spoof-Admin-Authorization': adminHeaders.Authorization,
       })
 
       expect(response.status).toBe(200)
@@ -318,16 +255,9 @@ describe('[POST] /private/sso/check-enforcement', () => {
 
   it.concurrent('should not allow a user token to bypass SSO enforcement as spoof proof', async () => {
     await withEnforcedSsoPasswordUser(async ({ targetAuthHeaders }) => {
-      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
-        method: 'POST',
-        headers: {
-          ...targetAuthHeaders,
-          'X-Capgo-Spoof-Admin-Authorization': targetAuthHeaders.Authorization,
-        },
-        body: JSON.stringify({
-          email: 'ignored@example.com',
-          auth_type: 'password',
-        }),
+      const response = await postCheckEnforcement({
+        ...targetAuthHeaders,
+        'X-Capgo-Spoof-Admin-Authorization': targetAuthHeaders.Authorization,
       })
 
       expect(response.status).toBe(200)
@@ -340,16 +270,9 @@ describe('[POST] /private/sso/check-enforcement', () => {
     await withEnforcedSsoPasswordUser(async ({ targetAuthHeaders }) => {
       const nonAdminHeaders = await getAuthHeadersForCredentials(USER_EMAIL_NONMEMBER, USER_PASSWORD_NONMEMBER)
 
-      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
-        method: 'POST',
-        headers: {
-          ...targetAuthHeaders,
-          'X-Capgo-Spoof-Admin-Authorization': nonAdminHeaders.Authorization,
-        },
-        body: JSON.stringify({
-          email: 'ignored@example.com',
-          auth_type: 'password',
-        }),
+      const response = await postCheckEnforcement({
+        ...targetAuthHeaders,
+        'X-Capgo-Spoof-Admin-Authorization': nonAdminHeaders.Authorization,
       })
 
       expect(response.status).toBe(200)
@@ -378,14 +301,7 @@ describe('[POST] /private/sso/check-enforcement', () => {
     try {
       const isolatedAuthHeaders = await getAuthHeadersForCredentials(email, password)
 
-      const response = await fetchTestRequest(getEndpointUrl('/private/sso/check-enforcement'), {
-        method: 'POST',
-        headers: isolatedAuthHeaders,
-        body: JSON.stringify({
-          email: 'ignored@example.com',
-          auth_type: 'password',
-        }),
-      })
+      const response = await postCheckEnforcement(isolatedAuthHeaders)
 
       expect(response.status).toBe(200)
       const data = await response.json() as { allowed: boolean }
@@ -2079,8 +1995,8 @@ describe('[POST] /private/sso/provision-user', () => {
       )
 
       const ssoAuthHeaders = await getAuthHeadersForCredentials(email, password)
-      const supabase = getSupabaseClient()
-      const { data: existingPublicUser, error: existingPublicUserError } = await supabase
+      const capgo = getSupabaseClient()
+      const { data: existingPublicUser, error: existingPublicUserError } = await capgo
         .from('users')
         .select('id')
         .eq('id', createdUser.user.id)
@@ -2089,7 +2005,7 @@ describe('[POST] /private/sso/provision-user', () => {
       expect(existingPublicUserError).toBeNull()
 
       if (existingPublicUser) {
-        const { error: deletePublicUserError } = await supabase
+        const { error: deletePublicUserError } = await capgo
           .from('users')
           .delete()
           .eq('id', createdUser.user.id)
@@ -2097,7 +2013,7 @@ describe('[POST] /private/sso/provision-user', () => {
         expect(deletePublicUserError).toBeNull()
       }
 
-      const { data: missingPublicUser, error: missingPublicUserError } = await supabase
+      const { data: missingPublicUser, error: missingPublicUserError } = await capgo
         .from('users')
         .select('id')
         .eq('id', createdUser.user.id)
@@ -2296,6 +2212,13 @@ describe('sSO role mapping', () => {
       expect(await orgRole()).toEqual(['org_member'])
       expect(await appRole()).toEqual(['app_developer'])
       expect(await inGroup()).toBe(false)
+
+      // The console locks what the mapping rewrites on login: the SSO member,
+      // the mapped app and the mapped group. The org owner (no SSO identity)
+      // stays editable.
+      const managedResponse = await fetchTestRequest(getEndpointUrl(`/private/sso/providers/${managedOrgId}/managed`), { headers: authHeaders })
+      expect(managedResponse.status).toBe(200)
+      expect(await managedResponse.json()).toEqual({ users: { [userId]: { app_ids: [appUuid], group_ids: [groupId] } } })
 
       // Removing the app from the mapping revokes the SSO-granted binding right
       // away, since the app is no longer re-evaluated on login. The provider is
@@ -2674,6 +2597,34 @@ describe('[GET] /private/sso/providers/:orgId', () => {
         'Content-Type': 'application/json',
         // No Authorization header
       },
+    })
+
+    expect(response.status).toBe(401)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('no_jwt_apikey_or_subkey')
+  })
+})
+
+describe('[POST] /private/sso/verify-dns', () => {
+  it('should return 404 for non-existent provider', async () => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/verify-dns'), {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ provider_id: randomUUID() }),
+    })
+
+    expect(response.status).toBe(404)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('provider_not_found')
+  })
+
+  it('should return 401 without authentication', async () => {
+    const response = await fetchTestRequest(getEndpointUrl('/private/sso/verify-dns'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ provider_id: randomUUID() }),
     })
 
     expect(response.status).toBe(401)

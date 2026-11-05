@@ -4,10 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import arrowBack from '~icons/ion/arrow-back?width=2em&height=2em'
 import IconLoader from '~icons/lucide/loader-2'
+import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
 import InviteTeammateModal from '~/components/dashboard/InviteTeammateModal.vue'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
+import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
-import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -27,11 +29,13 @@ const latestBundleId = ref<string>()
 const realtimeListener = ref(false)
 const pollTimer = ref<number | null>(null)
 const initialCount = ref<number | null>(null)
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
+// The AI agent card comes first unless the user last picked the manual way.
+const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 
 interface Step {
   title: string
@@ -40,7 +44,7 @@ interface Step {
 }
 
 const config = getLocalConfig()
-const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ``
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ``
 const steps = ref<Step[]>([
   {
     title: t('add-another-bundle'),
@@ -108,6 +112,8 @@ function scrollToElement(id: string) {
 async function copyToast(allowed: boolean, id: string, text?: string) {
   if (!allowed || !text)
     return
+  if (step.value === 0)
+    void rememberSetupMethod('manual')
   try {
     await navigator.clipboard.writeText(text)
     console.log('displayStore.messageToast', displayStore.messageToast)
@@ -140,14 +146,14 @@ async function copyToast(allowed: boolean, id: string, text?: string) {
 }
 
 async function addNewApiKey() {
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   const userId = claimsData?.claims?.sub
 
   if (!userId) {
     console.log('Not logged in, cannot regenerate API key')
     return null
   }
-  const { data, error } = await createDefaultApiKey(supabase, t('api-key'), {
+  const { data, error } = await createDefaultApiKey(capgo, t('api-key'), {
     orgId: organizationStore.currentOrganization?.gid,
     appId: props.appId,
   })
@@ -163,7 +169,7 @@ async function getKey(retry = true): Promise<void> {
   if (!main?.user?.id)
     return
 
-  const existingKey = await findUsablePlainApiKey(supabase, main.user.id, organizationStore.currentOrganization?.gid, props.appId)
+  const existingKey = await findUsablePlainApiKey(capgo, main.user.id, organizationStore.currentOrganization?.gid, props.appId)
   if (existingKey) {
     steps.value[0].command = steps.value[0].command?.replace('[APIKEY]', existingKey)
   }
@@ -182,7 +188,7 @@ async function getVersionsCount(): Promise<number> {
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !props.appId)
     return 0
-  const { count, error } = await supabase
+  const { count, error } = await capgo
     .from('app_versions')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)
@@ -198,7 +204,7 @@ async function getLatestVersionId(): Promise<string | undefined> {
   const orgId = organizationStore.currentOrganization?.gid
   if (!orgId || !props.appId)
     return undefined
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .select('id, created_at')
     .eq('owner_org', orgId)
@@ -216,7 +222,10 @@ function openInviteDialog() {
   inviteModalRef.value?.openDialog()
 }
 
-function onInviteSuccess() {
+// Someone else (a teammate or an AI agent) uploads the bundle: wait for it.
+function waitForDelegatedUpload() {
+  if (step.value !== 0)
+    return
   step.value += 1
   clicked.value = 0
   realtimeListener.value = false
@@ -269,7 +278,7 @@ onUnmounted(() => {
   <section class="overflow-y-auto py-12 h-full sm:py-16 lg:py-20 max-h-fit bg-slate-100 dark:bg-slate-900">
     <div class="px-4 mx-auto max-w-7xl sm:px-6 lg:px-8">
       <div class="flex justify-items-center items-center place-content-center">
-        <button v-if="!onboarding" type="button" class="mr-6 text-white bg-gray-800 d-btn d-btn-outline" @click="emit('closeStep')">
+        <button v-if="!onboarding" type="button" class="mr-6 d-btn d-btn-outline" :aria-label="t('go-back')" @click="emit('closeStep')">
           <arrowBack />
         </button>
         <div v-if="props.onboarding" class="text-center">
@@ -279,7 +288,7 @@ onUnmounted(() => {
           <p class="mx-auto mt-6 text-lg font-normal text-gray-600 dark:text-gray-200 font-pj">
             {{ t('add-your-first-bundle') }}
           </p>
-          <p class="mx-auto mt-2 font-normal text-md font-pj text-muted-blue-300 dark:text-muted-blue-50">
+          <p class="mx-auto mt-2 font-normal font-pj text-muted-blue-300 dark:text-muted-blue-50">
             {{ t('pro-tip-you-can-copy') }} <span class="text-pumpkin-orange-900">{{ t('commands') }}</span> {{ t('by-clicking-on-them') }}
           </p>
         </div>
@@ -291,6 +300,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="mx-auto mt-12 max-w-6xl sm:px-10">
+        <AiAgentTaskCard v-if="!manualFirst && step === 0" class="mb-6" task="upload-bundle" :app-id="appId" or-separator="after" @copied="waitForDelegatedUpload" />
         <template v-for="(s, i) in steps" :key="i">
           <div v-if="i > 0" class="mx-auto w-1 h-10 bg-gray-200" :class="[step !== i ? 'opacity-30' : '']" />
 
@@ -324,6 +334,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div v-if="i === 0" class="pt-6 border-t border-gray-200">
+              <AiAgentTaskCard v-if="manualFirst" class="mb-6" task="upload-bundle" :app-id="appId" @copied="waitForDelegatedUpload" />
               <h3 class="text-lg font-semibold text-gray-900 font-pj">
                 {{ t('onboarding-invite-option-title') }}
               </h3>
@@ -332,7 +343,7 @@ onUnmounted(() => {
               </p>
               <button
                 type="button"
-                class="inline-flex items-center py-2 px-4 mt-4 text-sm font-semibold rounded-md transition-colors duration-200 focus:ring-2 focus:ring-offset-2 bg-muted-blue-50 text-muted-blue-800 hover:bg-muted-blue-100 focus:outline-hidden focus:ring-muted-blue-500"
+                class="d-btn d-btn-outline mt-4"
                 @click="openInviteDialog"
               >
                 {{ t('onboarding-invite-option-cta') }}
@@ -343,5 +354,5 @@ onUnmounted(() => {
       </div>
     </div>
   </section>
-  <InviteTeammateModal ref="inviteModalRef" invite-kind="technical" @success="onInviteSuccess" />
+  <InviteTeammateModal ref="inviteModalRef" invite-kind="technical" @success="waitForDelegatedUpload" />
 </template>

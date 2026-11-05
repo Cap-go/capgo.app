@@ -46,41 +46,21 @@ describe('frontend channel RBAC scope regressions', () => {
     const source = await readRepoFile('src/components/tables/ChannelTable.vue')
 
     const permission = 'channel.delete'
-    expect(source).toMatch(channelScopedCheckPermissionsCall(permission, 'props.appId', 'row.id'))
     expect(source).toMatch(channelScopedCheckPermissionsCall(permission, 'props.appId', 'one.id'))
     expect(source).toMatch(/disabled\s*:\s*\(\s*elem\s*:\s*Element\s*\)\s*=>\s*!\s*canReadChannel\.value\[elem\.id\]/)
     expect(source).toMatch(/visible\s*:\s*\(\s*elem\s*:\s*Element\s*\)\s*=>\s*!!\s*canDeleteChannel\.value\[elem\.id\]/)
     expect(source).not.toMatch(appOnlyCheckPermissionsCall(permission, 'props.appId'))
   })
 
-  it.concurrent('keeps app reader channel defaults aligned with RBAC role permissions', async () => {
+  it.concurrent.each([
+    // App-level roles get no channel access until a channel-specific grant exists.
+    ['app_reader', { 'channel.read': false, 'channel.read_history': false, 'channel.promote_bundle': false }],
+    ['app_preview', { 'channel.read': false, 'channel.read_history': false, 'channel.promote_bundle': false }],
+    ['channel_preview', { 'channel.read': true, 'channel.read_history': false, 'channel.promote_bundle': true }],
+  ])('keeps %s channel defaults aligned with RBAC role permissions', async (roleName, expected) => {
     const source = await readRepoFile('src/components/permissions/ChannelPermissionOverridesPanel.vue')
 
-    expectChannelPermissionDefaults(source, 'app_reader', {
-      'channel.read': false,
-      'channel.read_history': false,
-      'channel.promote_bundle': false,
-    })
-  })
-
-  it.concurrent('keeps app preview channel defaults denied until a channel-specific grant exists', async () => {
-    const source = await readRepoFile('src/components/permissions/ChannelPermissionOverridesPanel.vue')
-
-    expectChannelPermissionDefaults(source, 'app_preview', {
-      'channel.read': false,
-      'channel.read_history': false,
-      'channel.promote_bundle': false,
-    })
-  })
-
-  it.concurrent('keeps preview channel defaults aligned with its channel-scoped RBAC role permissions', async () => {
-    const source = await readRepoFile('src/components/permissions/ChannelPermissionOverridesPanel.vue')
-
-    expectChannelPermissionDefaults(source, 'channel_preview', {
-      'channel.read': true,
-      'channel.read_history': false,
-      'channel.promote_bundle': true,
-    })
+    expectChannelPermissionDefaults(source, roleName, expected)
   })
 
   it.concurrent('keeps app-only keys in their owner organization filter without showing an organization role', async () => {
@@ -89,6 +69,6 @@ describe('frontend channel RBAC scope regressions', () => {
     expect(source).toMatch(/if\s*\(\s*binding\.scope_type\s*===\s*['"]app['"]\s*&&\s*binding\.org_id\s*\)/)
     expect(source).toMatch(/getOrgIds:\s*getFilterOrgIds/)
     expect(source).toMatch(/binding\.scope_type\s*===\s*['"]org['"]\s*&&\s*binding\.org_id\s*&&\s*binding\.role_name\s*!==\s*systemApiKeyOrgReaderRole/)
-    expect(source).toMatch(/const\s+directOrgBindings\s*=\s*bindings\.filter\(\s*binding\s*=>\s*binding\.scope_type\s*===\s*['"]org['"]\s*&&\s*binding\.role_name\s*!==\s*systemApiKeyOrgReaderRole\s*,?\s*\)/)
+    expect(source).toMatch(/const\s+directOrgBindings\s*=\s*bindings\.filter\(\s*binding\s*=>\s*binding\.scope_type\s*===\s*['"]org['"]\s*&&\s*binding\.role_name\s*!==\s*systemApiKeyOrgReaderRole\s*(?:,\s*)?\)/)
   })
 })

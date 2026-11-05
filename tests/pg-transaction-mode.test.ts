@@ -4,7 +4,7 @@ import { sql } from 'drizzle-orm'
 import { Client, Pool } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import { closeClient as closePluginClient, createLazyPgClient, getDrizzleClient as getPluginDrizzleClient, getPgClient as getPluginPgClient } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
-import { checkoutPgClient, closeClient, getDrizzleClient, getPgClient, releasePgClient, withPgTransaction } from '../supabase/functions/_backend/utils/pg.ts'
+import { BEGIN_WRITE_TRANSACTION_SQL, beginWriteTransaction, checkoutPgClient, closeClient, getDrizzleClient, getPgClient, releasePgClient, withPgTransaction } from '../supabase/functions/_backend/utils/pg.ts'
 
 const runtime = vi.hoisted(() => ({ key: 'node' }))
 vi.mock('hono/adapter', async importOriginal => ({
@@ -37,52 +37,43 @@ describe('pooled PostgreSQL transaction access modes', () => {
     ['API', 'workerd', getPgClient, closeClient],
     ['plugin fallback', 'node', getPluginPgClient, closePluginClient],
     ['plugin fallback', 'workerd', getPluginPgClient, closePluginClient],
-  ] as const)('restricts %s primary reads in %s without changing the backend session default', async (_name, runtimeKey, create, close) => {
+  ] as const)('never pins a transaction for %s primary reads in %s', async (_name, runtimeKey, create, close) => {
     runtime.key = runtimeKey
     const c = context()
     const reader = await create(c, true)
     try {
-      expect((await reader.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
+      // A request-long BEGIN READ ONLY pins one Hyperdrive origin connection per
+      // in-flight request and exhausts the primary pool; reads must stay idle.
+      await reader.query('SELECT 1')
+      expect((await reader.query('SELECT now() = statement_timestamp() AS autocommit')).rows[0].autocommit).toBe(true)
       expect((await reader.query('SHOW default_transaction_read_only')).rows[0].default_transaction_read_only).toBe('off')
-      await expect(reader.query('CREATE TABLE public.readonly_must_not_exist (id int)')).rejects.toMatchObject({ code: '25006' })
     }
     finally {
       await close(c, reader)
-      if (runtimeKey === 'workerd') {
-        // close() must roll back, but Hyperdrive owns ending the edge connection.
-        const rawQuery = Client.prototype.query.bind(reader as Client) as (text: string) => Promise<{ rows: Record<string, string>[] }>
-        expect((await rawQuery('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('off')
-        expect((await rawQuery('SHOW default_transaction_read_only')).rows[0].default_transaction_read_only).toBe('off')
+      if (runtimeKey === 'workerd')
         await reader.end()
-      }
       runtime.key = 'node'
     }
   })
 
-  it('does not let nested root transactions end a primary reader restriction', async () => {
+  it('opens primary reader transactions read-only and closes them', async () => {
     const c = context()
     const reader = await getPgClient(c, true)
     try {
-      await expect(withPgTransaction(reader, async () => undefined)).rejects.toThrow('primary read session')
-      await expect(getDrizzleClient(reader, { logger: false }).transaction(async () => undefined)).rejects.toThrow('primary read session')
-      expect((await reader.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
-    }
-    finally {
-      await closeClient(c, reader)
-    }
-  })
-
-  it('keeps checked-out primary readers restricted and releases them at close', async () => {
-    const c = context()
-    const reader = await getPgClient(c, true)
-    try {
+      await withPgTransaction(reader, async (client) => {
+        expect((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
+      })
+      await getDrizzleClient(reader, { logger: false }).transaction(async (tx) => {
+        expect((await tx.execute(sql`SHOW transaction_read_only`)).rows[0]).toMatchObject({ transaction_read_only: 'on' })
+      })
+      const upgrade = vi.fn(async () => undefined)
+      await expect(getDrizzleClient(reader, { logger: false }).transaction(upgrade, { accessMode: 'read write' })).rejects.toThrow('read-only client')
+      expect(upgrade).not.toHaveBeenCalled()
       const client = await checkoutPgClient(reader)
-      expect((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
+      expect((await client.query('SELECT now() = statement_timestamp() AS autocommit')).rows[0].autocommit).toBe(true)
       releasePgClient(reader, client)
-      expect((await reader.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
     }
     finally {
-      await closeClient(c, reader)
       await closeClient(c, reader)
     }
   })
@@ -118,6 +109,71 @@ describe('pooled PostgreSQL transaction access modes', () => {
     }
     finally {
       await client.end()
+    }
+  })
+
+  it('bounds idle time inside Drizzle transactions without leaking to the session', async () => {
+    const client = new Client({ connectionString })
+    await client.connect()
+    try {
+      await getDrizzleClient(client, { logger: false }).transaction(async (tx) => {
+        expect((await tx.execute(sql`SHOW idle_in_transaction_session_timeout`)).rows[0]).toMatchObject({ idle_in_transaction_session_timeout: '15s' })
+      })
+      expect((await client.query('SHOW idle_in_transaction_session_timeout')).rows[0].idle_in_transaction_session_timeout).toBe('0')
+    }
+    finally {
+      await client.end()
+    }
+  })
+
+  it('bounds idle time on raw write BEGIN in one round trip', async () => {
+    const client = new Client({ connectionString })
+    await client.connect()
+    try {
+      expect(BEGIN_WRITE_TRANSACTION_SQL).toMatch(/^BEGIN READ WRITE; SET LOCAL idle_in_transaction_session_timeout = 15000$/)
+      await beginWriteTransaction(client)
+      expect((await client.query('SHOW idle_in_transaction_session_timeout')).rows[0].idle_in_transaction_session_timeout).toBe('15s')
+      expect((await client.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('off')
+      await client.query('ROLLBACK')
+      expect((await client.query('SHOW idle_in_transaction_session_timeout')).rows[0].idle_in_transaction_session_timeout).toBe('0')
+    }
+    finally {
+      await client.end()
+    }
+  })
+
+  it('bounds idle time inside withPgTransaction without a separate SET after BEGIN', async () => {
+    const c = context()
+    const pool = await getPgClient(c, false)
+    try {
+      await withPgTransaction(pool, async (client) => {
+        expect((await client.query('SHOW idle_in_transaction_session_timeout')).rows[0].idle_in_transaction_session_timeout).toBe('15s')
+        expect((await client.query('SHOW statement_timeout')).rows[0].statement_timeout).toBe('10s')
+      })
+      expect((await pool.query('SHOW idle_in_transaction_session_timeout')).rows[0].idle_in_transaction_session_timeout).toBe('0')
+    }
+    finally {
+      await closeClient(c, pool)
+    }
+  })
+
+  it('rejects instead of crashing when the server kills a checked-out transaction client', async () => {
+    const c = context()
+    const pool = await getPgClient(c, false)
+    const admin = new Client({ connectionString })
+    await admin.connect()
+    try {
+      await expect(getDrizzleClient(pool, { logger: false }).transaction(async (tx) => {
+        const { pid } = (await tx.execute(sql`SELECT pg_backend_pid() AS pid`)).rows[0] as { pid: number }
+        await admin.query('SELECT pg_terminate_backend($1)', [pid])
+        // Let the socket close while the transaction is idle, as the idle timeout would.
+        await new Promise(resolve => setTimeout(resolve, 200))
+        await tx.execute(sql`SELECT 1`)
+      })).rejects.toThrow()
+    }
+    finally {
+      await admin.end()
+      await closeClient(c, pool)
     }
   })
 
@@ -166,67 +222,17 @@ describe('pooled PostgreSQL transaction access modes', () => {
     }
   })
 
-  it('does not let a lazy root transaction end its primary read restriction', async () => {
+  it('opens a lazy primary reader transaction read-only', async () => {
     const c = context()
     const lazy = createLazyPgClient(c, true)
-    const run = vi.fn(async () => undefined)
     try {
-      await expect(getPluginDrizzleClient(lazy.client, { logger: false }).transaction(run)).rejects.toThrow('primary read session')
-      expect(run).not.toHaveBeenCalled()
-      expect((await lazy.client.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
+      await getPluginDrizzleClient(lazy.client, { logger: false }).transaction(async (tx) => {
+        expect((await tx.execute(sql`SHOW transaction_read_only`)).rows[0]).toMatchObject({ transaction_read_only: 'on' })
+      })
+      expect((await lazy.client.query('SELECT now() = statement_timestamp() AS autocommit')).rows[0].autocommit).toBe(true)
     }
     finally {
       await lazy.close()
-    }
-  })
-
-  it('allows a caught failed primary read to fall back inside a fresh read-only transaction', async () => {
-    const c = context()
-    const reader = await getPgClient(c, true)
-    try {
-      await expect(reader.query('SELECT nonexistent_transaction_mode_column')).rejects.toMatchObject({ code: '42703' })
-      expect((await reader.query('SHOW transaction_read_only')).rows[0].transaction_read_only).toBe('on')
-      expect((await getDrizzleClient(reader, { logger: false }).execute(sql`SELECT 1 AS ok`)).rows[0]).toMatchObject({ ok: 1 })
-      expect((await reader.query('SHOW default_transaction_read_only')).rows[0].default_transaction_read_only).toBe('off')
-    }
-    finally {
-      await closeClient(c, reader)
-    }
-  })
-
-  it('keeps queued reads protected while recovering an earlier query failure', async () => {
-    const c = context()
-    const reader = await getPgClient(c, true)
-    try {
-      const results = await Promise.allSettled([
-        reader.query('SELECT nonexistent_transaction_mode_column'),
-        reader.query('SHOW transaction_read_only'),
-      ])
-      expect(results[0]).toMatchObject({ status: 'rejected', reason: { code: '42703' } })
-      expect(results[1]).toMatchObject({ status: 'fulfilled', value: { rows: [{ transaction_read_only: 'on' }] } })
-    }
-    finally {
-      await closeClient(c, reader)
-    }
-  })
-
-  it('preserves callback queries when recovering a failed primary read', async () => {
-    const c = context()
-    const reader = await getPgClient(c, true)
-    try {
-      await new Promise<void>((resolve) => {
-        reader.query('SELECT nonexistent_transaction_mode_column', (error) => {
-          expect(error).toMatchObject({ code: '42703' })
-          resolve()
-        })
-      })
-      const result = await new Promise((resolve, reject) => {
-        reader.query('SHOW transaction_read_only', (error, result) => error ? reject(error) : resolve(result))
-      })
-      expect(result).toMatchObject({ rows: [{ transaction_read_only: 'on' }] })
-    }
-    finally {
-      await closeClient(c, reader)
     }
   })
 })

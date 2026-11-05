@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -6,7 +6,7 @@ import { ORG_ID_OVERAGE } from './test-utils'
 
 const supabaseUrl = env.SUPABASE_URL as string
 const supabaseServiceKey = env.SUPABASE_SERVICE_KEY as string
-const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey)
+const capgo = createClient<Database>(supabaseUrl, supabaseServiceKey)
 
 async function callRpc<T>(
   fn: () => PromiseLike<{ data: T | null, error: any }>,
@@ -17,7 +17,7 @@ async function callRpc<T>(
 type CreditMetric = Database['public']['Enums']['credit_metric_type']
 
 async function countOverageEvents(metric: CreditMetric, billingStart: Date, billingEnd: Date) {
-  const { count, error } = await supabase
+  const { count, error } = await capgo
     .from('usage_overage_events')
     .select('*', { count: 'exact', head: true })
     .eq('org_id', ORG_ID_OVERAGE)
@@ -31,13 +31,13 @@ async function countOverageEvents(metric: CreditMetric, billingStart: Date, bill
 describe('overage Tracking - Duplicate Prevention', () => {
   beforeAll(async () => {
     // Clean up any existing overage/credit rows for our dedicated test org (PostgREST only).
-    const { error: overageCleanupError } = await supabase.from('usage_overage_events').delete().eq('org_id', ORG_ID_OVERAGE)
+    const { error: overageCleanupError } = await capgo.from('usage_overage_events').delete().eq('org_id', ORG_ID_OVERAGE)
     expect(overageCleanupError).toBeNull()
-    const { error: transactionCleanupError } = await supabase.from('usage_credit_transactions').delete().eq('org_id', ORG_ID_OVERAGE)
+    const { error: transactionCleanupError } = await capgo.from('usage_credit_transactions').delete().eq('org_id', ORG_ID_OVERAGE)
     expect(transactionCleanupError).toBeNull()
-    const { error: consumptionCleanupError } = await supabase.from('usage_credit_consumptions').delete().eq('org_id', ORG_ID_OVERAGE)
+    const { error: consumptionCleanupError } = await capgo.from('usage_credit_consumptions').delete().eq('org_id', ORG_ID_OVERAGE)
     expect(consumptionCleanupError).toBeNull()
-    const { error: grantCleanupError } = await supabase.from('usage_credit_grants').delete().eq('org_id', ORG_ID_OVERAGE)
+    const { error: grantCleanupError } = await capgo.from('usage_credit_grants').delete().eq('org_id', ORG_ID_OVERAGE)
     expect(grantCleanupError).toBeNull()
   })
 
@@ -50,7 +50,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
 
     // Call apply_usage_overage 5 times with identical parameters
     for (let i = 0; i < 5; i++) {
-      const { data, error } = await callRpc(() => supabase.rpc('apply_usage_overage', {
+      const { data, error } = await callRpc(() => capgo.rpc('apply_usage_overage', {
         p_org_id: ORG_ID_OVERAGE,
         p_metric: testMetric,
         p_overage_amount: overageAmount,
@@ -73,7 +73,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     const billingEnd = new Date('2026-01-07')
 
     // First call with initial overage
-    await callRpc(() => supabase.rpc('apply_usage_overage', {
+    await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: 1000000,
@@ -83,7 +83,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     }))
 
     // Second call with significantly higher overage (>1% increase)
-    await callRpc(() => supabase.rpc('apply_usage_overage', {
+    await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: 2000000, // 100% increase
@@ -102,7 +102,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     const overageAmount = 10000
 
     // Grant some credits FIRST
-    const { error: grantError } = await supabase.from('usage_credit_grants').insert({
+    const { error: grantError } = await capgo.from('usage_credit_grants').insert({
       org_id: ORG_ID_OVERAGE,
       credits_total: 100,
       credits_consumed: 0,
@@ -114,7 +114,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     expect(grantError).toBeNull()
 
     // Call with credits available - should apply them
-    const { data: firstCall, error: firstError } = await callRpc(() => supabase.rpc('apply_usage_overage', {
+    const { data: firstCall, error: firstError } = await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: overageAmount,
@@ -129,7 +129,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     expect(Number(firstResult?.credits_applied)).toBeGreaterThan(0)
 
     // Second call with same params - should NOT create new record (no new credits, same overage)
-    const { error: secondError } = await callRpc(() => supabase.rpc('apply_usage_overage', {
+    const { error: secondError } = await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: overageAmount,
@@ -150,7 +150,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     const billingEnd = new Date('2025-12-01')
 
     // First call
-    await callRpc(() => supabase.rpc('apply_usage_overage', {
+    await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: 100000,
@@ -160,7 +160,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     }))
 
     // Second call with tiny increase (0.5%)
-    await callRpc(() => supabase.rpc('apply_usage_overage', {
+    await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: 100500, // Only 0.5% increase
@@ -178,7 +178,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     const billingEnd = new Date('2032-02-01')
     const expiresAt = new Date('2032-12-01').toISOString()
 
-    const { error: firstGrantError } = await supabase.from('usage_credit_grants').insert({
+    const { error: firstGrantError } = await capgo.from('usage_credit_grants').insert({
       org_id: ORG_ID_OVERAGE,
       credits_total: 0.1,
       credits_consumed: 0,
@@ -188,7 +188,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     })
     expect(firstGrantError).toBeNull()
 
-    const { data: firstApply, error: firstApplyError } = await callRpc(() => supabase.rpc('apply_usage_overage', {
+    const { data: firstApply, error: firstApplyError } = await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: 100,
@@ -201,7 +201,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     expect(Number(firstRow?.credits_applied ?? 0)).toBeGreaterThan(0)
     expect(Number(firstRow?.credits_remaining ?? 0)).toBeGreaterThan(0)
 
-    const { error: secondGrantError } = await supabase.from('usage_credit_grants').insert({
+    const { error: secondGrantError } = await capgo.from('usage_credit_grants').insert({
       org_id: ORG_ID_OVERAGE,
       credits_total: 20,
       credits_consumed: 0,
@@ -211,7 +211,7 @@ describe('overage Tracking - Duplicate Prevention', () => {
     })
     expect(secondGrantError).toBeNull()
 
-    const { data: secondApply, error: secondApplyError } = await callRpc(() => supabase.rpc('apply_usage_overage', {
+    const { data: secondApply, error: secondApplyError } = await callRpc(() => capgo.rpc('apply_usage_overage', {
       p_org_id: ORG_ID_OVERAGE,
       p_metric: testMetric,
       p_overage_amount: 100,

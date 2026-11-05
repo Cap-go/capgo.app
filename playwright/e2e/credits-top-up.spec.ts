@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '../../src/types/supabase.types'
+import type { Database } from '../../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { getSupabaseClient, resetAndSeedAppData, resetAppData, USER_ID, USER_PASSWORD } from '../../tests/test-utils'
 import { expect, test } from '../support/commands'
@@ -25,7 +25,7 @@ async function stripeCreate<T>(path: string, body: Record<string, unknown>): Pro
 }
 
 test.describe('Credit Top-Up', () => {
-  let supabase: SupabaseClient<Database>
+  let capgo: SupabaseClient<Database>
 
   let orgId = ''
   let appId = ''
@@ -33,7 +33,7 @@ test.describe('Credit Top-Up', () => {
   let planStripeId = ''
 
   test.beforeAll(() => {
-    supabase = getSupabaseClient()
+    capgo = getSupabaseClient()
   })
 
   test.afterEach(async () => {
@@ -41,19 +41,19 @@ test.describe('Credit Top-Up', () => {
       await resetAppData(appId)
 
     if (orgId) {
-      const { error: orgUsersError } = await supabase.from('org_users').delete().eq('org_id', orgId)
+      const { error: orgUsersError } = await capgo.from('org_users').delete().eq('org_id', orgId)
       expect(orgUsersError).toBeNull()
-      const { error: orgError } = await supabase.from('orgs').delete().eq('id', orgId)
+      const { error: orgError } = await capgo.from('orgs').delete().eq('id', orgId)
       expect(orgError).toBeNull()
     }
 
     if (customerId) {
-      const { error: stripeInfoError } = await supabase.from('stripe_info').delete().eq('customer_id', customerId)
+      const { error: stripeInfoError } = await capgo.from('stripe_info').delete().eq('customer_id', customerId)
       expect(stripeInfoError).toBeNull()
     }
 
     if (planStripeId) {
-      const { error: planError } = await supabase.from('plans').delete().eq('stripe_id', planStripeId)
+      const { error: planError } = await capgo.from('plans').delete().eq('stripe_id', planStripeId)
       expect(planError).toBeNull()
     }
   })
@@ -85,7 +85,7 @@ test.describe('Credit Top-Up', () => {
     const priceMonthlyId = `price_emulate_monthly_${shortId}`
     const priceYearlyId = `price_emulate_yearly_${shortId}`
 
-    const { error: planError } = await supabase.from('plans').insert({
+    const { error: planError } = await capgo.from('plans').insert({
       bandwidth: 1,
       build_time_unit: 60,
       credit_id: creditProduct.id,
@@ -129,7 +129,7 @@ test.describe('Credit Top-Up', () => {
     await expect(page.locator('[data-test="toast"]')).toContainText('Credits purchased successfully.')
 
     await expect.poll(async () => {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('usage_credit_transactions')
         .select('amount, source_ref')
         .eq('org_id', orgId)

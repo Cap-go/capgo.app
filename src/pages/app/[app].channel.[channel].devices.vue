@@ -1,22 +1,24 @@
 <script setup lang="ts">
 import type { OrganizationRole } from '~/stores/organization'
-import type { Database } from '~/types/supabase.types'
-import { FormKit } from '@formkit/vue'
-import { ref, watchEffect } from 'vue'
+import type { Database } from '~/types/database.types'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import plusOutline from '~icons/ion/add-outline'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
+import EmptyState from '~/components/EmptyState.vue'
+import FormField from '~/components/forms/FormField.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { withBuiltinChannelVersion } from '~/services/versions'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 
 interface Channel {
   version: Database['public']['Tables']['app_versions']['Row']
@@ -29,13 +31,18 @@ const displayStore = useDisplayStore()
 const organizationStore = useOrganizationStore()
 const appDetailStore = useAppDetailStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
-const deviceIds = ref<string[]>([])
+// Whether any device is forced to this channel; the table pages them through the API.
+const hasDevices = ref(false)
 const channel = ref<Database['public']['Tables']['channels']['Row'] & Channel>()
 const deviceIdInput = ref('')
+const deviceIdErrors = computed(() => validateField(deviceIdInput.value, [
+  rules.required(t('device-id')),
+  rules.uuid(t('device-id')),
+]))
 const role = ref<OrganizationRole | null>(null)
 const { collection: deviceDataCollection } = useDeviceDataCollection(() => channel.value?.version.app_id ?? packageId.value)
 
@@ -120,7 +127,7 @@ async function customDeviceOverwritePart4(
 }
 
 async function setChannelDeviceOverride(deviceId: string) {
-  const { data: currentSession } = await supabase.auth.getSession()!
+  const { data: currentSession } = await capgo.auth.getSession()!
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt)
     throw new Error('Missing session')
@@ -184,15 +191,18 @@ async function getDeviceIds() {
   if (!channel.value)
     return
   try {
-    const { data: dataDevices } = await supabase
+    const { count, error } = await capgo
       .from('channel_devices')
-      .select('device_id')
+      .select('device_id', { count: 'exact', head: true })
       .eq('channel_id', id.value)
       .eq('app_id', channel.value.app_id)
-    if (dataDevices && dataDevices.length)
-      deviceIds.value = dataDevices.map(d => d.device_id)
-    else
-      deviceIds.value = []
+    // A failed check must not pretend the channel has no forced devices.
+    if (error) {
+      console.error('Cannot check forced devices', error)
+      toast.error(t('something-went-wrong-try-again-later'))
+      return
+    }
+    hasDevices.value = (count ?? 0) > 0
   }
   catch (error) {
     console.error(error)
@@ -213,7 +223,7 @@ async function getChannel() {
   }
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select(`
           id,
@@ -294,7 +304,7 @@ watchEffect(async () => {
     <div v-else-if="channel">
       <div class="w-full h-full px-0 pt-0 mx-auto mb-8 overflow-y-auto sm:px-6 md:pt-8 lg:px-8 max-w-9xl max-h-fit">
         <div class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
-          <DeviceTable v-if="deviceIds.length > 0" :app-id="channel.version.app_id" :ids="deviceIds" :channel="channel" :device-data-collection="deviceDataCollection" show-add-button @add-device="AddDevice" />
+          <DeviceTable v-if="hasDevices" :app-id="channel.version.app_id" :override-channel-id="channel.id" :channel="channel" :device-data-collection="deviceDataCollection" show-add-button @add-device="AddDevice" />
           <template v-else-if="!dialogStore.showDialog">
             <div class="flex min-h-96 items-center justify-center px-6 py-10 text-center">
               <div class="flex max-w-2xl flex-col items-center">
@@ -319,29 +329,30 @@ watchEffect(async () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('channel-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('channel-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
-        {{ t('back-to-channels') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('channel-not-found')"
+      :description="t('channel-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+          {{ t('back-to-channels') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <!-- Teleport Content for Add Device Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('type-device-id')" defer to="#dialog-v2-content">
       <div class="space-y-4">
         <ChannelOverrideRetentionNotice show-label />
-        <FormKit
+        <FormField
           v-model="deviceIdInput"
           type="text"
           :placeholder="t('device-id-placeholder')"
           :label="t('device-id')"
-          validation="required|uuid"
+          :errors="deviceIdErrors"
         />
       </div>
     </Teleport>

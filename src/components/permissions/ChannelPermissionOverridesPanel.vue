@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 
 type PrincipalType = 'user' | 'group' | 'apikey'
@@ -33,7 +33,7 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const channelOverrides = ref<Record<string, boolean>>({})
 const channelOverridesLoading = ref(false)
 const channelOverridesSearch = ref('')
@@ -170,7 +170,7 @@ async function loadChannelPermissions() {
 
   channelOverridesLoading.value = true
   try {
-    const { data: channelData, error: channelError } = await supabase
+    const { data: channelData, error: channelError } = await capgo
       .from('channels')
       .select('id, name')
       .eq('app_id', props.appId)
@@ -190,7 +190,7 @@ async function loadChannelPermissions() {
     }
 
     const channelIds = channels.value.map(channel => channel.id)
-    const { data: overrides, error: overridesError } = await supabase
+    const { data: overrides, error: overridesError } = await capgo
       .from('channel_permission_overrides')
       .select('channel_id, permission_key, is_allowed')
       .eq('principal_type', props.principalType)
@@ -253,7 +253,7 @@ async function updateChannelPermission(channelId: number, permission: ChannelPer
 
   try {
     if (nextOverride === null) {
-      const { error } = await supabase
+      const { error } = await capgo
         .from('channel_permission_overrides')
         .delete()
         .eq('principal_type', props.principalType)
@@ -265,7 +265,7 @@ async function updateChannelPermission(channelId: number, permission: ChannelPer
         throw error
     }
     else {
-      const { error } = await supabase
+      const { error } = await capgo
         .from('channel_permission_overrides')
         .upsert({
           principal_type: props.principalType,

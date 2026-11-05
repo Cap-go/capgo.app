@@ -1,6 +1,6 @@
 /**
  * Print a fingerprint of the tested source at a commit, ignoring files that only the
- * release bot rewrites (version strings, generated CLI docs, the Graphify graph).
+ * release bot rewrites (version strings, generated CLI docs).
  *
  * A pull_request test run records this fingerprint for its merge commit. The bump
  * workflow on main computes it for the pushed commit, and when they match, the code
@@ -14,7 +14,6 @@ import { createHash } from 'node:crypto'
 import process from 'node:process'
 
 const IGNORED_PREFIXES = [
-  'graphify-out/',
   'cli/webdocs/',
 ]
 

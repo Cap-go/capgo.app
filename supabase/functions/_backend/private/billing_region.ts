@@ -2,7 +2,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
-import { getRequestCountry, getSuggestedBillingAccount, isStripeAccountReadyForNewCustomers } from '../utils/stripe_billing.ts'
+import { canChooseUsBillingAccount, getRequestCountry, getSuggestedBillingAccount, isStripeAccountReadyForNewCustomers } from '../utils/stripe_billing.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -14,5 +14,7 @@ app.get('/', middlewareAuth, (c) => {
     country: getRequestCountry(c),
     suggested: getSuggestedBillingAccount(c),
     usAvailable: isStripeAccountReadyForNewCustomers(c, 'us'),
+    // Whether this visitor's country may pick the US entity at all.
+    usOffered: canChooseUsBillingAccount(c),
   })
 })

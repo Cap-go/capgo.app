@@ -74,7 +74,8 @@ app.post('/', middlewareAPISecret, async (c) => {
   if (!body.orgId)
     throw simpleError('no_orgId', 'No orgId', { body })
 
-  const pgClient = await getPgClient(c, true)
+  // Billing sync writes state and calls Stripe; do not pin a primary read transaction across network work.
+  const pgClient = await getPgClient(c, false)
   const drizzleClient = getDrizzleClient(pgClient)
   try {
     const { error, attempts } = await syncSubscriptionAndEventsWithRetry(c, body.orgId, drizzleClient)

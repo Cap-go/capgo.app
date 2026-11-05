@@ -5,9 +5,12 @@ import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret, quickError, simpleError, triggerValidator } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { isTransientDatabaseError } from '../utils/pg_errors.ts'
+import { queryJsonOne } from '../utils/pg_rls.ts'
 import { isRetryablePostgrestResult, retryWithBackoff } from '../utils/retry.ts'
 import { s3 } from '../utils/s3.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { deltaFileS3PathSql, deltaSessionJoinSql } from '../utils/version_manifest_sql.ts'
 
 const SIZE_RETRY_ATTEMPTS = 1
 const SIZE_RETRY_DELAY_MS = 500
@@ -42,58 +45,6 @@ async function getManifestSizeWithRetry(c: Context, s3Path: string): Promise<{ d
   return { attempts, diagnostics: result, lastError }
 }
 
-function shouldRetryManifestSizeLookup(size: number, currentFileSize: number | null | undefined): boolean {
-  return size <= 0 && !(currentFileSize && currentFileSize > 0)
-}
-
-async function shouldSkipManifestSizeRetry(c: Context, record: Database['public']['Tables']['manifest']['Row'], queue: QueueLogMetadata): Promise<boolean> {
-  if (!record.id)
-    return false
-
-  const { data: currentManifest, error: manifestError } = await supabaseAdmin(c)
-    .from('manifest')
-    .select('file_size, app_version_id')
-    .eq('id', record.id)
-    .maybeSingle()
-
-  if (manifestError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'error reading current manifest before retry', id: record.id, app_version_id: record.app_version_id, queue, error: manifestError })
-    return false
-  }
-
-  if (!currentManifest) {
-    cloudlog({ requestId: c.get('requestId'), message: 'manifest row already gone, skipping size retry', id: record.id, app_version_id: record.app_version_id, queue })
-    return true
-  }
-
-  if (currentManifest.file_size && currentManifest.file_size > 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'manifest row already sized, skipping stale queue retry', id: record.id, app_version_id: currentManifest.app_version_id, file_size: currentManifest.file_size, queue })
-    return true
-  }
-
-  const appVersionId = currentManifest.app_version_id ?? record.app_version_id
-  if (!appVersionId)
-    return false
-
-  const { data: appVersion, error: appVersionError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('deleted, deleted_at')
-    .eq('id', appVersionId)
-    .maybeSingle()
-
-  if (appVersionError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'error reading app version before manifest retry', id: record.id, app_version_id: appVersionId, queue, error: appVersionError })
-    return false
-  }
-
-  if (appVersion?.deleted || appVersion?.deleted_at) {
-    cloudlog({ requestId: c.get('requestId'), message: 'app version deleted, skipping manifest size retry', id: record.id, app_version_id: appVersionId, queue })
-    return true
-  }
-
-  return false
-}
-
 async function runManifestUpdateWithRetry(
   c: Context,
   operation: () => Promise<RetryableResult>,
@@ -108,7 +59,7 @@ async function runManifestUpdateWithRetry(
   }, {
     attempts: MANIFEST_UPDATE_RETRY_ATTEMPTS,
     baseDelayMs: MANIFEST_UPDATE_RETRY_DELAY_MS,
-    shouldRetry: result => isRetryablePostgrestResult(result),
+    shouldRetry: result => isRetryablePostgrestResult(result) || isTransientDatabaseError(result?.error),
   })
 
   if (!result) {
@@ -133,62 +84,86 @@ async function runManifestUpdateWithRetry(
   }
 }
 
-export async function updateManifestSize(c: Context, record: Database['public']['Tables']['manifest']['Row'], queue = getQueueLogMetadata(c)) {
-  if (!record.s3_path) {
-    cloudlog({ requestId: c.get('requestId'), message: 'No s3 path', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, queue })
-    throw simpleError('no_s3_path', 'No s3 path', { record })
-  }
+/**
+ * Size lookups queued for legacy public.manifest rows before the cutover:
+ * those ids no longer exist (public.manifest is now a view over delta_files),
+ * and the cutover queued delta_files lookups for every unsized file instead.
+ */
+export function skipLegacyManifestSize(c: Context, record: { id?: number | null }, queue = getQueueLogMetadata(c)) {
+  cloudlog({ requestId: c.get('requestId'), message: 'legacy manifest size lookup skipped', id: record.id, queue })
+  return c.json(BRES)
+}
 
-  const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, record.s3_path)
-  const size = diagnostics?.size ?? 0
-  if (lastError) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getSize failed after retries', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
-  }
-  if (shouldRetryManifestSizeLookup(size, record.file_size)) {
-    if (await shouldSkipManifestSizeRetry(c, record, queue))
+type DeltaFileRecord = Database['public']['Tables']['delta_files']['Row']
+
+function isDeltaFileRecord(record: object): record is DeltaFileRecord {
+  return 'entry_key' in record || 'path_key' in record
+}
+
+// One R2 lookup per unique unsized delta file; versions share the row.
+export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, queue = getQueueLogMetadata(c)) {
+  if (!record.id)
+    throw simpleError('no_s3_path', 'No s3 path', { record })
+
+  const pg = await getPgClient(c)
+  try {
+    let current: { file_size: number, s3_path: string } | null
+    try {
+      current = await queryJsonOne<{ file_size: number, s3_path: string }>(
+        pg,
+        `SELECT delta_file.file_size, ${deltaFileS3PathSql('delta_file', 'delta_session')} AS s3_path
+         FROM public.delta_files AS delta_file
+         ${deltaSessionJoinSql('delta_file', 'delta_session')}
+         WHERE delta_file.id = $1`,
+        [record.id],
+      )
+    }
+    catch (currentError) {
+      throw simpleError('delta_file_read_failed', 'Failed to read delta file', { id: record.id }, currentError)
+    }
+    if (!current || current.file_size > 0) {
+      cloudlog({ requestId: c.get('requestId'), message: 'delta file gone or already sized', id: record.id, queue })
       return c.json(BRES)
-    cloudlogErr({ requestId: c.get('requestId'), message: 'getSize returned 0 after retries', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, attempts, queue, storageDiagnostics: diagnostics })
-    // Return non-2xx so queue_consumer keeps the message and applies its 5-read retry budget.
-    throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, file_name: record.file_name, id: record.id, queue, s3_path: record.s3_path, storageDiagnostics: diagnostics }, lastError, { alert: false })
-  }
-  if (size <= 0) {
-    cloudlog({ requestId: c.get('requestId'), message: 'getSize returned 0, keeping existing file_size', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, file_size: record.file_size, attempts, queue, storageDiagnostics: diagnostics })
+    }
+
+    // The queued record may predate the row's compaction: read the path from the row.
+    const s3Path = current.s3_path
+    if (!s3Path)
+      throw simpleError('no_s3_path', 'No s3 path', { record })
+
+    const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, s3Path)
+    const size = diagnostics?.size ?? 0
+    if (size <= 0) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: s3Path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
+      // Non-2xx keeps the message under the 5-read queue budget.
+      throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: s3Path, storageDiagnostics: diagnostics }, lastError, { alert: false })
+    }
+
+    await runManifestUpdateWithRetry(c, async () => {
+      await pg.query('UPDATE public.delta_files SET file_size = $1 WHERE id = $2 AND file_size = 0', [size, record.id])
+      return { error: null }
+    })
+    cloudlog({ requestId: c.get('requestId'), message: 'delta file file_size updated', id: record.id, s3_path: s3Path, size, attempts, queue })
     return c.json(BRES)
   }
-
-  try {
-    await runManifestUpdateWithRetry(c, async () => await supabaseAdmin(c)
-      .from('manifest')
-      .update({ file_size: size })
-      .eq('id', record.id))
-    cloudlog({ requestId: c.get('requestId'), message: 'manifest file_size updated', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, size, attempts, queue, selectedCandidateKey: diagnostics?.selectedCandidateKey })
+  finally {
+    closeClient(c, pg)
   }
-  catch (updateError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error update manifest size', id: record.id, app_version_id: record.app_version_id, file_name: record.file_name, s3_path: record.s3_path, size, attempts, queue, error: updateError, storageDiagnostics: diagnostics })
-    throw simpleError('manifest_update_failed', 'Failed to update manifest file_size', { record, updateError })
-  }
-
-  return c.json(BRES)
 }
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
-app.post('/', middlewareAPISecret, triggerValidator('manifest', 'INSERT'), (c) => {
-  const record = c.get('webhookBody') as Database['public']['Tables']['manifest']['Row']
-  cloudlog({ requestId: c.get('requestId'), message: 'record', record })
+app.post('/', middlewareAPISecret, triggerValidator(['manifest', 'delta_files'], 'INSERT'), (c) => {
+  const webhookRecord = c.get('webhookBody') as object
+  cloudlog({ requestId: c.get('requestId'), message: 'record', record: webhookRecord })
+  if (isDeltaFileRecord(webhookRecord))
+    return updateDeltaFileSize(c, webhookRecord)
 
-  if (!record.app_version_id || !record.s3_path) {
-    cloudlog({ requestId: c.get('requestId'), message: 'no app_version_id or s3_path' })
-    throw simpleError('no_app_version_id_or_s3_path', 'no app_version_id or s3_path', { record })
-  }
-
-  return updateManifestSize(c, record)
+  return skipLegacyManifestSize(c, webhookRecord as { id?: number | null })
 })
 
 export const onManifestCreateTestUtils = {
   isRetryablePostgrestResult,
   runManifestUpdateWithRetry,
-  shouldRetryManifestSizeLookup,
-  shouldSkipManifestSizeRetry,
   sizeRetryAttempts: SIZE_RETRY_ATTEMPTS,
 }

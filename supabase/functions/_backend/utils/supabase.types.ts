@@ -125,6 +125,63 @@ export type Database = {
           },
         ]
       }
+      app_build_credentials: {
+        Row: {
+          app_id: string
+          ciphertext: string
+          created_at: string
+          created_by: string | null
+          id: string
+          key_version: string
+          owner_org: string
+          platform: string
+          summary: Json
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          app_id: string
+          ciphertext: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key_version: string
+          owner_org: string
+          platform: string
+          summary?: Json
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          app_id?: string
+          ciphertext?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          key_version?: string
+          owner_org?: string
+          platform?: string
+          summary?: Json
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_build_credentials_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+          {
+            foreignKeyName: "app_build_credentials_owner_org_fkey"
+            columns: ["owner_org"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_metrics_cache: {
         Row: {
           cached_at: string
@@ -595,6 +652,27 @@ export type Database = {
         }
         Relationships: []
       }
+      build_credentials_upload_token_uses: {
+        Row: {
+          app_id: string
+          expires_at: string
+          nonce: string
+          used_at: string
+        }
+        Insert: {
+          app_id: string
+          expires_at: string
+          nonce: string
+          used_at?: string
+        }
+        Update: {
+          app_id?: string
+          expires_at?: string
+          nonce?: string
+          used_at?: string
+        }
+        Relationships: []
+      }
       build_logs: {
         Row: {
           app_id: string | null
@@ -669,6 +747,7 @@ export type Database = {
           upload_path: string
           upload_session_key: string
           upload_url: string
+          uses_stored_credentials: boolean
           xcode_version: string | null
         }
         Insert: {
@@ -693,6 +772,7 @@ export type Database = {
           upload_path: string
           upload_session_key: string
           upload_url: string
+          uses_stored_credentials?: boolean
           xcode_version?: string | null
         }
         Update: {
@@ -717,6 +797,7 @@ export type Database = {
           upload_path?: string
           upload_session_key?: string
           upload_url?: string
+          uses_stored_credentials?: boolean
           xcode_version?: string | null
         }
         Relationships: [
@@ -730,6 +811,71 @@ export type Database = {
           {
             foreignKeyName: "build_requests_owner_org_fkey"
             columns: ["owner_org"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cancel_save_offers: {
+        Row: {
+          billing_account: string
+          coupon_id: string
+          created_at: string
+          currency: string
+          customer_id: string
+          discount_end: string | null
+          discount_start: string | null
+          duration_months: number
+          id: string
+          monthly_amount: number
+          org_id: string
+          outcome: string
+          percent_off: number
+          reason: string
+          responded_at: string | null
+          subscription_id: string
+        }
+        Insert: {
+          billing_account: string
+          coupon_id: string
+          created_at?: string
+          currency: string
+          customer_id: string
+          discount_end?: string | null
+          discount_start?: string | null
+          duration_months: number
+          id?: string
+          monthly_amount: number
+          org_id: string
+          outcome?: string
+          percent_off: number
+          reason: string
+          responded_at?: string | null
+          subscription_id: string
+        }
+        Update: {
+          billing_account?: string
+          coupon_id?: string
+          created_at?: string
+          currency?: string
+          customer_id?: string
+          discount_end?: string | null
+          discount_start?: string | null
+          duration_months?: number
+          id?: string
+          monthly_amount?: number
+          org_id?: string
+          outcome?: string
+          percent_off?: number
+          reason?: string
+          responded_at?: string | null
+          subscription_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cancel_save_offers_org_id_fkey"
+            columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "orgs"
             referencedColumns: ["id"]
@@ -1443,6 +1589,186 @@ export type Database = {
         }
         Relationships: []
       }
+      delta_files: {
+        Row: {
+          app_id: string
+          created_at: string
+          entry_key: string
+          file_hash: string
+          file_hash_bin: string | null
+          file_name: string
+          file_size: number
+          id: number
+          path_key: string
+          path_org: string | null
+          path_session: string | null
+          path_session_id: number | null
+          path_sha: string | null
+          s3_path: string
+        }
+        Insert: {
+          app_id: string
+          created_at?: string
+          entry_key: string
+          file_hash: string
+          file_hash_bin?: string | null
+          file_name: string
+          file_size?: number
+          id?: number
+          path_key: string
+          path_org?: string | null
+          path_session?: string | null
+          path_session_id?: number | null
+          path_sha?: string | null
+          s3_path: string
+        }
+        Update: {
+          app_id?: string
+          created_at?: string
+          entry_key?: string
+          file_hash?: string
+          file_hash_bin?: string | null
+          file_name?: string
+          file_size?: number
+          id?: number
+          path_key?: string
+          path_org?: string | null
+          path_session?: string | null
+          path_session_id?: number | null
+          path_sha?: string | null
+          s3_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_files_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
+      delta_gc_orphan_prefixes: {
+        Row: {
+          app_id: string
+          claimed_until: string | null
+          created_at: string
+          lease_until: string | null
+          list_cursor: string | null
+          org: string
+          prefix: string
+        }
+        Insert: {
+          app_id: string
+          claimed_until?: string | null
+          created_at?: string
+          lease_until?: string | null
+          list_cursor?: string | null
+          org: string
+          prefix: string
+        }
+        Update: {
+          app_id?: string
+          claimed_until?: string | null
+          created_at?: string
+          lease_until?: string | null
+          list_cursor?: string | null
+          org?: string
+          prefix?: string
+        }
+        Relationships: []
+      }
+      delta_gc_state: {
+        Row: {
+          app_id: string
+          known_orgs: string[]
+          last_error: string | null
+          last_run_at: string | null
+          lease_until: string | null
+          list_cursor: string | null
+          list_org: string | null
+          next_run_at: string
+          pending_orgs: string[] | null
+        }
+        Insert: {
+          app_id: string
+          known_orgs?: string[]
+          last_error?: string | null
+          last_run_at?: string | null
+          lease_until?: string | null
+          list_cursor?: string | null
+          list_org?: string | null
+          next_run_at?: string
+          pending_orgs?: string[] | null
+        }
+        Update: {
+          app_id?: string
+          known_orgs?: string[]
+          last_error?: string | null
+          last_run_at?: string | null
+          lease_until?: string | null
+          list_cursor?: string | null
+          list_org?: string | null
+          next_run_at?: string
+          pending_orgs?: string[] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_gc_state_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: true
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
+      delta_gc_unsettled_deletes: {
+        Row: {
+          app_id: string
+          checks: number
+          path: string
+          recorded_at: string
+        }
+        Insert: {
+          app_id: string
+          checks?: number
+          path: string
+          recorded_at?: string
+        }
+        Update: {
+          app_id?: string
+          checks?: number
+          path?: string
+          recorded_at?: string
+        }
+        Relationships: []
+      }
+      delta_sessions: {
+        Row: {
+          app_id: string
+          id: number
+          session: string
+        }
+        Insert: {
+          app_id: string
+          id?: number
+          session: string
+        }
+        Update: {
+          app_id?: string
+          id?: number
+          session?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_sessions_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["app_id"]
+          },
+        ]
+      }
       deploy_history: {
         Row: {
           app_id: string
@@ -1671,41 +1997,6 @@ export type Database = {
             columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "orgs"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      manifest: {
-        Row: {
-          app_version_id: number
-          file_hash: string
-          file_name: string
-          file_size: number | null
-          id: number
-          s3_path: string
-        }
-        Insert: {
-          app_version_id: number
-          file_hash: string
-          file_name: string
-          file_size?: number | null
-          id?: number
-          s3_path: string
-        }
-        Update: {
-          app_version_id?: number
-          file_hash?: string
-          file_name?: string
-          file_size?: number | null
-          id?: number
-          s3_path?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "manifest_app_version_id_fkey"
-            columns: ["app_version_id"]
-            isOneToOne: false
-            referencedRelation: "app_versions"
             referencedColumns: ["id"]
           },
         ]
@@ -2227,6 +2518,8 @@ export type Database = {
       }
       org_invitation_email_requests: {
         Row: {
+          bento_email: string | null
+          bento_synced_at: string | null
           id: string
           invited_by_user_id: string | null
           message_id: string | null
@@ -2236,6 +2529,8 @@ export type Database = {
           tmp_user_id: number | null
         }
         Insert: {
+          bento_email?: string | null
+          bento_synced_at?: string | null
           id?: string
           invited_by_user_id?: string | null
           message_id?: string | null
@@ -2245,6 +2540,8 @@ export type Database = {
           tmp_user_id?: number | null
         }
         Update: {
+          bento_email?: string | null
+          bento_synced_at?: string | null
           id?: string
           invited_by_user_id?: string | null
           message_id?: string | null
@@ -2578,6 +2875,8 @@ export type Database = {
       }
       plans: {
         Row: {
+          alt_price_m_ids: string[]
+          alt_price_y_ids: string[]
           bandwidth: number
           build_time_unit: number
           created_at: string
@@ -2595,12 +2894,15 @@ export type Database = {
           price_y_id: string
           price_y_id_us: string | null
           price_m_id_us: string | null
+          regional_price_ids: Json
           storage: number
           stripe_id: string
           stripe_id_us: string | null
           updated_at: string
         }
         Insert: {
+          alt_price_m_ids?: string[]
+          alt_price_y_ids?: string[]
           bandwidth: number
           build_time_unit?: number
           created_at?: string
@@ -2618,12 +2920,15 @@ export type Database = {
           price_y_id: string
           price_y_id_us?: string | null
           price_m_id_us?: string | null
+          regional_price_ids?: Json
           storage: number
           stripe_id?: string
           stripe_id_us?: string | null
           updated_at?: string
         }
         Update: {
+          alt_price_m_ids?: string[]
+          alt_price_y_ids?: string[]
           bandwidth?: number
           build_time_unit?: number
           created_at?: string
@@ -2641,6 +2946,7 @@ export type Database = {
           price_y_id?: string
           price_y_id_us?: string | null
           price_m_id_us?: string | null
+          regional_price_ids?: Json
           storage?: number
           stripe_id?: string
           stripe_id_us?: string | null
@@ -2690,84 +2996,6 @@ export type Database = {
           customer_id?: string
           date_id?: string
           event_id?: string
-        }
-        Relationships: []
-      }
-      r2_inventory_checkpoints: {
-        Row: {
-          accepted_event_floor: string | null
-          bucket_name: string
-          checkpoint: Json
-          job_name: string
-          partition_key: string
-          updated_at: string
-        }
-        Insert: {
-          accepted_event_floor?: string | null
-          bucket_name: string
-          checkpoint?: Json
-          job_name: string
-          partition_key?: string
-          updated_at?: string
-        }
-        Update: {
-          accepted_event_floor?: string | null
-          bucket_name?: string
-          checkpoint?: Json
-          job_name?: string
-          partition_key?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      r2_objects: {
-        Row: {
-          bucket_name: string
-          cleanup_requested_at: string | null
-          etag: string | null
-          first_seen_at: string
-          last_event_at: string | null
-          last_reconciled_at: string | null
-          manifest_lease_expires_at: string | null
-          r2_key: string
-          r2_last_modified_at: string | null
-          r2_state: Database["public"]["Enums"]["r2_object_state"]
-          revision: number
-          size_bytes: number | null
-          tombstone_expires_at: string | null
-          updated_at: string
-        }
-        Insert: {
-          bucket_name: string
-          cleanup_requested_at?: string | null
-          etag?: string | null
-          first_seen_at?: string
-          last_event_at?: string | null
-          last_reconciled_at?: string | null
-          manifest_lease_expires_at?: string | null
-          r2_key: string
-          r2_last_modified_at?: string | null
-          r2_state: Database["public"]["Enums"]["r2_object_state"]
-          revision?: number
-          size_bytes?: number | null
-          tombstone_expires_at?: string | null
-          updated_at?: string
-        }
-        Update: {
-          bucket_name?: string
-          cleanup_requested_at?: string | null
-          etag?: string | null
-          first_seen_at?: string
-          last_event_at?: string | null
-          last_reconciled_at?: string | null
-          manifest_lease_expires_at?: string | null
-          r2_key?: string
-          r2_last_modified_at?: string | null
-          r2_state?: Database["public"]["Enums"]["r2_object_state"]
-          revision?: number
-          size_bytes?: number | null
-          tombstone_expires_at?: string | null
-          updated_at?: string
         }
         Relationships: []
       }
@@ -3668,6 +3896,32 @@ export type Database = {
         }
         Relationships: []
       }
+      version_files: {
+        Row: {
+          app_version_id: number
+          created_at: string
+          file_ids: number[]
+        }
+        Insert: {
+          app_version_id: number
+          created_at?: string
+          file_ids: number[]
+        }
+        Update: {
+          app_version_id?: number
+          created_at?: string
+          file_ids?: number[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       version_meta: {
         Row: {
           app_id: string
@@ -3853,6 +4107,25 @@ export type Database = {
       }
     }
     Views: {
+      manifest: {
+        Row: {
+          app_version_id: number | null
+          file_hash: string | null
+          file_name: string | null
+          file_size: number | null
+          id: number | null
+          s3_path: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pg_buffercache: {
         Row: {
           bufferid: number | null
@@ -3905,6 +4178,25 @@ export type Database = {
             | null
         }
         Relationships: []
+      }
+      version_manifest: {
+        Row: {
+          app_version_id: number | null
+          file_hash: string | null
+          file_name: string | null
+          file_size: number | null
+          id: number | null
+          s3_path: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "version_files_app_version_id_fkey"
+            columns: ["app_version_id"]
+            isOneToOne: true
+            referencedRelation: "app_versions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
@@ -3970,6 +4262,10 @@ export type Database = {
             Args: { p_binding_id: string; p_error_code: string }
             Returns: undefined
           }
+      assert_console_daily_window: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: undefined
+      }
       assert_effective_super_admin_group_member_removal: {
         Args: { p_group_id: string; p_user_id: string }
         Returns: undefined
@@ -4270,6 +4566,112 @@ export type Database = {
         Returns: string
       }
       delete_user: { Args: never; Returns: undefined }
+      delta_app_has_unconverted_references: {
+        Args: { p_app_id: string }
+        Returns: boolean
+      }
+      delta_app_has_upload_in_progress: {
+        Args: { p_app_id: string }
+        Returns: boolean
+      }
+      delta_canonical_path: { Args: { p_s3_path: string }; Returns: string }
+      delta_entry_key: {
+        Args: { p_file_hash: string; p_file_name: string; p_s3_path: string }
+        Returns: string
+      }
+      delta_file_hash: {
+        Args: { p_file_hash: string; p_file_hash_bin: string }
+        Returns: string
+      }
+      delta_file_s3_path: {
+        Args: {
+          p_app_id: string
+          p_file_name: string
+          p_path_org: string
+          p_path_session: string
+          p_path_sha: string
+          p_s3_path: string
+        }
+        Returns: string
+      }
+      delta_files_compact: { Args: { p_batch_size?: number }; Returns: number }
+      delta_gc_begin_delete: {
+        Args: { p_app_id: string; p_lease_ms?: number; p_paths: string[] }
+        Returns: string[]
+      }
+      delta_gc_begin_orphan_delete: {
+        Args: { p_lease_ms?: number; p_paths: string[]; p_prefix: string }
+        Returns: string[]
+      }
+      delta_gc_claim: {
+        Args: { p_limit?: number }
+        Returns: {
+          app_id: string
+          list_cursor: string
+          list_org: string
+        }[]
+      }
+      delta_gc_claim_orphan_prefixes: {
+        Args: { p_limit?: number }
+        Returns: {
+          list_cursor: string
+          prefix: string
+        }[]
+      }
+      delta_gc_claim_unsettled: {
+        Args: { p_limit?: number }
+        Returns: {
+          path: string
+          referenced: boolean
+        }[]
+      }
+      delta_gc_confirm_deleted: {
+        Args: { p_paths: string[] }
+        Returns: undefined
+      }
+      delta_gc_end_delete: { Args: { p_app_id: string }; Returns: undefined }
+      delta_gc_end_orphan_delete: {
+        Args: { p_prefix: string }
+        Returns: undefined
+      }
+      delta_gc_finish: {
+        Args: {
+          p_app_id: string
+          p_error?: string
+          p_list_cursor: string
+          p_page_done?: boolean
+        }
+        Returns: undefined
+      }
+      delta_gc_finish_orphan_prefix: {
+        Args: { p_list_cursor: string; p_page_done?: boolean; p_prefix: string }
+        Returns: undefined
+      }
+      delta_gc_lock_key: { Args: { p_app_id: string }; Returns: number }
+      delta_gc_settle: {
+        Args: { p_path: string; p_referenced?: boolean }
+        Returns: undefined
+      }
+      delta_gc_unreferenced_paths: {
+        Args: { p_paths: string[] }
+        Returns: string[]
+      }
+      delta_path_key: { Args: { p_s3_path: string }; Returns: string }
+      delta_sessions_attach: { Args: { p_ids: number[] }; Returns: number }
+      delta_sessions_move: { Args: { p_batch_size?: number }; Returns: number }
+      delta_storage_gc_enabled: { Args: never; Returns: boolean }
+      delta_storage_setting: {
+        Args: { p_default: boolean; p_name: string }
+        Returns: boolean
+      }
+      delta_version_has_entry: {
+        Args: { p_file_hash: string; p_s3_path: string; p_version_id: number }
+        Returns: boolean
+      }
+      delta_version_keeps_files: {
+        Args: { p_deleted: boolean; p_deleted_at: string; p_updated_at: string }
+        Returns: boolean
+      }
       dismiss_getting_started: { Args: { p_app_id: string }; Returns: Json }
       enqueue_app_onboarding_refreshes: {
         Args: { p_limit?: number }
@@ -4287,10 +4689,6 @@ export type Database = {
             Args: { apikey: string; appid: string; name_version: string }
             Returns: boolean
           }
-      expire_r2_manifest_placeholders: {
-        Args: { p_bucket: string; p_limit: number }
-        Returns: number
-      }
       expire_usage_credits: { Args: never; Returns: number }
       find_apikey_by_value: {
         Args: { key_value: string }
@@ -4456,6 +4854,24 @@ export type Database = {
         Args: { apikey: string; appid: string; name_version: string }
         Returns: number
       }
+      get_bundle_channel_removals: {
+        Args: {
+          p_app_id: string
+          p_ascending?: boolean
+          p_channel_ids?: string[]
+          p_limit?: number
+          p_version_id: number
+        }
+        Returns: Json
+      }
+      get_bundle_upload_daily_counts: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: {
+          app_id: string
+          day_index: number
+          uploads: number
+        }[]
+      }
       get_channel_current_bundle_rbac: {
         Args: { p_app_id: string; p_channel_id: number }
         Returns: {
@@ -4520,6 +4936,16 @@ export type Database = {
               uninstall: number
             }[]
           }
+      get_deploy_daily_counts: {
+        Args: { p_app_ids: string[]; p_end: string; p_start: string }
+        Returns: {
+          app_id: string
+          channel_id: number
+          channel_name: string
+          day_index: number
+          deploys: number
+        }[]
+      }
       get_invite_by_magic_lookup: {
         Args: { lookup: string }
         Returns: {
@@ -5248,8 +5674,8 @@ export type Database = {
         Returns: number
       }
       queue_cron_stat_app_for_app: {
-        Args: { p_app_id: string; p_org_id?: string }
-        Returns: undefined
+        Args: { p_app_id: string; p_delay_seconds?: number; p_org_id?: string }
+        Returns: boolean
       }
       queue_cron_stat_org_for_org: {
         Args: { customer_id: string; org_id: string }
@@ -5258,6 +5684,14 @@ export type Database = {
       queue_org_invitation_email: {
         Args: { p_invite_id: number; p_inviter_id?: string; p_kind: string }
         Returns: string
+      }
+      rbac_caller_can_check_user_permission: {
+        Args: {
+          p_org_id: string
+          p_skip_password_policy?: boolean
+          p_target_user_id: string
+        }
+        Returns: boolean
       }
       rbac_check_permission: {
         Args: {
@@ -5786,11 +6220,6 @@ export type Database = {
       cron_task_type: "function" | "queue" | "function_queue"
       disable_update: "major" | "minor" | "patch" | "version_number" | "none"
       platform_os: "ios" | "android" | "electron"
-      r2_object_state:
-        | "to_be_uploaded"
-        | "present"
-        | "to_be_deleted"
-        | "deleted"
       stats_action:
         | "delete"
         | "reset"
@@ -6074,12 +6503,6 @@ export const Constants = {
       cron_task_type: ["function", "queue", "function_queue"],
       disable_update: ["major", "minor", "patch", "version_number", "none"],
       platform_os: ["ios", "android", "electron"],
-      r2_object_state: [
-        "to_be_uploaded",
-        "present",
-        "to_be_deleted",
-        "deleted",
-      ],
       stats_action: [
         "delete",
         "reset",

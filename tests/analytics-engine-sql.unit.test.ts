@@ -11,29 +11,19 @@ describe('analytics engine sql lint rules', () => {
 
   it.concurrent('flags CASE WHEN inside argMax', () => {
     expect(lintAnalyticsEngineSql(
-      "SELECT argMax(blob9, CASE WHEN blob9 != '' THEN timestamp ELSE toDateTime('1970-01-01 00:00:00') END) FROM device_info",
+      'SELECT argMax(blob9, CASE WHEN blob9 != \'\' THEN timestamp ELSE toDateTime(\'1970-01-01 00:00:00\') END) FROM device_info',
     )).toEqual([
       expect.objectContaining({ rule: 'no-case-in-argmax' }),
     ])
   })
 
-  it.concurrent('flags JOIN clauses', () => {
-    const issues = lintAnalyticsEngineSql(
-      'SELECT 1 FROM bandwidth_usage LEFT JOIN device_usage ON bandwidth_usage.blob1 = device_usage.blob1',
-    )
-    expect(issues.map(issue => issue.rule)).toContain('no-join')
-  })
-
-  it.concurrent('flags multiIf', () => {
-    expect(lintAnalyticsEngineSql("SELECT multiIf(blob4 != '', blob4, 1, 'ios') FROM device_usage").map(issue => issue.rule)).toContain('no-multiif')
-  })
-
-  it.concurrent('flags unsupported toString calls', () => {
-    expect(lintAnalyticsEngineSql('SELECT toString(toDate(timestamp)) AS date FROM app_log').map(issue => issue.rule)).toContain('no-to-string')
-  })
-
-  it.concurrent('flags unsupported concat calls', () => {
-    expect(lintAnalyticsEngineSql("SELECT concat(index1, ':', blob1) FROM device_usage").map(issue => issue.rule)).toContain('no-concat')
+  it.concurrent.each([
+    ['no-join', 'SELECT 1 FROM bandwidth_usage LEFT JOIN device_usage ON bandwidth_usage.blob1 = device_usage.blob1'],
+    ['no-multiif', 'SELECT multiIf(blob4 != \'\', blob4, 1, \'ios\') FROM device_usage'],
+    ['no-to-string', 'SELECT toString(toDate(timestamp)) AS date FROM app_log'],
+    ['no-concat', 'SELECT concat(index1, \':\', blob1) FROM device_usage'],
+  ])('flags %s', (rule, sql) => {
+    expect(lintAnalyticsEngineSql(sql).map(issue => issue.rule)).toContain(rule)
   })
 
   it.concurrent('flags ORDER BY on a source column that is only projected under an alias', () => {
@@ -67,31 +57,31 @@ describe('analytics engine sql lint rules', () => {
 
   it.concurrent('flags untyped NULL IF() branches', () => {
     expect(lintAnalyticsEngineSql(
-      "SELECT min(if(blob2 = 'download_complete' AND double1 > 0, double1, NULL)) FROM app_log",
+      'SELECT min(if(blob2 = \'download_complete\' AND double1 > 0, double1, NULL)) FROM app_log',
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT min(if(blob2 IN ('download_complete', 'download_zip_complete') AND double1 > 0, double1, NULL)) FROM app_log",
+      'SELECT min(if(blob2 IN (\'download_complete\', \'download_zip_complete\') AND double1 > 0, double1, NULL)) FROM app_log',
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT min(if(blob2 = 'download_complete', NULL, double1)) FROM app_log",
+      'SELECT min(if(blob2 = \'download_complete\', NULL, double1)) FROM app_log',
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT min(if(blob2 = 'download_complete', double1, null)) FROM app_log",
+      'SELECT min(if(blob2 = \'download_complete\', double1, null)) FROM app_log',
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT coalesce(double1, NULL) FROM app_log",
+      'SELECT coalesce(double1, NULL) FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT sum(if(blob2 = 'set', 1, 0)) AS succeeded FROM app_log WHERE blob2 IN ('set', NULL)",
+      'SELECT sum(if(blob2 = \'set\', 1, 0)) AS succeeded FROM app_log WHERE blob2 IN (\'set\', NULL)',
     ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT if(blob2 IN ('set', NULL), 1, 0) FROM app_log",
+      'SELECT if(blob2 IN (\'set\', NULL), 1, 0) FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT if(1, 'x)', NULL) FROM app_log",
+      'SELECT if(1, \'x)\', NULL) FROM app_log',
     ).map(issue => issue.rule)).toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
-      "SELECT 'if(1, NULL, 2)' FROM app_log",
+      'SELECT \'if(1, NULL, 2)\' FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-if-untyped-null')
     expect(lintAnalyticsEngineSql(
       'SELECT 1 FROM app_log -- if(1, NULL, 0)',
@@ -130,13 +120,13 @@ describe('analytics engine sql lint rules', () => {
       'SELECT max(if(blob2 = \'download_complete\' AND double1 > 0, double1, 0.0)) FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-conditional-agg-if')
     expect(lintAnalyticsEngineSql(
-      "SELECT 'avgIf(' FROM app_log",
+      'SELECT \'avgIf(\' FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-conditional-agg-if')
     expect(lintAnalyticsEngineSql(
-      "SELECT 'sumIf(' FROM app_log",
+      'SELECT \'sumIf(\' FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-conditional-agg-if')
     expect(lintAnalyticsEngineSql(
-      "SELECT 'countIf(' FROM app_log",
+      'SELECT \'countIf(\' FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-conditional-agg-if')
     expect(lintAnalyticsEngineSql(
       'SELECT 1 FROM app_log -- avgIf(double1, 1)',
@@ -148,10 +138,10 @@ describe('analytics engine sql lint rules', () => {
       'SELECT avgIf(double1, 1) FROM app_log -- countIf(1)',
     ).map(issue => issue.rule)).toContain('no-conditional-agg-if')
     expect(lintAnalyticsEngineSql(
-      "SELECT 'it\\'s avgIf(' FROM app_log",
+      'SELECT \'it\\\'s avgIf(\' FROM app_log',
     ).map(issue => issue.rule)).not.toContain('no-conditional-agg-if')
     expect(lintAnalyticsEngineSql(
-      "SELECT 'foo\\\\', avgIf(double1, 1) FROM app_log",
+      'SELECT \'foo\\\\\', avgIf(double1, 1) FROM app_log',
     ).map(issue => issue.rule)).toContain('no-conditional-agg-if')
   })
 })

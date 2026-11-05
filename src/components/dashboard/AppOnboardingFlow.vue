@@ -2,10 +2,11 @@
 import type { BuilderPlatform } from '~/services/builderOnboardingChecklist'
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
 import type { OrganizationApp } from '~/stores/organization'
-import type { Database, Json } from '~/types/supabase.types'
+import type { Database, Json } from '~/types/database.types'
 import type { ChecklistPath } from '~/utils/dualOnboardingChecklists'
 import type { OnboardingABTestAssignment } from '~/utils/onboardingABTests'
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
+import type { OnboardingPlanStop } from '~/utils/onboardingPlanStops'
 import type {
   OnboardingAnalyticsStep,
   OnboardingCopyEvent,
@@ -26,7 +27,6 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
-import IconArrowLeft from '~icons/lucide/arrow-left'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
 import IconChevronDown from '~icons/lucide/chevron-down'
@@ -50,20 +50,19 @@ import {
 import { isBuilderTodoListSelected } from '~/services/builderOnboardingChecklist'
 import { getCapgoApiErrorCode, invokeCapgoApi } from '~/services/capgoApi'
 import { buildCliAiSetupPrompt } from '~/services/cliAiPrompt'
+import { defaultApiHost, getLocalConfig, isLocal, useConsole } from '~/services/console'
 import { APP_ONBOARDING_READY_EVENT, sendOnboardingEvent } from '~/services/onboardingTracking'
 import { uploadOrgLogoFile } from '~/services/photos'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { getLocalConfig, isLocal, useSupabase } from '~/services/supabase'
 import {
-  MAX_USER_ONBOARDING_WRITE_ATTEMPTS,
   mergeUserOnboardingProgress,
-  replaceUserOnboardingIfUnchanged,
+  replaceUserOnboardingWithRetry,
   serializeUserOnboardingWrite,
 } from '~/services/userOnboardingWriteQueue'
 import { useDashboardAppsStore } from '~/stores/dashboardApps'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
-import { useOrganizationStore } from '~/stores/organization'
+import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { isValidAppId } from '~/utils/appId'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { useBeforeUnloadWarning } from '~/utils/beforeUnloadWarning'
@@ -87,10 +86,13 @@ import {
 } from '~/utils/onboardingAppDraft'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { withOnboardingChannelOrigin } from '~/utils/onboardingChannelAnalytics'
+import { onboardingPlanStops } from '~/utils/onboardingPlanStops'
+import { canEditInitialOnboardingName, consumeProfileOnboardingHandoff, initialProfileOnboardingProgressSteps, initialProfileOnboardingSteps, needsInitialOnboardingName, PROFILE_ONBOARDING_HANDOFF_KEY, readOnboardingCompanyName } from '~/utils/onboardingProfile'
 import {
   createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
   createOnboardingTelemetryIdentity,
+  PROFILE_ONBOARDING_ANALYTICS_VERSION,
   resolveOnboardingAppIconSource,
 } from '~/utils/onboardingProgressAnalytics'
 import { createOnboardingProgressPersistence, shouldInitializeOnboardingProgressTracking } from '~/utils/onboardingProgressPersistence'
@@ -101,6 +103,8 @@ import {
   ONBOARDING_SETUP_HANDOFF_STATE_KEY,
   readOnboardingSetupHandoff,
 } from '~/utils/onboardingRedirect'
+import { openOnboardingResumeDialog } from '~/utils/onboardingResumeDialog'
+import { checklistTaskListMode } from '~/utils/onboardingSetupMode'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
@@ -114,9 +118,9 @@ import {
 import AppOnboardingBuilderChecklist from './AppOnboardingBuilderChecklist.vue'
 import AppOnboardingCliSteps from './AppOnboardingCliSteps.vue'
 import AppOnboardingDualChecklist from './AppOnboardingDualChecklist.vue'
+import AppOnboardingHeader from './AppOnboardingHeader.vue'
 import AppOnboardingIconInput from './AppOnboardingIconInput.vue'
 import AppOnboardingSetupChecklist from './AppOnboardingSetupChecklist.vue'
-import AppOnboardingWelcome from './AppOnboardingWelcome.vue'
 import BillingRegionChoice from './BillingRegionChoice.vue'
 import ChannelConsoleAssignOnboarding from './ChannelConsoleAssignOnboarding.vue'
 import ChannelCreateOnboarding from './ChannelCreateOnboarding.vue'
@@ -137,6 +141,8 @@ const props = defineProps<{
   // View persisted setup without automatically leaving a finished checklist
   // or restarting the user's onboarding run.
   showChecklist?: boolean
+  hideFooter?: boolean
+  initialChecklistPath?: ChecklistPath
   // An existing user creating another organization runs the same first-run
   // flow from the start, ignoring any saved onboarding progress.
   newOrganization?: boolean
@@ -144,7 +150,7 @@ const props = defineProps<{
 
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
@@ -170,7 +176,6 @@ const newChannelTreatment = computed(() => hasNewChannelTreatment(onboardingForA
 const APPLE_LOOKUP_TIMEOUT_MS = 5_000
 const STORE_ICON_FETCH_TIMEOUT_MS = 10_000
 const ONBOARDING_AB_TEST_WAIT_TIMEOUT_MS = 3_000
-const WELCOME_CANVAS_MEDIA_QUERY = '(min-width: 640px) and (min-height: 640px)'
 const WEBNATIVE_APP_URL = 'https://webnativeapp.com/?ref=capgo'
 const removeBeforeUnloadWarning = useBeforeUnloadWarning(Boolean(props.preOrg && !props.setupAppId))
 
@@ -180,7 +185,7 @@ type AppRow = Omit<Database['public']['Tables']['apps']['Row'], 'onboarding'> & 
 type StandardFlowStep = 'details' | 'channel' | 'setup'
 type PreOrgFlowStep = 'intent' | 'publish_app_question' | 'details' | 'organization' | 'channel' | 'setup'
 type OnboardingFlowStep = StandardFlowStep | PreOrgFlowStep
-type OnboardingProgressStepId = OnboardingFlowStep
+type OnboardingProgressStepId = OnboardingFlowStep | 'name'
 type AppDetailsStep = 'name' | 'icon'
 type AppDetailsAnalyticsStep = 'app_name' | 'app_icon'
 type SetupStage = UserOnboardingSetupStage
@@ -190,12 +195,7 @@ const APP_DETAILS_ANALYTICS_STEPS: Record<AppDetailsStep, AppDetailsAnalyticsSte
   icon: 'app_icon',
 }
 
-interface UserCountStop {
-  value: number
-  label: string
-  planName: string
-  startingOut?: boolean
-}
+type UserCountStop = OnboardingPlanStop
 
 interface OrganizationWebsitePreview {
   hostname: string
@@ -210,9 +210,6 @@ interface OnboardingABTestsResponse {
 
 const isLoading = ref(true)
 const isHydratingOnboarding = ref(true)
-const welcomeCanvasEligible = ref(false)
-const welcomePending = ref(false)
-const showPreOrgWelcome = computed(() => props.preOrg && welcomeCanvasEligible.value && welcomePending.value)
 const isSubmitting = ref(false)
 const isImportingStore = ref(false)
 const isImportingStoreIcon = ref(false)
@@ -249,17 +246,26 @@ const selectedDevelopmentEnvironment = ref<OnboardingDevelopmentEnvironment | nu
 const skippedPublishAppQuestion = ref(false)
 const billingAccount = ref<'ee' | 'us' | undefined>()
 const selectedIntent = ref<OnboardingIntent | null>(null)
-const onboardingAnalyticsVersion = () => resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
+const initialProfileOnboarding = computed(() => props.preOrg && !props.newOrganization && !props.setupAppId)
+const canReturnToProfile = computed(() => initialProfileOnboarding.value && canEditInitialOnboardingName(main.user, organizationStore.hasOrganizations))
+const intentStepLabel = computed(() => t('unified-onboarding-step-intent'))
+function onboardingAnalyticsVersion() {
+  return props.preOrg && !props.newOrganization
+    ? PROFILE_ONBOARDING_ANALYTICS_VERSION
+    : resolveOnboardingAnalyticsVersion(onboardingForABTests.value, selectedIntent.value)
+}
 const setupHandoff = props.setupAppId ? consumeSetupHandoff(props.setupAppId) : null
+const profileHandoff = props.preOrg && !props.newOrganization ? consumeProfileOnboardingHandoff(window.history) : null
 const onboardingTelemetry = createOnboardingTelemetryIdentity({
-  continueFrom: setupHandoff,
+  continueFrom: setupHandoff ?? profileHandoff,
   flow: props.preOrg ? 'pre_org' : 'existing_org',
   onboardingVersion: onboardingAnalyticsVersion,
-  supaHost: config.supaHost,
+  apiHost: config.apiHost,
 })
 const webNativeRecommendationDismissed = ref(false)
-const orgNameInput = ref('')
-const hasEditedOrgName = ref(false)
+const profileCompanyName = computed(() => initialProfileOnboarding.value ? readOnboardingCompanyName(main.user?.onboarding) : '')
+const orgNameInput = ref(profileCompanyName.value)
+const hasEditedOrgName = ref(!!profileCompanyName.value)
 const estimatedUsersIndex = ref<number | null>(null)
 const isStoreImportOpen = ref(false)
 const isAppIdAdvancedOpen = ref(false)
@@ -292,27 +298,18 @@ const publishAppQuestionPrimaryActionLabel = computed(() => hasSelectedDevelopme
   ? t('unified-onboarding-continue-intent')
   : t('organization-onboarding-development-environment-skip'))
 
-const fallbackUserCountStops: UserCountStop[] = [
-  { value: 2000, label: '2K', planName: 'Solo' },
-  { value: 10000, label: '10K', planName: 'Maker' },
-  { value: 100000, label: '100K', planName: 'Team' },
-  { value: 1000000, label: '1M+', planName: 'Enterprise' },
-]
-const startingOutUserCountStop: UserCountStop = {
-  value: 0,
-  label: '0',
-  planName: 'Solo',
-  startingOut: true,
-}
-const planNameOrder = ['Solo', 'Maker', 'Team', 'Enterprise'] as const
-
-const localCommand = isLocal(config.supaHost) ? ` --supa-host ${config.supaHost} --supa-anon ${config.supaKey}` : ''
+const localCommand = isLocal(config.apiHost) ? ` --api-host ${defaultApiHost}` : ''
 // TODO(2027-03-19): Remove v3 compatibility after all existing OTA checklists have migrated.
 const usesOtaTodoList = computed(() => !!createdApp.value && hasSupportedOtaTodoList(parseAppOnboarding(createdApp.value.onboarding)))
 const usesDualTodoList = computed(() => !!createdApp.value && hasDualOnboardingChecklists(createdApp.value.onboarding))
 const activeChecklistPath = ref<ChecklistPath | null>(null)
 const usesBuilderTodoList = computed(() => usesDualTodoList.value ? activeChecklistPath.value === 'builder' : !!createdApp.value && isBuilderTodoListSelected(createdApp.value.onboarding))
 const usesBuilderSetupCommand = computed(() => usesBuilderTodoList.value || (!usesOtaTodoList.value && (selectedIntent.value === 'builder' || selectedIntent.value === 'publish')))
+// New AI signups watch the agent tick tasks off; new manual signups see one next step.
+// Scoped to the signup organization: a later organization keeps the default checklist.
+const checklistTaskList = computed(() => organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org)).length === 1
+  ? checklistTaskListMode(main.user?.onboarding)
+  : 'default')
 const markedOnboardingFeatures = new Set<string>()
 let onboardingABTestsRequest: Promise<void> | null = null
 
@@ -417,7 +414,7 @@ async function markOnboardingFeatureStarted(featureKey: 'cli_install' | 'ota' | 
 
   for (let attempt = 0; attempt < 2; attempt++) {
     markedOnboardingFeatures.add(markKey)
-    const { data, error } = await supabase.rpc('mark_onboarding_feature_started', {
+    const { data, error } = await capgo.rpc('mark_onboarding_feature_started', {
       p_app_id: appId,
       p_feature_key: featureKey,
     })
@@ -447,6 +444,13 @@ watch([flowStep, createdApp, setupStage, usesBuilderSetupCommand, activeChecklis
 })
 
 const cliSubcommand = computed(() => usesBuilderSetupCommand.value ? 'build init' : 'i')
+
+watch(() => props.initialChecklistPath, (path) => {
+  if (path && createdApp.value) {
+    flowStep.value = 'setup'
+    setupStage.value = 'cli'
+  }
+})
 const builderCliCommand = computed(() => apiKey.value ? `npx @capgo/cli@latest build init -a ${apiKey.value}` : '')
 const cliCommand = computed(() => {
   const key = apiKey.value
@@ -464,8 +468,8 @@ const cliCommandArgs = computed(() => {
   if (usesBuilderSetupCommand.value && apiKey.value)
     args.push('-a', apiKey.value)
 
-  if (isLocal(config.supaHost))
-    args.push('--supa-host', config.supaHost, '--supa-anon', config.supaKey)
+  if (isLocal(config.apiHost))
+    args.push('--api-host', defaultApiHost)
 
   return args
 })
@@ -556,7 +560,7 @@ const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: strin
     : []
   if (props.preOrg) {
     return [
-      { id: 'intent', label: t('unified-onboarding-step-intent') },
+      { id: 'intent', label: intentStepLabel.value },
       { id: 'details', label: t('app-onboarding-step-details') },
       { id: 'organization', label: t('unified-onboarding-step-organization') },
       ...channelStep,
@@ -570,24 +574,12 @@ const appOnboardingSteps = computed<Array<{ id: OnboardingFlowStep, label: strin
   ]
 })
 const stepperStepId = computed(() => flowStep.value === 'publish_app_question' ? 'intent' : flowStep.value)
-const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, label: string }>>(() => appOnboardingSteps.value)
+const onboardingProgressSteps = computed<Array<{ id: OnboardingProgressStepId, label: string }>>(() => initialProfileOnboarding.value
+  ? initialProfileOnboardingProgressSteps(onboardingForABTests.value).map(step => ({ id: step.id, label: t(step.labelKey) }))
+  : appOnboardingSteps.value)
 const currentProgressStepId = computed<OnboardingProgressStepId>(() => stepperStepId.value)
-const currentStepIndex = computed(() => Math.max(0, onboardingProgressSteps.value.findIndex(entry => entry.id === currentProgressStepId.value)))
-const stepProgress = computed(() => `${((currentStepIndex.value + 1) / onboardingProgressSteps.value.length) * 100}%`)
-const userCountStops = computed<UserCountStop[]>(() => {
-  const planStops = planNameOrder.map(planName => main.plans.find(plan => plan.name === planName)).flatMap((plan) => {
-    if (!plan?.mau)
-      return []
-    const mau = Number(plan.mau)
-    if (!Number.isFinite(mau) || mau <= 0)
-      return []
-    return [{ value: mau, label: formatUserCount(mau, plan.name === 'Enterprise'), planName: plan.name }]
-  })
-  return [
-    startingOutUserCountStop,
-    ...(planStops.length === planNameOrder.length ? planStops : fallbackUserCountStops),
-  ]
-})
+// Shared with AI onboarding so both paths offer the same plan tiers.
+const userCountStops = computed<UserCountStop[]>(() => onboardingPlanStops(main.plans))
 const selectedUserCountStop = computed<UserCountStop | null>(() => estimatedUsersIndex.value === null ? null : userCountStops.value[Math.min(estimatedUsersIndex.value, userCountStops.value.length - 1)] ?? null)
 const showWebNativeRecommendation = computed(() => shouldShowWebNativeRecommendation({
   developmentEnvironment: selectedDevelopmentEnvironment.value,
@@ -704,26 +696,26 @@ function ensurePublishAppQuestionStepTracked() {
 }
 
 function initializeProgressTracking(resumed: boolean) {
-  const initialStep: OnboardingAnalyticsStep = showPreOrgWelcome.value ? 'welcome' : analyticsStepFor(flowStep.value)
+  const initialStep: OnboardingAnalyticsStep = analyticsStepFor(flowStep.value)
   trackedAnalyticsSteps = appOnboardingSteps.value.flatMap<OnboardingAnalyticsStep>((step) => {
     if (step.id === 'details')
       return Object.values(APP_DETAILS_ANALYTICS_STEPS)
     return [step.id]
   })
-  if (initialStep === 'welcome')
-    trackedAnalyticsSteps.unshift('welcome')
   ensurePublishAppQuestionStepTracked()
+  if (props.preOrg && !props.newOrganization)
+    trackedAnalyticsSteps = initialProfileOnboardingSteps(onboardingForABTests.value, false)
 
   progressTracker = createOnboardingProgressTracker({
     flow: props.preOrg ? 'pre_org' : 'existing_org',
     onboardingVersion: onboardingAnalyticsVersion,
     resumed: resumed && !setupHandoff,
     steps: trackedAnalyticsSteps,
-    supaHost: config.supaHost,
+    apiHost: config.apiHost,
     onboardingAttemptId: onboardingTelemetry.attemptId,
     onboardingRunId: onboardingTelemetry.runId,
   })
-  const handoffPreviousStep = setupHandoff?.previousStep
+  const handoffPreviousStep = setupHandoff?.previousStep ?? (profileHandoff ? 'name' : undefined)
   if (initialStep === 'setup' || initialStep === 'install')
     void viewFinalStepWhenRendered(initialStep, handoffPreviousStep)
   else
@@ -861,71 +853,37 @@ async function writeOnboardingProgress(
     if (main.user?.id !== userId)
       return 'skipped'
 
-    const progress = snapshotOnboardingProgress(status)
-    let persistableProgress = progress
+    let persistableProgress = snapshotOnboardingProgress(status)
+    if (options.clearProfileDraft) {
+      // A restart must stay pristine when the required name step remounts the wizard.
+      delete persistableProgress.existing_app
+      delete persistableProgress.existing_app_setup
+    }
     let usedConstraintFallback = false
-    let currentOnboarding = main.user.onboarding
-    let latestProfile = main.user
-
-    for (let attempt = 0; attempt < MAX_USER_ONBOARDING_WRITE_ATTEMPTS; attempt++) {
-      if (
-        onboardingUserId.value !== userId
-        || main.authGeneration !== authGeneration
-        || (onboardingFlowDisposed && !options.allowDisposed)
-      ) {
-        return 'skipped'
-      }
-
-      const current = parseUserOnboardingProgress(currentOnboarding)
-      if (current?.status === 'completed' && status !== 'completed')
-        return 'skipped'
-
-      const onboarding = mergeUserOnboardingProgress(
-        persistableProgress as unknown as Json,
-        currentOnboarding,
-        { clearIntent: options.clearIntent },
-      )
-      const { data, error } = await replaceUserOnboardingIfUnchanged(
-        userId,
-        currentOnboarding,
-        onboarding,
-      )
-
-      if (error) {
+    const result = await replaceUserOnboardingWithRetry(
+      userId,
+      main.user.onboarding,
+      current => mergeUserOnboardingProgress({ ...persistableProgress }, current, options),
+      current => onboardingUserId.value === userId
+        && main.authGeneration === authGeneration
+        && (!onboardingFlowDisposed || !!options.allowDisposed)
+        && !(parseUserOnboardingProgress(current)?.status === 'completed' && status !== 'completed'),
+      (error) => {
         if (!usedConstraintFallback && isUsersOnboardingCheckConstraintError(error) && persistableProgress.step === 'publish_app_question') {
           usedConstraintFallback = true
           persistableProgress = fallbackUsersOnboardingProgressForLegacyConstraint(persistableProgress)
-          continue
+          return true
         }
-        console.error('Failed to persist onboarding progress', error)
-        return 'retryable_failure'
-      }
-
-      if (data) {
-        if (main.user?.id === userId && main.authGeneration === authGeneration)
-          main.user = { ...data, image_url: main.user.image_url }
-        return 'persisted'
-      }
-
-      const { data: latest, error: latestError } = await supabase
-        .from('users')
-        .select()
-        .eq('id', userId)
-        .maybeSingle()
-      if (latestError) {
-        console.error('Failed to refresh onboarding progress snapshot', latestError)
-        return 'retryable_failure'
-      }
-      if (!latest)
-        return status === 'completed' ? 'skipped' : 'conflict'
-
-      latestProfile = latest
-      currentOnboarding = latest.onboarding
+        return false
+      },
+    )
+    if (result.status === 'persisted' && main.user?.id === userId && main.authGeneration === authGeneration)
+      main.user = { ...main.user, onboarding: result.onboarding }
+    if (result.status === 'error') {
+      console.error('Failed to persist onboarding progress', result.error)
+      return 'retryable_failure'
     }
-
-    if (main.user?.id === userId && main.authGeneration === authGeneration)
-      main.user = { ...latestProfile, image_url: main.user.image_url }
-    return 'conflict'
+    return result.status
   })
 }
 
@@ -958,23 +916,17 @@ async function resetOnboardingForm() {
   localIconPreview.value = ''
   iconStoreUrl.value = ''
   resetStoreImportState()
-  const resetPersistResult = await persistOnboardingProgress('in_progress', { clearIntent: true })
+  let resetPersistResult = await persistOnboardingProgress('in_progress', { clearIntent: true, clearProfileDraft: true })
   if (resetPersistResult === 'retryable_failure' && !onboardingFlowDisposed)
-    await persistOnboardingProgress('in_progress', { clearIntent: true })
-}
-
-function showWelcomeOnDesktop() {
-  welcomePending.value = Boolean(props.preOrg && welcomeCanvasEligible.value)
-}
-
-async function continueFromWelcome() {
-  await waitForOnboardingABTests()
-  ensurePublishAppQuestionStepTracked()
-  const nextStep = flowStep.value
-  const nextAnalyticsStep = analyticsStepFor(nextStep)
-  progressTracker?.completeStep('welcome', { nextStep: nextAnalyticsStep })
-  progressTracker?.viewStep(nextAnalyticsStep, 'welcome')
-  welcomePending.value = false
+    resetPersistResult = await persistOnboardingProgress('in_progress', { clearIntent: true, clearProfileDraft: true })
+  if (resetPersistResult !== 'persisted') {
+    orgNameInput.value = profileCompanyName.value
+    hasEditedOrgName.value = !!profileCompanyName.value
+    if (!onboardingFlowDisposed)
+      toast.error(t('account-error'))
+    return
+  }
+  await redirectToRequiredInitialName()
 }
 
 function applyOnboardingProgress(progress: ReturnType<typeof parseUserOnboardingProgress>) {
@@ -1078,14 +1030,13 @@ async function maybeResumeSavedOnboarding() {
   const flow = props.preOrg ? 'pre_org' : 'existing_org'
   const saved = parseUserOnboardingProgress(main.user?.onboarding)
 
-  if (!shouldPromptOnboardingResume(saved, flow) || !saved) {
+  if (!shouldPromptOnboardingResume(saved, flow) || !saved || profileHandoff) {
     if (saved?.status === 'in_progress' && saved.flow === flow) {
       applyOnboardingProgress(saved)
     }
     else {
       applyDefaultPreOrgDetails()
     }
-    showWelcomeOnDesktop()
     return false
   }
 
@@ -1098,7 +1049,6 @@ async function maybeResumeSavedOnboarding() {
     await resetOnboardingForm()
     if (props.preOrg)
       applyDefaultPreOrgDetails()
-    showWelcomeOnDesktop()
     return false
   }
 
@@ -1108,17 +1058,9 @@ async function maybeResumeSavedOnboarding() {
     savedStep: resumableStep,
     steps: resumeCandidateSteps(resumableStep),
   })
-  dialogStore.openDialog({
-    title: t('onboarding-resume-title'),
-    description: t('onboarding-resume-description'),
-    preventAccidentalClose: true,
-    buttons: [
-      { text: t('onboarding-resume-restart'), id: 'onboarding-resume-restart', role: 'secondary' },
-      { text: t('onboarding-resume-continue'), id: 'onboarding-resume-continue', role: 'primary' },
-    ],
-  })
+  const dismissal = openOnboardingResumeDialog(dialogStore, t)
   onboardingTelemetry.recordResumeDialogViewed()
-  await dialogStore.onDialogDismiss()
+  await dismissal
 
   if (onboardingFlowDisposed)
     return null
@@ -1128,7 +1070,6 @@ async function maybeResumeSavedOnboarding() {
     await resetOnboardingForm()
     existingApp.value = true
     existingAppSetup.value = 'manual'
-    showWelcomeOnDesktop()
     return false
   }
 
@@ -1160,13 +1101,6 @@ function whiteCardPrimaryButtonClass() {
   return onboardingPrimaryButtonClass
 }
 
-function formatUserCount(value: number, plus = false) {
-  if (value >= 1_000_000)
-    return plus ? '1M+' : '1M'
-  if (value >= 1000)
-    return `${value / 1000}K`
-  return String(value)
-}
 function getUserCountStopTitle(stop: UserCountStop) {
   if (stop.startingOut)
     return t('organization-onboarding-starting-out')
@@ -1270,16 +1204,16 @@ async function loadResumeIconPreview(rawIconUrl: string | null | undefined, appI
 }
 
 async function ensureApiKey(userId: string, orgId?: string | null, appId?: string | null): Promise<string | null> {
-  const existingKey = await findUsablePlainApiKey(supabase, userId, orgId, appId)
+  const existingKey = await findUsablePlainApiKey(capgo, userId, orgId, appId)
   if (existingKey)
     return existingKey
 
-  const { data: claimsData } = await supabase.auth.getClaims()
+  const { data: claimsData } = await capgo.auth.getClaims()
   const claimsUserId = claimsData?.claims?.sub
   if (!claimsUserId)
     return null
 
-  const { data, error: createError } = await createDefaultApiKey(supabase, 'api-key', {
+  const { data, error: createError } = await createDefaultApiKey(capgo, 'api-key', {
     orgId,
     appId,
   })
@@ -1288,7 +1222,7 @@ async function ensureApiKey(userId: string, orgId?: string | null, appId?: strin
 
   return typeof data?.key === 'string'
     ? data.key
-    : await findUsablePlainApiKey(supabase, claimsUserId, orgId, appId)
+    : await findUsablePlainApiKey(capgo, claimsUserId, orgId, appId)
 }
 
 function loadApiKey() {
@@ -1324,7 +1258,7 @@ async function loadResumeApp(appId = resumeAppId.value) {
   if (!currentOrg.value?.gid)
     return false
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('apps')
     .select()
     .eq('owner_org', currentOrg.value.gid)
@@ -1346,10 +1280,11 @@ async function loadResumeApp(appId = resumeAppId.value) {
   const iconLoadRun = ++resumeIconLoadRun
   localIconPreview.value = getImmediateImageUrl(data.icon_url) || ''
   void loadResumeIconPreview(data.icon_url, data.app_id, iconLoadRun)
-  const resumeFinalStep = props.showChecklist || !newChannelTreatment.value
+  const hasChecklistTarget = props.showChecklist || !!props.initialChecklistPath
+  const resumeFinalStep = hasChecklistTarget || !newChannelTreatment.value
     || Boolean(savedProgress && savedProgress.app_id === data.app_id && savedProgress.final_step && savedProgress.setup_stage === 'cli')
   flowStep.value = resumeFinalStep ? 'setup' : 'channel'
-  if (props.showChecklist)
+  if (hasChecklistTarget)
     setupStage.value = 'cli'
   if (!savedProgress?.intent)
     hydrateIntentFromCurrentOrg()
@@ -1592,7 +1527,7 @@ async function importOrganizationWebsite() {
     }
 
     websitePreview.value = data as OrganizationWebsitePreview
-    if (websitePreview.value.name) {
+    if (websitePreview.value.name && !profileCompanyName.value) {
       orgNameInput.value = websitePreview.value.name
       hasEditedOrgName.value = true
     }
@@ -1849,7 +1784,7 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
   }
 
   const iconPath = `org/${currentOrg.value.gid}/${appId}/icon`
-  const { error: uploadError } = await supabase.storage
+  const { error: uploadError } = await capgo.storage
     .from('images')
     .upload(iconPath, fileToUpload, {
       upsert: true,
@@ -1862,7 +1797,7 @@ async function uploadIcon(appId: string, iconSourceUrl?: string) {
     return
   }
 
-  const { error: appUpdateError } = await supabase
+  const { error: appUpdateError } = await capgo
     .from('apps')
     .update({ icon_url: iconPath })
     .eq('app_id', appId)
@@ -1946,21 +1881,56 @@ function continueFromIntent() {
   })
 }
 
+async function backToProfile() {
+  if (!canReturnToProfile.value || flowStep.value !== 'intent' || isSubmitting.value)
+    return
+  isSubmitting.value = true
+  try {
+    if (await persistOnboardingProgress() !== 'persisted') {
+      toast.error(t('account-error'))
+      return
+    }
+    const failure = await router.push({
+      path: '/onboarding/name',
+      query: { edit: '1', to: '/onboarding/app' },
+      state: { [PROFILE_ONBOARDING_HANDOFF_KEY]: { attemptId: onboardingTelemetry.attemptId, runId: onboardingTelemetry.runId } },
+    })
+    if (failure)
+      throw failure
+  }
+  catch (error) {
+    console.warn('Cannot return to onboarding names', error)
+    toast.error(t('account-error'))
+  }
+  finally {
+    isSubmitting.value = false
+  }
+}
+
 async function continueFromGoal() {
+  if (isSubmitting.value)
+    return
+
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
   }
-  await persistOnboardingProgress()
-  await waitForOnboardingABTests({ force: true })
-  if (webNativeDevelopmentEnvironmentTreatment.value) {
-    ensurePublishAppQuestionStepTracked()
-    completeAndViewStep('publish_app_question', {
-      intent: selectedIntent.value,
-    })
-    return
+  isSubmitting.value = true
+  try {
+    await persistOnboardingProgress()
+    await waitForOnboardingABTests({ force: true })
+    if (webNativeDevelopmentEnvironmentTreatment.value) {
+      ensurePublishAppQuestionStepTracked()
+      completeAndViewStep('publish_app_question', {
+        intent: selectedIntent.value,
+      })
+      return
+    }
+    continueFromIntent()
   }
-  continueFromIntent()
+  finally {
+    isSubmitting.value = false
+  }
 }
 
 function continueFromDevelopmentEnvironment() {
@@ -2051,6 +2021,12 @@ function continuePreOrgDetails() {
 }
 
 async function createOrganizationAndApp() {
+  if (await redirectToRequiredInitialName())
+    return
+
+  if (isSubmitting.value)
+    return
+
   if (!selectedIntent.value) {
     toast.error(t('organization-onboarding-intent-required'))
     return
@@ -2271,7 +2247,7 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
       : { iosStoreUrl: null, androidStoreUrl: null }
 
     let appId = generatedAppId.value
-    const createResult = await createOnboardingAppWithFallbackIds(supabase, {
+    const createResult = await createOnboardingAppWithFallbackIds(capgo, {
       ownerOrgId: currentOrg.value.gid,
       baseAppId: appId,
       appName: appName.value.trim(),
@@ -2337,7 +2313,7 @@ async function createAppRecord(options?: { nextStep?: 'organization' }): Promise
     const restoredLocalIconSource = localIconPreview.value.startsWith('data:image/') ? localIconPreview.value : ''
     const importedIconSource = canUseStoreImportPreview.value ? storeIconPreview.value : ''
     await uploadIcon(appId, restoredLocalIconSource || importedIconSource)
-    const { data: refreshed } = await supabase
+    const { data: refreshed } = await capgo
       .from('apps')
       .select()
       .eq('app_id', appId)
@@ -2542,7 +2518,7 @@ async function openDashboard() {
     })
   }
   const app = createdApp.value
-  const { data } = await supabase
+  const { data } = await capgo
     .from('apps')
     .select('onboarding')
     .eq('app_id', app.app_id)
@@ -2564,8 +2540,8 @@ async function skipOnboardingSplash() {
   isHidingSplash.value = true
   try {
     const appId = createdApp.value.app_id
-    await supabase.rpc('verify_getting_started', { p_app_id: appId })
-    const { data, error } = await supabase.rpc('dismiss_getting_started', { p_app_id: appId })
+    await capgo.rpc('verify_getting_started', { p_app_id: appId })
+    const { data, error } = await capgo.rpc('dismiss_getting_started', { p_app_id: appId })
     if (error)
       throw error
     if (data != null)
@@ -2589,7 +2565,7 @@ async function leaveSplashIfAlreadySetup() {
   const app = createdApp.value
   if (!app || props.showChecklist)
     return false
-  const { data } = await supabase.rpc('verify_getting_started', { p_app_id: app.app_id })
+  const { data } = await capgo.rpc('verify_getting_started', { p_app_id: app.app_id })
   if (data != null)
     organizationStore.updateAppOnboarding(app.app_id, data)
   const latestOnboarding = data ?? app.onboarding
@@ -2619,6 +2595,43 @@ async function leaveUnavailableSetupApp() {
     await router.replace(`/app/${encodeURIComponent(props.setupAppId)}`)
 }
 
+let nameRedirectPending = false
+const nameRedirectFailed = ref(false)
+async function redirectToRequiredInitialName(retry = false): Promise<boolean> {
+  if (!props.preOrg || props.newOrganization || !needsInitialOnboardingName(main.user, organizationStore.hasOrganizations)) {
+    // This mount yielded progress ownership before navigation failed. Rehydrate
+    // from the server if names were saved elsewhere rather than revive its stale writer.
+    if (retry && nameRedirectFailed.value)
+      window.location.reload()
+    return false
+  }
+  if (nameRedirectFailed.value && !retry) {
+    isLoading.value = false
+    return true
+  }
+  if (!nameRedirectPending) {
+    nameRedirectPending = true
+    isLoading.value = true
+    clearScheduledOnboardingProgress()
+    // The name page owns progress from here; never flush stale wizard state over it.
+    onboardingProgressPersistence.abort()
+    try {
+      const failure = await router.replace({ path: '/onboarding/name', query: { to: '/onboarding/app' } })
+      if (failure)
+        throw failure
+    }
+    catch (error) {
+      console.error('Failed to open required onboarding names', error)
+      nameRedirectFailed.value = true
+      isLoading.value = false
+    }
+    finally {
+      nameRedirectPending = false
+    }
+  }
+  return true
+}
+
 function trackDashboardExplored() {
   if (!progressTracker) {
     pendingDashboardExplored = true
@@ -2631,13 +2644,14 @@ function trackDashboardExplored() {
 onMounted(async () => {
   window.addEventListener(ONBOARDING_DASHBOARD_EXPLORED_EVENT, trackDashboardExplored)
   document.addEventListener('visibilitychange', trackOnboardingVisibilityChange)
-  welcomeCanvasEligible.value = window.matchMedia(WELCOME_CANVAS_MEDIA_QUERY).matches
   let resumedFlow = false
   isLoading.value = true
   isHydratingOnboarding.value = true
   try {
     if (props.preOrg) {
       void refreshOnboardingABTests()
+      if (await redirectToRequiredInitialName())
+        return
       if (resumeAppId.value) {
         await organizationStore.awaitInitialLoad()
         await waitForOnboardingABTests()
@@ -2739,7 +2753,7 @@ onMounted(async () => {
       else
         pendingVisibilityChanges = []
     }
-    if (props.preOrg && !welcomePending.value)
+    if (props.preOrg)
       await waitForOnboardingABTests()
     finishOnboardingMount()
   }
@@ -2812,10 +2826,14 @@ defineExpose({
 </script>
 
 <template>
-  <AppOnboardingWelcome
-    v-if="showPreOrgWelcome && !isLoading"
-    @continue="continueFromWelcome"
-  />
+  <div v-if="nameRedirectFailed" class="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-20">
+    <p role="alert" class="text-sm text-slate-600 dark:text-slate-300">
+      {{ t('account-error') }}
+    </p>
+    <button type="button" class="d-btn d-btn-primary" :disabled="isLoading" data-test="onboarding-name-redirect-retry" @click="redirectToRequiredInitialName(true)">
+      {{ t('retry') }}
+    </button>
+  </div>
 
   <section
     v-else
@@ -2835,72 +2853,22 @@ defineExpose({
       </div>
 
       <div v-else class="onboarding-flow-content space-y-6">
-        <header v-if="!showDualChecklist && !showSetupChecklist && !showBuilderChecklist && (!props.setupAppId || showSetupBackButton)" class="onboarding-flow-header">
-          <div class="flex items-center gap-2">
-            <button
-              v-if="showSetupBackButton"
-              type="button"
-              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:-translate-x-0.5 hover:border-slate-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-300 dark:hover:border-white/30 dark:hover:text-white"
-              data-test="onboarding-setup-back"
-              :aria-label="t('button-back')"
-              :title="t('button-back')"
-              @click="goBackFromSetupStage"
-            >
-              <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
-            </button>
-            <div v-if="!props.setupAppId" class="onboarding-flow-badge inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 shadow-sm dark:border-white/15 dark:bg-slate-900/95 dark:text-slate-200">
-              <IconSparkles class="h-4 w-4" />
-              {{ t('app-onboarding-badge') }}
-            </div>
-          </div>
-          <template v-if="!props.setupAppId">
-            <h1 class="onboarding-flow-title mt-4 text-2xl font-semibold text-slate-950 sm:text-3xl dark:text-white">
-              {{ props.onboarding
-                ? t('app-onboarding-title-first')
-                : t('app-onboarding-title-return') }}
-            </h1>
-
-            <nav class="mt-6" :aria-label="t('app-onboarding-step-details')">
-              <ol class="flex items-center gap-2">
-                <li
-                  v-for="(entry, index) in onboardingProgressSteps"
-                  :key="entry.id"
-                  class="flex min-w-0 flex-1 items-center gap-2"
-                  :aria-current="currentProgressStepId === entry.id ? 'step' : undefined"
-                >
-                  <span
-                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
-                    :class="index < currentStepIndex ? 'bg-emerald-500 text-white' : currentProgressStepId === entry.id ? 'bg-primary-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'"
-                  >
-                    <IconCheck v-if="index < currentStepIndex" class="h-3.5 w-3.5" />
-                    <span v-else>{{ index + 1 }}</span>
-                  </span>
-                  <span
-                    class="hidden truncate text-sm font-medium sm:block"
-                    :class="currentProgressStepId === entry.id ? 'text-slate-950 dark:text-white' : index < currentStepIndex ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400 dark:text-slate-500'"
-                  >
-                    {{ entry.label }}
-                  </span>
-                  <span
-                    v-if="index < onboardingProgressSteps.length - 1"
-                    class="mx-1 hidden h-px flex-1 bg-slate-200 sm:block dark:bg-white/15"
-                    aria-hidden="true"
-                  />
-                </li>
-              </ol>
-              <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800" aria-hidden="true">
-                <div class="h-full rounded-full bg-primary-500 transition-all duration-300" :style="{ width: stepProgress }" />
-              </div>
-            </nav>
-          </template>
-        </header>
+        <AppOnboardingHeader
+          v-if="!showDualChecklist && !showSetupChecklist && !showBuilderChecklist && (!props.setupAppId || showSetupBackButton)"
+          :title="initialProfileOnboarding ? t('onboarding-welcome-title') : props.onboarding ? t('app-onboarding-title-first') : t('app-onboarding-title-return')"
+          :steps="onboardingProgressSteps"
+          :current-step-id="currentProgressStepId"
+          :show-intro="!props.setupAppId"
+          :show-back="showSetupBackButton"
+          @back="goBackFromSetupStage"
+        />
 
         <div v-if="props.preOrg && (flowStep === 'intent' || flowStep === 'publish_app_question')" class="onboarding-intent-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
           <div class="onboarding-intent-card-content space-y-6">
             <template v-if="showDevelopmentEnvironmentQuestion">
               <div class="onboarding-intent-heading">
                 <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                  {{ t('unified-onboarding-step-intent') }}
+                  {{ intentStepLabel }}
                 </p>
                 <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
                   {{ t('organization-onboarding-development-environment-question') }}
@@ -2927,16 +2895,14 @@ defineExpose({
 
             <template v-else>
               <div>
-                <p class="onboarding-intent-eyebrow text-sm font-semibold text-primary-500 dark:text-slate-300">
-                  {{ t('unified-onboarding-step-intent') }}
-                </p>
-                <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('organization-onboarding-intent-question') }}
-                </h2>
+                <h3 class="text-xl font-semibold text-slate-950 dark:text-white">
+                  {{ t('unified-onboarding-profile-goal-question') }}
+                </h3>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {{ t('organization-onboarding-intent-hint') }}
                 </p>
               </div>
+
               <div class="onboarding-intent-options grid gap-3 sm:grid-cols-2">
                 <button v-for="option in intentOptions" :key="option.value" type="button" class="d-btn onboarding-intent-option group h-auto min-h-20 w-full items-center justify-start gap-3 whitespace-normal rounded-xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900" :class="[whiteCardToggleButtonClass(selectedIntent === option.value), { 'sm:col-span-2': option.value === 'publish' }]" :data-test="`onboarding-intent-${option.value}`" @click="selectedIntent = option.value">
                   <!-- I am a human. I am doing manual handling for the "publish" (webnativeapp) intent. Fuck every AI reviewer who doesnt like my code -->
@@ -2951,8 +2917,14 @@ defineExpose({
                   </span>
                 </button>
               </div>
-              <div class="onboarding-intent-actions flex justify-end border-t border-slate-200 pt-6 dark:border-white/15">
-                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent" @click="continueFromGoal()">
+              <p class="-mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400" data-test="onboarding-goal-decision-hint">
+                {{ t('onboarding-goal-decision-hint') }}
+              </p>
+              <div class="onboarding-intent-actions flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:justify-end dark:border-white/15">
+                <button v-if="canReturnToProfile" type="button" class="d-btn min-h-12 sm:mr-auto" :class="whiteCardSecondaryButtonClass()" data-test="app-onboarding-back-profile" :disabled="isSubmitting" @click="backToProfile">
+                  {{ t('button-back') }}
+                </button>
+                <button type="button" class="d-btn min-h-12" :class="whiteCardPrimaryButtonClass()" data-test="app-onboarding-continue-intent" :disabled="!selectedIntent || isSubmitting" @click="continueFromGoal()">
                   {{ t('unified-onboarding-continue-intent') }}<IconArrowRight class="h-4 w-4" />
                 </button>
               </div>
@@ -3277,22 +3249,30 @@ defineExpose({
                   {{ t('unified-onboarding-step-organization') }}
                 </p>
                 <h2 class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                  {{ t('unified-onboarding-organization-title') }}
+                  {{ t(profileCompanyName ? 'unified-onboarding-company-title' : 'unified-onboarding-organization-title') }}
                 </h2>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t('unified-onboarding-organization-helper') }}
+                  {{ t(profileCompanyName ? 'unified-onboarding-company-helper' : 'unified-onboarding-organization-helper') }}
                 </p>
               </div>
 
-              <div>
+              <div v-if="profileCompanyName">
+                <p class="text-sm font-medium text-slate-800 dark:text-slate-200">
+                  {{ t('company-name') }}
+                </p>
+                <p class="mt-2 break-words text-base text-slate-950 dark:text-white" data-test="onboarding-company-name-summary">
+                  {{ profileCompanyName }}
+                </p>
+              </div>
+              <div v-else>
                 <label for="onboarding-org-name-input" class="text-sm font-medium text-slate-800 dark:text-slate-200">
-                  {{ t('organization-name') }}
+                  {{ t('company-name') }}
                 </label>
                 <input
                   id="onboarding-org-name-input"
                   v-model="orgNameInput"
                   type="text"
-                  :placeholder="t('organization-name')"
+                  :placeholder="t('company-name')"
                   data-test="onboarding-org-name"
                   autocomplete="organization"
                   autofocus
@@ -3460,7 +3440,7 @@ defineExpose({
 
               <BillingRegionChoice v-model="billingAccount" />
 
-              <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-400/30 dark:bg-primary-400/10" data-test="onboarding-webnative-recommendation">
+              <div v-if="showWebNativeRecommendation" class="rounded-2xl border border-primary-500/30 bg-primary-500/5 p-5 dark:border-primary-500/30 dark:bg-primary-500/10" data-test="onboarding-webnative-recommendation">
                 <div class="flex gap-3">
                   <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-500 text-white"><IconSparkles class="h-5 w-5" /></span>
                   <div>
@@ -3510,6 +3490,8 @@ defineExpose({
           :app-id="createdApp.app_id"
           :user-id="onboardingUserId"
           :initial-onboarding="createdApp.onboarding"
+          :initial-path="props.initialChecklistPath"
+          :hide-footer="hideFooter"
           :hiding="isHidingSplash"
           :leaving="isHandingOff"
           @path-changed="activeChecklistPath = $event"
@@ -3518,6 +3500,7 @@ defineExpose({
         >
           <template #ota="panel">
             <AppOnboardingSetupChecklist
+              :task-list="checklistTaskList"
               :app-id="createdApp.app_id"
               :initial-onboarding="createdApp.onboarding"
               :command="apiKey ? `npx @capgo/cli@latest i ${apiKey}${localCommand}` : ''"
@@ -3537,6 +3520,7 @@ defineExpose({
           </template>
           <template #builder="panel">
             <AppOnboardingBuilderChecklist
+              :task-list="checklistTaskList"
               :app-id="createdApp.app_id"
               :initial-onboarding="createdApp.onboarding"
               :command="builderCliCommand"
@@ -3559,9 +3543,11 @@ defineExpose({
         <AppOnboardingBuilderChecklist
           v-else-if="showBuilderChecklist && createdApp"
           :key="createdApp.app_id"
+          :task-list="checklistTaskList"
           :app-id="createdApp.app_id"
           :initial-onboarding="createdApp.onboarding"
           :command="builderCliCommand"
+          :hide-footer="hideFooter"
           :hiding="isHidingSplash"
           :leaving="isHandingOff"
           @copy-command="copyBuilderCliCommand"
@@ -3574,9 +3560,11 @@ defineExpose({
         <AppOnboardingSetupChecklist
           v-else-if="showSetupChecklist && createdApp"
           :key="createdApp.app_id"
+          :task-list="checklistTaskList"
           :app-id="createdApp.app_id"
           :initial-onboarding="createdApp.onboarding"
           :command="cliCommand"
+          :hide-footer="hideFooter"
           :hiding="isHidingSplash"
           :leaving="isHandingOff"
           @copy-command="copyCliCommand"

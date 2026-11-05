@@ -124,4 +124,40 @@ describe('bundle install stats helpers', () => {
     expect(bundleInstallStatsTestUtils.readsSuccessFromVersionUsage(1)).toBe(true)
     expect(bundleInstallStatsTestUtils.readsSuccessFromVersionUsage(30)).toBe(false)
   })
+
+  it.concurrent('reports the legacy download_fail ignored per bundle', () => {
+    const response = bundleInstallStatsTestUtils.buildBundleInstallResponse({
+      days: 7,
+      start: '2026-10-20T00:00:00.000Z',
+      end: '2026-10-26T23:59:59.999Z',
+      successRows: [{ version_name: '1.2.0', install: 500, fail: 30 }],
+      timingRows: new Map(),
+      versionFilter: new Set(['1.2.0', '1.1.0']),
+      legacyCheckFailures: [
+        { version_name: '1.2.0', excluded: 450, plugin_versions: ['8.51.16'] },
+        // Installed before the period: only ignored reports, still in the notice.
+        { version_name: '1.1.0', excluded: 5, plugin_versions: ['6.40.0'] },
+        // Outside the channel's bundles.
+        { version_name: '0.9.0', excluded: 7, plugin_versions: ['5.1.0'] },
+      ],
+    })
+    expect(response.bundles.map(bundle => bundle.version_name)).toEqual(['1.2.0'])
+    expect(response.totals).toEqual({ install: 500, fail: 30, success_rate: 94.3 })
+    expect(response.legacy_check_failures).toEqual({ excluded: 455, plugin_versions: ['6.40.0', '8.51.16'], fixed_in: '8.53.0' })
+
+    // A single bundle keeps only its own count and plugin versions.
+    const single = bundleInstallStatsTestUtils.filterResponseByVersionName(response, '1.1.0')
+    expect(single.legacy_check_failures).toEqual({ excluded: 5, plugin_versions: ['6.40.0'], fixed_in: '8.53.0' })
+    expect(single.legacy_check_failures_by_bundle).toEqual([{ version_name: '1.1.0', excluded: 5, plugin_versions: ['6.40.0'] }])
+
+    const none = bundleInstallStatsTestUtils.buildBundleInstallResponse({
+      days: 7,
+      start: '2026-10-20T00:00:00.000Z',
+      end: '2026-10-26T23:59:59.999Z',
+      successRows: [{ version_name: '1.0.0', install: 10, fail: 1 }],
+      timingRows: new Map(),
+    })
+    expect(none.legacy_check_failures).toBeNull()
+    expect(none.legacy_check_failures_by_bundle).toEqual([])
+  })
 })

@@ -42,6 +42,9 @@ export default defineConfig(({ mode }) => ({
     Icons({ compiler: 'vue3' }),
   ],
   resolve: {
+    // Bun keeps a stale nested Vue next to Pinia/vue-i18n. A second Vue copy
+    // breaks reactivity between stores and components.
+    dedupe: ['vue', '@vue/runtime-core', '@vue/runtime-dom', '@vue/reactivity', '@vue/shared'],
     alias: {
       '@capgo/cli/sdk': path.resolve(cwd(), 'cli/src/sdk.ts'),
       '~/': `${path.resolve(cwd(), 'src')}/`,
@@ -50,6 +53,7 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     include: ['tests/*.test.ts'],
+    setupFiles: ['./tests/happy-dom-storage.setup.ts'],
     environment: 'node',
     watch: false,
     // Let the run report all failures rather than stopping at the first one.
@@ -70,5 +74,12 @@ export default defineConfig(({ mode }) => ({
       shuffle: false, // Run in predictable order
     },
     env: loadEnv(mode, cwd(), ''),
+    // External node_modules resolve Vue from the package folder. Pinia still
+    // points at a stale Vue 3.5.40, so store updates never reach components.
+    server: {
+      deps: {
+        inline: ['pinia', 'vue-i18n', 'vue-router', 'vue-sonner', '@vueuse/core', '@vueuse/shared', '@vue/devtools-api'],
+      },
+    },
   },
 }))

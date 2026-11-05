@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconSettings from '~icons/lucide/settings'
-import { useSupabase } from '~/services/supabase'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
+import EmptyState from '~/components/EmptyState.vue'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 interface ChannelPreview {
@@ -16,7 +18,7 @@ const route = useRoute('/app/[app].channel.[channel].preview')
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
@@ -59,7 +61,7 @@ async function getChannel() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select(`
         id,
@@ -98,7 +100,7 @@ async function getChannel() {
 
 async function getApp() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select()
       .eq('app_id', packageId.value)
@@ -160,44 +162,34 @@ watchEffect(async () => {
   <div>
     <PageLoader v-if="loading" />
 
-    <div v-else-if="!channel" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('channel-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('channel-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
-        {{ t('back-to-channels') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else-if="!channel"
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('channel-not-found')"
+      :description="t('channel-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/channels`)">
+          {{ t('back-to-channels') }}
+        </button>
+      </template>
+    </EmptyState>
 
-    <div v-else-if="previewState === 'no-app'" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-center text-muted-foreground max-w-md">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push('/apps')">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else-if="previewState === 'no-app'" />
 
-    <div v-else-if="previewState === 'preview-disabled'" class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconSettings class="w-16 h-16 mb-4 text-muted-foreground" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('preview-disabled') }}
-      </h2>
-      <p class="mt-2 text-center text-muted-foreground max-w-md">
-        {{ t('preview-disabled-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
-        {{ t('preview-enable-settings') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else-if="previewState === 'preview-disabled'"
+      :icon="IconSettings"
+      :title="t('preview-disabled')"
+      :description="t('preview-disabled-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="goToAppSettings">
+          {{ t('preview-enable-settings') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <div v-else-if="previewState === 'ready'" class="h-full min-h-0 w-full overflow-y-auto">
       <BundlePreviewFrame

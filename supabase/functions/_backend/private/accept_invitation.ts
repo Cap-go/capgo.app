@@ -1,14 +1,17 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
-import type { PgQueryClient } from '../utils/pg.ts'
+import type { PgClient } from '../utils/pg.ts'
+import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { captureOrganizationInvitationPosthogEvent, sanitizeOrganizationInvitationFailureReason } from '../utils/organization_invitation_posthog.ts'
 import { getEffectivePasswordMinLength, getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
-import { checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../utils/pg.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJsonOne } from '../utils/pg_rls.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { emptySupabase, supabaseAdmin as useSupabaseAdmin } from '../utils/supabase.ts'
+import { emptySupabase, supabaseAdmin } from '../utils/supabase.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
 
@@ -70,47 +73,54 @@ function isMissingCreatedViaInviteColumnError(err: unknown): boolean {
   return code === 'PGRST204' || code === '42703' || msg.includes('created_via_invite')
 }
 
-async function rollbackCreatedUser(c: Parameters<typeof useSupabaseAdmin>[0], userId: string) {
+type UserRow = Database['public']['Tables']['users']['Row']
+type InvitationRow = Database['public']['Tables']['tmp_users']['Row']
+
+async function rollbackCreatedUser(c: Context, pg: PgClient, userId: string) {
   // Best-effort rollback so users can retry the invite flow if something fails mid-way.
-  const admin = useSupabaseAdmin(c)
   try {
-    await admin.from('role_bindings')
-      .delete()
-      .eq('principal_type', 'user')
-      .eq('principal_id', userId)
+    await pg.query('DELETE FROM public.role_bindings WHERE principal_type = $1 AND principal_id = $2', ['user', userId])
   }
   catch {}
   try {
-    await admin.from('org_users').delete().eq('user_id', userId)
+    await pg.query('DELETE FROM public.org_users WHERE user_id = $1', [userId])
   }
   catch {}
   try {
-    await admin.from('users').delete().eq('id', userId)
+    await pg.query('DELETE FROM public.users WHERE id = $1', [userId])
   }
   catch {}
   try {
-    await admin.auth.admin.deleteUser(userId)
+    await supabaseAdmin(c).auth.admin.deleteUser(userId)
   }
   catch {}
 }
 
+async function insertUserRow(pg: PgClient, payload: { id: string, email: string, first_name: string, last_name: string, enable_notifications: boolean, opt_for_newsletters: boolean, created_via_invite?: boolean }) {
+  const columns = Object.keys(payload) as (keyof typeof payload)[]
+  return queryJsonOne<UserRow>(
+    pg,
+    `INSERT INTO public.users (${columns.join(', ')}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING *`,
+    columns.map(column => payload[column]),
+  )
+}
+
 async function ensurePublicUserRowExists(
-  c: Parameters<typeof useSupabaseAdmin>[0],
-  supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
+  c: Context,
+  pg: PgClient,
   userId: string,
-  invitation: any,
+  invitation: InvitationRow,
   optForNewsletters: boolean,
 ) {
-  const { data: existingRows, error: existingError } = await supabaseAdmin
-    .from('users')
-    .select('id')
-    .eq('id', userId)
-
-  if (existingError) {
-    return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing user row', { error: existingError.message })
+  let existingRows: { id: string }[]
+  try {
+    ({ rows: existingRows } = await pg.query<{ id: string }>('SELECT id FROM public.users WHERE id = $1', [userId]))
+  }
+  catch (existingError) {
+    return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing user row', { error: (existingError as Error).message })
   }
 
-  if (existingRows && existingRows.length > 0)
+  if (existingRows.length > 0)
     return
 
   const insertPayload = {
@@ -123,7 +133,13 @@ async function ensurePublicUserRowExists(
     created_via_invite: true,
   }
 
-  let { error: insertError } = await supabaseAdmin.from('users').insert(insertPayload)
+  let insertError: { message: string } | null = null
+  try {
+    await insertUserRow(pg, insertPayload)
+  }
+  catch (error) {
+    insertError = error as Error
+  }
 
   // Log any initial error for observability during rollout
   if (insertError) {
@@ -141,7 +157,13 @@ async function ensurePublicUserRowExists(
       message: 'ensurePublicUserRowExists: created_via_invite column missing, retrying without it',
     })
     const { created_via_invite: _createdViaInvite, ...fallbackPayload } = insertPayload
-    ;({ error: insertError } = await supabaseAdmin.from('users').insert(fallbackPayload))
+    insertError = null
+    try {
+      await insertUserRow(pg, fallbackPayload)
+    }
+    catch (error) {
+      insertError = error as Error
+    }
   }
 
   if (insertError) {
@@ -150,17 +172,13 @@ async function ensurePublicUserRowExists(
 }
 
 async function ensureOrgMembership(
-  c: Parameters<typeof useSupabaseAdmin>[0],
-  _supabaseAdmin: ReturnType<typeof useSupabaseAdmin>,
+  pg: PgClient,
   userId: string,
   invitation: { invite_magic_string: string, org_id: string },
 ) {
-  const pgPool = await getPgClient(c, false)
-  let pgClient: PgQueryClient | null = null
   let status: string | undefined
   try {
-    pgClient = await checkoutPgClient(pgPool)
-    const result = await pgClient.query<{ accept_tmp_user_invitation: string }>(
+    const result = await pg.query<{ accept_tmp_user_invitation: string }>(
       `SELECT public.accept_tmp_user_invitation($1, $2::uuid) AS accept_tmp_user_invitation`,
       [invitation.invite_magic_string, userId],
     )
@@ -179,10 +197,6 @@ async function ensureOrgMembership(
       })
     }
     return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation', { error: message })
-  }
-  finally {
-    releasePgClient(pgPool, pgClient)
-    await closeClient(c, pgPool)
   }
 
   if (status === 'OK')
@@ -221,6 +235,7 @@ app.post('/', async (c) => {
   let membershipFinalized = false
   let telemetryUserId: string | undefined
   let telemetryInvitationId: number | undefined
+  let pg: PgClient | undefined
 
   try {
     const rawBody = await parseBody<AcceptInvitation>(c)
@@ -235,16 +250,18 @@ app.post('/', async (c) => {
     const { password: _password, captchaToken: _captchaToken, magic_invite_string: _magicInviteString, ...baseBodyWithoutSecrets } = baseBody
     cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation raw body', rawBody: baseBodyWithoutSecrets })
 
-    const supabaseAdmin = useSupabaseAdmin(c)
+    pg = await getPgClient(c)
 
     // Get the invitation to find the org_id
-    const { data: invitation, error: invitationError } = await supabaseAdmin.from('tmp_users')
-      .select('*')
-      .eq('invite_magic_string', baseBody.magic_invite_string)
-      .maybeSingle()
-
-    if (invitationError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation get tmp_users', { error: invitationError.message })
+    let invitation: InvitationRow | undefined
+    try {
+      ({ rows: [invitation] } = await pg.query<InvitationRow>(
+        'SELECT * FROM public.tmp_users WHERE invite_magic_string = $1 LIMIT 1',
+        [baseBody.magic_invite_string],
+      ))
+    }
+    catch (invitationError) {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation get tmp_users', { error: (invitationError as Error).message })
     }
 
     if (!invitation) {
@@ -253,14 +270,12 @@ app.post('/', async (c) => {
 
     telemetryInvitationId = invitation.id
 
-    const { data: existingUser, error: existingUserError } = await supabaseAdmin
-      .from('users')
-      .select('id')
-      .eq('email', invitation.email)
-      .maybeSingle()
-
-    if (existingUserError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing account', { error: existingUserError.message })
+    let existingUser: { id: string } | undefined
+    try {
+      ({ rows: [existingUser] } = await pg.query<{ id: string }>('SELECT id FROM public.users WHERE email = $1 LIMIT 1', [invitation.email]))
+    }
+    catch (existingUserError) {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to check existing account', { error: (existingUserError as Error).message })
     }
     telemetryUserId = existingUser?.id ?? invitation.future_uuid
 
@@ -269,13 +284,15 @@ app.post('/', async (c) => {
     }
 
     // Get the org's password policy
-    const { data: org, error: orgError } = await supabaseAdmin.from('orgs')
-      .select('password_policy_config')
-      .eq('id', invitation.org_id)
-      .single()
-
-    if (orgError) {
-      return quickError(500, 'failed_to_accept_invitation', 'Failed to get org password policy', { error: orgError.message })
+    let org: { password_policy_config: unknown } | undefined
+    try {
+      ({ rows: [org] } = await pg.query<{ password_policy_config: unknown }>('SELECT password_policy_config FROM public.orgs WHERE id = $1', [invitation.org_id]))
+    }
+    catch (orgError) {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to get org password policy', { error: (orgError as Error).message })
+    }
+    if (!org) {
+      return quickError(500, 'failed_to_accept_invitation', 'Failed to get org password policy', { error: 'JSON object requested, multiple (or no) rows returned' })
     }
 
     const captchaSecret = getEnv(c, 'CAPTCHA_SECRET_KEY')
@@ -301,7 +318,7 @@ app.post('/', async (c) => {
       }
 
       const userId = session.user?.id ?? existingUser.id
-      const membershipError = await ensureOrgMembership(c, supabaseAdmin, userId, invitation)
+      const membershipError = await ensureOrgMembership(pg, userId, invitation)
       if (membershipError)
         return membershipError
 
@@ -351,7 +368,7 @@ app.post('/', async (c) => {
     cloudlog({ requestId: c.get('requestId'), context: 'accept_invitation validated body', body: bodyWithoutSecrets })
 
     // here the real magic happens
-    const { data: user, error: userError } = await supabaseAdmin.auth.admin.createUser({
+    const { data: user, error: userError } = await supabaseAdmin(c).auth.admin.createUser({
       email: invitation.email,
       password: body.password,
       email_confirm: true,
@@ -371,11 +388,11 @@ app.post('/', async (c) => {
         })
         if (!sessionError && session.user?.id) {
           telemetryUserId = session.user.id
-          const publicUserError = await ensurePublicUserRowExists(c, supabaseAdmin, session.user.id, invitation, body.opt_for_newsletters)
+          const publicUserError = await ensurePublicUserRowExists(c, pg, session.user.id, invitation, body.opt_for_newsletters)
           if (publicUserError)
             return publicUserError
 
-          const membershipError = await ensureOrgMembership(c, supabaseAdmin, session.user.id, invitation)
+          const membershipError = await ensureOrgMembership(pg, session.user.id, invitation)
           if (membershipError)
             return membershipError
 
@@ -417,10 +434,14 @@ app.post('/', async (c) => {
         created_via_invite: true,
       }
 
-      let {
-        error: userNormalTableError,
-        data,
-      } = await supabaseAdmin.from('users').insert(insertUserPayload).select().single()
+      let userNormalTableError: { message: string } | null = null
+      let data: UserRow | null = null
+      try {
+        data = await insertUserRow(pg, insertUserPayload)
+      }
+      catch (error) {
+        userNormalTableError = error as Error
+      }
 
       // Log any initial error for observability during rollout
       if (userNormalTableError) {
@@ -438,12 +459,18 @@ app.post('/', async (c) => {
           message: 'accept_invitation: created_via_invite column missing, retrying without it',
         })
         const { created_via_invite: _createdViaInvite, ...fallbackPayload } = insertUserPayload
-      ;({ error: userNormalTableError, data } = await supabaseAdmin.from('users').insert(fallbackPayload).select().single())
+        userNormalTableError = null
+        try {
+          data = await insertUserRow(pg, fallbackPayload)
+        }
+        catch (error) {
+          userNormalTableError = error as Error
+        }
       }
 
       if (userNormalTableError) {
         didRollback = true
-        await rollbackCreatedUser(c, user.user.id)
+        await rollbackCreatedUser(c, pg, user.user.id)
         return quickError(500, 'failed_to_accept_invitation', 'Failed to accept invitation insert', { error: userNormalTableError.message })
       }
 
@@ -463,14 +490,14 @@ app.post('/', async (c) => {
       if (sessionError) {
       // Rollback so retrying the same invitation does not get stuck on `createUser`.
         didRollback = true
-        await rollbackCreatedUser(c, user.user.id)
+        await rollbackCreatedUser(c, pg, user.user.id)
         return quickError(400, 'sign_in_failed', 'Sign in failed, please retry', { error: sessionError.message })
       }
 
-      const membershipError = await ensureOrgMembership(c, supabaseAdmin, user.user.id, invitation)
+      const membershipError = await ensureOrgMembership(pg, user.user.id, invitation)
       if (membershipError) {
         didRollback = true
-        await rollbackCreatedUser(c, user.user.id)
+        await rollbackCreatedUser(c, pg, user.user.id)
         return membershipError
       }
       membershipFinalized = true
@@ -490,7 +517,7 @@ app.post('/', async (c) => {
     }
     catch (e) {
       if (!didRollback && !membershipFinalized) {
-        await rollbackCreatedUser(c, user.user.id)
+        await rollbackCreatedUser(c, pg, user.user.id)
       }
       throw e
     }
@@ -506,5 +533,9 @@ app.post('/', async (c) => {
       })
     }
     throw error
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
   }
 })

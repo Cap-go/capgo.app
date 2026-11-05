@@ -37,13 +37,35 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', async importOriginal => ({
 }))
 
 vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({
+  setAPIKeyRateLimitHeaders: vi.fn(),
+  setFailedAuthRateLimitPolicyHeader: vi.fn(),
   isAPIKeyRateLimited: vi.fn(async () => ({ limited: false })),
   isIPRateLimited: vi.fn(async () => ({ limited: false })),
-  recordAPIKeyUsage: vi.fn(async () => undefined),
+  recordAPIKeyUsage: vi.fn(async () => ({ count: 1 })),
   recordFailedAuth: recordFailedAuthMock,
 }))
 
 const { middlewareKey } = await import('../supabase/functions/_backend/utils/hono_middleware.ts')
+
+const retryKeyRow = {
+  id: 1,
+  created_at: null,
+  user_id: '00000000-0000-0000-0000-000000000001',
+  key: 'retry-key',
+  key_hash: null,
+  rbac_id: 'rbac-1',
+  updated_at: null,
+  name: 'k',
+  expires_at: null,
+}
+
+async function requestWithKey(capgkey: string) {
+  const { Hono } = await import('hono/tiny')
+  const app = new Hono()
+  app.onError(onError('test-middleware'))
+  app.get('/', middlewareKey({ usePostgres: true, readOnly: false }), c => c.json({ status: 'ok' }))
+  return app.fetch(new Request('http://localhost/', { headers: { capgkey } }))
+}
 
 function makeContext() {
   return {
@@ -59,22 +81,13 @@ describe('auth database unavailable hotfix', () => {
     getPgClientMock.mockImplementation(() => ({}))
   })
 
-  it('redacts api key parameters in drizzle query logs', () => {
-    const logger = new CapgoDrizzleQueryLogger()
-    logger.logQuery('SELECT * FROM find_apikey_by_value($1)', ['super-secret-api-key'])
-    expect(cloudlogMock).toHaveBeenCalledWith({
-      message: 'Query: SELECT * FROM find_apikey_by_value($1) -- params: [redacted]',
-    })
-    expect(JSON.stringify(cloudlogMock.mock.calls)).not.toContain('super-secret-api-key')
-  })
-
-  it('redacts rbac_check_permission_direct api key bind parameters', () => {
-    const logger = new CapgoDrizzleQueryLogger()
-    logger.logQuery('SELECT public.rbac_check_permission_direct($1, $2::uuid, $3::uuid, $4, $5::bigint, $6) AS allowed', ['capgo_secret_key'])
-    expect(cloudlogMock).toHaveBeenCalledWith({
-      message: 'Query: SELECT public.rbac_check_permission_direct($1, $2::uuid, $3::uuid, $4, $5::bigint, $6) AS allowed -- params: [redacted]',
-    })
-    expect(JSON.stringify(cloudlogMock.mock.calls)).not.toContain('capgo_secret_key')
+  it.each([
+    ['find_apikey_by_value', 'SELECT * FROM find_apikey_by_value($1)', 'super-secret-api-key'],
+    ['rbac_check_permission_direct', 'SELECT public.rbac_check_permission_direct($1, $2::uuid, $3::uuid, $4, $5::bigint, $6) AS allowed', 'capgo_secret_key'],
+  ])('redacts %s api key bind parameters in drizzle query logs', (_label, query, secret) => {
+    new CapgoDrizzleQueryLogger().logQuery(query, [secret])
+    expect(cloudlogMock).toHaveBeenCalledWith({ message: `Query: ${query} -- params: [redacted]` })
+    expect(JSON.stringify(cloudlogMock.mock.calls)).not.toContain(secret)
   })
 
   it('retries once on transient Hyperdrive pool errors', async () => {
@@ -111,14 +124,7 @@ describe('auth database unavailable hotfix', () => {
   it('middlewareKey returns 503 database_unavailable on checkKeyPg failure without recording failed auth', async () => {
     executeMock.mockRejectedValue(new Error('Timed out while waiting for an open slot in the pool.'))
 
-    const { Hono } = await import('hono/tiny')
-    const app = new Hono()
-    app.onError(onError('test-middleware'))
-    app.get('/', middlewareKey({ usePostgres: true, readOnly: false }), c => c.json({ status: 'ok' }))
-
-    const response = await app.fetch(new Request('http://localhost/', {
-      headers: { capgkey: 'valid-looking-key' },
-    }))
+    const response = await requestWithKey('valid-looking-key')
 
     expect(response.status).toBe(503)
     const body = await response.json() as { error: string }
@@ -130,14 +136,7 @@ describe('auth database unavailable hotfix', () => {
   it('middlewareKey still returns 401 invalid_apikey for a missing key', async () => {
     executeMock.mockResolvedValue({ rows: [] })
 
-    const { Hono } = await import('hono/tiny')
-    const app = new Hono()
-    app.onError(onError('test-middleware'))
-    app.get('/', middlewareKey({ usePostgres: true, readOnly: false }), c => c.json({ status: 'ok' }))
-
-    const response = await app.fetch(new Request('http://localhost/', {
-      headers: { capgkey: 'missing-key' },
-    }))
+    const response = await requestWithKey('missing-key')
 
     expect(response.status).toBe(401)
     const body = await response.json() as { error: string }
@@ -151,28 +150,9 @@ describe('auth database unavailable hotfix', () => {
         throw new Error('timeout exceeded when trying to connect')
       })
       .mockImplementation(() => ({}))
-    executeMock.mockResolvedValueOnce({
-      rows: [{
-        id: 1,
-        created_at: null,
-        user_id: '00000000-0000-0000-0000-000000000001',
-        key: 'retry-key',
-        key_hash: null,
-        rbac_id: 'rbac-1',
-        updated_at: null,
-        name: 'k',
-        expires_at: null,
-      }],
-    })
+    executeMock.mockResolvedValueOnce({ rows: [retryKeyRow] })
 
-    const { Hono } = await import('hono/tiny')
-    const app = new Hono()
-    app.onError(onError('test-middleware'))
-    app.get('/', middlewareKey({ usePostgres: true, readOnly: false }), c => c.json({ status: 'ok' }))
-
-    const response = await app.fetch(new Request('http://localhost/', {
-      headers: { capgkey: 'retry-key' },
-    }))
+    const response = await requestWithKey('retry-key')
 
     expect(response.status).toBe(200)
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
@@ -182,28 +162,9 @@ describe('auth database unavailable hotfix', () => {
   it('middlewareKey retries checkKeyPg once before succeeding', async () => {
     executeMock
       .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'))
-      .mockResolvedValueOnce({
-        rows: [{
-          id: 1,
-          created_at: null,
-          user_id: '00000000-0000-0000-0000-000000000001',
-          key: 'retry-key',
-          key_hash: null,
-          rbac_id: 'rbac-1',
-          updated_at: null,
-          name: 'k',
-          expires_at: null,
-        }],
-      })
+      .mockResolvedValueOnce({ rows: [retryKeyRow] })
 
-    const { Hono } = await import('hono/tiny')
-    const app = new Hono()
-    app.onError(onError('test-middleware'))
-    app.get('/', middlewareKey({ usePostgres: true, readOnly: false }), c => c.json({ status: 'ok' }))
-
-    const response = await app.fetch(new Request('http://localhost/', {
-      headers: { capgkey: 'retry-key' },
-    }))
+    const response = await requestWithKey('retry-key')
 
     expect(response.status).toBe(200)
     expect(executeMock).toHaveBeenCalledTimes(2)

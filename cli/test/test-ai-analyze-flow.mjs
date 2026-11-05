@@ -126,18 +126,6 @@ await test('postAnalyzeStreamRequest sends POST with correct shape and returns a
   }
 })
 
-await test('postAnalyzeStreamRequest returns already_analyzed on 409', async () => {
-  globalThis.fetch = async () => new Response(
-    JSON.stringify({ error: 'already_analyzed' }),
-    { status: 409, headers: { 'content-type': 'application/json' } }
-  )
-  const result = await postAnalyzeStreamRequest({
-    apiHost: 'x', apikey: 'y', jobId: JOB_ID, appId: 'a', logs: 'l',
-  })
-  if (result.kind !== 'already_analyzed')
-    throw new Error(`got ${JSON.stringify(result)}`)
-})
-
 await test('postAnalyzeStreamRequest returns error on 5xx', async () => {
   globalThis.fetch = async () => new Response('upstream broken', { status: 503 })
   const result = await postAnalyzeStreamRequest({
@@ -147,16 +135,61 @@ await test('postAnalyzeStreamRequest returns error on 5xx', async () => {
     throw new Error(`got ${JSON.stringify(result)}`)
 })
 
-await test('postAnalyzeStreamRequest returns too_big on 413', async () => {
-  globalThis.fetch = async () => new Response(
-    JSON.stringify({ error: 'logs_too_big' }),
-    { status: 413, headers: { 'content-type': 'application/json' } },
-  )
-  const result = await postAnalyzeStreamRequest({
-    apiHost: 'x', apikey: 'y', jobId: JOB_ID, appId: 'a', logs: 'l',
-  })
-  if (result.kind !== 'too_big')
-    throw new Error(`got ${JSON.stringify(result)}`)
+// ---- streaming protocol ----
+const baseInput = { apiHost: 'https://api.test', apikey: 'k', jobId: 'j1', appId: 'a1', logs: 'log text' }
+
+await test('accumulates chunks and resolves ok on done; onChunk fires per delta', async () => {
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).endsWith('/build/ai_analyze_stream')) throw new Error(`wrong url ${url}`)
+    if (init.headers.accept !== 'text/event-stream') throw new Error('missing accept header')
+    return sseResponse([
+      'event: chunk\ndata: {"text":"Hello "}\n\n',
+      'event: chunk\ndata: {"text":"world"}\n\n',
+      'event: done\ndata: {"durationMs":42}\n\n',
+    ])
+  }
+  const chunks = []
+  const r = await postAnalyzeStreamRequest({ ...baseInput, onChunk: t => chunks.push(t) })
+  if (r.kind !== 'ok') throw new Error(`got ${r.kind}: ${r.message}`)
+  if (r.analysis !== 'Hello world') throw new Error(`got ${r.analysis}`)
+  if (chunks.join('|') !== 'Hello |world') throw new Error(`got chunks ${chunks.join('|')}`)
+})
+
+await test('mid-stream error event returns kind error with partial text', async () => {
+  globalThis.fetch = async () => sseResponse([
+    'event: chunk\ndata: {"text":"partial diag"}\n\n',
+    'event: error\ndata: {"code":"idle_timeout"}\n\n',
+  ])
+  const r = await postAnalyzeStreamRequest(baseInput)
+  if (r.kind !== 'error') throw new Error(`got ${r.kind}`)
+  if (r.message !== 'idle_timeout') throw new Error(`got ${r.message}`)
+  if (r.partial !== 'partial diag') throw new Error(`got partial ${r.partial}`)
+})
+
+await test('maps 409 to already_analyzed', async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'already_analyzed' }), { status: 409 })
+  const r = await postAnalyzeStreamRequest(baseInput)
+  if (r.kind !== 'already_analyzed') throw new Error(`got ${r.kind}`)
+})
+
+await test('maps 413 to too_big', async () => {
+  globalThis.fetch = async () => new Response('', { status: 413 })
+  const r = await postAnalyzeStreamRequest(baseInput)
+  if (r.kind !== 'too_big') throw new Error(`got ${r.kind}`)
+})
+
+await test('maps 426 to upgrade_required with the server message', async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'Please upgrade', code: 'upgrade_required' }), { status: 426 })
+  const r = await postAnalyzeStreamRequest(baseInput)
+  if (r.kind !== 'upgrade_required') throw new Error(`got ${r.kind}`)
+  if (r.message !== 'Please upgrade') throw new Error(`got ${r.message}`)
+})
+
+await test('stream ending without a terminal event is an error with partial', async () => {
+  globalThis.fetch = async () => sseResponse(['event: chunk\ndata: {"text":"cut"}\n\n'])
+  const r = await postAnalyzeStreamRequest(baseInput)
+  if (r.kind !== 'error') throw new Error(`got ${r.kind}`)
+  if (r.partial !== 'cut') throw new Error(`got partial ${r.partial}`)
 })
 
 await rm(TEST_DIR, { recursive: true, force: true })

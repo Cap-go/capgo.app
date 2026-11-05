@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import type { BundleSummaryWithNativePackages } from '~/services/bundleColumns'
 import type { LinkedChannel } from '~/services/bundleLinkedChannels'
 import type { ChannelPromotionTarget } from '~/services/channelPromotion'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { FormKit } from '@formkit/vue'
 import { parse } from '@std/semver'
 import { computedAsync } from '@vueuse/core'
 import { computed, ref, watch, watchEffect } from 'vue'
@@ -14,16 +14,20 @@ import IconArchiveBoxArrowDown from '~icons/heroicons/archive-box-arrow-down'
 import Settings from '~icons/heroicons/cog-8-tooth'
 import IconDocumentDuplicate from '~icons/heroicons/document-duplicate'
 import IconTrash from '~icons/heroicons/trash'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
+import EmptyState from '~/components/EmptyState.vue'
+import FormField from '~/components/forms/FormField.vue'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { fetchLinkedChannelsForVersion, formatLinkedChannel, unlinkLinkedChannels } from '~/services/bundleLinkedChannels'
 import { findChannelsWithoutPromotionPermission, formatChannelPromotionTargets } from '~/services/channelPromotion'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { useConsole } from '~/services/console'
 import { formatBytes, getChecksumInfo } from '~/services/conversion'
 import { formatDate, formatLocalDate } from '~/services/date'
+import { checkCompatibilityNativePackages, isCompatible } from '~/services/nativePackageCompatibility'
 import { checkPermissions } from '~/services/permissions'
-import { checkCompatibilityNativePackages, isCompatible, useSupabase } from '~/services/supabase'
 import { openVersion } from '~/services/versions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
@@ -35,11 +39,11 @@ const router = useRouter()
 const dialogStore = useDialogV2Store()
 const displayStore = useDisplayStore()
 const main = useMainStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>()
 const loading = ref(true)
-const version = ref<Database['public']['Tables']['app_versions']['Row']>()
+const version = ref<BundleSummaryWithNativePackages>()
 const channels = ref<(Database['public']['Tables']['channels']['Row'])[]>([])
 const channel = ref<(Database['public']['Tables']['channels']['Row'])>()
 const version_meta = ref<Database['public']['Tables']['app_versions_meta']['Row']>()
@@ -167,7 +171,7 @@ async function getChannels() {
     return
   channel.value = undefined
   const appId = version.value.app_id
-  const { data: dataChannel, error: channelsError } = await supabase
+  const { data: dataChannel, error: channelsError } = await capgo
     .from('channels')
     .select()
     .eq('app_id', appId)
@@ -216,7 +220,7 @@ const zipSizeLabel = computed(() => {
 })
 
 const checksumInfo = computed(() => {
-  return getChecksumInfo(version.value?.checksum)
+  return getChecksumInfo(version.value?.checksum, !!version.value?.session_key)
 })
 
 // add check compatibility here
@@ -237,7 +241,7 @@ async function setChannel(channel: Database['public']['Tables']['channels']['Row
     throw new Error('No permission to update channel version')
   }
 
-  return supabase
+  return capgo
     .from('channels')
     .update({
       version: id,
@@ -481,7 +485,7 @@ async function saveBundleMetadata() {
     return false
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .update({
       link: normalizeOptionalMetadata(metadataLink.value),
@@ -537,13 +541,13 @@ async function getVersion() {
   if (!id.value)
     return
   try {
-    const { data } = await supabase
+    const { data } = await capgo
       .from('app_versions')
-      .select()
+      .select(`${BUNDLE_SUMMARY_COLUMNS}, native_packages`)
       .eq('app_id', packageId.value)
       .eq('id', id.value)
       .single()
-    const { data: dataVersionsMeta } = await supabase
+    const { data: dataVersionsMeta } = await capgo
       .from('app_versions_meta')
       .select()
       .eq('id', id.value)
@@ -596,7 +600,7 @@ async function saveCustomId(input: string) {
   }
 
   if (input.length === 0) {
-    const { error: errorNull } = await supabase
+    const { error: errorNull } = await capgo
       .from('app_versions')
       .update({
         min_update_version: null,
@@ -617,7 +621,7 @@ async function saveCustomId(input: string) {
     return
   }
 
-  const { error } = await supabase
+  const { error } = await capgo
     .from('app_versions')
     .update({
       min_update_version: input,
@@ -683,8 +687,8 @@ async function didCancel(name: string, askForMethod = true): Promise<boolean | '
   }
 
   const description = askForMethod
-    ? `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name} ${t('you-cannot-reuse')}.`
-    : `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${name}?`
+    ? t('alert-delete-named-no-reuse-confirm', { name })
+    : t('alert-delete-named-confirm', { name })
 
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
@@ -793,12 +797,12 @@ async function deleteBundle() {
 
     // Perform deletion (soft or hard)
     const deleteQuery = didCancelRes === 'normal'
-      ? supabase
+      ? capgo
           .from('app_versions')
           .update({ deleted: true })
           .eq('id', version.value.id)
           .eq('app_id', version.value.app_id)
-      : supabase
+      : capgo
           .from('app_versions')
           .delete()
           .eq('id', version.value.id)
@@ -899,6 +903,7 @@ async function deleteBundle() {
                     <button
                       type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                      :aria-label="t('copy')"
                       @click="copyToast(version?.checksum ?? '')"
                     >
                       <IconDocumentDuplicate class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -927,6 +932,7 @@ async function deleteBundle() {
                       <button
                         type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                        :aria-label="t('settings')"
                         @click="openChannelSettings(chn)"
                       >
                         <Settings class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -1033,6 +1039,7 @@ async function deleteBundle() {
                       <button
                         type="button"
                         class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                        :aria-label="t('download')"
                         @click="openDownload()"
                       >
                         <IconArchiveBoxArrowDown class="w-4 h-4 text-gray-500 cursor-pointer dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400" />
@@ -1067,6 +1074,7 @@ async function deleteBundle() {
                     <button
                       type="button"
                       class="p-1 transition-colors border border-gray-200 rounded-md dark:border-gray-700 hover:bg-gray-50 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-800"
+                      :aria-label="t('delete')"
                       @click="deleteBundle"
                     >
                       <IconTrash class="w-4 h-4 text-red-500 transition-colors cursor-pointer dark:text-red-400 hover:text-red-600" />
@@ -1084,18 +1092,19 @@ async function deleteBundle() {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('bundle-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('bundle-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles/`)">
-        {{ t('back-to-bundles') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('bundle-not-found')"
+      :description="t('bundle-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles/`)">
+          {{ t('back-to-bundles') }}
+        </button>
+      </template>
+    </EmptyState>
 
     <!-- Teleport Content for Deletion Style Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('select-style-of-deletion')" defer to="#dialog-v2-content">
@@ -1190,14 +1199,13 @@ async function deleteBundle() {
 
         <!-- Search Input -->
         <div class="mb-6">
-          <FormKit
+          <FormField
             v-model="channelSearchVal"
             :prefix-icon="IconSearch"
             enterkeyhint="send"
             :placeholder="t('search-channels')"
-            :classes="{
-              outer: 'mb-0! w-full',
-            }"
+            :aria-label="t('search-channels')"
+            outer-class="mb-0! w-full"
           />
         </div>
 

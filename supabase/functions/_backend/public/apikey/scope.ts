@@ -1,12 +1,13 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { getDrizzleClient } from '../../utils/pg.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { quickError } from '../../utils/hono.ts'
 import { assertJwtMfaAssurance } from '../../utils/jwt_mfa_assurance.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { authPrincipal, queryJson, servicePrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
 type ApiKeyManagementOrgMap = Map<string, string[]>
@@ -303,34 +304,57 @@ export async function filterApiKeysManageableByAuth<T extends Pick<ApiKeyRow, 'r
   })
 }
 
+export function apiKeyManagerPrincipal(c: Context<MiddlewareKeyVariables>, auth: AuthInfo): RlsPrincipal {
+  return auth.authType === 'apikey' ? servicePrincipal : authPrincipal(c, auth)
+}
+
+// Column lists are code constants; still reject anything that is not a plain identifier.
+function apiKeySelectColumns(columns: string) {
+  if (columns.trim() === '*')
+    return '*'
+  return columns.split(',').map((column) => {
+    const name = column.trim()
+    if (!/^[a-z_]+$/.test(name))
+      throw new Error(`Invalid apikeys column: ${name}`)
+    return `"${name}"`
+  }).join(', ')
+}
+
+function ownedApiKeyFilter(id: string): { column: string, value: number | string } {
+  return isNumericApiKeyId(id) ? { column: 'id', value: Number(id) } : { column: 'key', value: id }
+}
+
 export async function selectOwnedApiKeyByIdentifier<T = ApiKeyRow>(
   c: Context<MiddlewareKeyVariables>,
   auth: AuthInfo,
   id: string,
   columns = '*',
-) {
-  const query = (auth.authType === 'apikey' ? supabaseAdmin(c) : supabaseWithAuth(c, auth))
-    .from('apikeys')
-    .select(columns)
-    .eq('user_id', auth.userId)
-
-  const filteredQuery = isNumericApiKeyId(id)
-    ? query.eq('id', Number(id))
-    : query.eq('key', id)
-
-  const { data, error } = await filteredQuery.single()
-  return { data: data as T | null, error }
+): Promise<{ data: T | null, error: unknown }> {
+  const filter = ownedApiKeyFilter(id)
+  try {
+    // LIMIT 2 keeps PostgREST .single(): anything but exactly one row is "not found".
+    const rows = await withRlsContext(c, apiKeyManagerPrincipal(c, auth), client => queryJson<T>(
+      client,
+      `SELECT ${apiKeySelectColumns(columns)} FROM public.apikeys WHERE user_id = $1::uuid AND ${filter.column} = $2 LIMIT 2`,
+      [auth.userId, filter.value],
+    ))
+    return { data: rows.length === 1 ? rows[0] : null, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
 }
 
-export async function deleteOwnedApiKeyByIdentifier(c: Context<MiddlewareKeyVariables>, auth: AuthInfo, id: string) {
-  const query = (auth.authType === 'apikey' ? supabaseAdmin(c) : supabaseWithAuth(c, auth))
-    .from('apikeys')
-    .delete()
-    .eq('user_id', auth.userId)
-
-  const filteredQuery = isNumericApiKeyId(id)
-    ? query.eq('id', Number(id))
-    : query.eq('key', id)
-
-  return filteredQuery
+export async function deleteOwnedApiKeyByIdentifier(c: Context<MiddlewareKeyVariables>, auth: AuthInfo, id: string): Promise<{ error: unknown }> {
+  const filter = ownedApiKeyFilter(id)
+  try {
+    await withRlsContext(c, apiKeyManagerPrincipal(c, auth), client => client.query(
+      `DELETE FROM public.apikeys WHERE user_id = $1::uuid AND ${filter.column} = $2`,
+      [auth.userId, filter.value],
+    ))
+    return { error: null }
+  }
+  catch (error) {
+    return { error }
+  }
 }

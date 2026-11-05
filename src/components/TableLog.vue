@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import type { TableColumn } from './comp_def'
 import type { DateRangePreset } from '~/services/dateRange'
-import { FormKit } from '@formkit/vue'
 import { useDebounceFn, useNow } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconCheck from '~icons/lucide/check'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
@@ -17,6 +16,7 @@ import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
 import DateRangePicker from '~/components/DateRangePicker.vue'
 import FilterModal from '~/components/FilterModal.vue'
+import FormField from '~/components/forms/FormField.vue'
 import { RenderCell } from '~/components/RenderCell'
 import { createClearedFilters } from '~/composables/useFilterModal'
 import { clampDateRange, getDateRangeForPreset, inferDateRangePreset, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
@@ -315,15 +315,16 @@ onMounted(() => {
   <div class="pb-4 md:pb-0">
     <div class="flex flex-wrap items-start justify-between gap-2 p-3 pb-4 overflow-visible md:items-center md:flex-nowrap">
       <div class="flex h-10 shrink-0 md:mb-0">
-        <button class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden" type="button" @click="reloadData">
+        <button class="d-btn d-btn-outline mr-2 px-3 font-medium" type="button" :aria-label="t('reload')" @click="reloadData">
           <IconReload v-if="!isLoading" class="m-1 md:mr-2" />
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
           <span class="hidden text-sm md:block">{{ t('reload') }}</span>
         </button>
         <button
           v-if="exportable"
-          class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+          class="d-btn d-btn-outline mr-2 px-3 font-medium"
           type="button"
+          :aria-label="t('download-csv')"
           :disabled="isLoading || exportLoading"
           @click="exportData"
         >
@@ -438,14 +439,13 @@ onMounted(() => {
         </FilterModal>
       </div>
       <div class="flex min-w-0 max-w-[13rem] overflow-hidden sm:max-w-[14rem] md:max-w-[14rem] lg:max-w-[16rem] xl:max-w-xs md:w-auto">
-        <FormKit
+        <FormField
           v-model="searchVal"
           :placeholder="searchPlaceholder"
+          :aria-label="searchPlaceholder"
           :prefix-icon="IconSearch"
           enterkeyhint="send"
-          :classes="{
-            outer: 'mb-0! w-48 sm:w-52 md:w-56 lg:w-64 xl:w-80',
-          }"
+          outer-class="mb-0! w-48 sm:w-52 md:w-56 lg:w-64 xl:w-80"
         />
       </div>
     </div>
@@ -508,7 +508,7 @@ onMounted(() => {
     <nav class="native-bottom-offset fixed bottom-0 left-0 z-40 flex items-center justify-between w-full p-4 bg-white md:relative md:pt-4 md:bg-transparent dark:bg-gray-900 dark:md:bg-transparent" aria-label="Table navigation">
       <button
         type="button"
-        class="flex items-center justify-center h-10 px-4 py-2 space-x-2 text-sm font-medium transition-colors border border-gray-300 rounded-md whitespace-nowrap dark:text-white dark:border-gray-700 focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background dark:hover:bg-primary/90 hover:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-ring"
+        class="d-btn d-btn-outline whitespace-nowrap font-medium"
         @click="fastBackward"
       >
         <IconFastBackward />

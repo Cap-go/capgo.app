@@ -65,4 +65,19 @@ describe('app onboarding step PostHog event', () => {
       step_inferred_from: 'test_update',
     })
   })
+
+  it.concurrent('carries the skip reason only for an explicit skip', () => {
+    const base = {
+      appId: 'com.example.app',
+      auth: { authType: 'jwt' as const, userId: 'user-id', apikey: null, jwt: 'token' },
+      orgId: 'org-id',
+      setup: { todo_list_version: 4, ota_todo_list_version: '1', source: 'manual' as const, outcome: 'in_progress' as const, steps: {} },
+      skipReason: 'My AI agent set it up',
+    }
+    expect(buildAppOnboardingStepPosthogEvent({ ...base, change: { stepId: 'login_cli_mcp', status: 'skipped', at: '2026-10-21T10:00:00.000Z', historyLength: 1, historyFull: false } }).nonPersonTags)
+      .toMatchObject({ step_status: 'skipped', skip_reason: 'My AI agent set it up' })
+    const { skipReason: _skipReason, ...withoutReason } = base
+    expect(buildAppOnboardingStepPosthogEvent({ ...withoutReason, change: { stepId: 'login_cli_mcp', status: 'done', at: '2026-10-21T10:00:00.000Z', historyLength: 2, historyFull: false } }).nonPersonTags)
+      .not.toHaveProperty('skip_reason')
+  })
 })

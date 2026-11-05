@@ -30,8 +30,8 @@ export const addAppOptionsSchema = z.object({
   name: z.string().optional(),
   icon: z.string().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export type AddAppOptions = z.infer<typeof addAppOptionsSchema>
@@ -52,8 +52,8 @@ export const updateAppOptionsSchema = z.object({
   defaultDownloadChannel: z.string().optional().describe('Channel devices download from by default'),
   disableDownloadChannels: z.boolean().optional().describe('Unset every default download channel'),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 }).merge(deviceDataCollectionOptionsSchema)
 
 export type UpdateAppOptions = z.infer<typeof updateAppOptionsSchema>
@@ -99,8 +99,8 @@ export const uploadOptionsSchema = z.object({
   external: z.string().optional(),
   encrypt: z.boolean().optional(),
   encryptionKey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   timeout: z.number().optional(),
   useTus: z.boolean().optional(),
   comment: z.string().optional(),
@@ -162,8 +162,8 @@ export const cleanupOptionsSchema = z.object({
   force: z.boolean().optional(),
   ignoreChannel: z.boolean().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export type CleanupOptions = z.infer<typeof cleanupOptionsSchema>
@@ -207,8 +207,8 @@ export const addChannelOptionsSchema = z.object({
   default: z.boolean().optional(),
   selfAssign: z.boolean().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export type AddChannelOptions = z.infer<typeof addChannelOptionsSchema>
@@ -252,8 +252,8 @@ export const updateChannelOptionsBaseSchema = z.object({
   autoPauseCooldownMinutes: z.number().int().min(0).max(10080).optional(),
   acceptIncompatible: z.boolean().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export const updateChannelOptionsSchema = updateChannelOptionsBaseSchema.superRefine((value, ctx) => {
@@ -273,8 +273,8 @@ export const promoteChannelOptionsSchema = z.object({
   acceptIncompatible: z.boolean().optional(),
   sendUpdateNotification: z.boolean().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 }).superRefine((value, ctx) => {
   rejectConflictingBooleanGroup(value, ctx, ['acceptIncompatible', 'ignoreMetadataCheck'])
   if (value.fromChannel === value.toChannel)
@@ -289,8 +289,8 @@ export type PromoteChannelOptions = z.infer<typeof promoteChannelOptionsSchema>
 
 export const accountIdOptionsSchema = z.object({
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export type AccountIdOptions = z.infer<typeof accountIdOptionsSchema>
@@ -384,8 +384,8 @@ export type DeleteOrganizationOptions = z.infer<typeof deleteOrganizationOptions
 export const loginOptionsSchema = z.object({
   apikey: z.string(),
   local: z.boolean().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export type LoginOptions = z.infer<typeof loginOptionsSchema>
@@ -407,8 +407,8 @@ export const bundleCompatibilityOptionsSchema = z.object({
   nodeModules: z.string().optional(),
   textOutput: z.boolean().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export type BundleCompatibilityOptions = z.infer<typeof bundleCompatibilityOptionsSchema>
@@ -446,11 +446,35 @@ export const zipBundleOptionsSchema = z.object({
   name: z.string().optional(),
   codeCheck: z.boolean().optional(),
   json: z.boolean().optional(),
-  keyV2: z.boolean().optional(),
+  // `true` or a private key path (path only applies with forUpload).
+  keyV2: z.union([z.string(), z.boolean()]).optional(),
+  keyDataV2: z.string().optional(),
+  // Set to false to skip encryption (CLI --no-key).
+  key: z.boolean().optional(),
   packageJson: z.string().optional(),
+  nodeModules: z.string().optional(),
+  // Produce exactly what `bundle upload` would send (encryption, checksum, native packages).
+  forUpload: z.boolean().optional(),
+  // Also write a delta pack zip at this path (implies forUpload).
+  deltaPack: z.string().optional(),
+  encryptDelta: z.boolean().optional(),
+  disableBrotli: z.boolean().optional(),
+  forceCrc32Checksum: z.boolean().optional(),
 })
 
 export type ZipBundleOptions = z.infer<typeof zipBundleOptionsSchema>
+
+export const zipBuildOptionsSchema = z.object({
+  appId: z.string().optional(),
+  platform: z.enum(['ios', 'android']),
+  path: z.string().optional(),
+  nodeModules: z.string().optional(),
+  syncIosVersion: z.boolean().optional(),
+  syncAndroidVersion: z.boolean().optional(),
+  output: z.string().optional(),
+})
+
+export type ZipBuildOptions = z.infer<typeof zipBuildOptionsSchema>
 
 // ============================================================================
 // SDK Build Schemas
@@ -462,6 +486,8 @@ export const requestBuildOptionsSchema = z.object({
   nodeModules: z.string().optional(),
   platform: z.enum(['ios', 'android']),
   credentials: buildCredentialsSchema.optional(),
+  /** Use the signing credentials stored on Capgo for this app (needs app admin rights); `credentials` still take precedence. */
+  useStoredCredentials: z.boolean().optional(),
   /** iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1). */
   xcodeVersion: z.string().min(1).optional(),
   androidTrack: z.enum(['internal', 'alpha', 'beta', 'production']).optional(),
@@ -474,8 +500,8 @@ export const requestBuildOptionsSchema = z.object({
   iosAutomaticRelease: z.boolean().optional(),
   userId: z.string().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
   prescan: z.boolean().optional(),
   prescanIgnoreFatal: z.boolean().optional(),
   prescanSkip: z.array(z.string()).optional(),
@@ -524,8 +550,8 @@ export const getStatsOptionsSchema = z.object({
   limit: z.number().optional(),
   after: z.string().nullable().optional(),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export type GetStatsOptions = z.infer<typeof getStatsOptionsSchema>
@@ -555,8 +581,8 @@ export const observeOptionsObjectSchema = z.object({
   sort: observeSortSchema.optional().describe('Sort samples: slowest, fastest, newest, oldest'),
   limit: z.number().int().min(1).max(100).optional().describe('Max rows to return (default 20, max 100)'),
   apikey: z.string().optional(),
-  supaHost: z.string().optional(),
-  supaAnon: z.string().optional(),
+  apiHost: z.string().optional(),
+  filesHost: z.string().optional(),
 })
 
 export function refineObserveDeviceId(

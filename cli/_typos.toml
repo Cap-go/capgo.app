@@ -1,7 +1,5 @@
 [files]
-extend-exclude = [
-  "test/data.ts"
-]
+extend-exclude = []
 
 # Apple developer-portal vocabulary and other domain words the CI typos
 # checker mis-flags. Add identifiers here as "wrong" = "right" — but to

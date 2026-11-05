@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types.ts'
+import type { Database } from '../src/types/database.types.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 
@@ -127,8 +127,6 @@ describe('stats Action Types', () => {
     const versions = ALLOWED_STATS_ACTIONS.map(action => getVersionFromAction(action))
     const uniqueVersions = new Set(versions)
     expect(uniqueVersions.size).toBe(ALLOWED_STATS_ACTIONS.length)
-    // Verify all versions match semver pattern
-    expect(versions.every(_v => /^\d+\.\d+\.\d+(-[0-9A-Z-]+)?$/i)).toBe(true)
     type StatsActionEnum = Database['public']['Enums']['stats_action']
     const assertEqual = <T extends readonly StatsActionEnum[]>(value: T) => value
     assertEqual(ALLOWED_STATS_ACTIONS)
@@ -476,7 +474,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           baseData.device_id = uuid
           baseData.action = action
           if (action === 'download_fail')
-            baseData.plugin_version = '7.17.0'
+            baseData.plugin_version = '8.53.0'
           baseData.version_build = getVersionFromAction(action)
 
           const version = await createAppVersions(baseData.version_build, appId)
@@ -585,7 +583,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
       const overrideChannelName = `beta-${shortId}`
       await resetAndSeedAppData(appId)
       await resetAndSeedAppDataStats(appId)
-      const supabase = getSupabaseClient()
+      const capgo = getSupabaseClient()
 
       try {
         const baseData = getBaseData(appId) as StatsPayload
@@ -597,7 +595,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         const version = await createAppVersions(baseData.version_build, appId)
         baseData.version_name = version.name
 
-        const { data: channel, error: channelError } = await supabase
+        const { data: channel, error: channelError } = await capgo
           .from('channels')
           .insert({
             app_id: appId,
@@ -611,7 +609,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         expect(channelError).toBeNull()
         expect(channel).toBeTruthy()
 
-        await supabase
+        await capgo
           .from('channel_devices')
           .insert({
             app_id: appId,
@@ -621,7 +619,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
           })
           .throwOnError()
 
-        await supabase
+        await capgo
           .from('apps')
           .update({ channel_device_count: 1 })
           .eq('app_id', appId)
@@ -631,7 +629,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         expect(response.status).toBe(200)
         expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
 
-        const { data: usage, error: usageError } = await supabase
+        const { data: usage, error: usageError } = await capgo
           .from('version_usage')
           .select('channel_id, channel_name')
           .eq('app_id', appId)
@@ -656,7 +654,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
       const spoofedChannelName = `private-${shortId}`
       await resetAndSeedAppData(appId)
       await resetAndSeedAppDataStats(appId)
-      const supabase = getSupabaseClient()
+      const capgo = getSupabaseClient()
 
       try {
         const baseData = getBaseData(appId) as StatsPayload
@@ -668,7 +666,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         const version = await createAppVersions(baseData.version_build, appId)
         baseData.version_name = version.name
 
-        const { error: channelError } = await supabase
+        const { error: channelError } = await capgo
           .from('channels')
           .insert({
             app_id: appId,
@@ -683,7 +681,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         expect(response.status).toBe(200)
         expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
 
-        const { data: usage, error: usageError } = await supabase
+        const { data: usage, error: usageError } = await capgo
           .from('version_usage')
           .select('channel_name')
           .eq('app_id', appId)
@@ -703,13 +701,18 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
   })
 
   it('filters legacy download_fail before saved stats and logs', async () => {
+    // Plugins before 6.53.0 / 7.53.0 / 8.53.0 also send download_fail for a failed
+    // update check, against the running bundle: logged, never a version fail.
     const cases = [
-      { pluginVersion: '7.16.9', shouldRecord: false, createVersion: true },
-      { pluginVersion: '7.16.9', shouldRecord: false, createVersion: false },
-      { pluginVersion: '7.17.0', shouldRecord: true, createVersion: true },
-      { pluginVersion: '6.14.24', shouldRecord: false, createVersion: true },
-      { pluginVersion: '6.14.25', shouldRecord: true, createVersion: true },
-      { pluginVersion: 'not-a-version', shouldRecord: false, createVersion: true },
+      { pluginVersion: '7.16.9', shouldRecord: false, countsAsFail: false, createVersion: true },
+      { pluginVersion: '7.16.9', shouldRecord: false, countsAsFail: false, createVersion: false },
+      { pluginVersion: '7.17.0', shouldRecord: true, countsAsFail: false, createVersion: true },
+      { pluginVersion: '6.14.24', shouldRecord: false, countsAsFail: false, createVersion: true },
+      { pluginVersion: '6.14.25', shouldRecord: true, countsAsFail: false, createVersion: true },
+      { pluginVersion: '8.51.16', shouldRecord: true, countsAsFail: false, createVersion: true },
+      { pluginVersion: '8.53.0', shouldRecord: true, countsAsFail: true, createVersion: true },
+      { pluginVersion: '7.53.0', shouldRecord: true, countsAsFail: true, createVersion: true },
+      { pluginVersion: 'not-a-version', shouldRecord: false, countsAsFail: false, createVersion: true },
     ]
 
     for (const [caseIndex, testCase] of cases.entries()) {
@@ -748,7 +751,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats', () => {
         .eq('action', 'fail')
 
       expect(versionUsageError).toBeNull()
-      expect(versionUsageCount).toBe(testCase.shouldRecord ? 1 : 0)
+      expect(versionUsageCount).toBe(testCase.countsAsFail ? 1 : 0)
     }
   })
 
@@ -915,7 +918,7 @@ describe('rollout trigger metadata', () => {
     const appId = `${APP_NAME}.rollout.failcohort.${shortId}`
     await resetAndSeedAppData(appId)
     await resetAndSeedAppDataStats(appId)
-    const supabase = getSupabaseClient()
+    const capgo = getSupabaseClient()
 
     try {
       const version = await createAppVersions(`1.0.0-failcohort-${shortId}.1`, appId)
@@ -940,7 +943,7 @@ describe('rollout trigger metadata', () => {
         expect(responseData).toEqual({ status: 'ok' })
       }
 
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('version_usage')
         .select('action')
         .eq('app_id', appId)
@@ -1389,7 +1392,7 @@ describe.skipIf(USE_CLOUDFLARE)('[POST] /stats device version attribution', () =
         const data = getBaseData(appId) as StatsPayload
         data.device_id = uuid
         data.action = action
-        data.plugin_version = '7.17.0'
+        data.plugin_version = '8.53.0'
         data.version_name = versionName
         const response = await postStats(data)
         expect(response.status).toBe(200)

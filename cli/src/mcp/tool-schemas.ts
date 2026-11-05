@@ -15,7 +15,8 @@ import {
 } from '../schemas/sdk'
 import { DOCS_SEARCH_MAX_RESULTS } from '../shared/docs-search'
 
-const sdkAuthFields = { apikey: true, supaHost: true, supaAnon: true } as const
+// Host fields stay out of MCP inputs so an agent cannot send the saved key to a host it chooses.
+const sdkAuthFields = { apikey: true, apiHost: true, filesHost: true } as const
 
 export const mcpAddAppInputSchema = z.object({
   appId: z.string(),
@@ -23,11 +24,7 @@ export const mcpAddAppInputSchema = z.object({
   icon: z.string().optional(),
 })
 
-export const mcpUpdateAppInputSchema = updateAppOptionsSchema.omit({
-  apikey: true,
-  supaHost: true,
-  supaAnon: true,
-})
+export const mcpUpdateAppInputSchema = updateAppOptionsSchema.omit(sdkAuthFields)
 
 export const mcpDeleteAppInputSchema = z.object({
   appId: z.string().describe('App ID to delete'),
@@ -174,6 +171,14 @@ export const mcpSearchDocsInputSchema = z.object({
   limit: z.number().int().min(1).max(DOCS_SEARCH_MAX_RESULTS).optional().describe('Maximum results, default 8'),
 })
 
+export const mcpSetProjectDirInputSchema = z.object({
+  path: z.string().min(1).describe('Absolute path to the Capacitor app folder (with capacitor.config.* and its package.json), or a workspace containing exactly one Capacitor app. Multiple apps require an explicit app path. Relative paths resolve from the current project directory.'),
+})
+
+export const mcpProjectDirOptionSchema = z.string().trim().min(1).optional().describe('Absolute path of the agent\'s Capacitor app or workspace. Selects the project for this and subsequent calls on every tool. Omit to use MCP roots or the previously selected project.')
+
+export const mcpCwdOptionSchema = mcpProjectDirOptionSchema.describe('Alias for projectDir: the agent\'s working directory, not the MCP server\'s launch directory. Selects the app for this and subsequent calls. Relative tool paths resolve from the selected app.')
+
 export const mcpDoctorInputSchema = z.object({
   packageJson: z.string().describe('Path to package.json for monorepos').optional(),
 })
@@ -186,17 +191,14 @@ export const mcpGetStatsInputSchema = z.object({
   rangeEnd: z.string().optional(),
 })
 
-export const mcpObserveInputSchema = observeOptionsObjectSchema.omit({
-  apikey: true,
-  supaHost: true,
-  supaAnon: true,
-}).superRefine(refineObserveDeviceId)
+export const mcpObserveInputSchema = observeOptionsObjectSchema.omit(sdkAuthFields).superRefine(refineObserveDeviceId)
 
 export const mcpRequestBuildInputSchema = z.object({
   appId: z.string(),
   platform: z.enum(['ios', 'android']),
   path: z.string().optional(),
   nodeModules: z.string().optional(),
+  useStoredCredentials: z.boolean().optional().describe('Use the signing credentials stored on Capgo for this app (saved with "build credentials push"; needs app admin rights) instead of only the locally saved ones'),
   cache: buildCacheOptionSchema.describe('When false, disables compilation cache for this build. Omit or true to use the default (cache enabled).'),
   cacheKey: buildCacheKeyOptionSchema.describe('Custom compilation cache key (e.g. rc, prod) to share or isolate cache between environments.'),
 })

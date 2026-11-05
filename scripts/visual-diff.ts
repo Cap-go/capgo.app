@@ -365,7 +365,8 @@ async function captureRouteInChild(phase: Phase, route: VisualDiffRoute, configP
   const captureProcess = startProcess(
     `capture-${phase}-${route.slug}`,
     [process.execPath, runnerPath, 'capture-route', '--phase', phase, '--routes', route.slug],
-    { VISUAL_DIFF_CONFIG_PATH: configPath },
+    // Lets a route's prepare() require head-only UI on the after capture.
+    { VISUAL_DIFF_CONFIG_PATH: configPath, VISUAL_DIFF_PHASE: phase },
   )
   try {
     await waitForManagedProcess(captureProcess, visualDiffRouteTimeoutMs, `capturing ${phase} ${route.slug}`)

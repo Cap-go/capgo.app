@@ -55,6 +55,6 @@ Canonical researcher policy: https://github.com/Cap-go/.github/blob/main/SECURIT
 
 - Do **not** put GHSA ids or unpublished advisory/PoC text in public PRs, issues, or changelogs.
 - Zip / bundle extract and write paths: canonicalize and keep writes inside the intended root. Do not follow symlinks out of the target directory.
-- Treat project-controlled config (`localApi`, `localSupa`, app/id paths, custom endpoints) as untrusted for filesystem and network side effects.
+- Treat project-controlled config (`localApi`, `localApiFiles`, app/id paths, custom endpoints) as untrusted for filesystem and network side effects.
 - Prefer containment checks before delete or overwrite of paths derived from user/project input.
 - Report and fix CLI security issues via private advisories: https://github.com/Cap-go/capgo.app/security/advisories/new

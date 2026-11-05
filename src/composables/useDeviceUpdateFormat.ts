@@ -1,4 +1,4 @@
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 
 type DeviceRow = Database['public']['Tables']['devices']['Row']
 

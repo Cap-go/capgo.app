@@ -1,0 +1,587 @@
+import type { Context } from 'hono'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildReadDevicesCFQuery as buildPluginReadDevicesCFQuery } from '../supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts'
+import { buildDeviceIdsByInstallSourcesQuery, buildReadDevicesCFQuery, countDevicesCF, countInstallSourcesCF, formatDateCF, readBandwidthUsageCF, readDeviceUsageCF, readDevicesCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { readDevicesSB } from '../supabase/functions/_backend/utils/supabase.ts'
+
+const pgMocks = vi.hoisted(() => ({
+  getPgClient: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>(),
+  getPgClient: pgMocks.getPgClient,
+  closeClient: vi.fn(),
+}))
+
+function createContextMock() {
+  return {
+    env: {
+      SUPABASE_URL: 'http://localhost:54321',
+      SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+      CF_ANALYTICS_TOKEN: 'cf-analytics-token',
+      CF_ACCOUNT_ANALYTICS_ID: 'cf-account-id',
+      BANDWIDTH_USAGE: {},
+    },
+    req: { url: 'http://localhost/private/devices' },
+    get: vi.fn((key: string) => key === 'requestId' ? 'test-request' : undefined),
+  }
+}
+
+beforeEach(() => {
+  pgMocks.getPgClient.mockReset()
+  vi.unstubAllGlobals()
+})
+
+describe('buildReadDevicesCFQuery', () => {
+  it.concurrent('applies default device_id cursor pagination when no order is provided', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      cursor: '2026-04-04 03:05:59|11111111-1111-4111-8111-111111111111',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const cursorIndex = query.indexOf(`WHERE device_id > '11111111-1111-4111-8111-111111111111'`)
+
+    expect(groupByIndex).toBeGreaterThan(-1)
+    expect(cursorIndex).toBeGreaterThan(groupByIndex)
+    expect(query).toContain('ORDER BY device_id ASC')
+  })
+
+  const installSourceArgMax = 'argMax(blob9, if(blob9 != \'\', timestamp, toDateTime(\'1970-01-01 00:00:00\'))) AS install_source'
+
+  it.concurrent('reads install_source from blob9 on default device listing', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(installSourceArgMax)
+    expect(query).not.toContain('blob10')
+  })
+
+  it.concurrent('reads install_source from blob9 in plugin-runtime device listing', () => {
+    const query = buildPluginReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(installSourceArgMax)
+  })
+
+  it.concurrent('does not read country code for custom id listing without device ids', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      limit: 1,
+    }, true)
+
+    expect(query).toContain('custom_id != \'\'')
+    expect(query).not.toContain('blob5 != \'\'')
+    expect(query).not.toContain('blob10')
+  })
+
+  it.concurrent('reads country code when devices are requested by id', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      deviceIds: ['11111111-1111-4111-8111-111111111111'],
+      limit: 1,
+    }, false)
+
+    expect(query).toContain('argMax(blob10, if(blob10 != \'\', timestamp, toDateTime(\'1970-01-01 00:00:00\'))) AS country_code')
+  })
+
+  it.concurrent('applies descending cursor pagination after device grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      cursor: '2026-04-04 03:05:59|11111111-1111-4111-8111-111111111111',
+      limit: 1,
+      order: [{ key: 'updated_at', sortable: 'desc' }],
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const cursorIndex = query.indexOf(`WHERE (updated_at < toDateTime('2026-04-04 03:05:59')`)
+    const tiebreakerIndex = query.indexOf(`AND device_id > '11111111-1111-4111-8111-111111111111'`)
+
+    expect(groupByIndex).toBeGreaterThan(-1)
+    expect(cursorIndex).toBeGreaterThan(groupByIndex)
+    expect(tiebreakerIndex).toBeGreaterThan(cursorIndex)
+    expect(query).not.toContain(`AND (timestamp < toDateTime('2026-04-04 03:05:59')`)
+    expect(query).toContain(`ORDER BY updated_at DESC, device_id ASC`)
+  })
+
+  it.concurrent('applies ascending cursor pagination after device grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      cursor: '2026-04-04 03:05:59|11111111-1111-4111-8111-111111111111',
+      limit: 1,
+      order: [{ key: 'updated_at', sortable: 'asc' }],
+    }, false)
+
+    const cursorIndex = query.indexOf(`WHERE (updated_at > toDateTime('2026-04-04 03:05:59')`)
+    const tiebreakerIndex = query.indexOf(`AND device_id > '11111111-1111-4111-8111-111111111111'`)
+
+    expect(query).toContain(`WHERE (updated_at > toDateTime('2026-04-04 03:05:59')`)
+    expect(tiebreakerIndex).toBeGreaterThan(cursorIndex)
+    expect(query).toContain(`ORDER BY updated_at ASC, device_id ASC`)
+  })
+
+  it.concurrent('builds install source device lookup from non-empty blob9 rows', () => {
+    const query = buildDeviceIdsByInstallSourcesQuery('com.example.app', ['app_store', 'amazon_appstore'])
+
+    expect(query).toContain(`WHERE index1 = 'com.example.app' AND blob9 != ''`)
+    expect(query).toContain('GROUP BY blob1')
+    expect(query).toContain(`install_source IN ('app_store', 'amazon_appstore')`)
+  })
+  it.concurrent('filters devices with updated_at greater than the provided timestamp', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      updated_at_gt: '2026-04-04T03:05:59.000Z',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const innerFilterIndex = query.indexOf(`timestamp > toDateTime('2026-04-04 03:05:59')`)
+    const outerFilterIndex = query.indexOf(`WHERE updated_at > toDateTime('2026-04-04 03:05:59')`)
+
+    expect(groupByIndex).toBeGreaterThan(-1)
+    expect(innerFilterIndex).toBeGreaterThan(-1)
+    expect(innerFilterIndex).toBeLessThan(groupByIndex)
+    expect(outerFilterIndex).toBeGreaterThan(groupByIndex)
+  })
+
+  it.concurrent('filters devices by latest aggregated platform and version after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      platform: 'ios',
+      version_name: '1.2.3',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const outerWhereIndex = query.indexOf('WHERE platform = 1 AND version_name = \'1.2.3\'')
+    const altOuterWhereIndex = query.indexOf('WHERE version_name = \'1.2.3\' AND platform = 1')
+
+    expect(query).not.toContain(`blob2 = '1.2.3'`)
+    expect(Math.max(outerWhereIndex, altOuterWhereIndex)).toBeGreaterThan(groupByIndex)
+  })
+
+  it.concurrent('filters devices by latest aggregated default_channel after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      default_channel: 'beta\'s',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    expect(query).not.toContain(`blob7 = `)
+    expect(query.indexOf(`default_channel = 'beta''s'`)).toBeGreaterThan(groupByIndex)
+  })
+
+  it.concurrent('filters devices by os_version gte after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      platform: 'android',
+      os_version_compare: { op: 'gte', value: '14' },
+      version_name_compare: { op: 'lte', value: '1.2.3' },
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    expect(query).toContain('argMax(blob4, timestamp) AS os_version')
+    expect(query.indexOf('>= 14')).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf('splitByChar(\'.\', os_version)')).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf('splitByChar(\'.\', version_name)')).toBeGreaterThan(groupByIndex)
+    expect(query).not.toContain('concat(')
+  })
+
+  it.concurrent('filters devices by multiple version names after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      version_name: ['1.2.3', '2.0.0'],
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const outerWhereIndex = query.indexOf(`WHERE version_name IN ('1.2.3', '2.0.0')`)
+
+    expect(query).not.toContain(`blob2 IN ('1.2.3', '2.0.0')`)
+    expect(outerWhereIndex).toBeGreaterThan(groupByIndex)
+  })
+
+  it.concurrent('filters plugin-runtime devices by multiple version names', () => {
+    const query = buildPluginReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      version_name: ['1.2.3', '2.0.0'],
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(`blob2 IN ('1.2.3', '2.0.0')`)
+  })
+
+  it.concurrent('applies search against latest aggregated device fields after grouping', () => {
+    const query = buildReadDevicesCFQuery({
+      app_id: 'com.example.app',
+      platform: 'android',
+      search: 'abc',
+      limit: 1,
+    }, false)
+
+    const groupByIndex = query.indexOf('GROUP BY blob1')
+    const searchIndex = query.indexOf(`position('abc' IN toLower(device_id))`)
+
+    expect(query).not.toContain(`toLower(blob1)`)
+    expect(searchIndex).toBeGreaterThan(groupByIndex)
+    expect(query.indexOf('platform = 0')).toBeGreaterThan(groupByIndex)
+  })
+
+  it('maps install_source from Analytics Engine rows in readDevicesCF', async () => {
+    let query = ''
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        meta: [
+          { name: 'device_id', type: 'String' },
+          { name: 'version_name', type: 'String' },
+          { name: 'plugin_version', type: 'String' },
+          { name: 'os_version', type: 'String' },
+          { name: 'custom_id', type: 'String' },
+          { name: 'version_build', type: 'String' },
+          { name: 'default_channel', type: 'String' },
+          { name: 'key_id', type: 'String' },
+          { name: 'install_source', type: 'String' },
+          { name: 'platform', type: 'Float64' },
+          { name: 'is_prod', type: 'Float64' },
+          { name: 'is_emulator', type: 'Float64' },
+          { name: 'updated_at', type: 'DateTime' },
+        ],
+        data: [{
+          device_id: '11111111-1111-4111-8111-111111111111',
+          version_name: '1.0.0',
+          plugin_version: '8.0.0',
+          os_version: '17.0',
+          custom_id: '',
+          version_build: '1',
+          default_channel: 'production',
+          key_id: '',
+          install_source: 'app_store',
+          platform: 1,
+          is_prod: 1,
+          is_emulator: 0,
+          updated_at: '2026-04-04 03:05:59',
+        }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const devices = await readDevicesCF(createContextMock() as unknown as Context, {
+      app_id: 'com.example.app',
+      limit: 1,
+    }, false)
+
+    expect(query).toContain(installSourceArgMax)
+    expect(devices).toHaveLength(1)
+    expect(devices[0]?.install_source).toBe('app_store')
+  })
+})
+
+describe('countDevicesCF', () => {
+  it('does not read install source blob on default device counts', async () => {
+    let query = ''
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        meta: [{ name: 'total', type: 'UInt64' }],
+        data: [{ total: 12 }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const count = await countDevicesCF(
+      createContextMock() as unknown as Context,
+      'com.example.app',
+      false,
+    )
+
+    expect(count).toBe(12)
+    expect(query).toContain('COUNT(DISTINCT blob1) AS total')
+    expect(query).not.toContain('blob9')
+    expect(query).not.toContain('install_source')
+  })
+})
+
+describe('countDevicesCF default channel', () => {
+  it('filters counts by latest aggregated default_channel', async () => {
+    let query = ''
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        meta: [{ name: 'total', type: 'UInt64' }],
+        data: [{ total: 3 }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const count = await countDevicesCF(
+      createContextMock() as unknown as Context,
+      'com.example.app',
+      false,
+      [],
+      undefined,
+      undefined,
+      { defaultChannel: 'beta' },
+    )
+
+    expect(count).toBe(3)
+    expect(query).toContain('argMax(blob7, timestamp) AS default_channel')
+    expect(query.indexOf(`default_channel = 'beta'`)).toBeGreaterThan(query.indexOf('GROUP BY blob1'))
+  })
+})
+
+describe('readBandwidthUsageCF', () => {
+  it('throws strict bandwidth read failures instead of returning empty usage', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error('analytics unavailable')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(readBandwidthUsageCF(
+      createContextMock() as unknown as Context,
+      'com.example.app',
+      '2026-06-01',
+      '2026-07-01',
+      { throwOnError: true },
+    )).rejects.toThrow('runQueryToCFA encountered an error')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('includes Cloudflare Analytics HTTP error details in strict bandwidth failures', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      errors: [{ message: 'bad Analytics Engine query' }],
+    }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(readBandwidthUsageCF(
+      createContextMock() as unknown as Context,
+      'com.example.app',
+      '2026-06-01',
+      '2026-07-01',
+      { throwOnError: true },
+    )).rejects.toThrow('runQueryToCFA HTTP 400: {"errors":[{"message":"bad Analytics Engine query"}]}')
+  })
+})
+
+describe('countInstallSourcesCF', () => {
+  it('counts latest install sources in a dedicated aggregate query', async () => {
+    let query = ''
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(init?.body ?? '')
+      return new Response(JSON.stringify({
+        meta: [
+          { name: 'install_source', type: 'String' },
+          { name: 'total', type: 'UInt64' },
+        ],
+        data: [
+          { install_source: 'app_store', total: 3 },
+          { install_source: 'testflight', total: 2 },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const counts = await countInstallSourcesCF(createContextMock() as unknown as Context, 'com.example.app')
+
+    expect(counts).toEqual({ app_store: 3, testflight: 2 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(query).toContain('GROUP BY install_source')
+    expect(query).toContain('argMax(blob9, timestamp) AS install_source')
+    expect(query).toContain('COUNT() AS total')
+    expect(query).not.toContain('COUNT(DISTINCT blob1) AS total')
+    expect(query).not.toContain('CASE WHEN blob9')
+  })
+
+  it('reuses cached install source counts for the same app', async () => {
+    const cachedResponses = new Map<string, Response>()
+    vi.stubGlobal('caches', {
+      open: vi.fn(async () => ({
+        match: vi.fn(async (request: Request) => cachedResponses.get(request.url)),
+        put: vi.fn(async (request: Request, response: Response) => {
+          cachedResponses.set(request.url, response)
+        }),
+      })),
+    })
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      meta: [
+        { name: 'install_source', type: 'String' },
+        { name: 'total', type: 'UInt64' },
+      ],
+      data: [{ install_source: 'app_store', total: 3 }],
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const context = createContextMock() as unknown as Context
+    await expect(countInstallSourcesCF(context, 'com.example.app')).resolves.toEqual({ app_store: 3 })
+    await expect(countInstallSourcesCF(context, 'com.example.app')).resolves.toEqual({ app_store: 3 })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('readDevicesSB', () => {
+  async function readDevicesQuery(params: Parameters<typeof readDevicesSB>[1], customIdMode = false) {
+    const query = vi.fn(async (_text: string, _values: unknown[]) => ({ rows: [] }))
+    pgMocks.getPgClient.mockResolvedValueOnce({ query })
+    await readDevicesSB(createContextMock() as unknown as Context, params, customIdMode)
+    expect(query).toHaveBeenCalledTimes(1)
+    const [text, values] = query.mock.calls[0]!
+    return { text, values }
+  }
+
+  it('applies default device_id cursor pagination when no order is provided', async () => {
+    const { text, values } = await readDevicesQuery({
+      app_id: 'com.example.app',
+      cursor: '2026-04-04 03:05:59|11111111-1111-4111-8111-111111111111',
+      limit: 1,
+    })
+
+    expect(text).toContain('FROM public.devices WHERE app_id = $1 AND device_id > $2 ORDER BY device_id ASC LIMIT $3')
+    expect(values).toEqual(['com.example.app', '11111111-1111-4111-8111-111111111111', 2])
+    expect(pgMocks.getPgClient).toHaveBeenLastCalledWith(expect.anything(), false)
+  })
+
+  it('applies install source filters', async () => {
+    const { text, values } = await readDevicesQuery({
+      app_id: 'com.example.app',
+      installSources: ['app_store', 'testflight'],
+      limit: 1,
+    })
+
+    expect(text).toContain('install_source = ANY($2::text[])')
+    expect(values).toContainEqual(['app_store', 'testflight'])
+  })
+
+  it('applies platform and version_name filters together', async () => {
+    const { text, values } = await readDevicesQuery({
+      app_id: 'com.example.app',
+      platform: 'android',
+      version_name: '2.0.0',
+      limit: 1,
+    })
+
+    expect(text).toContain('version_name = $2')
+    expect(text).toContain('platform = $3::public.platform_os')
+    expect(values).toEqual(['com.example.app', '2.0.0', 'android', 2])
+  })
+
+  it('applies default_channel filter', async () => {
+    const { text, values } = await readDevicesQuery({
+      app_id: 'com.example.app',
+      default_channel: 'beta',
+      limit: 1,
+    })
+
+    expect(text).toContain('default_channel = $2')
+    expect(values).toEqual(['com.example.app', 'beta', 2])
+  })
+
+  it('filters devices with updated_at greater than the provided timestamp', async () => {
+    const { text, values } = await readDevicesQuery({
+      app_id: 'com.example.app',
+      updated_at_gt: '2026-04-04T03:05:59.000Z',
+      limit: 1,
+    })
+
+    expect(text).toContain('updated_at > $2::timestamptz')
+    expect(values).toEqual(['com.example.app', '2026-04-04T03:05:59.000Z', 2])
+  })
+
+  it('orders devices by updated_at when requested', async () => {
+    const { text } = await readDevicesQuery({
+      app_id: 'com.example.app',
+      order: [{ key: 'updated_at', sortable: 'desc' }],
+      limit: 1,
+    })
+
+    expect(text).toContain('ORDER BY updated_at DESC, device_id ASC')
+  })
+
+  it('returns rows as PostgREST JSON', async () => {
+    const { text } = await readDevicesQuery({ app_id: 'com.example.app', limit: 1 })
+
+    expect(text).toContain('pg_catalog.to_json(q.*)')
+  })
+})
+
+describe('formatDateCF', () => {
+  it.concurrent.each([
+    ['Date objects', new Date('2026-03-17T09:08:07.654Z')],
+    ['ISO strings with offsets', '2026-03-17T10:08:07+01:00'],
+  ] as const)('normalizes %s to a stable UTC SQL timestamp', (_name, input) => {
+    expect(formatDateCF(input)).toBe('2026-03-17 09:08:07')
+  })
+})
+
+function createDeviceUsageContext() {
+  return {
+    env: {
+      CF_ANALYTICS_TOKEN: 'cf-analytics-token',
+      CF_ACCOUNT_ANALYTICS_ID: 'cf-account-id',
+      DEVICE_USAGE: {},
+    },
+    get: (key: string) => key === 'requestId' ? 'device-usage-test' : undefined,
+  } as unknown as Context
+}
+
+describe('readDeviceUsageCF', () => {
+  it('aggregates daily MAU inside Analytics Engine instead of returning one row per device', async () => {
+    const queries: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      queries.push(String(init?.body))
+      return new Response(JSON.stringify({
+        meta: [
+          { name: 'date', type: 'String' },
+          { name: 'app_id', type: 'String' },
+          { name: 'org_id', type: 'String' },
+          { name: 'mau', type: 'UInt64' },
+        ],
+        data: [
+          { date: '2026-09-01', app_id: 'com.example.app', org_id: 'org-new', mau: '600000' },
+          { date: '2026-09-01', app_id: 'com.example.app', org_id: 'org-old', mau: '5' },
+          { date: '2026-09-02', app_id: 'com.example.app', org_id: 'org-new', mau: '328104' },
+        ],
+        rows: 3,
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+
+    const usage = await readDeviceUsageCF(createDeviceUsageContext(), 'com.example.app', '2026-09-01T00:00:00Z', '2026-10-01T00:00:00Z', { throwOnError: true })
+
+    expect(queries).toHaveLength(1)
+    // Device ids stay inside the inner GROUP BY; the result is one row per day/org.
+    expect(queries[0]).toMatch(/count\(\) AS mau/)
+    expect(queries[0]).toMatch(/GROUP BY date, app_id, org_id/)
+    expect(queries[0]!.split('\n')[1]!.trim()).toBe('date,')
+    expect(usage).toEqual([
+      { date: '2026-09-01', app_id: 'com.example.app', org_id: 'org-new', mau: 600005 },
+      { date: '2026-09-02', app_id: 'com.example.app', org_id: 'org-new', mau: 328104 },
+    ])
+  })
+})

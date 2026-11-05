@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
+import { BASE_URL, createDirectApiKeyWithBindings, fetchTestRequest, getAuthHeaders, getSupabaseClient, headers, NON_ACCESS_APP_NAME, resetAndSeedAppData, resetAppData, USER_EMAIL, USER_ID, USER_ID_2, warmEdgeEndpoint } from './test-utils.ts'
 
 const id = randomUUID().replace(/-/g, '').slice(0, 12)
 const APPNAME = `com.app.error.${id}`
@@ -115,6 +115,40 @@ describe('[POST] /app - Error Cases', () => {
     expect(data.error).toBe('cannot_access_organization')
   })
 
+  it('should return 403 when the user is not a member of the organization', async () => {
+    const { data: org, error } = await getSupabaseClient().from('orgs').insert({
+      name: `Unauthorized Org ${id}`,
+      created_by: USER_ID_2,
+      management_email: `test-${id}@example.com`,
+    }).select().single()
+    expect(error).toBeNull()
+    try {
+      const response = await fetchTestRequest(`${BASE_URL}/app`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ app_id: `${APPNAME}.nonmember`, owner_org: org!.id, name: 'Non-member App' }),
+      })
+      expect(response.status).toBe(403)
+      const data = await response.json() as { error: string }
+      expect(data.error).toBe('cannot_access_organization')
+    }
+    finally {
+      await getSupabaseClient().from('apps').delete().eq('app_id', `${APPNAME}.nonmember`)
+      await getSupabaseClient().from('orgs').delete().eq('id', org!.id)
+    }
+  })
+
+  it('should return 400 when owner_org is missing', async () => {
+    const response = await fetchTestRequest(`${BASE_URL}/app`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ app_id: `${APPNAME}.noorg`, name: 'No Org App' }),
+    })
+    expect(response.status).toBe(400)
+    const data = await response.json() as { error: string }
+    expect(data.error).toBe('missing_owner_org')
+  })
+
   it('should return 409 when app creation fails due to duplicate app id', async () => {
     // Try to create another app with the same app_id
     const response2 = await fetchTestRequest(`${BASE_URL}/app`, {
@@ -142,7 +176,7 @@ describe('[POST] /app - Error Cases', () => {
 })
 
 describe('[GET] /app - Error Cases', () => {
-  it('should return 400 when user cannot access the app', async () => {
+  it('should return 401 when user cannot access the app', async () => {
     const response = await fetchTestRequest(`${BASE_URL}/app/nonexistent.app`, {
       method: 'GET',
       headers: testHeaders,
@@ -152,7 +186,7 @@ describe('[GET] /app - Error Cases', () => {
     expect(data.error).toBe('cannot_access_app')
   })
 
-  it('should return 404 when app is not found', async () => {
+  it('should return 401 cannot_access_app when the app was deleted', async () => {
     // Create an app first to get access, then delete it to test 404
     await resetAndSeedAppData(NOT_FOUND_APP_ID, {
       orgId: testOrgId,
@@ -173,7 +207,7 @@ describe('[GET] /app - Error Cases', () => {
     expect(data.error).toBe('cannot_access_app')
   })
 
-  it('should return 403 when user does not have access to organization', async () => {
+  it('should deny an app owned by an organization the user cannot access', async () => {
     // This test would need a more complex setup with different users
     // For now, we test with a response structure check
     const response = await fetchTestRequest(`${BASE_URL}/app/${NON_ACCESS_APP_NAME}`, {
@@ -196,7 +230,7 @@ describe('[PUT] /app - Error Cases', () => {
     })
   })
 
-  it('should return 400 when user cannot access the app', async () => {
+  it('should return 401 when user cannot access the app', async () => {
     const response = await fetchTestRequest(`${BASE_URL}/app/nonexistent.app`, {
       method: 'PUT',
       headers: testHeaders,
@@ -209,7 +243,7 @@ describe('[PUT] /app - Error Cases', () => {
     expect(data.error).toBe('cannot_access_app')
   })
 
-  it('should return 400 when update fails', async () => {
+  it('should return cannot_update_app when the update fails', async () => {
     // Try to update with invalid data that would cause a database error
     const response = await fetchTestRequest(`${BASE_URL}/app/${PUT_APP_ID}`, {
       method: 'PUT',

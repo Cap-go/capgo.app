@@ -5,6 +5,7 @@ import {
   getFailRateFunComparison,
   getIsoWeekNumber,
   getPreviousMonthUtcRange,
+  isInPreviousMonthRange,
   shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
   summarizeDeviceVersionAdoption,
@@ -132,6 +133,15 @@ describe('getPreviousMonthUtcRange', () => {
     expect(range.startIso).toBe('2025-12-01T00:00:00.000Z')
     expect(range.endExclusiveIso).toBe('2026-01-01T00:00:00.000Z')
   })
+
+  it.concurrent('includes the whole last day of the previous month and excludes the current month', () => {
+    // The old window ended at June 30 00:00:00 and dropped almost all of June 30.
+    const now = new Date('2026-07-01T00:30:00.000Z')
+    expect(isInPreviousMonthRange('2026-06-30T00:00:01.000Z', now)).toBe(true)
+    expect(isInPreviousMonthRange('2026-06-30T23:59:59.999Z', now)).toBe(true)
+    expect(isInPreviousMonthRange('2026-07-01T00:00:00.000Z', now)).toBe(false)
+    expect(isInPreviousMonthRange('2026-07-01T00:00:00.001Z', now)).toBe(false)
+  })
 })
 
 describe('sumVersionInstalls', () => {
@@ -177,6 +187,10 @@ describe('sumVersionInstalls', () => {
     expect(installs).toBe(30)
     expect(typeof installs).toBe('number')
     expect(shouldSendDeployInstallStatsEmail(installs)).toBe(true)
+    expect(sumVersionInstalls([], '1.2.3', 1)).toBe(0)
+    expect(shouldSendDeployInstallStatsEmail(0)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(1)).toBe(false)
+    expect(shouldSendDeployInstallStatsEmail(2)).toBe(true)
   })
 })
 
@@ -240,5 +254,52 @@ describe('summarizeDeviceVersionAdoption', () => {
       total_devices: 133,
       adoption_percent: '42.1',
     })
+  })
+})
+
+function assertCleanNumericString(value: string, label: string) {
+  expect(value, label).toMatch(/^\d+(\.\d+)?$/)
+  expect(value, `${label} must not have leading zeros trash`).not.toMatch(/^0\d/)
+}
+
+describe('weekly stats invariants (seeded random weeks)', () => {
+  it.concurrent('keeps rates sane, matches the admin success rate, and emits clean email fields', () => {
+    let seed = 42
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      return seed / 4294967296
+    }
+
+    for (let i = 0; i < 250; i += 1) {
+      const installs = Math.floor(rand() * 50_000)
+      const fails = i === 0 ? 0 : Math.floor(rand() * 50_000)
+      const gets = Math.floor(rand() * 100_000)
+      const asStrings = rand() > 0.5
+
+      const stats = computeWeeklyInstallStats({
+        all_updates: asStrings ? String(installs) : installs,
+        failed_updates: asStrings ? String(fails) : fails,
+        open_app: asStrings ? String(gets) : gets,
+      })
+      const metadata = buildWeeklyEmailMetadata('com.stress.app', stats)
+      const total = installs + fails
+
+      expect(stats.totalUpdates).toBe(total)
+      expect(stats.successfulInstalls).toBe(installs)
+      expect(stats.failedUpdates).toBe(fails)
+      expect(stats.successPercentage).toBeGreaterThanOrEqual(0)
+      expect(stats.successPercentage).toBeLessThanOrEqual(1)
+      // Must match the admin dashboard success_rate formula.
+      expect(Math.abs(stats.successPercentage * 100 - (total > 0 ? (installs / total) * 100 : 0))).toBeLessThan(0.05)
+
+      for (const field of ['weekly_updates', 'weekly_install', 'weekly_fail', 'weekly_open', 'weekly_install_success'] as const)
+        assertCleanNumericString(metadata[field], `week ${i} ${field}`)
+      expect(Number(metadata.weekly_install_success)).toBeCloseTo(stats.successPercentage * 100, 4)
+
+      if (fails > 0)
+        expect(metadata.fun_comparison_2.toLowerCase()).not.toMatch(/flawless|no failed updates/)
+      else
+        expect(metadata.fun_comparison_2.toLowerCase()).toContain('flawless')
+    }
   })
 })

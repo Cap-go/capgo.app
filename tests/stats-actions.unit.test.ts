@@ -45,21 +45,13 @@ describe('stats action filters', () => {
     expect([...frontendActions].sort()).toEqual([...ALLOWED_STATS_ACTIONS].sort())
   })
 
-  it('keeps every app and WebView health action accepted and filterable', () => {
-    expect(ALLOWED_STATS_ACTIONS).toEqual(expect.arrayContaining([...HEALTH_STATS_ACTIONS]))
+  it.each([
+    ['app and WebView health', HEALTH_STATS_ACTIONS],
+    ['native version change', NATIVE_VERSION_STATS_ACTIONS],
+  ] as const)('keeps every %s action accepted and filterable', (_name, actions) => {
+    expect(ALLOWED_STATS_ACTIONS).toEqual(expect.arrayContaining([...actions]))
 
-    for (const action of HEALTH_STATS_ACTIONS) {
-      const filterKey = actionToFilter[action]
-
-      expect(filterKey).toBeTruthy()
-      expect(filterToAction[filterKey]).toBe(action)
-    }
-  })
-
-  it('keeps native version change actions accepted and filterable', () => {
-    expect(ALLOWED_STATS_ACTIONS).toEqual(expect.arrayContaining([...NATIVE_VERSION_STATS_ACTIONS]))
-
-    for (const action of NATIVE_VERSION_STATS_ACTIONS) {
+    for (const action of actions) {
       const filterKey = actionToFilter[action]
 
       expect(filterKey).toBeTruthy()

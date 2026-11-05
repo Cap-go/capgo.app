@@ -159,7 +159,7 @@ function readExternalInput() {
           type="text"
           :placeholder="t('demo-input-placeholder')"
           :aria-label="t('demo-input-placeholder')"
-          class="flex-1 input input-bordered"
+          class="flex-1 d-input"
         >
         <button
           type="button"
@@ -185,7 +185,7 @@ function readExternalInput() {
             type="text"
             :placeholder="t('demo-text-placeholder')"
             :aria-label="t('custom-input-field')"
-            class="w-full input input-bordered"
+            class="w-full d-input"
           >
         </div>
         <div class="text-sm text-gray-500">
@@ -205,7 +205,7 @@ function readExternalInput() {
               type="text"
               :placeholder="t('demo-fname-placeholder')"
               :aria-label="t('first-name')"
-              class="w-full input input-bordered"
+              class="w-full d-input"
             >
           </div>
           <div>
@@ -215,7 +215,7 @@ function readExternalInput() {
               type="text"
               :placeholder="t('demo-lname-placeholder')"
               :aria-label="t('last-name')"
-              class="w-full input input-bordered"
+              class="w-full d-input"
             >
           </div>
         </div>
@@ -227,13 +227,13 @@ function readExternalInput() {
             type="email"
             :placeholder="t('demo-email-placeholder')"
             :aria-label="t('email')"
-            class="w-full input input-bordered"
+            class="w-full d-input"
           >
         </div>
 
         <div>
           <label for="role" class="block mb-2 text-sm font-medium">{{ t('role') }}</label>
-          <select id="role" class="w-full select select-bordered" :aria-label="t('role')">
+          <select id="role" class="w-full d-select" :aria-label="t('role')">
             <option disabled selected>
               {{ t('demo-select-role') }}
             </option>
@@ -247,7 +247,7 @@ function readExternalInput() {
           <input
             id="terms"
             type="checkbox"
-            class="checkbox"
+            class="d-checkbox"
           >
           <label for="terms" class="text-sm">
             I agree to the terms and conditions
@@ -287,7 +287,7 @@ function readExternalInput() {
             2. Dialog with Teleported Content
           </h3>
           <pre class="overflow-x-auto p-3 text-sm bg-gray-100 rounded dark:bg-gray-700"><code>&lt;Teleport to="#dialog-v2-content" v-if="dialogStore.showDialog"&gt;
-  &lt;input v-model="customValue" class="w-full input input-bordered" /&gt;
+  &lt;input v-model="customValue" class="w-full d-input" /&gt;
 &lt;/Teleport&gt;</code></pre>
         </div>
       </div>

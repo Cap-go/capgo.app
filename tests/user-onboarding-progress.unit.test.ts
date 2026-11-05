@@ -12,16 +12,16 @@ import {
 } from '../src/utils/userOnboardingProgress'
 
 describe('user onboarding progress', () => {
-  it.concurrent('parses saved wizard progress and rejects empty or invalid payloads', () => {
-    expect(parseUserOnboardingProgress({})).toBeNull()
-    expect(parseUserOnboardingProgress({ status: 'in_progress' })).toBeNull()
-    expect(parseUserOnboardingProgress({
-      status: 'nope',
-      step: 'details',
-      flow: 'pre_org',
-    })).toBeNull()
+  it.concurrent.each([
+    {},
+    { status: 'in_progress' },
+    { status: 'nope', step: 'details', flow: 'pre_org' },
+  ])('rejects empty or invalid saved wizard progress %j', (payload) => {
+    expect(parseUserOnboardingProgress(payload)).toBeNull()
+  })
 
-    expect(parseUserOnboardingProgress({
+  it.concurrent.each([
+    {
       status: 'in_progress',
       step: 'organization',
       flow: 'pre_org',
@@ -35,69 +35,33 @@ describe('user onboarding progress', () => {
       onboarding_attempt_id: '7e64f484-4171-47b6-86f7-0ef5d49e0ef8',
       last_run_id: 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276',
       updated_at: '2026-08-15T00:00:00.000Z',
-    })).toEqual({
-      status: 'in_progress',
-      step: 'organization',
-      flow: 'pre_org',
-      development_environment: 'hosted_builder',
-      intent: 'publish',
-      details_step: 'icon',
-      app_name: 'Acme',
-      app_id: 'com.acme.app',
-      existing_app: false,
-      org_name: 'Acme Org',
-      onboarding_attempt_id: '7e64f484-4171-47b6-86f7-0ef5d49e0ef8',
-      last_run_id: 'ir_6b735b41-f8ea-45b9-a46e-10c8be795276',
-      updated_at: '2026-08-15T00:00:00.000Z',
-    })
-
-    expect(parseUserOnboardingProgress({
+    },
+    {
       status: 'in_progress',
       step: 'details',
       flow: 'pre_org',
       development_environment: 'skipped',
       intent: 'ota',
       updated_at: '2026-08-15T00:00:00.000Z',
-    })).toEqual({
-      status: 'in_progress',
-      step: 'details',
-      flow: 'pre_org',
-      development_environment: 'skipped',
-      intent: 'ota',
-      updated_at: '2026-08-15T00:00:00.000Z',
-    })
-
-    expect(parseUserOnboardingProgress({
+    },
+    {
       status: 'in_progress',
       step: 'publish_app_question',
       flow: 'pre_org',
       development_environment: 'hosted_builder',
       intent: 'publish',
       updated_at: '2026-08-15T00:00:00.000Z',
-    })).toEqual({
-      status: 'in_progress',
-      step: 'publish_app_question',
-      flow: 'pre_org',
-      development_environment: 'hosted_builder',
-      intent: 'publish',
-      updated_at: '2026-08-15T00:00:00.000Z',
-    })
-
-    expect(parseUserOnboardingProgress({
+    },
+    {
       status: 'in_progress',
       step: 'intent',
       flow: 'pre_org',
       publish_app_question: true,
       intent: 'ota',
       updated_at: '2026-08-15T00:00:00.000Z',
-    })).toEqual({
-      status: 'in_progress',
-      step: 'intent',
-      flow: 'pre_org',
-      publish_app_question: true,
-      intent: 'ota',
-      updated_at: '2026-08-15T00:00:00.000Z',
-    })
+    },
+  ])('parses saved wizard progress at step $step unchanged', (payload) => {
+    expect(parseUserOnboardingProgress(payload)).toEqual(payload)
   })
 
   it.concurrent('ignores malformed telemetry metadata without invalidating saved progress', () => {

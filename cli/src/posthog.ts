@@ -209,7 +209,7 @@ function getErrorStatus(error: unknown): number | undefined {
     return candidate.status
   if (typeof candidate.statusCode === 'number')
     return candidate.statusCode
-  // supabase-js FunctionsHttpError keeps the upstream Response on `.context`.
+  // invokeCapgoCliApi errors keep the upstream Response on `.context`.
   const contextStatus = candidate.context && typeof candidate.context === 'object'
     ? (candidate.context as { status?: unknown }).status
     : undefined

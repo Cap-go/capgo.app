@@ -4,7 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
 import OnboardingSupportUsernames from '~/components/dashboard/OnboardingSupportUsernames.vue'
-import { useSupabase } from '~/services/supabase'
+import { billingModalOpen } from '~/services/billingModalState'
+import { useConsole } from '~/services/console'
 import {
   dismissSupportUsernamesPromptForever,
   isOnboardingOrganizationSet,
@@ -20,7 +21,7 @@ const PROMPT_DELAY_MS = 2500
 const { t } = useI18n()
 const route = useRoute()
 const main = useMainStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 const organizationStore = useOrganizationStore()
 
@@ -70,7 +71,7 @@ function syncDiscordFromUser() {
 }
 
 function canOpenPrompt() {
-  if (isOnboarding.value || blockedPath.value || dialogStore.showDialog || isOpen.value)
+  if (isOnboarding.value || blockedPath.value || dialogStore.showDialog || billingModalOpen.value || isOpen.value)
     return false
   return shouldShowSupportUsernamesPrompt(main.user)
 }
@@ -118,7 +119,7 @@ async function saveDiscordUsername() {
   if (nextDiscordUsername === (main.user.discord_username || null))
     return true
 
-  const { data: user, error } = await supabase
+  const { data: user, error } = await capgo
     .from('users')
     .update({
       discord_username: nextDiscordUsername,
@@ -156,7 +157,7 @@ async function saveAndClose() {
 }
 
 watch(
-  () => [main.user?.id, main.user?.discord_username, main.user?.github_username, route.path, dialogStore.showDialog, isOnboarding.value] as const,
+  () => [main.user?.id, main.user?.discord_username, main.user?.github_username, route.path, dialogStore.showDialog, billingModalOpen.value, isOnboarding.value] as const,
   () => {
     if (isOnboarding.value || !shouldShowSupportUsernamesPrompt(main.user) || blockedPath.value) {
       if (showTimer)
@@ -169,6 +170,12 @@ watch(
   },
   { immediate: true },
 )
+
+// Billing dialogs (e.g. the trial "add a card" prompt) take priority over this prompt.
+watch(billingModalOpen, (open) => {
+  if (open)
+    closePrompt()
+})
 
 onMounted(() => {
   syncDiscordFromUser()

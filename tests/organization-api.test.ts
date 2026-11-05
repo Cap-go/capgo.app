@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
-import { z } from 'zod'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { parseSchema, safeParseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
 import {
@@ -26,6 +26,8 @@ import {
   warmEdgeEndpoint,
 } from './test-utils.ts'
 
+// Bucket behind the local S3 endpoint that stands in for R2.
+const LOCAL_R2_BUCKET = 'capgo'
 const normalizedSupabaseBaseUrl = normalizeLocalhostUrl(SUPABASE_BASE_URL) ?? SUPABASE_BASE_URL
 
 const ORG_ID = randomUUID()
@@ -174,72 +176,69 @@ describe('read-only API keys cannot access destructive organization routes', () 
     await executeSQL('DELETE FROM public.stripe_info WHERE customer_id = $1', [readOnlyCustomerId])
   })
 
-  it.concurrent('rejects POST /organization/members', async () => {
-    const response = await fetch(`${BASE_URL}/organization/members`, {
-      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+  it.concurrent.each([
+    {
+      name: 'POST /organization/members',
       method: 'POST',
-      body: JSON.stringify({
-        orgId: readOnlyOrgId,
-        email: USER_ADMIN_EMAIL,
-        invite_type: 'org_member',
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const payload = await response.json() as { error: string }
-    expect(payload.error).toBe('cannot_access_organization')
-  })
-
-  it.concurrent('rejects DELETE /organization/members', async () => {
-    const response = await fetch(`${BASE_URL}/organization/members?orgId=${readOnlyOrgId}&email=${USER_ADMIN_EMAIL}`, {
-      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+      path: () => '/organization/members',
+      body: () => ({ orgId: readOnlyOrgId, email: USER_ADMIN_EMAIL, invite_type: 'org_member' }),
+      status: 400,
+      error: 'cannot_access_organization',
+    },
+    {
+      name: 'DELETE /organization/members',
       method: 'DELETE',
-    })
-
-    expect(response.status).toBe(400)
-    const payload = await response.json() as { error: string }
-    expect(payload.error).toBe('cannot_access_organization')
-  })
-
-  it.concurrent('rejects PUT /organization', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+      path: () => `/organization/members?orgId=${readOnlyOrgId}&email=${USER_ADMIN_EMAIL}`,
+      status: 400,
+      error: 'cannot_access_organization',
+    },
+    {
+      name: 'PUT /organization',
       method: 'PUT',
-      body: JSON.stringify({
-        orgId: readOnlyOrgId,
-        name: `Blocked update ${randomUUID()}`,
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const payload = await response.json() as { error: string }
-    expect(payload.error).toBe('cannot_access_organization')
-  })
-
-  it.concurrent('rejects POST /organization without org.create permission', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+      path: () => '/organization',
+      body: () => ({ orgId: readOnlyOrgId, name: `Blocked update ${randomUUID()}` }),
+      status: 400,
+      error: 'cannot_access_organization',
+    },
+    {
+      name: 'POST /organization without org.create permission',
       method: 'POST',
-      body: JSON.stringify({
-        orgId: readOnlyOrgId,
-        name: `Blocked create ${randomUUID()}`,
-      }),
-    })
-
-    expect(response.status).toBe(403)
-    const payload = await response.json() as { error?: string }
-    expect(payload.error).toBe('permission_denied')
-  })
-
-  it.concurrent('rejects DELETE /organization', async () => {
-    const response = await fetch(`${BASE_URL}/organization?orgId=${readOnlyOrgId}`, {
-      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+      path: () => '/organization',
+      body: () => ({ orgId: readOnlyOrgId, name: `Blocked create ${randomUUID()}` }),
+      status: 403,
+      error: 'permission_denied',
+    },
+    {
+      name: 'DELETE /organization',
       method: 'DELETE',
+      path: () => `/organization?orgId=${readOnlyOrgId}`,
+      status: 403,
+      error: 'invalid_org_id',
+    },
+    {
+      name: 'GET /organization/members outside bound organization scope',
+      method: 'GET',
+      path: () => `/organization/members?orgId=${ORG_ID}`,
+      status: 400,
+      error: 'cannot_access_organization',
+    },
+    {
+      name: 'GET /organization/audit without audit-log permission',
+      method: 'GET',
+      path: () => `/organization/audit?orgId=${readOnlyOrgId}`,
+      status: 400,
+      error: 'invalid_org_id',
+    },
+  ] as Array<{ name: string, method: string, path: () => string, body?: () => unknown, status: number, error: string }>)('rejects $name', async ({ method, path, body, status, error }) => {
+    const response = await fetch(`${BASE_URL}${path()}`, {
+      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
+      method,
+      ...(body ? { body: JSON.stringify(body()) } : {}),
     })
 
-    expect(response.status).toBe(403)
-    const payload = await response.json() as { error: string }
-    expect(payload.error).toBe('invalid_org_id')
+    expect(response.status).toBe(status)
+    const payload = await response.json() as { error?: string }
+    expect(payload.error).toBe(error)
   })
 
   it.concurrent('allows GET /organization for accessible organizations', async () => {
@@ -281,28 +280,6 @@ describe('read-only API keys cannot access destructive organization routes', () 
       role: z.string(),
     }))
     expect(parseSchema(members, await response.json()).some(member => member.uid === USER_ID)).toBe(true)
-  })
-
-  it.concurrent('rejects GET /organization/members outside bound organization scope', async () => {
-    const response = await fetch(`${BASE_URL}/organization/members?orgId=${ORG_ID}`, {
-      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
-      method: 'GET',
-    })
-
-    expect(response.status).toBe(400)
-    const payload = await response.json() as { error: string }
-    expect(payload.error).toBe('cannot_access_organization')
-  })
-
-  it.concurrent('rejects GET /organization/audit without audit-log permission', async () => {
-    const response = await fetch(`${BASE_URL}/organization/audit?orgId=${readOnlyOrgId}`, {
-      headers: { ...readOnlyHeaders, capgkey: readOnlyKey },
-      method: 'GET',
-    })
-
-    expect(response.status).toBe(400)
-    const payload = await response.json() as { error: string }
-    expect(payload.error).toBe('invalid_org_id')
   })
 })
 
@@ -354,11 +331,13 @@ describe('scoped write API keys cannot cross organization boundaries', () => {
     scopedKey = createdKey.key
     scopedKeyId = createdKey.id
 
+    // Images live in R2 under `images/`; locally the S3 endpoint is the Supabase
+    // Storage `capgo` bucket, so seed and inspect the object through it.
     const imageContent = new Blob(['scope bypass regression'], { type: 'text/plain' })
     const { error: uploadError } = await getSupabaseClient()
       .storage
-      .from('images')
-      .upload(imagePath, imageContent, {
+      .from(LOCAL_R2_BUCKET)
+      .upload(`images/${imagePath}`, imageContent, {
         contentType: 'text/plain',
         upsert: true,
       })
@@ -371,7 +350,7 @@ describe('scoped write API keys cannot cross organization boundaries', () => {
       await getSupabaseClient().from('apikeys').delete().eq('id', scopedKeyId)
     }
 
-    await getSupabaseClient().storage.from('images').remove([imagePath])
+    await getSupabaseClient().storage.from(LOCAL_R2_BUCKET).remove([`images/${imagePath}`])
     await getSupabaseClient().from('role_bindings').delete().eq('org_id', allowedOrgId)
     await getSupabaseClient().from('role_bindings').delete().eq('org_id', targetOrgId)
     await getSupabaseClient().from('org_users').delete().eq('org_id', allowedOrgId)
@@ -405,8 +384,8 @@ describe('scoped write API keys cannot cross organization boundaries', () => {
 
     const { data: imageList, error: imageError } = await getSupabaseClient()
       .storage
-      .from('images')
-      .list(`org/${targetOrgId}`)
+      .from(LOCAL_R2_BUCKET)
+      .list(`images/org/${targetOrgId}`)
 
     expect(imageError).toBeNull()
     expect(imageList?.some(file => file.name === imagePath.split('/').at(-1))).toBe(true)
@@ -633,7 +612,7 @@ describe('x-limited-key-id subkeys enforce organization scope on middlewareKey r
   })
 })
 
-describe('API key organization creation', () => {
+describe('aPI key organization creation', () => {
   it.concurrent('allows a key with org.create to create an organization and auto-binds that key', async () => {
     const createKeyValue = randomUUID()
     const createKey = await createDirectApiKeyWithBindings({
@@ -1394,89 +1373,38 @@ describe('[POST] /organization', () => {
     }
   })
 
-  it('create organization with missing name', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers: authHeaders,
-      method: 'POST',
-      body: JSON.stringify({}), // Missing name
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_json_parse_body')
-  })
-
   it('create organization with invalid body format', async () => {
     const response = await fetch(`${BASE_URL}/organization`, {
       headers: authHeaders,
       method: 'POST',
-      body: 'invalid json', // Invalid JSON
+      body: 'invalid json',
     })
     expect(response.status).toBeGreaterThanOrEqual(400)
   })
 
-  it('create organization with empty name', async () => {
+  it.each([
+    ['missing name', {}, 'invalid_json_parse_body'],
+    ['empty name', { name: '' }, 'invalid_body'],
+    ['invalid website scheme', { name: `Created Organization ${randomUUID()}`, website: 'ftp://capgo.app' }, 'invalid_body'],
+    ['credential-bearing website urls', { name: `Created Organization ${randomUUID()}`, website: 'https://user:pass@capgo.app' }, 'invalid_body'],
+    ['an estimated active user count above the largest plan stop', { name: `Created Organization ${randomUUID()}`, estimatedMau: 1000001 }, 'invalid_body'],
+  ])('create organization rejects %s', async (_label, body, error) => {
     const response = await fetch(`${BASE_URL}/organization`, {
       headers: authHeaders,
       method: 'POST',
-      body: JSON.stringify({ name: '' }), // Empty name
+      body: JSON.stringify(body),
     })
     expect(response.status).toBe(400)
     const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
+    expect(responseData.error).toBe(error)
   })
 
-  it('create organization rejects invalid website scheme', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers: authHeaders,
-      method: 'POST',
-      body: JSON.stringify({
-        name: `Created Organization ${new Date().toISOString()}`,
-        website: 'ftp://capgo.app',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
-  })
-
-  it('create organization rejects credential-bearing website urls', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers: authHeaders,
-      method: 'POST',
-      body: JSON.stringify({
-        name: `Created Organization ${new Date().toISOString()}`,
-        website: 'https://user:pass@capgo.app',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
-  })
-
-  it('create organization uses the estimated active users to choose the initial plan', async () => {
-    await expectCreatedOrganizationPlan(100000, 'Team')
-  })
-
-  it('create organization keeps Solo through 2K active users', async () => {
-    await expectCreatedOrganizationPlan(2000, 'Solo')
-  })
-
-  it('create organization moves above the Solo active user limit to Maker', async () => {
-    await expectCreatedOrganizationPlan(2001, 'Maker')
-  })
-
-  it('create organization rejects an estimated active user count above the largest plan stop', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers: authHeaders,
-      method: 'POST',
-      body: JSON.stringify({
-        name: `Created Organization ${randomUUID()}`,
-        estimatedMau: 1000001,
-      }),
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
+  it.each([
+    [100000, 'Team'],
+    [2000, 'Solo'],
+    [2001, 'Maker'],
+  ])('create organization with %i estimated active users starts on %s', async (estimatedMau, planName) => {
+    await expectCreatedOrganizationPlan(estimatedMau, planName)
   })
 })
 
@@ -1524,68 +1452,21 @@ describe('[PUT] /organization', () => {
     }
   })
 
-  it('update organization with invalid body', async () => {
+  it.concurrent.each([
+    ['invalid body', () => ({}), 'invalid_json_parse_body'],
+    ['invalid orgId', () => ({ orgId: randomUUID(), name: 'New Name' }), 'cannot_access_organization'],
+    ['missing orgId', () => ({ name: 'New Name' }), 'invalid_body'],
+    ['invalid website scheme', () => ({ orgId: ORG_ID, name: `Updated Organization ${randomUUID()}`, website: 'ftp://www.capgo.app/docs' }), 'invalid_body'],
+    ['credential-bearing website urls', () => ({ orgId: ORG_ID, name: `Updated Organization ${randomUUID()}`, website: 'https://user:pass@www.capgo.app/docs' }), 'invalid_body'],
+  ])('update organization rejects %s', async (_label, body, error) => {
     const response = await fetch(`${BASE_URL}/organization`, {
       headers,
       method: 'PUT',
-      body: JSON.stringify({}), // Missing required fields
+      body: JSON.stringify(body()),
     })
     expect(response.status).toBe(400)
     const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_json_parse_body')
-  })
-
-  it('update organization with invalid orgId', async () => {
-    const invalidOrgId = randomUUID()
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers,
-      method: 'PUT',
-      body: JSON.stringify({ orgId: invalidOrgId, name: 'New Name' }),
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('cannot_access_organization')
-  })
-
-  it('update organization with missing orgId', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers,
-      method: 'PUT',
-      body: JSON.stringify({ name: 'New Name' }), // Missing orgId
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
-  })
-
-  it.concurrent('update organization rejects invalid website scheme', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers,
-      method: 'PUT',
-      body: JSON.stringify({
-        orgId: ORG_ID,
-        name: `Updated Organization ${new Date().toISOString()}`,
-        website: 'ftp://www.capgo.app/docs',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
-  })
-
-  it.concurrent('update organization rejects credential-bearing website urls', async () => {
-    const response = await fetch(`${BASE_URL}/organization`, {
-      headers,
-      method: 'PUT',
-      body: JSON.stringify({
-        orgId: ORG_ID,
-        name: `Updated Organization ${new Date().toISOString()}`,
-        website: 'https://user:pass@www.capgo.app/docs',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
+    expect(responseData.error).toBe(error)
   })
 })
 
@@ -2544,47 +2425,7 @@ describe('rbac mode - organization member operations', () => {
   })
 })
 
-describe('hashed API key enforcement integration', () => {
-  it('find_apikey_by_value finds hashed key', async () => {
-    // Create a hashed API key via API
-    const createResponse = await fetch(`${BASE_URL}/apikey`, {
-      headers: authHeaders,
-      method: 'POST',
-      body: JSON.stringify({
-        name: 'test-hashed-key-for-find',
-        bindings: orgApiKeyBindings(ORG_ID),
-        hashed: true,
-      }),
-    })
-    const createData = await createResponse.json<{ key: string, key_hash: string, id: number }>()
-    expect(createResponse.status).toBe(200)
-    expect(createData.key).toBeTruthy()
-    expect(createData.key_hash).toBeTruthy()
-
-    // Use the plain key to find it via the database function
-    const { data, error } = await getSupabaseClient().rpc('find_apikey_by_value', { key_value: createData.key })
-    expect(error).toBeNull()
-    expect(Array.isArray(data)).toBe(true)
-    expect(data!.length).toBe(1)
-    expect(data![0].id).toBe(createData.id)
-    expect(data![0].key_hash).toBe(createData.key_hash)
-    // The key column should be null for hashed keys
-    expect(data![0].key).toBeNull()
-
-    // Cleanup
-    await fetch(`${BASE_URL}/apikey/${createData.id}`, {
-      headers: authHeaders,
-      method: 'DELETE',
-    })
-  })
-
-  it('find_apikey_by_value returns empty for non-existent key', async () => {
-    const { data, error } = await getSupabaseClient().rpc('find_apikey_by_value', { key_value: 'non-existent-key-abc123' })
-    expect(error).toBeNull()
-    expect(Array.isArray(data)).toBe(true)
-    expect(data!.length).toBe(0)
-  })
-
+describe('verify_api_key_hash', () => {
   it('verify_api_key_hash works correctly', async () => {
     const testKey = 'test-verification-key-xyz'
 

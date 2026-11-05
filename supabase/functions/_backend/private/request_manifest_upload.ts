@@ -7,8 +7,6 @@ import { Hono } from 'hono/tiny'
 import { quickError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { ManifestInventoryConflict, reserveManifestPaths, usesManifestInventory, withManifestInventory } from '../utils/manifest_inventory.ts'
-import { getManifestReceiptBucket } from '../utils/manifest_size_receipt.ts'
 import { createManifestUploadResponse, ManifestUploadRequestError, parseManifestUploadRequestBody, resolveManifestUploadPublicBaseUrl, validateManifestUploadRequest } from '../utils/manifest_upload.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { throwDatabaseLookupError, throwDatabaseUnavailable } from '../utils/pg_auth_lookup.ts'
@@ -27,7 +25,7 @@ function manifestUploadError(error: ManifestUploadRequestError): never {
   return quickError(error.status, error.code, error.message, error.moreInfo)
 }
 
-function manifestUploadPublicUrl(c: Parameters<typeof getEnv>[0]): string {
+export function manifestUploadPublicUrl(c: Parameters<typeof getEnv>[0]): string {
   const configured = getEnv(c, 'FILES_PUBLIC_URL') || getEnv(c, 'PUBLIC_URL')
   if (configured || getRuntimeKey() === 'workerd')
     return configured
@@ -108,14 +106,9 @@ app.post('/', middlewareKey({ usePostgres: true, readOnly: false, rateLimitScope
         secret: capabilitySecret,
         keyId: getEnv(c, 'MANIFEST_UPLOAD_CAPABILITY_KEY_ID'),
         publicBaseUrl,
-        reservePaths: usesManifestInventory(c)
-          ? (prefix, suffixes, sizes) => withManifestInventory(c, db => reserveManifestPaths(db, getManifestReceiptBucket(getEnv(c, 'ENV_NAME')), prefix, suffixes, sizes))
-          : undefined,
       })
     }
     catch (error) {
-      if (error instanceof ManifestInventoryConflict)
-        return quickError(409, 'error_manifest_inventory_conflict', error.message, { entries: error.paths })
       if (error instanceof ManifestUploadRequestError)
         return manifestUploadError(error)
       throw error

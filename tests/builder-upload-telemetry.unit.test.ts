@@ -7,32 +7,29 @@ vi.mock('../cli/src/utils.ts', () => ({
   sendEvent: sendEventMock,
 }))
 
+const httpError = (status: number) => ({ originalResponse: { getStatus: () => status } })
+
 describe('mapBuilderUploadError', () => {
-  it.concurrent('maps HTTP 401 to unauthorized', () => {
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 401 } })).toBe('unauthorized')
-  })
-  it.concurrent('maps HTTP 403 to unauthorized', () => {
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 403 } })).toBe('unauthorized')
-  })
-  it.concurrent('maps HTTP 413 to payload_too_large', () => {
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 413 } })).toBe('payload_too_large')
-  })
-  it.concurrent('maps HTTP 500-599 to storage_failure', () => {
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 500 } })).toBe('storage_failure')
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 502 } })).toBe('storage_failure')
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 599 } })).toBe('storage_failure')
-  })
-  it.concurrent('maps no-response (connection-level) errors to network_error', () => {
-    expect(mapBuilderUploadError(new Error('ECONNRESET'))).toBe('network_error')
-    expect(mapBuilderUploadError({ originalResponse: undefined })).toBe('network_error')
-    expect(mapBuilderUploadError(null)).toBe('network_error')
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 0 } })).toBe('network_error')
-  })
-  it.concurrent('maps other HTTP statuses to unknown', () => {
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 418 } })).toBe('unknown')
-    expect(mapBuilderUploadError({ originalResponse: { getStatus: () => 404 } })).toBe('unknown')
+  it.concurrent.each([
+    [httpError(401), 'unauthorized'],
+    [httpError(403), 'unauthorized'],
+    [httpError(413), 'payload_too_large'],
+    [httpError(500), 'storage_failure'],
+    [httpError(502), 'storage_failure'],
+    [httpError(599), 'storage_failure'],
+    // no-response (connection-level) errors
+    [new Error('ECONNRESET'), 'network_error'],
+    [{ originalResponse: undefined }, 'network_error'],
+    [null, 'network_error'],
+    [httpError(0), 'network_error'],
+    [httpError(418), 'unknown'],
+    [httpError(404), 'unknown'],
+  ])('maps %o to %s', (error, expected) => {
+    expect(mapBuilderUploadError(error)).toBe(expected)
   })
 })
+
+const base = { apikey: 'cap_test_key', appId: 'com.example.app', orgId: 'org-uuid-1', buildMode: 'release', jobId: 'job-abc' } as const
 
 describe('trackBuilderUpload', () => {
   beforeEach(() => {
@@ -42,12 +39,8 @@ describe('trackBuilderUpload', () => {
 
   it('emits Builder Upload Started with size but no duration or failure_category', async () => {
     await trackBuilderUpload({
-      apikey: 'cap_test_key',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
+      ...base,
       platform: 'ios',
-      buildMode: 'release',
-      jobId: 'job-abc',
       sizeBytes: 12_345_678,
       phase: 'started',
     })
@@ -73,12 +66,8 @@ describe('trackBuilderUpload', () => {
 
   it('emits Builder Upload Succeeded with duration and size', async () => {
     await trackBuilderUpload({
-      apikey: 'cap_test_key',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
+      ...base,
       platform: 'android',
-      buildMode: 'release',
-      jobId: 'job-abc',
       sizeBytes: 12_345_678,
       phase: 'succeeded',
       durationSeconds: 42.7,
@@ -96,12 +85,8 @@ describe('trackBuilderUpload', () => {
 
   it('emits Builder Upload Failed with failure_category from a 413', async () => {
     await trackBuilderUpload({
-      apikey: 'cap_test_key',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
+      ...base,
       platform: 'ios',
-      buildMode: 'release',
-      jobId: 'job-abc',
       sizeBytes: 999_999,
       phase: 'failed',
       durationSeconds: 5,
@@ -121,12 +106,8 @@ describe('trackBuilderUpload', () => {
   it('swallows errors thrown by sendEvent', async () => {
     sendEventMock.mockRejectedValueOnce(new Error('network down'))
     await expect(trackBuilderUpload({
-      apikey: 'cap_test_key',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
+      ...base,
       platform: 'ios',
-      buildMode: 'release',
-      jobId: 'job-abc',
       sizeBytes: 1,
       phase: 'started',
     })).resolves.toBeUndefined()

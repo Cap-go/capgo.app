@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
-import { checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
+import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 
@@ -254,7 +254,7 @@ export async function reserveNativeBuildSlot(
   try {
     pgPool = await getPgClient(c)
     client = await checkoutPgClient(pgPool) as PgClient
-    await client.query('BEGIN')
+    await beginWriteTransaction(client)
 
     const orgLock = await client.query(
       'SELECT id FROM public.orgs WHERE id = $1 FOR UPDATE',

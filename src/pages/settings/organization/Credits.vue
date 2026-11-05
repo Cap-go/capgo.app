@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { CreditMetricType, CreditPricingStep } from '~/services/creditPricing'
-import type { Database } from '~/types/supabase.types'
-import { FormKit } from '@formkit/vue'
+import type { Database } from '~/types/database.types'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -13,17 +12,22 @@ import ChevronDownIcon from '~icons/heroicons/chevron-down'
 import CloudIcon from '~icons/heroicons/cloud'
 import ScaleIcon from '~icons/heroicons/scale'
 import UserGroupIcon from '~icons/heroicons/user-group'
+import CardFormModal from '~/components/billing/CardFormModal.vue'
+import EmbeddedCheckoutModal from '~/components/billing/EmbeddedCheckoutModal.vue'
+import TrialPlanOfferModal from '~/components/billing/TrialPlanOfferModal.vue'
 import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
+import FormField from '~/components/forms/FormField.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
+import { getCreditPricingSteps, useConsole } from '~/services/console'
 import { creditPricingMetricOrder, formatCreditPricingPrice, formatCreditPricingTierLabel } from '~/services/creditPricing'
 import { formatLocalDate } from '~/services/date'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { completeCreditTopUp, getCreditAutoTopUp, openPortal, saveCreditAutoTopUp, startCreditTopUp } from '~/services/stripe'
-import { getCreditPricingSteps, useSupabase } from '~/services/supabase'
+import { completeCreditTopUp, getCreditAutoTopUp, saveCreditAutoTopUp, startCreditTopUp } from '~/services/stripe'
 import { useDisplayStore } from '~/stores/display'
 import { useOrganizationStore } from '~/stores/organization'
+import { rules, validateField } from '~/utils/formValidation'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 interface UsageCreditLedgerRow {
@@ -63,7 +67,7 @@ interface DailyLedgerRow {
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
 const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value))
@@ -82,18 +86,26 @@ const isLoadingTransactions = ref(false)
 const loadError = ref<string | null>(null)
 const creditUsdRate = ref(1)
 const isStartingCheckout = ref(false)
+const embeddedCheckout = ref<{ clientSecret: string, publishableKey: string, sessionId: string } | null>(null)
+const showCardModal = ref(false)
+const showTrialPlanOffer = ref(false)
 const isCompletingTopUp = ref(false)
 const isProcessingCheckout = computed(() => isStartingCheckout.value || isCompletingTopUp.value)
 const currentPage = ref(1)
 const pageSize = 5
+// The ledger loads newest-first in batches of whole days instead of the full history.
+const LEDGER_BATCH_ROWS = 500
+const hasMoreTransactions = ref(false)
+const isLoadingMoreTransactions = ref(false)
 const CREDIT_PRICING_HASH = '#credit-pricing'
 const isCreditPricingOpen = ref(route.hash === CREDIT_PRICING_HASH)
 const DEFAULT_TOP_UP_QUANTITY = 100
 const QUICK_TOP_UP_OPTIONS = [50, 500, 5000] as const
 const CREDIT_TAX_MULTIPLIER = 1.2
-const topUpQuantityInput = ref(String(DEFAULT_TOP_UP_QUANTITY))
+// `type="number"` v-model yields numbers (or '' when empty), so keep both shapes.
+const topUpQuantityInput = ref<string | number>(String(DEFAULT_TOP_UP_QUANTITY))
 const topUpQuantity = computed(() => {
-  const parsed = Number.parseInt(topUpQuantityInput.value, 10)
+  const parsed = Number.parseInt(String(topUpQuantityInput.value), 10)
   if (Number.isNaN(parsed) || parsed <= 0)
     return null
   return parsed
@@ -103,7 +115,7 @@ const topUpQuantityUsd = computed(() => (topUpQuantity.value ?? 0) * creditUsdRa
 
 const MIN_AUTO_TOP_UP = 10
 const autoTopUpEnabled = ref(false)
-const autoTopUpThresholdInput = ref(String(MIN_AUTO_TOP_UP))
+const autoTopUpThresholdInput = ref<string | number>(String(MIN_AUTO_TOP_UP))
 const autoTopUpHasCard = ref(false)
 const isLoadingAutoTopUp = ref(false)
 const isSavingAutoTopUp = ref(false)
@@ -111,23 +123,35 @@ const autoTopUpLoadFailed = ref(false)
 let autoTopUpPersistQueue = Promise.resolve()
 let autoTopUpLoadSeq = 0
 let confirmedAutoTopUpThreshold = MIN_AUTO_TOP_UP
-const autoTopUpMonthlyLimitInput = ref('0')
+const autoTopUpMonthlyLimitInput = ref<string | number>('0')
 const autoTopUpMonthlyTotal = ref<number | null>(null)
 const confirmedAutoTopUpMonthlyLimit = ref(0)
 const isAutoTopUpControlsDisabled = computed(() => isLoadingAutoTopUp.value || isSavingAutoTopUp.value || autoTopUpLoadFailed.value)
 const autoTopUpThreshold = computed(() => {
-  const parsed = Number.parseInt(autoTopUpThresholdInput.value, 10)
+  const parsed = Number.parseInt(String(autoTopUpThresholdInput.value), 10)
   if (Number.isNaN(parsed))
     return null
   return parsed
 })
 const isAutoTopUpThresholdValid = computed(() => autoTopUpThreshold.value !== null && autoTopUpThreshold.value >= MIN_AUTO_TOP_UP)
 const autoTopUpMonthlyLimit = computed(() => {
-  const parsed = Number.parseInt(autoTopUpMonthlyLimitInput.value, 10)
+  const parsed = Number.parseInt(String(autoTopUpMonthlyLimitInput.value), 10)
   if (Number.isNaN(parsed))
     return null
   return parsed
 })
+const topUpQuantityErrors = computed(() => validateField(topUpQuantityInput.value, [
+  rules.required(t('credits-top-up-quantity-label')),
+  rules.min(t('credits-top-up-quantity-label'), 1),
+]))
+const autoTopUpThresholdErrors = computed(() => validateField(autoTopUpThresholdInput.value, [
+  rules.required(t('credits-auto-top-up-threshold-label')),
+  rules.min(t('credits-auto-top-up-threshold-label'), MIN_AUTO_TOP_UP),
+]))
+const autoTopUpMonthlyLimitErrors = computed(() => validateField(autoTopUpMonthlyLimitInput.value, [
+  rules.required(t('credits-auto-top-up-monthly-limit-label')),
+  rules.min(t('credits-auto-top-up-monthly-limit-label'), 0),
+]))
 // 0 means no limit; otherwise the limit must allow at least one top-up.
 const isAutoTopUpMonthlyLimitValid = computed(() => {
   const limit = autoTopUpMonthlyLimit.value
@@ -408,33 +432,82 @@ function metricsWithData(day: DailyLedgerRow) {
   })
 }
 
+/**
+ * One newest-first batch of ledger rows older than `before`. When more rows exist,
+ * the oldest (possibly partial) day is held back so every shown day is complete;
+ * the next batch starts below the oldest kept row and fetches that day in full.
+ */
+async function fetchLedgerBatch(orgId: string, before?: string) {
+  let query = capgo
+    .from('usage_credit_ledger')
+    .select('*')
+    .eq('org_id', orgId)
+    .order('occurred_at', { ascending: false })
+    .limit(LEDGER_BATCH_ROWS + 1)
+  if (before)
+    query = query.lt('occurred_at', before)
+  const { data, error } = await query
+  if (error)
+    return { rows: [] as UsageCreditLedgerRow[], hasMore: false, error }
+  const rows = (data ?? []) as UsageCreditLedgerRow[]
+  if (rows.length <= LEDGER_BATCH_ROWS)
+    return { rows, hasMore: false, error: null }
+  const batch = rows.slice(0, LEDGER_BATCH_ROWS)
+  const oldestDay = batch[batch.length - 1].occurred_at.slice(0, 10)
+  const completeDays = batch.filter(row => row.occurred_at.slice(0, 10) !== oldestDay)
+  // A single day larger than a batch is shown as loaded rather than never progressing.
+  return { rows: completeDays.length ? completeDays : batch, hasMore: true, error: null }
+}
+
 async function loadTransactions() {
   const orgId = currentOrganization.value?.gid
   if (!orgId) {
     transactions.value = []
+    hasMoreTransactions.value = false
     return
   }
 
   isLoadingTransactions.value = true
   loadError.value = null
 
-  const { data, error } = await supabase
-    .from('usage_credit_ledger')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('occurred_at', { ascending: false })
+  const { rows, hasMore, error } = await fetchLedgerBatch(orgId)
 
   if (error) {
     console.error('Failed to load usage credit ledger entries', error)
     loadError.value = error.message
     transactions.value = []
+    hasMoreTransactions.value = false
   }
   else {
-    transactions.value = (data ?? []) as UsageCreditLedgerRow[]
+    transactions.value = rows
+    hasMoreTransactions.value = hasMore
     currentPage.value = 1
   }
 
   isLoadingTransactions.value = false
+}
+
+async function loadMoreTransactions() {
+  const orgId = currentOrganization.value?.gid
+  const oldest = transactions.value[transactions.value.length - 1]?.occurred_at
+  if (!orgId || !oldest || isLoadingMoreTransactions.value)
+    return
+  isLoadingMoreTransactions.value = true
+  const { rows, hasMore, error } = await fetchLedgerBatch(orgId, oldest)
+  isLoadingMoreTransactions.value = false
+  if (error) {
+    console.error('Failed to load older usage credit ledger entries', error)
+    toast.error(error.message)
+    return
+  }
+  transactions.value = [...transactions.value, ...rows]
+  hasMoreTransactions.value = hasMore
+}
+
+async function goToNextLedgerPage() {
+  if (currentPage.value >= totalPages.value && hasMoreTransactions.value)
+    await loadMoreTransactions()
+  currentPage.value = Math.min(totalPages.value, currentPage.value + 1)
 }
 
 async function loadPricingSteps() {
@@ -598,13 +671,30 @@ async function onAutoTopUpFieldBlur() {
   await persistAutoTopUpSettings(false, false, true)
 }
 
-async function openBillingPortalForCard() {
+async function openCardForm() {
   const orgId = currentOrganization.value?.gid
   if (!orgId)
     return
   if (!(await ensureUpdateBillingAccess()))
     return
-  await openPortal(orgId, t)
+  showCardModal.value = true
+}
+
+async function onCardSaved() {
+  showCardModal.value = false
+  // Trial orgs that add a card here are offered to start their plan when the trial ends.
+  showTrialPlanOffer.value = !!currentOrganization.value && !currentOrganization.value.paying && (currentOrganization.value.trial_left ?? 0) > 0
+  await loadAutoTopUpSettings()
+}
+
+// Embedded checkout finished in place: reuse the same completion path as a Stripe redirect.
+async function onCreditCheckoutComplete() {
+  const session = embeddedCheckout.value
+  embeddedCheckout.value = null
+  if (!session)
+    return
+  await router.replace({ query: { ...route.query, creditCheckout: 'success', session_id: session.sessionId } })
+  await handleCreditCheckoutReturn()
 }
 
 // Page view requires org.read_billing; buy/checkout still requires org.update_billing.
@@ -671,7 +761,11 @@ async function handleBuyCredits() {
   }
   try {
     isStartingCheckout.value = true
-    await startCreditTopUp(orgId, topUpQuantity.value)
+    const session = await startCreditTopUp(orgId, topUpQuantity.value)
+    if (session.kind === 'embedded')
+      embeddedCheckout.value = session
+    else
+      globalThis.location.href = session.url
   }
   catch (error) {
     console.error('Failed to initiate credit checkout', error)
@@ -877,7 +971,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <div class="flex w-full flex-col gap-3 sm:max-w-md">
               <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
                 <div class="relative w-full sm:flex-1">
-                  <FormKit
+                  <FormField
                     v-model="topUpQuantityInput"
                     type="number"
                     name="creditsTopUpQuantity"
@@ -887,17 +981,16 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                     step="1"
                     :placeholder="`${DEFAULT_TOP_UP_QUANTITY}`"
                     :label="t('credits-top-up-quantity-label')"
-                    validation="required|min:1"
+                    :errors="topUpQuantityErrors"
                     validation-visibility="live"
                     outer-class="w-full !mb-0"
                     label-class="text-xs font-semibold uppercase tracking-wide"
-                    help-class="hidden"
                     message-class="text-xs text-rose-200 mt-1"
                   >
                     <template #prefix>
                       $
                     </template>
-                  </FormKit>
+                  </FormField>
                 </div>
                 <div class="grid grid-cols-3 gap-2 sm:flex sm:shrink-0 sm:items-end">
                   <button
@@ -910,7 +1003,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                       : 'border border-blue-200 bg-white text-blue-700 hover:border-blue-400 hover:bg-blue-50 dark:border-blue-500/60 dark:bg-gray-900 dark:text-blue-200 dark:hover:border-blue-400 dark:hover:bg-blue-900/40'"
                     @click="selectTopUpQuantity(amount)"
                   >
-                    ${{ amount }}
+                    {{ formatNumber(amount, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 }) }}
                   </button>
                 </div>
               </div>
@@ -978,7 +1071,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
           </button>
         </div>
         <div class="mt-6 max-w-md">
-          <FormKit
+          <FormField
             id="credits-auto-top-up-threshold"
             v-model="autoTopUpThresholdInput"
             type="number"
@@ -988,7 +1081,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             min="10"
             step="1"
             :label="t('credits-auto-top-up-threshold-label')"
-            validation="required|min:10"
+            :errors="autoTopUpThresholdErrors"
             validation-visibility="live"
             outer-class="w-full !mb-0"
             :disabled="isAutoTopUpControlsDisabled"
@@ -997,11 +1090,11 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <template #prefix>
               $
             </template>
-          </FormKit>
+          </FormField>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {{ t('credits-auto-top-up-min') }}
           </p>
-          <FormKit
+          <FormField
             id="credits-auto-top-up-monthly-limit"
             v-model="autoTopUpMonthlyLimitInput"
             type="number"
@@ -1011,7 +1104,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             min="0"
             step="1"
             :label="t('credits-auto-top-up-monthly-limit-label')"
-            validation="required|min:0"
+            :errors="autoTopUpMonthlyLimitErrors"
             validation-visibility="live"
             outer-class="w-full !mb-0 mt-4"
             :disabled="isAutoTopUpControlsDisabled"
@@ -1020,7 +1113,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             <template #prefix>
               $
             </template>
-          </FormKit>
+          </FormField>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             {{ t('credits-auto-top-up-monthly-limit-help') }}
           </p>
@@ -1049,7 +1142,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             v-if="!autoTopUpHasCard"
             type="button"
             class="d-btn d-btn-sm d-btn-outline mt-4"
-            @click="openBillingPortalForCard"
+            @click="openCardForm"
           >
             {{ t('credits-auto-top-up-add-card') }}
           </button>
@@ -1231,7 +1324,7 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             </table>
             <div class="mt-4 flex items-center justify-between px-6 py-4 text-sm">
               <span>
-                {{ t('credits-pagination-label', { current: currentPage, total: totalPages }) }}
+                {{ t('credits-pagination-label', { current: currentPage, total: hasMoreTransactions ? `${totalPages}+` : totalPages }) }}
               </span>
               <div class="flex items-center gap-2">
                 <button
@@ -1245,8 +1338,8 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                 <button
                   type="button"
                   class="d-btn d-btn-sm"
-                  :disabled="currentPage >= totalPages"
-                  @click="currentPage = Math.min(totalPages, currentPage + 1)"
+                  :disabled="(currentPage >= totalPages && !hasMoreTransactions) || isLoadingMoreTransactions"
+                  @click="goToNextLedgerPage"
                 >
                   {{ t('next') }}
                 </button>
@@ -1257,6 +1350,28 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
       </div>
     </div>
     <!-- Permission modal: read denial is not dismissible; update denial can be closed -->
+    <EmbeddedCheckoutModal
+      v-if="embeddedCheckout"
+      :title="t('billing-credits-checkout-title')"
+      :client-secret="embeddedCheckout.clientSecret"
+      :publishable-key="embeddedCheckout.publishableKey"
+      @close="embeddedCheckout = null"
+      @complete="onCreditCheckoutComplete"
+    />
+    <CardFormModal
+      v-if="showCardModal && currentOrganization?.gid"
+      :org-id="currentOrganization.gid"
+      mode="setup"
+      @close="showCardModal = false"
+      @saved="onCardSaved"
+    />
+    <TrialPlanOfferModal
+      v-if="showTrialPlanOffer && currentOrganization?.gid"
+      :org-id="currentOrganization.gid"
+      source="credits"
+      @close="showTrialPlanOffer = false"
+      @scheduled="showTrialPlanOffer = false"
+    />
     <RbacPermissionOnlyModal
       v-if="showAdminModal"
       :title="t('billing-access-required')"

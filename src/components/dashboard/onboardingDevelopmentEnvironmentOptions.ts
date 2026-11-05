@@ -22,6 +22,15 @@ export interface OnboardingDevelopmentEnvironmentOption {
   hasDescription: boolean
 }
 
+export const builderSetupAssistants = [
+  { client: 'codex', name: 'Codex', icon: assistantCodex },
+  { client: 'cursor', name: 'Cursor', icon: assistantCursor },
+  { client: 'claude-code', name: 'Claude Code', icon: assistantClaude },
+  { client: 'windsurf', name: 'Windsurf', icon: assistantWindsurf },
+  { client: 'vscode', name: 'VS Code', icon: editorVscode },
+  { client: 'zed', name: 'Zed', icon: null },
+] as const
+
 export const developmentEnvironmentOptions: OnboardingDevelopmentEnvironmentOption[] = [
   {
     value: 'hosted_builder',

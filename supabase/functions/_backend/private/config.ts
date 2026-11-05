@@ -3,17 +3,20 @@ import { Hono } from 'hono/tiny'
 import { hasCliUsageIngest, resolveCliUsageIdentity, trackCliUsage } from '../utils/cli_usage.ts'
 import { MIN_CLI_VERSION, MIN_CLI_VERSION_REASON } from '../utils/cliMinVersion.ts'
 import { useCors } from '../utils/hono.ts'
+import { isLegacySdkCli, notifyLegacyCliUpgrade } from '../utils/legacy_cli_notice.ts'
 import { backgroundTask, existInEnv, getEnv, isStripeConfigured } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
-const USE_NEW_FINALIZE_BUNDLE_UPLOAD = false
 
 app.use('/', useCors)
 
 app.get('/', async (c) => {
   const cliVersion = c.req.header('x-cli-version') ?? ''
+  const capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key') ?? undefined
+  // CLIs up to 8.90.0 read the database through PostgREST: ask their owner to upgrade, off the response path.
+  if (capgkey && isLegacySdkCli(cliVersion))
+    backgroundTask(c, notifyLegacyCliUpgrade(c, { capgkey, cliVersion }))
   if (cliVersion && hasCliUsageIngest(c)) {
-    const capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key') ?? undefined
     const event = {
       cli_version: cliVersion,
       command: c.req.header('x-cli-command') ?? '',
@@ -39,9 +42,9 @@ app.get('/', async (c) => {
     supaKey: getEnv(c, 'SUPABASE_ANON_KEY'),
     stripeEnabled: isStripeConfigured(c),
     // Deprecated response-shape compatibility for released clients; current UI uses build-time flags.
-    nativeAppleLoginEnabled: false,
     minCliVersion: MIN_CLI_VERSION,
     minCliVersionReason: MIN_CLI_VERSION_REASON,
-    useNewFinalizeBundleUpload: USE_NEW_FINALIZE_BUNDLE_UPLOAD,
+    // finalize_bundle_upload was removed; keep false so released CLIs use the version-update path.
+    useNewFinalizeBundleUpload: false,
   })
 })

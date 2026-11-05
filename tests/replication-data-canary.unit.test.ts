@@ -5,6 +5,26 @@ import {
   evaluateSubscriptionHealth,
 } from '../supabase/functions/_backend/public/replication.ts'
 
+type Subscription = Parameters<typeof evaluateSubscriptionHealth>[0][number]
+
+const healthy: Subscription = {
+  subname: 'capgo_google_eu_2_sub',
+  subenabled: true,
+  has_apply_worker: true,
+  has_recent_receipt: true,
+  apply_lag_seconds: 2,
+  last_msg_receipt_time: '2026-08-01T07:00:00.000Z',
+}
+
+const stalled: Subscription = {
+  subname: 'capgo_google_eu_2',
+  subenabled: true,
+  has_apply_worker: false,
+  has_recent_receipt: false,
+  apply_lag_seconds: null,
+  last_msg_receipt_time: null,
+}
+
 describe('replication data canary evaluation', () => {
   afterEach(() => {
     clearDataCanaryCacheForTests()
@@ -18,46 +38,19 @@ describe('replication data canary evaluation', () => {
     })
   })
 
-  it('rejects empty replica when primary has rows', () => {
-    expect(evaluateAppVersionsCanary(120, 0)).toMatchObject({
+  it.each([
+    ['empty replica when primary has rows', 120, 0, 'replica_empty'],
+    ['empty replica even when primary is empty', 0, 0, 'replica_empty'],
+    ['count drift above threshold', 1000, 900, 'count_mismatch'],
+  ])('rejects %s', (_name, primary, replica, reason) => {
+    expect(evaluateAppVersionsCanary(primary, replica)).toMatchObject({
       status: 'ko',
-      reasons: ['replica_empty'],
-    })
-  })
-
-  it('rejects empty replica even when primary is empty', () => {
-    expect(evaluateAppVersionsCanary(0, 0)).toMatchObject({
-      status: 'ko',
-      reasons: ['replica_empty'],
-    })
-  })
-
-  it('rejects count drift above threshold', () => {
-    expect(evaluateAppVersionsCanary(1000, 900)).toMatchObject({
-      status: 'ko',
-      reasons: ['count_mismatch'],
+      reasons: [reason],
     })
   })
 
   it('treats one healthy subscription as ok even with a disabled sibling', () => {
-    const result = evaluateSubscriptionHealth([
-      {
-        subname: 'capgo_google_eu_2',
-        subenabled: false,
-        has_apply_worker: false,
-        has_recent_receipt: false,
-        apply_lag_seconds: null,
-        last_msg_receipt_time: null,
-      },
-      {
-        subname: 'capgo_google_eu_2_sub',
-        subenabled: true,
-        has_apply_worker: true,
-        has_recent_receipt: true,
-        apply_lag_seconds: 2,
-        last_msg_receipt_time: '2026-08-01T07:00:00.000Z',
-      },
-    ])
+    const result = evaluateSubscriptionHealth([{ ...stalled, subenabled: false }, healthy])
 
     expect(result.status).toBe('ok')
     expect(result.subscriptions.find(s => s.subname === 'capgo_google_eu_2')?.status).toBe('disabled')
@@ -65,74 +58,20 @@ describe('replication data canary evaluation', () => {
   })
 
   it('fails when any enabled subscription is unhealthy', () => {
-    const result = evaluateSubscriptionHealth([
-      {
-        subname: 'capgo_google_eu_2',
-        subenabled: true,
-        has_apply_worker: false,
-        has_recent_receipt: false,
-        apply_lag_seconds: null,
-        last_msg_receipt_time: null,
-      },
-      {
-        subname: 'capgo_google_eu_2_sub',
-        subenabled: true,
-        has_apply_worker: true,
-        has_recent_receipt: true,
-        apply_lag_seconds: 2,
-        last_msg_receipt_time: '2026-08-01T07:00:00.000Z',
-      },
-    ])
+    const result = evaluateSubscriptionHealth([stalled, healthy])
 
     expect(result.status).toBe('ko')
     expect(result.reasons).toContain('no_apply_worker')
   })
 
-  it('marks enabled subscription without apply worker as ko', () => {
-    const result = evaluateSubscriptionHealth([
-      {
-        subname: 'capgo_google_eu_2_sub',
-        subenabled: true,
-        has_apply_worker: false,
-        has_recent_receipt: false,
-        apply_lag_seconds: null,
-        last_msg_receipt_time: null,
-      },
-    ])
+  it.each([
+    ['without apply worker', { ...stalled, subname: healthy.subname }, undefined, 'no_apply_worker'],
+    ['with pid but no receipt', { ...stalled, subname: healthy.subname, has_apply_worker: true }, undefined, 'no_recent_receipt'],
+    ['with apply lag above threshold', { ...healthy, apply_lag_seconds: 400, last_msg_receipt_time: '2026-08-01T06:50:00.000Z' }, 180, 'apply_lag_threshold_exceeded'],
+  ] as const)('marks an enabled subscription %s as ko', (_name, subscription, threshold, reason) => {
+    const result = evaluateSubscriptionHealth([subscription], threshold)
 
     expect(result.status).toBe('ko')
-    expect(result.reasons).toContain('no_apply_worker')
-  })
-
-  it('marks enabled subscription with pid but no receipt as ko', () => {
-    const result = evaluateSubscriptionHealth([
-      {
-        subname: 'capgo_google_eu_2_sub',
-        subenabled: true,
-        has_apply_worker: true,
-        has_recent_receipt: false,
-        apply_lag_seconds: null,
-        last_msg_receipt_time: null,
-      },
-    ])
-
-    expect(result.status).toBe('ko')
-    expect(result.reasons).toContain('no_recent_receipt')
-  })
-
-  it('marks apply lag above threshold as ko', () => {
-    const result = evaluateSubscriptionHealth([
-      {
-        subname: 'capgo_google_eu_2_sub',
-        subenabled: true,
-        has_apply_worker: true,
-        has_recent_receipt: true,
-        apply_lag_seconds: 400,
-        last_msg_receipt_time: '2026-08-01T06:50:00.000Z',
-      },
-    ], 180)
-
-    expect(result.status).toBe('ko')
-    expect(result.reasons).toContain('apply_lag_threshold_exceeded')
+    expect(result.reasons).toContain(reason)
   })
 })

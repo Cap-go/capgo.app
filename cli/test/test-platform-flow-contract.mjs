@@ -1,5 +1,6 @@
 import { isStepView } from '../src/build/onboarding/flow/contract.ts'
 import { androidFlow } from '../src/build/onboarding/flow/android-flow.ts'
+import { iosFlow } from '../src/build/onboarding/flow/ios-flow.ts'
 let pass = 0, fail = 0
 const ok = (c, m) => c ? (pass++, console.log('OK', m)) : (fail++, console.error('FAIL', m))
 ok(isStepView({ kind: 'choice', prompt: 'pick', options: [{ value: 'a', label: 'A' }] }), 'valid choice view')
@@ -7,11 +8,8 @@ ok(isStepView({ kind: 'human_gate', prompt: 'enter', collect: [{ field: 'x', des
 ok(isStepView({ kind: 'input', prompt: 'type', collect: [{ field: 'x', desc: 'X' }] }), 'valid input view')
 ok(!isStepView({ kind: 'nope', prompt: 'x' }), 'rejects unknown kind')
 ok(!isStepView({ prompt: 'x' }), 'rejects missing kind')
-ok(typeof androidFlow.resumeStep === 'function', 'androidFlow.resumeStep exists')
-ok(typeof androidFlow.viewForStep === 'function', 'androidFlow.viewForStep exists')
-ok(typeof androidFlow.applyInput === 'function', 'androidFlow.applyInput exists')
-ok(typeof androidFlow.runEffect === 'function', 'androidFlow.runEffect exists')
-ok(androidFlow.resumeStep(null) === 'welcome', 'resumeStep(null) delegates to welcome')
+ok(androidFlow.resumeStep(null) === 'welcome', 'androidFlow.resumeStep(null) delegates to welcome')
+ok(iosFlow.resumeStep(null) === 'welcome', 'iosFlow.resumeStep(null) delegates to welcome')
 
 // ── Real StepView conformance: a representative step of EACH AndroidStepKind ──
 // reachable via androidFlow.viewForStep (auto | input | choice | done | error).

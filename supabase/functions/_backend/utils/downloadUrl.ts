@@ -1,5 +1,4 @@
 import type { Context } from 'hono'
-import type { Database } from './supabase.types.ts'
 import { getRuntimeKey } from 'hono/adapter'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { normalizeLegacyEncodedManifestFileName } from './manifest_encoding.ts'
@@ -84,7 +83,7 @@ export async function getBundleUrl(
   return downloadUrl
 }
 
-export function getManifestUrl(c: Context, versionId: number, manifest: Partial<Database['public']['Tables']['manifest']['Row']>[] | null, deviceId: string): ManifestEntry[] {
+export function getManifestUrl(c: Context, versionId: number, manifest: { file_name?: string | null, file_hash?: string | null, s3_path?: string | null }[] | null, deviceId: string): ManifestEntry[] {
   if (!manifest) {
     return []
   }

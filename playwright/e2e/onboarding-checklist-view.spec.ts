@@ -14,6 +14,26 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
+for (const scenario of [
+  { name: 'legacy OTA after an install', query: 'version=2&otaInstalled=1' },
+  { name: 'completed legacy OTA', query: 'version=2&checklistState=completed' },
+  { name: 'pending OTA', query: 'version=3' },
+]) {
+  test(`opens ${scenario.name} from the sidebar without bouncing home`, async ({ page }) => {
+    await page.goto(`/app/${appId}?${scenario.query}`)
+    const link = page.locator('[data-test="getting-started-nav-link"]')
+    await expect(link).toBeVisible()
+    await link.click()
+    await expect(page).toHaveURL(`${gettingStarted}?showChecklist=1`)
+    await expect(page.locator('[data-test="getting-started-setup"]')).toBeVisible()
+    await expect(page.locator('[data-test="preview-app-dashboard"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="app-onboarding-cli-step-login_cli_mcp"]')).toBeVisible()
+    const state = await page.evaluate(() => (window as any).onboardingSetupPreview.state)
+    expect(state.setupWrites).toEqual([])
+    expect(state.userWrites).toEqual([])
+  })
+}
+
 for (const preOrg of [false, true]) {
   for (const scenario of [
     { name: 'legacy OTA', query: 'version=2', completed: 'Guided setup complete' },
@@ -117,3 +137,30 @@ test('keeps unavailable apps behind the existing not-found page', async ({ page 
   await expect(page.locator('[data-test="getting-started-setup"]')).toHaveCount(0)
   expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.setupWrites)).toEqual([])
 })
+
+test('opens Builder on a query change while the channel-treatment flow stays mounted', async ({ page }) => {
+  await page.goto(`${gettingStarted}?assignment=both-ota&otaProgress=1&channelTreatment=1&legacyChannel=1&setupStage=channel-routing`)
+  await expect(page.locator('[data-test="channel-default-routing-animation"]')).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Builder', exact: true })).toHaveCount(0)
+  await page.evaluate(async () => {
+    await (window as any).onboardingSetupPreview.navigate(`${location.pathname}${location.search}&path=builder`)
+  })
+  await expect(page.getByRole('tab', { name: 'Builder', exact: true })).toHaveAttribute('aria-selected', 'true')
+  expect(await page.evaluate(() => (window as any).onboardingSetupPreview.events.filter((event: string) => event === 'getting-started-mounted'))).toHaveLength(1)
+})
+
+for (const assignment of ['builder-only', 'both-ota']) {
+  test(`opens the real untouched ${assignment} Builder checklist without replaying setup`, async ({ page }) => {
+    await page.goto(`${gettingStarted}?assignment=${assignment}&platform=android&checklistState=pending&showChecklist=1&path=builder&legacyChannel=1&channelTreatment=1&setupStage=channel-routing`)
+    await expect(page.locator('[data-test="builder-step-start_setup"]')).toHaveAttribute('data-status', 'pending')
+    await expect(page.locator('[data-test="setup-goal-chooser"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="channel-default-routing-animation"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="builder-introduction"]')).toHaveCount(0)
+    if (assignment === 'both-ota')
+      await expect(page.getByRole('tab', { name: 'Builder', exact: true })).toHaveAttribute('aria-selected', 'true')
+    const state = await page.evaluate(() => (window as any).onboardingSetupPreview.state)
+    expect(state.setupWrites).toEqual([])
+    expect(state.userWrites).toEqual([])
+    expect(state.builderActivationRequests).toEqual([])
+  })
+}

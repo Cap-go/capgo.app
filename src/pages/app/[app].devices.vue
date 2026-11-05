@@ -1,26 +1,24 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, ref, watchEffect } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import IconAlertCircle from '~icons/lucide/alert-circle'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
+import { useConsole } from '~/services/console'
 import { parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
-const { t } = useI18n()
 const id = ref('')
 const route = useRoute('/app/[app].devices')
 const lastPath = ref('')
 const isLoading = ref(false)
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const app = ref<Database['public']['Tables']['apps']['Row']>()
 const deviceDataCollection = computed(() => parseAppRowDeviceDataCollection(app.value as unknown))
 
 async function loadAppInfo() {
   try {
-    const { data: dataApp } = await supabase
+    const { data: dataApp } = await capgo
       .from('apps')
       .select()
       .eq('app_id', id.value)
@@ -66,18 +64,7 @@ watchEffect(async () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
   </div>
 </template>
 

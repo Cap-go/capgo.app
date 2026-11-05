@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types.ts'
+import type { Database } from '../src/types/database.types.ts'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 
@@ -38,7 +38,6 @@ beforeAll(async () => {
   })
   if (error)
     throw error
-
 })
 
 afterAll(async () => {
@@ -221,15 +220,22 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       .eq('id', ORG_ID)
   })
 
-  it('reject request with missing email', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
+  function postCompliance(body: unknown, extraHeaders: Record<string, string> = {}) {
+    return fetch(`${BASE_URL}/private/validate_password_compliance`, {
+      headers: { ...headers, ...extraHeaders },
       method: 'POST',
-      body: JSON.stringify({
-        password: 'TestPassword123!',
-        org_id: ORG_ID,
-      }),
+      body: JSON.stringify(body),
     })
+  }
+
+  it.each([
+    ['missing email', { password: 'TestPassword123!', org_id: ORG_ID }],
+    ['missing password', { email: TEST_EMAIL, org_id: ORG_ID }],
+    ['missing org_id', { email: TEST_EMAIL, password: 'TestPassword123!' }],
+    ['invalid org_id format', { email: TEST_EMAIL, password: 'TestPassword123!', org_id: 'not-a-uuid' }],
+    ['invalid email format', { email: 'not-an-email', password: 'TestPassword123!', org_id: ORG_ID }],
+  ])('reject request with %s', async (_label, body) => {
+    const response = await postCompliance(body)
     expect(response.status).toBe(400)
 
     const responseData = await response.json() as { error: string }
@@ -237,156 +243,36 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
   })
 
   it('reject request with disallowed Origin header', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers: {
-        ...headers,
-        Origin: 'https://malicious.example',
-      },
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: USER_PASSWORD,
-        org_id: ORG_ID,
-      }),
-    })
+    const response = await postCompliance({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+      org_id: ORG_ID,
+    }, { Origin: 'https://malicious.example' })
     expect(response.status).toBe(403)
 
     const responseData = await response.json() as { error: string }
     expect(responseData.error).toBe('forbidden_origin')
   })
 
-  it('allow request from capacitor origin', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers: {
-        ...headers,
-        Origin: 'capacitor://localhost',
-      },
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: USER_PASSWORD,
-        org_id: ORG_ID,
-      }),
-    })
+  it.each(['capacitor://localhost', 'ionic://localhost', 'http://localhost:3000'])('allow request from %s origin', async (origin) => {
+    const response = await postCompliance({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+      org_id: ORG_ID,
+    }, { Origin: origin })
 
     expect(response.status).toBe(400)
 
     const responseData = await response.json() as { error: string }
     expect(responseData.error).toBe('password_does_not_meet_policy')
-  })
-
-  it('allow request from ionic origin', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers: {
-        ...headers,
-        Origin: 'ionic://localhost',
-      },
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: USER_PASSWORD,
-        org_id: ORG_ID,
-      }),
-    })
-
-    expect(response.status).toBe(400)
-
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('password_does_not_meet_policy')
-  })
-
-  it('allow request from localhost origin', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers: {
-        ...headers,
-        Origin: 'http://localhost:3000',
-      },
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: USER_PASSWORD,
-        org_id: ORG_ID,
-      }),
-    })
-
-    expect(response.status).toBe(400)
-
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('password_does_not_meet_policy')
-  })
-
-  it('reject request with missing password', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: TEST_EMAIL,
-        org_id: ORG_ID,
-      }),
-    })
-    expect(response.status).toBe(400)
-
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
-  })
-
-  it('reject request with missing org_id', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: TEST_EMAIL,
-        password: 'TestPassword123!',
-      }),
-    })
-    expect(response.status).toBe(400)
-
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
-  })
-
-  it('reject request with invalid org_id format', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: TEST_EMAIL,
-        password: 'TestPassword123!',
-        org_id: 'not-a-uuid',
-      }),
-    })
-    expect(response.status).toBe(400)
-
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
-  })
-
-  it('reject request with invalid email format', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: 'not-an-email',
-        password: 'TestPassword123!',
-        org_id: ORG_ID,
-      }),
-    })
-    expect(response.status).toBe(400)
-
-    const responseData = await response.json() as { error: string }
-    expect(responseData.error).toBe('invalid_body')
   })
 
   it('reject request for non-existent org', async () => {
     const nonExistentOrgId = randomUUID()
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: USER_PASSWORD,
-        org_id: nonExistentOrgId,
-      }),
+    const response = await postCompliance({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+      org_id: nonExistentOrgId,
     })
     expect(response.status).toBe(403)
 
@@ -395,14 +281,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
   })
 
   it('returns policy errors for non-compliant member', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: USER_PASSWORD,
-        org_id: ORG_ID,
-      }),
+    const response = await postCompliance({
+      email: USER_EMAIL,
+      password: USER_PASSWORD,
+      org_id: ORG_ID,
     })
 
     expect(response.status).toBe(400)
@@ -432,14 +314,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
     let caughtError: Error | null = null
     let restoreErrorMessage: string | null = null
     try {
-      const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-        headers,
-        method: 'POST',
-        body: JSON.stringify({
-          email: USER_EMAIL,
-          password: USER_PASSWORD,
-          org_id: ORG_ID,
-        }),
+      const response = await postCompliance({
+        email: USER_EMAIL,
+        password: USER_PASSWORD,
+        org_id: ORG_ID,
       })
       expect(response.status).toBe(400)
 
@@ -468,14 +346,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
   })
 
   it('reject request with invalid credentials', async () => {
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: 'WrongPassword123!',
-        org_id: ORG_ID,
-      }),
+    const response = await postCompliance({
+      email: USER_EMAIL,
+      password: 'WrongPassword123!',
+      org_id: ORG_ID,
     })
     expect(response.status).toBe(401)
 
@@ -485,14 +359,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
 
   it('does not reveal org existence when credentials are invalid', async () => {
     const nonExistentOrgId = randomUUID()
-    const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-      headers,
-      method: 'POST',
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        password: 'WrongPassword123!',
-        org_id: nonExistentOrgId,
-      }),
+    const response = await postCompliance({
+      email: USER_EMAIL,
+      password: 'WrongPassword123!',
+      org_id: nonExistentOrgId,
     })
 
     expect(response.status).toBe(401)
@@ -505,7 +375,7 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
     const nonMemberCustomerId = `cus_pwd_nomember_${nonMemberOrgId}`
     const nonMemberEmail = USER_EMAIL
     const nonMemberPassword = USER_PASSWORD
-    const supabase = getSupabaseClient()
+    const capgo = getSupabaseClient()
 
     await executeSQL(
       `INSERT INTO auth.users (id, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_user_meta_data)
@@ -520,7 +390,7 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       [USER_ID, USER_EMAIL],
     )
 
-    await supabase.from('stripe_info').insert({
+    await capgo.from('stripe_info').insert({
       customer_id: nonMemberCustomerId,
       status: 'succeeded',
       product_id: 'prod_LQIregjtNduh4q',
@@ -529,7 +399,7 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       is_good_plan: true,
     })
 
-    await supabase.from('orgs').insert({
+    await capgo.from('orgs').insert({
       id: nonMemberOrgId,
       name: `Pwd Policy Non Member Org ${nonMemberOrgId}`,
       management_email: TEST_EMAIL,
@@ -545,14 +415,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
     })
 
     try {
-      const response = await fetch(`${BASE_URL}/private/validate_password_compliance`, {
-        headers,
-        method: 'POST',
-        body: JSON.stringify({
-          email: nonMemberEmail,
-          password: nonMemberPassword,
-          org_id: nonMemberOrgId,
-        }),
+      const response = await postCompliance({
+        email: nonMemberEmail,
+        password: nonMemberPassword,
+        org_id: nonMemberOrgId,
       })
 
       expect(response.status).toBe(403)
@@ -560,8 +426,8 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
       expect(responseData.error).toBe('not_member')
     }
     finally {
-      await supabase.from('orgs').delete().eq('id', nonMemberOrgId)
-      await supabase.from('stripe_info').delete().eq('customer_id', nonMemberCustomerId)
+      await capgo.from('orgs').delete().eq('id', nonMemberOrgId)
+      await capgo.from('stripe_info').delete().eq('customer_id', nonMemberCustomerId)
     }
   })
 
@@ -578,8 +444,10 @@ describeSupabaseOnly('[POST] /private/validate_password_compliance', () => {
 describe('checkOrgReadAccess', () => {
   it('returns error when membership RPC fails', async () => {
     const result = await checkOrgReadAccess({
-      rpc: async () => ({ data: null, error: { message: 'boom' } }),
-    } as any, ORG_ID, 'req-test')
+      query: async () => {
+        throw new Error('boom')
+      },
+    }, ORG_ID, 'req-test')
 
     expect(result.allowed).toBe(false)
     expect(result.error).toBe('boom')
@@ -655,7 +523,6 @@ describeSupabaseOnly('password Policy Enforcement Integration', () => {
         require_special: true,
       },
     })
-
   })
 
   afterAll(async () => {
@@ -664,7 +531,7 @@ describeSupabaseOnly('password Policy Enforcement Integration', () => {
     await getSupabaseClient().from('stripe_info').delete().eq('customer_id', orgWithPolicyCustomerId)
   })
 
-  it('RBAC permission checks respect password policy with compatibility flag disabled', async () => {
+  it('rBAC permission checks respect password policy with compatibility flag disabled', async () => {
     const [result] = await executeSQL(`
       SELECT public.rbac_check_permission_direct(
         public.rbac_perm_org_read(),
@@ -679,7 +546,7 @@ describeSupabaseOnly('password Policy Enforcement Integration', () => {
     expect(typeof result.allowed).toBe('boolean')
   })
 
-  it('RBAC permission checks respect password policy', async () => {
+  it('rBAC permission checks respect password policy', async () => {
     // Create a dedicated RBAC org with password policy to test the RBAC path
     const orgRbacId = randomUUID()
     const orgRbacCustomerId = `cus_pwd_rbac_${orgRbacId}`

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 // tabs handled by settings layout
 
 const { t } = useI18n()
 const main = useMainStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const isLoading = ref(false)
 const enableNotifications = ref(main.user?.enable_notifications ?? true)
 const optForNewsletters = ref(main.user?.opt_for_newsletters ?? true)
@@ -51,7 +51,7 @@ async function submitNotif() {
 
   isLoading.value = true
   enableNotifications.value = !enableNotifications.value
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('users')
     .update({
       enable_notifications: enableNotifications.value,
@@ -71,7 +71,7 @@ async function submitDoi() {
   isLoading.value = true
 
   optForNewsletters.value = !optForNewsletters.value
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('users')
     .update({
       opt_for_newsletters: optForNewsletters.value,
@@ -94,7 +94,7 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
   const updatedPrefs = { ...currentPrefs, [key]: newValue }
 
   // email_preferences is a JSONB column added in migration 20251228064121
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('users')
     .update({
       email_preferences: updatedPrefs,

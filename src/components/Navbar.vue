@@ -81,7 +81,7 @@ const mobileTitle = computed(() => {
 
           <!-- Title on desktop -->
           <div class="hidden lg:block">
-            <div class="flex items-center space-x-2 font-bold truncate md:text-2xl dark:text-white text-md text-dark">
+            <div class="flex items-center space-x-2 font-bold truncate md:text-2xl dark:text-white">
               <nav class="text-sm font-normal text-slate-600 dark:text-slate-400" aria-label="Breadcrumb">
                 <ol class="inline-flex items-center space-x-1">
                   <li v-for="(breadcrumb, i) in displayStore.pathTitle" :key="i" class="flex items-center h-16">
@@ -119,7 +119,7 @@ const mobileTitle = computed(() => {
 
         <!-- Centered title on mobile -->
         <div class="flex-1 px-4 text-center lg:hidden">
-          <div class="font-bold truncate dark:text-white text-md text-dark first-letter:uppercase">
+          <div class="font-bold truncate dark:text-white first-letter:uppercase">
             {{ mobileTitle }}
           </div>
         </div>

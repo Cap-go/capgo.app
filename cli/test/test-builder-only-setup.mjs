@@ -10,7 +10,7 @@ import { readBuilderOnlyAssignment, readBuilderOnlyInitAssignment, tryBuilderOnl
 
 const appId = 'com.example.builder'
 const setup = { todo_list_version: 4, builder_todo_list_version: '1', paths: ['builder'], selected_path: 'builder', selected_builder_platform: 'android', steps: { builder: { ios: {}, android: {} } } }
-const options = { apikey: 'test-key', supaHost: 'http://localhost:54321', supaAnon: 'test-anon', analytics: true }
+const options = { apikey: 'test-key', apiHost: 'http://localhost:54321/functions/v1', analytics: true }
 const requests = []
 const request = async (route, opts) => {
   requests.push({ route, opts })
@@ -25,8 +25,16 @@ assert.deepEqual(calls, ['cleanup', { ...options, appId }])
 assert.equal(requests[0].route, `app/${appId}`)
 assert.equal(requests[0].opts.method, 'GET', 'assignment reads do not refresh or mutate progress')
 assert.equal(requests[0].opts.apikey, options.apikey)
-assert.equal(requests[0].opts.supaHost, options.supaHost)
+assert.equal(requests[0].opts.apiHost, options.apiHost)
 assert.ok(requests[0].opts.signal, 'assignment lookup is bounded')
+const knownCalls = []
+assert.equal(await tryBuilderOnlyInit(appId, options, {
+  knownBuilderOnly: true,
+  request: async () => assert.fail('a confirmed pending-app assignment must not be looked up again'),
+  beforeLaunch: async () => knownCalls.push('cleanup'),
+  launch: async opts => knownCalls.push(opts),
+}), true, 'a confirmed Builder assignment must hand off without falling through to OTA')
+assert.deepEqual(knownCalls, ['cleanup', { ...options, appId }])
 assert.equal((await resolveBuilderChecklistPlatform(appId, options, 'ios', 'android', request)).platform, 'ios', 'explicit platform wins')
 assert.equal((await resolveBuilderChecklistPlatform(appId, options, undefined, 'ios', request)).platform, 'android', 'saved platform beats native-directory inference')
 assert.equal((await resolveBuilderChecklistPlatform(appId, options, undefined, undefined, request)).platform, 'android')
@@ -116,14 +124,14 @@ try {
       const url = input?.url ?? String(input)
       if (!url.startsWith('http') || url.includes('.wasm')) return nativeFetch(input, init)
       appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ url, method: init?.method ?? 'GET' }) + '\\n')
-      if (url.includes('/private/config')) return Response.json({ supaHost: ${JSON.stringify(options.supaHost)}, supaKey: ${JSON.stringify(options.supaAnon)} })
-      if (url.includes('/rpc/request_actor_user_id')) return Response.json('00000000-0000-4000-8000-000000000001')
+      if (url.includes('/private/config')) return Response.json({})
+      if (url.includes('/private/cli/identity')) return Response.json({ userId: '00000000-0000-4000-8000-000000000001', email: 'builder@example.com' })
+      if (url.includes('/private/cli/preflight')) return Response.json({ user_id: '00000000-0000-4000-8000-000000000001', org_id: 'org-1', app_id: '${appId}', trial_days_left: null, warnings: [] })
       if (url.endsWith('/app/${appId}')) {
         Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true })
         Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true })
         return Response.json({ app_id: '${appId}', onboarding: { setup: ${JSON.stringify(setup)} } })
       }
-      if (url.includes('/rpc/reject_access_due_to_2fa_for_app')) return Response.json(false)
       if (url.includes('/private/onboarding_progress')) {
         const setup = ${JSON.stringify(setup)}
         const status = process.env.BUILDER_TEST_STATUS
@@ -134,7 +142,7 @@ try {
     }
   `)
   const builtCli = new URL('../dist/index.js', import.meta.url).pathname
-  const child = spawnSync('node', ['--import', preload, builtCli, 'init', '--no-analytics', '--supa-host', options.supaHost, '--supa-anon', options.supaAnon], {
+  const child = spawnSync('node', ['--import', preload, builtCli, 'init', '--no-analytics', '--api-host', options.apiHost], {
     cwd: fixture, encoding: 'utf8', timeout: 15_000,
     env: { ...process.env, CAPGO_TOKEN: 'test-key', CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1', CI: '1' },
   })
@@ -143,11 +151,11 @@ try {
   assert.match(output, /build init.*requires an interactive terminal/, 'bundled init hands Builder-only apps to the real Builder command')
   const requests = readFileSync(trace, 'utf8').trim().split('\n').map(line => JSON.parse(line))
   assert.ok(requests.some(item => item.url.endsWith(`/app/${appId}`) && item.method === 'GET'))
-  assert.ok(requests.every(item => item.method === 'GET' || item.url.includes('/rpc/request_actor_user_id')), JSON.stringify(requests))
+  assert.ok(requests.every(item => item.method === 'GET' || item.url.includes('/private/cli/identity')), JSON.stringify(requests))
   assert.equal(readFileSync(join(fixture, '.capgo'), 'utf8'), 'test-key')
   assert.deepEqual(JSON.parse(readFileSync(join(fixture, 'capacitor.config.json'), 'utf8')), { appId, appName: 'Builder test', webDir: 'dist' }, 'no OTA config edits before the handoff')
   for (const status of ['pending', 'warning', 'done']) {
-    const todo = spawnSync('node', ['--import', preload, builtCli, 'app', 'todo', appId, '-a', options.apikey, '--supa-host', options.supaHost, '--supa-anon', options.supaAnon], {
+    const todo = spawnSync('node', ['--import', preload, builtCli, 'app', 'todo', appId, '-a', options.apikey, '--api-host', options.apiHost], {
       cwd: fixture, encoding: 'utf8', timeout: 15_000,
       env: { ...process.env, BUILDER_TEST_STATUS: status, CAPGO_DISABLE_TELEMETRY: '1', CAPGO_DISABLE_POSTHOG: '1', CI: '1' },
     })

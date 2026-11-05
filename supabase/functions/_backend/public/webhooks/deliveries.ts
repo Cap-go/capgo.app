@@ -4,7 +4,8 @@ import type { WebhookDeliveryPayload } from '../../utils/webhook.ts'
 import { z } from 'zod'
 import { numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { queryJson, queryJsonOne } from '../../utils/pg_rls.ts'
 import {
   getDeliveryById,
   getWebhookById,
@@ -38,70 +39,62 @@ export async function getDeliveries(c: Context<MiddlewareKeyVariables>, bodyRaw:
   await checkWebhookPermissionV2(c, body.orgId, auth)
 
   // Direct RLS access to webhook tables is intentionally denied; use service-role only after explicit permission checks.
-  const supabase = supabaseAdmin(c)
+  const pg = await getPgClient(c)
+  try {
+    // Verify webhook belongs to org
+    const webhook = await pg.query<{ id: string, org_id: string }>('SELECT id, org_id FROM public.webhooks WHERE id = $1', [body.webhookId])
+      .then(result => result.rows[0] ?? null)
+      .catch(() => null)
 
-  // Verify webhook belongs to org
-  const { data: webhook, error: webhookError } = await supabase
-    .from('webhooks')
-    .select('id, org_id')
-    .eq('id', body.webhookId)
-    .single()
+    if (!webhook) {
+      throw simpleError('webhook_not_found', 'Webhook not found', { webhookId: body.webhookId })
+    }
 
-  if (webhookError || !webhook) {
-    throw simpleError('webhook_not_found', 'Webhook not found', { webhookId: body.webhookId })
+    if (webhook.org_id !== body.orgId) {
+      throw simpleError('no_permission', 'Webhook does not belong to this organization', { webhookId: body.webhookId })
+    }
+
+    // Build query
+    const page = body.page ?? 0
+    const from = page * DELIVERIES_PER_PAGE
+
+    // Apply status filter before ordering and pagination
+    const where = body.status ? 'webhook_id = $1 AND status = $2' : 'webhook_id = $1'
+    const filterParams: unknown[] = body.status ? [body.webhookId, body.status] : [body.webhookId]
+
+    let data: unknown[]
+    try {
+      data = await queryJson(
+        pg,
+        `SELECT * FROM public.webhook_deliveries WHERE ${where} ORDER BY created_at DESC LIMIT $${filterParams.length + 1} OFFSET $${filterParams.length + 2}`,
+        [...filterParams, DELIVERIES_PER_PAGE, from],
+      )
+    }
+    catch (error) {
+      throw simpleError('cannot_get_deliveries', 'Cannot get deliveries', { error })
+    }
+
+    // Get total count for pagination (include status filter)
+    const count = await queryJsonOne<{ count: number }>(pg, `SELECT count(*)::int AS count FROM public.webhook_deliveries WHERE ${where}`, filterParams)
+      .then(row => row?.count ?? null)
+      .catch(() => null)
+
+    const totalCount = count ?? 0
+    const nextPageStart = (page + 1) * DELIVERIES_PER_PAGE
+
+    return c.json({
+      deliveries: data,
+      pagination: {
+        page,
+        per_page: DELIVERIES_PER_PAGE,
+        total: totalCount,
+        has_more: nextPageStart < totalCount,
+      },
+    })
   }
-
-  if (webhook.org_id !== body.orgId) {
-    throw simpleError('no_permission', 'Webhook does not belong to this organization', { webhookId: body.webhookId })
+  finally {
+    closeClient(c, pg)
   }
-
-  // Build query
-  const page = body.page ?? 0
-  const from = page * DELIVERIES_PER_PAGE
-  const to = (page + 1) * DELIVERIES_PER_PAGE - 1
-
-  let query = supabase
-    .from('webhook_deliveries')
-    .select('*')
-    .eq('webhook_id', body.webhookId)
-
-  // Apply status filter before ordering and pagination
-  if (body.status) {
-    query = query.eq('status', body.status)
-  }
-
-  query = query.order('created_at', { ascending: false }).range(from, to)
-
-  const { data, error } = await query
-
-  if (error) {
-    throw simpleError('cannot_get_deliveries', 'Cannot get deliveries', { error })
-  }
-
-  // Get total count for pagination (include status filter)
-  let countQuery = supabase
-    .from('webhook_deliveries')
-    .select('*', { count: 'exact', head: true })
-    .eq('webhook_id', body.webhookId)
-
-  if (body.status) {
-    countQuery = countQuery.eq('status', body.status)
-  }
-
-  const { count } = await countQuery
-
-  const totalCount = count ?? 0
-  const nextPageStart = (page + 1) * DELIVERIES_PER_PAGE
-
-  return c.json({
-    deliveries: data,
-    pagination: {
-      page,
-      per_page: DELIVERIES_PER_PAGE,
-      total: totalCount,
-      has_more: nextPageStart < totalCount,
-    },
-  })
 }
 
 export async function retryDelivery(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, auth: AuthInfo): Promise<Response> {
@@ -112,8 +105,6 @@ export async function retryDelivery(c: Context<MiddlewareKeyVariables>, bodyRaw:
   const body = bodyParsed.data
 
   await checkWebhookPermissionV2(c, body.orgId, auth)
-
-  const supabase = supabaseAdmin(c)
 
   // Get delivery
   const delivery = await getDeliveryById(c, body.deliveryId)
@@ -148,24 +139,23 @@ export async function retryDelivery(c: Context<MiddlewareKeyVariables>, bodyRaw:
     throw simpleError('invalid_url', urlError, { urlInfo: getWebhookLogUrlMetadata(webhook.url) })
 
   // Reset delivery status and queue for retry
-  const { error: updateError } = await supabase
-    .from('webhook_deliveries')
-    .update({
-      status: 'pending',
-      attempt_count: 0,
-      response_status: null,
-      response_body: null,
-      completed_at: null,
-      duration_ms: null,
-      next_retry_at: null,
-    })
-    .eq('id', body.deliveryId)
-
-  if (updateError) {
+  const pg = await getPgClient(c)
+  try {
+    await pg.query(
+      `UPDATE public.webhook_deliveries
+       SET status = 'pending', attempt_count = 0, response_status = NULL, response_body = NULL, completed_at = NULL, duration_ms = NULL, next_retry_at = NULL
+       WHERE id = $1`,
+      [body.deliveryId],
+    )
+  }
+  catch (updateError) {
     throw simpleError('cannot_reset_delivery', 'Cannot reset delivery for retry', {
       deliveryId: body.deliveryId,
       error: updateError,
     })
+  }
+  finally {
+    closeClient(c, pg)
   }
 
   // Queue for immediate delivery

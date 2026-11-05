@@ -1,18 +1,16 @@
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { ManifestPersistEntry } from '../utils/manifest_persist.ts'
-import type { ManifestSizeReceiptFacts } from '../utils/manifest_size_receipt.ts'
 import type { Database } from '../utils/supabase.types.ts'
-import { greaterOrEqual, parse, tryParse } from '@std/semver'
 import { Hono } from 'hono/tiny'
 import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareKey } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { ManifestInventoryConflict, registerManifestInventory, usesManifestInventory, withManifestInventory } from '../utils/manifest_inventory.ts'
 import { MAX_FILE_HASH_LENGTH, MAX_FILE_NAME_LENGTH, MAX_MANIFEST_ENTRIES, MAX_S3_PATH_LENGTH } from '../utils/manifest_limits.ts'
 import { persistVersionManifestEntries } from '../utils/manifest_persist.ts'
 import { getManifestReceiptBucket, verifyManifestSizeReceiptFacts } from '../utils/manifest_size_receipt.ts'
 import { checkPermission } from '../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../utils/pg_rls.ts'
 import { getEnv } from '../utils/utils.ts'
 
 interface DataSetManifest {
@@ -21,9 +19,12 @@ interface DataSetManifest {
   manifest?: ManifestPersistEntry[]
 }
 
-export const app = new Hono<MiddlewareKeyVariables>()
+// Same shape as the PostgREST `.single()` error.
+function singleRowError(rows: number) {
+  return { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned', details: `The result contains ${rows} rows` }
+}
 
-const MANIFEST_UPLOAD_CLI_VERSION = parse('8.74.0')
+export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareKey(), async (c) => {
   const body = await parseBody<DataSetManifest>(c)
@@ -54,23 +55,29 @@ app.post('/', middlewareKey(), async (c) => {
   if (!(await checkPermission(c, 'app.upload_bundle', { appId: body.app_id })))
     return quickError(401, 'not_authorized', 'You can\'t access this app', { app_id: body.app_id })
 
-  const { data: appRow, error: errorApp } = await supabaseApikey(c, capgkey)
-    .from('apps')
-    .select('app_id, owner_org')
-    .eq('app_id', body.app_id)
-    .single()
-  if (errorApp || !appRow)
-    return quickError(404, 'app_not_found', 'Error App not found', { errorApp })
-
-  const { data: version, error: errorVersion } = await supabaseApikey(c, capgkey)
-    .from('app_versions')
-    .select('id, app_id, name, storage_provider, deleted, owner_org')
-    .eq('name', body.name)
-    .eq('app_id', body.app_id)
-    .eq('deleted', false)
-    .single()
-  if (errorVersion || !version)
-    return quickError(404, 'error_version_not_found', 'Error Version not found', { errorVersion })
+  // Both reads run as the API key; a failed read ends the lookup (nothing is written here).
+  const lookup = await withRlsContext(c, apikeyPrincipal(c, capgkey), async (client) => {
+    const apps = await queryJson<{ app_id: string, owner_org: string }>(client, 'SELECT app_id, owner_org FROM public.apps WHERE app_id = $1 LIMIT 2', [body.app_id])
+      .catch((error: unknown) => ({ error }))
+    if ('error' in apps || apps.length !== 1)
+      return { errorApp: 'error' in apps ? apps.error : singleRowError(apps.length) }
+    const versions = await queryJson<{ id: number, app_id: string, name: string, storage_provider: string, deleted: boolean, owner_org: string }>(
+      client,
+      `SELECT id, app_id, name, storage_provider, deleted, owner_org FROM public.app_versions
+      WHERE name = $1 AND app_id = $2 AND deleted = false
+      LIMIT 2`,
+      [body.name, body.app_id],
+    ).catch((error: unknown) => ({ error }))
+    if ('error' in versions || versions.length !== 1)
+      return { appRow: apps[0], errorVersion: 'error' in versions ? versions.error : singleRowError(versions.length) }
+    return { appRow: apps[0], version: versions[0] }
+  })
+  const appRow = lookup.appRow
+  if (!appRow)
+    return quickError(404, 'app_not_found', 'Error App not found', { errorApp: lookup.errorApp })
+  const version = lookup.version
+  if (!version)
+    return quickError(404, 'error_version_not_found', 'Error Version not found', { errorVersion: lookup.errorVersion })
 
   const s3PathPrefix = `orgs/${appRow.owner_org}/apps/${appRow.app_id}/`
   const invalidEntry = body.manifest.find(entry =>
@@ -91,27 +98,31 @@ app.post('/', middlewareKey(), async (c) => {
 
   const receiptMode = body.manifest.some(entry => entry.file_size_receipt != null)
   let trustFileSizes = false
-  let receiptFacts: ManifestSizeReceiptFacts[] | null = null
   if (receiptMode) {
     if (body.manifest.some(entry => typeof entry.file_size_receipt !== 'string' || entry.file_size_receipt.length > 128))
       return quickError(400, 'error_manifest_size_receipt_invalid', 'Every manifest entry must include a valid size receipt')
-    receiptFacts = await verifyManifestSizeReceiptFacts(getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET'), getManifestReceiptBucket(getEnv(c, 'ENV_NAME')), body.manifest.map(entry => ({ path: entry.s3_path!, receipt: entry.file_size_receipt! })))
+    const receiptFacts = await verifyManifestSizeReceiptFacts(getEnv(c, 'MANIFEST_SIZE_RECEIPT_SECRET'), getManifestReceiptBucket(getEnv(c, 'ENV_NAME')), body.manifest.map(entry => ({ path: entry.s3_path!, receipt: entry.file_size_receipt! })))
     if (!receiptFacts)
       return quickError(400, 'error_manifest_size_receipt_invalid', 'Manifest size receipt verification failed')
-    body.manifest = body.manifest.map((entry, index) => ({ ...entry, file_size: receiptFacts![index].size }))
+    body.manifest = body.manifest.map((entry, index) => ({ ...entry, file_size: receiptFacts[index].size }))
     trustFileSizes = true
   }
 
   // After storage_provider flips to r2, only idempotent retries are allowed.
   if (version.storage_provider === 'r2') {
-    const { data: existingEntries, error: existingError } = await supabaseAdmin(c)
-      .from('manifest')
-      .select('id')
-      .eq('app_version_id', version.id)
-      .limit(1)
-    if (existingError)
+    let hasExistingEntries = false
+    const pg = await getPgClient(c)
+    try {
+      const existing = await pg.query('SELECT 1 FROM public.version_manifest WHERE app_version_id = $1 LIMIT 1', [version.id])
+      hasExistingEntries = existing.rows.length > 0
+    }
+    catch (existingError) {
       throw simpleError('error_set_manifest', 'Failed to check existing manifest', { existingError })
-    if (!existingEntries?.length) {
+    }
+    finally {
+      closeClient(c, pg)
+    }
+    if (!hasExistingEntries) {
       return quickError(400, 'error_version_already_finalized', 'Version upload already finalized without a direct manifest write window', {
         storage_provider: version.storage_provider,
       })
@@ -126,14 +137,6 @@ app.post('/', middlewareKey(), async (c) => {
   }
 
   try {
-    // Older clients upload directly without reserving inventory paths first.
-    const cliVersion = tryParse(c.req.header('x-cli-version') ?? '')
-    if (usesManifestInventory(c) && cliVersion && greaterOrEqual(cliVersion, MANIFEST_UPLOAD_CLI_VERSION)) {
-      await withManifestInventory(c, db => registerManifestInventory(db, getManifestReceiptBucket(getEnv(c, 'ENV_NAME')), body.manifest!.map((entry, index) => ({
-        path: entry.s3_path!,
-        facts: receiptFacts?.[index],
-      }))))
-    }
     const result = await persistVersionManifestEntries(
       c,
       { id: version.id, app_id: version.app_id },
@@ -157,8 +160,6 @@ app.post('/', middlewareKey(), async (c) => {
     })
   }
   catch (error) {
-    if (error instanceof ManifestInventoryConflict)
-      return quickError(409, 'error_manifest_inventory_conflict', error.message, { entries: error.paths })
     throw simpleError('error_set_manifest', 'Failed to set manifest', { error })
   }
 })

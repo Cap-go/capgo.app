@@ -5,7 +5,7 @@ import { toast } from 'vue-sonner'
 import IconPlus from '~icons/heroicons/plus'
 import IconTrash from '~icons/heroicons/trash'
 import IconXMark from '~icons/heroicons/x-mark'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 
@@ -38,7 +38,7 @@ const controlClass = 'd-select d-select-bordered min-h-10 w-full rounded-md bg-w
 const inputClass = 'd-input d-input-bordered min-h-10 w-full rounded-md bg-white text-sm text-slate-900 dark:bg-slate-900 dark:text-slate-100'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 
 const providerId = ref('')
@@ -56,8 +56,8 @@ function roleLabel(role: string) {
 
 async function loadTargets() {
   const [appsResult, groupsResult] = await Promise.all([
-    supabase.from('apps').select('id, name, app_id').eq('owner_org', props.orgId).order('name'),
-    supabase.from('groups').select('id, name').eq('org_id', props.orgId).order('name'),
+    capgo.from('apps').select('id, name, app_id').eq('owner_org', props.orgId).order('name'),
+    capgo.from('groups').select('id, name').eq('org_id', props.orgId).order('name'),
   ])
   if (appsResult.error || groupsResult.error)
     console.error('Failed to load SSO role mapping targets:', appsResult.error ?? groupsResult.error)
@@ -81,7 +81,7 @@ function addApp(rule: SsoRoleMapping['rules'][number]) {
 }
 
 async function save(roleMapping: SsoRoleMapping | null): Promise<boolean> {
-  const { data: session } = await supabase.auth.getSession()
+  const { data: session } = await capgo.auth.getSession()
   const url = shared.value
     ? `${defaultApiHost}/private/sso/providers/${providerId.value}/links/${props.orgId}`
     : `${defaultApiHost}/private/sso/providers/${providerId.value}`

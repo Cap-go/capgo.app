@@ -7,7 +7,7 @@ import IconTrash from '~icons/heroicons/trash'
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import ChannelPermissionOverridesPanel from '~/components/permissions/ChannelPermissionOverridesPanel.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { getRbacRoleI18nKey } from '~/stores/organization'
 import { getErrorCode, getErrorMessage } from '~/utils/errors'
 
@@ -53,7 +53,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 const isLoading = ref(false)
 const isSaving = ref(false)
@@ -119,12 +119,12 @@ async function loadChannelAccess() {
   isLoading.value = true
   try {
     const [channelsResult, rolesResult] = await Promise.all([
-      supabase
+      capgo
         .from('channels')
         .select('id, rbac_id, name')
         .eq('app_id', props.appId)
         .order('name', { ascending: true }),
-      supabase
+      capgo
         .from('roles')
         .select('id, name, description')
         .eq('scope_type', 'channel')

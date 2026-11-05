@@ -15,9 +15,15 @@ import { CliUserError } from '../shared/cli-user-error'
  * to CommonJS, which skips Node/Bun native TypeScript loading. Building it
  * from a string keeps the real ESM loader.
  *
+ * The helper is created on first use. Workers reject `new Function` during
+ * module initialization, and the replication probe imports this SDK.
+ *
  * @see https://github.com/ionic-team/capacitor/issues/8531
  */
-const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<Record<string, unknown>>
+function importSpecifier(specifier: string): Promise<Record<string, unknown>> {
+  const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<Record<string, unknown>>
+  return dynamicImport(specifier)
+}
 
 export type { CapacitorConfig, ExtConfigPairs } from '../schemas/config'
 
@@ -185,11 +191,11 @@ export async function loadConfigTarget(filePath: string): Promise<CapacitorConfi
     catch (requireTsError) {
       if (!supportsNativeTypeScriptImport())
         throw requireTsError
-      configModule = await dynamicImport(pathToFileURL(resolve(filePath)).href)
+      configModule = await importSpecifier(pathToFileURL(resolve(filePath)).href)
     }
   }
   else if (supportsNativeTypeScriptImport()) {
-    configModule = await dynamicImport(pathToFileURL(resolve(filePath)).href)
+    configModule = await importSpecifier(pathToFileURL(resolve(filePath)).href)
   }
   else {
     throw new Error('Could not load a usable TypeScript compiler for the Capacitor config')
@@ -218,10 +224,21 @@ module.exports = config
 
 export async function loadConfig(): Promise<ExtConfigPairs | undefined> {
   const configPath = findDefaultCapacitorConfigFile(cwd())
-  if (configPath && extname(configPath) === '.ts' && projectTypeScriptLacksClassicApi(cwd())) {
-    return {
-      config: await loadConfigTarget(configPath),
-      path: getConfigWriteTarget() ?? configPath,
+  if (configPath) {
+    const extension = extname(configPath)
+    // Prefer the config file in cwd for JSON/JS so isolated tests and app subfolders
+    // do not inherit a parent monorepo capacitor.config.ts via Capacitor's root walk.
+    if (extension === '.json' || extension === '.js') {
+      return {
+        config: await loadConfigTarget(configPath),
+        path: getConfigWriteTarget() ?? configPath,
+      }
+    }
+    if (extension === '.ts' && projectTypeScriptLacksClassicApi(cwd())) {
+      return {
+        config: await loadConfigTarget(configPath),
+        path: getConfigWriteTarget() ?? configPath,
+      }
     }
   }
   const config = await loadConfigCap()

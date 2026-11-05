@@ -1,4 +1,6 @@
+import { createRequire } from 'node:module'
 import { PassThrough, Writable } from 'node:stream'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 // trackEvent is fire-and-forget (void) and never asserted, so a shared module
@@ -37,8 +39,12 @@ interface CliClackPrompts {
 
 let cliClackPrompts: Promise<CliClackPrompts> | undefined
 
+// Resolve from the CLI package so the test drives the same module instance as
+// the CLI code, whichever node_modules layout the install produced.
+const cliClackPromptsUrl = pathToFileURL(createRequire(new URL('../cli/package.json', import.meta.url)).resolve('@clack/prompts')).href
+
 function getCliClackPrompts(): Promise<CliClackPrompts> {
-  cliClackPrompts ??= import(new URL('../cli/node_modules/@clack/prompts', import.meta.url).href) as Promise<CliClackPrompts>
+  cliClackPrompts ??= import(cliClackPromptsUrl) as Promise<CliClackPrompts>
   return cliClackPrompts
 }
 

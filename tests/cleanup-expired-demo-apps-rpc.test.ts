@@ -23,15 +23,11 @@ describe('cleanup_expired_demo_apps RPC authorization', () => {
         has_function_privilege('public', 'public.cleanup_expired_demo_apps()', 'EXECUTE') AS public_can_execute
     `)
 
-    expect(rows).toHaveLength(1)
-    const row = rows[0]
-    if (!row) {
-      throw new Error('Expected exactly one privilege row')
-    }
-
-    expect(row.service_role_can_execute).toBe(true)
-    expect(row.anon_can_execute).toBe(false)
-    expect(row.authenticated_can_execute).toBe(false)
-    expect(row.public_can_execute).toBe(false)
+    expect(rows).toEqual([{
+      service_role_can_execute: true,
+      anon_can_execute: false,
+      authenticated_can_execute: false,
+      public_can_execute: false,
+    }])
   })
 })

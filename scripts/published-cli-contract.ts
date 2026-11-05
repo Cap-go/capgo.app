@@ -38,7 +38,7 @@ export function comparePublishedCliTags(left: string, right: string): number {
   return 0
 }
 
-export function resolveLatestPublishedCliTag(runGit: GitRunner = defaultGitRunner): string {
+function listPublishedCliTags(runGit: GitRunner): string[] {
   const output = runGit(['tag', '-l', `${PUBLISHED_CLI_TAG_PREFIX}*`])
   const tags = output
     .split('\n')
@@ -48,7 +48,11 @@ export function resolveLatestPublishedCliTag(runGit: GitRunner = defaultGitRunne
   if (tags.length === 0)
     throw new Error(`No published CLI tags found (expected ${PUBLISHED_CLI_TAG_PREFIX}<semver>)`)
 
-  return tags.sort(comparePublishedCliTags).at(-1)!
+  return tags.sort(comparePublishedCliTags)
+}
+
+export function resolveLatestPublishedCliTag(runGit: GitRunner = defaultGitRunner): string {
+  return listPublishedCliTags(runGit).at(-1)!
 }
 
 export function resolvePublishedCliNpmVersion(tag: string): string {
@@ -380,8 +384,21 @@ export function extractPublishedCliRpcCallsFromSource(source: string): Published
   return [...calls.values()].sort(comparePublishedCliRpcCalls)
 }
 
+// git grep exits 1 when nothing matches: that is an empty result, not a failure.
+function isGitGrepNoMatch(error: unknown) {
+  return !!error && typeof error === 'object' && 'status' in error && error.status === 1
+}
+
 export function extractPublishedCliRpcCalls(tag: string, runGit: GitRunner = defaultGitRunner): PublishedCliRpcCall[] {
-  const output = runGit(['grep', '-l', '-E', String.raw`\.rpc\(["'\`][a-z][a-z0-9_]*["'\`]`, tag, '--', 'cli/src'])
+  let output: string
+  try {
+    output = runGit(['grep', '-l', '-E', String.raw`\.rpc\(["'\`][a-z][a-z0-9_]*["'\`]`, tag, '--', 'cli/src'])
+  }
+  catch (error) {
+    if (isGitGrepNoMatch(error))
+      return []
+    throw error
+  }
   const files = output
     .split('\n')
     .map(line => line.trim())
@@ -400,6 +417,23 @@ export function extractPublishedCliRpcCalls(tag: string, runGit: GitRunner = def
   }
 
   return [...calls.values()].sort(comparePublishedCliRpcCalls)
+}
+
+// Newer CLIs stop calling RPCs directly, but customers still run older releases that do.
+// Walk back from sourceTag to the newest published CLI that still calls RPCs so their grants stay protected.
+export function resolvePublishedCliRpcContract(
+  sourceTag: string,
+  runGit: GitRunner = defaultGitRunner,
+): { rpcSourceTag: string, rpcCalls: PublishedCliRpcCall[] } {
+  const candidates = listPublishedCliTags(runGit)
+    .filter(tag => comparePublishedCliTags(tag, sourceTag) <= 0)
+    .reverse()
+  for (const tag of candidates) {
+    const rpcCalls = extractPublishedCliRpcCalls(tag, runGit)
+    if (rpcCalls.length > 0)
+      return { rpcSourceTag: tag, rpcCalls }
+  }
+  return { rpcSourceTag: sourceTag, rpcCalls: [] }
 }
 
 export function formatPublishedCliRpcCall(call: PublishedCliRpcCall): string {

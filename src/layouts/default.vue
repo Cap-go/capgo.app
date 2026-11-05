@@ -1,23 +1,26 @@
 <script setup lang="ts">
 import { Capacitor } from '@capacitor/core'
 import { useLocalStorage, useMediaQuery } from '@vueuse/core'
-import { computed, ref, useTemplateRef, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, useTemplateRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import AssistantChat from '~/components/assistant/AssistantChat.vue'
-import OnboardingExploreBanner from '~/components/dashboard/OnboardingExploreBanner.vue'
-import OnboardingExploreReminder from '~/components/dashboard/OnboardingExploreReminder.vue'
-import PastDueBanner from '~/components/dashboard/PastDueBanner.vue'
 import LogAsDialogField from '~/components/LogAsDialogField.vue'
 import { useEdgeSwipeBack } from '~/composables/useEdgeSwipeBack'
 import { isNativeChromeEnabled, useNativeChrome } from '~/composables/useNativeChrome'
 import { useRealtimeCLIFeed } from '~/composables/useRealtimeCLIFeed'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
 import { getOnboardingExploreBannerAppId, getOnboardingResumeAppId } from '~/utils/onboardingRedirect'
 import Navbar from '../components/Navbar.vue'
 import Sidebar from '../components/Sidebar.vue'
+
+// Overlays and prompts that wait on their own data load after the page instead of blocking it.
+const AssistantChat = defineAsyncComponent(() => import('~/components/assistant/AssistantChat.vue'))
+const OnboardingExploreBanner = defineAsyncComponent(() => import('~/components/dashboard/OnboardingExploreBanner.vue'))
+const OnboardingExploreReminder = defineAsyncComponent(() => import('~/components/dashboard/OnboardingExploreReminder.vue'))
+const PastDueBanner = defineAsyncComponent(() => import('~/components/dashboard/PastDueBanner.vue'))
+const TrialCardPrompt = defineAsyncComponent(() => import('~/components/dashboard/TrialCardPrompt.vue'))
 
 const sidebarOpen = ref(false)
 const sidebarCollapsedPreference = useLocalStorage('capgo-sidebar-collapsed', false)
@@ -30,7 +33,7 @@ function toggleSidebarCollapse() {
 
 const pendingOnboardingAppId = ref('')
 const route = useRoute()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const main = useMainStore()
 let onboardingLookupRun = 0
@@ -50,17 +53,16 @@ async function refreshPendingOnboardingApp() {
   const singleOrganization = selectableOrganizations.value.length === 1
     ? selectableOrganizations.value[0]
     : undefined
-  const routeAppId = 'app' in route.params && typeof route.params.app === 'string' ? route.params.app : null
-  const candidateAppId = routeAppId ?? getOnboardingResumeAppId(main.user?.id ?? main.auth?.id)
-  if (!candidateAppId && (!singleOrganization || singleOrganization.app_count !== 1))
+  if (!singleOrganization || singleOrganization.app_count > 1)
     return
 
-  let query = supabase.from('apps').select('app_id, need_onboarding, onboarding')
-  if (candidateAppId)
-    query = query.eq('app_id', candidateAppId)
-  else
-    query = query.eq('owner_org', singleOrganization!.gid)
-  const { data, error } = await query.limit(1).maybeSingle()
+  const routeAppId = 'app' in route.params && typeof route.params.app === 'string' ? route.params.app : null
+  const candidateAppId = routeAppId ?? getOnboardingResumeAppId(main.user?.id ?? main.auth?.id)
+
+  const { data, error } = await capgo.from('apps')
+    .select('app_id, need_onboarding, onboarding')
+    .eq('owner_org', singleOrganization.gid)
+    .limit(2)
 
   if (lookupRun !== onboardingLookupRun)
     return
@@ -70,14 +72,21 @@ async function refreshPendingOnboardingApp() {
     return
   }
 
-  if (data && shouldSkipOnboardingResume(data.onboarding))
+  if (!data || data.length !== 1)
+    return
+
+  const app = data[0]
+  if (candidateAppId && app.app_id !== candidateAppId)
+    return
+
+  if (shouldSkipOnboardingResume(app.onboarding))
     return
 
   pendingOnboardingAppId.value = getOnboardingExploreBannerAppId({
-    app: data,
-    organizationAppCount: singleOrganization?.app_count ?? 0,
+    app,
+    organizationAppCount: data.length,
     organizationCount: selectableOrganizations.value.length,
-  }) ?? (candidateAppId && data?.need_onboarding ? data.app_id : '')
+  }) ?? ''
 }
 
 watch([
@@ -116,6 +125,7 @@ useEdgeSwipeBack(contentShell, {
       </main>
     </div>
     <LogAsDialogField />
+    <TrialCardPrompt />
   </div>
   <!-- Below lg the sidebar is an overlay drawer, so the safe areas take the content color instead of the sidebar color. -->
   <div v-else class="flex h-full overflow-hidden bg-slate-100 dark:bg-slate-900 lg:bg-slate-800 lg:dark:bg-slate-800 pt-safe safe-areas">
@@ -152,5 +162,6 @@ useEdgeSwipeBack(contentShell, {
       </div>
     </div>
     <AssistantChat />
+    <TrialCardPrompt />
   </div>
 </template>

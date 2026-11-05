@@ -1,8 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  NEW_CHANNEL_ANALYTICS_VERSION,
-  NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION,
-  NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION,
+  createOnboardingDetailsFieldDebouncer,
   createOnboardingProgressTracker,
   createOnboardingTelemetryIdentity,
   ONBOARDING_ANALYTICS_VERSION,
@@ -49,7 +47,7 @@ describe('onboarding progress analytics', () => {
       capture,
       flow: 'pre_org',
       idFactory: () => ids.shift()!,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     identity.prepareResumeCandidate({
       lastRunId: RUN_R1,
@@ -105,7 +103,7 @@ describe('onboarding progress analytics', () => {
       capture,
       flow,
       idFactory: () => ids.shift()!,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     identity.prepareResumeCandidate({
       lastRunId: RUN_R1,
@@ -149,7 +147,7 @@ describe('onboarding progress analytics', () => {
       capture,
       flow: 'pre_org',
       idFactory: () => ids.shift()!,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     identity.prepareResumeCandidate({
       lastRunId: RUN_R1,
@@ -194,7 +192,7 @@ describe('onboarding progress analytics', () => {
         capture,
         flow: 'pre_org',
         idFactory: () => ids.shift()!,
-        supaHost: 'https://supabase.capgo.test',
+        apiHost: 'https://supabase.capgo.test',
       })
       identity.prepareResumeCandidate({
         lastRunId: RUN_R1,
@@ -237,7 +235,7 @@ describe('onboarding progress analytics', () => {
       now: () => 100,
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('intent')
@@ -269,7 +267,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       idFactory: () => ids.shift()!,
       onboardingVersion,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     identity.prepareResumeCandidate({
       savedStep: 'organization',
@@ -285,7 +283,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     tracker.viewStep('intent')
     tracker.trackStepEvent('onboarding_webnative_recommendation_clicked', 'organization', {
@@ -298,12 +296,6 @@ describe('onboarding progress analytics', () => {
       expect(call[2]).toEqual(expect.objectContaining({ onboarding_version: '5.C' }))
   })
 
-  it.concurrent('exports distinct channel experiment analytics labels', () => {
-    expect(NEW_CHANNEL_ANALYTICS_VERSION).toBe('5.E')
-    expect(NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION).toBe('5.F')
-    expect(NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION).toBe('5.G')
-  })
-
   it.concurrent('tracks a hidden tab and its matching return before setup', () => {
     let now = 1_000
     const capture = vi.fn()
@@ -314,7 +306,7 @@ describe('onboarding progress analytics', () => {
       now: () => now,
       resumed: false,
       steps: ['intent', 'details', 'setup'],
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('intent')
@@ -367,7 +359,7 @@ describe('onboarding progress analytics', () => {
       now: () => 5_000,
       resumed: false,
       steps: ['intent', 'setup'],
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('intent')
@@ -406,7 +398,7 @@ describe('onboarding progress analytics', () => {
       now: () => now,
       resumed: false,
       steps: ['intent', 'details', 'setup'],
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('intent')
@@ -431,7 +423,7 @@ describe('onboarding progress analytics', () => {
       now: () => now,
       resumed: false,
       steps: ['intent', 'setup'],
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.trackVisibilityChange('hidden')
@@ -457,7 +449,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('intent')
@@ -479,7 +471,7 @@ describe('onboarding progress analytics', () => {
       now: () => now,
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('intent')
@@ -533,7 +525,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('intent')
@@ -559,7 +551,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.trackDetailsEvent('onboarding_app_name_entered', 'details', { field_length: 11 })
@@ -587,7 +579,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps: pageSteps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('app_name')
@@ -614,7 +606,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.trackDetailsEvent('onboarding_app_creation_succeeded', 'details', {
@@ -644,7 +636,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.trackStepEvent('onboarding_organization_import_opened', 'organization')
@@ -670,7 +662,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: false,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.trackStepEvent('onboarding_webnative_recommendation_clicked', 'organization', {
@@ -697,7 +689,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: true,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     tracker.viewStep('setup')
     capture.mockClear()
@@ -740,7 +732,7 @@ describe('onboarding progress analytics', () => {
       flow: 'pre_org',
       resumed: true,
       steps,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
     tracker.viewStep('setup')
     capture.mockClear()
@@ -771,7 +763,7 @@ describe('onboarding progress analytics', () => {
       now: () => now,
       resumed: true,
       steps: ['details', 'choice', 'install'],
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('choice')
@@ -803,7 +795,7 @@ describe('onboarding progress analytics', () => {
       now: () => 50,
       resumed: true,
       steps: ['details', 'choice', 'install', 'setup'],
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.viewStep('setup')
@@ -834,7 +826,7 @@ describe('onboarding progress analytics', () => {
       flow: 'existing_org',
       steps: ['details', 'choice', 'install'],
       resumed: false,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     tracker.completeStep('details', { nextStep: 'choice' })
@@ -848,7 +840,7 @@ describe('onboarding progress analytics', () => {
   it.concurrent('only exposes approved fields and never lets capture failures escape', () => {
     const capture = vi.fn<(
       name: string,
-      supaHost: string,
+      apiHost: string,
       properties?: Record<string, string | number | boolean | null>,
     ) => void>(() => {
       throw new Error('PostHog unavailable')
@@ -859,7 +851,7 @@ describe('onboarding progress analytics', () => {
       flow: 'existing_org',
       steps: ['details', 'choice', 'install'],
       resumed: false,
-      supaHost: 'https://supabase.capgo.test',
+      apiHost: 'https://supabase.capgo.test',
     })
 
     expect(() => tracker.viewStep('details')).not.toThrow()
@@ -889,5 +881,66 @@ describe('onboarding progress analytics', () => {
     for (const call of capture.mock.calls) {
       expect(Object.keys(call[2] ?? {}).every(key => allowedKeys.has(key))).toBe(true)
     }
+  })
+})
+
+describe('onboarding details field analytics debounce', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('emits the latest non-empty value one second after the last keystroke', () => {
+    vi.useFakeTimers()
+    const emit = vi.fn()
+    const tracker = createOnboardingDetailsFieldDebouncer(emit)
+
+    tracker.schedule('onboarding_app_name_entered', 'app_name', 'app_name', 'Example')
+    vi.advanceTimersByTime(750)
+    tracker.schedule('onboarding_app_name_entered', 'app_name', 'app_name', '  Example App  ')
+    vi.advanceTimersByTime(999)
+    expect(emit).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(emit).toHaveBeenCalledOnce()
+    expect(emit).toHaveBeenCalledWith('onboarding_app_name_entered', 'app_name', { field_length: 11 })
+  })
+
+  it('tracks fields independently, cancels empty values, and flushes pending values on dispose', () => {
+    vi.useFakeTimers()
+    const emit = vi.fn()
+    const tracker = createOnboardingDetailsFieldDebouncer(emit)
+
+    tracker.schedule('onboarding_app_name_entered', 'app_name', 'app_name', 'Discard me')
+    tracker.schedule('onboarding_app_name_entered', 'app_name', 'app_name', '   ')
+    tracker.schedule('onboarding_app_id_entered', 'app_id', 'app_id', 'com.example.app')
+    tracker.schedule('onboarding_store_url_entered', 'store_url', 'app_id', 'https://apps.apple.com/example')
+    const iconStoreUrl = 'https://play.google.com/example'
+    tracker.schedule('onboarding_store_icon_url_entered', 'icon_store_url', 'app_icon', iconStoreUrl)
+    vi.advanceTimersByTime(1_000)
+
+    expect(emit).toHaveBeenCalledTimes(3)
+    expect(emit).toHaveBeenCalledWith('onboarding_app_id_entered', 'app_id', { field_length: 15 })
+    expect(emit).toHaveBeenCalledWith('onboarding_store_url_entered', 'app_id', { field_length: 30 })
+    expect(emit).toHaveBeenCalledWith('onboarding_store_icon_url_entered', 'app_icon', { field_length: iconStoreUrl.length })
+
+    tracker.schedule('onboarding_app_name_entered', 'app_name', 'app_name', 'Never emitted')
+    tracker.dispose()
+    vi.runAllTimers()
+    expect(emit).toHaveBeenCalledTimes(4)
+    expect(emit).toHaveBeenLastCalledWith('onboarding_app_name_entered', 'app_name', { field_length: 13 })
+  })
+
+  it('keeps the page step captured before a user continues during the debounce', () => {
+    vi.useFakeTimers()
+    const emit = vi.fn()
+    const tracker = createOnboardingDetailsFieldDebouncer(emit)
+    let currentPage: 'app_id' | 'app_name' = 'app_name'
+
+    tracker.schedule('onboarding_app_name_entered', 'app_name', currentPage, 'Example App')
+    currentPage = 'app_id'
+    vi.advanceTimersByTime(1_000)
+
+    expect(currentPage).toBe('app_id')
+    expect(emit).toHaveBeenCalledWith('onboarding_app_name_entered', 'app_name', { field_length: 11 })
   })
 })

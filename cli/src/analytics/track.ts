@@ -1,13 +1,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { env } from 'node:process'
+import { cwd, env } from 'node:process'
 import pack from '../../package.json'
 import { isTruthyEnvValue } from '../posthog'
-import { findSavedKeySilent, getAppId, getConfig, sendEvent } from '../utils'
+import { findSavedKeySilent, getAppId, getConfig, getLocalConfig, sendEvent } from '../utils'
 import { getBuilderAppId } from '../build/app-id'
+import { withCwd } from '../build/cwd'
 import { resolveOwnerOrgId } from './org-resolver'
 import { categorizeCliError, categorizeHttpStatus } from './error-category'
-import { deriveSupabaseOperation, setSupabaseCallRecorder, SLOW_THRESHOLD_MS, withSupabaseSource } from './supabase-perf'
-import type { SupabaseCallInfo } from './supabase-perf'
+import { deriveApiOperation, setApiCallRecorder, SLOW_THRESHOLD_MS } from './api-perf'
+import type { ApiCallInfo } from './api-perf'
 
 // Global analytics props + invocation source live in ./global-props so the
 // shared sendEvent() path (cli/src/utils.ts) can inject them on every event
@@ -49,34 +50,26 @@ export async function flushAnalytics(timeoutMs = 2000): Promise<void> {
 }
 
 // --- best-effort app + owner-org context from the local Capacitor config ---
-// Keyed by apikey so events for different accounts never reuse another's org.
-const cachedContextByApiKey = new Map<string, Promise<{ appId?: string, orgId?: string }>>()
-
 export function isBuilderInvocation(commandPath: string): boolean {
   return commandPath === 'build' || commandPath.startsWith('build ')
     || /^mcp:(?:capgo_builder_|start_capgo_builder_|start_capgo_build$|capgo_build_|cancel_capgo_build$)/u.test(commandPath)
 }
 
-export function resolveTrackingContext(apikey: string, signal?: AbortSignal, builder = false): Promise<{ appId?: string, orgId?: string }> {
-  const cacheKey = `${apikey}\0${builder ? 'builder' : 'default'}`
-  const cached = cachedContextByApiKey.get(cacheKey)
-  if (cached)
-    return cached
-  const promise = (async () => {
-    try {
+export async function resolveTrackingContext(apikey: string, signal?: AbortSignal, builder = false): Promise<{ appId?: string, orgId?: string, apiHost?: string }> {
+  try {
+    const readContext = async () => {
       const extConfig = await getConfig(true).catch(() => undefined)
       const appId = (builder ? getBuilderAppId(undefined, extConfig?.config) : getAppId('', extConfig?.config)) || undefined
-      if (!appId)
-        return {}
-      const orgId = await resolveOwnerOrgId(apikey, appId, {}, signal)
-      return { appId, orgId }
+      const { hostApi: apiHost } = await getLocalConfig(true)
+      return { appId, apiHost }
     }
-    catch {
-      return {}
-    }
-  })()
-  cachedContextByApiKey.set(cacheKey, promise)
-  return promise
+    const context = mcpCommandPathStore.getStore() ? await withCwd(cwd(), readContext) : await readContext()
+    const orgId = context.appId ? await resolveOwnerOrgId(apikey, context.appId, { apiHost: context.apiHost }, signal) : undefined
+    return { ...context, orgId }
+  }
+  catch {
+    return {}
+  }
 }
 
 export interface TrackEventInput {
@@ -116,11 +109,15 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
     try {
       let appId = input.appId
       let orgId = input.orgId
+      let apiHost: string | undefined
       if (appId === undefined && orgId === undefined) {
         const commandPath = mcpCommandPathStore.getStore() ?? (typeof input.tags?.command_path === 'string' ? input.tags.command_path : currentCommandPath)
         const ctx = await resolveTrackingContext(apikey, controller.signal, isBuilderInvocation(commandPath))
         appId = ctx.appId
         orgId = ctx.orgId
+        apiHost = ctx.apiHost
+        if (!apiHost)
+          return
       }
 
       const tags: Record<string, string | number | boolean> = {
@@ -136,7 +133,7 @@ export function trackEvent(input: TrackEventInput): Promise<void> {
         ...(orgId ? { org_id: orgId } : {}),
         tags,
         ...(input.nonPersonTags ? { nonPersonTags: input.nonPersonTags } : {}),
-      }, false, controller.signal).catch(() => {})
+      }, false, controller.signal, apiHost).catch(() => {})
     }
     catch {
       // telemetry must never break a command
@@ -303,18 +300,18 @@ export function trackMcpServerStarted(hasApikey: boolean): void {
   })
 }
 
-// --- Supabase performance events ---
+// --- Capgo API performance events ---
 const CLI_PERF_CHANNEL = 'cli-perf'
 
 /**
- * Turns a raw timed-fetch observation into a fire-and-forget `Supabase Call`
- * event. Injected into supabase-perf so that module stays a leaf (no cycle).
+ * Turns a raw timed-fetch observation into a fire-and-forget `API Call`
+ * event. Injected into api-perf so that module stays a leaf (no cycle).
  *
  * Only slow or failed calls are emitted. Successful fast calls were ~50% of
  * PostHog volume (mostly CI `bundle upload`) and added little beyond the
  * existing CLI command lifecycle events.
  */
-function recordSupabaseCall(info: SupabaseCallInfo): void {
+function recordApiCall(info: ApiCallInfo): void {
   const slow = info.durationMs > SLOW_THRESHOLD_MS
   if (info.ok && !slow)
     return
@@ -323,7 +320,7 @@ function recordSupabaseCall(info: SupabaseCallInfo): void {
   // module-level value set in trackCommandInvoked.
   const commandPath = mcpCommandPathStore.getStore() ?? currentCommandPath
   const tags: Record<string, string | number | boolean> = {
-    operation: deriveSupabaseOperation(info.url, info.method),
+    operation: deriveApiOperation(info.route ?? info.url, info.method),
     method: info.method,
     status_code: info.status,
     duration_ms: info.durationMs,
@@ -339,13 +336,11 @@ function recordSupabaseCall(info: SupabaseCallInfo): void {
       ? categorizeCliError(info.error)
       : categorizeHttpStatus(info.status)
   }
-  // Use the key from the Supabase request itself so events fire even when the
+  // Use the key from the request itself so events fire even when the
   // key came from --apikey (not env / a saved file); trackEvent still falls back.
-  void trackEvent({ apikey: info.apikey, channel: CLI_PERF_CHANNEL, event: 'Supabase Call', tags })
+  void trackEvent({ apikey: info.apikey, channel: CLI_PERF_CHANNEL, event: 'API Call', tags })
 }
 
-setSupabaseCallRecorder(recordSupabaseCall)
+setApiCallRecorder(recordApiCall)
 
-// Re-export so call sites can `import { withSupabaseSource } from '../analytics/track'`.
-export { withSupabaseSource }
-export { enableSupabaseInstrumentation } from './supabase-perf'
+export { enableApiInstrumentation } from './api-perf'

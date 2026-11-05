@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconArrowRight from '~icons/lucide/arrow-right'
@@ -9,7 +9,7 @@ import IconCircleDot from '~icons/lucide/circle-dot'
 import IconSettings from '~icons/lucide/settings-2'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconStore from '~icons/lucide/store'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -38,7 +38,7 @@ type ReleaseChannel = Pick<ChannelRow, ReleaseChannelKey>
 type ChannelUpdate = Database['public']['Tables']['channels']['Update']
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 
 const isLoading = ref(true)
@@ -135,7 +135,7 @@ async function getInstallSourceCounts(appId: string) {
   if (cached)
     return cached
 
-  const { data: currentSession } = await supabase.auth.getSession()
+  const { data: currentSession } = await capgo.auth.getSession()
   const currentJwt = currentSession.session?.access_token
   if (!currentJwt)
     throw new Error('Cannot count install sources without a session')
@@ -297,7 +297,7 @@ async function loadStatus() {
   try {
     await organizationStore.awaitInitialLoad()
 
-    const bundleResult = await supabase
+    const bundleResult = await capgo
       .from('app_versions')
       .select('id')
       .eq('app_id', appId)
@@ -382,7 +382,7 @@ async function loadChannels() {
   isLoadingChannels.value = true
   setupError.value = ''
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select('id,name,public,app_id,allow_emulator,allow_device,allow_dev,allow_prod,ios,android,electron')
       .eq('app_id', props.appId)
@@ -428,7 +428,7 @@ async function applyProductionSetup() {
       ...(setupForm.value.makeDefault ? { public: true } : {}),
     }
 
-    const { error: selectedError } = await supabase
+    const { error: selectedError } = await capgo
       .from('channels')
       .update(selectedUpdate)
       .eq('app_id', appliedAppId)
@@ -452,7 +452,7 @@ async function applyProductionSetup() {
       : []
 
     if (disablePublicChannelIds.length > 0) {
-      const { error: publicError } = await supabase
+      const { error: publicError } = await capgo
         .from('channels')
         .update({ public: false })
         .eq('app_id', appliedAppId)

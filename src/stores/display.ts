@@ -1,7 +1,7 @@
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 export interface BreadcrumbItem {
   path: string
@@ -164,11 +164,11 @@ export const useDisplayStore = defineStore('display', () => {
 
       // Kick off fetch if we still don't have a name
       if (appId !== 'new' && !hasCachedName && !appNameResolver.value(appId) && !pendingFetches.has(appId)) {
-        const supabase = useSupabase()
+        const capgo = useConsole()
         const requestOrgId = currentCacheOrgId.value
         const fetchPromise = (async () => {
           try {
-            const { data, error } = await supabase
+            const { data, error } = await capgo
               .from('apps')
               .select('name')
               .eq('app_id', appId)

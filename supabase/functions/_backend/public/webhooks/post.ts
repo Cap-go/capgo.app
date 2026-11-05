@@ -3,7 +3,8 @@ import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { queryJsonOne } from '../../utils/pg_rls.ts'
 import { getWebhookLogUrlMetadata, getWebhookPublicUrlValidationError, isWebhookEventType, parseWebhookDeliveryVersion, WEBHOOK_EVENT_TYPES } from '../../utils/webhook.ts'
 import { checkWebhookPermissionV2 } from './index.ts'
 import { webhookCreatedSelect } from './response.ts'
@@ -48,23 +49,23 @@ export async function post(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
     throw simpleError('invalid_url', urlError, { urlInfo: getWebhookLogUrlMetadata(body.url) })
 
   // Direct RLS access to webhook tables is intentionally denied; use service-role only after explicit permission checks.
-  const { data, error } = await supabaseAdmin(c)
-    .from('webhooks')
-    .insert({
-      org_id: body.orgId,
-      name: body.name,
-      url: body.url,
-      events: body.events,
-      enabled: body.enabled ?? true,
-      delivery_version: deliveryVersion,
-      created_by: auth.userId,
-    })
+  const pg = await getPgClient(c)
+  let data: unknown
+  try {
     // Return the secret once on creation so admins can store it; read/update endpoints never expose it.
-    .select(webhookCreatedSelect)
-    .single()
-
-  if (error) {
+    data = await queryJsonOne(
+      pg,
+      `INSERT INTO public.webhooks (org_id, name, url, events, enabled, delivery_version, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING ${webhookCreatedSelect}`,
+      [body.orgId, body.name, body.url, body.events, body.enabled ?? true, deliveryVersion, auth.userId],
+    )
+  }
+  catch (error) {
     throw simpleError('cannot_create_webhook', 'Cannot create webhook', { error })
+  }
+  finally {
+    closeClient(c, pg)
   }
 
   return c.json({

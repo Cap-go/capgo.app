@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
-import type { Database } from '~/types/supabase.types'
-import { FormKit } from '@formkit/vue'
+import type { Database } from '~/types/database.types'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, h, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconSettings from '~icons/heroicons/cog-8-tooth'
 import IconTrash from '~icons/heroicons/trash'
+import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
+import ChannelIntroduction from '~/components/dashboard/ChannelIntroduction.vue'
+import FormField from '~/components/forms/FormField.vue'
+import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { refetchIfPageOutOfRange } from '~/services/tablePagination'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
@@ -45,13 +48,17 @@ const offset = 10
 const { t } = useI18n()
 const dialogStore = useDialogV2Store()
 const organizationStore = useOrganizationStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const router = useRouter()
 const main = useMainStore()
+// The AI agent card comes first unless the user last picked the manual way.
+const { manualFirst, rememberSetupMethod } = useSetupMethodPreference()
 const total = ref(0)
 const search = ref('')
 const elements = ref<(Element)[]>([])
 const isLoading = ref(true)
+const loadedQuery = ref<{ appId: string, search: string } | null>(null)
+let dataRequestId = 0
 const currentPage = ref(1)
 const versionId = ref<number | null>(null)
 const filters = ref()
@@ -61,11 +68,27 @@ const canReadChannel = ref<Record<number, boolean>>({})
 const canDeleteChannel = ref<Record<number, boolean>>({})
 const defaultUploadChannel = ref<string | null>(null)
 
-const canCreateChannel = computedAsync(async () => {
-  if (!props.appId)
-    return false
-  return await checkPermissions('app.create_channel', { appId: props.appId })
-}, false)
+const evaluatingCreatePermission = ref(false)
+const createPermission = computedAsync(async () => {
+  const appId = props.appId
+  if (!appId)
+    return { appId, allowed: false }
+  try {
+    return { appId, allowed: await checkPermissions('app.create_channel', { appId }) }
+  }
+  catch {
+    return { appId, allowed: false }
+  }
+}, null, { evaluating: evaluatingCreatePermission })
+const canCreateChannel = computed(() => !evaluatingCreatePermission.value
+  && createPermission.value?.appId === props.appId
+  && createPermission.value?.allowed === true)
+
+const showIntroduction = computed(() => !isLoading.value
+  && loadedQuery.value?.appId === props.appId
+  && loadedQuery.value.search === ''
+  && total.value === 0
+  && !search.value)
 
 const currentVersionsNumber = computed(() => {
   return (currentPage.value - 1) * offset
@@ -81,7 +104,7 @@ async function addChannel(name: string) {
     if (!currentGid)
       return
     // { name: channelId, app_id: appId, version: data.id, created_by: userId }
-    const { data: dataChannel } = await supabase
+    const { data: dataChannel } = await capgo
       .from('channels')
       .insert([
         {
@@ -103,12 +126,17 @@ async function addChannel(name: string) {
 }
 
 async function getData() {
+  const requestId = ++dataRequestId
+  const appId = props.appId
+  const requestedSearch = search.value
+  const isCurrentRequest = () => requestId === dataRequestId && appId === props.appId && requestedSearch === search.value
   isLoading.value = true
+  loadedQuery.value = null
   canPromoteChannel.value = {}
   canReadChannel.value = {}
   canDeleteChannel.value = {}
   try {
-    let req = supabase
+    let req = capgo
       .from('channels')
       .select(`
           id,
@@ -133,11 +161,11 @@ async function getData() {
           updated_at,
           disable_auto_update
           `, { count: 'exact' })
-      .eq('app_id', props.appId)
+      .eq('app_id', appId)
       .range(currentVersionsNumber.value, currentVersionsNumber.value + offset - 1)
 
-    if (search.value)
-      req = req.like('name', `%${search.value}%`)
+    if (requestedSearch)
+      req = req.like('name', `%${requestedSearch}%`)
 
     if (columns.value.length) {
       columns.value.forEach((col) => {
@@ -147,19 +175,21 @@ async function getData() {
     }
     const [{ data: dataVersions, count }, { data: appData }] = await Promise.all([
       req,
-      supabase.from('apps').select('default_upload_channel').eq('app_id', props.appId).maybeSingle(),
+      capgo.from('apps').select('default_upload_channel').eq('app_id', appId).maybeSingle(),
     ])
+    if (!isCurrentRequest())
+      return
     defaultUploadChannel.value = appData?.default_upload_channel ?? null
     if (!dataVersions)
       return
     total.value = count ?? 0
     if (await refetchIfPageOutOfRange(currentPage, total.value, offset, getData))
       return
+    if (!isCurrentRequest())
+      return
+    loadedQuery.value = { appId, search: requestedSearch }
     elements.value.length = 0
     elements.value.push(...dataVersions as any)
-    if (count === 0) {
-      showAddModal()
-    }
 
     // Look for misconfigured channels
     // This will trigger if the channel disables updates based on metadata + if the metadata is undefined
@@ -178,12 +208,15 @@ async function getData() {
     // Inform the parent component if there are any misconfigured channels
     emit('misconfigured', anyMisconfigured)
     versionId.value = null
-    await loadChannelPermissions(elements.value)
+    await loadChannelPermissions(elements.value, appId, requestId)
   }
   catch (error) {
     console.error(error)
   }
-  isLoading.value = false
+  finally {
+    if (requestId === dataRequestId)
+      isLoading.value = false
+  }
 }
 async function refreshData(keepCurrentPage = false) {
   try {
@@ -206,7 +239,7 @@ async function deleteOne(one: Element) {
 
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')} ${one.name}?`,
+    description: t('alert-delete-named-confirm', { name: one.name }),
     buttons: [
       {
         text: t('button-cancel'),
@@ -217,7 +250,7 @@ async function deleteOne(one: Element) {
         role: 'danger',
         handler: async () => {
           try {
-            const { error: delChanError } = await supabase
+            const { error: delChanError } = await capgo
               .from('channels')
               .delete()
               .eq('app_id', props.appId)
@@ -241,7 +274,7 @@ async function deleteOne(one: Element) {
   return dialogStore.onDialogDismiss()
 }
 
-async function loadChannelPermissions(rows: Element[]) {
+async function loadChannelPermissions(rows: Element[], appId: string, requestId: number) {
   if (!rows.length) {
     canPromoteChannel.value = {}
     canReadChannel.value = {}
@@ -253,10 +286,13 @@ async function loadChannelPermissions(rows: Element[]) {
     const [canRead, canPromote, canDelete] = await Promise.all([
       checkPermissions('channel.read', { channelId: row.id }),
       checkPermissions('channel.promote_bundle', { channelId: row.id }),
-      checkPermissions('channel.delete', { appId: props.appId, channelId: row.id }),
+      checkPermissions('channel.delete', { appId, channelId: row.id }),
     ])
     return { id: row.id, canRead, canPromote, canDelete }
   }))
+
+  if (requestId !== dataRequestId || appId !== props.appId)
+    return
 
   const nextPromote: Record<number, boolean> = {}
   const nextRead: Record<number, boolean> = {}
@@ -359,12 +395,13 @@ columns.value = [
         icon: IconSettings,
         disabled: (elem: Element) => !canReadChannel.value[elem.id],
         title: (elem: Element) => (canReadChannel.value[elem.id]
-          ? ''
+          ? t('settings')
           : t('channel-permission-read-required')),
         onClick: (elem: Element) => openOne(elem),
       },
       {
         icon: IconTrash,
+        title: () => t('delete'),
         visible: (elem: Element) => !!canDeleteChannel.value[elem.id],
         onClick: (elem: Element) => deleteOne(elem),
       },
@@ -405,6 +442,7 @@ async function showAddModal() {
             toast.error(t('missing-name'))
             return false
           }
+          void rememberSetupMethod('manual')
           await addChannel(name)
         },
       },
@@ -412,6 +450,74 @@ async function showAddModal() {
   })
   await dialogStore.onDialogDismiss()
 }
+
+// The copied prompt only hands the work to the agent: refresh the list until its channel
+// shows up, for a bounded time.
+const AGENT_CHANNEL_POLL_MS = 5000
+const AGENT_CHANNEL_MAX_POLLS = 120
+let agentChannelTimer: ReturnType<typeof setInterval> | undefined
+let isUnmounted = false
+
+function stopWatchingAgentChannel() {
+  clearInterval(agentChannelTimer)
+  agentChannelTimer = undefined
+}
+
+async function countChannels(appId: string) {
+  const { count, error } = await capgo
+    .from('channels')
+    .select('id', { count: 'exact', head: true })
+    .eq('app_id', appId)
+  if (error)
+    throw error
+  return count ?? 0
+}
+
+async function watchForAgentChannel() {
+  dialogStore.closeDialog()
+  stopWatchingAgentChannel()
+  const appId = props.appId
+  let countBefore: number
+  try {
+    countBefore = await countChannels(appId)
+  }
+  catch (error) {
+    console.warn('Cannot count channels before the AI agent creates one', error)
+    return
+  }
+  if (isUnmounted)
+    return
+  let polls = 0
+  let checking = false
+  const timer = setInterval(async () => {
+    polls += 1
+    if (polls > AGENT_CHANNEL_MAX_POLLS || props.appId !== appId) {
+      stopWatchingAgentChannel()
+      return
+    }
+    if (document.visibilityState === 'hidden' || checking)
+      return
+    checking = true
+    try {
+      if (await countChannels(appId) > countBefore && agentChannelTimer === timer) {
+        stopWatchingAgentChannel()
+        await refreshData(true)
+      }
+    }
+    catch (error) {
+      console.warn('Cannot check for the channel created by the AI agent', error)
+    }
+    finally {
+      checking = false
+    }
+  }, AGENT_CHANNEL_POLL_MS)
+  agentChannelTimer = timer
+}
+
+onBeforeUnmount(() => {
+  isUnmounted = true
+  stopWatchingAgentChannel()
+})
 
 async function openOneVersion(one: Element) {
   const servingRollout = !!one.rollout_enabled
@@ -433,10 +539,13 @@ watch(props, async () => {
 
 <template>
   <div>
+    <ChannelIntroduction v-if="showIntroduction" :can-create="canCreateChannel" @create="showAddModal" />
     <DataTable
+      v-show="!showIntroduction"
       v-model:filters="filters" v-model:columns="columns" v-model:current-page="currentPage" v-model:search="search"
       :total="total" :offset="offset" :element-list="elements"
-      show-add
+      :show-add="canCreateChannel"
+      add-button-test-id="channel-add"
       filter-text="Filters"
       :is-loading="isLoading"
       :search-placeholder="t('search-by-name')"
@@ -447,11 +556,14 @@ watch(props, async () => {
     <!-- Teleport Content for Add Channel Modal -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.title === t('channel-create')" defer to="#dialog-v2-content">
       <div class="space-y-4">
-        <FormKit
+        <AiAgentTaskCard v-if="!manualFirst" task="create-channel" :app-id="appId" :channel-name="newChannelName" compact or-separator="after" @copied="watchForAgentChannel" />
+        <FormField
           v-model="newChannelName"
           type="text"
           :placeholder="t('channel-name-placeholder')"
+          :aria-label="t('channel-name')"
         />
+        <AiAgentTaskCard v-if="manualFirst" task="create-channel" :app-id="appId" :channel-name="newChannelName" compact or-separator="before" @copied="watchForAgentChannel" />
       </div>
     </Teleport>
   </div>

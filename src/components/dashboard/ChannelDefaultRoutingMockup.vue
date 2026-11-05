@@ -283,6 +283,7 @@ const {
           v-if="!prefersReducedMotion"
           type="button"
           :class="props.embedded ? 'd-btn d-btn-sm shrink-0 border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/15 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10' : 'cr-replay'"
+          :aria-label="t('channel-routing-mockup-replay')"
           @click="replay"
         >
           <IconRefreshCw class="h-4 w-4" aria-hidden="true" />
@@ -433,16 +434,18 @@ const {
         </div>
       </section>
 
-      <footer v-if="props.embedded" class="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3 sm:px-6 dark:border-white/10 dark:bg-slate-950">
-        <span class="h-10 w-10 shrink-0" aria-hidden="true" />
-        <button
-          type="button"
-          class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5"
-          data-test="channel-default-routing-continue"
-          @click="continueOnboarding"
-        >
-          {{ t('continue') }}
-        </button>
+      <footer v-if="props.embedded" class="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3 sm:px-6 dark:border-white/10 dark:bg-slate-950">
+        <div class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+          <slot name="secondary-action" />
+          <button
+            type="button"
+            class="d-btn d-btn-primary h-12 min-h-12 shrink-0 px-5"
+            data-test="channel-default-routing-continue"
+            @click="continueOnboarding"
+          >
+            {{ t('continue') }}
+          </button>
+        </div>
       </footer>
     </div>
   </main>

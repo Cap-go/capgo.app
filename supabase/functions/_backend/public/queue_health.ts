@@ -193,7 +193,7 @@ export function evaluateQueueHealth(
 
   if (metrics.queue_table_exists && metrics.never_read_stale_count > 0) {
     reasons.push('never_read_stale')
-    reason_details.never_read_stale = `${metrics.never_read_stale_count} visible message(s) still have read_ct=0 after ${metrics.never_read_stale_seconds}s (oldest age ${metrics.oldest_message_age_seconds ?? 'unknown'}s). Consumers are not reading this queue in time.`
+    reason_details.never_read_stale = `${metrics.never_read_stale_count} message(s) have been readable for over ${metrics.never_read_stale_seconds}s with read_ct=0 (oldest age ${metrics.oldest_message_age_seconds ?? 'unknown'}s). Consumers are not reading this queue in time.`
   }
 
   if (metrics.queue_table_exists && metrics.stuck_count > 0) {
@@ -241,7 +241,7 @@ export function evaluateQueueHealth(
 export function buildQueueHealthCriteria(thresholds: QueueHealthThresholds) {
   return {
     never_read_stale: {
-      healthy_when: 'No visible (vt <= now()) queue messages remain with read_ct=0 longer than the queue stale threshold (derived from cron interval when known). Delayed retries with future vt are ignored.',
+      healthy_when: 'No queue messages with read_ct=0 stay readable (vt <= now()) longer than the queue stale threshold (derived from cron interval when known), measured from vt so delayed sends and retries only count once they become readable.',
       unhealthy_when: 'Visible messages sit unread long enough that consumers are likely stuck or not scheduled.',
       default_threshold_seconds: thresholds.default_never_read_stale_seconds,
       min_threshold_seconds: thresholds.min_never_read_stale_seconds,
@@ -328,7 +328,7 @@ async function loadQueueIntervals(client: Awaited<ReturnType<typeof getPgClient>
   return buildQueueIntervalMap(rows)
 }
 
-async function fetchQueueMetrics(
+export async function fetchQueueMetrics(
   client: Awaited<ReturnType<typeof getPgClient>>,
   queueName: string,
   expectedIntervalSeconds: number | null,
@@ -375,11 +375,13 @@ async function fetchQueueMetrics(
         COUNT(*)::bigint AS queue_count,
         -- All unread rows (including delayed vt > now()). Public metric — keep meaning stable.
         COUNT(*) FILTER (WHERE read_ct = 0)::bigint AS never_read_count,
-        -- Staleness only cares about messages consumers can already read.
+        -- Staleness only cares about messages consumers can already read. An
+        -- unread message's vt is when it became readable (enqueued_at + send
+        -- delay), so delayed sends from staggered bursts are not stale the
+        -- moment their slot opens.
         COUNT(*) FILTER (
           WHERE read_ct = 0
-            AND vt <= now()
-            AND enqueued_at < now() - ($1::text || ' seconds')::interval
+            AND vt < now() - ($1::text || ' seconds')::interval
         )::bigint AS never_read_stale_count,
         COUNT(*) FILTER (WHERE read_ct > $2)::bigint AS stuck_count,
         MAX(read_ct)::bigint AS max_read_ct,

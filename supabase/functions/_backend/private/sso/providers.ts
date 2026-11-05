@@ -8,11 +8,11 @@ import { BRES, createHono, parseBody, quickError, simpleError, useCors } from '.
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { requireEnterprisePlan } from '../../utils/plan-gating.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { createSSOProvider, deleteSSOProvider, ManagementAPIError, restoreSSOProvider, snapshotSSOProvider, updateSSOProvider } from '../../utils/supabase-management.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 import { getCallerMaxPriorityRank } from '../role_bindings.ts'
 import { PUBLIC_EMAIL_DOMAINS } from './prelink-shared.ts'
@@ -114,16 +114,24 @@ function parseAttributeMapping(value: unknown): Record<string, string> | undefin
 
 // Every app and group a mapping grants must belong to the provider's org.
 async function requireMappingTargetsInOrg(c: Context<MiddlewareKeyVariables>, orgId: string, mapping: SsoRoleMapping) {
-  const admin = supabaseAdmin(c)
   const groupIds = [...new Set(mapping.rules.map(rule => rule.group_id).filter((id): id is string => id !== null))]
   const appIds = [...new Set(mapping.rules.flatMap(rule => rule.apps.map(app => app.app_id)))]
-  const [groups, apps] = await Promise.all([
-    groupIds.length ? admin.from('groups').select('id').eq('org_id', orgId).in('id', groupIds) : { data: [], error: null },
-    appIds.length ? admin.from('apps').select('id').eq('owner_org', orgId).in('id', appIds) : { data: [], error: null },
-  ])
-  if (groups.error || apps.error)
+  let groupCount = 0
+  let appCount = 0
+  const pgPool = await getPgClient(c)
+  try {
+    if (groupIds.length)
+      groupCount = (await pgPool.query('select id from public.groups where org_id = $1 and id = any($2::uuid[])', [orgId, groupIds])).rows.length
+    if (appIds.length)
+      appCount = (await pgPool.query('select id from public.apps where owner_org = $1 and id = any($2::uuid[])', [orgId, appIds])).rows.length
+  }
+  catch {
     quickError(500, 'role_mapping_lookup_failed', 'Failed to validate role mapping targets')
-  if ((groups.data ?? []).length !== groupIds.length || (apps.data ?? []).length !== appIds.length)
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
+  if (groupCount !== groupIds.length || appCount !== appIds.length)
     throw simpleError('invalid_role_mapping', 'Role mapping references an app or group that does not belong to this organization')
 }
 
@@ -425,19 +433,24 @@ app.post('/', async (c) => {
   // Nothing is registered in Supabase Auth yet: the SAML provider is only
   // created on activation, once DNS ownership is proven, so a pending or
   // unverified domain can never be used to sign in.
-  const { data, error } = await supabaseAdmin(c)
-    .from('sso_providers')
-    .insert({
-      org_id: body.org_id,
-      domain,
-      status: 'pending_verification',
-      dns_verification_token: generateDnsVerificationToken(),
-      metadata_url: body.metadata_url ?? null,
-      metadata_xml: body.metadata_xml ?? null,
-      attribute_mapping: attributeMapping ?? null,
-    } as any)
-    .select('*')
-    .single()
+  let data: Record<string, unknown> | null = null
+  let error: { code?: string } | null = null
+  const pgPool = await getPgClient(c)
+  try {
+    data = await queryJsonOne<Record<string, unknown>>(
+      pgPool,
+      `insert into public.sso_providers (org_id, domain, status, dns_verification_token, metadata_url, metadata_xml, attribute_mapping)
+      values ($1, $2, 'pending_verification', $3, $4, $5, $6::jsonb)
+      returning *`,
+      [body.org_id, domain, generateDnsVerificationToken(), body.metadata_url ?? null, body.metadata_xml ?? null, attributeMapping == null ? null : JSON.stringify(attributeMapping)],
+    )
+  }
+  catch (insertError) {
+    error = insertError as { code?: string }
+  }
+  finally {
+    await closeClient(c, pgPool)
+  }
 
   if (error || !data) {
     if (error?.code === '23505')
@@ -462,18 +475,20 @@ app.get('/:orgId', async (c) => {
 
   await requireManageSsoPermission(c, orgId)
 
-  const supabase = supabaseWithAuth(c, auth) as any
-  const { data, error } = await supabase
-    .from('sso_providers')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false })
-
-  if (error) {
+  let data: Record<string, unknown>[] = []
+  try {
+    // PostgREST capped this read at max_rows (1000).
+    data = await withRlsContext(c, authPrincipal(c, auth), client => queryJson<Record<string, unknown>>(
+      client,
+      'select * from public.sso_providers where org_id = $1 order by created_at desc limit 1000',
+      [orgId],
+    ))
+  }
+  catch (error) {
     quickError(500, 'providers_list_failed', 'Failed to list SSO providers', { error })
   }
 
-  return c.json((data ?? []).map((provider: Record<string, unknown>) => sanitizeProvider(provider)))
+  return c.json(data.map(provider => sanitizeProvider(provider)))
 })
 
 app.patch('/:id', async (c) => {
@@ -503,14 +518,17 @@ app.patch('/:id', async (c) => {
   const body = validation.data
   const attributeMapping = parseAttributeMapping(body.attribute_mapping)
 
-  const supabase = supabaseWithAuth(c, auth) as any
-  const { data: provider, error: providerError } = await supabase
-    .from('sso_providers')
-    .select('id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping, role_mapping')
-    .eq('id', id)
-    .single()
+  let provider: any = null
+  try {
+    provider = await withRlsContext(c, authPrincipal(c, auth), client => queryJsonOne(
+      client,
+      'select id, org_id, domain, status, enforce_sso, provider_id, updated_at, metadata_url, metadata_xml, attribute_mapping, role_mapping from public.sso_providers where id = $1',
+      [id],
+    ))
+  }
+  catch {}
 
-  if (providerError || !provider) {
+  if (!provider) {
     quickError(404, 'provider_not_found', 'SSO provider not found')
   }
 
@@ -677,14 +695,17 @@ app.delete('/:id', async (c) => {
     throw simpleError('invalid_provider_id', 'Invalid provider id')
   }
 
-  const supabase = supabaseWithAuth(c, auth) as any
-  const { data: provider, error: providerError } = await supabase
-    .from('sso_providers')
-    .select('id, org_id, provider_id, domain, status, enforce_sso')
-    .eq('id', id)
-    .single()
+  let provider: any = null
+  try {
+    provider = await withRlsContext(c, authPrincipal(c, auth), client => queryJsonOne(
+      client,
+      'select id, org_id, provider_id, domain, status, enforce_sso from public.sso_providers where id = $1',
+      [id],
+    ))
+  }
+  catch {}
 
-  if (providerError || !provider) {
+  if (!provider) {
     quickError(404, 'provider_not_found', 'SSO provider not found')
   }
 
@@ -762,6 +783,78 @@ app.get('/:orgId/links', async (c) => {
       ),
     ])
     return { shared: shared.rows, linked: linked.rows }
+  })
+  return c.json(result)
+})
+
+// What the SSO role mapping rewrites on every login of this org's SSO members:
+// their org role, their roles on the mapped apps and their membership of the
+// mapped groups. The UI locks those controls since a manual edit would be
+// silently reverted at the next login.
+app.get('/:orgId/managed', async (c) => {
+  const orgId = parseUuidParam(c.req.param('orgId'), 'invalid_org_id', 'Invalid org_id')
+  // App role editors (app.update_user_roles) may lack org.read_members: they
+  // pass the app they manage so its access screen can lock the same controls.
+  const appId = c.req.query('app_id')
+
+  const result = await withPgPool(c, async (pool) => {
+    // Set for app-scoped callers: the response is then limited to that app.
+    let scopedAppUuid: string | null = null
+    if (!await checkPermission(c, 'org.read_members', { orgId })) {
+      const ownedApp = appId
+        ? await pool.query<{ id: string }>('select id from public.apps where app_id = $1 and owner_org = $2', [appId, orgId])
+        : null
+      if (!ownedApp?.rowCount || !await checkPermission(c, 'app.update_user_roles', { appId }))
+        quickError(403, 'not_authorized', 'Not authorized')
+      scopedAppUuid = ownedApp!.rows[0].id
+    }
+
+    const { rows } = await pool.query<{ provider_id: string, role_mapping: unknown }>(
+      `
+        select p.provider_id, p.role_mapping
+        from public.sso_providers p
+        where p.org_id = $1 and p.status = 'active' and p.provider_id is not null and p.role_mapping is not null
+        union all
+        select p.provider_id, l.role_mapping
+        from public.sso_provider_org_links l
+        join public.sso_providers p on p.id = l.sso_provider_id
+        where l.org_id = $1 and p.status = 'active' and p.provider_id is not null and l.role_mapping is not null
+      `,
+      [orgId],
+    )
+    // A login only applies the mapping of the provider that authenticated it,
+    // so targets are kept per provider, then per user.
+    const targetsByProvider = new Map<string, ReturnType<typeof mappingTargets>>()
+    for (const row of rows) {
+      const mapping = parseStoredRoleMapping(row.role_mapping)
+      if (mapping)
+        targetsByProvider.set(`sso:${row.provider_id}`, mappingTargets(mapping))
+    }
+    const users: Record<string, { app_ids: string[], group_ids: string[] }> = {}
+    if (targetsByProvider.size === 0)
+      return { users }
+
+    const identities = await pool.query<{ user_id: string, provider: string }>(
+      `
+        select distinct ou.user_id, i.provider
+        from public.org_users ou
+        join auth.identities i on i.user_id = ou.user_id
+        where ou.org_id = $1 and i.provider = any($2::text[])
+      `,
+      [orgId, [...targetsByProvider.keys()]],
+    )
+    for (const { user_id, provider } of identities.rows) {
+      const targets = targetsByProvider.get(provider)!
+      if (scopedAppUuid) {
+        if (targets.appIds.has(scopedAppUuid))
+          users[user_id] = { app_ids: [scopedAppUuid], group_ids: [] }
+        continue
+      }
+      const user = users[user_id] ??= { app_ids: [], group_ids: [] }
+      user.app_ids = [...new Set([...user.app_ids, ...targets.appIds])]
+      user.group_ids = [...new Set([...user.group_ids, ...targets.groupIds])]
+    }
+    return { users }
   })
   return c.json(result)
 })

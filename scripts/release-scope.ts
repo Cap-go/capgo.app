@@ -37,8 +37,6 @@ export const componentMatchers: Record<Component, RegExp[]> = {
     /^configs\.json$/,
     /^deno-env\.d\.ts$/,
     /^deno\.lock$/,
-    /^formkit\.config\.ts$/,
-    /^formkit\.theme\.ts$/,
     /^icons\//,
     /^index\.html$/,
     /^internal\//,

@@ -7,7 +7,15 @@ const APPNAME = `com.trigger.test.${id}`
 
 const triggerHeaders = {
   'Content-Type': 'application/json',
-  'apisecret': 'testsecret', // This would need to match your actual test secret
+  'apisecret': 'testsecret',
+}
+
+function postTrigger(trigger: string, body: Record<string, unknown>) {
+  return fetch(`${BASE_URL}/triggers/${trigger}`, {
+    method: 'POST',
+    headers: triggerHeaders,
+    body: JSON.stringify(body),
+  })
 }
 
 beforeAll(async () => {
@@ -18,418 +26,62 @@ afterAll(async () => {
   await resetAppData(APPNAME)
 })
 
-describe('[POST] /triggers/cron_stat_app - Error Cases', () => {
-  it('should return 400 when appId is missing', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({}),
-    })
-    expect(response.status).toBe(400)
+// [case, trigger, body, expected status (null = not asserted), expected error]
+const errorCases: Array<[string, string, Record<string, unknown>, number | null, string]> = [
+  ['appId is missing', 'cron_stat_app', {}, 400, 'no_appId'],
+  ['org is missing', 'cron_stat_app', { appId: 'nonexistent-app-id' }, 400, 'no_orgId'],
+  ['appId is not provided with an orgId', 'cron_stat_app', { orgId: ORG_ID }, 400, 'no_appId'],
+  ['orgId is missing', 'cron_stat_org', {}, 400, 'no_orgId'],
+  ['required fields are missing', 'cron_email', {}, 400, 'missing_email_type'],
+  ['email is missing', 'cron_email', { appId: APPNAME, type: 'stats' }, 400, 'missing_email_type'],
+  ['appId is missing for a non-billing_period_stats type', 'cron_email', { email: 'test@example.com', type: 'stats' }, 400, 'missing_appId'],
+  ['type is missing', 'cron_email', { email: 'test@example.com', appId: APPNAME }, 400, 'missing_email_type'],
+  ['orgId is missing for billing_period_stats type', 'cron_email', { email: 'test@example.com', type: 'billing_period_stats' }, 400, 'missing_orgId'],
+  ['email type is invalid', 'cron_email', { email: USER_EMAIL, appId: APPNAME, type: 'invalid_type' }, 400, 'invalid_stats_type'],
+  ['deploy stats are missing versionId', 'cron_email', { email: 'test@example.com', appId: 'nonexistent-app', type: 'deploy_install_stats' }, 400, 'missing_version_id'],
+  ['no version is given to cleanup', 'cron_clear_versions', {}, null, 'no_version'],
+  ['channel update has no app id', 'on_channel_update', { table: 'channels', type: 'UPDATE', record: { id: 'nonexistent-channel' }, old_record: {} }, null, 'no_app_id'],
+  ['channel update targets another table', 'on_channel_update', { table: 'not_channels', type: 'UPDATE', record: {}, old_record: {} }, 400, 'table_not_match'],
+  ['channel update is not an UPDATE', 'on_channel_update', { table: 'channels', type: 'INSERT', record: {}, old_record: {} }, 400, 'type_not_match'],
+  ['app create cannot fetch its organization', 'on_app_create', { table: 'apps', type: 'INSERT', record: { id: randomUUID(), app_id: 'test.app', owner_org: randomUUID() } }, 400, 'error_fetching_organization'],
+  ['app create record has no id', 'on_app_create', { table: 'apps', type: 'INSERT', record: { id: null, app_id: null } }, 400, 'no_id'],
+  ['version create record has no id', 'on_version_create', { table: 'app_versions', type: 'INSERT', record: { id: null, app_id: null } }, 400, 'no_id'],
+  ['deploy history create targets another table', 'on_deploy_history_create', { table: 'app_versions_meta', type: 'INSERT', record: { id: null, app_id: null } }, 400, 'table_not_match'],
+  ['delta file size lookup data is incomplete', 'on_manifest_create', { table: 'delta_files', type: 'INSERT', record: { id: null, entry_key: 'abc', path_key: 'def' } }, 400, 'no_s3_path'],
+  ['version update targets another table', 'on_version_update', { table: 'not_app_versions', type: 'UPDATE', record: {}, old_record: {} }, 400, 'table_not_match'],
+  ['version update is not an UPDATE', 'on_version_update', { table: 'app_versions', type: 'INSERT', record: {}, old_record: {} }, 400, 'type_not_match'],
+  ['stripe event has no signature', 'stripe_event', { type: 'invalid.event.type', data: {} }, null, 'webhook_error_no_signature'],
+]
+
+describe('[POST] /triggers/* - Error Cases', () => {
+  it.each(errorCases)('rejects when %s (/triggers/%s)', async (_case, trigger, body, status, error) => {
+    const response = await postTrigger(trigger, body)
+    if (status !== null)
+      expect(response.status).toBe(status)
     const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_appId')
+    expect(data.error).toBe(error)
   })
 
-  it('should return 400 when org is missing', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        appId: 'nonexistent-app-id',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_orgId')
+  it.concurrent('acknowledges size lookups queued for legacy manifest rows', async () => {
+    // public.manifest is a view now; lookups queued before the cutover are skipped.
+    const response = await postTrigger('on_manifest_create', { table: 'manifest', type: 'INSERT', record: { id: 1, app_version_id: 1, s3_path: 'legacy.js' } })
+    expect(response.status).toBe(200)
   })
 
-  it.concurrent('should skip stale jobs when the app no longer exists', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        appId: 'nonexistent-app-id',
-        orgId: ORG_ID,
-      }),
-    })
+  it.concurrent('cron_stat_app skips stale jobs when the app no longer exists', async () => {
+    const response = await postTrigger('cron_stat_app', { appId: 'nonexistent-app-id', orgId: ORG_ID })
     expect(response.status).toBe(200)
     const data = await response.json() as { status: string, reason: string }
     expect(data.status).toBe('skipped')
     expect(data.reason).toBe('app_not_found')
   })
 
-  it('should return 400 when appId is not provided', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_stat_app`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        orgId: ORG_ID,
-      }),
+  it('on_version_create returns 200 for a nonexistent app (trigger logs error but does not fail)', async () => {
+    const response = await postTrigger('on_version_create', {
+      table: 'app_versions',
+      type: 'INSERT',
+      record: { id: Number.MAX_SAFE_INTEGER, app_id: 'nonexistent.app', name: '1.0.0', owner_org: randomUUID() },
     })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_appId')
-  })
-})
-
-describe('[POST] /triggers/cron_stat_org - Error Cases', () => {
-  it('should return 400 when orgId is missing', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({}),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_orgId')
-  })
-})
-
-describe('[POST] /triggers/cron_email - Error Cases', () => {
-  it('should return 400 when required fields are missing', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({}),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    // First validation checks email and type
-    expect(data.error).toBe('missing_email_type')
-  })
-
-  it('should return 400 when email is missing', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        appId: APPNAME,
-        type: 'stats',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('missing_email_type')
-  })
-
-  it('should return 400 when appId is missing for non-billing_period_stats type', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: 'test@example.com',
-        type: 'stats',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    // For non-billing_period_stats types, appId is required
-    expect(data.error).toBe('missing_appId')
-  })
-
-  it('should return 400 when type is missing', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: 'test@example.com',
-        appId: APPNAME,
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('missing_email_type')
-  })
-
-  it('should return 400 when orgId is missing for billing_period_stats type', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: 'test@example.com',
-        type: 'billing_period_stats',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    // billing_period_stats requires orgId instead of appId
-    expect(data.error).toBe('missing_orgId')
-  })
-
-  it('should return 400 when email type is invalid', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: USER_EMAIL,
-        appId: APPNAME,
-        type: 'invalid_type',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_stats_type')
-  })
-
-  it('should return 400 when deploy stats are missing versionId', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_email`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        email: 'test@example.com',
-        appId: 'nonexistent-app',
-        type: 'deploy_install_stats',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('missing_version_id')
-  })
-})
-
-describe('[POST] /triggers/cron_clear_versions - Error Cases', () => {
-  it('should return 500 when cleanup fails', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/cron_clear_versions`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        // This might trigger an error condition depending on the implementation
-      }),
-    })
-
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_version')
-  })
-})
-
-describe('[POST] /triggers/on_channel_update - Error Cases', () => {
-  it('should return 500 when channel update fails', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_channel_update`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'channels',
-        type: 'UPDATE',
-        record: {
-          id: 'nonexistent-channel',
-        },
-        old_record: {},
-      }),
-    })
-
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_app_id')
-  })
-
-  it('should return 200 for non-channel table', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_channel_update`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'not_channels',
-        type: 'UPDATE',
-        record: {},
-        old_record: {},
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('table_not_match')
-  })
-
-  it('should return 200 for non-UPDATE type', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_channel_update`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'channels',
-        type: 'INSERT',
-        record: {},
-        old_record: {},
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('type_not_match')
-  })
-})
-
-describe('[POST] /triggers/on_app_create - Error Cases', () => {
-  it('should return 400 when organization fetching fails', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_app_create`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'apps',
-        type: 'INSERT',
-        record: {
-          id: randomUUID(),
-          app_id: 'test.app',
-          owner_org: randomUUID(),
-        },
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('error_fetching_organization')
-  })
-
-  it('should return 400 when app creation handling fails', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_app_create`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'apps',
-        type: 'INSERT',
-        record: {
-          // Invalid app data
-          id: null,
-          app_id: null,
-        },
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_id')
-  })
-})
-
-describe('[POST] /triggers/on_version_create - Error Cases', () => {
-  it('should return 200 for nonexistent app (trigger logs error but does not fail)', async () => {
-    // Triggers are designed to be fire-and-forget - they log errors but return success
-    // The update to apps table will simply update 0 rows when app doesn't exist
-    const response = await fetch(`${BASE_URL}/triggers/on_version_create`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'app_versions',
-        type: 'INSERT',
-        record: {
-          id: randomUUID(),
-          app_id: 'nonexistent.app',
-          name: '1.0.0',
-          owner_org: randomUUID(),
-        },
-      }),
-    })
-
     expect(response.status).toBe(200)
-  })
-
-  it('should return 400 when version creation fails', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_version_create`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'app_versions',
-        type: 'INSERT',
-        record: {
-          // Invalid version data
-          id: null,
-          app_id: null,
-        },
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_id')
-  })
-})
-
-describe('[POST] /triggers/on_deploy_history_create - Error Cases', () => {
-  it('should return 400 when deploy history creation fails', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_deploy_history_create`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'app_versions_meta',
-        type: 'INSERT',
-        record: {
-          // Invalid deploy history data
-          id: null,
-          app_id: null,
-        },
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('table_not_match')
-  })
-})
-
-describe('[POST] /triggers/on_manifest_create - Error Cases', () => {
-  it('should return 400 when manifest data is incomplete', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_manifest_create`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'manifest',
-        type: 'INSERT',
-        record: {
-          // Invalid manifest data
-          id: randomUUID(),
-          app_id: 'invalid.app',
-          size: 'invalid-size',
-        },
-      }),
-    })
-
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('no_app_version_id_or_s3_path')
-  })
-})
-
-describe('[POST] /triggers/on_version_update - Error Cases', () => {
-  it('should return 200 for non-version table', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_version_update`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'not_app_versions',
-        type: 'UPDATE',
-        record: {},
-        old_record: {},
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('table_not_match')
-  })
-
-  it('should return 200 for non-UPDATE type', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/on_version_update`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        table: 'app_versions',
-        type: 'INSERT',
-        record: {},
-        old_record: {},
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('type_not_match')
-  })
-})
-
-describe('[POST] /triggers/stripe_event - Error Cases', () => {
-  it('should return 500 when signature is missing', async () => {
-    const response = await fetch(`${BASE_URL}/triggers/stripe_event`, {
-      method: 'POST',
-      headers: triggerHeaders,
-      body: JSON.stringify({
-        // Invalid stripe event data
-        type: 'invalid.event.type',
-        data: {},
-      }),
-    })
-
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('webhook_error_no_signature')
   })
 })

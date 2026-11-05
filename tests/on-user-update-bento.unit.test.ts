@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -282,19 +281,5 @@ describe('user update Bento subscriber identity', () => {
       oldRecord,
       'old@example.com',
     )
-  })
-
-  it('contains no legacy Bento email migration command or helper', async () => {
-    const [bentoSource, triggerSource] = await Promise.all([
-      readFile(new URL('../supabase/functions/_backend/utils/bento.ts', import.meta.url), 'utf8'),
-      readFile(new URL('../supabase/functions/_backend/triggers/on_user_update.ts', import.meta.url), 'utf8'),
-    ])
-    const legacyCommand = ['change', 'email'].join('_')
-    const legacyHelper = ['change', 'Email', 'Bento'].join('')
-
-    expect(bentoSource).not.toContain(legacyCommand)
-    expect(bentoSource).not.toContain(legacyHelper)
-    expect(triggerSource).not.toContain(legacyCommand)
-    expect(triggerSource).not.toContain(legacyHelper)
   })
 })

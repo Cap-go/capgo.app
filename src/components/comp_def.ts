@@ -27,7 +27,8 @@ export interface TableAction<T = TableRow> {
   onClick: (item: T) => void
   visible?: (item: T) => boolean
   disabled?: (item: T) => boolean
-  title?: string | ((item: T) => string)
+  /** Accessible name and tooltip of the icon-only button. */
+  title: string | ((item: T) => string)
   testId?: string | ((item: T) => string)
 }
 
@@ -42,7 +43,6 @@ export interface TableColumn<T = TableRow> {
   actions?: TableAction<T>[] // New property for multiple actions
   class?: string
   allowHtml?: boolean
-  sanitizeHtml?: boolean
   displayFunction?: (item: T) => string | number
   // Preferred way to render complex cell content without v-html
   renderFunction?: (item: T) => VNodeChild

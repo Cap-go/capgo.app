@@ -1,17 +1,19 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { LegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import type { VersionUsageChannel } from '../utils/types.ts'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, runQueryToCFA } from '../utils/cloudflare.ts'
-import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { buildAppLogFailureChannelFilterCF, buildVersionUsageChannelFilterCF, escapeSqlString, formatDateCF, PUBLIC_FAILURE_ACTIONS, readLegacyCheckFailuresCF, readLegacyDownloadFailsCF, runQueryToCFA } from '../utils/cloudflare.ts'
+import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
-import { checkPermission } from '../utils/rbac.ts'
+import { legacyDownloadFailKey, NOT_LEGACY_DOWNLOAD_FAIL_CF, mergeLegacyCheckFailures, subtractLegacyDownloadFails } from '../utils/legacyDownloadFail.ts'
+import { checkPermission, getDeniedChannelIdsForPermission } from '../utils/rbac.ts'
 import { readDeviceVersionCounts } from '../utils/stats.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 
 // Near-realtime view of a release rollout on one channel. Every number is
 // scoped to that channel (the app's default channel unless the request names
@@ -33,7 +35,10 @@ const MAX_BUCKETS = 90
 const BUCKET_MINUTES_OPTIONS = [1, 5, 15, 30, 60] as const
 const MAX_FAILURE_ACTIONS = 8
 const RECENT_DEPLOYMENTS_LIMIT = 10
-const DEPLOY_HISTORY_LIMIT = 100
+// Deploy history is capped per channel, not per app, so busy channels (or
+// channels a caller cannot read, which are dropped per request after the
+// shared cache) never push another channel's history out of the window.
+const DEPLOY_HISTORY_PER_CHANNEL_LIMIT = 25
 const INTERNAL_VERSION_NAMES = new Set(['builtin', 'unknown'])
 
 interface ReleaseLiveRequest {
@@ -92,6 +97,9 @@ export interface ReleaseLiveResponse extends ReleaseLiveChannelContext {
   // recovered = installed it (set) after their first failure, stuck = not yet.
   // null when the breakdown could not be read.
   failed_devices: ReleaseLiveFailedDevices | null
+  // download_fail from plugins that also send it for a failed update check:
+  // never counted above, shown so users know why and update the plugin.
+  legacy_check_failures: LegacyCheckFailures | null
   series: ReleaseLiveBucket[]
   // Set when the release is the target of a progressive rollout on the
   // channel: the target only reaches a share of devices, so raw adoption
@@ -167,6 +175,19 @@ interface RawFailedDevicesRow {
 }
 
 type Relation<T> = T | T[] | null | undefined
+
+interface CandidateChannelRow {
+  id: number
+  name: string
+  public: boolean
+  rollout_enabled: boolean
+  rollout_percentage_bps: number | null
+  rollout_paused_at: string | null
+  rollout_pause_reason: string | null
+  version: Relation<{ id: number, name: string, created_at: string | null }>
+  rollout_version_info: Relation<{ id: number, name: string, created_at: string | null }>
+  deploy_history: Array<{ deployed_at: string | null, app_versions: Relation<{ id: number, name: string }> }> | null
+}
 
 function one<T>(value: Relation<T>): T | null {
   if (Array.isArray(value))
@@ -284,12 +305,16 @@ function computeRollout(
   }
 }
 
+function seriesBucketCF(bucketMinutes: number) {
+  return `toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '${bucketMinutes}' MINUTE))`
+}
+
 function buildSeriesQueryCF(appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel?: VersionUsageChannel) {
   // Older `get` rows carry no channel; keep them so a channel view does not lose
   // them while they age out (the release window is at most 72h).
   const channelFilter = buildVersionUsageChannelFilterCF(channel, { includeUnattributedGets: true })
   return `SELECT
-  toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '${bucketMinutes}' MINUTE)) AS bucket,
+  ${seriesBucketCF(bucketMinutes)} AS bucket,
   sum(if(blob3 = 'get', _sample_interval, 0)) AS get,
   sum(if(blob3 = 'install', _sample_interval, 0)) AS install,
   sum(if(blob3 = 'fail', _sample_interval, 0)) AS fail
@@ -304,20 +329,6 @@ GROUP BY bucket
 ORDER BY bucket`
 }
 
-// app_log failure rows carry the channel in blob8 (name) and blob9 (id). Rows
-// written before that have neither and stay out of a channel view.
-function buildFailureChannelFilterCF(channel: VersionUsageChannel) {
-  const channelId = channel.id ? escapeSqlString(String(channel.id)) : ''
-  const channelName = channel.name ? escapeSqlString(channel.name) : ''
-  if (channelId && channelName)
-    return `AND (blob9 = '${channelId}' OR (blob9 = '' AND blob8 = '${channelName}'))`
-  if (channelId)
-    return `AND blob9 = '${channelId}'`
-  if (channelName)
-    return `AND blob8 = '${channelName}'`
-  return ''
-}
-
 function buildFailuresQueryCF(appId: string, versionName: string, startMs: number, endMs: number, channel: VersionUsageChannel) {
   return `SELECT
   blob2 AS action,
@@ -327,9 +338,10 @@ WHERE
   index1 = '${escapeSqlString(appId)}'
   AND blob3 = '${escapeSqlString(versionName)}'
   AND blob2 LIKE '%fail%'
+  AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF}
   AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
   AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
-  ${buildFailureChannelFilterCF(channel)}
+  ${buildAppLogFailureChannelFilterCF(channel)}
 GROUP BY action
 ORDER BY count DESC
 LIMIT ${MAX_FAILURE_ACTIONS}`
@@ -343,7 +355,8 @@ LIMIT ${MAX_FAILURE_ACTIONS}`
 // (Analytics Engine precision): a set in the same second as the first failure
 // counts as recovered.
 const NO_FAILURE_TS = 4102444800 // 2100-01-01, sentinel for "no failure"
-// Bundle failures are every `*_fail` action plus these, as in the public metrics.
+// Bundle failures are every `*_fail` action plus these, as in the public metrics,
+// without download_fail of plugins that also send it for a failed update check.
 const EXTRA_FAILURE_ACTIONS: string[] = PUBLIC_FAILURE_ACTIONS.filter(action => !action.endsWith('_fail'))
 const EXTRA_FAILURE_ACTIONS_CF = EXTRA_FAILURE_ACTIONS.map(action => `'${escapeSqlString(action)}'`).join(', ')
 
@@ -362,7 +375,7 @@ FROM (
     AND blob3 = '${escapeSqlString(versionName)}'
     AND timestamp >= toDateTime('${formatDateCF(new Date(startMs))}')
     AND timestamp < toDateTime('${formatDateCF(new Date(endMs))}')
-    AND (blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN (${EXTRA_FAILURE_ACTIONS_CF})) ${buildFailureChannelFilterCF(channel)}))
+    AND (blob2 = 'set' OR ((blob2 LIKE '%_fail' OR blob2 IN (${EXTRA_FAILURE_ACTIONS_CF})) AND ${NOT_LEGACY_DOWNLOAD_FAIL_CF} ${buildAppLogFailureChannelFilterCF(channel)}))
   GROUP BY device_id
 )
 WHERE first_fail < ${NO_FAILURE_TS}`
@@ -409,10 +422,25 @@ function toFailedDevices(rows: RawFailedDevicesRow[] | null): ReleaseLiveFailedD
 }
 
 async function readActivityCF(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
-  const [seriesRows, failureRows, failedDeviceRows] = await Promise.all([
+  const [rawSeriesRows, legacyFails, legacyCheckFailures, failureRows, failedDeviceRows] = await Promise.all([
     c.env.VERSION_USAGE
       ? runQueryToCFA<RawBucketRow>(c, buildSeriesQueryCF(appId, versionName, startMs, endMs, bucketMinutes, channel))
       : Promise.resolve([] as RawBucketRow[]),
+    readLegacyDownloadFailsCF(c, {
+      appId,
+      start: new Date(startMs),
+      end: new Date(endMs),
+      bucket: seriesBucketCF(bucketMinutes),
+      channel,
+      versionName,
+    }),
+    readLegacyCheckFailuresCF(c, {
+      appId,
+      start: new Date(startMs),
+      end: new Date(endMs),
+      channel,
+      versionNames: [versionName],
+    }),
     c.env.APP_LOG
       ? runQueryToCFA<RawFailureRow>(c, buildFailuresQueryCF(appId, versionName, startMs, endMs, channel))
           .catch((error) => {
@@ -429,7 +457,13 @@ async function readActivityCF(c: Context, appId: string, versionName: string, st
           })
       : Promise.resolve(null),
   ])
-  return { seriesRows, failureRows, failedDevices: toFailedDevices(failedDeviceRows) }
+  const seriesRows = subtractLegacyDownloadFails(rawSeriesRows, row => legacyDownloadFailKey(Number(row.bucket), versionName), legacyFails)
+  return {
+    seriesRows,
+    failureRows,
+    failedDevices: toFailedDevices(failedDeviceRows),
+    legacyCheckFailures: mergeLegacyCheckFailures(legacyCheckFailures.filter(bundle => bundle.version_name === versionName)),
+  }
 }
 
 async function readActivitySB(c: Context, appId: string, versionName: string, startMs: number, endMs: number, bucketMinutes: number, channel: VersionUsageChannel) {
@@ -487,7 +521,8 @@ LIMIT ${MAX_FAILURE_ACTIONS}`,
         return null
       }),
     ])
-    return { seriesRows: series.rows, failureRows: failures.rows, failedDevices: toFailedDevices(failedDevices?.rows ?? null) }
+    // public.stats has no plugin version: no notice without Analytics Engine.
+    return { seriesRows: series.rows, failureRows: failures.rows, failedDevices: toFailedDevices(failedDevices?.rows ?? null), legacyCheckFailures: null }
   }
   catch (error) {
     logPgError(c, 'release_live readActivitySB', error)
@@ -526,36 +561,58 @@ function cacheBucket(ttlSeconds: number, nowMs = Date.now()) {
   return String(Math.floor(nowMs / (ttlSeconds * 1000)))
 }
 
+// Deployments are read per channel; callers expect the newest first across
+// the whole app (default channel and version lookups scan in this order).
+function sortDeploymentsNewestFirst(deployments: ResolvedRelease[]): ResolvedRelease[] {
+  return [...deployments].sort((a, b) => Date.parse(b.deployed_at) - Date.parse(a.deployed_at))
+}
+
 // Candidates are identical for every user allowed to read the app, so they are
 // read with the admin client (after checkPermission) and shared through the cache.
 async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: string): Promise<ReleaseCandidates> {
   const cache = new CacheHelper(c)
-  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, v: '3', bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
+  const cacheKey = cache.buildRequest(CANDIDATES_CACHE_PATH, { appId, v: '4', bucket: cacheBucket(CANDIDATES_CACHE_TTL_SECONDS) })
   const cached = await cache.matchJson<ReleaseCandidates>(cacheKey)
   if (cached)
     return cached
 
-  const supabase = supabaseAdmin(c)
-  const [{ data: channelRows, error: channelError }, { data: deployRows, error: deployError }] = await Promise.all([
-    supabase
-      .from('channels')
-      .select('id, name, public, rollout_enabled, rollout_percentage_bps, rollout_paused_at, rollout_pause_reason, version:app_versions!channels_version_fkey(id, name, created_at), rollout_version_info:app_versions!channels_rollout_version_fkey(id, name, created_at)')
-      .eq('app_id', appId)
-      .order('name', { ascending: true })
-      .order('id', { ascending: true }),
-    supabase
-      .from('deploy_history')
-      .select('deployed_at, channel_id, channels(name), app_versions(id, name)')
-      .eq('app_id', appId)
-      .order('deployed_at', { ascending: false })
-      .limit(DEPLOY_HISTORY_LIMIT),
-  ])
-  if (channelError || deployError) {
-    cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', channelError, deployError })
+  let channelRows: CandidateChannelRow[]
+  const pg = await getPgClient(c)
+  try {
+    // PostgREST capped the channels at max_rows (1000).
+    channelRows = await queryJson<CandidateChannelRow>(
+      pg,
+      `SELECT ch.id, ch.name, ch.public, ch.rollout_enabled, ch.rollout_percentage_bps, ch.rollout_paused_at, ch.rollout_pause_reason,
+        (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'created_at', av.created_at) FROM public.app_versions av WHERE av.id = ch.version) AS version,
+        (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name, 'created_at', av.created_at) FROM public.app_versions av WHERE av.id = ch.rollout_version) AS rollout_version_info,
+        COALESCE((
+          SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
+            'deployed_at', d.deployed_at,
+            'app_versions', (SELECT pg_catalog.json_build_object('id', av.id, 'name', av.name) FROM public.app_versions av WHERE av.id = d.version_id)
+          ) ORDER BY d.deployed_at DESC)
+          FROM (
+            SELECT dh.deployed_at, dh.version_id FROM public.deploy_history dh
+            WHERE dh.channel_id = ch.id
+            ORDER BY dh.deployed_at DESC
+            LIMIT $2
+          ) d
+        ), '[]'::json) AS deploy_history
+      FROM public.channels ch
+      WHERE ch.app_id = $1
+      ORDER BY ch.name ASC, ch.id ASC
+      LIMIT 1000`,
+      [appId, DEPLOY_HISTORY_PER_CHANNEL_LIMIT],
+    )
+  }
+  catch (channelError) {
+    cloudlog({ requestId: c.get('requestId'), message: 'release_live candidates error', channelError })
     throw simpleError('fetch_error', 'Failed to fetch deployment history')
   }
+  finally {
+    closeClient(c, pg)
+  }
 
-  const channels = (channelRows ?? []).map((row) => {
+  const channels = channelRows.map((row) => {
     const version = one(row.version as Relation<{ id: number, name: string, created_at: string | null }>)
     const current = version?.name && version.created_at && !INTERNAL_VERSION_NAMES.has(version.name)
       ? {
@@ -584,19 +641,21 @@ async function loadReleaseCandidates(c: Context<MiddlewareKeyVariables>, appId: 
     return { id: row.id, name: row.name, public: row.public, current, rollout } satisfies CandidateChannel
   })
 
-  const deployments = (deployRows ?? []).flatMap((row) => {
-    const version = one(row.app_versions as Relation<{ id: number, name: string }>)
-    const channel = one(row.channels as Relation<{ name: string }>)
-    if (!version?.name || !row.deployed_at)
-      return []
-    return [{
-      bundle_id: version.id,
-      version_name: version.name,
-      channel_id: row.channel_id,
-      channel_name: channel?.name ?? null,
-      deployed_at: row.deployed_at,
-    } satisfies ResolvedRelease]
-  })
+  const deployments = sortDeploymentsNewestFirst(channelRows.flatMap((row) => {
+    const history = row.deploy_history ?? []
+    return history.flatMap((entry) => {
+      const version = one(entry.app_versions)
+      if (!version?.name || !entry.deployed_at)
+        return []
+      return [{
+        bundle_id: version.id,
+        version_name: version.name,
+        channel_id: row.id,
+        channel_name: row.name,
+        deployed_at: entry.deployed_at,
+      } satisfies ResolvedRelease]
+    })
+  }))
 
   const candidates: ReleaseCandidates = { channels, deployments }
   await cache.putJson(cacheKey, candidates, CANDIDATES_CACHE_TTL_SECONDS)
@@ -672,20 +731,26 @@ async function loadNamedBundle(c: Context<MiddlewareKeyVariables>, appId: string
   if (cached)
     return cached.bundle ? { ...cached.bundle, channel_id: channel.id, channel_name: channel.name } : null
 
-  const { data, error } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id, name, created_at')
-    .eq('app_id', appId)
-    .eq('name', versionName)
-    .eq('deleted', false)
-    .not('name', 'in', '("builtin","unknown")')
-    .limit(1)
-  if (error) {
+  let data: { id: number, name: string, created_at: string | null }[]
+  const pg = await getPgClient(c)
+  try {
+    data = await queryJson<{ id: number, name: string, created_at: string | null }>(
+      pg,
+      `SELECT id, name, created_at FROM public.app_versions
+      WHERE app_id = $1 AND name = $2 AND deleted = false AND name NOT IN ('builtin', 'unknown')
+      LIMIT 1`,
+      [appId, versionName],
+    )
+  }
+  catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'release_live named bundle error', error })
     throw simpleError('fetch_error', 'Failed to fetch bundle')
   }
+  finally {
+    closeClient(c, pg)
+  }
 
-  const version = data?.[0]
+  const version = data[0]
   const bundle: ResolvedRelease | null = version?.name && version.created_at
     ? {
         bundle_id: version.id,
@@ -737,13 +802,32 @@ function toChannelContext(candidates: ReleaseCandidates, channel: CandidateChann
   }
 }
 
+// Candidates are cached per app and shared by every reader, so channels where
+// this caller is denied channel.read_history are dropped per request, after
+// the cache: neither their deploy history nor their release/rollout state is
+// returned, and they are never picked as the default channel.
+function withoutDeniedHistory(candidates: ReleaseCandidates, deniedChannelIds: Set<number>): ReleaseCandidates {
+  if (deniedChannelIds.size === 0)
+    return candidates
+  return {
+    channels: candidates.channels.filter(channel => !deniedChannelIds.has(channel.id)),
+    deployments: candidates.deployments.filter(deployment => deployment.channel_id === null || !deniedChannelIds.has(deployment.channel_id)),
+  }
+}
+
 async function readReleaseLive(
   c: Context<MiddlewareKeyVariables>,
   appId: string,
   channelId?: number,
   versionName?: string,
 ): Promise<ReleaseLiveResponse | ReleaseLiveEmptyResponse> {
-  const candidates = await loadReleaseCandidates(c, appId)
+  const [allCandidates, deniedHistoryChannelIds] = await Promise.all([
+    loadReleaseCandidates(c, appId),
+    getDeniedChannelIdsForPermission(c, 'channel.read_history', appId),
+  ])
+  if (channelId !== undefined && deniedHistoryChannelIds.has(channelId))
+    throw quickError(403, 'channel_access_denied', 'You can\'t access this channel history', { app_id: appId, channel_id: channelId })
+  const candidates = withoutDeniedHistory(allCandidates, deniedHistoryChannelIds)
   const channel = pickChannel(candidates, channelId, versionName)
   const context = toChannelContext(candidates, channel)
   if (!channel)
@@ -824,6 +908,7 @@ async function readReleaseLive(
       .map(row => ({ action: String(row.action), count: toCount(row.count) }))
       .filter(row => row.count > 0),
     failed_devices: activity.failedDevices,
+    legacy_check_failures: activity.legacyCheckFailures,
     series,
     rollout: rollout ? computeRollout(rollout, fallback, deviceCounts, fallbackTotals) : null,
     generated_at: now.toISOString(),
@@ -865,6 +950,8 @@ app.post('/', middlewareAuth, async (c) => {
 })
 
 export const releaseLiveTestUtils = {
+  sortDeploymentsNewestFirst,
+  withoutDeniedHistory,
   pickDefaultChannel,
   pickChannel,
   pickRelease,

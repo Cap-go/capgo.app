@@ -23,10 +23,10 @@ The current version workflow scopes a release from the individual push range
 touches another component, the later run does not see the earlier component's
 still-untagged changes.
 
-Each version run also generates release commits, tags, and Graphify artifacts in
-an isolated checkout, then executes `git pull --rebase=false` immediately before
+Each version run also generates release commits, tags, and generated artifacts
+in an isolated checkout, then executes `git pull --rebase=false` immediately before
 pushing. If `main` moved while tests or generation were running, Git attempts to
-merge generated artifacts. Concurrent Graphify changes have already produced
+merge generated artifacts. Concurrent generated changes have already produced
 merge conflicts and failed the release job.
 
 Finally, generated schema and TypeScript files are currently synchronized from

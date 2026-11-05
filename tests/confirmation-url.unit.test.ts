@@ -79,4 +79,18 @@ describe('resolveConfirmationUrl', () => {
     expect(resolveConfirmationUrl(query, options)).toBeNull()
     expect(new URL(resolveConfirmationUrl(query, { ...options, allowLocalDev: true })!).searchParams.get('type')).toBe('recovery')
   })
+
+  it.concurrent('relays verification links through the Capgo API when an API host is configured', () => {
+    const relayOptions = { ...options, apiHost: 'https://api.capgo.app/' }
+    const relayed = new URL(resolveConfirmationUrl({ confirmation_url: verificationUrl, type: 'recovery', redirect_to: redirectTo }, relayOptions)!)
+    expect(relayed.origin).toBe('https://api.capgo.app')
+    expect(relayed.pathname).toBe('/private/console/auth/verify')
+    expect(relayed.searchParams.get('token')).toBe('recovery-regression')
+    expect(relayed.searchParams.get('type')).toBe('recovery')
+    expect(relayed.searchParams.get('redirect_to')).toBe(redirectTo)
+    // The email host is irrelevant: only our own auth provider ever sees the token.
+    expect(new URL(resolveConfirmationUrl({ confirmation_url: 'https://evil.example/auth/v1/verify?token=regression' }, relayOptions)!).origin).toBe('https://api.capgo.app')
+    // Other links still need an approved host.
+    expect(resolveConfirmationUrl({ confirmation_url: 'https://evil.example/login' }, relayOptions)).toBeNull()
+  })
 })

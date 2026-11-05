@@ -2,8 +2,9 @@
 import { Capacitor } from '@capacitor/core'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 
-import { stripeEnabled } from '~/services/supabase'
+import { stripeEnabled } from '~/services/console'
 import { useOrganizationStore } from '~/stores/organization'
 import { orgBillingStatusLabelKey, resolveOrgBillingStatus } from '~/utils/organizationBilling'
 
@@ -27,6 +28,11 @@ const status = computed(() => resolveOrgBillingStatus(organizationStore.currentO
   lacksSecurityAccess: lacksSecurityAccess.value,
   organizationFailed: !!organizationStore.currentOrganizationFailed,
 }))
+// Only look up trial history once the trial is over: direct-offer orgs never
+// had a trial, so they see "Choose a plan" instead of "Trial over".
+const trialOverOrgId = computed(() => status.value.kind === 'trial_over' ? organizationStore.currentOrganization?.gid : undefined)
+const { trialSkipped } = useBillingPaidAt(trialOverOrgId, isMobile)
+const showNoTrialStatus = computed(() => status.value.kind === 'trial_over' && trialSkipped.value)
 const billingCtaHref = computed(() => {
   if (isMobile)
     return '/settings/organization/usage'
@@ -46,11 +52,15 @@ const showBanner = computed(() => status.value.kind !== 'hidden')
 const showCta = computed(() => status.value.cta !== 'none')
 
 const statusLabel = computed(() => {
+  if (showNoTrialStatus.value)
+    return t('choose-a-plan')
   const key = orgBillingStatusLabelKey(status.value.kind)
   return key ? t(key) : ''
 })
 
 const statusDetail = computed(() => {
+  if (showNoTrialStatus.value)
+    return t('no-trial-money-back-guarantee-description')
   if (status.value.kind !== 'trial')
     return null
   if (status.value.trialDaysLeft === 1)

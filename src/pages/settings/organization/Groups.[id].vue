@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { Tab, TableColumn } from '~/components/comp_def'
+import type { SsoManagedAccess } from '~/services/ssoManaged'
 import { computedAsync } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -13,8 +14,9 @@ import IconUsers from '~icons/heroicons/users'
 import DataTable from '~/components/DataTable.vue'
 import RoleCapabilitiesHint from '~/components/forms/RoleCapabilitiesHint.vue'
 import SearchInput from '~/components/forms/SearchInput.vue'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
+import { fetchSsoManagedAccess } from '~/services/ssoManaged'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
@@ -72,7 +74,7 @@ interface RoleOption {
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -147,9 +149,16 @@ const groupAppBindings = computed(() =>
   groupBindings.value.filter((b: RoleBinding) => b.scope_type === 'app' && !!b.app_id),
 )
 
+const ssoManaged = ref<SsoManagedAccess>(new Map())
+
+// The SSO role mapping owns the membership of SSO members in the groups it maps.
+function isSsoManagedMember(userId: string) {
+  return !!group.value && !!ssoManaged.value.get(userId)?.groupIds.has(group.value.id)
+}
+
 const availableMembersToAdd = computed(() => {
   const alreadyInGroup = new Set(groupMembers.value.map((m: GroupMember) => m.user_id))
-  return orgMembers.value.filter((m: OrgMember) => !alreadyInGroup.has(m.user_id))
+  return orgMembers.value.filter((m: OrgMember) => !alreadyInGroup.has(m.user_id) && !isSsoManagedMember(m.user_id))
 })
 
 const orgRoleOptions = computed<RoleOption[]>(() =>
@@ -198,7 +207,8 @@ const memberDynamicColumns = computed<TableColumn[]>(() => [
     actions: [
       {
         icon: IconTrash,
-        title: t('remove'),
+        title: (member: GroupMember) => isSsoManagedMember(member.user_id) ? t('sso-managed-role') : t('remove'),
+        disabled: (member: GroupMember) => isSsoManagedMember(member.user_id),
         onClick: (member: GroupMember) => removeMemberFromGroup(member.user_id),
       },
     ],
@@ -246,6 +256,7 @@ async function loadAll() {
       fetchRoleBindings(),
       fetchApps(),
       fetchOrgMembers(),
+      currentOrganization.value?.gid ? fetchSsoManagedAccess(currentOrganization.value.gid).then(managed => ssoManaged.value = managed) : undefined,
     ])
     // fetchGroupMembers needs orgMembers loaded first to resolve emails
     await fetchGroupMembers()
@@ -260,7 +271,7 @@ async function loadAll() {
 }
 
 async function fetchGroup() {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('groups')
     .select('id, org_id, name, description, created_at')
     .eq('id', groupId.value)
@@ -276,7 +287,7 @@ async function fetchGroup() {
 }
 
 async function fetchRoles() {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('roles')
     .select('id, name, scope_type, description, priority_rank')
     .eq('is_assignable', true)
@@ -294,7 +305,7 @@ async function fetchRoleBindings() {
     return
 
   const orgId = group.value?.org_id ?? currentOrganization.value?.gid ?? ''
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('role_bindings')
     .select('id, principal_type, principal_id, scope_type, app_id, role_id, roles(name)')
     .eq('org_id', orgId)
@@ -329,7 +340,7 @@ async function fetchApps() {
   if (!orgId)
     return
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('apps')
     .select('id, app_id, name')
     .eq('owner_org', orgId)
@@ -346,7 +357,7 @@ async function fetchOrgMembers() {
   if (!orgId)
     return
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .rpc('get_org_members_rbac', { p_org_id: orgId })
 
   if (error)
@@ -360,7 +371,7 @@ async function fetchGroupMembers() {
   if (!id)
     return
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('group_members')
     .select('user_id')
     .eq('group_id', id)
@@ -422,7 +433,7 @@ async function createGroup() {
 
   isSubmitting.value = true
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('groups')
       .insert({
         org_id: orgId,
@@ -484,7 +495,7 @@ async function saveGroup() {
   isSubmitting.value = true
   try {
     // Save group info
-    const { error: groupError } = await supabase
+    const { error: groupError } = await capgo
       .from('groups')
       .update({
         name: editName.value.trim(),
@@ -531,19 +542,19 @@ function requireRoleId(roleName: string) {
 }
 
 async function deleteRoleBinding(bindingId: string) {
-  const { error } = await supabase.from('role_bindings').delete().eq('id', bindingId)
+  const { error } = await capgo.from('role_bindings').delete().eq('id', bindingId)
   if (error)
     throw error
 }
 
 async function updateRoleBinding(bindingId: string, roleId: string) {
-  const { error } = await supabase.from('role_bindings').update({ role_id: roleId }).eq('id', bindingId)
+  const { error } = await capgo.from('role_bindings').update({ role_id: roleId }).eq('id', bindingId)
   if (error)
     throw error
 }
 
 async function insertGroupRoleBinding(roleId: string, scopeType: 'org' | 'app', appId: string | null) {
-  const { error } = await supabase.from('role_bindings').insert({
+  const { error } = await capgo.from('role_bindings').insert({
     principal_type: 'group',
     principal_id: group.value!.id,
     role_id: roleId,
@@ -653,7 +664,7 @@ async function addSelectedMembersToGroup() {
       added_by: main.user?.id || null,
     }))
 
-    const { error } = await supabase
+    const { error } = await capgo
       .from('group_members')
       .upsert(rows, { onConflict: 'group_id,user_id', ignoreDuplicates: true })
 
@@ -679,7 +690,7 @@ async function addSelectedMembersToGroup() {
 async function removeMemberFromGroup(userId: string) {
   isSubmitting.value = true
   try {
-    const { error } = await supabase
+    const { error } = await capgo
       .from('group_members')
       .delete()
       .eq('group_id', group.value!.id)

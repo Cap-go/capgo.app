@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { BuilderPlatform, BuilderStepStatus } from '~/services/builderOnboardingChecklist'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { ChecklistTaskListMode } from '~/utils/onboardingSetupMode'
+import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
+import IconChevronDown from '~icons/lucide/chevron-down'
 import IconCircle from '~icons/lucide/circle'
 import IconFileText from '~icons/lucide/file-text'
 import IconInfo from '~icons/lucide/info'
@@ -12,10 +15,14 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconMinus from '~icons/lucide/minus'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
+import { isOpenOnboardingStepStatus } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 import { resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'
-import AppOnboardingAiAgentCard from './AppOnboardingAiAgentCard.vue'
+import { initialChecklistOpen } from '~/utils/onboardingSetupMode'
+import { skipOnboardingStep } from '~/utils/onboardingSkipStep'
+import AppOnboardingBuilderAiSetup from './AppOnboardingBuilderAiSetup.vue'
+import AppOnboardingSkipStep from './AppOnboardingSkipStep.vue'
 
 const props = withDefaults(defineProps<{
   appId: string
@@ -28,7 +35,9 @@ const props = withDefaults(defineProps<{
   initialPlatform?: BuilderPlatform | null
   completionAction?: string
   preserveSelection?: boolean
-}>(), { active: true })
+  /** hidden: one next step, no counts or list. open: list expanded (AI setup). */
+  taskList?: ChecklistTaskListMode
+}>(), { active: true, taskList: 'default' })
 
 const emit = defineEmits<{
   copyCommand: [platform: BuilderPlatform]
@@ -41,7 +50,8 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
+const panelId = useId()
 const onboarding = ref(parseBuilderOnboarding(props.initialOnboarding))
 const viewedPlatform = ref<BuilderPlatform | null>(props.initialPlatform ?? onboarding.value.selectedPlatform)
 const selectedIds = ref<Partial<Record<BuilderPlatform, string | null>>>({})
@@ -54,6 +64,8 @@ const selectedId = computed({
 })
 const refreshError = ref(false)
 let refreshTimer: ReturnType<typeof setInterval> | undefined
+// Bumped by writes so an older in-flight poll cannot overwrite their snapshot.
+let refreshGeneration = 0
 let hasLoadedPlatform = false
 let hasInteractedWithPlatform = false
 
@@ -87,11 +99,20 @@ const doneCount = computed(() => steps.value.filter(step => step.status === 'don
 const currentStep = computed(() => steps.value.find(step => step.status !== 'done' && step.status !== 'skipped'))
 const selectedStep = computed(() => steps.value.find(step => step.id === selectedId.value) ?? currentStep.value ?? steps.value.at(-1))
 const isFirstStep = computed(() => selectedStep.value?.index === 0)
+const canSkipSelected = computed(() => !!selectedStep.value && isOpenOnboardingStepStatus(selectedStep.value.status))
+// Every step is shown by default on wide screens; new manual signups only see their next step.
+const checklistOpen = ref(initialChecklistOpen(props.taskList, typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches))
+const showTaskList = computed(() => props.taskList !== 'hidden')
+const skipping = ref(false)
 const completed = computed(() => steps.value.length > 0
   && steps.value.every(step => step.status === 'done' || step.status === 'skipped')
   && steps.value.at(-1)?.status === 'done')
 const platformCommand = computed(() => viewedPlatform.value && props.command ? `${props.command} --platform ${viewedPlatform.value}` : '')
-const guideHref = computed(() => viewedPlatform.value ? `https://capgo.app/docs/cli/cloud-build/${viewedPlatform.value}/` : '')
+const guideHref = computed(() => {
+  if (viewedPlatform.value === 'android' && selectedStep.value?.id === 'connect_google_play')
+    return 'https://capgo.app/docs/cli/reference/build/'
+  return viewedPlatform.value ? `https://capgo.app/docs/cli/cloud-build/${viewedPlatform.value}/` : ''
+})
 
 watch(() => props.initialPlatform, (platform) => {
   if (platform)
@@ -107,8 +128,9 @@ async function refreshOnboarding() {
   if (props.active === false)
     return
   const appId = props.appId
-  const { data, error } = await supabase.from('apps').select('onboarding').eq('app_id', appId).maybeSingle()
-  if (appId !== props.appId)
+  const generation = refreshGeneration
+  const { data, error } = await capgo.from('apps').select('onboarding').eq('app_id', appId).maybeSingle()
+  if (appId !== props.appId || generation !== refreshGeneration)
     return
   refreshError.value = !!error
   if (!error && data) {
@@ -154,6 +176,38 @@ function selectPlatform(platform: BuilderPlatform) {
 function selectStep(id: string) {
   hasInteractedWithPlatform = true
   selectedId.value = id
+  // AI setup keeps the list open so the agent's progress stays visible.
+  if (props.taskList !== 'open')
+    checklistOpen.value = false
+}
+
+async function skipSelectedStep(reason: string) {
+  const platform = viewedPlatform.value
+  const step = selectedStep.value
+  if (!platform || !step)
+    return
+  const appId = props.appId
+  skipping.value = true
+  try {
+    const value = await skipOnboardingStep(appId, `builder.${platform}.${step.id}`, reason)
+    if (appId !== props.appId)
+      return
+    if (value !== undefined) {
+      refreshGeneration += 1
+      onboarding.value = parseBuilderOnboarding(value)
+      emit('snapshot', value)
+    }
+    // Fall back to the next open task, unless the user picked another one meanwhile.
+    if (selectedIds.value[platform] === step.id)
+      selectedIds.value[platform] = null
+  }
+  catch (error) {
+    console.error('Cannot skip builder onboarding step', error)
+    toast.error(t('setup-checklist-skip-step-error'))
+  }
+  finally {
+    skipping.value = false
+  }
 }
 
 function statusLabel(status: BuilderStepStatus) {
@@ -181,11 +235,9 @@ function statusLabel(status: BuilderStepStatus) {
       </p>
     </header>
 
-    <AppOnboardingAiAgentCard v-if="!completed" @copy="emit('copyAi', 'checklist')" />
-
     <section aria-labelledby="builder-platform-title" class="space-y-3">
       <div class="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 id="builder-platform-title" class="text-base font-semibold text-slate-950 dark:text-white">
+        <h2 id="builder-platform-title" class="text-lg font-semibold text-slate-950 dark:text-white">
           {{ t('builder-checklist-platform-title') }}
         </h2>
         <p class="text-sm text-slate-500 dark:text-slate-400">
@@ -215,22 +267,36 @@ function statusLabel(status: BuilderStepStatus) {
     </section>
 
     <template v-if="viewedPlatform && selectedStep">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="builder-checklist-progress">
+      <div v-if="showTaskList" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6" data-test="builder-checklist-progress">
         <p class="shrink-0 text-sm font-medium text-slate-800 dark:text-slate-200" aria-live="polite" aria-atomic="true">
           {{ t('setup-checklist-progress', { done: doneCount, total: steps.length }) }}
         </p>
         <progress class="d-progress h-2.5 w-full text-primary-500" :value="doneCount" :max="steps.length" :aria-label="t('setup-checklist-progress', { done: doneCount, total: steps.length })" />
       </div>
 
-      <div class="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)] dark:border-white/15 dark:bg-slate-900">
-        <nav class="border-b border-slate-200 p-4 sm:p-6 lg:border-b-0 lg:border-r dark:border-white/15" :aria-label="t('builder-checklist-tasks-title')">
-          <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
-            {{ t('builder-checklist-tasks-title') }}
-          </h2>
-          <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+      <div class="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/15 dark:bg-slate-900" :class="{ 'lg:grid-cols-[minmax(0,0.38fr)_minmax(0,0.62fr)]': checklistOpen && showTaskList }">
+        <nav v-if="showTaskList" class="border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-white/15" :class="{ 'sm:py-6 lg:border-b-0 lg:border-r': checklistOpen }" :aria-label="t('builder-checklist-tasks-title')">
+          <!-- Show every step by default; users can hide the list. -->
+          <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <h2 class="text-lg font-semibold text-slate-950 dark:text-white">
+              {{ t('builder-checklist-tasks-title') }}
+            </h2>
+            <button
+              type="button"
+              class="d-btn d-btn-ghost min-h-11 px-2 text-sky-700 dark:text-azure-300"
+              :aria-expanded="checklistOpen"
+              :aria-controls="`${panelId}-list`"
+              data-test="builder-checklist-toggle"
+              @click="checklistOpen = !checklistOpen"
+            >
+              {{ checklistOpen ? t('setup-checklist-hide-steps') : t('setup-checklist-show-steps', { total: steps.length }) }}
+              <IconChevronDown class="h-4 w-4 shrink-0" :class="{ 'rotate-180': checklistOpen }" aria-hidden="true" />
+            </button>
+          </div>
+          <p v-if="checklistOpen" class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
             {{ t('builder-checklist-tasks-subtitle') }}
           </p>
-          <ol class="mt-4">
+          <ol :id="`${panelId}-list`" class="mt-4" :class="checklistOpen ? 'block' : 'hidden'">
             <li v-for="step in steps" :key="step.id" class="border-b border-slate-100 last:border-b-0 dark:border-white/10" :data-test="`builder-step-${step.id}`" :data-status="step.status">
               <button
                 type="button"
@@ -241,8 +307,8 @@ function statusLabel(status: BuilderStepStatus) {
                 @click="selectStep(step.id)"
               >
                 <IconCheck v-if="step.status === 'done'" class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" :aria-label="statusLabel(step.status)" />
-                <IconMinus v-else-if="step.status === 'skipped'" class="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" :aria-label="statusLabel(step.status)" />
-                <IconCircle v-else class="mt-0.5 h-5 w-5 shrink-0 text-slate-400" :aria-label="statusLabel(step.status)" />
+                <IconMinus v-else-if="step.status === 'skipped'" class="mt-0.5 h-5 w-5 shrink-0 text-slate-400 dark:text-slate-500" :aria-label="statusLabel(step.status)" />
+                <IconCircle v-else class="mt-0.5 h-5 w-5 shrink-0" :class="currentStep?.id === step.id ? 'text-azure-500' : 'text-slate-400'" :aria-label="statusLabel(step.status)" />
                 <span class="mt-0.5 shrink-0 text-xs text-slate-400" aria-hidden="true">{{ step.index + 1 }}.</span>
                 <span class="min-w-0 flex-1 text-base leading-6" :class="{ 'font-medium': selectedStep.id === step.id }">
                   {{ step.title }}
@@ -262,16 +328,16 @@ function statusLabel(status: BuilderStepStatus) {
             <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t('builder-checklist-complete-description') }}
             </p>
-            <button type="button" class="d-btn mt-6 min-h-12 self-start border-primary-500 bg-primary-500 text-white hover:border-primary-600 hover:bg-primary-600" :disabled="hiding || leaving" @click="emit('complete')">
+            <button type="button" class="d-btn mt-6 min-h-12 self-start d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
               {{ completionAction || t('setup-checklist-open-app') }}
               <IconArrowRight class="h-4 w-4" aria-hidden="true" />
             </button>
           </template>
           <template v-else>
             <p class="text-sm font-medium text-sky-700 dark:text-azure-400">
-              {{ t('setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) }}
+              {{ showTaskList ? t(selectedStep.id === currentStep?.id ? 'setup-checklist-current-task-number' : 'setup-checklist-task-number', { number: selectedStep.index + 1, total: steps.length }) : t('setup-checklist-next-step') }}
             </p>
-            <h2 class="mt-3 text-2xl font-semibold leading-tight text-slate-950 sm:text-3xl dark:text-white">
+            <h2 class="mt-2 text-2xl font-semibold leading-tight text-slate-950 dark:text-white">
               {{ selectedStep.title }}
             </h2>
             <p class="mt-4 max-w-prose text-base leading-7 text-slate-600 dark:text-slate-300">
@@ -279,6 +345,9 @@ function statusLabel(status: BuilderStepStatus) {
             </p>
 
             <template v-if="isFirstStep">
+              <h3 class="mt-7 text-base font-semibold text-slate-950 dark:text-white">
+                {{ t('builder-checklist-terminal-title') }}
+              </h3>
               <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {{ t('builder-checklist-command-location') }}
               </p>
@@ -294,7 +363,7 @@ function statusLabel(status: BuilderStepStatus) {
                 <IconCopy class="absolute right-4 top-5 h-5 w-5 text-slate-400 group-hover:text-white" aria-hidden="true" />
               </button>
               <output v-else class="mt-5 block rounded-2xl bg-slate-950 p-5 text-sm text-slate-300">{{ t('app-onboarding-command-apikey-loading') }}</output>
-              <button type="button" class="d-btn mt-4 min-h-12 self-start border-primary-500 bg-primary-500 px-5 text-white hover:border-primary-600 hover:bg-primary-600" :disabled="!platformCommand" @click="emit('copyCommand', viewedPlatform)">
+              <button type="button" class="d-btn mt-4 min-h-12 self-start d-btn-primary px-5" :disabled="!platformCommand" @click="emit('copyCommand', viewedPlatform)">
                 <IconCopy class="h-4 w-4" aria-hidden="true" />
                 {{ t('builder-checklist-copy-command') }}
               </button>
@@ -309,36 +378,41 @@ function statusLabel(status: BuilderStepStatus) {
               <span class="flex items-center gap-3 font-medium text-slate-800 dark:text-slate-200">
                 <IconInfo v-if="refreshError" class="h-5 w-5 text-amber-600" aria-hidden="true" />
                 <IconCheck v-else-if="selectedStep.status === 'done'" class="h-5 w-5 text-emerald-600" aria-hidden="true" />
-                <IconMinus v-else-if="selectedStep.status === 'skipped'" class="h-5 w-5 text-amber-600" aria-hidden="true" />
-                <IconLoader v-else class="h-5 w-5 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
+                <IconMinus v-else-if="selectedStep.status === 'skipped'" class="h-5 w-5 text-slate-400" aria-hidden="true" />
+                <IconLoader v-else-if="selectedStep.id === currentStep?.id" class="h-5 w-5 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
+                <IconCircle v-else class="h-5 w-5 text-slate-300 dark:text-slate-600" aria-hidden="true" />
                 {{ refreshError ? t('setup-checklist-refresh-error') : statusLabel(selectedStep.status) }}
               </span>
               <span class="mt-2 block pl-8 leading-6 text-slate-500 dark:text-slate-400">{{ t('builder-checklist-auto-progress') }}</span>
               <button v-if="refreshError" type="button" class="d-btn d-btn-ghost mt-2 min-h-11 text-sky-700 dark:text-azure-300" @click="refreshOnboarding">{{ t('setup-checklist-retry') }}</button>
             </output>
 
-            <button v-if="currentStep && currentStep.id !== selectedStep.id" type="button" class="d-btn d-btn-ghost mt-2 min-h-11 self-start text-sky-700 dark:text-azure-300" @click="selectStep(currentStep.id)">
-              {{ t('setup-checklist-return-current') }}
-              <IconArrowRight class="h-4 w-4" aria-hidden="true" />
-            </button>
-            <a :href="guideHref" target="_blank" rel="noopener noreferrer" class="mt-auto inline-flex min-h-11 items-center gap-2 self-start rounded-sm text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 dark:text-azure-300" data-test="builder-checklist-guide">
-              <IconFileText class="h-5 w-5" aria-hidden="true" />
-              {{ t('builder-checklist-guide', { platform: t(`builder-checklist-platform-${viewedPlatform}`) }) }}
-              <IconArrowRight class="h-4 w-4" aria-hidden="true" />
-            </a>
+            <AppOnboardingSkipStep v-if="canSkipSelected" :key="`${viewedPlatform}-${selectedStep.id}`" test-id="builder-checklist" :skipping="skipping" @skip="skipSelectedStep" />
+
+            <div class="mt-auto flex flex-wrap items-stretch gap-2 pt-4" data-test="builder-checklist-task-actions">
+              <button v-if="currentStep && currentStep.id !== selectedStep.id" type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full shrink whitespace-normal" @click="selectStep(currentStep.id)">
+                {{ t('setup-checklist-return-current') }}
+              </button>
+              <a :href="guideHref" target="_blank" rel="noopener noreferrer" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full text-left whitespace-normal" data-test="builder-checklist-guide">
+                <IconFileText class="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{{ t('builder-checklist-guide', { platform: t(`builder-checklist-platform-${viewedPlatform}`) }) }}</span>
+              </a>
+            </div>
           </template>
         </div>
       </div>
     </template>
 
-    <div v-else class="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-white/15 dark:bg-slate-900" data-test="builder-checklist-choose-platform">
-      <h2 class="text-xl font-semibold text-slate-950 dark:text-white">
+    <div v-else class="rounded-2xl border border-dashed border-slate-300 px-6 py-5 text-center dark:border-white/15" data-test="builder-checklist-choose-platform">
+      <h2 class="text-base font-medium text-slate-700 dark:text-slate-200">
         {{ t('builder-checklist-choose-platform-title') }}
       </h2>
-      <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+      <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
         {{ t('builder-checklist-choose-platform-description') }}
       </p>
     </div>
+
+    <AppOnboardingBuilderAiSetup v-if="!completed" @copy="emit('copyAi', 'checklist')" />
 
     <footer v-if="!hideFooter" class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-5">
       <button type="button" class="d-btn min-h-12 shrink-0 border-slate-300 bg-white px-4 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200" :disabled="hiding || leaving" @click="emit('hide')">

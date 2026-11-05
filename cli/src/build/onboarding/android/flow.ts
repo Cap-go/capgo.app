@@ -220,7 +220,7 @@ export interface AndroidStepCtx {
 //
 // Maps every AndroidOnboardingStep to its base kind. Steps outside the core
 // provisioning machine (bootstrap, post-save tail) still need a sensible
-// mapping so the Record is exhaustive and tsgo is happy.
+// mapping so the Record is exhaustive and the type checker is happy.
 
 export const KIND_TABLE: Record<AndroidOnboardingStep, AndroidStepKind> = {
   // ── Bootstrap (stays in Ink, not in the progress machine) ──

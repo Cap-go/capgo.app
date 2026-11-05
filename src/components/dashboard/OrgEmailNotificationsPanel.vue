@@ -4,8 +4,8 @@ import { storeToRefs } from 'pinia'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { useConsole } from '~/services/console'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 
 withDefaults(defineProps<{
@@ -16,7 +16,7 @@ withDefaults(defineProps<{
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
-const supabase = useSupabase()
+const capgo = useConsole()
 const isLoading = ref(false)
 
 const { currentOrganization } = storeToRefs(organizationStore)
@@ -65,7 +65,7 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
   const newValue = !(currentPrefs[key] ?? true)
   const updatedPrefs = { ...currentPrefs, [key]: newValue }
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('orgs')
     .update({
       email_preferences: updatedPrefs,

@@ -170,7 +170,7 @@ describe('evaluateQueueHealth', () => {
 
   it.concurrent('documents healthy and unhealthy criteria', () => {
     const criteria = buildQueueHealthCriteria(thresholds)
-    expect(criteria.never_read_stale.healthy_when).toContain('vt <= now()')
+    expect(criteria.never_read_stale.healthy_when).toContain('measured from vt')
     expect(criteria.never_read_stale.healthy_when).toContain('read_ct=0')
     expect(criteria.archive_stale.unhealthy_when).toContain('ramping')
     expect(criteria.stuck_high_read_ct.threshold).toBe(STUCK_READ_CT_THRESHOLD)

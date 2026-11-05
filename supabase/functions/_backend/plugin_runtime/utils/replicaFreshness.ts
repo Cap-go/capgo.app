@@ -1,0 +1,193 @@
+import type { Context } from 'hono'
+import { CacheHelper } from './cache.ts'
+
+/**
+ * Replica lag known to this isolate / data center, per database source, and
+ * the edge cache rule built on it.
+ *
+ * Plugin edge cache entries (worker Cache API and snippet answers) are filled
+ * from the local read replica. A purge re-runs up to 180s after a write; a
+ * refill after that from a replica still behind would keep the pre-change
+ * answer for the whole TTL. Refills from a replica measured behind are
+ * therefore cached briefly only.
+ *
+ * Load: the rule fails open. Without a lag figure (cold isolate, probe error,
+ * unreadable stats) the TTL is unchanged, so the refill rate only rises while
+ * a replica is measured lagging, and only in its region. It never queries
+ * the database itself: figures come from the existing background probe.
+ */
+
+export type ReplicationStatus = 'ok' | 'lagging' | 'unknown'
+
+export interface ReplicationLagStatus {
+  status: ReplicationStatus
+  max_lag_seconds: number | null
+}
+
+interface ReplicationLagCacheEntry extends ReplicationLagStatus {
+  expiresAt: number
+}
+
+export const REPLICATION_LAG_CACHE_TTL_SECONDS = 60
+const REPLICATION_LAG_CACHE_TTL_MS = REPLICATION_LAG_CACHE_TTL_SECONDS * 1000
+
+/**
+ * Largest replica lag at which a refill keeps its full TTL. The lag figure can
+ * be REPLICATION_LAG_CACHE_TTL_SECONDS old, so the replica is at most 120s
+ * behind at refill time: under the last re-purge (+180s), which then evicts
+ * any refill that missed the write.
+ */
+export const EDGE_CACHE_MAX_REPLICA_LAG_SECONDS = 60
+/** TTL of an edge cache refill from a replica measured lagging. */
+export const EDGE_CACHE_UNVERIFIED_REPLICA_TTL_SECONDS = 30
+
+/**
+ * Replica lag SQL. The EU replica is the logical subscriber of the primary
+ * (pg_stat_subscription); the regional replicas are physical standbys of that
+ * subscriber, where pg_stat_subscription is empty, so their lag is the age of
+ * the last replayed transaction. A standby whose WAL receiver runs and that
+ * replayed everything it received is current: no writes is not lag. This is
+ * lag behind the subscriber, not the primary (the subscriber's own lag is
+ * not visible from a standby). Roles
+ * without pg_read_all_stats see the receiver pid but a NULL status, which
+ * still counts as running.
+ */
+export const REPLICA_LAG_QUERY = `
+  SELECT CASE
+    WHEN pg_is_in_recovery() THEN
+      CASE
+        WHEN pg_last_wal_receive_lsn() IS NOT NULL
+          AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
+          AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
+          THEN 0
+        ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
+      END
+    ELSE (
+      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
+      FROM pg_stat_subscription
+      WHERE last_msg_receipt_time IS NOT NULL
+    )
+  END AS lag_seconds
+`
+
+const REPLICATION_LAG_CACHE_PATH = '/cache/replication-lag'
+
+const replicationLagMemoryCache = new Map<string, ReplicationLagCacheEntry>()
+
+/** Data center (Cache API) copy of a source's lag figure, shared by its isolates. */
+export function replicationLagCacheRequest(helper: CacheHelper, cacheKey: string) {
+  return helper.buildRequest(REPLICATION_LAG_CACHE_PATH, { source: cacheKey })
+}
+
+export function getReplicationLagCacheKey(c: Context): string {
+  return String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown')
+}
+
+export function getFreshReplicationLagMemoryEntry(cacheKey: string, now = Date.now()): ReplicationLagStatus | null {
+  const cached = replicationLagMemoryCache.get(cacheKey)
+  if (!cached)
+    return null
+  if (cached.expiresAt <= now) {
+    replicationLagMemoryCache.delete(cacheKey)
+    return null
+  }
+  return {
+    status: cached.status,
+    max_lag_seconds: cached.max_lag_seconds,
+  }
+}
+
+export function setReplicationLagMemoryEntry(cacheKey: string, status: ReplicationLagStatus, expiresAt = Date.now() + REPLICATION_LAG_CACHE_TTL_MS) {
+  replicationLagMemoryCache.set(cacheKey, {
+    ...status,
+    expiresAt,
+  })
+}
+
+/** Test helper: forget every known lag figure. */
+export function resetReplicationLagMemory() {
+  replicationLagMemoryCache.clear()
+  replicationLagColoMisses.clear()
+}
+
+/**
+ * Lag past which a regional replica stops serving its region: reads go to the
+ * EU replica (the subscriber every regional replica streams from) until a
+ * probe measures it back under this. Never to the primary.
+ */
+export const READ_REPLICA_FALLBACK_LAG_SECONDS = 600
+
+/**
+ * True when this isolate's lag figure for `source` is over
+ * READ_REPLICA_FALLBACK_LAG_SECONDS. Memory only, so replica selection stays
+ * synchronous; once the figure expires the next read probes the replica again.
+ */
+export function isReplicaTooFarBehind(source: string, now = Date.now()) {
+  const lag = getFreshReplicationLagMemoryEntry(source, now)
+  return lag?.max_lag_seconds != null && lag.max_lag_seconds > READ_REPLICA_FALLBACK_LAG_SECONDS
+}
+
+/** True for a database source that is a read replica (it can be behind the primary). */
+export function isReadReplicaSource(source: string) {
+  return source.startsWith('HYPERDRIVE_CAPGO_READ_') || source === 'local_read_replica'
+}
+
+function isMeasuredBehind(lag: ReplicationLagStatus | null) {
+  if (!lag || lag.status === 'unknown' || lag.max_lag_seconds === null)
+    return false
+  return lag.status === 'lagging' || lag.max_lag_seconds > EDGE_CACHE_MAX_REPLICA_LAG_SECONDS
+}
+
+/** Data center lookups that found no lag figure: skip the Cache API read for a while. */
+const REPLICATION_LAG_COLO_MISS_MEMO_MS = 10_000
+const replicationLagColoMisses = new Map<string, number>()
+
+/**
+ * Lag figure for a source: this isolate's, else the data center's (one Cache
+ * API read, copied into this isolate, no database query), else null.
+ */
+async function loadReplicationLag(c: Context, source: string): Promise<ReplicationLagStatus | null> {
+  const memory = getFreshReplicationLagMemoryEntry(source)
+  if (memory)
+    return memory
+  const now = Date.now()
+  if ((replicationLagColoMisses.get(source) ?? 0) > now)
+    return null
+  try {
+    const helper = new CacheHelper(c)
+    const cached = await helper.matchJson<ReplicationLagCacheEntry>(replicationLagCacheRequest(helper, source))
+    // A probe may have stored a newer figure while this read awaited.
+    const current = getFreshReplicationLagMemoryEntry(source)
+    if (current)
+      return current
+    if (cached && cached.expiresAt > Date.now()) {
+      const status = { status: cached.status, max_lag_seconds: cached.max_lag_seconds }
+      setReplicationLagMemoryEntry(source, status, cached.expiresAt)
+      return status
+    }
+  }
+  catch {
+    // Best effort: no figure means fail open.
+  }
+  replicationLagColoMisses.set(source, now + REPLICATION_LAG_COLO_MISS_MEMO_MS)
+  return null
+}
+
+/**
+ * TTL for an edge cache entry built from replica reads: capped to
+ * EDGE_CACHE_UNVERIFIED_REPLICA_TTL_SECONDS when the replica is measured more
+ * than EDGE_CACHE_MAX_REPLICA_LAG_SECONDS behind, unchanged otherwise
+ * (primary reads, no figure, unknown).
+ *
+ * `source` defaults to this request's database source; pass the replica an
+ * answer came from when the request itself read no database (read cache hit).
+ *
+ * Measures the replica against its upstream only: regional standbys cannot
+ * see the EU subscriber's own lag behind the primary.
+ */
+export async function edgeCacheTtlForReplicaLag(c: Context, ttlSeconds: number, source = getReplicationLagCacheKey(c)) {
+  if (!isReadReplicaSource(source))
+    return ttlSeconds
+  const lag = await loadReplicationLag(c, source)
+  return isMeasuredBehind(lag) ? Math.min(ttlSeconds, EDGE_CACHE_UNVERIFIED_REPLICA_TTL_SECONDS) : ttlSeconds
+}
