@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BillingSubscription, CancelReason, CancelSaveOffer } from '~/services/stripe'
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import BillingModal from '~/components/billing/BillingModal.vue'
@@ -26,6 +26,7 @@ const isAccepting = ref(false)
 // undefined until checked; null when the customer is not eligible.
 const offer = ref<CancelSaveOffer | null | undefined>(undefined)
 const showLossReminder = ref(false)
+const lossHeading = ref<HTMLElement | null>(null)
 const MAX_COMMENT = 1000
 const lossItems = ['ota', 'channels', 'builds', 'support'] as const
 
@@ -43,10 +44,12 @@ async function cancelPlan(selected: CancelReason) {
   emit('canceled', subscription)
 }
 
-function submitReason() {
+async function submitReason() {
   if (!canSubmit.value || !reason.value)
     return
   showLossReminder.value = true
+  await nextTick()
+  lossHeading.value?.focus()
 }
 
 async function loadOfferOrCancel() {
@@ -118,7 +121,7 @@ async function acceptOffer() {
     @close="emit('close')"
   >
     <div v-if="showLossReminder" data-test="cancel-loss-reminder">
-      <p class="text-base font-semibold text-slate-900 dark:text-white">
+      <p ref="lossHeading" tabindex="-1" class="text-base font-semibold text-slate-900 outline-none dark:text-white">
         {{ t('billing-cancel-loss-title') }}
       </p>
       <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
