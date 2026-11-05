@@ -51,7 +51,7 @@ export async function getAppOwnerWithEdgeCache(
       throw error
     }
     logPgError(c, 'getAppOwnerPostgres', error, { appId, planActions: actions })
-    return { value: null, hit: false, lookupFailed: true }
+    return { value: null, hit: false, lookupFailed: true, error }
   }
 }
 

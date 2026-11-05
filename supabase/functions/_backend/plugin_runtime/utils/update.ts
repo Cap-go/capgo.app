@@ -1030,7 +1030,7 @@ export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: 
     // Deleted or no longer a cloud app: nothing to attribute the answer to.
     if (!owner.value) {
       if (owner.lookupFailed)
-        throw new Error('snippet edge replay owner lookup failed')
+        throw new Error('snippet edge replay owner lookup failed', { cause: owner.error })
       return c.json(BRES)
     }
     const device = makeDevice(body, owner.value.allow_device_custom_id)
