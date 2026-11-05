@@ -1,4 +1,9 @@
 <script setup lang="ts">
+/**
+ * Org billing cancel flow: pick a reason, see what the plan includes, then load an optional
+ * Stripe save offer before confirming cancellation. Accepting the offer keeps the subscription.
+ */
+
 import type { BillingSubscription, CancelReason, CancelSaveOffer } from '~/services/stripe'
 import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
