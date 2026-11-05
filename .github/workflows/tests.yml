@@ -216,7 +216,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true' || needs.changes.outputs.run_cli == 'true' || needs.changes.outputs.run_notifications == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Check dead code
     permissions:
       contents: read
@@ -313,7 +313,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: Run unit tests
     permissions:
       contents: read

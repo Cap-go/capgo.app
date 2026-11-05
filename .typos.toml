@@ -91,4 +91,5 @@ ITMS = "ITMS" # App Store Connect upload error-code prefix (ITMS-90704, ITMS-904
 loca = "loca" # localtunnel host suffix *.loca.lt detected by the iOS capacitor-server-url check
 adress = "adress" # Preserve the requested request_actor_email_adress RPC name.
 jod = "jod" # ISO 4217 Jordanian dinar (three-decimal Stripe currency in stripe-amount.ts)
+ein = "ein" # US employer identification number in Stripe tax ID type us_ein
 # Add more project-specific terms as needed
