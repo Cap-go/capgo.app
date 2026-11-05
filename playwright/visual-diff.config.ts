@@ -668,10 +668,10 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.locator('[data-test="billing-cancel"]').click()
       await page.locator('[data-test="cancel-reason-too_expensive"]').click()
       await page.locator('[data-test="cancel-plan-confirm"]').click()
-      await page.locator('[data-test="cancel-loss-reminder"]')
-        .or(page.locator('[data-test="cancel-save-offer"]'))
-        .first()
-        .waitFor()
+      if (process.env.VISUAL_DIFF_PHASE === 'after')
+        await page.locator('[data-test="cancel-loss-reminder"]').waitFor()
+      else
+        await page.locator('[data-test="cancel-loss-reminder"]').or(page.locator('[data-test="cancel-save-offer"]')).first().waitFor()
     },
   },
   {
