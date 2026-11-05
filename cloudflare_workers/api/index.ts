@@ -113,6 +113,7 @@ import { app as pluginNotifications } from '../../supabase/functions/_backend/tr
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as stripe_event_us } from '../../supabase/functions/_backend/triggers/stripe_event_us.ts'
+import { app as sync_trial_plan_schedule } from '../../supabase/functions/_backend/triggers/sync_trial_plan_schedule.ts'
 import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
@@ -252,6 +253,7 @@ appTriggers.route('/on_manifest_create', on_manifest_create)
 appTriggers.route('/on_deploy_history_create', on_deploy_history_create)
 appTriggers.route('/stripe_event', stripe_event)
 appTriggers.route('/stripe_event_us', stripe_event_us)
+appTriggers.route('/sync_trial_plan_schedule', sync_trial_plan_schedule)
 appTriggers.route('/updates_cache_purge', updates_cache_purge)
 appTriggers.route('/on_organization_create', on_organization_create)
 appTriggers.route('/cron_stat_app', cron_stat_app)

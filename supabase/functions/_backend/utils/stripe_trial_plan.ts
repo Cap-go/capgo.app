@@ -13,8 +13,9 @@ import type { BillingAccount } from './stripe_billing.ts'
 import type { PriceTier } from './country_price_tier.ts'
 import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { getCustomerBilling, isRegionalCurrency } from './regional_price.ts'
+import { getStripe } from './stripe.ts'
 import type { Database } from './supabase.types.ts'
-import { findPlanByProductId, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, singleRowOrNull, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
+import { findPlanByProductId, getBillingAccountForCustomer, getPlanPriceId, getPlanProductId, getRegionalPlanPriceId, getRequestCountry, isAutomaticTaxEnabled, singleRowOrNull, TRIAL_PLAN_SCHEDULE_METADATA_KEY } from './stripe_billing.ts'
 
 type PlanRow = Database['public']['Tables']['plans']['Row']
 
@@ -240,6 +241,169 @@ async function listPendingTrialPlanSchedules(stripe: Stripe, customerId: string)
 
 export async function findPendingTrialPlanSchedule(stripe: Stripe, customerId: string) {
   return (await listPendingTrialPlanSchedules(stripe, customerId))[0] ?? null
+}
+
+export type SyncPendingTrialPlanScheduleResult = 'updated' | 'unchanged' | 'no_schedule' | 'canceled' | 'failed'
+
+function pendingTrialPlanScheduleStartUnix(schedule: Stripe.SubscriptionSchedule): number | null {
+  const phaseStart = schedule.phases[0]?.start_date
+  if (typeof phaseStart === 'number')
+    return phaseStart
+  return null
+}
+
+async function loadStripeInfoTrialAt(c: Context, customerId: string): Promise<string | null> {
+  return singleRowOrNull(await adminQuery(c, client => queryJson<{ trial_at: string | null }>(
+    client,
+    'SELECT trial_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+    [customerId],
+  )))?.trial_at ?? null
+}
+
+// Moves a pending trial-end subscription schedule to match stripe_info.trial_at.
+// Stripe failures leave stripe_info unchanged and return failed (queue retries).
+export async function syncPendingTrialPlanScheduleWithTrialAt(
+  c: Context,
+  stripe: Stripe,
+  customerId: string,
+  trialAt?: string | null,
+): Promise<SyncPendingTrialPlanScheduleResult> {
+  const schedule = await findPendingTrialPlanSchedule(stripe, customerId)
+  if (!schedule)
+    return 'no_schedule'
+
+  const authoritativeTrialAt = trialAt !== undefined
+    ? trialAt
+    : await loadStripeInfoTrialAt(c, customerId)
+  const newStart = getTrialPlanStartDate(authoritativeTrialAt)
+  if (!newStart) {
+    try {
+      await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
+    }
+    catch (error) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'trial plan schedule cancel on trial end failed', customerId, error })
+      return 'failed'
+    }
+    return 'canceled'
+  }
+
+  const newStartUnix = Math.floor(newStart.getTime() / 1000)
+  const currentStartUnix = pendingTrialPlanScheduleStartUnix(schedule)
+  if (currentStartUnix === newStartUnix) {
+    try {
+      await withTrialPlanLockForScheduleSync(c, customerId, async () => {
+        const latest = await findPendingTrialPlanSchedule(stripe, customerId)
+        if (!latest)
+          return
+        await cancelPendingTrialPlanSchedulesExcept(
+          c,
+          stripe,
+          customerId,
+          latest.id,
+          'duplicate trial plan schedule canceled during trial end sync',
+        )
+      })
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'trial plan schedule duplicate cancel failed',
+        customerId,
+        scheduleId: schedule.id,
+        error,
+      })
+      return 'failed'
+    }
+    return 'unchanged'
+  }
+
+  const phase = schedule.phases[0]
+  const scheduledPrice = phase?.items[0]?.price
+  const priceId = typeof scheduledPrice === 'string' ? scheduledPrice : scheduledPrice?.id
+  if (!phase || !priceId)
+    return 'failed'
+
+  const phaseMetadata = phase.metadata ?? {}
+  const orgId = typeof schedule.metadata?.org_id === 'string'
+    ? schedule.metadata.org_id
+    : (typeof phaseMetadata.org_id === 'string' ? phaseMetadata.org_id : undefined)
+
+  try {
+    await withTrialPlanLockForScheduleSync(c, customerId, async () => {
+      let trialAtNow: string | null
+      const fromDb = await loadStripeInfoTrialAt(c, customerId)
+      trialAtNow = fromDb ?? (trialAt !== undefined ? trialAt : null)
+      const lockedStart = getTrialPlanStartDate(trialAtNow)
+      if (!lockedStart) {
+        await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
+        return
+      }
+      const lockedStartUnix = Math.floor(lockedStart.getTime() / 1000)
+      const latest = await findPendingTrialPlanSchedule(stripe, customerId)
+      if (!latest)
+        return
+      if (pendingTrialPlanScheduleStartUnix(latest) === lockedStartUnix) {
+        await cancelPendingTrialPlanSchedulesExcept(
+          c,
+          stripe,
+          customerId,
+          latest.id,
+          'duplicate trial plan schedule canceled during trial end sync',
+        )
+        return
+      }
+      const latestPhase = latest.phases[0]
+      const latestPrice = latestPhase?.items[0]?.price
+      const latestPriceId = typeof latestPrice === 'string' ? latestPrice : latestPrice?.id
+      if (!latestPhase || !latestPriceId)
+        throw new Error('pending trial plan schedule missing price')
+      await stripe.subscriptionSchedules.update(latest.id, {
+        phases: [{
+          items: [{ price: latestPriceId, quantity: 1 }],
+          start_date: lockedStartUnix,
+          metadata: {
+            ...latestPhase.metadata,
+            [TRIAL_PLAN_SCHEDULE_METADATA_KEY]: 'true',
+            ...(orgId ? { org_id: orgId } : {}),
+          },
+        }],
+      })
+      await cancelPendingTrialPlanSchedulesExcept(
+        c,
+        stripe,
+        customerId,
+        latest.id,
+        'duplicate trial plan schedule canceled during trial end sync',
+      )
+    })
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'trial plan schedule start synced to trial end',
+      customerId,
+      scheduleId: schedule.id,
+      startsAt: newStart.toISOString(),
+    })
+    return 'updated'
+  }
+  catch (error) {
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'trial plan schedule start sync failed',
+      customerId,
+      scheduleId: schedule.id,
+      error,
+    })
+    return 'failed'
+  }
+}
+
+export async function syncTrialPlanScheduleForCustomer(
+  c: Context,
+  customerId: string,
+  trialAt?: string | null,
+): Promise<SyncPendingTrialPlanScheduleResult> {
+  const billingAccount = await getBillingAccountForCustomer(c, customerId)
+  return syncPendingTrialPlanScheduleWithTrialAt(c, getStripe(c, billingAccount), customerId, trialAt)
 }
 
 async function cancelSchedules(c: Context, stripe: Stripe, customerId: string, schedules: readonly Stripe.SubscriptionSchedule[], message: string) {
@@ -594,6 +758,24 @@ async function withTrialPlanLock<T>(c: Context, customerId: string, run: () => P
     const { result, connectionLost } = await holdTrialPlanLock(c, client, customerId, run)
     broken = connectionLost
     return result
+  }
+  finally {
+    releasePgClient(pool, client, broken)
+    closeClient(c, pool)
+  }
+}
+
+// Same lock as withTrialPlanLock, but fails when the DB connection drops so queue retries can reconcile Stripe.
+async function withTrialPlanLockForScheduleSync(c: Context, customerId: string, run: () => Promise<void>): Promise<void> {
+  const pool = await getPgClient(c)
+  let client: Awaited<ReturnType<typeof checkoutPgClient>> | null = null
+  let broken = false
+  try {
+    client = await checkoutPgClient(pool)
+    const { connectionLost } = await holdTrialPlanLock(c, client, customerId, run)
+    broken = connectionLost
+    if (connectionLost)
+      throw new Error('trial plan schedule sync lock connection lost')
   }
   finally {
     releasePgClient(pool, client, broken)
