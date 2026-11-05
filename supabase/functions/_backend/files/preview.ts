@@ -140,7 +140,8 @@ const MIME_TYPES: Record<string, string> = {
 
 const BUNDLE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable'
 const CHANNEL_PREVIEW_CACHE_CONTROL = 'no-store, no-cache, must-revalidate, max-age=0'
-const PREVIEW_ROBOTS_TXT_BODY = 'User-agent: *\nDisallow: /\n'
+// Allow crawlers to fetch preview URLs so they see X-Robots-Tag: noindex on every response.
+const PREVIEW_ROBOTS_TXT_BODY = 'User-agent: *\nAllow: /\n'
 
 export function isPreviewRobotsTxtPath(pathname: string): boolean {
   const normalizedPath = pathname.replace(/\/+$/, '') || '/'

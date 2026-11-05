@@ -31,13 +31,13 @@ describe('preview response headers', () => {
     expect(headers.get('x-robots-tag')).toBe(PREVIEW_X_ROBOTS_TAG)
   })
 
-  it.concurrent('serves robots.txt that disallows all crawlers on preview hosts', () => {
+  it.concurrent('serves robots.txt that allows crawlers while noindex is enforced via response headers', () => {
     const response = buildPreviewRobotsTxtResponse()
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
     expect(response.headers.get('x-robots-tag')).toBe(PREVIEW_X_ROBOTS_TAG)
-    return expect(response.text()).resolves.toBe('User-agent: *\nDisallow: /\n')
+    return expect(response.text()).resolves.toBe('User-agent: *\nAllow: /\n')
   })
 
   it.concurrent('adds X-Robots-Tag to preview subdomain errors and skips other hosts', async () => {
@@ -61,7 +61,7 @@ describe('preview response headers', () => {
       headers: { host: 'invalid.preview.capgo.app' },
     }))
     expect(previewRobots.headers.get('x-robots-tag')).toBe(PREVIEW_X_ROBOTS_TAG)
-    await expect(previewRobots.text()).resolves.toBe('User-agent: *\nDisallow: /\n')
+    await expect(previewRobots.text()).resolves.toBe('User-agent: *\nAllow: /\n')
 
     const apiOk = await app.fetch(new Request('https://api.capgo.app/ok'))
     expect(apiOk.headers.get('x-robots-tag')).toBeNull()
