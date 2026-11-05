@@ -74,6 +74,8 @@ describe('CancelPlanModal loss reminder', () => {
     await pickReason()
     await submitReason()
     expect(shell().querySelector('[data-test="cancel-loss-reminder"]')).toBeTruthy()
+    const focusTarget = shell().querySelector('[data-test="cancel-loss-reminder"] [tabindex="-1"]')
+    await vi.waitFor(() => expect(document.activeElement).toBe(focusTarget))
     expect(shell().querySelector('[data-test="cancel-plan-form"]')).toBeNull()
     expect(mocks.getCancelSaveOffer).not.toHaveBeenCalled()
   })
