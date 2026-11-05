@@ -25,7 +25,9 @@ const isSubmitting = ref(false)
 const isAccepting = ref(false)
 // undefined until checked; null when the customer is not eligible.
 const offer = ref<CancelSaveOffer | null | undefined>(undefined)
+const showLossReminder = ref(false)
 const MAX_COMMENT = 1000
+const lossItems = ['ota', 'channels', 'builds', 'support'] as const
 
 // "Other" asks for a short explanation so the reason stays actionable.
 const needsComment = computed(() => reason.value === 'other')
@@ -41,8 +43,14 @@ async function cancelPlan(selected: CancelReason) {
   emit('canceled', subscription)
 }
 
-async function submit() {
+function submitReason() {
   if (!canSubmit.value || !reason.value)
+    return
+  showLossReminder.value = true
+}
+
+async function loadOfferOrCancel() {
+  if (!reason.value || busy.value)
     return
   isSubmitting.value = true
   try {
@@ -52,9 +60,26 @@ async function submit() {
         console.error('Cannot load cancel offer', error)
         return null
       })
+      showLossReminder.value = false
       if (offer.value)
         return
     }
+    await cancelPlan(reason.value)
+  }
+  catch (error) {
+    console.error('Cannot cancel subscription', error)
+    toast.error(t('billing-cancel-error'))
+  }
+  finally {
+    isSubmitting.value = false
+  }
+}
+
+async function submit() {
+  if (!reason.value || busy.value)
+    return
+  isSubmitting.value = true
+  try {
     await cancelPlan(reason.value)
   }
   catch (error) {
@@ -92,7 +117,29 @@ async function acceptOffer() {
     :busy="busy"
     @close="emit('close')"
   >
-    <div v-if="offer && offerPrices" data-test="cancel-save-offer">
+    <div v-if="showLossReminder" data-test="cancel-loss-reminder">
+      <p class="text-base font-semibold text-slate-900 dark:text-white">
+        {{ t('billing-cancel-loss-title') }}
+      </p>
+      <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+        {{ t('billing-cancel-loss-desc') }}
+      </p>
+      <ul class="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700 dark:text-slate-200">
+        <li v-for="item in lossItems" :key="item">
+          {{ t(`billing-cancel-loss-item-${item}`) }}
+        </li>
+      </ul>
+      <div class="mt-6 flex flex-wrap justify-end gap-2">
+        <button type="button" class="d-btn d-btn-ghost" :disabled="busy" data-test="cancel-loss-keep-plan" @click="emit('close')">
+          {{ t('billing-cancel-keep-plan') }}
+        </button>
+        <button type="button" class="d-btn d-btn-error text-white" :disabled="busy" data-test="cancel-loss-continue" @click="loadOfferOrCancel">
+          <span v-if="isSubmitting" class="d-loading d-loading-spinner d-loading-sm" />
+          {{ t('billing-cancel-loss-continue') }}
+        </button>
+      </div>
+    </div>
+    <div v-else-if="offer && offerPrices" data-test="cancel-save-offer">
       <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
         <p class="text-base font-semibold text-blue-900 dark:text-blue-100">
           {{ t('billing-cancel-offer-title', { percent: offer.percentOff, months: offer.durationMonths }) }}
@@ -112,7 +159,7 @@ async function acceptOffer() {
         </button>
       </div>
     </div>
-    <form v-else data-test="cancel-plan-form" @submit.prevent="submit">
+    <form v-else data-test="cancel-plan-form" @submit.prevent="submitReason">
       <fieldset>
         <legend class="mb-3 text-sm font-medium text-slate-900 dark:text-white">
           {{ t('billing-cancel-reason-label') }}
