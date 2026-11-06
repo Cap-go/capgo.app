@@ -12,13 +12,16 @@ import {
   sumVersionInstalls,
 } from '../utils/cron_email_stats.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
+import { isBentoConfigured } from '../utils/bento.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
-import { closeClient, getPgClient } from '../utils/pg.ts'
+import { sendEmailToOrgMembers, sendNotifToOrgMembersOnceWithResult } from '../utils/org_email_notifications.ts'
+import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import { queryJson } from '../utils/pg_rls.ts'
 import { findBestPlan } from '../utils/plans.ts'
 import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
 import { getCurrentPlanNameOrg, getOrgExtraMau } from '../utils/supabase.ts'
+import { loadTrialUsageRecapPayload, trialUsageRecapUniqId } from '../utils/trial_usage_recap.ts'
+import { getEnv } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -67,6 +70,7 @@ app.post('/', middlewareAPISecret, async (c) => {
     totalFails,
     failPercentage,
     reportDate,
+    trialEndDate,
   } = await parseBody<{
     email: string
     appId?: string
@@ -86,10 +90,21 @@ app.post('/', middlewareAPISecret, async (c) => {
     totalFails?: number
     failPercentage?: number
     reportDate?: string
+    trialEndDate?: string
   }>(c)
 
   if (!email || !type) {
     throw simpleError('missing_email_type', 'Missing email or type', { email, type })
+  }
+
+  if (type === 'trial_usage_recap' || type === 'trial_end_usage_recap') {
+    if (!orgId) {
+      throw simpleError('missing_orgId', `Missing orgId for ${type}`, { email, type })
+    }
+    if (!trialEndDate) {
+      throw simpleError('missing_trial_end_date', 'Missing trialEndDate for trial recap', { email, type, orgId })
+    }
+    return await handleTrialUsageRecap(c, orgId, type, trialEndDate)
   }
 
   // billing_period_stats uses orgId instead of appId
@@ -144,6 +159,99 @@ app.post('/', middlewareAPISecret, async (c) => {
     throw simpleError('invalid_stats_type', 'Invalid stats type', { email, appId, type })
   }
 })
+
+async function handleTrialUsageRecap(
+  c: Context,
+  orgId: string,
+  type: 'trial_usage_recap' | 'trial_end_usage_recap',
+  trialEndDate: string,
+) {
+  const pg = await getPgClient(c)
+  try {
+    const drizzle = getDrizzleClient(pg)
+    const trialStateRows = await queryJson<{ trial_day: string, status: string | null }>(
+      pg,
+      `SELECT (si.trial_at AT TIME ZONE 'UTC')::date::text AS trial_day, si.status::text AS status
+       FROM public.stripe_info si
+       INNER JOIN public.orgs o ON o.customer_id = si.customer_id
+       WHERE o.id = $1::uuid
+       LIMIT 2`,
+      [orgId],
+    )
+    if (trialStateRows.length !== 1) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trial usage recap skipped: org or stripe row missing',
+        orgId,
+        type,
+      })
+      return c.json(BRES)
+    }
+    const { trial_day: trialDayUtc, status: stripeStatus } = trialStateRows[0]
+    if (trialDayUtc !== trialEndDate) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trial usage recap skipped: queued trialEndDate does not match stripe trial day',
+        orgId,
+        type,
+        trialEndDate,
+        trialDayUtc,
+      })
+      return c.json(BRES)
+    }
+    if (stripeStatus === 'succeeded') {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trial usage recap skipped: org already on a paid subscription',
+        orgId,
+        type,
+      })
+      return c.json(BRES)
+    }
+    const base = getEnv(c, 'WEBAPP_URL').trim() || 'https://capgo.app'
+    const payload = await loadTrialUsageRecapPayload(pg, orgId, type, trialEndDate, base)
+    if (!isBentoConfigured(c)) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trial usage recap skipped: Bento not configured',
+        orgId,
+        type,
+      })
+      return c.json(BRES)
+    }
+    const eventName = type === 'trial_usage_recap' ? 'org:trial_usage_recap' : 'org:trial_end_usage_recap'
+    const uniqId = trialUsageRecapUniqId(type, payload.org_id, payload.trial_end_date)
+    const result = await sendNotifToOrgMembersOnceWithResult(
+      c,
+      eventName,
+      'trial_usage_recap',
+      { ...payload, email_variant: payload.variant },
+      orgId,
+      uniqId,
+      drizzle,
+      'billing',
+      { recordDelivery: false },
+    )
+    if (result === 'failed')
+      throw simpleError('trial_usage_recap_failed', 'Trial usage recap could not be sent', { orgId, type })
+    return c.json(BRES)
+  }
+  catch (error: unknown) {
+    if (error && typeof error === 'object' && 'getResponse' in error)
+      throw error
+    cloudlogErr({
+      requestId: c.get('requestId'),
+      message: 'trial usage recap handler error',
+      error,
+      orgId,
+      type,
+    })
+    throw simpleError('trial_usage_recap_failed', 'Trial usage recap failed', { orgId, type })
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
 
 async function handleWeeklyInstallStats(c: Context, appId: string) {
   const pg = await getPgClient(c)
@@ -340,7 +448,7 @@ async function handleDeployInstallStats(
   // and this email counts installs for the deployed version across the app.
   const versionStats = await readStatsVersion(c, appId, windowStart, windowEnd)
   // Filter by version_name (new format) OR version_id as string (old Cloudflare format).
-  // Coerce installs with Number() — Analytics Engine sum() can arrive as stringy Float64.
+  // Coerce installs with Number(); Analytics Engine sum() can arrive as stringy Float64.
   const installs = sumVersionInstalls(versionStats, versionName, versionId)
 
   if (shouldSendDeployInstallStatsEmail(installs)) {
