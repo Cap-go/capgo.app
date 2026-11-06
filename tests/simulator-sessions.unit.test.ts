@@ -35,6 +35,10 @@ describe('running simulator sessions', () => {
     const id = '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4'
     const session = { id, url: 'https://ios-emulator.capgo.app/s/a/' }
     rememberSimulator(appId, session)
+    if (!await sessionRemainsAfterLookup(async () => ({ httpStatus: 400 })))
+      forgetSimulator(appId, id)
+    expect(runningSimulators(appId)).toHaveLength(0)
+    rememberSimulator(appId, session)
     if (!await sessionRemainsAfterLookup(async () => ({ httpStatus: 404 })))
       forgetSimulator(appId, id)
     expect(runningSimulators(appId)).toHaveLength(0)

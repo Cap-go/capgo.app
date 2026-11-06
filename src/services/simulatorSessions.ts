@@ -34,7 +34,7 @@ export function rememberSimulator(appId: string, session: RunningSimulator, epoc
 }
 
 export function rememberedSessionStillRunning(httpStatus: number, sessionStatus?: string) {
-  if (httpStatus === 404)
+  if (httpStatus === 400 || httpStatus === 404)
     return false
   if (httpStatus < 200 || httpStatus >= 300)
     return true
