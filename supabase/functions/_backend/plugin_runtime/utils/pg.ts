@@ -72,8 +72,12 @@ function pgAbortRace<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
  * (verified in node_modules/pg). Race read only Hyperdrive queries with request.signal
  * so disconnect can drop replica work early without cancelling connect or close paths.
  */
-/** Hyperdrive read clients only. Used by tests to validate abort racing without bootstrapping Hyperdrive. */
-export function wrapPluginReadOnlyClientForRequestSignal(db: PluginPgClient, signal: AbortSignal): PluginPgClient {
+/** Read replica clients only. Pass `true` when the underlying handle is Hyperdrive (must skip `.end()`). */
+export function wrapPluginReadOnlyClientForRequestSignal(
+  db: PluginPgClient,
+  signal: AbortSignal,
+  underlyingSkipsEnd: boolean,
+): PluginPgClient {
   const orig = db.query.bind(db) as (...args: unknown[]) => Promise<unknown>
   const wrapped = new Proxy(db, {
     get(target, prop, receiver) {
@@ -87,7 +91,8 @@ export function wrapPluginReadOnlyClientForRequestSignal(db: PluginPgClient, sig
       return Reflect.get(target, prop, receiver)
     },
   }) as PluginPgClient
-  skipEndClients.add(wrapped)
+  if (underlyingSkipsEnd)
+    skipEndClients.add(wrapped)
   const source = pgClientSources.get(db)
   if (source !== undefined)
     pgClientSources.set(wrapped, source)
@@ -313,7 +318,7 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
   return query
 }
 
-/** For tests: wrapped read clients must skip `.end()` like the underlying Hyperdrive handle. */
+/** For tests: wrapped read clients skip `.end()` only when the underlying Hyperdrive handle does. */
 export function pluginReadClientSkipsEnd(db: PluginPgClient): boolean {
   return skipEndClients.has(db)
 }
@@ -532,9 +537,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     pgClientSources.set(client, dbName)
     const withMode = setPgAccessMode(client, readOnly)
     if (readAbortSignal && readOnly) {
-      const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal)
-      if (skipEndClients.has(withMode))
-        skipEndClients.add(wrapped)
+      const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal, skipEndClients.has(withMode))
       inheritPgAccessMode(withMode, wrapped)
       return wrapped
     }
@@ -574,7 +577,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   pgClientSources.set(pool, dbName)
   const withMode = setPgAccessMode(pool, readOnly)
   if (readAbortSignal && readOnly) {
-    const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal)
+    const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal, skipEndClients.has(withMode))
     inheritPgAccessMode(withMode, wrapped)
     return wrapped
   }
