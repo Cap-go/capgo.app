@@ -7,12 +7,14 @@ import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, rele
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 import { reserveSimulatorSlot } from './concurrency.ts'
+import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
 
 export interface SimulatorBody {
   app_id?: string
   platform?: string
   name?: string
+  build_job_id?: string
 }
 
 export interface EmulatorSessionData {
@@ -225,6 +227,30 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
   return { status: response.status, data: payload?.data }
 }
 
+async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string) {
+  const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
+  if (!saved || saved.kind !== 'ios_ipa')
+    throw new Error('This build has no saved iOS app.')
+  const file = await fetch(saved.url)
+  if (!file.ok)
+    throw new Error('The saved build could not be downloaded.')
+  const bytes = await file.arrayBuffer()
+  if (bytes.byteLength > 200 * 1024 * 1024)
+    throw new Error('The saved build is too large to install.')
+  const form = new FormData()
+  form.append('ipa', new Blob([bytes], { type: 'application/octet-stream' }), 'app.ipa')
+  const installUrl = new URL('api/install', sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`)
+  const response = await fetch(installUrl, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessKey}` },
+    body: form,
+  })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(text.slice(0, 300) || 'The simulator could not install the build.')
+  }
+}
+
 function simulatorConfig(c: Context) {
   const accessKey = getEnv(c, 'SIMULATOR_ACCESS_KEY')
   if (!accessKey)
@@ -265,6 +291,15 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
     if (!device?.id || !device.url)
       throw new Error('Simulator did not return a session URL.')
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
+    let installError: string | undefined
+    if (body.build_job_id && platform === 'ios') {
+      try {
+        await installSavedIpa(c, principal, appId, orgId, body.build_job_id, device.url, accessKey)
+      }
+      catch (error) {
+        installError = error instanceof Error ? error.message : 'The saved build could not be installed.'
+      }
+    }
     return c.json({
       data: {
         id: slot.id,
@@ -273,6 +308,7 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
         platform,
         kind: 'simulator',
         remoteConfig: device.remoteConfig ?? null,
+        install_error: installError ?? null,
       },
     })
   }

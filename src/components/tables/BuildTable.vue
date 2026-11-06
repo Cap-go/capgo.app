@@ -11,7 +11,7 @@ import IconEye from '~icons/heroicons/eye'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
 import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useConsole } from '~/services/console'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
@@ -39,6 +39,8 @@ const showSteps = ref(false)
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const elements = ref<Element[]>([])
 const buildDurations = ref<Record<string, number>>({})
+const savedOutputs = ref<Record<string, { url: string, kind: string }>>({})
+const openingJob = ref('')
 const isLoading = ref(true)
 const currentPage = ref(1)
 const total = ref(0)
@@ -172,6 +174,8 @@ async function getData() {
       toast.error(t('error-fetching-build-durations'))
     elements.value = builds
     total.value = count || 0
+    if (isCurrent())
+      await loadSavedOutputs(builds, isCurrent)
   }
   catch (error) {
     if (!isCurrent())
@@ -318,6 +322,59 @@ function getStatusColor(status: string): string {
   }
 }
 
+async function loadSavedOutputs(builds: Element[], current: () => boolean) {
+  const jobIds = builds.filter(build => build.status === 'succeeded' && build.builder_job_id).map(build => build.builder_job_id as string)
+  if (jobIds.length === 0) {
+    savedOutputs.value = {}
+    return
+  }
+  try {
+    const { data } = await capgo.auth.getSession()
+    const token = data.session?.access_token
+    if (!token)
+      return
+    const response = await fetch(`${defaultApiHost}/private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobIds.join(','))}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!response.ok)
+      return
+    const body = await response.json() as { outputs?: Record<string, { url: string, kind: string }> }
+    if (current())
+      savedOutputs.value = body.outputs ?? {}
+  }
+  catch {
+    savedOutputs.value = {}
+  }
+}
+
+async function openSavedBuild(jobId: string) {
+  openingJob.value = jobId
+  try {
+    const { data } = await capgo.auth.getSession()
+    const token = data.session?.access_token
+    if (!token)
+      throw new Error(t('simulator-sign-in'))
+    const response = await fetch(`${defaultApiHost}/private/simulator/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
+      body: JSON.stringify({ app_id: props.appId, platform: 'ios', build_job_id: jobId }),
+    })
+    const payload = await response.json() as { message?: string, error?: string, data?: { url?: string, install_error?: string | null } }
+    if (!response.ok)
+      throw new Error(payload.message || payload.error || t('simulator-did-not-start'))
+    if (payload.data?.url)
+      window.open(payload.data.url, '_blank', 'noopener')
+    if (payload.data?.install_error)
+      toast.error(payload.data.install_error)
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : t('simulator-did-not-start'))
+  }
+  finally {
+    openingJob.value = ''
+  }
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(seconds ?? 0))
   if (safeSeconds < 60)
@@ -380,6 +437,13 @@ columns.value = [
         return '-'
       return elem.last_error.length > 50 ? `${elem.last_error.substring(0, 50)}...` : elem.last_error
     },
+  },
+  {
+    label: t('saved-build'),
+    key: 'artifact',
+    mobile: true,
+    class: 'max-w-48',
+    displayFunction: () => '',
   },
   {
     label: t('updated-at'),
@@ -450,6 +514,28 @@ watch(showSetupFlow, (newValue) => {
         @reset="reload()"
         @reload="getData()"
       >
+        <template #artifact="{ element }">
+          <div v-if="element.builder_job_id && savedOutputs[element.builder_job_id]" class="flex items-center gap-2">
+            <a
+              :href="savedOutputs[element.builder_job_id].url"
+              target="_blank"
+              rel="noopener"
+              class="text-sm font-semibold text-blue-600 dark:text-blue-400"
+            >
+              {{ t('download-saved-build') }}
+            </a>
+            <button
+              v-if="savedOutputs[element.builder_job_id].kind === 'ios_ipa'"
+              type="button"
+              class="px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0"
+              :disabled="openingJob === element.builder_job_id"
+              @click.stop="openSavedBuild(element.builder_job_id)"
+            >
+              {{ openingJob === element.builder_job_id ? t('simulator-starting') : t('open-in-simulator') }}
+            </button>
+          </div>
+          <span v-else class="text-gray-400 dark:text-gray-600">-</span>
+        </template>
         <template #status="{ element }">
           <span
             class="font-semibold"

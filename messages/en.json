@@ -4168,5 +4168,8 @@
   "start-ios-simulator": "Start iOS simulator",
   "simulator-did-not-stop": "Simulator did not stop.",
   "simulator-stopping": "Stopping",
-  "stop-simulator": "Stop simulator"
+  "stop-simulator": "Stop simulator",
+  "saved-build": "Saved build",
+  "download-saved-build": "Download",
+  "open-in-simulator": "Open in simulator"
 }
