@@ -14,6 +14,12 @@ npx @capgo/cli@latest mcp
 
 This command starts an MCP server that exposes Capgo functionality as tools for AI agents.
 The server communicates via stdio and is designed for non-interactive, programmatic use.
+For guided OTA setup, call `start_capgo_live_update_onboarding` and follow the returned next step.
+At the encryption step, recommend skipping for most apps, including public quote, news, or catalog apps.
+Use the app purpose and bundle contents already known from the conversation or project; do not ask users to repeat those details.
+Enable encryption only for an explicit user request or a concrete requirement for end-to-end encrypted delivery of the shipped code and assets.
+Handling sensitive data through an API does not by itself require bundle encryption. Bundle encryption does not encrypt API traffic, databases, or on-device user data, and must not be used to hide embedded secrets.
+Explain the recommendation and key-management cost, then wait for the user's choice.
 Selected tools exposed via MCP:
   - capgo_list_apps, capgo_add_app, capgo_update_app, capgo_delete_app
   - capgo_upload_bundle, capgo_list_bundles, capgo_delete_bundle, capgo_cleanup_bundles

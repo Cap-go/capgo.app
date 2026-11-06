@@ -16,7 +16,7 @@ export const liveUpdateNextStepSchema = z.object({
   packageJson: packageJsonSchema.optional(),
   mainFile: mainFileSchema.optional(),
   resumeChoice: z.enum(['continue', 'restart']).describe('Answer to the resume prompt: "continue" resumes saved progress, "restart" wipes it').optional(),
-  encryptionChoice: z.enum(['enable', 'skip']).describe('Answer at setup-encryption: "enable" turns on bundle encryption, "skip" leaves it off').optional(),
+  encryptionChoice: z.enum(['enable', 'skip']).describe('User choice at setup-encryption. Recommend "skip" for most apps, including public-content apps. Use "enable" only for an explicit user request or a concrete requirement for encrypted delivery of the shipped code/assets. Sensitive runtime/API data alone does not require bundle encryption. Never enable it just as a conservative default.').optional(),
   platform: z.enum(['ios', 'android']).describe('Answer at select-platform: target device platform').optional(),
   dirtyGitAction: z.enum(['check-again', 'continue-dirty']).describe('Answer at dirty-git: re-check after cleaning the repo, or continue with uncommitted changes').optional(),
   testChangeChoice: z.enum(['agent', 'manual']).describe('Answer at test-change-choice: "agent" means you (the AI assistant) make a small temporary visible change following the returned guidelines, "manual" means the user makes it themselves').optional(),
