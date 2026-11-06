@@ -33,7 +33,9 @@ const loading = ref(true)
 const failed = ref(false)
 
 const highlights = computed(() => (digest.value?.highlights ?? []).slice(0, props.compact ? 4 : 6))
-const upToDate = computed(() => !!digest.value && digest.value.releaseCount === 0)
+// Empty range is only proof of "up to date" when the whole history was read.
+const upToDate = computed(() => !!digest.value && digest.value.releaseCount === 0 && !digest.value.truncated)
+const rangeUnavailable = computed(() => !!digest.value && digest.value.releaseCount === 0 && digest.value.truncated)
 const countBadges = computed(() => {
   const counts = digest.value?.counts
   if (!counts)
@@ -121,6 +123,10 @@ async function copyCommand() {
 
     <p v-else-if="failed" class="text-sm text-slate-600 dark:text-slate-300">
       {{ t('changelog-digest-failed') }}
+    </p>
+
+    <p v-else-if="rangeUnavailable" class="text-sm text-slate-600 dark:text-slate-300" data-test="changelog-digest-range-unavailable">
+      {{ t('changelog-digest-truncated') }}
     </p>
 
     <div v-else-if="upToDate" class="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-300">

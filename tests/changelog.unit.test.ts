@@ -240,7 +240,8 @@ describe('aiDigest', () => {
     const digest = await aiDigest(fakeContext({ response: { headline: 'h', highlights: [{ title: 'Big feature', detail: '', type: 'added', version: '23.0.0', impact: 'medium', relevant: false }], actionRequired: [] } }), fallback, releases, context, 'en')
     expect(digest.aiGenerated).toBe(true)
     expect(digest.actionRequired).toContain('Dropped the v1 API')
-    expect(digest.highlights.map(h => h.title)).toContain('Dropped the v1 API')
+    // First, so it stays inside the 4–6 highlights the card shows.
+    expect(digest.highlights[0].title).toBe('Dropped the v1 API')
   })
 
   it('falls back when the model returns no highlights', async () => {

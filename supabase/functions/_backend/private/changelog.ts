@@ -327,7 +327,9 @@ export async function aiDigest(
     // The model may drop a required step it saw: when it returns none but the notes have some, keep the notes' own.
     const seenActions = parsed.actionRequired.length ? [] : requiredActions(releases.filter(release => prompt.included.has(release.version)))
     const actionRequired = [...new Set([...parsed.actionRequired, ...seenActions, ...requiredActions(omitted)])].slice(0, 6)
-    return { ...fallback, ...parsed, highlights: [...highlights.slice(0, 8 - reserved.length), ...reserved], actionRequired, aiGenerated: true }
+    // Reserved entries go first: the card shows only the first 4–6 highlights.
+    const visible = [...reserved, ...highlights.filter(h => !reserved.some(r => r.title === h.title))].slice(0, 8)
+    return { ...fallback, ...parsed, highlights: visible, actionRequired, aiGenerated: true }
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'changelog digest AI failed', product: fallback.product, repo: fallback.repo, error: serializeError(error) })
