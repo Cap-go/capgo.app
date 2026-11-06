@@ -36,11 +36,13 @@ import { useOrganizationStore } from '~/stores/organization'
 import {
   buildCiPipeline,
   builderCredentialsPushCommand,
+  CI_ENCRYPTION_SECRET,
   CI_PLATFORMS,
   CI_PROVIDERS,
   CI_STRATEGIES,
   DEFAULT_PREPROD_BRANCH,
   DEFAULT_PRODUCTION_BRANCH,
+  encryptionSecretCommand,
   githubSecretCommand,
   isCiChannelSupported,
   loadCiGuideSelection,
@@ -82,6 +84,13 @@ const defaultChannels = ref<string[] | null | undefined>(undefined)
 const productionChannels = computed(() => normalizeCiChannels(defaultChannels.value))
 const productionChannel = computed(() => productionChannels.value.join(', '))
 
+// Encrypted apps need the private key in CI, or the CLI uploads plaintext
+// bundles (or fails when the organization enforces encryption).
+const encryptionRequired = computed(() => organizationStore.getOrgByAppId(props.appId)?.enforce_encrypted_bundles === true)
+const encryptionDetected = ref(false)
+const encryptedChoice = ref<boolean | null>(null)
+const encrypted = computed(() => encryptionRequired.value || (encryptedChoice.value ?? encryptionDetected.value))
+
 // Never swap in another channel: CI would ship to a channel the user didn't pick.
 const unsupportedChannel = computed(() => productionChannels.value.find(channel => !isCiChannelSupported(channel)))
 const channelUnsupported = computed(() => product.value === 'ota' && unsupportedChannel.value !== undefined)
@@ -93,6 +102,7 @@ const pipeline = computed(() => provider.value && !channelUnsupported.value
       provider: provider.value,
       platforms: platforms.value,
       productionChannels: productionChannels.value,
+      encrypted: encrypted.value,
       productionBranch: productionBranch.value,
       preprodBranch: preprodBranch.value,
     })
@@ -216,6 +226,19 @@ async function createKey(spec: CiKeySpec) {
   }
 }
 
+async function loadEncryptionState() {
+  const appId = props.appId
+  // key_id is set on bundles encrypted with a v2 key.
+  const { data } = await capgo
+    .from('app_versions')
+    .select('key_id')
+    .eq('app_id', appId)
+    .not('key_id', 'is', null)
+    .limit(1)
+  if (appId === props.appId)
+    encryptionDetected.value = !!data?.[0]?.key_id
+}
+
 async function loadDefaultChannel() {
   const appId = props.appId
   // One default channel per platform at most, so this list stays tiny.
@@ -321,6 +344,7 @@ async function recordCreatedKey(spec: CiKeySpec, rbacId: unknown) {
 
 onMounted(() => {
   void loadDefaultChannel()
+  void loadEncryptionState()
   void refreshStatus()
   track('onboarding_cicd_guide_opened')
   statusTimer = setInterval(() => {
@@ -415,6 +439,15 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           <IconCheck v-if="product === option" class="h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
         </button>
       </fieldset>
+      <div v-if="product === 'ota'" class="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1" data-test="cicd-encryption">
+        <label class="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm font-medium text-slate-800 dark:text-slate-100" :class="choiceClass(encrypted)">
+          <input type="checkbox" class="d-checkbox d-checkbox-sm" :checked="encrypted" :disabled="encryptionRequired" data-test="cicd-encrypted" @change="encryptedChoice = ($event.target as HTMLInputElement).checked">
+          {{ t('cicd-guide-encrypted') }}
+        </label>
+        <span v-if="encryptionRequired || encryptionDetected" class="text-sm text-slate-500 dark:text-slate-400">
+          {{ t(encryptionRequired ? 'cicd-guide-encrypted-required' : 'cicd-guide-encrypted-detected') }}
+        </span>
+      </div>
       <fieldset v-if="product === 'builder'" class="flex flex-wrap items-center gap-3 pt-1" data-test="cicd-platforms">
         <legend class="sr-only">
           {{ t('cicd-guide-platforms') }}
@@ -634,6 +667,13 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
               <li v-for="spec in pipeline.keys" :key="spec.secret">
                 {{ t(`cicd-guide-secret-${provider}-2`, { secret: spec.secret }) }}
               </li>
+              <li v-if="pipeline.extraSecrets.length" data-test="cicd-encryption-secret">
+                {{ t('cicd-guide-secret-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
+                <button type="button" class="mt-2" :class="commandClass" :aria-label="`${t('copy')}: ${encryptionSecretCommand(provider === 'github' ? 'github' : 'other')}`" @click="copy(encryptionSecretCommand(provider === 'github' ? 'github' : 'other'))">
+                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ encryptionSecretCommand(provider === 'github' ? 'github' : 'other') }}</code>
+                  <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
+                </button>
+              </li>
               <template v-if="provider === 'gitlab'">
                 <li>{{ t('cicd-guide-secret-gitlab-protect') }}</li>
                 <li v-if="strategy === 'main_preprod'">
@@ -641,6 +681,9 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 </li>
                 <li v-if="pipeline.keys.some(spec => spec.secret === 'CAPGO_PREVIEW_TOKEN')">
                   {{ t('cicd-guide-secret-gitlab-preview') }}
+                </li>
+                <li v-if="pipeline.extraSecrets.length && strategy === 'pull_request'">
+                  {{ t('cicd-guide-secret-gitlab-preview-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
                 </li>
               </template>
               <li v-if="provider === 'azure'">
@@ -720,6 +763,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 <li class="flex items-start gap-2">
                   <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
                   {{ t('cicd-guide-note-incompatible') }}
+                </li>
+                <li v-if="encrypted" class="flex items-start gap-2" data-test="cicd-note-encryption">
+                  <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+                  {{ t('cicd-guide-note-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
                 </li>
               </template>
               <template v-else>

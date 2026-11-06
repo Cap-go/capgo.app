@@ -69,7 +69,7 @@ const state = {
   skipReasons: [] as string[],
   apikeyCreates: [] as unknown[],
   apikeyError: params.get('apikeyError'),
-  latestBundles: (params.get('bundle') ? [{ name: params.get('bundle'), created_at: '2026-11-06T10:00:00.000Z' }] : []) as Array<{ name: string | null, created_at: string }>,
+  latestBundles: (params.get('bundle') || params.get('encrypted') === '1' ? [{ name: params.get('bundle') ?? '1.0.0', created_at: '2026-11-06T10:00:00.000Z', key_id: params.get('encrypted') === '1' ? 'MIIB' : null }] : []) as Array<{ name: string | null, created_at: string, key_id: string | null }>,
 }
 // apps.onboarding.cicd, reactive so the sidebar follows the guide's writes.
 const cicdLedger = ref<Record<string, unknown> | undefined>(params.get('cicd') === 'detected'

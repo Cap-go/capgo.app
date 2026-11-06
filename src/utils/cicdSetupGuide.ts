@@ -40,6 +40,8 @@ export interface CiGuideOptions {
   productionChannels?: readonly string[]
   productionBranch?: string
   preprodBranch?: string
+  /** Live updates only: the app encrypts bundles, so CI needs its private key. */
+  encrypted?: boolean
 }
 
 export type CiTrigger
@@ -62,6 +64,22 @@ export interface CiJob {
   command: string
   /** Extra environment for the command; values are plain flags, never secrets. */
   env?: Record<string, string>
+  /** Restore the encryption private key before the command (encrypted live updates). */
+  restoreKey?: boolean
+}
+
+/**
+ * Secret holding `.capgo_key_v2` as one base64 line: single-line values work
+ * with GitLab masked and Bitbucket secured variables, and the CLI encrypts
+ * whenever `.capgo_key_v2` exists in the project, so no key flag is needed.
+ */
+export const CI_ENCRYPTION_SECRET = 'CAPGO_PRIVATE_KEY_BASE64'
+export const CI_RESTORE_KEY_COMMAND = `echo "$${CI_ENCRYPTION_SECRET}" | base64 -d > .capgo_key_v2`
+
+/** Run locally to get the secret value (one line on macOS and Linux). */
+export function encryptionSecretCommand(provider: 'github' | 'other') {
+  const value = `base64 < .capgo_key_v2 | tr -d '\\n'`
+  return provider === 'github' ? `${value} | gh secret set ${CI_ENCRYPTION_SECRET}` : value
 }
 
 // Stored build credentials can carry release settings (store review, Play
@@ -84,6 +102,8 @@ export interface CiPipeline {
   content: string
   jobs: CiJob[]
   keys: CiKeySpec[]
+  /** Secrets besides the API keys, such as the encryption private key. */
+  extraSecrets: string[]
   /** True when the pipeline deletes pull request channels after the pull request closes. */
   cleansUpPreviews: boolean
 }
@@ -227,6 +247,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       secret: 'CAPGO_TOKEN',
       setup: 'build',
       command: otaUpload(appId, options.productionChannels.join(',')),
+      restoreKey: !!options.encrypted,
     }]
     if (strategy === 'main_preprod') {
       jobs.push({
@@ -236,6 +257,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
         secret: 'CAPGO_TOKEN',
         setup: 'build',
         command: otaUpload(appId, PREPROD_CHANNEL),
+        restoreKey: !!options.encrypted,
       })
     }
     if (strategy === 'pull_request') {
@@ -246,6 +268,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
         secret: 'CAPGO_PREVIEW_TOKEN',
         setup: 'build',
         command: otaUpload(appId, `${PREVIEW_CHANNEL_PREFIX}${PR}`),
+        restoreKey: !!options.encrypted,
       })
       if (ciProviderCleansUpPreviews(options.provider)) {
         jobs.push({
@@ -345,9 +368,20 @@ function yamlEnv(job: CiJob, indent: string) {
 }
 
 function setupCommands(job: CiJob) {
-  return job.setup === 'build'
-    ? ['npm ci', 'npm run build', ...(job.sync ? [`npx cap sync ${job.sync}`] : [])]
-    : ['npm ci']
+  return [
+    ...(job.setup === 'build'
+      ? ['npm ci', 'npm run build', ...(job.sync ? [`npx cap sync ${job.sync}`] : [])]
+      : ['npm ci']),
+    ...(job.restoreKey ? [CI_RESTORE_KEY_COMMAND] : []),
+  ]
+}
+
+// GitHub and Azure only expose secrets through a step's env block.
+function setupStep(command: string, indent: string, key: 'run' | 'script', secretValue: (secret: string) => string) {
+  const line = `${indent}- ${key}: ${yamlScalar(command)}`
+  return command === CI_RESTORE_KEY_COMMAND
+    ? [line, `${indent}  env:`, `${indent}    ${CI_ENCRYPTION_SECRET}: ${secretValue(CI_ENCRYPTION_SECRET)}`]
+    : [line]
 }
 
 function yamlQuote(value: string) {
@@ -403,7 +437,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       '          cache: npm',
     )
     for (const command of setupCommands(job))
-      lines.push(`      - run: ${command}`)
+      lines.push(...setupStep(command, '      ', 'run', secret => `\${{ secrets.${secret} }}`))
     lines.push(
       `      - run: ${yamlScalar(withPr(job.command, GITHUB_PR_NUMBER))}`,
       '        env:',
@@ -494,7 +528,7 @@ function renderAzure(jobs: CiJob[]) {
       `          versionSpec: ${yamlQuote('24.x')}`,
     )
     for (const command of setupCommands(job))
-      lines.push(`      - script: ${command}`)
+      lines.push(...setupStep(command, '      ', 'script', secret => `$(${secret})`))
     lines.push(
       `      - script: ${yamlScalar(withPr(job.command, '$(System.PullRequest.PullRequestId)'))}`,
       `        displayName: ${yamlScalar(job.name)}`,
@@ -569,7 +603,7 @@ function renderCircleci(jobs: CiJob[]) {
     }
     lines.push('      - checkout')
     for (const command of setupCommands(job))
-      lines.push(`      - run: ${command}`)
+      lines.push(`      - run: ${yamlScalar(command)}`)
     lines.push(
       '      - run:',
       `          name: ${yamlScalar(job.name)}`,
@@ -625,6 +659,7 @@ export function buildCiPipeline(input: CiGuideOptions): CiPipeline {
     content: `${renderers[input.provider]()}\n`,
     jobs,
     keys: ciKeysFor(input.product, input.strategy),
+    extraSecrets: jobs.some(job => job.restoreKey) ? [CI_ENCRYPTION_SECRET] : [],
     cleansUpPreviews: jobs.some(job => job.trigger.kind === 'pull_request_closed'),
   }
 }

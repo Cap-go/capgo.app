@@ -5,10 +5,13 @@ import {
   buildCiJobs,
   buildCiPipeline,
   builderCredentialsPushCommand,
+  CI_ENCRYPTION_SECRET,
   CI_PRODUCTS,
   CI_PROVIDERS,
+  CI_RESTORE_KEY_COMMAND,
   CI_STRATEGIES,
   ciKeysFor,
+  encryptionSecretCommand,
   isCiChannelSupported,
   loadCiGuideSelection,
   normalizeCiBranch,
@@ -187,6 +190,30 @@ describe('CI/CD guide pipelines', () => {
     expect(gitlab['capgo-android-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     const circleci = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' }).content)
     expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { filters: { branches: { ignore: ['main'] } } } })
+  })
+
+  it('restores the encryption key before every live update upload of an encrypted app', () => {
+    const restore = 'echo "$CAPGO_PRIVATE_KEY_BASE64" | base64 -d > .capgo_key_v2'
+    expect(CI_RESTORE_KEY_COMMAND).toBe(restore)
+    const github = buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'github', encrypted: true })
+    expect(github.extraSecrets).toEqual([CI_ENCRYPTION_SECRET])
+    const workflow = parse(github.content)
+    for (const job of ['production', 'preview']) {
+      const steps = workflow.jobs[job].steps
+      const index = steps.findIndex((step: { run?: string }) => step.run === restore)
+      expect(steps[index].env).toEqual({ CAPGO_PRIVATE_KEY_BASE64: '${{ secrets.CAPGO_PRIVATE_KEY_BASE64 }}' })
+      expect(steps.at(-1).run).toContain('bundle upload')
+      expect(index).toBe(steps.length - 2)
+    }
+    // Deleting a channel uploads nothing, so it never needs the key.
+    expect(workflow.jobs['preview-cleanup'].steps.some((step: { run?: string }) => step.run === restore)).toBe(false)
+    const azure = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'azure', encrypted: true }).content)
+    expect(azure.jobs[0].steps.find((step: { script?: string }) => step.script === restore).env).toEqual({ CAPGO_PRIVATE_KEY_BASE64: '$(CAPGO_PRIVATE_KEY_BASE64)' })
+    for (const provider of ['gitlab', 'bitbucket', 'circleci', 'other'] as const)
+      expect(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider, encrypted: true }).content, provider).toContain(restore)
+    expect(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).extraSecrets).toEqual([])
+    expect(buildCiPipeline({ ...base, product: 'builder', strategy: 'main', provider: 'github', encrypted: true }).content).not.toContain('.capgo_key_v2')
+    expect(encryptionSecretCommand('github')).toBe(`base64 < .capgo_key_v2 | tr -d '\\n' | gh secret set CAPGO_PRIVATE_KEY_BASE64`)
   })
 
   it('keeps numeric-looking branch names as strings in every provider', () => {

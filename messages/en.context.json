@@ -4363,5 +4363,11 @@
   "cicd-guide-status-error": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-waiting-ota": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-waiting-builder": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "cicd-guide-note-tester-builds": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "cicd-guide-note-tester-builds": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-encrypted": "Used in Capgo web console areas: components/dashboard. Role: checkbox label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-encrypted-detected": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-encrypted-required": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-encryption": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-gitlab-preview-encryption": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-note-encryption": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

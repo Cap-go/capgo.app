@@ -183,6 +183,19 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-strategy-main"]')).toContainText('ships a live update to the production-android, production-ios channel')
   })
 
+  test('restores the encryption key in CI when the app encrypts its bundles', async ({ page }) => {
+    await page.goto(`${fixture}&encrypted=1`)
+    await expect(page.locator('[data-test="cicd-encrypted"]')).toBeChecked()
+    await expect(page.locator('[data-test="cicd-encryption"]')).toContainText('Your latest bundle is encrypted')
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-encryption-secret"]')).toContainText(`base64 < .capgo_key_v2 | tr -d '\\n' | gh secret set CAPGO_PRIVATE_KEY_BASE64`)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('echo "$CAPGO_PRIVATE_KEY_BASE64" | base64 -d > .capgo_key_v2')
+    await expect(page.locator('[data-test="cicd-note-encryption"]')).toBeVisible()
+    await page.locator('[data-test="cicd-encrypted"]').uncheck()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('.capgo_key_v2')
+    await expect(page.locator('[data-test="cicd-encryption-secret"]')).toHaveCount(0)
+  })
+
   test('explains when only an admin can create the CI key', async ({ page }) => {
     await page.goto(`${fixture}&apikeyError=forbidden_binding`)
     await page.locator('[data-test="cicd-provider-github"]').click()
