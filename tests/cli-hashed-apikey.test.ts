@@ -73,7 +73,7 @@ describe('cli operations with hashed API key', () => {
       ignoreCompatibilityCheck: true,
     })
 
-    expect(result.success).toBe(true)
+    expect(result.success, result.error).toBe(true)
   }, 30000)
 
   it('should list bundles with hashed API key', async () => {

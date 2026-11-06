@@ -1,6 +1,8 @@
 import type { Database } from '../../utils/supabase.types.ts'
 import type { AiBumpLevelBody } from './ai_bump_level.ts'
 import type { GetLatest } from './get.ts'
+import type { UpsertBundleBody } from './upsert.ts'
+import { recordCicdDeploy } from '../../utils/cicdDetection.ts'
 import { getBodyOrQuery, honoFactory } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { aiBumpLevel } from './ai_bump_level.ts'
@@ -41,13 +43,21 @@ app.put('/', writeBundleMiddleware, async (c) => {
 app.post('/', writeBundleMiddleware, async (c) => {
   const body = await getBodyOrQuery<any>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return createBundle(c, body, apikey)
+  const response = await createBundle(c, body, apikey)
+  if (response.ok)
+    await recordCicdDeploy(c, { appId: body?.app_id, product: 'ota', apikeyRbacId: apikey?.rbac_id })
+  return response
 })
 
 app.post('/upsert', writeBundleMiddleware, async (c) => {
-  const body = await getBodyOrQuery<any>(c)
+  const body = await getBodyOrQuery<UpsertBundleBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return upsertBundle(c, body, apikey)
+  const response = await upsertBundle(c, body, apikey)
+  // The CLI sets storage_provider only after the zip and manifest uploads finish.
+  // Initial metadata creation and the intermediate TUS r2_path update are not deployments.
+  if (response.ok && (body.storage_provider === 'r2' || (body.storage_provider === 'external' && body.external_url)))
+    await recordCicdDeploy(c, { appId: body?.app_id, product: 'ota', apikeyRbacId: apikey?.rbac_id })
+  return response
 })
 
 // Server-side `bundle cleanup`: picks and soft-deletes old bundles in one request.

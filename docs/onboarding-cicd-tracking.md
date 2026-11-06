@@ -1,0 +1,117 @@
+# CI/CD onboarding tracking
+
+The console guides users to automate releases at `/app/APP_ID/ci-cd`. The
+sidebar keeps a **Set up CI/CD** entry per app until Capgo sees CI ship the app
+once, or the user says CI/CD is already set up.
+
+## When the sidebar shows it
+
+`shouldShowCiCdNav` in `src/utils/cicdSetupState.ts`, rendered by
+`GettingStartedNav.vue`:
+
+1. Getting started is no longer shown for the app (done or dismissed).
+2. The app already ships: `features.ota.succeeded_at`,
+   `features.builder.succeeded_at`, or a completed setup checklist.
+3. `apps.onboarding.cicd` has no detection and no `marked_done_at`.
+
+At most three apps are listed, the most recently active first. There is no
+dismiss button: the entry stays until CI ships once or the guide marks it set
+up.
+
+Visible tabs refresh only the three displayed CI/CD entries every 30 seconds.
+When those entries connect, the next displayed apps are checked on the next
+tick. Initial organization refreshes still cover all apps; store updates batch
+changed rows and preserve newer reads and local writes.
+
+## Stored state: `apps.onboarding.cicd`
+
+| Field | Written by | Meaning |
+| --- | --- | --- |
+| `keys`, `key_created_at`, `selection` | `record_app_cicd_setup('key_created')` | Caller-owned API keys registered for setup (max 10) and the answers chosen |
+| `marked_done_at` | `record_app_cicd_setup('marked_done')` | The user says CI/CD already ships this app |
+| `ota_detected_at`, `builder_detected_at` | `record_app_cicd_deploy` (backend) | First bundle upload / build request from CI |
+| `ota_detected_via`, `ota_ci_provider`, `builder_detected_via`, `builder_ci_provider` | `record_app_cicd_deploy` | Attribution of each product's first successful detection |
+| `detected_via`, `ci_provider` | `record_app_cicd_deploy` | Source of the first detection across either product, preserved when the other product connects |
+
+`record_app_cicd_setup` needs app read access and only tracks the caller's own
+keys. Registration is a setup hint, not proof that a key was created by the
+guide or that it was used in CI. App readers can also mark setup done
+explicitly. Neither path grants access or affects release authorization.
+`record_app_cicd_deploy` is `service_role` only.
+
+The setup RPC checks app-read permission before taking the app row lock, then
+checks the locked row's current owner again in case the app moved organizations
+while it waited. This runs at most two existing RBAC checks per RPC request, not
+once per row in a policy or view. Both app reads use the single `app_id` key
+covered by `apps_pkey` in `supabase/schemas/prod.sql`; they do not scan the app
+population. Anonymous execution stays revoked, and the existing authenticated
+and service-role grants are unchanged.
+
+## Detection
+
+`POST /bundle/upsert` calls `recordCicdDeploy` only for the final
+`storage_provider: r2` update, which the CLI sends after the zip and manifest
+uploads finish, or after an external upload supplies its URL. Metadata
+creation and intermediate TUS path updates do not count. Hosted uploads record
+after `POST /bundle/upload/complete` finalizes the artifact and assigns its
+channels. External bundle references (`POST /bundle`) and native build requests
+(`POST /build/request`) record after their successful response.
+
+The helper (`supabase/functions/_backend/utils/cicdDetection.ts`) records the
+first detection when:
+
+- the request carries `x-cli-ci` (sent by `@capgo/cli` when `ci-info` detects
+  CI), or
+- the request's API key is one of the guide keys.
+
+Older CLI versions do not send `x-cli-ci`. Their CI runs are only detected
+through a guide key, so those users can mark the step as set up from the guide.
+
+## Generated GitHub workflow authentication
+
+Generated GitHub workflows explicitly grant `GITHUB_TOKEN` only `contents: read`.
+Every checkout sets `persist-credentials: false`. Live-update push workflows use
+three jobs on separate GitHub-hosted runners:
+
+1. Build the web app and archive the project, preserving custom `webDir` paths and
+   config imports. Git history, `node_modules`, and the encryption key are excluded.
+2. Check the current branch head with a read-only `GH_TOKEN`. This runner never
+   checks out code, downloads build artifacts, or runs project scripts. Build
+   scripts cannot modify its environment or executables.
+3. When that check succeeds and the commit is current, download the exact artifact
+   ID from the build and upload it. This job has `permissions: {}`, installs config
+   dependencies with `npm ci --ignore-scripts`, and restores encryption separately.
+   It receives the app-scoped Capgo key only for the upload command.
+
+Workflow concurrency holds one branch-specific lock across all three jobs.
+Superseded commits skip deployment, API failures stop it, and an older rerun cannot
+overwrite a newer release. Pull request workflows use distinct run-ID groups so
+their existing preview and cleanup cancellation still works. Artifact IDs also
+allow a failed check to reuse its successful build on a partial rerun. Uploads
+require a check from the current run attempt. If an upload alone fails, choose
+**Re-run all jobs** to refresh the branch check; an upload-only rerun fails before
+downloading artifacts or receiving release credentials.
+
+## Protected encrypted previews
+
+The bundle encryption private key also authenticates bundles accepted by the
+app. Its authority includes production, even when the preview API key can only
+change preview channels. A trusted maintainer must review the exact preview
+commit before that code can access the private key.
+
+The guide keeps the preview API key and encryption private key together in a
+provider-protected scope:
+
+| Provider | Preview scope | Required control |
+| --- | --- | --- |
+| GitHub | `capgo-encrypted-preview` environment | Required reviewers, no self-review or administrator bypass |
+| GitLab | `capgo/pr-*` variables | Protected and Masked variables; reviewed protected source and target branches in the same project; maintainer-run manual upload and cleanup |
+| Azure | `capgo-encrypted-preview` variable group | Maintainer approval checks on the group |
+| Bitbucket | `capgo-encrypted-preview` environment | Admin-only deployment permissions and a manual preview stage |
+| CircleCI | `capgo-encrypted-preview` context | Project and maintainer-group restrictions plus an approval job |
+
+GitHub cleanup uses the same protected environment. GitLab preserves each
+preview's `capgo/pr-N` environment and stop job while requiring protected access
+for both upload and cleanup. Cleanup jobs never restore the encryption key.
+Providers or plans that cannot enforce these restrictions should use reviewed
+releases from a protected preprod branch.

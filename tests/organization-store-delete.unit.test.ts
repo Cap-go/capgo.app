@@ -337,3 +337,89 @@ describe('organization store fetchOrganizations', () => {
     expect(store.currentOrganization?.gid).toBe('org-b')
   })
 })
+
+describe('organization store onboarding refresh', () => {
+  const orgId = 'org-onboarding-refresh'
+  const mockAppIn = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIn.mockReset().mockResolvedValue({ data: [], error: null })
+    mockRpc.mockReset()
+    mockAppIn.mockReset()
+    mainStore.auth = { id: 'auth-user-123' }
+    mainStore.user = { id: 'user-123' }
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn(),
+    })
+  })
+
+  async function loadStore(count = 4) {
+    const rows = Array.from({ length: count }, (_, index) => ({
+      app_id: `com.example.refresh-${index}`,
+      owner_org: orgId,
+      name: `Refresh app ${index}`,
+      icon_url: null,
+      need_onboarding: false,
+      onboarding: { features: { ota: { succeeded_at: '2026-10-01T00:00:00.000Z' } } },
+    }))
+    mockRpc.mockResolvedValueOnce({ data: [{ gid: orgId, role: 'org_super_admin', is_invite: false, app_count: count, name: 'Refresh organization', logo: null }], error: null })
+    mockIn.mockResolvedValueOnce({ data: rows, error: null })
+    const { useOrganizationStore } = await import('../src/stores/organization.ts')
+    const store = useOrganizationStore(createPinia())
+    await store.fetchOrganizations({ loadImages: false })
+    await store.awaitInitialLoad()
+    mockIn.mockClear()
+    return { store, rows }
+  }
+
+  it('narrows periodic reads and does not republish unchanged app data', async () => {
+    const { store, rows } = await loadStore()
+    const firstId = 'com.example.refresh-0'
+    const other = store.getAppByAppId('com.example.refresh-1')
+    const row = { ...rows[0], app_id: firstId, onboarding: { cicd: { marked_done_at: '2026-11-06T12:00:00.000Z' } } }
+    mockIn.mockReturnValue({ in: mockAppIn })
+    mockAppIn.mockResolvedValue({ data: [row], error: null })
+    await store.refreshAppsOnboarding(orgId, { appIds: [firstId] })
+    expect(mockAppIn).toHaveBeenCalledWith('app_id', [firstId])
+    expect(store.getAppByAppId(firstId)?.onboarding).toEqual(row.onboarding)
+    expect(store.getAppByAppId('com.example.refresh-1')).toBe(other)
+    const catalog = store.getAppsByOrgId(orgId)
+    const current = store.getAppByAppId(firstId)
+    await store.refreshAppsOnboarding(orgId, { appIds: [firstId] })
+    expect(store.getAppsByOrgId(orgId)).toBe(catalog)
+    expect(store.getAppByAppId(firstId)).toBe(current)
+  })
+
+  it('keeps unscoped refreshes complete and publishes a large batch once', async () => {
+    const { store, rows } = await loadStore(1000)
+    mockIn.mockResolvedValueOnce({ data: rows.map(row => ({ ...row, need_onboarding: true })), error: null })
+    const onCatalogChange = vi.fn()
+    const stop = watch(() => store.getAppsByOrgId(orgId), onCatalogChange, { flush: 'sync' })
+    await store.refreshAppsOnboarding(orgId)
+    stop()
+    expect(mockIn).toHaveBeenCalledWith('owner_org', [orgId])
+    expect(mockAppIn).not.toHaveBeenCalled()
+    expect(store.getAppsByOrgId(orgId).every(app => app.need_onboarding)).toBe(true)
+    expect(onCatalogChange).toHaveBeenCalledOnce()
+  })
+
+  it('preserves newer narrow reads and local writes without discarding other app results', async () => {
+    const { store, rows } = await loadStore()
+    const { createDeferredPromise } = await import('../src/utils/promise.ts')
+    const fullRows = rows.map(row => ({ ...row, onboarding: { cicd: { marked_done_at: 'older-response' } } }))
+    const full = createDeferredPromise<{ data: typeof fullRows, error: null }>()
+    mockIn.mockReturnValueOnce(full.promise)
+    const pending = store.refreshAppsOnboarding(orgId)
+    mockIn.mockReturnValueOnce({ in: mockAppIn })
+    const firstId = 'com.example.refresh-0'
+    mockAppIn.mockResolvedValueOnce({ data: [{ ...rows[0], app_id: firstId, onboarding: { cicd: { marked_done_at: 'newer-response' } } }], error: null })
+    await store.refreshAppsOnboarding(orgId, { appIds: [firstId] })
+    store.updateAppOnboarding('com.example.refresh-2', { cicd: { marked_done_at: 'local-write' } })
+    full.resolve({ data: fullRows, error: null })
+    await pending
+    expect(store.getAppByAppId(firstId)?.onboarding).toEqual({ cicd: { marked_done_at: 'newer-response' } })
+    expect(store.getAppByAppId('com.example.refresh-1')?.onboarding).toEqual({ cicd: { marked_done_at: 'older-response' } })
+    expect(store.getAppByAppId('com.example.refresh-2')?.onboarding).toEqual({ cicd: { marked_done_at: 'local-write' } })
+  })
+})

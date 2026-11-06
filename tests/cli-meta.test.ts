@@ -93,7 +93,7 @@ describe('tests CLI metadata', () => {
       ignoreCompatibilityCheck: false,
       packageJsonPaths: packageJsonPath,
     })
-    expect(result.success).toBe(true)
+    expect(result.success, result.error).toBe(true)
 
     // Now compatibility check should show remote versions from the uploaded bundle
     // The SDK reports the currently installed dependency version from node_modules.

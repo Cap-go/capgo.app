@@ -39,6 +39,7 @@ function createContext({ apiSecret, completionHeader = false, executionCtx }: {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   runtimeKey.value = 'node'
   if (originalEdgeRuntime === undefined)
     delete runtime.EdgeRuntime
@@ -52,6 +53,16 @@ async function expectAwaited(result: unknown, task: Promise<unknown>) {
 }
 
 describe('backgroundTask on Supabase Edge Runtime', () => {
+  it('awaits each request task when the test runtime disables background functions', async () => {
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const waitUntil = vi.fn()
+    runtime.EdgeRuntime = { waitUntil }
+    const task = Promise.resolve('completed')
+
+    await expectAwaited(backgroundTask(createContext(), task), task)
+    expect(waitUntil).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['the EdgeRuntime global is absent', undefined],
     ['EdgeRuntime has no waitUntil hook', {}],

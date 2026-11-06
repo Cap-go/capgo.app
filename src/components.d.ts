@@ -84,6 +84,7 @@ declare module 'vue' {
     ChannelVersionChart: typeof import('./components/dashboard/ChannelVersionChart.vue')['default']
     ChartCard: typeof import('./components/dashboard/ChartCard.vue')['default']
     ChartLegend: typeof import('./components/dashboard/ChartLegend.vue')['default']
+    CiCdSetupGuide: typeof import('./components/dashboard/CiCdSetupGuide.vue')['default']
     CliLoginSkippedOrganizations: typeof import('./components/CliLoginSkippedOrganizations.vue')['default']
     CompatibilityBanner: typeof import('./components/dashboard/CompatibilityBanner.vue')['default']
     ConnectAppPicker: typeof import('./components/connect/ConnectAppPicker.vue')['default']
