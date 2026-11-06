@@ -363,6 +363,16 @@ app.post('/digest', middlewareAuth, async (c) => {
   return c.json(await changelogDigest(c, body))
 })
 
+/** FNV-1a hash of the releases in range: edited release notes produce a new digest cache key. */
+export function releasesFingerprint(releases: ChangelogRelease[]) {
+  let hash = 0x811C9DC5
+  for (const char of JSON.stringify(releases.map(release => [release.version, release.sections]))) {
+    hash ^= char.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(36)
+}
+
 /** Strict SemVer bound: undefined when absent, null when supplied but invalid. */
 function versionBound(value: unknown): string | null | undefined {
   if (value === undefined || value === null || value === '')
@@ -410,12 +420,14 @@ export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: 
 
   const cache = new CacheHelper(c)
   const key = cache.buildRequest(DIGEST_CACHE_PATH, {
-    v: '2',
+    v: '3',
     product,
-    // The exact release set: a digest built from partial history never outlives its recovery.
+    // The exact release set and its contents: a digest built from partial history or older notes
+    // never outlives a recovery or an edited release.
     n: String(inRange.length),
     oldest: oldestInRange,
     t: truncated ? '1' : '0',
+    h: releasesFingerprint(inRange),
     repo: source.repo,
     from: fromVersion,
     to: toVersion ?? '',

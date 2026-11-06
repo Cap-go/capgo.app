@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { aiDigest, parseAiDigest } from '../supabase/functions/_backend/private/changelog.ts'
+import { aiDigest, parseAiDigest, releasesFingerprint } from '../supabase/functions/_backend/private/changelog.ts'
 import {
   buildFallbackDigest,
   changelogSource,
@@ -211,6 +211,15 @@ describe('parseAiDigest', () => {
     expect(parseAiDigest({ response: 'not json' }, versions, '22.30.0')).toBeNull()
     expect(parseAiDigest({ response: JSON.stringify({ headline: 'x', highlights: [] }) }, versions, '22.30.0')?.highlights).toEqual([])
     expect(parseAiDigest({ response: JSON.stringify({ highlights: [] }) }, versions, '22.30.0')).toBeNull()
+  })
+})
+
+describe('releasesFingerprint', () => {
+  it('changes when release notes are edited but the range stays the same', () => {
+    const before = normalizeReleases([release('capgo-23.0.0', '## Added\n- One')], 'capgo-')
+    const after = normalizeReleases([release('capgo-23.0.0', '## Added\n- One, edited')], 'capgo-')
+    expect(releasesFingerprint(before)).toBe(releasesFingerprint(before))
+    expect(releasesFingerprint(before)).not.toBe(releasesFingerprint(after))
   })
 })
 
