@@ -33,6 +33,24 @@ export function rememberSimulator(appId: string, session: RunningSimulator, epoc
   sessions.push(session)
 }
 
+export function rememberedSessionStillRunning(httpStatus: number, sessionStatus?: string) {
+  if (httpStatus === 404)
+    return false
+  if (httpStatus < 200 || httpStatus >= 300)
+    return true
+  return sessionStatus === 'in-progress'
+}
+
+export async function sessionRemainsAfterLookup(lookup: () => Promise<{ httpStatus: number, sessionStatus?: string }>) {
+  try {
+    const result = await lookup()
+    return rememberedSessionStillRunning(result.httpStatus, result.sessionStatus)
+  }
+  catch {
+    return true
+  }
+}
+
 export function forgetSimulator(appId: string, id: string) {
   const sessions = runningSimulators(appId)
   const index = sessions.findIndex(item => item.id === id)

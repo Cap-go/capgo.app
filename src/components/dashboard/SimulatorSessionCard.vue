@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
 import { defaultApiHost, useConsole } from '../../services/console'
-import { forgetSimulator, rememberSimulator, runningSimulators, simulatorEpoch } from '../../services/simulatorSessions'
+import { forgetSimulator, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../../services/simulatorSessions'
 
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
@@ -53,23 +53,17 @@ async function refreshSessions() {
   const appId = props.appId
   const known = [...runningSimulators(appId)]
   await Promise.all(known.map(async (session) => {
-    try {
+    const remains = await sessionRemainsAfterLookup(async () => {
       const response = await fetch(`${defaultApiHost}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
         headers: { authorization: `Bearer ${await sessionToken()}` },
       })
-      if (response.status === 404) {
-        forgetSimulator(appId, session.id)
-        return
-      }
       if (!response.ok)
-        return
+        return { httpStatus: response.status }
       const payload = await response.json() as { data?: { status?: string } }
-      if (payload.data?.status !== 'in-progress')
-        forgetSimulator(appId, session.id)
-    }
-    catch {
-      // A failed lookup keeps the stop control.
-    }
+      return { httpStatus: response.status, sessionStatus: payload.data?.status }
+    })
+    if (!remains)
+      forgetSimulator(appId, session.id)
   }))
 }
 

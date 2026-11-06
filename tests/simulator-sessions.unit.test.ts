@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clearSimulatorSessions, forgetSimulator, rememberSimulator, runningSimulators, simulatorEpoch } from '../src/services/simulatorSessions'
+import { clearSimulatorSessions, forgetSimulator, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../src/services/simulatorSessions'
 
 describe('running simulator sessions', () => {
   it('keeps a session started outside the card so it can be stopped', () => {
@@ -28,5 +28,26 @@ describe('running simulator sessions', () => {
     clearSimulatorSessions()
     rememberSimulator('app-a', { id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4', url: 'https://ios-emulator.capgo.app/s/a/' }, epoch)
     expect(runningSimulators('app-a')).toHaveLength(0)
+  })
+
+  it('drops a remembered session that is gone and keeps one whose lookup fails', async () => {
+    const appId = 'app-refresh'
+    const id = '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4'
+    const session = { id, url: 'https://ios-emulator.capgo.app/s/a/' }
+    rememberSimulator(appId, session)
+    if (!await sessionRemainsAfterLookup(async () => ({ httpStatus: 404 })))
+      forgetSimulator(appId, id)
+    expect(runningSimulators(appId)).toHaveLength(0)
+    rememberSimulator(appId, session)
+    if (!await sessionRemainsAfterLookup(async () => ({ httpStatus: 200, sessionStatus: 'stopped' })))
+      forgetSimulator(appId, id)
+    expect(runningSimulators(appId)).toHaveLength(0)
+    rememberSimulator(appId, session)
+    const failed = await sessionRemainsAfterLookup(async () => {
+      throw new Error('offline')
+    })
+    expect(failed).toBe(true)
+    expect(runningSimulators(appId)).toHaveLength(1)
+    forgetSimulator(appId, id)
   })
 })
