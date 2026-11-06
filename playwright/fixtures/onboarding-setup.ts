@@ -78,8 +78,12 @@ const cicdLedger = ref<Record<string, unknown> | undefined>(params.get('cicd') =
     ? { marked_done_at: '2026-11-05T10:00:00.000Z' }
     : undefined)
 const cicdSetupCalls: Array<Record<string, unknown>> = []
-if (cicdView && params.get('defaultChannel') !== '0')
-  state.channels.push({ id: 1, app_id: previewAppId, name: params.get('defaultChannel') ?? 'production', public: true })
+if (cicdView && params.get('defaultChannel') !== '0') {
+  // `defaultChannels=a|b` gives each platform its own default channel.
+  const names = params.get('defaultChannels')?.split('|') ?? [params.get('defaultChannel') ?? 'production']
+  for (const [index, name] of names.entries())
+    state.channels.push({ id: index + 1, app_id: previewAppId, name, public: true })
+}
 if (params.get('checklistState') === 'completed') {
   for (const id of ['login_cli_mcp', 'add_updater', 'add_code', 'add_channel', 'run_device', 'upload_bundle', 'test_update'])
     state.steps[id] = { status: id === 'add_code' ? 'skipped' : 'done' }

@@ -33,8 +33,11 @@ export interface CiGuideOptions {
   provider: CiProvider
   /** Builder only: platforms to build. */
   platforms?: readonly CiPlatform[]
-  /** Live updates only: the app's default channel. */
-  productionChannel?: string
+  /**
+   * Live updates only: the app's default channels. Apps can have one default
+   * channel per platform; CI uploads to all of them (`--channel a,b`).
+   */
+  productionChannels?: readonly string[]
   productionBranch?: string
   preprodBranch?: string
 }
@@ -110,6 +113,12 @@ export function normalizeCiChannel(value: string | null | undefined) {
   return value || DEFAULT_PRODUCTION_CHANNEL
 }
 
+/** The app's default channels, de-duplicated in a stable order; production when there is none. */
+export function normalizeCiChannels(values: readonly (string | null | undefined)[] | null | undefined) {
+  const channels = [...new Set((values ?? []).filter((value): value is string => !!value))].sort((a, b) => a.localeCompare(b))
+  return channels.length ? channels : [DEFAULT_PRODUCTION_CHANNEL]
+}
+
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/
 
@@ -126,7 +135,8 @@ export function isCiChannelSupported(name: string) {
 const SHELL_QUOTE_ESCAPE = String.raw`'\''`
 
 function shellArg(value: string) {
-  if (/^[\w./@%+=:-]+$/.test(value))
+  // Commas are plain shell characters; the CLI splits --channel on them.
+  if (/^[\w./@%+=:,-]+$/.test(value))
     return value
   return `'${value.replaceAll('\'', SHELL_QUOTE_ESCAPE)}'`
 }
@@ -189,7 +199,7 @@ function resolved(options: CiGuideOptions) {
   return {
     ...options,
     platforms: platforms.length ? platforms : [...CI_PLATFORMS],
-    productionChannel: normalizeCiChannel(options.productionChannel),
+    productionChannels: normalizeCiChannels(options.productionChannels),
     productionBranch: normalizeCiBranch(options.productionBranch, DEFAULT_PRODUCTION_BRANCH),
     preprodBranch: normalizeCiBranch(options.preprodBranch, DEFAULT_PREPROD_BRANCH),
   }
@@ -212,11 +222,11 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
   if (options.product === 'ota') {
     const jobs: CiJob[] = [{
       id: 'production',
-      name: `Upload live update to ${options.productionChannel}`,
+      name: `Upload live update to ${options.productionChannels.join(', ')}`,
       trigger: production,
       secret: 'CAPGO_TOKEN',
       setup: 'build',
-      command: otaUpload(appId, options.productionChannel),
+      command: otaUpload(appId, options.productionChannels.join(',')),
     }]
     if (strategy === 'main_preprod') {
       jobs.push({

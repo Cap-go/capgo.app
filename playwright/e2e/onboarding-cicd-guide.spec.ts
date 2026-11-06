@@ -176,6 +176,13 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-mark-done"]')).toHaveCount(0)
   })
 
+  test('ships to every default channel when each platform has its own', async ({ page }) => {
+    await page.goto(`${fixture}&defaultChannels=production-ios|production-android`)
+    await page.locator('[data-test="cicd-provider-gitlab"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText(`bundle upload ${appId} --channel production-android,production-ios --auto-bump patch`)
+    await expect(page.locator('[data-test="cicd-strategy-main"]')).toContainText('ships a live update to the production-android, production-ios channel')
+  })
+
   test('explains when only an admin can create the CI key', async ({ page }) => {
     await page.goto(`${fixture}&apikeyError=forbidden_binding`)
     await page.locator('[data-test="cicd-provider-github"]').click()

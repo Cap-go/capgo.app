@@ -45,6 +45,7 @@ import {
   isCiChannelSupported,
   loadCiGuideSelection,
   normalizeCiBranch,
+  normalizeCiChannels,
   previewCleanupCommand,
   saveCiGuideSelection,
 } from '~/utils/cicdSetupGuide'
@@ -76,11 +77,14 @@ const productionBranchInvalid = computed(() => productionBranchInput.value.trim(
 const preprodBranchInvalid = computed(() => preprodBranchInput.value.trim() !== preprodBranch.value)
 
 // undefined while loading; null when the app has no default channel yet.
-const defaultChannel = ref<string | null | undefined>(undefined)
-const productionChannel = computed(() => defaultChannel.value ?? 'production')
+// Apps can have one default channel per platform: CI uploads to all of them.
+const defaultChannels = ref<string[] | null | undefined>(undefined)
+const productionChannels = computed(() => normalizeCiChannels(defaultChannels.value))
+const productionChannel = computed(() => productionChannels.value.join(', '))
 
 // Never swap in another channel: CI would ship to a channel the user didn't pick.
-const channelUnsupported = computed(() => product.value === 'ota' && !isCiChannelSupported(productionChannel.value))
+const unsupportedChannel = computed(() => productionChannels.value.find(channel => !isCiChannelSupported(channel)))
+const channelUnsupported = computed(() => product.value === 'ota' && unsupportedChannel.value !== undefined)
 const pipeline = computed(() => provider.value && !channelUnsupported.value
   ? buildCiPipeline({
       appId: props.appId,
@@ -88,7 +92,7 @@ const pipeline = computed(() => provider.value && !channelUnsupported.value
       strategy: strategy.value,
       provider: provider.value,
       platforms: platforms.value,
-      productionChannel: productionChannel.value,
+      productionChannels: productionChannels.value,
       productionBranch: productionBranch.value,
       preprodBranch: preprodBranch.value,
     })
@@ -214,16 +218,17 @@ async function createKey(spec: CiKeySpec) {
 
 async function loadDefaultChannel() {
   const appId = props.appId
+  // One default channel per platform at most, so this list stays tiny.
   const { data, error } = await capgo
     .from('channels')
     .select('name')
     .eq('app_id', appId)
     .eq('public', true)
-    .limit(1)
   if (appId !== props.appId)
     return
   // On a read error keep the conventional name instead of warning about a missing channel.
-  defaultChannel.value = error ? 'production' : (data?.[0]?.name ?? null)
+  const names = (data ?? []).map(row => row.name).filter((name): name is string => !!name)
+  defaultChannels.value = error ? ['production'] : (names.length ? names : null)
 }
 
 // CI/CD state from apps.onboarding.cicd. The backend fills the detection fields
@@ -488,7 +493,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <output v-if="provider && channelUnsupported" class="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-channel-unsupported">
         <IconTriangleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <span class="min-w-0 flex-1">
-          {{ t('cicd-guide-channel-unsupported', { channel: productionChannel }) }}
+          {{ t('cicd-guide-channel-unsupported', { channel: unsupportedChannel }) }}
           <RouterLink :to="`/app/${encodeURIComponent(appId)}/channels`" class="ml-1 font-medium underline underline-offset-4">{{ t('cicd-guide-open-channels') }}</RouterLink>
         </span>
       </output>
@@ -507,7 +512,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
         </p>
       </div>
 
-      <output v-if="product === 'ota' && defaultChannel === null" class="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-no-default-channel">
+      <output v-if="product === 'ota' && defaultChannels === null" class="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-no-default-channel">
         <IconTriangleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <span class="min-w-0 flex-1">{{ t('cicd-guide-no-default-channel') }}</span>
         <RouterLink :to="checklistPath" class="font-medium underline underline-offset-4">
