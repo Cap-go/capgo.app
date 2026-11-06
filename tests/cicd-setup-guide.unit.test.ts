@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { execFile } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -61,7 +61,8 @@ describe('CI/CD guide pipelines', () => {
     expect(workflow.env).toBeUndefined()
     for (const job of Object.values<{ env?: unknown, steps: { uses?: string, id?: string, with?: { 'persist-credentials'?: boolean }, env?: Record<string, string> }[] }>(workflow.jobs)) {
       expect(job.env).toBeUndefined()
-      expect(job.steps.find(step => step.uses === 'actions/checkout@v6')?.with?.['persist-credentials']).toBe(false)
+      for (const checkout of job.steps.filter(step => step.uses === 'actions/checkout@v6'))
+        expect(checkout.with?.['persist-credentials']).toBe(false)
       for (const step of job.steps) {
         if (step.id === 'release_head')
           expect(step.env).toEqual({ GH_TOKEN: '${{ github.token }}' })
@@ -78,11 +79,10 @@ describe('CI/CD guide pipelines', () => {
     expect(workflow.on).toEqual({ push: { branches: ['main'] } })
     expect(pipeline.content).toContain("branches: ['main']")
     const steps = workflow.jobs.production.steps
-    expect(steps.filter((step: { id?: string }) => step.id !== 'release_head').map((step: { run?: string }) => step.run).filter(Boolean)).toEqual([
-      'npm ci',
-      'npm run build',
-      'npx @capgo/cli@latest bundle upload com.example.app --channel stable --auto-bump patch --fail-on-incompatible',
-    ])
+    expect(workflow.jobs.production_build.steps.filter((step: { run?: string }) => step.run).slice(0, 2).map((step: { run: string }) => step.run)).toEqual(['npm ci', 'npm run build'])
+    expect(steps.at(-1).run).toBe('npx @capgo/cli@latest bundle upload com.example.app --channel stable --auto-bump patch --fail-on-incompatible')
+    expect(steps.some((step: { run?: string }) => step.run === 'npm ci --ignore-scripts')).toBe(true)
+    expect(steps.some((step: { run?: string }) => step.run === 'npm run build')).toBe(false)
     expect(steps.at(-1).env).toEqual({ CAPGO_TOKEN: '${{ secrets.CAPGO_TOKEN }}' })
     expect(pipeline.keys).toEqual([{ secret: 'CAPGO_TOKEN', role: 'app_uploader', purpose: 'release' }])
   })
@@ -96,9 +96,10 @@ describe('CI/CD guide pipelines', () => {
   it('keeps release credentials in provider scopes that can restrict branch access', () => {
     for (const product of CI_PRODUCTS) {
       const options = { ...base, product, strategy: 'pull_request' } as const
-      const github = parse(buildCiPipeline({ ...options, provider: 'github' }).content)
-      for (const [id, job] of Object.entries<{ environment?: string }>(github.jobs))
-        expect(job.environment, id).toBe(id.includes('preview') ? product === 'builder' ? BUILDER_PREVIEW_SCOPE : undefined : 'capgo-release')
+      const githubPipeline = buildCiPipeline({ ...options, provider: 'github' })
+      const github = parse(githubPipeline.content)
+      for (const { id } of githubPipeline.jobs)
+        expect(github.jobs[id].environment, id).toBe(id.includes('preview') ? product === 'builder' ? BUILDER_PREVIEW_SCOPE : undefined : 'capgo-release')
       const bitbucket = parse(buildCiPipeline({ ...options, provider: 'bitbucket', platforms: ['ios'] }).content)
       expect(bitbucket.pipelines.branches.main[0].step.environment).toBe('capgo-release')
       if (product === 'ota')
@@ -312,10 +313,8 @@ describe('CI/CD guide pipelines', () => {
       expect(steps[index].env).toEqual({ CAPGO_PRIVATE_KEY_BASE64: '${{ secrets.CAPGO_PRIVATE_KEY_BASE64 }}' })
       expect(steps.at(-1).run).toContain('bundle upload')
       expect(index).toBeLessThan(steps.length - 1)
-      const guard = steps.findIndex((step: { id?: string }) => step.id === 'release_head')
-      if (guard >= 0)
-        expect(guard).toBeGreaterThan(index)
     }
+    expect(workflow.jobs.production_build.steps.some((step: { run?: string }) => step.run === restore)).toBe(false)
     // Deleting a channel uploads nothing, so it never needs the key.
     expect(workflow.jobs['preview-cleanup'].steps.some((step: { run?: string }) => step.run === restore)).toBe(false)
     const azure = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'azure', encrypted: true }).content)
@@ -342,8 +341,8 @@ describe('CI/CD guide pipelines', () => {
     const concurrency = { group: 'capgo-preview-${{ github.event.pull_request.number }}', 'cancel-in-progress': true }
     expect(github.jobs.preview.concurrency).toEqual(concurrency)
     expect(github.jobs['preview-cleanup'].concurrency).toEqual(concurrency)
-    expect(github.jobs.production.concurrency).toEqual({
-      group: 'capgo-release-com.example.app-${{ github.workflow }}-${{ github.ref }}',
+    expect(github.concurrency).toEqual({
+      group: 'capgo-release-com.example.app-${{ github.workflow }}-${{ github.event_name == \'push\' && github.ref || github.run_id }}',
       'cancel-in-progress': false,
       queue: 'max',
     })
@@ -354,21 +353,46 @@ describe('CI/CD guide pipelines', () => {
     expect(parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'github' }).content).jobs['ios-preview'].concurrency).toBeUndefined()
   })
 
-  it('guards every GitHub live-update release without changing preview coordination', () => {
+  it('isolates every GitHub live-update branch check between building and uploading', () => {
     for (const strategy of CI_STRATEGIES) {
       const pipeline = buildCiPipeline({ ...base, product: 'ota', strategy, provider: 'github' })
       const github = parse(pipeline.content)
       for (const job of pipeline.jobs) {
         const rendered = github.jobs[job.id]
-        const guard = rendered.steps.findIndex((step: { id?: string }) => step.id === 'release_head')
         if (job.trigger.kind === 'push') {
-          expect(rendered.concurrency['cancel-in-progress']).toBe(false)
-          expect(rendered.concurrency.queue).toBe('max')
-          expect(guard).toBe(rendered.steps.length - 2)
-          expect(rendered.steps.at(-1).if).toBe("steps.release_head.outputs.current == 'true'")
+          const buildId = `${job.id}_build`
+          const headId = `${job.id}_head`
+          const build = github.jobs[buildId]
+          const head = github.jobs[headId]
+          expect(github.concurrency['cancel-in-progress']).toBe(false)
+          expect(github.concurrency.queue).toBe('max')
+          expect(build['runs-on']).toBe('ubuntu-latest')
+          expect(build.environment).toBeUndefined()
+          expect(build.outputs.artifact_id).toBe('${{ steps.archive.outputs.artifact-id }}')
+          const archive = build.steps.at(-1)
+          expect(archive.uses).toBe('actions/upload-artifact@v7')
+          expect(archive.with.overwrite).toBe(true)
+          expect(head.needs).toBe(buildId)
+          expect(head['runs-on']).toBe('ubuntu-latest')
+          expect(head.steps).toHaveLength(1)
+          expect(head.steps[0].id).toBe('release_head')
+          expect(head.steps[0].env).toEqual({ GH_TOKEN: '${{ github.token }}' })
+          expect(head.steps[0].uses).toBeUndefined()
+          expect(head.steps[0].run).not.toMatch(/npm|npx|tar|checkout|artifact/)
+          expect(head.outputs.current).toBe('${{ steps.release_head.outputs.current }}')
+          expect(head.outputs.check_attempt).toBe('${{ steps.release_head.outputs.check_attempt }}')
+          expect(rendered.needs).toEqual([buildId, headId])
+          expect(rendered.if).toBe(`needs.${headId}.outputs.current == 'true'`)
+          expect(rendered.permissions).toEqual({})
+          expect(rendered.steps[0].env).toEqual({ CHECK_ATTEMPT: `\${{ needs.${headId}.outputs.check_attempt }}` })
+          expect(rendered.steps[1]).toEqual({
+            uses: 'actions/download-artifact@v8',
+            with: { 'artifact-ids': `\${{ needs.${buildId}.outputs.artifact_id }}`, path: '${{ runner.temp }}/capgo-release' },
+          })
+          expect(rendered.steps.some((step: { uses?: string }) => step.uses === 'actions/checkout@v6')).toBe(false)
         }
         else {
-          expect(guard).toBe(-1)
+          expect(rendered.steps.some((step: { id?: string }) => step.id === 'release_head')).toBe(false)
         }
       }
     }
@@ -376,7 +400,7 @@ describe('CI/CD guide pipelines', () => {
 
   it('authenticates the branch check without Git credentials, skips superseded commits, and fails closed on API errors', async () => {
     const github = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
-    const guard = github.jobs.production.steps.find((step: { id?: string }) => step.id === 'release_head')
+    const guard = github.jobs.production_head.steps[0]
     expect(guard.shell).toBe('bash')
     const directory = mkdtempSync(join(tmpdir(), 'capgo-release-order-'))
     const newer = 'b'.repeat(40)
@@ -409,6 +433,7 @@ describe('CI/CD guide pipelines', () => {
       GITHUB_API_URL: `http://127.0.0.1:${address.port}`,
       GITHUB_REPOSITORY: 'example/app',
       GITHUB_REF: 'refs/heads/release/stable',
+      GITHUB_RUN_ATTEMPT: '1',
     }
     try {
       const older = 'a'.repeat(40)
@@ -418,7 +443,7 @@ describe('CI/CD guide pipelines', () => {
           cwd: directory,
           env: { ...guardEnv, GITHUB_SHA: sha, GITHUB_OUTPUT: output },
         })
-        expect(readFileSync(output, 'utf8').trim()).toBe(`current=${expected}`)
+        expect(readFileSync(output, 'utf8').trim()).toBe(`check_attempt=1\ncurrent=${expected}`)
       }
       expect(requests).toEqual(Array.from({ length: 2 }, () => ({ path: '/repos/example/app/git/ref/heads/release/stable', authenticated: true })))
       for (const overrides of [{ GITHUB_REF: 'refs/heads/missing' }, { GH_TOKEN: 'invalid-fixture-token', GH_ENTERPRISE_TOKEN: 'invalid-fixture-token' }]) {
@@ -432,6 +457,65 @@ describe('CI/CD guide pipelines', () => {
     }
     finally {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('requires a branch check from the current attempt before an upload-only rerun', async () => {
+    const workflow = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
+    const check = workflow.jobs.production.steps[0]
+    expect(check.shell).toBe('bash')
+    const run = (checked: string, current: string) => runFile('bash', ['-e', '-o', 'pipefail', '-c', check.run], {
+      env: { ...env, CHECK_ATTEMPT: checked, GITHUB_RUN_ATTEMPT: current },
+    })
+    await expect(run('1', '1')).resolves.toMatchObject({ stdout: '' })
+    await expect(run('1', '2')).rejects.toMatchObject({ stdout: expect.stringContaining('Re-run all jobs') })
+    await expect(run('', '2')).rejects.toMatchObject({ stdout: expect.stringContaining('Re-run all jobs') })
+    await expect(run('2', '2')).resolves.toMatchObject({ stdout: '' })
+  })
+
+  it('transfers a custom web output and config without Git history, dependencies, or private keys', async () => {
+    const workflow = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
+    const archive = workflow.jobs.production_build.steps.find((step: { run?: string }) => step.run?.startsWith('tar ')).run
+    const restore = workflow.jobs.production.steps.find((step: { run?: string }) => step.run?.startsWith('tar ')).run
+    const install = workflow.jobs.production.steps.find((step: { run?: string }) => step.run?.startsWith('npm ci')).run
+    const directory = mkdtempSync(join(tmpdir(), 'capgo-release-artifact-'))
+    const project = join(directory, 'project')
+    const deployment = join(directory, 'deployment')
+    const temporary = join(directory, 'temporary')
+    try {
+      for (const path of ['.git', 'node_modules/example', 'web/custom', '.config'])
+        mkdirSync(join(project, path), { recursive: true })
+      mkdirSync(deployment)
+      mkdirSync(join(temporary, 'capgo-release'), { recursive: true })
+      writeFileSync(join(project, 'web/custom/index.html'), '<p>Built app</p>')
+      writeFileSync(join(project, 'web/custom/script.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      writeFileSync(join(project, 'capacitor.config.ts'), 'export default { webDir: "web/custom" }\n')
+      writeFileSync(join(project, '.config/channel.json'), '{"channel":"stable"}')
+      writeFileSync(join(project, '.git/config'), 'fixture git configuration')
+      writeFileSync(join(project, 'node_modules/example/index.js'), 'fixture dependency')
+      writeFileSync(join(project, '.capgo_key_v2'), 'fixture private key')
+      const name = 'cicd-artifact-fixture'
+      const version = '1.0.0'
+      writeFileSync(join(project, 'package.json'), JSON.stringify({
+        name,
+        version,
+        scripts: { postinstall: 'node -e "require(\'node:fs\').writeFileSync(\'web/custom/index.html\', \'Changed by install\')"' },
+      }))
+      writeFileSync(join(project, 'package-lock.json'), JSON.stringify({ name, version, lockfileVersion: 3, packages: { '': { name, version, hasInstallScript: true } } }))
+      const commandEnv = { ...env, RUNNER_TEMP: temporary, npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
+      await runFile('bash', ['-e', '-o', 'pipefail', '-c', archive], { cwd: project, env: commandEnv })
+      copyFileSync(join(temporary, 'capgo-release.tar.gz'), join(temporary, 'capgo-release/capgo-release.tar.gz'))
+      await runFile('bash', ['-e', '-o', 'pipefail', '-c', restore], { cwd: deployment, env: commandEnv })
+      for (const path of ['.git', 'node_modules', '.capgo_key_v2'])
+        expect(existsSync(join(deployment, path)), path).toBe(false)
+      await runFile('bash', ['-e', '-o', 'pipefail', '-c', install], { cwd: deployment, env: commandEnv })
+      expect(readFileSync(join(deployment, 'web/custom/index.html'), 'utf8')).toBe('<p>Built app</p>')
+      expect(readFileSync(join(deployment, 'capacitor.config.ts'), 'utf8')).toContain('web/custom')
+      expect(readFileSync(join(deployment, '.config/channel.json'), 'utf8')).toBe('{"channel":"stable"}')
+      expect(statSync(join(deployment, 'web/custom/script.sh')).mode & 0o777).toBe(0o755)
+    }
+    finally {
       rmSync(directory, { recursive: true, force: true })
     }
   })

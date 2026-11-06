@@ -425,9 +425,108 @@ function yamlQuote(value: string) {
 const GITHUB_PR_NUMBER = '$' + '{{ github.event.pull_request.number }}'
 const GITHUB_BASE_REF = '$' + '{{ github.event.pull_request.base.ref }}'
 const GITHUB_WORKFLOW = '$' + '{{ github.workflow }}'
-const GITHUB_REF = '$' + '{{ github.ref }}'
+const GITHUB_RELEASE_GROUP_REF = '$' + '{{ github.event_name == \'push\' && github.ref || github.run_id }}'
+const GITHUB_NODE_STEPS = [
+  '      - uses: actions/setup-node@v6',
+  '        with:',
+  '          node-version: 24',
+  '          cache: npm',
+]
 // GitHub repositories provide a PR number; Azure Repos provides a PR id.
 const AZURE_PR_NUMBER = '$' + '{SYSTEM_PULLREQUEST_PULLREQUESTNUMBER:-$SYSTEM_PULLREQUEST_PULLREQUESTID}'
+
+function githubCheckoutSteps(job: CiJob) {
+  return [
+    '      - uses: actions/checkout@v6',
+    '        with:',
+    '          persist-credentials: false',
+    // A closed pull request can lose its merge ref; the base branch always has the config.
+    ...(job.trigger.kind === 'pull_request_closed' ? [`          ref: ${GITHUB_BASE_REF}`] : []),
+  ]
+}
+
+/** Keep the authenticated branch check on a fresh runner with no project code or artifacts. */
+function githubReleaseJobs(job: CiJob, condition: string) {
+  const buildId = `${job.id}_build`
+  const headId = `${job.id}_head`
+  return [
+    `  ${buildId}:`,
+    `    name: Build web app for ${job.id}`,
+    `    if: ${condition}`,
+    '    runs-on: ubuntu-latest',
+    '    outputs:',
+    `      artifact_id: \${{ steps.archive.outputs.artifact-id }}`,
+    '    steps:',
+    ...githubCheckoutSteps(job),
+    ...GITHUB_NODE_STEPS,
+    '      - run: npm ci',
+    '      - run: npm run build',
+    '      # Preserve custom webDir paths and Capacitor config without checkout credentials.',
+    '      - run: tar --exclude=.git --exclude=node_modules --exclude=.capgo_key_v2 -czf "$RUNNER_TEMP/capgo-release.tar.gz" .',
+    '      - uses: actions/upload-artifact@v7',
+    '        id: archive',
+    '        with:',
+    `          name: capgo-${job.id}`,
+    `          path: \${{ runner.temp }}/capgo-release.tar.gz`,
+    '          if-no-files-found: error',
+    '          overwrite: true',
+    '          retention-days: 1',
+    '',
+    `  ${headId}:`,
+    `    name: Check latest commit for ${job.id}`,
+    `    needs: ${buildId}`,
+    '    runs-on: ubuntu-latest',
+    '    outputs:',
+    `      current: \${{ steps.release_head.outputs.current }}`,
+    `      check_attempt: \${{ steps.release_head.outputs.check_attempt }}`,
+    '    steps:',
+    '      # This runner never checks out, downloads, or executes project files.',
+    '      - name: Check release commit is still the branch head',
+    '        id: release_head',
+    '        shell: bash',
+    '        env:',
+    `          GH_TOKEN: \${{ github.token }}`,
+    '        run: |',
+    `          latest="$(gh api "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/ref/\${GITHUB_REF#refs/}" --jq .object.sha)"`,
+    '          echo "check_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"',
+    '          if [ "$latest" = "$GITHUB_SHA" ]; then',
+    '            echo "current=true" >> "$GITHUB_OUTPUT"',
+    '          else',
+    '            echo "current=false" >> "$GITHUB_OUTPUT"',
+    '            echo "Skipping this release because the branch has a newer commit."',
+    '          fi',
+    '',
+    `  ${job.id}:`,
+    `    name: ${yamlScalar(job.name)}`,
+    `    needs: [${buildId}, ${headId}]`,
+    `    if: needs.${headId}.outputs.current == 'true'`,
+    '    runs-on: ubuntu-latest',
+    '    permissions: {}',
+    '    environment: capgo-release',
+    '    steps:',
+    '      - name: Require a fresh branch check for this attempt',
+    '        shell: bash',
+    '        env:',
+    `          CHECK_ATTEMPT: \${{ needs.${headId}.outputs.check_attempt }}`,
+    '        run: |',
+    '          if [ "$CHECK_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then',
+    '            echo "::error::Re-run all jobs so the branch check runs again before deployment."',
+    '            exit 1',
+    '          fi',
+    '      - uses: actions/download-artifact@v8',
+    '        with:',
+    `          artifact-ids: \${{ needs.${buildId}.outputs.artifact_id }}`,
+    `          path: \${{ runner.temp }}/capgo-release`,
+    '      - run: tar -xzf "$RUNNER_TEMP/capgo-release/capgo-release.tar.gz"',
+    ...GITHUB_NODE_STEPS,
+    '      # Config imports need dependencies, but install scripts must not rebuild the artifact.',
+    '      - run: npm ci --ignore-scripts',
+    ...(job.restoreKey ? setupStep(CI_RESTORE_KEY_COMMAND, '      ', 'run', secret => `\${{ secrets.${secret} }}`) : []),
+    `      - run: ${yamlScalar(job.command)}`,
+    '        env:',
+    `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
+  ]
+}
 
 function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptions) {
   const branches = pushBranches(jobs)
@@ -441,11 +540,15 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
     if (hasCleanup)
       lines.push('    types: [opened, synchronize, reopened, closed]')
   }
-  lines.push('', 'permissions:', '  contents: read', '', 'jobs:')
+  lines.push('', 'permissions:', '  contents: read')
+  if (options.product === 'ota') {
+    // Hold one lock across build, isolated check, and upload. PRs keep their job-level cancellation.
+    lines.push('', 'concurrency:', `  group: capgo-release-${options.appId}-${GITHUB_WORKFLOW}-${GITHUB_RELEASE_GROUP_REF}`, '  cancel-in-progress: false', '  queue: max')
+  }
+  lines.push('', 'jobs:')
   // Fork pull requests get no secrets, so they skip instead of failing.
   const sameRepo = 'github.event.pull_request.head.repo.full_name == github.repository'
   jobs.forEach((job, index) => {
-    const guardRelease = options.product === 'ota' && job.trigger.kind === 'push'
     let condition: string
     if (job.trigger.kind === 'push')
       condition = `github.event_name == 'push' && github.ref_name == '${job.trigger.branch}'`
@@ -453,58 +556,32 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
       condition = `github.event_name == 'pull_request' && github.event.action != 'closed' && ${sameRepo}`
     else
       condition = `github.event_name == 'pull_request' && github.event.action == 'closed' && ${sameRepo}`
+    if (index > 0)
+      lines.push('')
+    if (options.product === 'ota' && job.trigger.kind === 'push') {
+      lines.push(...githubReleaseJobs(job, condition))
+      return
+    }
     lines.push(
-      ...(index > 0 ? [''] : []),
       `  ${job.id}:`,
       `    name: ${yamlScalar(job.name)}`,
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
       ...(job.trigger.kind === 'push' ? ['    environment: capgo-release'] : []),
       ...(isBuilderPreview(job) ? [`    environment: ${BUILDER_PREVIEW_SCOPE}`] : []),
-      ...(guardRelease
-        ? ['    concurrency:', `      group: capgo-release-${options.appId}-${GITHUB_WORKFLOW}-${GITHUB_REF}`, '      cancel-in-progress: false', '      queue: max']
-        : []),
       // Without this, cleanup can finish before an in-flight preview upload,
       // which then recreates the deleted channel. Closing cancels the upload.
       ...(hasCleanup && job.trigger.kind !== 'push'
         ? ['    concurrency:', `      group: capgo-preview-${GITHUB_PR_NUMBER}`, '      cancel-in-progress: true']
         : []),
       '    steps:',
-      '      - uses: actions/checkout@v6',
-      '        with:',
-      '          persist-credentials: false',
-      // A closed pull request can lose its merge ref; the base branch always has the config.
-      ...(job.trigger.kind === 'pull_request_closed' ? [`          ref: ${GITHUB_BASE_REF}`] : []),
-      '      - uses: actions/setup-node@v6',
-      '        with:',
-      '          node-version: 24',
-      '          cache: npm',
+      ...githubCheckoutSteps(job),
+      ...GITHUB_NODE_STEPS,
     )
     for (const command of setupCommands(job))
       lines.push(...setupStep(command, '      ', 'run', secret => `\${{ secrets.${secret} }}`))
-    // Concurrency is not commit-ordered, and old runs can be rerun manually.
-    // Check after building, immediately before the upload can promote a channel.
-    if (guardRelease) {
-      lines.push(
-        '      # Only this API check receives the read-only GitHub token.',
-        '      - name: Check release commit is still the branch head',
-        '        id: release_head',
-        '        shell: bash',
-        '        env:',
-        `          GH_TOKEN: \${{ github.token }}`,
-        '        run: |',
-        `          latest="$(gh api "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/ref/\${GITHUB_REF#refs/}" --jq .object.sha)"`,
-        '          if [ "$latest" = "$GITHUB_SHA" ]; then',
-        '            echo "current=true" >> "$GITHUB_OUTPUT"',
-        '          else',
-        '            echo "current=false" >> "$GITHUB_OUTPUT"',
-        '            echo "Skipping this release because the branch has a newer commit."',
-        '          fi',
-      )
-    }
     lines.push(
       `      - run: ${yamlScalar(withPr(job.command, GITHUB_PR_NUMBER))}`,
-      ...(guardRelease ? ['        if: steps.release_head.outputs.current == \'true\''] : []),
       '        env:',
       `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
       ...yamlEnv(job, '          '),

@@ -239,7 +239,7 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('echo "$CAPGO_PRIVATE_KEY_BASE64" | base64 -d > .capgo_key_v2')
     await expect(page.locator('[data-test="cicd-note-encryption"]')).toBeVisible()
     await page.locator('[data-test="cicd-encrypted"]').uncheck()
-    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('.capgo_key_v2')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('base64 -d > .capgo_key_v2')
     await expect(page.locator('[data-test="cicd-encryption-secret"]')).toHaveCount(0)
   })
 

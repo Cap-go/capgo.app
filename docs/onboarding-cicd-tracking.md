@@ -62,8 +62,24 @@ through a guide key, so those users can mark the step as set up from the guide.
 ## Generated GitHub workflow authentication
 
 Generated GitHub workflows explicitly grant `GITHUB_TOKEN` only `contents: read`.
-Every checkout sets `persist-credentials: false`, so dependency installation and
-build scripts do not inherit checkout credentials. After the build, the
-release-head guard receives `GH_TOKEN` through its own step environment and reads
-the branch through the GitHub API. This also authenticates private repositories
-without writing the token to Git configuration or passing it to other steps.
+Every checkout sets `persist-credentials: false`. Live-update push workflows use
+three jobs on separate GitHub-hosted runners:
+
+1. Build the web app and archive the project, preserving custom `webDir` paths and
+   config imports. Git history, `node_modules`, and the encryption key are excluded.
+2. Check the current branch head with a read-only `GH_TOKEN`. This runner never
+   checks out code, downloads build artifacts, or runs project scripts. Build
+   scripts cannot modify its environment or executables.
+3. When that check succeeds and the commit is current, download the exact artifact
+   ID from the build and upload it. This job has `permissions: {}`, installs config
+   dependencies with `npm ci --ignore-scripts`, and restores encryption separately.
+   It receives the app-scoped Capgo key only for the upload command.
+
+Workflow concurrency holds one branch-specific lock across all three jobs.
+Superseded commits skip deployment, API failures stop it, and an older rerun cannot
+overwrite a newer release. Pull request workflows use distinct run-ID groups so
+their existing preview and cleanup cancellation still works. Artifact IDs also
+allow a failed check to reuse its successful build on a partial rerun. Uploads
+require a check from the current run attempt. If an upload alone fails, choose
+**Re-run all jobs** to refresh the branch check; an upload-only rerun fails before
+downloading artifacts or receiving release credentials.
