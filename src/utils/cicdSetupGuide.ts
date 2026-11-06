@@ -356,7 +356,7 @@ function sameTrigger(a: CiTrigger, b: CiTrigger) {
 }
 
 function groupByTrigger(jobs: CiJob[]) {
-  const groups: Array<{ trigger: CiTrigger, jobs: CiJob[] }> = []
+  const groups: Array<{ trigger: CiTrigger, jobs: [CiJob, ...CiJob[]] }> = []
   for (const job of jobs) {
     const group = groups.find(entry => sameTrigger(entry.trigger, job.trigger))
     if (group)
@@ -689,11 +689,11 @@ function renderAzure(jobs: CiJob[]) {
     // Checks apply to an entire stage. A release group in the root variables
     // would make its branch check block preview stages too.
     lines.push(
-      `  - stage: ${stageJobs[0]!.id.replaceAll('-', '_')}`,
+      `  - stage: ${stageJobs[0].id.replaceAll('-', '_')}`,
       '    dependsOn: []',
       `    condition: ${condition}`,
       '    variables:',
-      `      - group: ${secretScope(stageJobs[0]!)}`,
+      `      - group: ${secretScope(stageJobs[0])}`,
       '    jobs:',
     )
     for (const job of stageJobs) {
@@ -733,6 +733,23 @@ function renderBitbucketStep(job: CiJob, indent: string, includeEnvironment = tr
   return lines
 }
 
+/** Bitbucket requires an automatic first step before a manual, protected preview stage. */
+function renderBitbucketApprovedPreviews({ jobs }: ReturnType<typeof groupByTrigger>[number]) {
+  const nativePreview = jobs.some(isBuilderPreview)
+  return [
+    '      - step:',
+    '          name: Review the preview commit before approving',
+    '          script:',
+    `            - echo "A trusted maintainer must review this commit before ${nativePreview ? 'the signing build' : 'using the bundle signing key'}."`,
+    '      - stage:',
+    `          name: Build approved ${nativePreview ? 'native' : 'encrypted'} previews`,
+    '          trigger: manual',
+    `          environment: ${secretScope(jobs[0])}`,
+    '          steps:',
+    ...jobs.flatMap(job => renderBitbucketStep(job, '            ', false)),
+  ]
+}
+
 function renderBitbucket(jobs: CiJob[]) {
   const lines = ['image: node:24', '', 'pipelines:']
   const groups = groupByTrigger(jobs)
@@ -740,7 +757,7 @@ function renderBitbucket(jobs: CiJob[]) {
   const prGroups = groups.filter(group => group.trigger.kind === 'pull_request')
   const renderGroup = (group: typeof groups[number], indent: string) => {
     if (group.jobs.length === 1)
-      return renderBitbucketStep(group.jobs[0]!, indent)
+      return renderBitbucketStep(group.jobs[0], indent)
     return [`${indent}- parallel:`, ...group.jobs.flatMap(job => renderBitbucketStep(job, `${indent}    `))]
   }
   if (branchGroups.length) {
@@ -754,20 +771,7 @@ function renderBitbucket(jobs: CiJob[]) {
     lines.push('  pull-requests:', `    ${yamlQuote('**')}:`)
     for (const group of prGroups) {
       if (group.jobs.some(requiresPreviewApproval)) {
-        const nativePreview = group.jobs.some(isBuilderPreview)
-        // Bitbucket disallows a manual first step. This step gets no secrets.
-        lines.push(
-          '      - step:',
-          '          name: Review the preview commit before approving',
-          '          script:',
-          `            - echo "A trusted maintainer must review this commit before ${nativePreview ? 'the signing build' : 'using the bundle signing key'}."`,
-          '      - stage:',
-          `          name: Build approved ${nativePreview ? 'native' : 'encrypted'} previews`,
-          '          trigger: manual',
-          `          environment: ${secretScope(group.jobs[0]!)}`,
-          '          steps:',
-          ...group.jobs.flatMap(job => renderBitbucketStep(job, '            ', false)),
-        )
+        lines.push(...renderBitbucketApprovedPreviews(group))
       }
       else {
         lines.push(...renderGroup(group, '      '))
@@ -884,7 +888,9 @@ export function buildCiPipeline(input: CiGuideOptions): CiPipeline {
 export function githubSecretCommand(secret: CiSecretName | typeof CI_ENCRYPTION_SECRET, purpose: CiKeySpec['purpose'] = 'release', product: CiProduct = 'ota', encrypted = false) {
   if (purpose === 'preview' && product === 'ota' && !encrypted && secret !== CI_ENCRYPTION_SECRET)
     return `gh secret set ${secret}`
-  const scope = purpose === 'release' ? 'capgo-release' : product === 'builder' ? BUILDER_PREVIEW_SCOPE : ENCRYPTED_PREVIEW_SCOPE
+  let scope = 'capgo-release'
+  if (purpose === 'preview')
+    scope = product === 'builder' ? BUILDER_PREVIEW_SCOPE : ENCRYPTED_PREVIEW_SCOPE
   return `gh secret set ${secret} --env ${scope}`
 }
 
