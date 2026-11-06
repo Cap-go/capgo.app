@@ -92,15 +92,15 @@ function selectProduct(key: string) {
   if (!isChangelogProduct(key) || key === product.value)
     return
   // A version belongs to one product: never carry "since" across tabs.
-  setQuery({ product: key, repo: null, since: null, features: null, platforms: null })
+  setQuery({ product: key, repo: null, since: null, to: null, features: null, platforms: null })
 }
 
 function selectPlugin(plugin: ChangelogPlugin) {
   if (plugin.name === UPDATER_PACKAGE) {
-    setQuery({ product: 'updater', repo: null, since: null })
+    setQuery({ product: 'updater', repo: null, since: null, to: null })
     return
   }
-  setQuery({ product: 'plugin', repo: plugin.repo, since: null })
+  setQuery({ product: 'plugin', repo: plugin.repo, since: null, to: null })
 }
 
 async function load() {
@@ -350,7 +350,7 @@ function clearFilters() {
                     type="button"
                     class="d-btn d-btn-ghost d-btn-sm d-btn-square"
                     :aria-label="t('changelog-clear-since')"
-                    @click="setQuery({ since: null })"
+                    @click="setQuery({ since: null, to: null })"
                   >
                     <IconX class="h-4 w-4" aria-hidden="true" />
                   </button>
