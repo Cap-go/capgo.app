@@ -143,6 +143,7 @@ declare module 'vue' {
     OrgEmailNotificationsPanel: typeof import('./components/dashboard/OrgEmailNotificationsPanel.vue')['default']
     OrgNativeBuildStatsPanel: typeof import('./components/dashboard/OrgNativeBuildStatsPanel.vue')['default']
     OrgNotificationStatsPanel: typeof import('./components/dashboard/OrgNotificationStatsPanel.vue')['default']
+    PackageChangelogLink: typeof import('./components/changelog/PackageChangelogLink.vue')['default']
     PageHeader: typeof import('./components/PageHeader.vue')['default']
     PageLoader: typeof import('./components/PageLoader.vue')['default']
     PastDueBanner: typeof import('./components/dashboard/PastDueBanner.vue')['default']
