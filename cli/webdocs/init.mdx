@@ -15,7 +15,7 @@ npx @capgo/cli@latest init
 ```
 
 This includes adding code for updates, building, uploading your app, and verifying update functionality.
-Capgo bundles are web assets and can be fetched by anyone who knows the URL. Most apps can skip bundle encryption, including apps with public quotes, news, or catalogs. Enable it when you require end-to-end encrypted delivery of your code or bundled assets. Handling sensitive data through an API does not by itself require bundle encryption; it does not encrypt API traffic, databases, or on-device user data. Enabling it adds private-key backup, CI key configuration, and a native rebuild to ship the public key.
+Capgo bundles are web assets and can be fetched by anyone who knows the URL. Use encryption for banking, regulated, or other high-security apps.
 During the iOS run-on-device step, choose a physical iPhone/iPad or simulator. If you choose a physical device, the CLI lets you connect, unlock, and check again before it launches the app.
 If the selected Xcode uses Device Hub and Capacitor's native-run cannot open it, onboarding gives you a manual launch path. Run npx cap open ios, select the simulator in Xcode, choose Product > Run, and confirm that the baseline app opens before continuing. MCP live-update onboarding gives the same instructions and waits for deviceRunConfirmed: true. Run npx @capgo/cli@latest doctor for the upstream fix status and upgrade guidance.
 
