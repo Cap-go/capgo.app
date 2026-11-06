@@ -1,4 +1,9 @@
 // @vitest-environment happy-dom
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { env } from 'node:process'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import {
@@ -51,7 +56,7 @@ describe('CI/CD guide pipelines', () => {
     expect(workflow.on).toEqual({ push: { branches: ['main'] } })
     expect(pipeline.content).toContain("branches: ['main']")
     const steps = workflow.jobs.production.steps
-    expect(steps.map((step: { run?: string }) => step.run).filter(Boolean)).toEqual([
+    expect(steps.filter((step: { id?: string }) => step.id !== 'release_head').map((step: { run?: string }) => step.run).filter(Boolean)).toEqual([
       'npm ci',
       'npm run build',
       'npx @capgo/cli@latest bundle upload com.example.app --channel stable --auto-bump patch --fail-on-incompatible',
@@ -231,7 +236,10 @@ describe('CI/CD guide pipelines', () => {
       const index = steps.findIndex((step: { run?: string }) => step.run === restore)
       expect(steps[index].env).toEqual({ CAPGO_PRIVATE_KEY_BASE64: '${{ secrets.CAPGO_PRIVATE_KEY_BASE64 }}' })
       expect(steps.at(-1).run).toContain('bundle upload')
-      expect(index).toBe(steps.length - 2)
+      expect(index).toBeLessThan(steps.length - 1)
+      const guard = steps.findIndex((step: { id?: string }) => step.id === 'release_head')
+      if (guard >= 0)
+        expect(guard).toBeGreaterThan(index)
     }
     // Deleting a channel uploads nothing, so it never needs the key.
     expect(workflow.jobs['preview-cleanup'].steps.some((step: { run?: string }) => step.run === restore)).toBe(false)
@@ -259,12 +267,70 @@ describe('CI/CD guide pipelines', () => {
     const concurrency = { group: 'capgo-preview-${{ github.event.pull_request.number }}', 'cancel-in-progress': true }
     expect(github.jobs.preview.concurrency).toEqual(concurrency)
     expect(github.jobs['preview-cleanup'].concurrency).toEqual(concurrency)
-    expect(github.jobs.production.concurrency).toBeUndefined()
+    expect(github.jobs.production.concurrency).toEqual({
+      group: 'capgo-release-com.example.app-${{ github.workflow }}-${{ github.ref }}',
+      'cancel-in-progress': false,
+      queue: 'max',
+    })
     const gitlab = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'gitlab' }).content)
     expect(gitlab['capgo-preview'].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
     expect(gitlab['capgo-preview-cleanup'].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
     // Builder previews have no cleanup to race with.
     expect(parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'github' }).content).jobs['ios-preview'].concurrency).toBeUndefined()
+  })
+
+  it('guards every GitHub live-update release without changing preview coordination', () => {
+    for (const strategy of CI_STRATEGIES) {
+      const pipeline = buildCiPipeline({ ...base, product: 'ota', strategy, provider: 'github' })
+      const github = parse(pipeline.content)
+      for (const job of pipeline.jobs) {
+        const rendered = github.jobs[job.id]
+        const guard = rendered.steps.findIndex((step: { id?: string }) => step.id === 'release_head')
+        if (job.trigger.kind === 'push') {
+          expect(rendered.concurrency['cancel-in-progress']).toBe(false)
+          expect(rendered.concurrency.queue).toBe('max')
+          expect(guard).toBe(rendered.steps.length - 2)
+          expect(rendered.steps.at(-1).if).toBe("steps.release_head.outputs.current == 'true'")
+        }
+        else {
+          expect(guard).toBe(-1)
+        }
+      }
+    }
+  })
+
+  it('allows the current Git commit to upload and skips superseded commits', () => {
+    const github = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
+    const guard = github.jobs.production.steps.find((step: { id?: string }) => step.id === 'release_head')
+    expect(guard.shell).toBe('bash')
+    const directory = mkdtempSync(join(tmpdir(), 'capgo-release-order-'))
+    const gitEnv = { ...env, GIT_AUTHOR_NAME: 'CI Test', GIT_AUTHOR_EMAIL: 'ci-test@example.com', GIT_COMMITTER_NAME: 'CI Test', GIT_COMMITTER_EMAIL: 'ci-test@example.com' }
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', input: '', env: gitEnv }).trim()
+    try {
+      git('init', '--bare', '--quiet')
+      git('remote', 'add', 'origin', directory)
+      const tree = git('mktree')
+      const older = git('commit-tree', tree, '-m', 'older')
+      const newer = git('commit-tree', tree, '-p', older, '-m', 'newer')
+      git('update-ref', 'refs/heads/main', newer)
+      for (const [sha, expected] of [[older, 'false'], [newer, 'true']]) {
+        const output = join(directory, `${sha}.output`)
+        execFileSync('bash', ['-e', '-o', 'pipefail', '-c', guard.run], {
+          cwd: directory,
+          env: { ...env, GITHUB_REF: 'refs/heads/main', GITHUB_SHA: sha, GITHUB_OUTPUT: output },
+        })
+        expect(readFileSync(output, 'utf8').trim()).toBe(`current=${expected}`)
+      }
+      const failedOutput = join(directory, 'missing.output')
+      expect(() => execFileSync('bash', ['-e', '-o', 'pipefail', '-c', guard.run], {
+        cwd: directory,
+        env: { ...env, GITHUB_REF: 'refs/heads/missing', GITHUB_SHA: newer, GITHUB_OUTPUT: failedOutput },
+      })).toThrow()
+      expect(existsSync(failedOutput)).toBe(false)
+    }
+    finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   it('rejects branch and channel names that would break the YAML', () => {

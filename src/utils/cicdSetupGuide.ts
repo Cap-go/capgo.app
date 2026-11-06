@@ -404,10 +404,12 @@ function yamlQuote(value: string) {
 
 const GITHUB_PR_NUMBER = '$' + '{{ github.event.pull_request.number }}'
 const GITHUB_BASE_REF = '$' + '{{ github.event.pull_request.base.ref }}'
+const GITHUB_WORKFLOW = '$' + '{{ github.workflow }}'
+const GITHUB_REF = '$' + '{{ github.ref }}'
 // GitHub repositories provide a PR number; Azure Repos provides a PR id.
 const AZURE_PR_NUMBER = '$' + '{SYSTEM_PULLREQUEST_PULLREQUESTNUMBER:-$SYSTEM_PULLREQUEST_PULLREQUESTID}'
 
-function renderGithub(jobs: CiJob[], workflowName: string) {
+function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptions) {
   const branches = pushBranches(jobs)
   const hasPr = jobs.some(job => job.trigger.kind !== 'push')
   const hasCleanup = jobs.some(job => job.trigger.kind === 'pull_request_closed')
@@ -423,6 +425,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
   // Fork pull requests get no secrets, so they skip instead of failing.
   const sameRepo = 'github.event.pull_request.head.repo.full_name == github.repository'
   jobs.forEach((job, index) => {
+    const guardRelease = options.product === 'ota' && job.trigger.kind === 'push'
     let condition: string
     if (job.trigger.kind === 'push')
       condition = `github.event_name == 'push' && github.ref_name == '${job.trigger.branch}'`
@@ -437,6 +440,9 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
       ...(job.trigger.kind === 'push' ? ['    environment: capgo-release'] : []),
+      ...(guardRelease
+        ? ['    concurrency:', `      group: capgo-release-${options.appId}-${GITHUB_WORKFLOW}-${GITHUB_REF}`, '      cancel-in-progress: false', '      queue: max']
+        : []),
       // Without this, cleanup can finish before an in-flight preview upload,
       // which then recreates the deleted channel. Closing cancels the upload.
       ...(hasCleanup && job.trigger.kind !== 'push'
@@ -453,8 +459,26 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
     )
     for (const command of setupCommands(job))
       lines.push(...setupStep(command, '      ', 'run', secret => `\${{ secrets.${secret} }}`))
+    // Concurrency is not commit-ordered, and old runs can be rerun manually.
+    // Check after building, immediately before the upload can promote a channel.
+    if (guardRelease) {
+      lines.push(
+        '      - name: Check release commit is still the branch head',
+        '        id: release_head',
+        '        shell: bash',
+        '        run: |',
+        '          latest="$(git ls-remote --exit-code origin "$GITHUB_REF" | cut -f1)"',
+        '          if [ "$latest" = "$GITHUB_SHA" ]; then',
+        '            echo "current=true" >> "$GITHUB_OUTPUT"',
+        '          else',
+        '            echo "current=false" >> "$GITHUB_OUTPUT"',
+        '            echo "Skipping this release because the branch has a newer commit."',
+        '          fi',
+      )
+    }
     lines.push(
       `      - run: ${yamlScalar(withPr(job.command, GITHUB_PR_NUMBER))}`,
+      ...(guardRelease ? ['        if: steps.release_head.outputs.current == \'true\''] : []),
       '        env:',
       `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
       ...yamlEnv(job, '          '),
@@ -662,7 +686,7 @@ export function buildCiPipeline(input: CiGuideOptions): CiPipeline {
   const jobs = buildCiJobs(input)
   const workflowName = input.product === 'ota' ? 'Capgo live updates' : 'Capgo native builds'
   const renderers: Record<CiProvider, () => string> = {
-    github: () => renderGithub(jobs, workflowName),
+    github: () => renderGithub(jobs, workflowName, input),
     gitlab: () => renderGitlab(jobs),
     azure: () => renderAzure(jobs),
     bitbucket: () => renderBitbucket(jobs),
