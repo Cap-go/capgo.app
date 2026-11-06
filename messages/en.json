@@ -3285,7 +3285,7 @@
   "trial-plan-start-now": "Start now",
   "trial-plan-start-now-title": "Start {plan} now?",
   "trial-plan-start-now-charge": "We charge {price} (plus applicable tax) for {plan} to your {card} today, then every month.",
-  "trial-plan-start-now-usage-reset": "Your billing cycle restarts today, so your monthly usage (MAU and bandwidth) starts again from today. Usage already recorded today stays in the new cycle.",
+  "trial-plan-start-now-usage-reset": "Your billing cycle restarts today, so your monthly usage (MAU and build time) starts again from today. Usage already recorded today stays in the new cycle.",
   "trial-plan-start-now-trial-ends": "The remaining {days} day of your free trial ends now. | The remaining {days} days of your free trial end now.",
   "trial-plan-start-now-confirm": "Start now and reset my usage",
   "trial-plan-start-now-keep-trial": "Keep my trial",
