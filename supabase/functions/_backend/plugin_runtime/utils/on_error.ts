@@ -5,7 +5,6 @@ import { sendDiscordAlert500 } from './discord.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { isTransientDatabaseError, readPgErrorCode, readQuickErrorOriginalCause } from './pg_errors.ts'
 import { capturePosthogException } from './posthog.ts'
-import { redactSensitiveUrl } from '../../utils/sensitive_url.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -72,6 +71,18 @@ function shouldSuppressQueueRetryAlert(c: Context): boolean {
   return Boolean(queueName) && readCount !== null && maxReads !== null && readCount < maxReads
 }
 
+function redactUrlForLog(url: string): string {
+  try {
+    const parsed = URL.parse(url)
+    if (!parsed)
+      return url.split('?')[0] ?? url
+    return `${parsed.origin}${parsed.pathname}`
+  }
+  catch {
+    return url.split('?')[0] ?? url
+  }
+}
+
 function isPluginRequestCancellation(c: Context, e: unknown): boolean {
   if (!e || typeof e !== 'object')
     return false
@@ -130,7 +141,7 @@ export function onError(functionName: string) {
         functionName,
         kind: 'request_cancelled',
         method: c.req.method,
-        url: redactSensitiveUrl(c.req.url),
+        url: redactUrlForLog(c.req.url),
       })
       return c.json({
         error: 'request_cancelled',
