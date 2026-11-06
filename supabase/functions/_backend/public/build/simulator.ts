@@ -258,7 +258,7 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
 
 async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string) {
   const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
-  if (!saved || saved.kind !== 'ios_ipa')
+  if (saved?.kind !== 'ios_ipa')
     throw new Error('This build has no saved iOS app.')
   const file = await fetch(saved.url)
   if (!file.ok || !file.body)
@@ -308,6 +308,34 @@ async function ownedSession(c: Context, principal: RlsPrincipal, userId: string,
   return { orgId, row }
 }
 
+async function savedBuildInstallError(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string | undefined, platform: string, sessionUrl: string, accessKey: string) {
+  if (!jobId || platform !== 'ios')
+    return null
+  try {
+    await installSavedIpa(c, principal, appId, ownerOrg, jobId, sessionUrl, accessKey)
+    return null
+  }
+  catch (error) {
+    return error instanceof Error ? error.message : 'The saved build could not be installed.'
+  }
+}
+
+function openedSimulator(device: EmulatorSessionData | undefined) {
+  if (!device?.id || !device.url)
+    throw new Error('Simulator did not return a session URL.')
+  return device
+}
+
+async function failSimulatorStartup(c: Context, slotId: string, emulatorId: string, error: unknown, appId: string): Promise<never> {
+  const interrupted = emulatorId === '' && simulatorCreateWasInterrupted(error)
+  const deviceId = emulatorId || (interrupted ? slotId : '')
+  const deviceStopped = deviceId === '' || await createdDeviceStopped(c, deviceId, interrupted)
+  await recordStartupFailure(c, slotId, deviceStopped ? '' : deviceId, deviceStopped)
+  if (error instanceof Error && error.name === 'HTTPException')
+    throw error
+  throw quickError(502, 'simulator_unavailable', error instanceof Error ? error.message : 'Simulator did not start.', { app_id: appId }, error, { alert: false })
+}
+
 export async function startSimulator(c: Context, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const { appId, platform, name } = simulatorRequestFields(body)
   await ensureBuildPermission(c, appId, userId)
@@ -318,21 +346,11 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
   try {
     const { accessKey, origin } = simulatorConfig(c)
     const created = await postEmulator(origin, accessKey, '/v2/device-run-sessions', 'POST', emulatorSessionCreateBody({ id: slot.id, appId, platform, orgId, name }))
-    const device = created.data
-    if (device?.id)
-      emulatorId = device.id
-    if (!device?.id || !device.url)
-      throw new Error('Simulator did not return a session URL.')
+    if (created.data?.id)
+      emulatorId = created.data.id
+    const device = openedSimulator(created.data)
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
-    let installError: string | undefined
-    if (body.build_job_id && platform === 'ios') {
-      try {
-        await installSavedIpa(c, principal, appId, orgId, body.build_job_id, device.url, accessKey)
-      }
-      catch (error) {
-        installError = error instanceof Error ? error.message : 'The saved build could not be installed.'
-      }
-    }
+    const installError = await savedBuildInstallError(c, principal, appId, orgId, body.build_job_id, platform, device.url, accessKey)
     return c.json({
       data: {
         id: slot.id,
@@ -341,18 +359,12 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
         platform,
         kind: 'simulator',
         remoteConfig: device.remoteConfig ?? null,
-        install_error: installError ?? null,
+        install_error: installError,
       },
     })
   }
   catch (error) {
-    const interrupted = emulatorId === '' && simulatorCreateWasInterrupted(error)
-    const deviceId = emulatorId || (interrupted ? slot.id : '')
-    const deviceStopped = deviceId === '' || await createdDeviceStopped(c, deviceId, interrupted)
-    await recordStartupFailure(c, slot.id, deviceStopped ? '' : deviceId, deviceStopped)
-    if (error instanceof Error && error.name === 'HTTPException')
-      throw error
-    throw quickError(502, 'simulator_unavailable', error instanceof Error ? error.message : 'Simulator did not start.', { app_id: appId }, error, { alert: false })
+    return failSimulatorStartup(c, slot.id, emulatorId, error, appId)
   }
 }
 
