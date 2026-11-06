@@ -30,17 +30,17 @@ We do not have a measured app store review wait time per organization. Any headl
 
 Before (legacy Bento body HTML, desktop then mobile):
 
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/before-bento-3-days-left-desktop.png
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/before-bento-3-days-left-mobile.png
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/before-bento-ends-today-desktop.png
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/before-bento-ends-today-mobile.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/before-bento-3-days-left-desktop.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/before-bento-3-days-left-mobile.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/before-bento-ends-today-desktop.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/before-bento-ends-today-mobile.png
 
 After (new templates, desktop then mobile):
 
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/trial-recap-usage-desktop.png
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/trial-recap-usage-mobile.png
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/trial-recap-low-usage-desktop.png
-- https://raw.githubusercontent.com/Cap-go/capgo/f70644d030190876be6de4bcb54810fe60a5d6d9/.github/pr-assets/trial-recap-low-usage-mobile.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/trial-recap-usage-desktop.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/trial-recap-usage-mobile.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/trial-recap-low-usage-desktop.png
+- https://raw.githubusercontent.com/Cap-go/capgo/89ef17e9057f3645d51b6e6f4541afcef89763fd/.github/pr-assets/trial-recap-low-usage-mobile.png
 
 ## Test plan (AI generated)
 
