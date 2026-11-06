@@ -39,6 +39,14 @@ guide or that it was used in CI. App readers can also mark setup done
 explicitly. Neither path grants access or affects release authorization.
 `record_app_cicd_deploy` is `service_role` only.
 
+The setup RPC checks app-read permission before taking the app row lock, then
+checks the locked row's current owner again in case the app moved organizations
+while it waited. This runs at most two existing RBAC checks per RPC request, not
+once per row in a policy or view. Both app reads use the single `app_id` key
+covered by `apps_pkey` in `supabase/schemas/prod.sql`; they do not scan the app
+population. Anonymous execution stays revoked, and the existing authenticated
+and service-role grants are unchanged.
+
 ## Detection
 
 `POST /bundle/upsert` calls `recordCicdDeploy` only for the final
@@ -83,3 +91,27 @@ allow a failed check to reuse its successful build on a partial rerun. Uploads
 require a check from the current run attempt. If an upload alone fails, choose
 **Re-run all jobs** to refresh the branch check; an upload-only rerun fails before
 downloading artifacts or receiving release credentials.
+
+## Protected encrypted previews
+
+The bundle encryption private key also authenticates bundles accepted by the
+app. Its authority includes production, even when the preview API key can only
+change preview channels. A trusted maintainer must review the exact preview
+commit before that code can access the private key.
+
+The guide keeps the preview API key and encryption private key together in a
+provider-protected scope:
+
+| Provider | Preview scope | Required control |
+| --- | --- | --- |
+| GitHub | `capgo-encrypted-preview` environment | Required reviewers, no self-review or administrator bypass |
+| GitLab | `capgo/pr-*` variables | Protected and Masked variables; reviewed protected source and target branches in the same project; maintainer-run manual upload and cleanup |
+| Azure | `capgo-encrypted-preview` variable group | Maintainer approval checks on the group |
+| Bitbucket | `capgo-encrypted-preview` environment | Admin-only deployment permissions and a manual preview stage |
+| CircleCI | `capgo-encrypted-preview` context | Project and maintainer-group restrictions plus an approval job |
+
+GitHub cleanup uses the same protected environment. GitLab preserves each
+preview's `capgo/pr-N` environment and stop job while requiring protected access
+for both upload and cleanup. Cleanup jobs never restore the encryption key.
+Providers or plans that cannot enforce these restrictions should use reviewed
+releases from a protected preprod branch.

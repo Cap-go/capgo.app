@@ -181,6 +181,40 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('capgo-builder-preview')
   })
 
+  test('protects encrypted preview keys behind trusted provider approvals', async ({ page }) => {
+    await page.goto(`${fixture}&encrypted=1`)
+    await page.locator('[data-test="cicd-strategy-pull_request"]').click()
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    const trust = page.locator('[data-test="cicd-encrypted-preview-trust"]')
+    const secrets = page.locator('[data-test="cicd-step-secret"]')
+    const content = page.locator('[data-test="cicd-pipeline-content"]')
+    await expect(trust).toContainText('authenticates bundles for your app, including production')
+    await expect(trust).toContainText('Required reviewers')
+    await expect(secrets).toContainText('gh secret set CAPGO_PRIVATE_KEY_BASE64 --env capgo-encrypted-preview')
+    await expect(secrets).toContainText('gh secret set CAPGO_PREVIEW_TOKEN --env capgo-encrypted-preview')
+    await expect(content).toContainText('environment: capgo-encrypted-preview')
+
+    await page.locator('[data-test="cicd-provider-gitlab"]').click()
+    await expect(trust).toContainText('Keep CAPGO_PREVIEW_TOKEN and CAPGO_PRIVATE_KEY_BASE64 Protected and Masked')
+    await expect(trust).toContainText('Environment scope set to capgo/pr-*')
+    await expect(trust).toContainText('Both branches must be protected')
+    await expect(secrets).not.toContainText('Turn Protect variable off')
+    await expect(content).toContainText('CI_MERGE_REQUEST_SOURCE_BRANCH_PROTECTED')
+
+    for (const [provider, instruction] of [
+      ['azure', 'Approvals and checks'],
+      ['bitbucket', 'Build approved encrypted previews'],
+      ['circleci', 'approve-encrypted-preview'],
+      ['other', 'manual step in editable pipeline code alone is insufficient'],
+    ]) {
+      await page.locator(`[data-test="cicd-provider-${provider}"]`).click()
+      await expect(trust).toContainText(instruction)
+    }
+    await page.locator('[data-test="cicd-encrypted"]').uncheck()
+    await expect(trust).toHaveCount(0)
+    await expect(content).not.toContainText('capgo-encrypted-preview')
+  })
+
   test('remembers answers per app and warns when there is no default channel', async ({ page }) => {
     await page.goto(`${fixture}&defaultChannel=0`)
     await page.locator('[data-test="cicd-provider-other"]').click()

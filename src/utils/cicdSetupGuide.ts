@@ -22,6 +22,7 @@ export const DEFAULT_PRODUCTION_CHANNEL = 'production'
 export const PREPROD_CHANNEL = 'preprod'
 export const PREVIEW_CHANNEL_PREFIX = 'pr-'
 export const BUILDER_PREVIEW_SCOPE = 'capgo-builder-preview'
+export const ENCRYPTED_PREVIEW_SCOPE = 'capgo-encrypted-preview'
 
 const CLI = 'npx @capgo/cli@latest'
 // Replaced by each provider's own pull request number variable.
@@ -376,10 +377,24 @@ function isBuilderPreview(job: CiJob) {
   return job.trigger.kind === 'pull_request' && job.sync !== undefined
 }
 
+function isEncryptedPreview(job: CiJob) {
+  return job.trigger.kind === 'pull_request' && job.restoreKey === true
+}
+
+function requiresPreviewApproval(job: CiJob) {
+  return isBuilderPreview(job) || isEncryptedPreview(job)
+}
+
 function secretScope(job: CiJob) {
   if (isBuilderPreview(job))
     return BUILDER_PREVIEW_SCOPE
+  if (isEncryptedPreview(job))
+    return ENCRYPTED_PREVIEW_SCOPE
   return job.trigger.kind === 'push' ? 'capgo-release' : 'capgo-preview'
+}
+
+function previewApprovalId(job: CiJob) {
+  return isBuilderPreview(job) ? 'approve-builder-preview' : 'approve-encrypted-preview'
 }
 
 function withPr(command: string, variable: string) {
@@ -532,6 +547,7 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
   const branches = pushBranches(jobs)
   const hasPr = jobs.some(job => job.trigger.kind !== 'push')
   const hasCleanup = jobs.some(job => job.trigger.kind === 'pull_request_closed')
+  const encryptedPreviews = jobs.some(isEncryptedPreview)
   const lines = [`name: ${workflowName}`, '', 'on:']
   if (branches.length)
     lines.push('  push:', `    branches: [${branches.map(yamlQuote).join(', ')}]`)
@@ -568,7 +584,9 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
       ...(job.trigger.kind === 'push' ? ['    environment: capgo-release'] : []),
-      ...(isBuilderPreview(job) ? [`    environment: ${BUILDER_PREVIEW_SCOPE}`] : []),
+      ...(requiresPreviewApproval(job) || (encryptedPreviews && job.trigger.kind === 'pull_request_closed')
+        ? [`    environment: ${isBuilderPreview(job) ? BUILDER_PREVIEW_SCOPE : ENCRYPTED_PREVIEW_SCOPE}`]
+        : []),
       // Without this, cleanup can finish before an in-flight preview upload,
       // which then recreates the deleted channel. Closing cancels the upload.
       ...(hasCleanup && job.trigger.kind !== 'push'
@@ -590,24 +608,30 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
   return lines.join('\n')
 }
 
+function gitlabMergeRequestCondition(protectedPreview: boolean) {
+  const mergeRequest = '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  return protectedPreview
+    ? `${mergeRequest} && $CI_MERGE_REQUEST_SOURCE_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_TARGET_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID`
+    : mergeRequest
+}
+
 function renderGitlab(jobs: CiJob[]) {
   const lines = ['default:', '  image: node:24']
   const prVariable = '$CI_MERGE_REQUEST_IID'
   const environment = `capgo/${PREVIEW_CHANNEL_PREFIX}$CI_MERGE_REQUEST_IID`
   const resourceGroup = `capgo-${PREVIEW_CHANNEL_PREFIX}$CI_MERGE_REQUEST_IID`
   const hasCleanup = jobs.some(job => job.trigger.kind === 'pull_request_closed')
+  const encryptedPreviews = jobs.some(isEncryptedPreview)
   for (const job of jobs) {
     lines.push('', `capgo-${job.id}:`, '  rules:')
     if (job.trigger.kind === 'push') {
       lines.push(`    - if: $CI_COMMIT_BRANCH == "${job.trigger.branch}"`, '  environment:', '    name: capgo-release')
     }
     else if (job.trigger.kind === 'pull_request') {
-      if (isBuilderPreview(job)) {
+      if (requiresPreviewApproval(job)) {
         lines.push(
-          '    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_TARGET_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID',
+          `    - if: ${gitlabMergeRequestCondition(true)}`,
           '      when: manual',
-          '  environment:',
-          `    name: ${BUILDER_PREVIEW_SCOPE}`,
         )
       }
       else {
@@ -622,12 +646,15 @@ function renderGitlab(jobs: CiJob[]) {
           '    auto_stop_in: 2 weeks',
         )
       }
+      else if (requiresPreviewApproval(job)) {
+        lines.push('  environment:', `    name: ${secretScope(job)}`)
+      }
     }
     else {
       // GitLab runs this stop job when the merge request is merged or closed. It
       // keeps the default checkout: merge request refs outlive deleted branches.
       lines.push(
-        '    - if: $CI_PIPELINE_SOURCE == "merge_request_event"',
+        `    - if: ${gitlabMergeRequestCondition(encryptedPreviews)}`,
         '      when: manual',
         '  allow_failure: true',
         // Waits for a running preview upload of the same merge request.
@@ -726,17 +753,18 @@ function renderBitbucket(jobs: CiJob[]) {
   if (prGroups.length) {
     lines.push('  pull-requests:', `    ${yamlQuote('**')}:`)
     for (const group of prGroups) {
-      if (group.jobs.some(isBuilderPreview)) {
+      if (group.jobs.some(requiresPreviewApproval)) {
+        const nativePreview = group.jobs.some(isBuilderPreview)
         // Bitbucket disallows a manual first step. This step gets no secrets.
         lines.push(
           '      - step:',
           '          name: Review the preview commit before approving',
           '          script:',
-          '            - echo "A trusted maintainer must review this commit before the signing build."',
+          `            - echo "A trusted maintainer must review this commit before ${nativePreview ? 'the signing build' : 'using the bundle signing key'}."`,
           '      - stage:',
-          '          name: Build approved native previews',
+          `          name: Build approved ${nativePreview ? 'native' : 'encrypted'} previews`,
           '          trigger: manual',
-          `          environment: ${BUILDER_PREVIEW_SCOPE}`,
+          `          environment: ${secretScope(group.jobs[0]!)}`,
           '          steps:',
           ...group.jobs.flatMap(job => renderBitbucketStep(job, '            ', false)),
         )
@@ -783,9 +811,10 @@ function renderCircleci(jobs: CiJob[]) {
   })
   const releaseBranches = pushBranches(jobs)
   lines.push('', 'workflows:', '  capgo:', '    jobs:')
-  if (jobs.some(isBuilderPreview)) {
+  const approvalIds = [...new Set(jobs.filter(requiresPreviewApproval).map(previewApprovalId))]
+  for (const approvalId of approvalIds) {
     lines.push(
-      '      - approve-builder-preview:',
+      `      - ${approvalId}:`,
       '          type: approval',
       '          filters:',
       '            branches:',
@@ -794,8 +823,8 @@ function renderCircleci(jobs: CiJob[]) {
   }
   for (const job of jobs) {
     lines.push(`      - ${job.id}:`, `          context: ${secretScope(job)}`)
-    if (isBuilderPreview(job))
-      lines.push('          requires:', '            - approve-builder-preview')
+    if (requiresPreviewApproval(job))
+      lines.push('          requires:', `            - ${previewApprovalId(job)}`)
     lines.push('          filters:', '            branches:')
     if (job.trigger.kind === 'push')
       lines.push(`              only: ${yamlQuote(job.trigger.branch)}`)
@@ -821,6 +850,8 @@ function renderOther(jobs: CiJob[]) {
         lines.push(...(index > 0 ? [''] : []), `# ${job.name}`)
       if (isBuilderPreview(job))
         lines.push('# Require trusted-maintainer approval of this exact commit before exposing signing credentials.')
+      else if (isEncryptedPreview(job))
+        lines.push('# Require trusted-maintainer approval of this exact commit before exposing the bundle signing key.')
       lines.push(...setupCommands(job), shellCommand(job, '$PR_NUMBER'))
     })
   }
@@ -850,10 +881,10 @@ export function buildCiPipeline(input: CiGuideOptions): CiPipeline {
 }
 
 /** `gh secret set` reads the value from stdin, so the key never lands in shell history. */
-export function githubSecretCommand(secret: CiSecretName | typeof CI_ENCRYPTION_SECRET, purpose: CiKeySpec['purpose'] = 'release', product: CiProduct = 'ota') {
-  if (purpose === 'preview' && product === 'ota')
+export function githubSecretCommand(secret: CiSecretName | typeof CI_ENCRYPTION_SECRET, purpose: CiKeySpec['purpose'] = 'release', product: CiProduct = 'ota', encrypted = false) {
+  if (purpose === 'preview' && product === 'ota' && !encrypted && secret !== CI_ENCRYPTION_SECRET)
     return `gh secret set ${secret}`
-  const scope = purpose === 'release' ? 'capgo-release' : BUILDER_PREVIEW_SCOPE
+  const scope = purpose === 'release' ? 'capgo-release' : product === 'builder' ? BUILDER_PREVIEW_SCOPE : ENCRYPTED_PREVIEW_SCOPE
   return `gh secret set ${secret} --env ${scope}`
 }
 

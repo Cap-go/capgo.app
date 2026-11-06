@@ -43,6 +43,7 @@ import {
   CI_STRATEGIES,
   DEFAULT_PREPROD_BRANCH,
   DEFAULT_PRODUCTION_BRANCH,
+  ENCRYPTED_PREVIEW_SCOPE,
   encryptionSecretCommand,
   githubSecretCommand,
   isCiChannelSupported,
@@ -145,7 +146,15 @@ const roleLabels: Record<CiKeySpec['role'], string> = {
 }
 const providerName = computed(() => provider.value ? t(`cicd-guide-provider-${provider.value}`) : '')
 const builderPreview = computed(() => product.value === 'builder' && strategy.value === 'pull_request')
-const previewScope = computed(() => product.value === 'builder' ? BUILDER_PREVIEW_SCOPE : 'capgo-preview')
+const encryptedPreview = computed(() => product.value === 'ota' && encrypted.value && strategy.value === 'pull_request')
+const protectedPreview = computed(() => builderPreview.value || encryptedPreview.value)
+const previewScope = computed(() => {
+  if (builderPreview.value)
+    return BUILDER_PREVIEW_SCOPE
+  if (encryptedPreview.value)
+    return provider.value === 'gitlab' ? 'capgo/pr-*' : ENCRYPTED_PREVIEW_SCOPE
+  return 'capgo-preview'
+})
 const checklistPath = computed(() => `${getAppGettingStartedPath(props.appId)}?showChecklist=1${product.value === 'builder' ? '&path=builder' : ''}`)
 const docsHref = computed(() => product.value === 'ota'
   ? 'https://capgo.app/docs/getting-started/cicd-integration/'
@@ -165,7 +174,7 @@ function keyScope(spec: CiKeySpec) {
 }
 function secretInstruction(spec: CiKeySpec) {
   if (provider.value === 'github' && spec.purpose === 'preview')
-    return product.value === 'builder' ? 'cicd-guide-secret-github-builder-preview' : 'cicd-guide-secret-github-preview'
+    return protectedPreview.value ? 'cicd-guide-secret-github-builder-preview' : 'cicd-guide-secret-github-preview'
   return `cicd-guide-secret-${provider.value}-2`
 }
 const createdKeys = reactive<Partial<Record<CiKeySlot, string>>>({})
@@ -789,7 +798,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
             </h3>
             <ol class="mt-3 list-decimal space-y-2 pl-5 text-sm leading-6 text-slate-700 marker:text-slate-400 dark:text-slate-200">
               <li v-if="provider !== 'other'">
-                {{ t(provider === 'github' && builderPreview ? 'cicd-guide-secret-github-builder-1' : `cicd-guide-secret-${provider}-1`, { previewScope }) }}
+                {{ t(provider === 'github' && protectedPreview ? 'cicd-guide-secret-github-builder-1' : `cicd-guide-secret-${provider}-1`, { previewScope }) }}
               </li>
               <li v-for="spec in pipeline.keys" :key="spec.secret">
                 {{ t(secretInstruction(spec), { secret: spec.secret, scope: keyScope(spec) }) }}
@@ -808,7 +817,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
                 </button>
                 <p v-if="provider === 'github' && strategy === 'pull_request'" class="mt-2">
-                  {{ t('cicd-guide-secret-github-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
+                  {{ t('cicd-guide-secret-github-encryption', { secret: CI_ENCRYPTION_SECRET, scope: previewScope }) }}
                 </p>
               </li>
               <template v-if="provider === 'gitlab'">
@@ -816,11 +825,11 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 <li v-if="strategy === 'main_preprod'">
                   {{ t('cicd-guide-secret-gitlab-protect-preprod', { branch: preprodBranch }) }}
                 </li>
-                <li v-if="product === 'ota' && pipeline.keys.some(spec => spec.secret === 'CAPGO_PREVIEW_TOKEN')">
+                <li v-if="product === 'ota' && !encryptedPreview && pipeline.keys.some(spec => spec.secret === 'CAPGO_PREVIEW_TOKEN')">
                   {{ t('cicd-guide-secret-gitlab-preview') }}
                 </li>
                 <li v-if="pipeline.extraSecrets.length && strategy === 'pull_request'">
-                  {{ t('cicd-guide-secret-gitlab-preview-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
+                  {{ t('cicd-guide-secret-gitlab-preview-encryption', { secret: CI_ENCRYPTION_SECRET, scope: previewScope }) }}
                 </li>
               </template>
               <template v-if="provider === 'azure'">
@@ -834,20 +843,20 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 {{ t('cicd-guide-secret-circleci-protect', { expression: circleReleaseExpression }) }}
               </li>
               <li v-if="pipeline.extraSecrets.length && strategy === 'pull_request' && (provider === 'azure' || provider === 'bitbucket' || provider === 'circleci')">
-                {{ t('cicd-guide-secret-encryption-scopes', { secret: CI_ENCRYPTION_SECRET }) }}
+                {{ t('cicd-guide-secret-encryption-scopes', { secret: CI_ENCRYPTION_SECRET, scope: previewScope }) }}
               </li>
             </ol>
-            <div v-if="builderPreview" class="mt-4 space-y-2 rounded-xl border border-slate-200 p-4 text-sm leading-6 text-slate-700 dark:border-white/15 dark:text-slate-200" data-test="cicd-builder-preview-trust">
+            <div v-if="protectedPreview" class="mt-4 space-y-2 rounded-xl border border-slate-200 p-4 text-sm leading-6 text-slate-700 dark:border-white/15 dark:text-slate-200" :data-test="builderPreview ? 'cicd-builder-preview-trust' : 'cicd-encrypted-preview-trust'">
               <h4 class="font-semibold text-slate-950 dark:text-white">
-                {{ t('cicd-guide-builder-preview-trust-title') }}
+                {{ t(encryptedPreview ? 'cicd-guide-encrypted-preview-trust-title' : 'cicd-guide-builder-preview-trust-title') }}
               </h4>
-              <p>{{ t('cicd-guide-builder-preview-trust') }}</p>
+              <p>{{ t(encryptedPreview ? 'cicd-guide-encrypted-preview-trust' : 'cicd-guide-builder-preview-trust') }}</p>
               <ol class="list-decimal space-y-2 pl-5">
-                <li>{{ t(`cicd-guide-builder-preview-${provider}`, { scope: previewScope, branch: productionBranch }) }}</li>
+                <li>{{ t(`cicd-guide-${encryptedPreview ? 'encrypted' : 'builder'}-preview-${provider}`, { scope: previewScope, branch: productionBranch }) }}</li>
                 <li v-if="provider === 'gitlab'">
-                  {{ t('cicd-guide-builder-preview-gitlab-run', { branch: productionBranch }) }}
+                  {{ t(encryptedPreview ? 'cicd-guide-encrypted-preview-gitlab-run' : 'cicd-guide-builder-preview-gitlab-run', { branch: productionBranch }) }}
                 </li>
-                <li>{{ t('cicd-guide-builder-preview-fallback') }}</li>
+                <li>{{ t(encryptedPreview ? 'cicd-guide-encrypted-preview-fallback' : 'cicd-guide-builder-preview-fallback') }}</li>
               </ol>
             </div>
             <template v-if="provider === 'github'">
@@ -860,10 +869,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   :key="spec.secret"
                   type="button"
                   :class="commandClass"
-                  :aria-label="`${t('copy')}: ${githubSecretCommand(spec.secret, spec.purpose, product)}`"
-                  @click="copy(githubSecretCommand(spec.secret, spec.purpose, product))"
+                  :aria-label="`${t('copy')}: ${githubSecretCommand(spec.secret, spec.purpose, product, encrypted)}`"
+                  @click="copy(githubSecretCommand(spec.secret, spec.purpose, product, encrypted))"
                 >
-                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ githubSecretCommand(spec.secret, spec.purpose, product) }}</code>
+                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ githubSecretCommand(spec.secret, spec.purpose, product, encrypted) }}</code>
                   <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
                 </button>
               </div>

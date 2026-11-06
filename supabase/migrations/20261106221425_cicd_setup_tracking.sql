@@ -15,9 +15,11 @@
 --   ci_provider          CI name reported by the CLI, when known
 --   <product>_detected_via / <product>_ci_provider keep each product's attribution
 --
--- Execution model: one PK-indexed apps row per call. record_app_cicd_deploy
--- runs once per bundle upload or build request (backend, service_role), and
--- writes only until the first detection for that product.
+-- Execution model: setup uses two PK-indexed reads of one apps row and two
+-- request-scoped permission checks, before and after locking its current owner.
+-- No policy, view, or table scan invokes these checks once per candidate row.
+-- record_app_cicd_deploy runs once per bundle upload or build request
+-- (backend, service_role), and writes only until the first detection per product.
 
 CREATE OR REPLACE FUNCTION "public"."app_onboarding_cicd_timestamp"()
 RETURNS text
@@ -57,11 +59,11 @@ BEGIN
     RAISE EXCEPTION 'INVALID_EVENT';
   END IF;
 
-  SELECT apps.owner_org, apps.onboarding
-  INTO v_owner_org, v_onboarding
+  -- Reject callers without app access before they can contend on its row lock.
+  SELECT apps.owner_org
+  INTO v_owner_org
   FROM public.apps
-  WHERE apps.app_id = p_app_id
-  FOR UPDATE;
+  WHERE apps.app_id = p_app_id;
 
   IF v_owner_org IS NULL THEN
     RAISE EXCEPTION 'NO_PERMISSION';
@@ -70,6 +72,22 @@ BEGIN
   -- Same boundary as dismiss_getting_started: anyone who can read the app may
   -- record its CI/CD setup state. It only changes this app's own nudge.
   IF NOT public.rbac_check_permission_request(
+    public.rbac_perm_app_read(),
+    v_owner_org,
+    p_app_id,
+    NULL::bigint
+  ) THEN
+    RAISE EXCEPTION 'NO_PERMISSION';
+  END IF;
+
+  SELECT apps.owner_org, apps.onboarding
+  INTO v_owner_org, v_onboarding
+  FROM public.apps
+  WHERE apps.app_id = p_app_id
+  FOR UPDATE;
+
+  -- A transfer can change the owner while this call waits for the app lock.
+  IF v_owner_org IS NULL OR NOT public.rbac_check_permission_request(
     public.rbac_perm_app_read(),
     v_owner_org,
     p_app_id,

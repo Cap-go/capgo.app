@@ -19,6 +19,7 @@ import {
   CI_RESTORE_KEY_COMMAND,
   CI_STRATEGIES,
   ciKeysFor,
+  ENCRYPTED_PREVIEW_SCOPE,
   encryptionSecretCommand,
   githubSecretCommand,
   isCiChannelSupported,
@@ -324,6 +325,50 @@ describe('CI/CD guide pipelines', () => {
     expect(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).extraSecrets).toEqual([])
     expect(buildCiPipeline({ ...base, product: 'builder', strategy: 'main', provider: 'github', encrypted: true }).content).not.toContain('.capgo_key_v2')
     expect(encryptionSecretCommand('github')).toBe(`base64 < .capgo_key_v2 | tr -d '\\n' | gh secret set CAPGO_PRIVATE_KEY_BASE64 --env capgo-release`)
+  })
+
+  it('keeps GitHub encryption and preview API keys behind the protected preview environment', () => {
+    const pipeline = buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'github', encrypted: true })
+    const github = parse(pipeline.content)
+    expect(github.jobs.preview.environment).toBe(ENCRYPTED_PREVIEW_SCOPE)
+    // Cleanup executes repository config too, so it needs the same trusted-code approval.
+    expect(github.jobs['preview-cleanup'].environment).toBe(ENCRYPTED_PREVIEW_SCOPE)
+    expect(github.jobs['preview-cleanup'].steps.some((step: { run?: string }) => step.run === CI_RESTORE_KEY_COMMAND)).toBe(false)
+    expect(github.jobs.production.environment).toBe('capgo-release')
+    expect(githubSecretCommand('CAPGO_PREVIEW_TOKEN', 'preview', 'ota', true)).toBe(`gh secret set CAPGO_PREVIEW_TOKEN --env ${ENCRYPTED_PREVIEW_SCOPE}`)
+    expect(githubSecretCommand(CI_ENCRYPTION_SECRET, 'preview')).toBe(`gh secret set CAPGO_PRIVATE_KEY_BASE64 --env ${ENCRYPTED_PREVIEW_SCOPE}`)
+    expect(encryptionSecretCommand('github', 'preview')).toBe(`base64 < .capgo_key_v2 | tr -d '\\n' | gh secret set CAPGO_PRIVATE_KEY_BASE64 --env ${ENCRYPTED_PREVIEW_SCOPE}`)
+  })
+
+  it('requires protected GitLab branches and manual approval for encrypted preview upload and cleanup', () => {
+    const gitlab = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'gitlab', encrypted: true }).content)
+    for (const id of ['capgo-preview', 'capgo-preview-cleanup']) {
+      expect(gitlab[id].rules).toEqual([{
+        if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_TARGET_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID',
+        when: 'manual',
+      }])
+      expect(gitlab[id].environment.name).toBe('capgo/pr-$CI_MERGE_REQUEST_IID')
+      expect(gitlab[id].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
+    }
+    expect(gitlab['capgo-preview'].environment.on_stop).toBe('capgo-preview-cleanup')
+    expect(gitlab['capgo-preview-cleanup'].environment.action).toBe('stop')
+    expect(gitlab['capgo-preview-cleanup'].script).not.toContain(CI_RESTORE_KEY_COMMAND)
+  })
+
+  it('requires restricted approval scopes before other providers can use the bundle signing key', () => {
+    const options = { ...base, product: 'ota', strategy: 'pull_request', encrypted: true } as const
+    const azure = parse(buildCiPipeline({ ...options, provider: 'azure' }).content)
+    expect(azure.stages[1].variables).toEqual([{ group: ENCRYPTED_PREVIEW_SCOPE }])
+    const bitbucket = parse(buildCiPipeline({ ...options, provider: 'bitbucket' }).content)
+    const stages = bitbucket.pipelines['pull-requests']['**']
+    expect(stages[0].step.environment).toBeUndefined()
+    expect(stages[0].step.script.join(' ')).not.toContain('CAPGO_')
+    expect(stages[1].stage).toMatchObject({ name: 'Build approved encrypted previews', trigger: 'manual', environment: ENCRYPTED_PREVIEW_SCOPE })
+    expect(stages[1].stage.steps[0].step.script).toContain(CI_RESTORE_KEY_COMMAND)
+    const circleci = parse(buildCiPipeline({ ...options, provider: 'circleci' }).content)
+    expect(circleci.workflows.capgo.jobs).toContainEqual({ 'approve-encrypted-preview': { type: 'approval', filters: { branches: { ignore: ['main'] } } } })
+    expect(circleci.workflows.capgo.jobs).toContainEqual({ preview: { context: ENCRYPTED_PREVIEW_SCOPE, requires: ['approve-encrypted-preview'], filters: { branches: { ignore: ['main'] } } } })
+    expect(buildCiPipeline({ ...options, provider: 'other' }).content).toContain('Require trusted-maintainer approval of this exact commit before exposing the bundle signing key.')
   })
 
   it('keeps numeric-looking branch names as strings in every provider', () => {
