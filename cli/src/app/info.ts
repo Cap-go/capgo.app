@@ -437,9 +437,11 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
     tags: computeDoctorAnalyticsTags(installedDependencies, latestDependencies),
   })
 
-  const outdated = listOutdatedDependencies(installedDependencies, latestDependencies)
+  let outdated = listOutdatedDependencies(installedDependencies, latestDependencies)
 
-  if (outdated.length > 0) {
+  // Silent callers (SDK, MCP) get the outdated list back as a diagnosis instead of a bare
+  // "Some dependencies are not up to date" error, so an agent can act on it.
+  if (outdated.length > 0 && !silent) {
     if (!silent)
       logOutdatedDependencyTable(outdated)
 
@@ -449,6 +451,7 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
 
     installedDependencies = await getInstalledDependencies(options.packageJson)
     latestDependencies = await getLatestDependencies(installedDependencies)
+    outdated = []
   }
 
   if (!silent)
@@ -461,6 +464,8 @@ export async function getInfoInternal(options: DoctorInfoOptions, silent = false
     webDir,
     installedDependencies,
     latestDependencies,
+    outdatedDependencies: outdated,
+    updateCommand: outdated.length > 0 ? buildOutdatedInstallCommandsForDoctor(options.packageJson, outdated) : undefined,
     iosSimulatorCompatibility,
   }
 }

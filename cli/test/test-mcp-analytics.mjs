@@ -40,6 +40,7 @@ try {
   assert.equal(body.tags.success, true)
   assert.equal(body.nonPersonTags.invocation_source, 'mcp')
   assert.equal(typeof body.tags.duration_ms, 'number')
+  assert.equal('error_category' in body.tags, false, 'no category on success')
 
   // isError result path
   requests = stubFetch()
@@ -48,6 +49,16 @@ try {
   await flushAnalytics()
   body = JSON.parse(findEvent(requests).init.body)
   assert.equal(body.tags.success, false, 'isError result => success:false')
+  assert.equal(body.tags.error_category, 'unknown', 'isError result carries a category, never the text')
+  assert.equal(JSON.stringify(body).includes('bad'), false, 'error text is not sent')
+
+  // categorized isError result path
+  requests = stubFetch()
+  const noKeyHandler = withMcpToolTracking('capgo_list_apps', async () => ({ content: [{ type: 'text', text: 'No Capgo API key found. Run `npx @capgo/cli@latest login` first.' }], isError: true }))
+  await noKeyHandler({})
+  await flushAnalytics()
+  body = JSON.parse(findEvent(requests).init.body)
+  assert.equal(body.tags.error_category, 'missing_apikey')
 
   // thrown-error path
   requests = stubFetch()
@@ -56,6 +67,7 @@ try {
   await flushAnalytics()
   body = JSON.parse(findEvent(requests).init.body)
   assert.equal(body.tags.success, false)
+  assert.equal(body.tags.error_category, 'unknown')
 
   console.log('✅ MCP tool tracking tests passed')
 }

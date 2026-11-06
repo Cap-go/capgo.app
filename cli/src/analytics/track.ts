@@ -256,6 +256,13 @@ const MCP_CHANNEL = 'mcp'
 
 type AnyAsyncFn = (...args: any[]) => Promise<any>
 
+function mcpResultText(result: object): string {
+  const content = (result as { content?: unknown }).content
+  if (!Array.isArray(content))
+    return ''
+  return content.map(part => (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') ? (part as { text: string }).text : '').join(' ')
+}
+
 /**
  * Wraps an MCP tool handler to emit a `MCP Tool Invoked` event with the tool
  * name, success flag, and duration. Re-throws so behavior is unchanged.
@@ -264,14 +271,18 @@ export function withMcpToolTracking<H extends AnyAsyncFn>(toolName: string, hand
   const wrapped = (...args: Parameters<H>) => mcpCommandPathStore.run(`mcp:${toolName}`, async () => {
     const start = Date.now()
     let success = true
+    let errorCategory: string | undefined
     try {
       const result = await handler(...args)
-      if (result && typeof result === 'object' && 'isError' in result && (result as { isError?: unknown }).isError)
+      if (result && typeof result === 'object' && 'isError' in result && (result as { isError?: unknown }).isError) {
         success = false
+        errorCategory = categorizeCliError(mcpResultText(result))
+      }
       return result
     }
     catch (error) {
       success = false
+      errorCategory = categorizeCliError(error)
       throw error
     }
     finally {
@@ -282,6 +293,8 @@ export function withMcpToolTracking<H extends AnyAsyncFn>(toolName: string, hand
           tool_name: toolName,
           success,
           duration_ms: Date.now() - start,
+          // Closed enum only: the error text itself never leaves the machine.
+          ...(errorCategory ? { error_category: errorCategory } : {}),
         },
       })
     }
