@@ -3,7 +3,7 @@ import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { computed, defineAsyncComponent, h, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -41,6 +41,8 @@ const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const elements = ref<Element[]>([])
 const buildDurations = ref<Record<string, number>>({})
 const savedOutputs = ref<Record<string, { url: string, kind: string, expires_at: string }>>({})
+const savedBuildNow = ref(Date.now())
+let savedBuildClock: ReturnType<typeof setInterval> | undefined
 const openingJobs = ref<string[]>([])
 const isLoading = ref(true)
 const currentPage = ref(1)
@@ -352,7 +354,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
 function savedBuildIsCurrent(output: { expires_at?: string } | undefined) {
   if (!output?.expires_at)
     return false
-  return Date.parse(output.expires_at) > Date.now()
+  return Date.parse(output.expires_at) > savedBuildNow.value
 }
 
 async function openSavedBuild(jobId: string) {
@@ -362,7 +364,7 @@ async function openSavedBuild(jobId: string) {
   const epoch = simulatorEpoch()
   const output = savedOutputs.value[jobId]
   const tab = window.open('', '_blank')
-  if (!savedBuildIsCurrent(output)) {
+  if (!output?.expires_at || Date.parse(output.expires_at) <= Date.now()) {
     tab?.close()
     toast.error(t('saved-build-expired'))
     return
@@ -515,8 +517,16 @@ watch(props, async () => {
 // renders when the org has no builds yet. watch(props, ...) doesn't fire
 // for the initial value, and DataTable's @reload hook only calls getData().
 onMounted(async () => {
+  savedBuildClock = setInterval(() => {
+    savedBuildNow.value = Date.now()
+  }, 30_000)
   await organizationStore.awaitInitialLoad()
   await reload()
+})
+
+onUnmounted(() => {
+  if (savedBuildClock)
+    clearInterval(savedBuildClock)
 })
 
 watch(showSetupFlow, (newValue) => {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
 import { defaultApiHost, useConsole } from '../../services/console'
@@ -47,6 +47,34 @@ async function start(platform: 'ios' | 'android') {
     pending.value = ''
   }
 }
+
+async function refreshSessions() {
+  const appId = props.appId
+  const known = [...runningSimulators(appId)]
+  await Promise.all(known.map(async (session) => {
+    try {
+      const response = await fetch(`${defaultApiHost}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
+        headers: { authorization: `Bearer ${await sessionToken()}` },
+      })
+      if (response.status === 404) {
+        forgetSimulator(appId, session.id)
+        return
+      }
+      if (!response.ok)
+        return
+      const payload = await response.json() as { data?: { status?: string } }
+      if (payload.data?.status !== 'in-progress')
+        forgetSimulator(appId, session.id)
+    }
+    catch {
+      // A failed lookup keeps the stop control.
+    }
+  }))
+}
+
+onMounted(() => {
+  void refreshSessions()
+})
 
 async function stop(id: string) {
   error.value = ''
