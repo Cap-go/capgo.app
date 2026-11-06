@@ -22,6 +22,10 @@ import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.t
 import { checkPermission } from '../../utils/rbac.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
+import {
+  computeNativeBuildEffectiveQueuePriority,
+  nativeBuildQueueTierFromPriority,
+} from '../../utils/native_build_queue_priority.ts'
 
 export interface BuildStatusParams {
   job_id: string
@@ -104,12 +108,21 @@ export async function getBuildStatus(
 
   // Bind job_id to app_id under RLS before calling the builder.
   // This prevents cross-app access by mixing an allowed app_id with another app's job_id.
-  type StatusBuildRow = Pick<Database['public']['Tables']['build_requests']['Row'], 'app_id' | 'owner_org' | 'requested_by' | 'platform' | 'status' | 'build_mode'>
+  type StatusBuildRow = Pick<Database['public']['Tables']['build_requests']['Row'],
+    'app_id'
+    | 'owner_org'
+    | 'requested_by'
+    | 'platform'
+    | 'status'
+    | 'build_mode'
+    | 'queue_priority'
+    | 'created_at'
+  >
   let buildRequest: StatusBuildRow | null
   try {
     const rows = await withRlsContext(c, principal, client => queryJson<StatusBuildRow>(
       client,
-      `SELECT app_id, owner_org, requested_by, platform, status, build_mode
+      `SELECT app_id, owner_org, requested_by, platform, status, build_mode, queue_priority, created_at
       FROM public.build_requests
       WHERE builder_job_id = $1
       LIMIT 2`,
@@ -346,6 +359,16 @@ export async function getBuildStatus(
     )
   }
 
+  const baseQueuePriority = typeof buildRequest.queue_priority === 'number'
+    ? buildRequest.queue_priority
+    : null
+  const enqueuedAtMs = buildRequest.created_at
+    ? Date.parse(buildRequest.created_at)
+    : Date.now()
+  const effectiveQueuePriority = baseQueuePriority !== null
+    ? computeNativeBuildEffectiveQueuePriority(baseQueuePriority, enqueuedAtMs)
+    : null
+
   return c.json({
     job_id,
     status: effectiveStatus,
@@ -360,5 +383,10 @@ export async function getBuildStatus(
         : null,
     error: effectiveError,
     upload_url: builderJob.uploadUrl || null,
+    queue_priority: baseQueuePriority,
+    effective_queue_priority: effectiveQueuePriority,
+    queue_priority_tier: baseQueuePriority !== null
+      ? nativeBuildQueueTierFromPriority(baseQueuePriority)
+      : null,
   }, 200)
 }
