@@ -133,6 +133,9 @@ type UsageKind = 'mau' | 'storage' | 'bandwidth'
 // Solo plan limits: MAU ~ thousands, storage 1073741824 (1GB), bandwidth 13958643712 (~13GB).
 const OVER_LIMIT: Record<UsageKind, number> = { mau: 1_000_000, storage: 2_000_000_000, bandwidth: 20_000_000_000 }
 const USAGE_KINDS = Object.keys(OVER_LIMIT) as UsageKind[]
+// Storage and bandwidth are fair use on paid plans: only MAU is a plan limit here.
+const PLAN_LIMITED_KINDS: UsageKind[] = ['mau']
+const FAIR_USE_KINDS: UsageKind[] = ['storage', 'bandwidth']
 
 async function setUsage(kind: UsageKind, value: number) {
   const supabase = getSupabaseClient()
@@ -200,7 +203,7 @@ describe('[POST] /triggers/cron_stat_org', () => {
     expect(await readStripeInfoVersion()).toEqual(before)
   })
 
-  it.each(USAGE_KINDS)('flags only the exceeded %s usage and blocks only that action', async (kind) => {
+  it.each(PLAN_LIMITED_KINDS)('flags only the exceeded %s usage and blocks only that action', async (kind) => {
     await setUsage(kind, OVER_LIMIT[kind])
     await markGoodPlan({ trial_at: new Date(0).toISOString() })
 
@@ -225,7 +228,40 @@ describe('[POST] /triggers/cron_stat_org', () => {
     }
   })
 
-  it.each(USAGE_KINDS)('clears the %s exceeded flag once usage drops back under the limit', async (kind) => {
+  it.each(FAIR_USE_KINDS)('keeps a paid plan good and unblocked when %s is over the fair-use reference', async (kind) => {
+    await setUsage(kind, OVER_LIMIT[kind])
+    await markGoodPlan({ trial_at: new Date(0).toISOString() })
+
+    expect((await runCronStatOrg()).status).toBe(200)
+
+    const { data: stripeInfoData } = await getSupabaseClient()
+      .from('stripe_info')
+      .select('*')
+      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
+      .single()
+    expect(stripeInfoData?.is_good_plan).toBe(true)
+
+    for (const other of USAGE_KINDS) {
+      expect(await isExceeded(other), `${other} exceeded`).toBe(false)
+      expect(await isAllowed(other), `${other} allowed`).toBe(true)
+    }
+  })
+
+  it('clears storage and bandwidth flags left over from the old plan limits', async () => {
+    const { error } = await getSupabaseClient()
+      .from('stripe_info')
+      .update({ storage_exceeded: true, bandwidth_exceeded: true })
+      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
+    expect(error).toBeFalsy()
+    await setUsage('storage', OVER_LIMIT.storage)
+    await setUsage('bandwidth', OVER_LIMIT.bandwidth)
+
+    expect((await runCronStatOrg()).status).toBe(200)
+    expect(await isExceeded('storage')).toBe(false)
+    expect(await isExceeded('bandwidth')).toBe(false)
+  })
+
+  it.each(PLAN_LIMITED_KINDS)('clears the %s exceeded flag once usage drops back under the limit', async (kind) => {
     await setUsage(kind, OVER_LIMIT[kind])
     await markGoodPlan()
     await runCronStatOrg()
