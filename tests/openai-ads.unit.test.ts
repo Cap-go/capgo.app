@@ -84,7 +84,7 @@ describe('openai ads conversions api', () => {
       vi.useRealTimers()
     }
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toBe('https://bzr.openai.com/v1/events?pid=5Fiq7Kwp18THe1MThKS7GL')
+    expect(url).toBe('https://bzr.openai.com/v1/events?pid=2Hvm75NK5qA45jWSMVWAdK')
     expect(init.method).toBe('POST')
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-key')
     const body = JSON.parse(init.body as string)

@@ -49,11 +49,17 @@ async function openCancelDialog(page: Page, offer: (route: Route) => Promise<voi
   return calls
 }
 
+async function continuePastLoss(page: Page) {
+  await expect(page.locator('[data-test="cancel-loss-reminder"]')).toBeVisible()
+  await page.locator('[data-test="cancel-loss-continue"]').click()
+}
+
 const eligible = (route: Route) => route.fulfill(json({ offer: { id: OFFER_ID, percentOff: 50, durationMonths: 3, monthlyAmount: 2900, discountedAmount: 1450, currency: 'usd' } }))
 
 test.describe('Cancel plan save offer', () => {
   test('keeping the plan with the discount does not cancel it', async ({ page }) => {
     const calls = await openCancelDialog(page, eligible)
+    await continuePastLoss(page)
     await expect(page.locator('[data-test="cancel-save-offer"]')).toBeVisible()
     await page.locator('[data-test="cancel-offer-accept"]').click()
     await expect(page.locator('[data-test="cancel-save-offer"]')).toBeHidden()
@@ -64,6 +70,7 @@ test.describe('Cancel plan save offer', () => {
 
   test('declining the offer cancels and records the offer', async ({ page }) => {
     const calls = await openCancelDialog(page, eligible)
+    await continuePastLoss(page)
     await page.locator('[data-test="cancel-offer-decline"]').click()
     await expect(page.locator('[data-test="cancel-save-offer"]')).toBeHidden()
     expect(calls.map(call => call.path)).toEqual(['cancel-offer', 'cancel'])
@@ -72,8 +79,18 @@ test.describe('Cancel plan save offer', () => {
 
   test('cancels directly when the offer cannot load', async ({ page }) => {
     const calls = await openCancelDialog(page, route => route.fulfill(json({ error: 'internal_error' }, 500)))
+    await continuePastLoss(page)
+    await expect(page.locator('[data-test="cancel-loss-reminder"]')).toBeHidden()
     await expect(page.locator('[data-test="cancel-plan-form"]')).toBeHidden()
     expect(calls.map(call => call.path)).toEqual(['cancel-offer', 'cancel'])
     expect(calls[1].body.offerId).toBeUndefined()
+  })
+
+  test('keep plan on the loss step closes the dialog without calling Stripe', async ({ page }) => {
+    const calls = await openCancelDialog(page, eligible)
+    await expect(page.locator('[data-test="cancel-loss-reminder"]')).toBeVisible()
+    await page.locator('[data-test="cancel-loss-keep-plan"]').click()
+    await expect(page.locator('[data-test="cancel-loss-reminder"]')).toBeHidden()
+    expect(calls).toEqual([])
   })
 })
