@@ -22,19 +22,30 @@ up.
 
 | Field | Written by | Meaning |
 | --- | --- | --- |
-| `keys`, `key_created_at`, `selection` | `record_app_cicd_setup('key_created')` | API keys the guide created (max 10) and the answers chosen |
+| `keys`, `key_created_at`, `selection` | `record_app_cicd_setup('key_created')` | Caller-owned API keys registered for setup (max 10) and the answers chosen |
 | `marked_done_at` | `record_app_cicd_setup('marked_done')` | The user says CI/CD already ships this app |
 | `ota_detected_at`, `builder_detected_at` | `record_app_cicd_deploy` (backend) | First bundle upload / build request from CI |
-| `detected_via`, `ci_provider` | `record_app_cicd_deploy` | `ci` (CLI ran in CI, provider name) or `key` (a guide key was used) |
+| `ota_detected_via`, `ota_ci_provider`, `builder_detected_via`, `builder_ci_provider` | `record_app_cicd_deploy` | Attribution of each product's first successful detection |
+| `detected_via`, `ci_provider` | `record_app_cicd_deploy` | Source of the first detection across either product, preserved when the other product connects |
 
 `record_app_cicd_setup` needs app read access and only tracks the caller's own
-keys. `record_app_cicd_deploy` is `service_role` only.
+keys. Registration is a setup hint, not proof that a key was created by the
+guide or that it was used in CI. App readers can also mark setup done
+explicitly. Neither path grants access or affects release authorization.
+`record_app_cicd_deploy` is `service_role` only.
 
 ## Detection
 
-`POST /bundle/upsert`, `POST /bundle` and `POST /build/request` call
-`recordCicdDeploy` (`supabase/functions/_backend/utils/cicdDetection.ts`) after a
-successful response. It records the first detection when:
+`POST /bundle/upsert` calls `recordCicdDeploy` only for the final
+`storage_provider: r2` update, which the CLI sends after the zip and manifest
+uploads finish, or after an external upload supplies its URL. Metadata
+creation and intermediate TUS path updates do not count. Hosted uploads record
+after `POST /bundle/upload/complete` finalizes the artifact and assigns its
+channels. External bundle references (`POST /bundle`) and native build requests
+(`POST /build/request`) record after their successful response.
+
+The helper (`supabase/functions/_backend/utils/cicdDetection.ts`) records the
+first detection when:
 
 - the request carries `x-cli-ci` (sent by `@capgo/cli` when `ci-info` detects
   CI), or

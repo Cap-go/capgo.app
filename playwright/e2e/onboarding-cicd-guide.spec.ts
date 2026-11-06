@@ -28,7 +28,7 @@ test.describe('CI/CD setup guide', () => {
     await expect(content).toContainText("branches: ['main']")
     await expect(content).toContainText(`npx @capgo/cli@latest bundle upload ${appId} --channel production --auto-bump patch --fail-on-incompatible`)
     await expect(content).toContainText('CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}')
-    await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('Name it CAPGO_TOKEN, paste the key, and click Add secret.')
+    await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('Store release keys as capgo-release environment secrets and preview keys as repository secrets.')
     await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('gh secret set CAPGO_TOKEN')
     await expect(page.locator('[data-test="cicd-detection"]')).toContainText('Waiting for the first bundle uploaded from CI…')
 
@@ -202,4 +202,100 @@ test.describe('CI/CD setup guide', () => {
     await page.locator('[data-test="cicd-create-key-CAPGO_TOKEN"]').click()
     await expect(page.getByRole('alert')).toHaveText('Only organization admins can create this key. Ask an admin, or create it on the API keys page.')
   })
+  test('ignores public channels without an enabled platform', async ({ page }) => {
+    await page.goto(`${fixture}&defaultChannel=stable&disabledPublicChannel=1`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    const content = page.locator('[data-test="cicd-pipeline-content"]')
+    await expect(content).toContainText('--channel stable --auto-bump patch')
+    await expect(content).not.toContainText('disabled-public')
+  })
+
+  for (const setting of ['channels', 'encryption'] as const) {
+    test(`blocks pipeline generation until ${setting} can be read`, async ({ page }) => {
+      await page.goto(`${fixture}&defaultChannel=stable&${setting === 'channels' ? 'channelError' : 'encryptionError'}=1`)
+      await page.locator('[data-test="cicd-provider-github"]').click()
+      await expect(page.locator(`[data-test="cicd-${setting}-retry"]`)).toBeVisible()
+      await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
+      await page.evaluate((key) => {
+        (window as any).onboardingSetupPreview.state[key] = false
+      }, setting === 'channels' ? 'channelError' : 'encryptionError')
+      await page.locator(`[data-test="cicd-${setting}-retry"]`).click()
+      await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('--channel stable --auto-bump patch')
+    })
+  }
+
+  test('waits for encryption detection before showing a pipeline', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`${fixture}&encrypted=1&encryptionDelay=2000`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
+    await page.clock.fastForward(2000)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+  })
+
+  test('retries key registration without replacing the one-time key', async ({ page }) => {
+    await page.goto(`${fixture}&registrationError=1`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await page.locator('[data-test="cicd-create-key-CAPGO_TOKEN"]').click()
+    await expect(page.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_1')
+    await expect(page.locator('[data-test="cicd-key-registration-error-CAPGO_TOKEN"]')).toBeVisible()
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdRegistrationError = false })
+    await page.locator('[data-test="cicd-key-registration-retry-CAPGO_TOKEN"]').click()
+    await expect(page.locator('[data-test="cicd-key-registration-error-CAPGO_TOKEN"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_1')
+    expect((await previewState(page)).apikeyCreates).toHaveLength(1)
+    const calls = await page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toEqual(calls[0])
+  })
+
+  for (const source of ['ci', 'key'] as const) {
+    test(`keeps polling for Builder ${source} evidence when only live updates are connected`, async ({ page }) => {
+      await page.clock.install()
+      await page.goto(`${fixture}&cicd=detected`)
+      await page.locator('[data-test="cicd-provider-github"]').click()
+      await expect(page.locator('[data-test="cicd-detection"]')).toContainText('received a bundle')
+      await page.locator('[data-test="cicd-product-builder"]').click()
+      await expect(page.locator('[data-test="cicd-detection"]')).toContainText('Waiting for the first build requested from CI')
+      await expect(page.locator('[data-test="cicd-status-detected"]')).toHaveCount(0)
+      await page.evaluate((source) => {
+        (window as any).onboardingSetupPreview.state.cicdRemoteLedger = {
+          ota_detected_at: '2026-11-06T10:00:00.000Z',
+          builder_detected_at: '2026-11-06T12:00:00.000Z',
+          builder_detected_via: source,
+          builder_ci_provider: source === 'ci' ? 'Azure Pipelines' : null,
+          detected_via: 'ci',
+          ci_provider: 'GitHub Actions',
+        }
+      }, source)
+      await page.clock.fastForward(15000)
+      await expect(page.locator('[data-test="cicd-detection"]')).toContainText(source === 'ci' ? 'received a build request from Azure Pipelines' : 'received a build request from the CI key created here')
+    })
+  }
+
+  test('keeps a saved completion when an older status read finishes', async ({ page }) => {
+    await page.goto(fixture)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-detection-refresh"]')).toBeEnabled()
+    const before = await previewState(page)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdStatusDelayMs = 800 })
+    await page.locator('[data-test="cicd-detection-refresh"]').click()
+    await expect.poll(async () => (await previewState(page)).cicdStatusRequests).toBe(before.cicdStatusRequests + 1)
+    await page.locator('[data-test="cicd-mark-done"]').click()
+    await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+    await expect.poll(async () => (await previewState(page)).cicdStatusResponses).toBe(before.cicdStatusResponses + 1)
+    await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+  })
+
+  test('requires separate production and preproduction branches', async ({ page }) => {
+    await page.goto(fixture)
+    await page.locator('[data-test="cicd-strategy-main_preprod"]').click()
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await page.locator('[data-test="cicd-preprod-branch"]').fill('main')
+    await expect(page.locator('[data-test="cicd-branches-equal"]')).toBeVisible()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
+    await page.locator('[data-test="cicd-preprod-branch"]').fill('preprod')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toBeVisible()
+  })
+
 })

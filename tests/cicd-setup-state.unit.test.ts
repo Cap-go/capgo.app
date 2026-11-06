@@ -10,6 +10,9 @@ describe('CI/CD setup state', () => {
       builder_detected_at: '',
       detected_via: 'ci',
       ci_provider: 'GitHub Actions',
+      ota_detected_via: 'ci',
+      ota_ci_provider: 'GitHub Actions',
+      builder_detected_via: 'key',
       key_created_at: 42,
       marked_done_at: null,
     } })).toEqual({
@@ -17,6 +20,10 @@ describe('CI/CD setup state', () => {
       builderDetectedAt: null,
       detectedVia: 'ci',
       ciProvider: 'GitHub Actions',
+      otaDetectedVia: 'ci',
+      otaCiProvider: 'GitHub Actions',
+      builderDetectedVia: 'key',
+      builderCiProvider: null,
       keyCreatedAt: null,
       markedDoneAt: null,
     })

@@ -77,9 +77,9 @@ export const CI_ENCRYPTION_SECRET = 'CAPGO_PRIVATE_KEY_BASE64'
 export const CI_RESTORE_KEY_COMMAND = `echo "$${CI_ENCRYPTION_SECRET}" | base64 -d > .capgo_key_v2`
 
 /** Run locally to get the secret value (one line on macOS and Linux). */
-export function encryptionSecretCommand(provider: 'github' | 'other') {
+export function encryptionSecretCommand(provider: 'github' | 'other', purpose: CiKeySpec['purpose'] = 'release') {
   const value = `base64 < .capgo_key_v2 | tr -d '\\n'`
-  return provider === 'github' ? `${value} | gh secret set ${CI_ENCRYPTION_SECRET}` : value
+  return provider === 'github' ? `${value} | ${githubSecretCommand(CI_ENCRYPTION_SECRET, purpose)}` : value
 }
 
 // Stored build credentials can carry release settings (store review, Play
@@ -236,6 +236,8 @@ function platformLabel(platform: CiPlatform) {
 export function buildCiJobs(input: CiGuideOptions): CiJob[] {
   const options = resolved(input)
   const { appId, strategy, productionBranch, preprodBranch } = options
+  if (strategy === 'main_preprod' && productionBranch === preprodBranch)
+    throw new Error('Production and preproduction branches must be different')
   const production: CiTrigger = { kind: 'push', branch: productionBranch }
   const preprod: CiTrigger = { kind: 'push', branch: preprodBranch }
 
@@ -296,7 +298,10 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
     secret: 'CAPGO_TOKEN',
     setup: 'build',
     sync: platform,
-    command: strategy === 'main_preprod' ? `${buildCommand(platform)} --submit-to-store-review` : buildCommand(platform),
+    command: strategy === 'main_preprod'
+      ? `${buildCommand(platform)} --submit-to-store-review`
+      : platform === 'android' ? `${buildCommand(platform)} ${ANDROID_TESTER_TRACK}` : buildCommand(platform),
+    ...(strategy === 'main_preprod' ? {} : { env: NO_STORE_REVIEW }),
   }))
   if (strategy === 'main_preprod') {
     return [...releases, ...options.platforms.map((platform): CiJob => ({
@@ -348,6 +353,12 @@ function pushBranches(jobs: CiJob[]) {
   return [...new Set(jobs.flatMap(job => job.trigger.kind === 'push' ? [job.trigger.branch] : []))]
 }
 
+// These scopes need branch restrictions configured in the provider's settings.
+// YAML conditions alone cannot protect secrets from changes in a pull request.
+function secretScope(trigger: CiTrigger) {
+  return trigger.kind === 'push' ? 'capgo-release' : 'capgo-preview'
+}
+
 function withPr(command: string, variable: string) {
   return command.replaceAll(PR, variable)
 }
@@ -390,6 +401,8 @@ function yamlQuote(value: string) {
 
 const GITHUB_PR_NUMBER = '$' + '{{ github.event.pull_request.number }}'
 const GITHUB_BASE_REF = '$' + '{{ github.event.pull_request.base.ref }}'
+// GitHub repositories provide a PR number; Azure Repos provides a PR id.
+const AZURE_PR_NUMBER = '$' + '{SYSTEM_PULLREQUEST_PULLREQUESTNUMBER:-$SYSTEM_PULLREQUEST_PULLREQUESTID}'
 
 function renderGithub(jobs: CiJob[], workflowName: string) {
   const branches = pushBranches(jobs)
@@ -420,6 +433,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       `    name: ${yamlScalar(job.name)}`,
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
+      ...(job.trigger.kind === 'push' ? ['    environment: capgo-release'] : []),
       // Without this, cleanup can finish before an in-flight preview upload,
       // which then recreates the deleted channel. Closing cancels the upload.
       ...(hasCleanup && job.trigger.kind !== 'push'
@@ -502,41 +516,41 @@ function renderAzure(jobs: CiJob[]) {
     lines.push('', 'pr:', '  branches:', '    include:', `      - ${yamlQuote('*')}`)
   else
     lines.push('', 'pr: none')
-  lines.push(
-    '',
-    'variables:',
-    '  - group: capgo',
-    '',
-    'pool:',
-    '  vmImage: ubuntu-latest',
-    '',
-    'jobs:',
-  )
-  jobs.forEach((job, index) => {
-    const condition = job.trigger.kind === 'push'
-      ? `and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/${job.trigger.branch}'), ne(variables['Build.Reason'], 'PullRequest'))`
-      : `and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))`
-    if (index > 0)
-      lines.push('')
+  lines.push('', 'pool:', '  vmImage: ubuntu-latest', '', 'stages:')
+  for (const { trigger, jobs: stageJobs } of groupByTrigger(jobs)) {
+    const condition = trigger.kind === 'push'
+      ? `and(eq(variables['Build.SourceBranch'], 'refs/heads/${trigger.branch}'), ne(variables['Build.Reason'], 'PullRequest'))`
+      : `eq(variables['Build.Reason'], 'PullRequest')`
+    // Checks apply to an entire stage. A release group in the root variables
+    // would make its branch check block preview stages too.
     lines.push(
-      `  - job: ${job.id.replaceAll('-', '_')}`,
-      `    displayName: ${yamlScalar(job.name)}`,
+      `  - stage: ${stageJobs[0]!.id.replaceAll('-', '_')}`,
+      '    dependsOn: []',
       `    condition: ${condition}`,
-      '    steps:',
-      '      - task: NodeTool@0',
-      '        inputs:',
-      `          versionSpec: ${yamlQuote('24.x')}`,
+      '    variables:',
+      `      - group: ${secretScope(trigger)}`,
+      '    jobs:',
     )
-    for (const command of setupCommands(job))
-      lines.push(...setupStep(command, '      ', 'script', secret => `$(${secret})`))
-    lines.push(
-      `      - script: ${yamlScalar(withPr(job.command, '$(System.PullRequest.PullRequestId)'))}`,
-      `        displayName: ${yamlScalar(job.name)}`,
-      '        env:',
-      `          CAPGO_TOKEN: $(${job.secret})`,
-      ...yamlEnv(job, '          '),
-    )
-  })
+    for (const job of stageJobs) {
+      lines.push(
+        `      - job: ${job.id.replaceAll('-', '_')}`,
+        `        displayName: ${yamlScalar(job.name)}`,
+        '        steps:',
+        '          - task: NodeTool@0',
+        '            inputs:',
+        `              versionSpec: ${yamlQuote('24.x')}`,
+      )
+      for (const command of setupCommands(job))
+        lines.push(...setupStep(command, '          ', 'script', secret => `$(${secret})`))
+      lines.push(
+        `          - script: ${yamlScalar(withPr(job.command, AZURE_PR_NUMBER))}`,
+        `            displayName: ${yamlScalar(job.name)}`,
+        '            env:',
+        `              CAPGO_TOKEN: $(${job.secret})`,
+        ...yamlEnv(job, '              '),
+      )
+    }
+  }
   return lines.join('\n')
 }
 
@@ -544,6 +558,7 @@ function renderBitbucketStep(job: CiJob, indent: string) {
   const lines = [
     `${indent}- step:`,
     `${indent}    name: ${yamlScalar(job.name)}`,
+    `${indent}    environment: ${secretScope(job.trigger)}`,
     `${indent}    caches:`,
     `${indent}      - node`,
     `${indent}    script:`,
@@ -613,7 +628,7 @@ function renderCircleci(jobs: CiJob[]) {
   const releaseBranches = pushBranches(jobs)
   lines.push('', 'workflows:', '  capgo:', '    jobs:')
   for (const job of jobs) {
-    lines.push(`      - ${job.id}:`, '          filters:', '            branches:')
+    lines.push(`      - ${job.id}:`, `          context: ${secretScope(job.trigger)}`, '          filters:', '            branches:')
     if (job.trigger.kind === 'push')
       lines.push(`              only: ${yamlQuote(job.trigger.branch)}`)
     else
@@ -665,8 +680,8 @@ export function buildCiPipeline(input: CiGuideOptions): CiPipeline {
 }
 
 /** `gh secret set` reads the value from stdin, so the key never lands in shell history. */
-export function githubSecretCommand(secret: CiSecretName) {
-  return `gh secret set ${secret}`
+export function githubSecretCommand(secret: CiSecretName | typeof CI_ENCRYPTION_SECRET, purpose: CiKeySpec['purpose'] = 'release') {
+  return `gh secret set ${secret}${purpose === 'release' ? ' --env capgo-release' : ''}`
 }
 
 /** Builder: store this machine's signing credentials on Capgo so CI only needs CAPGO_TOKEN. */

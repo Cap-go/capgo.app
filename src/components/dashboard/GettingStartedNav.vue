@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OrganizationApp } from '~/stores/organization'
-import { computed, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconX from '~icons/lucide/x'
@@ -132,6 +132,29 @@ watch(() => organizationStore.currentOrganization?.gid, async (orgId) => {
   await organizationStore.awaitInitialLoad()
   void organizationStore.refreshAppsOnboarding(orgId)
 }, { immediate: true })
+
+let refreshTimer: ReturnType<typeof setInterval> | undefined
+let refreshing = false
+async function refreshCiCdState() {
+  const orgId = organizationStore.currentOrganization?.gid
+  // Refresh only the current organization while a CI/CD nudge is visible.
+  if (!orgId || refreshing || !cicdApps.value.length || document.visibilityState !== 'visible')
+    return
+  refreshing = true
+  try {
+    await organizationStore.refreshAppsOnboarding(orgId)
+  }
+  finally {
+    refreshing = false
+  }
+}
+onMounted(() => {
+  refreshTimer = setInterval(() => void refreshCiCdState(), 30000)
+})
+onUnmounted(() => {
+  if (refreshTimer)
+    clearInterval(refreshTimer)
+})
 </script>
 
 <template>

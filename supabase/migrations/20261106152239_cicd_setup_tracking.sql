@@ -13,6 +13,7 @@
 --   builder_detected_at  first native build requested from CI (or with a guide key)
 --   detected_via         'ci' (CLI ran in CI) or 'key' (a guide key was used)
 --   ci_provider          CI name reported by the CLI, when known
+--   <product>_detected_via / <product>_ci_provider keep each product's attribution
 --
 -- Execution model: one PK-indexed apps row per call. record_app_cicd_deploy
 -- runs once per bundle upload or build request (backend, service_role), and
@@ -163,8 +164,11 @@ BEGIN
       COALESCE(CASE WHEN jsonb_typeof(apps.onboarding -> 'cicd') = 'object' THEN apps.onboarding -> 'cicd' END, '{}'::jsonb)
       || jsonb_strip_nulls(jsonb_build_object(
         v_field, public.app_onboarding_cicd_timestamp(),
-        'detected_via', CASE WHEN v_provider IS NOT NULL THEN 'ci' ELSE 'key' END,
-        'ci_provider', v_provider
+        p_product || '_detected_via', CASE WHEN v_provider IS NOT NULL THEN 'ci' ELSE 'key' END,
+        p_product || '_ci_provider', v_provider,
+        'detected_via', COALESCE(NULLIF(apps.onboarding -> 'cicd' ->> 'detected_via', ''), CASE WHEN v_provider IS NOT NULL THEN 'ci' ELSE 'key' END),
+        'ci_provider', CASE WHEN NULLIF(apps.onboarding -> 'cicd' ->> 'detected_via', '') IS NOT NULL
+          THEN apps.onboarding -> 'cicd' ->> 'ci_provider' ELSE v_provider END
       ))),
     updated_at = now()
   WHERE apps.app_id = p_app_id

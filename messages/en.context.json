@@ -4369,5 +4369,17 @@
   "cicd-guide-encrypted-required": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-secret-encryption": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-secret-gitlab-preview-encryption": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "cicd-guide-note-encryption": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "cicd-guide-note-encryption": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-branches-equal": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-channels-error": "Used in Capgo web console. Role: toast or status message about \"cicd guide channels error\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-encryption-error": "Used in Capgo web console. Role: toast or status message about \"cicd guide encryption error\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-key-registration-error": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-key-registration-retry": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-azure-protect": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-bitbucket-protect": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-circleci-protect": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-encryption-scopes": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-github-encryption": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-secret-github-protect": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-settings-loading": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

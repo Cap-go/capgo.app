@@ -76,11 +76,17 @@ const preprodBranchInput = ref(saved.preprodBranch ?? DEFAULT_PREPROD_BRANCH)
 const productionBranch = computed(() => normalizeCiBranch(productionBranchInput.value, DEFAULT_PRODUCTION_BRANCH))
 const preprodBranch = computed(() => normalizeCiBranch(preprodBranchInput.value, DEFAULT_PREPROD_BRANCH))
 const productionBranchInvalid = computed(() => productionBranchInput.value.trim() !== productionBranch.value)
+const branchesEqual = computed(() => strategy.value === 'main_preprod' && productionBranch.value === preprodBranch.value)
+const releaseBranches = computed(() => strategy.value === 'main_preprod' ? [productionBranch.value, preprodBranch.value] : [productionBranch.value])
+const releaseBranchRefs = computed(() => releaseBranches.value.map(branch => `refs/heads/${branch}`).join(', '))
+const circleReleaseExpression = computed(() => releaseBranches.value.map(branch => `pipeline.git.branch == "${branch}"`).join(' or '))
 const preprodBranchInvalid = computed(() => preprodBranchInput.value.trim() !== preprodBranch.value)
 
 // undefined while loading; null when the app has no default channel yet.
 // Apps can have one default channel per platform: CI uploads to all of them.
 const defaultChannels = ref<string[] | null | undefined>(undefined)
+type LoadStatus = 'loading' | 'ready' | 'error'
+const channelStatus = ref<LoadStatus>('loading')
 const productionChannels = computed(() => normalizeCiChannels(defaultChannels.value))
 const productionChannel = computed(() => productionChannels.value.join(', '))
 
@@ -88,13 +94,15 @@ const productionChannel = computed(() => productionChannels.value.join(', '))
 // bundles (or fails when the organization enforces encryption).
 const encryptionRequired = computed(() => organizationStore.getOrgByAppId(props.appId)?.enforce_encrypted_bundles === true)
 const encryptionDetected = ref(false)
+const encryptionStatus = ref<LoadStatus>('loading')
 const encryptedChoice = ref<boolean | null>(null)
 const encrypted = computed(() => encryptionRequired.value || (encryptedChoice.value ?? encryptionDetected.value))
 
 // Never swap in another channel: CI would ship to a channel the user didn't pick.
 const unsupportedChannel = computed(() => productionChannels.value.find(channel => !isCiChannelSupported(channel)))
 const channelUnsupported = computed(() => product.value === 'ota' && unsupportedChannel.value !== undefined)
-const pipeline = computed(() => provider.value && !channelUnsupported.value
+const pipeline = computed(() => provider.value && !channelUnsupported.value && !branchesEqual.value
+  && (product.value !== 'ota' || (channelStatus.value === 'ready' && encryptionStatus.value === 'ready'))
   ? buildCiPipeline({
       appId: props.appId,
       product: product.value,
@@ -141,6 +149,13 @@ const keySlot = (spec: CiKeySpec): CiKeySlot => `${spec.secret}:${spec.role}`
 const createdKeys = reactive<Partial<Record<CiKeySlot, string>>>({})
 const creatingKey = reactive<Partial<Record<CiKeySlot, boolean>>>({})
 const keyErrors = reactive<Partial<Record<CiKeySlot, 'permission' | 'generic'>>>({})
+interface KeyRegistration {
+  status: 'pending' | 'saving' | 'saved' | 'error'
+  appId: string
+  rbacId: string
+  selection: { product: CiProduct, strategy: CiStrategy, provider: CiProvider | null }
+}
+const keyRegistrations = reactive<Partial<Record<CiKeySlot, KeyRegistration>>>({})
 
 watch([product, strategy, provider, platforms, productionBranch, preprodBranch], () => {
   if (!provider.value)
@@ -202,6 +217,7 @@ async function createKey(spec: CiKeySpec) {
   creatingKey[slot] = true
   keyErrors[slot] = undefined
   const appId = props.appId
+  const selection = { product: product.value, strategy: strategy.value, provider: provider.value }
   try {
     const name = `${providerName.value || 'CI'} ${spec.purpose === 'preview' ? 'previews' : 'CI'} (${appId})`
     const { data, error } = await createDefaultApiKey(capgo, name, { appId, appRole: spec.role, hashed: true })
@@ -214,7 +230,16 @@ async function createKey(spec: CiKeySpec) {
       return
     createdKeys[slot] = key
     track('onboarding_cicd_key_created', { role: spec.role })
-    void recordCreatedKey(spec, (data as { rbac_id?: unknown } | null)?.rbac_id)
+    const rbacId = (data as { rbac_id?: unknown } | null)?.rbac_id
+    if (typeof rbacId === 'string' && rbacId) {
+      keyRegistrations[slot] = {
+        status: 'pending',
+        appId,
+        rbacId,
+        selection,
+      }
+      void recordCreatedKey(spec)
+    }
   }
   catch (error) {
     console.error('Cannot create CI API key', error)
@@ -228,30 +253,55 @@ async function createKey(spec: CiKeySpec) {
 
 async function loadEncryptionState() {
   const appId = props.appId
-  // key_id is set on bundles encrypted with a v2 key.
-  const { data } = await capgo
-    .from('app_versions')
-    .select('key_id')
-    .eq('app_id', appId)
-    .not('key_id', 'is', null)
-    .limit(1)
-  if (appId === props.appId)
-    encryptionDetected.value = !!data?.[0]?.key_id
+  encryptionStatus.value = 'loading'
+  try {
+    // key_id is set on bundles encrypted with a v2 key.
+    const { data, error } = await capgo
+      .from('app_versions')
+      .select('key_id')
+      .eq('app_id', appId)
+      .not('key_id', 'is', null)
+      .limit(1)
+    if (error)
+      throw error
+    if (appId === props.appId) {
+      encryptionDetected.value = !!data?.[0]?.key_id
+      encryptionStatus.value = 'ready'
+    }
+  }
+  catch (error) {
+    console.error('Cannot check CI/CD bundle encryption', error)
+    if (appId === props.appId)
+      encryptionStatus.value = 'error'
+  }
 }
 
 async function loadDefaultChannel() {
   const appId = props.appId
-  // One default channel per platform at most, so this list stays tiny.
-  const { data, error } = await capgo
-    .from('channels')
-    .select('name')
-    .eq('app_id', appId)
-    .eq('public', true)
-  if (appId !== props.appId)
-    return
-  // On a read error keep the conventional name instead of warning about a missing channel.
-  const names = (data ?? []).map(row => row.name).filter((name): name is string => !!name)
-  defaultChannels.value = error ? ['production'] : (names.length ? names : null)
+  channelStatus.value = 'loading'
+  try {
+    // One default channel per platform at most, so this list stays tiny.
+    const { data, error } = await capgo
+      .from('channels')
+      .select('name, ios, android, electron')
+      .eq('app_id', appId)
+      .eq('public', true)
+    if (error)
+      throw error
+    if (appId !== props.appId)
+      return
+    const names = (data ?? [])
+      .filter(row => row.ios || row.android || row.electron)
+      .map(row => row.name)
+      .filter((name): name is string => !!name)
+    defaultChannels.value = names.length ? names : null
+    channelStatus.value = 'ready'
+  }
+  catch (error) {
+    console.error('Cannot load CI/CD default channels', error)
+    if (appId === props.appId)
+      channelStatus.value = 'error'
+  }
 }
 
 // CI/CD state from apps.onboarding.cicd. The backend fills the detection fields
@@ -259,12 +309,13 @@ async function loadDefaultChannel() {
 // user's first pipeline run without a reload.
 const onboarding = ref<unknown>(organizationStore.getAppByAppId(props.appId)?.onboarding)
 const cicdState = computed(() => parseCiCdSetupState(onboarding.value))
-const detectedAt = computed(() => ciCdDetectedAt(cicdState.value))
+const detectedAt = computed(() => product.value === 'ota' ? cicdState.value.otaDetectedAt : cicdState.value.builderDetectedAt)
 const statusError = ref(false)
 const statusLoading = ref(false)
 const markingDone = ref(false)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let statusGeneration = 0
+let onboardingWrites = 0
 
 function applyOnboarding(value: unknown) {
   onboarding.value = value
@@ -272,6 +323,8 @@ function applyOnboarding(value: unknown) {
 }
 
 async function refreshStatus() {
+  if (onboardingWrites > 0)
+    return
   const generation = ++statusGeneration
   const appId = props.appId
   statusLoading.value = true
@@ -281,9 +334,9 @@ async function refreshStatus() {
       return
     statusError.value = !!error
     if (!error && data) {
-      const wasDone = !!detectedAt.value
+      const wasDone = !!ciCdDetectedAt(cicdState.value)
       applyOnboarding(data.onboarding)
-      if (!wasDone && detectedAt.value)
+      if (!wasDone && ciCdDetectedAt(cicdState.value))
         track('onboarding_cicd_detected', { via: cicdState.value.detectedVia ?? 'unknown' })
     }
   }
@@ -297,16 +350,23 @@ const detectedLabel = computed(() => {
   const state = cicdState.value
   if (!detectedAt.value)
     return ''
-  const fallbackKey = state.detectedVia === 'key' ? 'cicd-guide-status-from-key' : 'cicd-guide-status-from-ci'
-  const from = state.ciProvider && state.ciProvider !== 'ci' ? state.ciProvider : t(fallbackKey)
-  const builderFirst = !state.otaDetectedAt || (!!state.builderDetectedAt && state.builderDetectedAt < state.otaDetectedAt)
-  return t(builderFirst ? 'cicd-guide-status-detected-builder' : 'cicd-guide-status-detected-ota', { from, date: formatDate(detectedAt.value) })
+  const productVia = product.value === 'ota' ? state.otaDetectedVia : state.builderDetectedVia
+  const via = productVia ?? state.detectedVia
+  const ciProvider = productVia
+    ? product.value === 'ota' ? state.otaCiProvider : state.builderCiProvider
+    : state.ciProvider
+  const fallbackKey = via === 'key' ? 'cicd-guide-status-from-key' : 'cicd-guide-status-from-ci'
+  const from = ciProvider && ciProvider !== 'ci' ? ciProvider : t(fallbackKey)
+  return t(product.value === 'builder' ? 'cicd-guide-status-detected-builder' : 'cicd-guide-status-detected-ota', { from, date: formatDate(detectedAt.value) })
 })
 
 async function markDone() {
   if (markingDone.value)
     return
   markingDone.value = true
+  onboardingWrites += 1
+  statusGeneration += 1
+  statusLoading.value = false
   const appId = props.appId
   try {
     const { data, error } = await capgo.rpc('record_app_cicd_setup', { p_app_id: appId, p_event: 'marked_done' })
@@ -321,25 +381,41 @@ async function markDone() {
     toast.error(t('cicd-guide-mark-done-error'))
   }
   finally {
+    onboardingWrites -= 1
     markingDone.value = false
   }
 }
 
 // Tracks the guide key so its first use from CI marks this step done, even
 // where the CLI cannot tell it runs in CI.
-async function recordCreatedKey(spec: CiKeySpec, rbacId: unknown) {
-  if (typeof rbacId !== 'string' || !rbacId)
+async function recordCreatedKey(spec: CiKeySpec) {
+  const registration = keyRegistrations[keySlot(spec)]
+  if (!registration || registration.status === 'saving' || registration.status === 'saved')
     return
-  const { data, error } = await capgo.rpc('record_app_cicd_setup', {
-    p_app_id: props.appId,
-    p_event: 'key_created',
-    p_apikey_rbac_id: rbacId,
-    p_selection: { product: product.value, strategy: strategy.value, provider: provider.value },
-  })
-  if (error)
+  registration.status = 'saving'
+  onboardingWrites += 1
+  statusGeneration += 1
+  statusLoading.value = false
+  try {
+    const { data, error } = await capgo.rpc('record_app_cicd_setup', {
+      p_app_id: registration.appId,
+      p_event: 'key_created',
+      p_apikey_rbac_id: registration.rbacId,
+      p_selection: registration.selection,
+    })
+    if (error)
+      throw error
+    registration.status = 'saved'
+    if (data && registration.appId === props.appId)
+      applyOnboarding(data)
+  }
+  catch (error) {
     console.error('Cannot record the CI/CD key', error)
-  else if (data)
-    applyOnboarding(data)
+    registration.status = 'error'
+  }
+  finally {
+    onboardingWrites -= 1
+  }
 }
 
 onMounted(() => {
@@ -348,12 +424,13 @@ onMounted(() => {
   void refreshStatus()
   track('onboarding_cicd_guide_opened')
   statusTimer = setInterval(() => {
-    if (!detectedAt.value && document.visibilityState === 'visible')
+    if (!detectedAt.value && !statusLoading.value && document.visibilityState === 'visible')
       void refreshStatus()
   }, 15000)
 })
 
 onUnmounted(() => {
+  statusGeneration += 1
   if (statusTimer)
     clearInterval(statusTimer)
 })
@@ -499,7 +576,8 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
         <label v-if="strategy === 'main_preprod'" class="block">
           <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('cicd-guide-preprod-branch') }}</span>
           <input v-model="preprodBranchInput" type="text" class="d-input mt-1 h-11 w-full rounded-lg border-slate-300 bg-white font-mono text-sm dark:border-white/20 dark:bg-slate-900" spellcheck="false" autocomplete="off" data-test="cicd-preprod-branch" :aria-invalid="preprodBranchInvalid">
-          <span v-if="preprodBranchInvalid" class="mt-1 block text-xs text-amber-700 dark:text-amber-400">{{ t('cicd-guide-branch-invalid', { branch: preprodBranch }) }}</span>
+          <span v-if="branchesEqual" class="mt-1 block text-xs text-amber-700 dark:text-amber-400" data-test="cicd-branches-equal">{{ t('cicd-guide-branches-equal') }}</span>
+          <span v-else-if="preprodBranchInvalid" class="mt-1 block text-xs text-amber-700 dark:text-amber-400">{{ t('cicd-guide-branch-invalid', { branch: preprodBranch }) }}</span>
         </label>
       </div>
     </section>
@@ -534,6 +612,18 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
         {{ t('cicd-guide-choose-provider') }}
       </p>
     </section>
+
+    <div v-if="provider && product === 'ota' && (channelStatus !== 'ready' || encryptionStatus !== 'ready')" class="space-y-3" aria-live="polite" data-test="cicd-settings-status">
+      <template v-for="setting in (['channels', 'encryption'] as const)" :key="setting">
+        <div v-if="(setting === 'channels' ? channelStatus : encryptionStatus) !== 'ready'" class="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-900 dark:text-slate-200" :data-test="`cicd-${setting}-status`">
+          <span class="min-w-0 flex-1">{{ t((setting === 'channels' ? channelStatus : encryptionStatus) === 'error' ? `cicd-guide-${setting}-error` : 'cicd-guide-settings-loading') }}</span>
+          <button v-if="(setting === 'channels' ? channelStatus : encryptionStatus) === 'error'" type="button" :class="secondaryLinkClass" :data-test="`cicd-${setting}-retry`" @click="setting === 'channels' ? loadDefaultChannel() : loadEncryptionState()">
+            <IconRefresh class="h-4 w-4" aria-hidden="true" />
+            {{ t('cicd-guide-refresh') }}
+          </button>
+        </div>
+      </template>
+    </div>
 
     <section v-if="provider && pipeline" aria-labelledby="cicd-steps-title" class="space-y-4" data-test="cicd-steps">
       <div>
@@ -635,8 +725,17 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 >
                   <IconLoader v-if="creatingKey[keySlot(spec)]" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
                   <IconKey v-else class="h-4 w-4" aria-hidden="true" />
-                  {{ creatingKey[keySlot(spec)] ? t('cicd-guide-key-creating') : t('cicd-guide-key-create', { secret: spec.secret }) }}
+                  {{ creatingKey[keySlot(spec)] ? t('cicd-guide-key-creating') : t('cicd-guide-key-create', { secret: spec.secret, scope: spec.purpose === 'preview' ? 'capgo-preview' : 'capgo-release' }) }}
                 </button>
+                <div v-if="keyRegistrations[keySlot(spec)]?.status === 'error'" class="mt-3 text-sm text-amber-700 dark:text-amber-400" :data-test="`cicd-key-registration-error-${spec.secret}`">
+                  <p role="alert">
+                    {{ t('cicd-guide-key-registration-error') }}
+                  </p>
+                  <button type="button" :class="secondaryLinkClass" class="mt-2" :data-test="`cicd-key-registration-retry-${spec.secret}`" @click="recordCreatedKey(spec)">
+                    <IconRefresh class="h-4 w-4" aria-hidden="true" />
+                    {{ t('cicd-guide-key-registration-retry') }}
+                  </button>
+                </div>
                 <p v-if="keyErrors[keySlot(spec)]" class="mt-2 text-sm text-red-700 dark:text-red-400" role="alert">
                   {{ t(keyErrors[keySlot(spec)] === 'permission' ? 'cicd-guide-key-error-permission' : 'cicd-guide-key-error') }}
                 </p>
@@ -665,7 +764,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 {{ t(`cicd-guide-secret-${provider}-1`) }}
               </li>
               <li v-for="spec in pipeline.keys" :key="spec.secret">
-                {{ t(`cicd-guide-secret-${provider}-2`, { secret: spec.secret }) }}
+                {{ t(`cicd-guide-secret-${provider}-2`, { secret: spec.secret, scope: spec.purpose === 'preview' ? 'capgo-preview' : 'capgo-release' }) }}
+              </li>
+              <li v-if="provider === 'github'">
+                {{ t('cicd-guide-secret-github-protect', { branches: releaseBranches.join(', ') }) }}
               </li>
               <li v-if="pipeline.extraSecrets.length" data-test="cicd-encryption-secret">
                 {{ t('cicd-guide-secret-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
@@ -673,9 +775,16 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ encryptionSecretCommand(provider === 'github' ? 'github' : 'other') }}</code>
                   <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
                 </button>
+                <button v-if="provider === 'github' && strategy === 'pull_request'" type="button" class="mt-2" :class="commandClass" :aria-label="`${t('copy')}: ${encryptionSecretCommand('github', 'preview')}`" @click="copy(encryptionSecretCommand('github', 'preview'))">
+                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ encryptionSecretCommand('github', 'preview') }}</code>
+                  <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
+                </button>
+                <p v-if="provider === 'github' && strategy === 'pull_request'" class="mt-2">
+                  {{ t('cicd-guide-secret-github-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
+                </p>
               </li>
               <template v-if="provider === 'gitlab'">
-                <li>{{ t('cicd-guide-secret-gitlab-protect') }}</li>
+                <li>{{ t('cicd-guide-secret-gitlab-protect', { branch: productionBranch }) }}</li>
                 <li v-if="strategy === 'main_preprod'">
                   {{ t('cicd-guide-secret-gitlab-protect-preprod', { branch: preprodBranch }) }}
                 </li>
@@ -686,8 +795,18 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   {{ t('cicd-guide-secret-gitlab-preview-encryption', { secret: CI_ENCRYPTION_SECRET }) }}
                 </li>
               </template>
-              <li v-if="provider === 'azure'">
-                {{ t('cicd-guide-secret-azure-permit') }}
+              <template v-if="provider === 'azure'">
+                <li>{{ t('cicd-guide-secret-azure-protect', { branches: releaseBranchRefs }) }}</li>
+                <li>{{ t('cicd-guide-secret-azure-permit') }}</li>
+              </template>
+              <li v-if="provider === 'bitbucket'">
+                {{ t('cicd-guide-secret-bitbucket-protect', { branches: releaseBranches.join(', ') }) }}
+              </li>
+              <li v-if="provider === 'circleci'">
+                {{ t('cicd-guide-secret-circleci-protect', { expression: circleReleaseExpression }) }}
+              </li>
+              <li v-if="pipeline.extraSecrets.length && strategy === 'pull_request' && (provider === 'azure' || provider === 'bitbucket' || provider === 'circleci')">
+                {{ t('cicd-guide-secret-encryption-scopes', { secret: CI_ENCRYPTION_SECRET }) }}
               </li>
             </ol>
             <template v-if="provider === 'github'">
@@ -700,10 +819,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   :key="spec.secret"
                   type="button"
                   :class="commandClass"
-                  :aria-label="`${t('copy')}: ${githubSecretCommand(spec.secret)}`"
-                  @click="copy(githubSecretCommand(spec.secret))"
+                  :aria-label="`${t('copy')}: ${githubSecretCommand(spec.secret, spec.purpose)}`"
+                  @click="copy(githubSecretCommand(spec.secret, spec.purpose))"
                 >
-                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ githubSecretCommand(spec.secret) }}</code>
+                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ githubSecretCommand(spec.secret, spec.purpose) }}</code>
                   <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
                 </button>
               </div>

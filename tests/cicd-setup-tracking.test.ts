@@ -42,11 +42,11 @@ async function cicd(appId: string) {
   return parseCiCdSetupState(row?.onboarding)
 }
 
-async function upsertBundle(appId: string, name: string, extraHeaders: Record<string, string> = {}) {
+async function upsertBundle(appId: string, name: string, extraHeaders: Record<string, string> = {}, storageProvider?: string) {
   const response = await fetch(`${BASE_URL}/bundle/upsert`, {
     method: 'POST',
     headers: { ...headers, ...extraHeaders },
-    body: JSON.stringify({ app_id: appId, name }),
+    body: JSON.stringify({ app_id: appId, name, ...(storageProvider ? { storage_provider: storageProvider } : {}) }),
   })
   expect(response.status, await response.clone().text()).toBe(200)
 }
@@ -66,18 +66,34 @@ describe('CI/CD setup tracking', () => {
     await new Promise(resolve => setTimeout(resolve, 1000))
     expect(isCiCdSetupDone((await executeSQL('SELECT onboarding FROM public.apps WHERE app_id = $1', [APP_UPSERT]))[0]?.onboarding)).toBe(false)
 
-    await upsertBundle(APP_UPSERT, '1.0.2-ci', { 'x-cli-ci': 'GitHub Actions' })
+    // The initial row exists before transfer starts. An abandoned upload must not complete setup.
+    await upsertBundle(APP_UPSERT, '1.0.2-ci', { 'x-cli-ci': 'GitHub Actions' }, 'r2-direct')
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    expect((await cicd(APP_UPSERT)).otaDetectedAt).toBeNull()
+
+    // The CLI finalizes storage_provider after the zip and manifest are persisted.
+    await upsertBundle(APP_UPSERT, '1.0.2-ci', { 'x-cli-ci': 'GitHub Actions' }, 'r2')
     await expect.poll(async () => (await cicd(APP_UPSERT)).otaDetectedAt, { timeout: 10000 }).toBeTruthy()
     const state = await cicd(APP_UPSERT)
     expect(state).toEqual(expect.objectContaining({ detectedVia: 'ci', ciProvider: 'GitHub Actions', builderDetectedAt: null }))
 
     // Only the first CI upload is recorded.
-    await upsertBundle(APP_UPSERT, '1.0.3-ci', { 'x-cli-ci': 'GitLab CI' })
+    await upsertBundle(APP_UPSERT, '1.0.3-ci', { 'x-cli-ci': 'GitLab CI' }, 'r2')
     await new Promise(resolve => setTimeout(resolve, 1000))
     expect(await cicd(APP_UPSERT)).toEqual(state)
+
+    const [key] = await executeSQL<{ rbac_id: string }>('SELECT rbac_id::text AS rbac_id FROM public.apikeys WHERE key = $1', [APIKEY_TEST_ALL])
+    const client = await signedIn()
+    const { error } = await client.rpc('record_app_cicd_setup', { p_app_id: APP_UPSERT, p_event: 'key_created', p_apikey_rbac_id: key!.rbac_id })
+    expect(error).toBeNull()
+    await executeSQL('SELECT public.record_app_cicd_deploy($1, $2, $3, $4)', [APP_UPSERT, 'builder', key!.rbac_id, null])
+    expect(await cicd(APP_UPSERT)).toEqual(expect.objectContaining({
+      detectedVia: 'ci', ciProvider: 'GitHub Actions', otaDetectedAt: state.otaDetectedAt, builderDetectedAt: expect.any(String),
+      otaDetectedVia: 'ci', otaCiProvider: 'GitHub Actions', builderDetectedVia: 'key', builderCiProvider: null,
+    }))
   })
 
-  it('marks live updates done when a key created by the guide uploads, even without CI detection', async () => {
+  it('marks live updates done when a caller-owned registered key uploads, even without CI detection', async () => {
     const [key] = await executeSQL<{ rbac_id: string }>('SELECT rbac_id::text AS rbac_id FROM public.apikeys WHERE key = $1', [APIKEY_TEST_ALL])
     const client = await signedIn()
     const { data, error } = await client.rpc('record_app_cicd_setup', {
@@ -92,9 +108,12 @@ describe('CI/CD setup tracking', () => {
     expect(stored?.selection).toEqual({ product: 'ota', strategy: 'pull_request', provider: 'gitlab' })
     expect(stored?.key_created_at).toBeTruthy()
 
-    await upsertBundle(APP_KEY, '1.0.1-guide-key')
+    await upsertBundle(APP_KEY, '1.0.1-guide-key', {}, 'r2')
     await expect.poll(async () => (await cicd(APP_KEY)).otaDetectedAt, { timeout: 10000 }).toBeTruthy()
     expect(await cicd(APP_KEY)).toEqual(expect.objectContaining({ detectedVia: 'key', ciProvider: null }))
+
+    await executeSQL('SELECT public.record_app_cicd_deploy($1, $2, $3, $4)', [APP_KEY, 'builder', null, 'GitHub Actions'])
+    expect(await cicd(APP_KEY)).toEqual(expect.objectContaining({ detectedVia: 'key', ciProvider: null, builderDetectedAt: expect.any(String), otaDetectedVia: 'key', builderDetectedVia: 'ci', builderCiProvider: 'GitHub Actions' }))
   })
 
   it('only lets app readers record their own keys and the done state', async () => {

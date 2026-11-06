@@ -792,6 +792,23 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     await expect(link).toHaveCount(0)
   })
 
+  test('refreshes the sidebar after CI connects while outside the guide', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    const link = page.locator('[data-test="cicd-nav-link"]')
+    await expect(link).toBeVisible()
+    await page.evaluate(() => {
+      (window as any).onboardingSetupPreview.state.cicdRemoteLedger = {
+        ota_detected_at: '2026-11-06T12:00:00.000Z',
+        detected_via: 'ci',
+        ci_provider: 'GitHub Actions',
+      }
+    })
+    await expect(link).toBeVisible()
+    await page.clock.fastForward(30000)
+    await expect(link).toHaveCount(0)
+  })
+
   for (const scenario of [
     { name: 'v4 Builder', query: 'version=4&assignment=builder-only', checklist: '[data-test="builder-checklist"]', pollsProgress: false },
   ]) {

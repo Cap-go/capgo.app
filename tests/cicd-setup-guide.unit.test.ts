@@ -60,6 +60,32 @@ describe('CI/CD guide pipelines', () => {
     expect(pipeline.keys).toEqual([{ secret: 'CAPGO_TOKEN', role: 'app_uploader', purpose: 'release' }])
   })
 
+  it('rejects production and preproduction branches that normalize to the same name', () => {
+    for (const product of CI_PRODUCTS) {
+      expect(() => buildCiPipeline({ ...base, product, strategy: 'main_preprod', provider: 'github', productionBranch: ' main ', preprodBranch: 'main' })).toThrow('branches must be different')
+    }
+  })
+
+  it('keeps release credentials in provider scopes that can restrict branch access', () => {
+    for (const product of CI_PRODUCTS) {
+      const options = { ...base, product, strategy: 'pull_request' } as const
+      const github = parse(buildCiPipeline({ ...options, provider: 'github' }).content)
+      for (const [id, job] of Object.entries<{ environment?: string }>(github.jobs))
+        expect(job.environment, id).toBe(id.includes('preview') ? undefined : 'capgo-release')
+      const bitbucket = parse(buildCiPipeline({ ...options, provider: 'bitbucket', platforms: ['ios'] }).content)
+      expect(bitbucket.pipelines.branches.main[0].step.environment).toBe('capgo-release')
+      expect(bitbucket.pipelines['pull-requests']['**'][0].step.environment).toBe('capgo-preview')
+      const circleci = parse(buildCiPipeline({ ...options, provider: 'circleci' }).content)
+      for (const entry of circleci.workflows.capgo.jobs) {
+        const [id, config] = Object.entries<{ context: string }>(entry)[0]!
+        expect(config.context, id).toBe(id.includes('preview') ? 'capgo-preview' : 'capgo-release')
+      }
+      const testerJobs = buildCiJobs({ ...options, strategy: 'main', provider: 'github' })
+      if (product === 'builder')
+        expect(testerJobs.every(job => job.env?.CAPGO_STORE_SUBMIT_REVIEW === 'false')).toBe(true)
+    }
+  })
+
   it('routes main and preprod to their own channels with custom branch names', () => {
     const jobs = buildCiJobs({ ...base, product: 'ota', strategy: 'main_preprod', provider: 'gitlab', productionBranch: 'master', preprodBranch: 'release/staging' })
     expect(jobs.map(job => [job.trigger, job.command])).toEqual([
@@ -114,7 +140,7 @@ describe('CI/CD guide pipelines', () => {
 
   it('uses each provider\'s pull request number and keeps cleanup manual where CI has no close event', () => {
     const expected = {
-      azure: 'pr-$(System.PullRequest.PullRequestId)',
+      azure: 'pr-${SYSTEM_PULLREQUEST_PULLREQUESTNUMBER:-$SYSTEM_PULLREQUEST_PULLREQUESTID}',
       bitbucket: 'pr-$BITBUCKET_PR_ID',
       circleci: 'pr-${CIRCLE_PULL_REQUEST##*/}',
       other: 'pr-$PR_NUMBER',
@@ -127,12 +153,14 @@ describe('CI/CD guide pipelines', () => {
     }
   })
 
-  it('maps Azure secrets from the capgo variable group into each step', () => {
+  it('isolates Azure secrets in independently checked release and preview stages', () => {
     const azure = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'azure' }).content)
-    expect(azure.variables).toEqual([{ group: 'capgo' }])
-    expect(azure.jobs.map((job: { job: string }) => job.job)).toEqual(['production', 'preview'])
-    expect(azure.jobs[0].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_TOKEN)' })
-    expect(azure.jobs[1].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_PREVIEW_TOKEN)' })
+    expect(azure.variables).toBeUndefined()
+    expect(azure.stages.map((stage: { variables: unknown }) => stage.variables)).toEqual([[{ group: 'capgo-release' }], [{ group: 'capgo-preview' }]])
+    expect(azure.stages.every((stage: { dependsOn: unknown[] }) => stage.dependsOn.length === 0)).toBe(true)
+    expect(azure.stages.flatMap((stage: { jobs: { job: string }[] }) => stage.jobs.map(job => job.job))).toEqual(['production', 'preview'])
+    expect(azure.stages[0].jobs[0].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_TOKEN)' })
+    expect(azure.stages[1].jobs[0].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_PREVIEW_TOKEN)' })
     expect(parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'azure' }).content).pr).toBe('none')
   })
 
@@ -144,7 +172,7 @@ describe('CI/CD guide pipelines', () => {
       'npm ci',
       'npm run build',
       'npx cap sync android',
-      'npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials',
+      'npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --android-track internal --android-release-status draft',
     ])
     expect(pipeline.keys).toEqual([{ secret: 'CAPGO_TOKEN', role: 'app_admin', purpose: 'release' }])
   })
@@ -164,13 +192,13 @@ describe('CI/CD guide pipelines', () => {
     expect(jobs.find(job => job.id === 'android-preprod')?.command).toContain('--android-track internal --android-release-status draft')
     expect(jobs.find(job => job.id === 'android-release')?.env).toBeUndefined()
     const previews = buildCiJobs({ ...base, product: 'builder', strategy: 'pull_request', provider: 'github' })
-    expect(previews.filter(job => job.env).map(job => job.id)).toEqual(['ios-preview', 'android-preview'])
+    expect(previews.filter(job => job.env).map(job => job.id)).toEqual(['ios-release', 'android-release', 'ios-preview', 'android-preview'])
 
     const github = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'main_preprod', provider: 'github' }).content)
     expect(github.jobs['ios-preprod'].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '${{ secrets.CAPGO_TOKEN }}', CAPGO_STORE_SUBMIT_REVIEW: 'false' })
     expect(github.jobs['ios-release'].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '${{ secrets.CAPGO_TOKEN }}' })
     const azure = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'azure', platforms: ['ios'] }).content)
-    expect(azure.jobs[1].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_PREVIEW_TOKEN)', CAPGO_STORE_SUBMIT_REVIEW: 'false' })
+    expect(azure.stages[1].jobs[0].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_PREVIEW_TOKEN)', CAPGO_STORE_SUBMIT_REVIEW: 'false' })
     const gitlab = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['ios'] }).content)
     expect(gitlab['capgo-ios-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials')
   })
@@ -189,7 +217,7 @@ describe('CI/CD guide pipelines', () => {
     const gitlab = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['android'] }).content)
     expect(gitlab['capgo-android-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     const circleci = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' }).content)
-    expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { filters: { branches: { ignore: ['main'] } } } })
+    expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { context: 'capgo-preview', filters: { branches: { ignore: ['main'] } } } })
   })
 
   it('restores the encryption key before every live update upload of an encrypted app', () => {
@@ -208,12 +236,12 @@ describe('CI/CD guide pipelines', () => {
     // Deleting a channel uploads nothing, so it never needs the key.
     expect(workflow.jobs['preview-cleanup'].steps.some((step: { run?: string }) => step.run === restore)).toBe(false)
     const azure = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'azure', encrypted: true }).content)
-    expect(azure.jobs[0].steps.find((step: { script?: string }) => step.script === restore).env).toEqual({ CAPGO_PRIVATE_KEY_BASE64: '$(CAPGO_PRIVATE_KEY_BASE64)' })
+    expect(azure.stages[0].jobs[0].steps.find((step: { script?: string }) => step.script === restore).env).toEqual({ CAPGO_PRIVATE_KEY_BASE64: '$(CAPGO_PRIVATE_KEY_BASE64)' })
     for (const provider of ['gitlab', 'bitbucket', 'circleci', 'other'] as const)
       expect(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider, encrypted: true }).content, provider).toContain(restore)
     expect(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).extraSecrets).toEqual([])
     expect(buildCiPipeline({ ...base, product: 'builder', strategy: 'main', provider: 'github', encrypted: true }).content).not.toContain('.capgo_key_v2')
-    expect(encryptionSecretCommand('github')).toBe(`base64 < .capgo_key_v2 | tr -d '\\n' | gh secret set CAPGO_PRIVATE_KEY_BASE64`)
+    expect(encryptionSecretCommand('github')).toBe(`base64 < .capgo_key_v2 | tr -d '\\n' | gh secret set CAPGO_PRIVATE_KEY_BASE64 --env capgo-release`)
   })
 
   it('keeps numeric-looking branch names as strings in every provider', () => {
@@ -258,7 +286,7 @@ describe('CI/CD guide pipelines', () => {
     const commands = {
       github: (yaml: any) => yaml.jobs.production.steps.at(-1).run,
       gitlab: (yaml: any) => yaml['capgo-production'].script.at(-1),
-      azure: (yaml: any) => yaml.jobs[0].steps.at(-1).script,
+      azure: (yaml: any) => yaml.stages[0].jobs[0].steps.at(-1).script,
       bitbucket: (yaml: any) => yaml.pipelines.branches.main[0].step.script.at(-1),
       circleci: (yaml: any) => yaml.jobs.production.steps.at(-1).run.command,
     } as const

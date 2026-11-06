@@ -355,7 +355,9 @@ function statusLabel(status: string | undefined) {
           <IconLoader v-if="hiding" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
           {{ t('app-onboarding-dont-show-again') }}
         </button>
-        <p class="sr-only">{{ t('setup-checklist-hide-description') }}</p>
+        <p class="sr-only">
+          {{ t('setup-checklist-hide-description') }}
+        </p>
         <button
           v-if="!completed"
           type="button"

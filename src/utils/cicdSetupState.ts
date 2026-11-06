@@ -8,6 +8,10 @@ export interface CiCdSetupState {
   builderDetectedAt: string | null
   detectedVia: 'ci' | 'key' | null
   ciProvider: string | null
+  otaDetectedVia: 'ci' | 'key' | null
+  otaCiProvider: string | null
+  builderDetectedVia: 'ci' | 'key' | null
+  builderCiProvider: string | null
   keyCreatedAt: string | null
   markedDoneAt: string | null
 }
@@ -16,19 +20,27 @@ function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
-function timestamp(value: unknown) {
+function nonEmptyString(value: unknown) {
   return typeof value === 'string' && value ? value : null
+}
+
+function detectionSource(value: unknown) {
+  return value === 'ci' || value === 'key' ? value : null
 }
 
 export function parseCiCdSetupState(onboarding: unknown): CiCdSetupState {
   const cicd = record(record(onboarding).cicd)
   return {
-    otaDetectedAt: timestamp(cicd.ota_detected_at),
-    builderDetectedAt: timestamp(cicd.builder_detected_at),
-    detectedVia: cicd.detected_via === 'ci' || cicd.detected_via === 'key' ? cicd.detected_via : null,
-    ciProvider: typeof cicd.ci_provider === 'string' && cicd.ci_provider ? cicd.ci_provider : null,
-    keyCreatedAt: timestamp(cicd.key_created_at),
-    markedDoneAt: timestamp(cicd.marked_done_at),
+    otaDetectedAt: nonEmptyString(cicd.ota_detected_at),
+    builderDetectedAt: nonEmptyString(cicd.builder_detected_at),
+    detectedVia: detectionSource(cicd.detected_via),
+    ciProvider: nonEmptyString(cicd.ci_provider),
+    otaDetectedVia: detectionSource(cicd.ota_detected_via),
+    otaCiProvider: nonEmptyString(cicd.ota_ci_provider),
+    builderDetectedVia: detectionSource(cicd.builder_detected_via),
+    builderCiProvider: nonEmptyString(cicd.builder_ci_provider),
+    keyCreatedAt: nonEmptyString(cicd.key_created_at),
+    markedDoneAt: nonEmptyString(cicd.marked_done_at),
   }
 }
 
@@ -71,5 +83,5 @@ export function shouldShowCiCdNav(onboarding: unknown, gettingStartedVisible: bo
 export function withCiCdMarkedDone(onboarding: unknown, at = new Date().toISOString()): Json {
   const value = record(onboarding)
   const cicd = record(value.cicd)
-  return { ...value, cicd: { ...cicd, marked_done_at: timestamp(cicd.marked_done_at) ?? at } } as Json
+  return { ...value, cicd: { ...cicd, marked_done_at: nonEmptyString(cicd.marked_done_at) ?? at } } as Json
 }

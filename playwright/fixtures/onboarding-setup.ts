@@ -49,8 +49,8 @@ const state = {
   error: false,
   requests: 0,
   polls: [] as Array<{ appId: string, N: number, initial: boolean }>,
-  channels: (params.get('channel') === '1' ? [{ id: 1, app_id: previewAppId, name: 'staging', public: true, allow_device_self_set: true }] : []) as Array<{ id: number, app_id: string, name: string, public?: boolean, allow_device_self_set?: boolean }>,
-  channelError: false,
+  channels: (params.get('channel') === '1' ? [{ id: 1, app_id: previewAppId, name: 'staging', public: true, allow_device_self_set: true }] : []) as Array<{ id: number, app_id: string, name: string, public?: boolean, allow_device_self_set?: boolean, ios?: boolean, android?: boolean, electron?: boolean }>,
+  channelError: params.get('channelError') === '1',
   channelRequests: 0,
   channelQueries: [] as string[],
   channelDelayMs: Number(params.get('channelDelay') ?? 0),
@@ -69,6 +69,13 @@ const state = {
   skipReasons: [] as string[],
   apikeyCreates: [] as unknown[],
   apikeyError: params.get('apikeyError'),
+  encryptionError: params.get('encryptionError') === '1',
+  encryptionDelayMs: Number(params.get('encryptionDelay') ?? 0),
+  cicdRegistrationError: params.get('registrationError') === '1',
+  cicdStatusDelayMs: 0,
+  cicdStatusRequests: 0,
+  cicdStatusResponses: 0,
+  cicdRemoteLedger: null as Record<string, unknown> | null,
   latestBundles: (params.get('bundle') || params.get('encrypted') === '1' ? [{ name: params.get('bundle') ?? '1.0.0', created_at: '2026-11-06T10:00:00.000Z', key_id: params.get('encrypted') === '1' ? 'MIIB' : null }] : []) as Array<{ name: string | null, created_at: string, key_id: string | null }>,
 }
 // apps.onboarding.cicd, reactive so the sidebar follows the guide's writes.
@@ -82,8 +89,10 @@ if (cicdView && params.get('defaultChannel') !== '0') {
   // `defaultChannels=a|b` gives each platform its own default channel.
   const names = params.get('defaultChannels')?.split('|') ?? [params.get('defaultChannel') ?? 'production']
   for (const [index, name] of names.entries())
-    state.channels.push({ id: index + 1, app_id: previewAppId, name, public: true })
+    state.channels.push({ id: index + 1, app_id: previewAppId, name, public: true, ios: index % 2 === 0, android: index % 2 !== 0, electron: false })
 }
+if (params.get('disabledPublicChannel') === '1')
+  state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name: 'disabled-public', public: true, ios: false, android: false, electron: false })
 if (params.get('checklistState') === 'completed') {
   for (const id of ['login_cli_mcp', 'add_updater', 'add_code', 'add_channel', 'run_device', 'upload_bundle', 'test_update'])
     state.steps[id] = { status: id === 'add_code' ? 'skipped' : 'done' }
@@ -119,7 +128,7 @@ if (params.get('otaComplete') === '1') {
   state.channels.push({ id: 1, app_id: previewAppId, name: 'staging', public: true })
 }
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
-const preview = { state, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
+const preview = { state, cicdLedger, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 const previewUserOnboarding = {
   profile_completed_at: '2026-09-25T00:00:00.000Z',
   abtests: {
@@ -245,8 +254,11 @@ const fixtureFetch: typeof fetch = async (input, init) => {
   }
   if (url.pathname.endsWith('/build_requests'))
     return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json', 'Content-Range': '*/0' } })
-  if (url.pathname.endsWith('/app_versions'))
-    return new Response(JSON.stringify(state.latestBundles), { headers: { 'Content-Type': 'application/json' } })
+  if (url.pathname.endsWith('/app_versions')) {
+    if (state.encryptionDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.encryptionDelayMs))
+    return new Response(JSON.stringify(state.encryptionError ? { message: 'Encryption unavailable' } : state.latestBundles), { status: state.encryptionError ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+  }
   // The CI/CD guide creates app-scoped secure keys through the API key endpoint.
   if (url.pathname.endsWith('/apikey') && method === 'POST') {
     const body = JSON.parse(String(init?.body))
@@ -258,6 +270,8 @@ const fixtureFetch: typeof fetch = async (input, init) => {
   if (url.pathname.endsWith('/rpc/record_app_cicd_setup')) {
     const args = JSON.parse(String(init?.body)) as Record<string, unknown>
     cicdSetupCalls.push(args)
+    if (args.p_event === 'key_created' && state.cicdRegistrationError)
+      return new Response(JSON.stringify({ message: 'CI registration unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
     const at = '2026-11-06T12:00:00.000Z'
     if (args.p_event === 'marked_done')
       cicdLedger.value = { ...cicdLedger.value, marked_done_at: at }
@@ -295,6 +309,15 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       headers: { 'Content-Type': 'application/json' },
     })
   }
+  if (url.pathname.endsWith('/apps')) {
+    state.cicdStatusRequests += 1
+    const snapshot = { ...previewOnboarding(), ...(state.cicdRemoteLedger ? { cicd: state.cicdRemoteLedger } : {}) }
+    if (state.cicdStatusDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdStatusDelayMs))
+    state.cicdStatusResponses += 1
+    if (cicdView)
+      return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: '00000000-0000-4000-8000-000000000002', onboarding: snapshot }]), { headers: { 'Content-Type': 'application/json' } })
+  }
   if (params.get('view') === 'flow' || navigationView) {
     if (url.pathname.endsWith('/apps') && params.get('unavailable') === '1')
       return new Response(JSON.stringify({ message: 'App unavailable' }), { status: 406, headers: { 'Content-Type': 'application/json' } })
@@ -304,8 +327,6 @@ const fixtureFetch: typeof fetch = async (input, init) => {
     const single = new Headers(init?.headers).get('Accept')?.includes('object')
     return new Response(JSON.stringify(single ? rows[0] ?? {} : rows), { headers: { 'Content-Type': 'application/json' } })
   }
-  if (cicdView && url.pathname.endsWith('/apps'))
-    return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: '00000000-0000-4000-8000-000000000002', onboarding: previewOnboarding() }]), { headers: { 'Content-Type': 'application/json' } })
   if (builderComponentView && url.pathname.endsWith('/apps')) {
     return new Response(JSON.stringify({ onboarding: previewOnboarding() }), { headers: { 'Content-Type': 'application/json' } })
   }
@@ -438,6 +459,11 @@ organization.setCurrentOrganization = (orgId) => {
   preview.selectedOrgId.value = selectedOrganization.value.gid
 }
 organization.awaitInitialLoad = async () => true
+organization.refreshAppsOnboarding = async () => {
+  state.cicdStatusRequests += 1
+  if (state.cicdRemoteLedger)
+    cicdLedger.value = state.cicdRemoteLedger
+}
 organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }] : []
 if (builderIntroView) {
   const builderApp = ref({ app_id: previewAppId, owner_org: previewOrganization.gid, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() })
