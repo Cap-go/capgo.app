@@ -1,5 +1,6 @@
 import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChannelAlreadyExistsError } from '../supabase/functions/_backend/utils/channel_insert.ts'
 
 const updateOrCreateChannel = vi.fn()
 const checkPermission = vi.fn()
@@ -126,7 +127,7 @@ function context() {
   } as any
 }
 
-function configureTransaction(versionId: number | null = 123) {
+function configureTransaction(versionId: number | null = 123, existingChannelId: number | null = null) {
   dbClient.query.mockImplementation(async (statement: string) => {
     if (statement === 'BEGIN') {
       transactionEvents.push('begin')
@@ -146,7 +147,10 @@ function configureTransaction(versionId: number | null = 123) {
     }
     if (statement.includes('INSERT INTO public.channels')) {
       transactionEvents.push('insert')
-      return { rowCount: 1, rows: [{ id: 77, public: false }] }
+      const row = existingChannelId === null
+        ? { id: '77', version: null, rollout_version: null, public: false, paused_at: null, inserted: true }
+        : { id: String(existingChannelId), version: 5, rollout_version: null, public: false, paused_at: null, inserted: false }
+      return { rowCount: 1, rows: [{ row }] }
     }
     if (statement.includes('FROM public.app_versions')) {
       transactionEvents.push('version')
@@ -202,21 +206,44 @@ describe('public channel post', () => {
     expect(updateOrCreateChannel).toHaveBeenLastCalledWith(c, expect.anything(), 42, true)
   })
 
-  it('reads the existing channel past the Hyperdrive query cache', async () => {
+  it('updates the existing channel returned by the insert when the lookup was stale', async () => {
     const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
-    const channelLookups: string[] = []
-    const lookup = buildAdminChain({ existingChannelId: 42 })
+    // Hyperdrive served a cached "no channel"; the insert found the real row instead of failing.
+    const existing = { id: 42, version: 5, rollout_version: null, public: false, paused_at: null }
+    updateOrCreateChannel.mockRejectedValueOnce(new ChannelAlreadyExistsError(existing))
+    let channelLookups = 0
+    const lookup = buildAdminChain()
     adminQuery.mockImplementation((text: string, values: unknown[]) => {
       if (text.includes('FROM public.channels'))
-        channelLookups.push(text)
+        channelLookups++
       return lookup(text, values)
     })
-    await post(context(), { app_id: 'com.test.channel-cache', channel: 'pr-1' }, apiKey())
-    // Hyperdrive skips its cache for queries that call now(): a cached "no channel"
-    // row would otherwise turn every set within 60s of creation into a duplicate insert.
-    expect(channelLookups).toHaveLength(1)
-    expect(channelLookups[0]).toMatch(/now\(\)/)
-    expect(updateOrCreateChannel).toHaveBeenCalledWith(expect.anything(), expect.anything(), 42, true)
+    const c = context()
+    await post(c, { app_id: 'com.test.channel-stale', channel: 'pr-1', disableAutoUpdate: 'none' }, apiKey())
+    expect(channelLookups).toBe(1)
+    expect(checkPermission).toHaveBeenCalledWith(c, 'channel.update_settings', { appId: 'com.test.channel-stale', channelId: 42 })
+    expect(updateOrCreateChannel).toHaveBeenCalledTimes(2)
+    expect(updateOrCreateChannel).toHaveBeenLastCalledWith(c, expect.objectContaining({ version: 5, disable_auto_update: 'none' }), 42, true)
+  })
+
+  it('does not update the existing channel returned by the insert without update permission', async () => {
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    updateOrCreateChannel.mockRejectedValueOnce(new ChannelAlreadyExistsError({ id: 42, version: null, rollout_version: null, public: false, paused_at: null }))
+    checkPermission.mockImplementation(async (_c: unknown, permission: string) => permission !== 'channel.update_settings')
+    await expect(post(context(), { app_id: 'com.test.channel-stale', channel: 'pr-1' }, apiKey())).rejects.toThrow('You can\'t access this app')
+    expect(updateOrCreateChannel).toHaveBeenCalledOnce()
+  })
+
+  it('rolls back create-and-promote and updates the existing channel returned by the insert', async () => {
+    configureTransaction(123, 42)
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const c = context()
+    await post(c, { app_id: 'com.test.channel-stale', channel: 'pr-1', version: '1.0.0' }, apiKey())
+    expect(transactionEvents).toContain('rollback')
+    expect(transactionEvents).not.toContain('commit')
+    expect(setChannelInTransaction).not.toHaveBeenCalled()
+    expect(checkPermission).toHaveBeenCalledWith(c, 'channel.update_settings', { appId: 'com.test.channel-stale', channelId: 42 })
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(c, expect.objectContaining({ version: 123 }), 42, false)
   })
 
   it('rejects the concurrent update when the key has only creation permission', async () => {

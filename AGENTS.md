@@ -253,6 +253,19 @@ backfill code, design for this scale:
 - For data repair scripts, use indexed pagination over the owning table's key
   path, keep DB writes batched, make work resumable, and write failed records to
   a report file for later inspection.
+- **HARD RULE — never bypass the Hyperdrive query cache to fix stale reads:**
+  Hyperdrive caches reads (default `max_age` 60s) and that cache is what keeps
+  the database alive. Never make a request-path read uncacheable (an unused
+  `now()` CTE, a volatile function call, a unique comment or parameter, moving
+  it into a transaction, etc.) because a value can be up to 60s old. Make the
+  write path tolerate the stale read instead: let the write fail safely and
+  return the real row from the write itself. For example, an insert that may
+  race with an existing row uses `INSERT ... ON CONFLICT DO NOTHING` in a
+  data-modifying statement (writes are never cached) that returns either the
+  inserted row or the existing one. Only edge cache refills, which would
+  otherwise store a stale row for the whole edge TTL, may skip the cache
+  (`plugin_runtime/utils/hyperdriveFreshRead.ts`); do not extend that helper to
+  other paths.
 - GUESS IS NOT AN OPTION for production scale failures. Find the exact
   production evidence in database state, queue/archive tables, provider logs, or
   HTTP/runtime logs. If the current logs cannot identify the cause, first add
