@@ -3,6 +3,7 @@ import { PgDialect } from 'drizzle-orm/pg-core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
+  claimNotifOrgOnceWithResultMock,
   cloudlogErrMock,
   cloudlogMock,
   getCurrentPlanNameOrgMock,
@@ -19,6 +20,7 @@ const {
   sendNotifToOrgMembersOnceMock,
   supabaseAdminMock,
 } = vi.hoisted(() => ({
+  claimNotifOrgOnceWithResultMock: vi.fn(async () => 'claimed'),
   cloudlogErrMock: vi.fn(),
   cloudlogMock: vi.fn(),
   getCurrentPlanNameOrgMock: vi.fn(async () => 'Solo'),
@@ -43,6 +45,14 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: cloudlogMock,
   cloudlogErr: cloudlogErrMock,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/credit_auto_top_up.ts', () => ({
+  maybeAutoTopUpCredits: vi.fn(async () => undefined),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/notifications.ts', () => ({
+  claimNotifOrgOnceWithResult: claimNotifOrgOnceWithResultMock,
 }))
 
 vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({
@@ -281,7 +291,7 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
 
   it.concurrent('sends plan usage alerts with the metric that crossed the threshold', async () => {
     const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
-    const orgId = 'org-usage-storage'
+    const orgId = 'org-usage-build-time'
 
     const result = await handleOrgNotificationsAndEvents(
       createContext(),
@@ -297,8 +307,8 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
         total_percent: 20,
         mau_percent: 20,
         bandwidth_percent: 0,
-        storage_percent: 51,
-        build_time_percent: 0,
+        storage_percent: 0,
+        build_time_percent: 51,
       },
       {} as any,
     )
@@ -317,14 +327,14 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
       'user:usage_50_percent_of_plan',
       'usage_limit',
       {
-        metric: 'storage',
+        metric: 'build_time',
         metric_percent: 51,
         percent: {
           total_percent: 51,
           mau_percent: 20,
           bandwidth_percent: 0,
-          storage_percent: 51,
-          build_time_percent: 0,
+          storage_percent: 0,
+          build_time_percent: 51,
         },
         threshold: 50,
       },
@@ -340,12 +350,100 @@ describe('handleOrgNotificationsAndEvents onboarding reminder', () => {
         event: 'User is at 50% of plan usage',
         user_id: orgId,
         tags: {
-          metric: 'storage',
+          metric: 'build_time',
           metric_percent: '51',
           threshold: '50',
         },
       }),
     )
+  })
+
+  it.concurrent('never sends plan usage alerts for fair-use storage or bandwidth', async () => {
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const orgId = 'org-usage-fair-use'
+
+    const result = await handleOrgNotificationsAndEvents(
+      createContext(),
+      {
+        customer_id: 'cus_123',
+        name: 'Acme Mobile',
+        stripe_info: null,
+        website: 'https://acme.example/',
+      },
+      orgId,
+      true,
+      {
+        total_percent: 300,
+        mau_percent: 10,
+        bandwidth_percent: 300,
+        storage_percent: 95,
+        build_time_percent: 0,
+      },
+      {} as any,
+    )
+
+    expect(result.finalIsGoodPlan).toBe(true)
+    expect(orgNotificationCalls(sendNotifToOrgMembersMock, orgId)).toHaveLength(0)
+    expect(trackingCalls(orgId)).toHaveLength(0)
+  })
+})
+
+describe('checkPlanStatusOnly fair use review', () => {
+  it('emits one internal event for a fair-use metric over the reference and no customer email', async () => {
+    const orgId = 'org-fair-use-review'
+    getPlanUsageAndFitUncachedMock.mockResolvedValueOnce({
+      is_good_plan: true,
+      total_percent: 10,
+      mau_percent: 10,
+      bandwidth_percent: 250,
+      storage_percent: 40,
+      build_time_percent: 0,
+    })
+    supabaseAdminMock.mockReturnValueOnce({
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            maybeSingle: vi.fn(async () => ({
+              data: {
+                customer_id: 'cus_fair_use_review',
+                has_usage_credits: false,
+                name: 'Fair Use Review',
+                onboarding: null,
+                stripe_info: {
+                  status: 'succeeded',
+                  subscription_id: 'sub_fair_use_review',
+                  subscription_anchor_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+                  trial_at: null,
+                },
+                website: null,
+              },
+              error: null,
+            })),
+          })),
+        })),
+      })),
+    })
+
+    const { checkPlanStatusOnly } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const drizzleClient = { execute: vi.fn(async () => ({ rows: [] })) }
+    await checkPlanStatusOnly(createContext(), orgId, drizzleClient as any)
+
+    const claims = (claimNotifOrgOnceWithResultMock.mock.calls as unknown[][]).filter(call => call[2] === orgId)
+    expect(claims).toEqual([
+      [expect.anything(), 'internal:fair_use_review', orgId, `bandwidth:${new Date().toISOString().slice(0, 7)}`, drizzleClient],
+    ])
+    expect(trackingCalls(orgId)).toEqual([
+      [
+        expect.anything(),
+        expect.objectContaining({
+          channel: 'usage',
+          event: 'Fair use review',
+          user_id: orgId,
+          tags: { metric: 'bandwidth', metric_percent: '250' },
+        }),
+      ],
+    ])
+    expect(orgNotificationCalls(sendNotifToOrgMembersMock, orgId)).toHaveLength(0)
   })
 })
 
@@ -498,5 +596,97 @@ describe('userAbovePlan overage billing cycle', () => {
       p_billing_cycle_end: cycle.subscription_anchor_end,
       p_included_amount: 1000,
     }))
+  })
+
+  function mockCycleAndCoveredOverage() {
+    rpcMock.mockImplementation((name: string) => ({
+      single: vi.fn(async () => {
+        if (name === 'get_cycle_info_org') {
+          return {
+            data: {
+              subscription_anchor_start: '2026-02-28T14:00:00+00:00',
+              subscription_anchor_end: '2026-03-31T14:00:00+00:00',
+            },
+            error: null,
+          }
+        }
+        return {
+          data: {
+            overage_amount: 4000,
+            credits_required: 1,
+            credits_applied: 1,
+            credits_remaining: 10,
+            overage_covered: 4000,
+            overage_unpaid: 0,
+            credit_step_id: 1,
+          },
+          error: null,
+        }
+      }),
+    }))
+  }
+
+  function overageMetrics() {
+    return (rpcMock.mock.calls as unknown[][])
+      .filter(call => call[0] === 'apply_usage_overage')
+      .map(call => (call[1] as { p_metric: string }).p_metric)
+  }
+
+  it('never charges or flags storage and bandwidth for an org on a plan', async () => {
+    getTotalStatsMock.mockResolvedValueOnce({
+      mau: 500,
+      storage: 5000,
+      bandwidth: 5000,
+      build_time_unit: 0,
+      get: 0,
+      fail: 0,
+      install: 0,
+      uninstall: 0,
+    })
+    mockCycleAndCoveredOverage()
+
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const result = await handleOrgNotificationsAndEvents(createContext(), payingOrg(), 'org-fair-use-plan', false, ZERO_USAGE, replayDrizzle as any)
+
+    expect(overageMetrics()).toEqual([])
+    expect(result).toEqual({
+      exceededFlags: {
+        bandwidth_exceeded: false,
+        build_time_exceeded: false,
+        mau_exceeded: false,
+        storage_exceeded: false,
+      },
+      finalIsGoodPlan: true,
+    })
+  })
+
+  it('still charges storage and bandwidth with credits for a credit-only org', async () => {
+    getTotalStatsMock.mockResolvedValueOnce({
+      mau: 0,
+      storage: 5000,
+      bandwidth: 5000,
+      build_time_unit: 0,
+      get: 0,
+      fail: 0,
+      install: 0,
+      uninstall: 0,
+    })
+    mockCycleAndCoveredOverage()
+
+    const creditOnlyOrg = {
+      ...payingOrg(),
+      stripe_info: {
+        status: 'canceled' as const,
+        subscription_id: null,
+        subscription_anchor_end: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+        trial_at: null,
+      },
+    }
+
+    const { handleOrgNotificationsAndEvents } = await import('../supabase/functions/_backend/utils/plans.ts')
+    const result = await handleOrgNotificationsAndEvents(createContext(), creditOnlyOrg, 'org-fair-use-credit-only', true, ZERO_USAGE, replayDrizzle as any)
+
+    expect(overageMetrics()).toEqual(['storage', 'bandwidth'])
+    expect(result.finalIsGoodPlan).toBe(true)
   })
 })

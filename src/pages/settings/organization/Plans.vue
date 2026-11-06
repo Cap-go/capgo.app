@@ -108,8 +108,9 @@ function planFeatures(plan: Plan) {
   }
 
   const mauFeature = t('plan-mau', { count: formatNumberValue(displayedPlanMau(plan)) }, displayedPlanMau(plan))
-  const storageFeature = t('plan-storage', { count: formatNumberValue(plan.storage) })
-  const bandwidthFeature = t('plan-bandwidth', { count: formatNumberValue(plan.bandwidth) })
+  // Storage and bandwidth are fair use on every plan: no fixed amount to show.
+  const storageFeature = t('plan-storage-fair-use')
+  const bandwidthFeature = t('plan-bandwidth-fair-use')
 
   const buildTimeFeature = buildTimeDisplay ? planFeature(buildTimeDisplay, true) : null
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency

@@ -4,7 +4,7 @@ import { billingPeriodStatsTestUtils } from '../supabase/functions/_backend/trig
 // The SQL cycle helper itself (billing_period_completed_cycle) is covered by
 // supabase/tests/63_test_billing_period_stats_email.sql; here we only test the
 // TypeScript mapping from a half-open cycle to the inclusive metrics range.
-const { toDateOnlyUtc, addDaysToDateOnly, billingPeriodMetricsRange } = billingPeriodStatsTestUtils
+const { toDateOnlyUtc, addDaysToDateOnly, billingPeriodMetricsRange, planUsageUpgradeSignal } = billingPeriodStatsTestUtils
 const DAY_MS = 24 * 60 * 60 * 1000
 
 const iso = (date: Date) => date.toISOString().slice(0, 10)
@@ -62,5 +62,17 @@ describe('billing period stats date helpers', () => {
       }
     }
     expect(bad.slice(0, 20)).toEqual([])
+  })
+})
+
+describe('billing period stats upgrade signal', () => {
+  it.concurrent('ignores fair-use storage and bandwidth when deciding to nudge an upgrade', () => {
+    // Storage and bandwidth percentages are not inputs: only MAU and build time count.
+    expect(planUsageUpgradeSignal({ mau: 20, buildTime: 10 })).toEqual({ maxUsagePercent: 20, highUsageMetrics: [] })
+  })
+
+  it.concurrent('flags MAU and build time at 90% or more', () => {
+    expect(planUsageUpgradeSignal({ mau: 95, buildTime: 90 })).toEqual({ maxUsagePercent: 95, highUsageMetrics: ['MAU', 'Build Time'] })
+    expect(planUsageUpgradeSignal({ mau: 89, buildTime: 120 })).toEqual({ maxUsagePercent: 120, highUsageMetrics: ['Build Time'] })
   })
 })

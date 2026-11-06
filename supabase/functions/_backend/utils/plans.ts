@@ -6,6 +6,7 @@ import { sql } from 'drizzle-orm'
 import { maybeAutoTopUpCredits } from './credit_auto_top_up.ts'
 import { quickError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { claimNotifOrgOnceWithResult } from './notifications.ts'
 import { sendNotifToOrgMembers, sendNotifToOrgMembersOnce } from './org_email_notifications.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from './org_onboarding_intent.ts'
 import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
@@ -34,12 +35,18 @@ const PLAN_USAGE_ALERT_EVENT_BY_THRESHOLD: Record<(typeof PLAN_USAGE_ALERT_THRES
   70: 'user:usage_70_percent_of_plan',
   90: 'user:usage_90_percent_of_plan',
 }
+// Metrics a paid plan limits. Storage and bandwidth are fair use on plans: they
+// never count toward plan usage, upgrade nudges, overage, or blocking.
 const PLAN_USAGE_METRICS: Array<{ key: PlanUsageMetric, metric: CreditMetric }> = [
   { key: 'mau_percent', metric: 'mau' },
-  { key: 'bandwidth_percent', metric: 'bandwidth' },
-  { key: 'storage_percent', metric: 'storage' },
   { key: 'build_time_percent', metric: 'build_time' },
 ]
+const FAIR_USE_METRICS: Array<{ key: PlanUsageMetric, metric: CreditMetric }> = [
+  { key: 'storage_percent', metric: 'storage' },
+  { key: 'bandwidth_percent', metric: 'bandwidth' },
+]
+const FAIR_USE_METRIC_SET = new Set<CreditMetric>(FAIR_USE_METRICS.map(({ metric }) => metric))
+const FAIR_USE_REVIEW_EVENT = 'internal:fair_use_review'
 
 interface StripeInfoForPlanCheck {
   subscription_id: string | null
@@ -379,12 +386,15 @@ async function userAbovePlan(c: Context, org: {
   const planId = currentPlan?.id
   const extraMau = creditOnlyMode ? 0 : await getOrgExtraMau(c, orgId)
 
-  const metrics: Array<{ key: CreditMetric, usage: number, limit: number | null | undefined }> = [
+  const allMetrics: Array<{ key: CreditMetric, usage: number, limit: number | null | undefined }> = [
     { key: 'mau', usage: Number(totalStats.mau ?? 0), limit: creditOnlyMode ? 0 : (currentPlan?.mau == null ? currentPlan?.mau : currentPlan.mau + extraMau) },
-    { key: 'storage', usage: Number(totalStats.storage ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.storage },
-    { key: 'bandwidth', usage: Number(totalStats.bandwidth ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.bandwidth },
+    { key: 'storage', usage: Number(totalStats.storage ?? 0), limit: 0 },
+    { key: 'bandwidth', usage: Number(totalStats.bandwidth ?? 0), limit: 0 },
     { key: 'build_time', usage: Number(totalStats.build_time_unit ?? 0), limit: creditOnlyMode ? 0 : currentPlan?.build_time_unit },
   ]
+  // Credit-only orgs have no plan and still pay storage and bandwidth with
+  // credits. Orgs on a plan get them as fair use: no overage, no flag.
+  const metrics = creditOnlyMode ? allMetrics : allMetrics.filter(metric => !FAIR_USE_METRIC_SET.has(metric.key))
 
   const creditResults: Record<CreditMetric, CreditApplicationResult | null> = {
     mau: null,
@@ -488,6 +498,33 @@ async function userIsAtPlanUsage(c: Context, orgId: string, percentUsage: PlanUs
         threshold: alert.threshold.toString(),
       },
     }).catch()
+  }
+}
+
+// Fair use has no automatic limit: when a plan org goes past the old plan
+// numbers (kept as the fair-use reference), emit one internal event per
+// metric and month so the team can review it. Never emails the customer.
+async function flagFairUseReview(c: Context, orgId: string, percentUsage: PlanUsage, drizzleClient: ReturnType<typeof getDrizzleClient>) {
+  const month = new Date().toISOString().slice(0, 7)
+  for (const { key, metric } of FAIR_USE_METRICS) {
+    const metricPercent = Number(percentUsage[key] ?? 0)
+    if (!(metricPercent >= 100))
+      continue
+    const claim = await claimNotifOrgOnceWithResult(c, FAIR_USE_REVIEW_EVENT, orgId, `${metric}:${month}`, drizzleClient)
+    if (claim !== 'claimed')
+      continue
+    await sendEventToTracking(c, {
+      channel: 'usage',
+      event: 'Fair use review',
+      user_id: orgId,
+      groups: { organization: orgId },
+      tags: {
+        metric,
+        metric_percent: Math.round(metricPercent).toString(),
+      },
+    }).catch((error: unknown) => {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'fair use review tracking failed', orgId, metric, error })
+    })
   }
 }
 
@@ -696,6 +733,14 @@ export async function checkPlanStatusOnly(c: Context, orgId: string, drizzleClie
       catch (error) {
         planStatusWriteError = error
         cloudlogErr({ requestId: c.get('requestId'), message: 'plan status write failed', orgId, error })
+      }
+      if (hasActivePlanEntitlement(org) && !isCreditOnlyBillingOrg(org)) {
+        try {
+          await flagFairUseReview(c, orgId, percentUsage, drizzleClient)
+        }
+        catch (error) {
+          cloudlogErr({ requestId: c.get('requestId'), message: 'fair use review failed', orgId, error })
+        }
       }
     }
   }

@@ -2937,7 +2937,7 @@
   "picture-uploaded": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan": "Used in Capgo web console areas: pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-active": "Used in Capgo web console areas: components. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "plan-bandwidth": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plan-bandwidth-fair-use": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-desc": "Used in Capgo web console areas: pages/settings/organization. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-distribution": "Used in billing/plans. Role: UI label about \"plan distribution\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-distribution-trend": "Used in billing/plans. Role: UI label about \"plan distribution trend\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
@@ -2962,7 +2962,7 @@
   "plan-payasyougo": "Used in billing/plans. Role: UI label about \"plan payasyougo\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-pricing-plans": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-solo": "Used in billing/plans. Role: UI label about \"plan solo\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "plan-storage": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "plan-storage-fair-use": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-team": "Used in billing/plans. Role: UI label about \"plan team\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-upgrade": "Used in Capgo web console areas: pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "plan-upgrade-v2": "Used in Capgo web console areas: components, components/tables, pages/settings/organization. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
@@ -4242,5 +4242,7 @@
   "saved-build": "Used in Capgo web console areas: components/dashboard. Role: table column label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "download-saved-build": "Used in Capgo web console areas: components/dashboard. Role: link label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "open-in-simulator": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "saved-build-expired": "Used in Capgo web console areas: components/dashboard. Role: error sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "saved-build-expired": "Used in Capgo web console areas: components/dashboard. Role: error sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "fair-use": "Used in Capgo web console areas: pages/settings/organization. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "fair-use-usage-hint": "Used in Capgo web console areas: pages/settings/organization. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
