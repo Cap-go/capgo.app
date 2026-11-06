@@ -546,6 +546,24 @@ export const useOrganizationStore = defineStore('organization', () => {
   let appsOnboardingRefreshGen = 0
   const appOnboardingRefreshGen = new Map<string, number>()
 
+  const publishRefreshedOnboarding = (refreshedApps: Map<string, OrganizationApp>) => {
+    if (!refreshedApps.size)
+      return
+    // Publish one catalog update per response, rather than copying the maps
+    // and traversing an organization's app list once for every returned row.
+    const nextByAppId = new Map(_appsByAppId.value)
+    const affectedOrgs = new Set<string>()
+    for (const [appId, app] of refreshedApps) {
+      nextByAppId.set(appId, app)
+      affectedOrgs.add(app.owner_org)
+    }
+    const nextByOrgId = new Map(_appsByOrgId.value)
+    for (const id of affectedOrgs)
+      nextByOrgId.set(id, (_appsByOrgId.value.get(id) ?? []).map(app => refreshedApps.get(app.app_id) ?? app))
+    _appsByAppId.value = nextByAppId
+    _appsByOrgId.value = nextByOrgId
+  }
+
   const refreshAppsOnboarding = async (orgId?: string, options?: AppOnboardingRefreshOptions) => {
     const orgIds = orgId ? [orgId] : Array.from(_appsByOrgId.value.keys())
     if (orgIds.length === 0)
@@ -571,7 +589,6 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
     }
     const refreshedApps = new Map<string, OrganizationApp>()
-    const affectedOrgs = new Set<string>()
     for (const row of data ?? []) {
       if (appOnboardingRefreshGen.get(row.app_id) !== refreshGen)
         continue
@@ -585,20 +602,8 @@ export const useOrganizationStore = defineStore('organization', () => {
         onboarding: row.onboarding,
         need_onboarding: row.need_onboarding,
       })
-      affectedOrgs.add(existing.owner_org)
     }
-    if (!refreshedApps.size)
-      return
-    // Publish one catalog update per response, rather than copying the maps
-    // and traversing an organization's app list once for every returned row.
-    const nextByAppId = new Map(_appsByAppId.value)
-    for (const [appId, app] of refreshedApps)
-      nextByAppId.set(appId, app)
-    const nextByOrgId = new Map(_appsByOrgId.value)
-    for (const id of affectedOrgs)
-      nextByOrgId.set(id, (_appsByOrgId.value.get(id) ?? []).map(app => refreshedApps.get(app.app_id) ?? app))
-    _appsByAppId.value = nextByAppId
-    _appsByOrgId.value = nextByOrgId
+    publishRefreshedOnboarding(refreshedApps)
   }
 
   const getCurrentRoleForApp = (appId: string) => {
