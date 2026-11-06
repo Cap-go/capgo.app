@@ -1,6 +1,6 @@
 ---
 name: native-builds
-description: Use when working with Capgo Cloud native iOS and Android build requests, onboarding, credential storage, credential updates, and build output upload settings.
+description: Use when working with Capgo Cloud native iOS and Android build requests, cloud simulators, onboarding, credential storage, credential updates, and build output upload settings.
 ---
 
 # Capgo CLI Native Builds
@@ -332,6 +332,38 @@ npx @capgo/cli@latest build credentials export ANDROID_KEYSTORE_FILE \
   - `--appId <appId>`
   - `--platform <platform>`: only `ios`
   - `--local`
+
+## Cloud simulator
+
+A running simulator uses one native builder slot, the same limit as a native build. Stopping it records the open time as build minutes. Each session has its own URL.
+
+### `simulator start [appId]`
+
+```bash
+npx @capgo/cli@latest simulator start com.example.app --platform ios
+npx @capgo/cli@latest simulator start com.example.app --platform android --name "Checkout"
+```
+
+- `--platform <platform>`: `ios` or `android`. Defaults to `ios`.
+- `-n, --name <name>`: optional session name.
+- `--json`: print the session JSON instead of the session id and URL.
+- `-a, --apikey <apikey>` and `--api-host <apiHost>`: same authentication override as the other commands.
+
+The command prints the session id, then the session URL. `simulator get` and `simulator stop` need that id. An iOS session boots a slim device. An Android session uses a small profile: 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
+
+### `simulator get [sessionId] [appId]`
+
+```bash
+npx @capgo/cli@latest simulator get <session-id> com.example.app
+```
+
+### `simulator stop [sessionId] [appId]`
+
+```bash
+npx @capgo/cli@latest simulator stop <session-id> com.example.app
+```
+
+Stop ends the device and records build minutes. If the device host is still running, or the minute write fails, the session stays open so the same command can be retried. A session also ends by itself after its duration, which releases the builder slot and records the capped time.
 
 ## Supporting docs
 

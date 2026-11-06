@@ -1,0 +1,41 @@
+---
+title: 🔹 simulator
+description: "Start a cloud simulator. A running simulator uses one builder slot and build minutes."
+sidebar_label: simulator
+sidebar:
+  order: 16
+---
+
+Start a cloud iOS or Android simulator. Each session has its own URL. A running simulator uses one builder slot and build minutes.
+
+```bash
+npx @capgo/cli@latest simulator start com.example.app --platform ios
+npx @capgo/cli@latest simulator get <session-id> com.example.app
+npx @capgo/cli@latest simulator stop <session-id> com.example.app
+```
+
+### <a id="simulator-start"></a> 🔹 **Start**
+
+```bash
+npx @capgo/cli@latest simulator start [appId]
+```
+
+Prints the session id, then the session URL.
+
+| Option | Type | Description |
+| --- | --- | --- |
+| **--platform** | `ios` or `android` | Device platform. Defaults to `ios`. |
+| **--name** | `string` | Session name. |
+| **--json** | `boolean` | Print the session JSON. |
+| **--apikey** | `string` | Capgo API key. |
+| **--api-host** | `string` | Capgo API host. |
+
+An iOS session boots a slim device. An Android session uses 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
+
+### <a id="simulator-stop"></a> 🔹 **Stop**
+
+```bash
+npx @capgo/cli@latest simulator stop [sessionId] [appId]
+```
+
+Ends the device and records build minutes. Retry the same command if the device is still running or the minute write did not finish.
