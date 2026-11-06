@@ -308,11 +308,20 @@ async function ownedSession(c: Context, principal: RlsPrincipal, userId: string,
   return { orgId, row }
 }
 
-async function savedBuildInstallError(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string | undefined, platform: string, sessionUrl: string, accessKey: string) {
-  if (!jobId || platform !== 'ios')
+async function savedBuildInstallError(input: {
+  c: Context
+  principal: RlsPrincipal
+  appId: string
+  ownerOrg: string
+  jobId: string | undefined
+  platform: string
+  sessionUrl: string
+  accessKey: string
+}) {
+  if (!input.jobId || input.platform !== 'ios')
     return null
   try {
-    await installSavedIpa(c, principal, appId, ownerOrg, jobId, sessionUrl, accessKey)
+    await installSavedIpa(input.c, input.principal, input.appId, input.ownerOrg, input.jobId, input.sessionUrl, input.accessKey)
     return null
   }
   catch (error) {
@@ -350,7 +359,7 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
       emulatorId = created.data.id
     const device = openedSimulator(created.data)
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
-    const installError = await savedBuildInstallError(c, principal, appId, orgId, body.build_job_id, platform, device.url, accessKey)
+    const installError = await savedBuildInstallError({ c, principal, appId, ownerOrg: orgId, jobId: body.build_job_id, platform, sessionUrl: device.url, accessKey })
     return c.json({
       data: {
         id: slot.id,
