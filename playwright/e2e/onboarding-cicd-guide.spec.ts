@@ -138,6 +138,19 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
   })
 
+  test('keeps the real default channel and blocks one the CLI cannot target', async ({ page }) => {
+    await page.goto(`${fixture}&defaultChannel=${encodeURIComponent('Live app')}`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText(`--channel 'Live app' --auto-bump patch`)
+    await page.goto(`${fixture}&defaultChannel=${encodeURIComponent('beta,stable')}`)
+    await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toContainText('"beta,stable"')
+    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+    // Native builds don't upload to a channel, so they stay available.
+    await page.locator('[data-test="cicd-product-builder"]').click()
+    await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
+  })
+
   test('explains when only an admin can create the CI key', async ({ page }) => {
     await page.goto(`${fixture}&apikeyError=forbidden_binding`)
     await page.locator('[data-test="cicd-provider-github"]').click()

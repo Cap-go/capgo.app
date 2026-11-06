@@ -9,6 +9,7 @@ import {
   CI_PROVIDERS,
   CI_STRATEGIES,
   ciKeysFor,
+  isCiChannelSupported,
   loadCiGuideSelection,
   normalizeCiBranch,
   normalizeCiChannel,
@@ -174,9 +175,37 @@ describe('CI/CD guide pipelines', () => {
     expect(normalizeCiBranch('feature/a.b_c-1', 'main')).toBe('feature/a.b_c-1')
     for (const value of ['', 'a b', 'a: b', '\'quoted\'', 'x\ny', '../up', 'a//b', '#hash', '*'])
       expect(normalizeCiBranch(value, 'main')).toBe('main')
+    // The app's real default channel is kept, whatever its name; only a missing one falls back.
     expect(normalizeCiChannel('beta-1')).toBe('beta-1')
-    expect(normalizeCiChannel('bad channel')).toBe('production')
+    expect(normalizeCiChannel('Live app / v2')).toBe('Live app / v2')
     expect(normalizeCiChannel(null)).toBe('production')
+    expect(normalizeCiChannel('')).toBe('production')
+  })
+
+  it('quotes unusual default channel names instead of replacing them', () => {
+    const channel = 'Store: it\'s #1 / ${HOME}'
+    const shell = `'Store: it'\\''s #1 / \${HOME}'`
+    const expected = `npx @capgo/cli@latest bundle upload com.example.app --channel ${shell} --auto-bump patch --fail-on-incompatible`
+    const commands = {
+      github: (yaml: any) => yaml.jobs.production.steps.at(-1).run,
+      gitlab: (yaml: any) => yaml['capgo-production'].script.at(-1),
+      azure: (yaml: any) => yaml.jobs[0].steps.at(-1).script,
+      bitbucket: (yaml: any) => yaml.pipelines.branches.main[0].step.script.at(-1),
+      circleci: (yaml: any) => yaml.jobs.production.steps.at(-1).run.command,
+    } as const
+    for (const [provider, read] of Object.entries(commands)) {
+      const pipeline = buildCiPipeline({ ...base, productionChannel: channel, product: 'ota', strategy: 'main', provider: provider as keyof typeof commands })
+      expect(read(parse(pipeline.content)), provider).toBe(expected)
+    }
+    expect(buildCiPipeline({ ...base, productionChannel: channel, product: 'ota', strategy: 'main', provider: 'other' }).content).toContain(expected)
+    expect(parse(buildCiPipeline({ ...base, productionChannel: channel, product: 'ota', strategy: 'main', provider: 'github' }).content).jobs.production.name).toBe(`Upload live update to ${channel}`)
+  })
+
+  it('flags channel names the CLI channel option cannot target', () => {
+    expect(isCiChannelSupported('production')).toBe(true)
+    expect(isCiChannelSupported('Live app / v2')).toBe(true)
+    for (const name of ['', 'a,b', ' production', 'production ', 'prod\nuction', 'prod\tuction'])
+      expect(isCiChannelSupported(name), JSON.stringify(name)).toBe(false)
   })
 
   it('prints the credentials push command for each platform', () => {

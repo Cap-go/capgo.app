@@ -41,6 +41,7 @@ import {
   DEFAULT_PREPROD_BRANCH,
   DEFAULT_PRODUCTION_BRANCH,
   githubSecretCommand,
+  isCiChannelSupported,
   loadCiGuideSelection,
   normalizeCiBranch,
   previewCleanupCommand,
@@ -76,7 +77,9 @@ const preprodBranchInvalid = computed(() => preprodBranchInput.value.trim() !== 
 const defaultChannel = ref<string | null | undefined>(undefined)
 const productionChannel = computed(() => defaultChannel.value ?? 'production')
 
-const pipeline = computed(() => provider.value
+// Never swap in another channel: CI would ship to a channel the user didn't pick.
+const channelUnsupported = computed(() => product.value === 'ota' && !isCiChannelSupported(productionChannel.value))
+const pipeline = computed(() => provider.value && !channelUnsupported.value
   ? buildCiPipeline({
       appId: props.appId,
       product: product.value,
@@ -427,6 +430,13 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           <span class="text-sm font-medium leading-5 text-slate-900 dark:text-white">{{ t(`cicd-guide-provider-${option}`) }}</span>
         </button>
       </div>
+      <p v-if="provider && channelUnsupported" class="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" role="status" data-test="cicd-channel-unsupported">
+        <IconTriangleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+        <span class="min-w-0 flex-1">
+          {{ t('cicd-guide-channel-unsupported', { channel: productionChannel }) }}
+          <RouterLink :to="`/app/${encodeURIComponent(appId)}/channels`" class="ml-1 font-medium underline underline-offset-4">{{ t('cicd-guide-open-channels') }}</RouterLink>
+        </span>
+      </p>
       <p v-if="!provider" class="rounded-2xl border border-dashed border-slate-300 px-6 py-5 text-center text-sm text-slate-500 dark:border-white/15 dark:text-slate-400" data-test="cicd-choose-provider">
         {{ t('cicd-guide-choose-provider') }}
       </p>

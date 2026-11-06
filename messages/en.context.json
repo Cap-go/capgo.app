@@ -4355,5 +4355,7 @@
   "cicd-guide-open-bundles": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-open-builds": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-docs": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "cicd-guide-key-why-app_admin-preview": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "cicd-guide-key-why-app_admin-preview": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-channel-unsupported": "Used in Capgo web console areas: components/dashboard. Role: warning message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-open-channels": "Used in Capgo web console areas: components/dashboard. Role: link label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

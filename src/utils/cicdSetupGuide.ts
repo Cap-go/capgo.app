@@ -96,11 +96,33 @@ export function normalizeCiBranch(value: string | undefined, fallback: string) {
   return branch && branch.length <= 100 && BRANCH_PATTERN.test(branch) && !branch.includes('..') ? branch : fallback
 }
 
-const CHANNEL_PATTERN = /^[\w.-]{1,64}$/
-
+/** Keeps the app's real default channel name; only a missing one falls back to production. */
 export function normalizeCiChannel(value: string | null | undefined) {
-  const channel = value?.trim() ?? ''
-  return CHANNEL_PATTERN.test(channel) ? channel : DEFAULT_PRODUCTION_CHANNEL
+  return value || DEFAULT_PRODUCTION_CHANNEL
+}
+
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/
+
+/**
+ * `bundle upload --channel` splits on commas and trims each name, so such a
+ * channel cannot be targeted from CI. The guide asks for a rename instead of
+ * silently shipping to another channel.
+ */
+export function isCiChannelSupported(name: string) {
+  return name.length > 0 && name === name.trim() && !name.includes(',') && !CONTROL_CHARACTERS.test(name)
+}
+
+function shellArg(value: string) {
+  return /^[\w./@%+=:-]+$/.test(value) ? value : `'${value.replaceAll('\'', `'\\''`)}'`
+}
+
+/** Plain YAML when it cannot be misread, otherwise a single-quoted scalar. */
+function yamlScalar(value: string) {
+  const plain = /^[\w$./(]/.test(value)
+    && !/: |:$| #|^[\w.-]+:$/.test(value)
+    && !CONTROL_CHARACTERS.test(value)
+  return plain ? value : yamlQuote(value)
 }
 
 export function isCiProduct(value: unknown): value is CiProduct {
@@ -160,7 +182,7 @@ function resolved(options: CiGuideOptions) {
 }
 
 function otaUpload(appId: string, channel: string) {
-  return `${CLI} bundle upload ${appId} --channel ${channel} --auto-bump patch --fail-on-incompatible`
+  return `${CLI} bundle upload ${appId} --channel ${shellArg(channel)} --auto-bump patch --fail-on-incompatible`
 }
 
 function platformLabel(platform: CiPlatform) {
@@ -325,7 +347,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       lines.push('')
     lines.push(
       `  ${job.id}:`,
-      `    name: ${job.name}`,
+      `    name: ${yamlScalar(job.name)}`,
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
       '    steps:',
@@ -343,7 +365,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
     for (const command of setupCommands(job))
       lines.push(`      - run: ${command}`)
     lines.push(
-      `      - run: ${withPr(job.command, `\${{ github.event.pull_request.number }}`)}`,
+      `      - run: ${yamlScalar(withPr(job.command, `\${{ github.event.pull_request.number }}`))}`,
       '        env:',
       `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
     )
@@ -386,7 +408,7 @@ function renderGitlab(jobs: CiJob[]) {
     }
     lines.push('  script:')
     for (const command of [...setupCommands(job), shellCommand(job, prVariable)])
-      lines.push(`    - ${command}`)
+      lines.push(`    - ${yamlScalar(command)}`)
   }
   return lines.join('\n')
 }
@@ -419,7 +441,7 @@ function renderAzure(jobs: CiJob[]) {
       lines.push('')
     lines.push(
       `  - job: ${job.id.replaceAll('-', '_')}`,
-      `    displayName: ${job.name}`,
+      `    displayName: ${yamlScalar(job.name)}`,
       `    condition: ${condition}`,
       '    steps:',
       '      - task: NodeTool@0',
@@ -429,8 +451,8 @@ function renderAzure(jobs: CiJob[]) {
     for (const command of setupCommands(job))
       lines.push(`      - script: ${command}`)
     lines.push(
-      `      - script: ${withPr(job.command, '$(System.PullRequest.PullRequestId)')}`,
-      `        displayName: ${job.name}`,
+      `      - script: ${yamlScalar(withPr(job.command, '$(System.PullRequest.PullRequestId)'))}`,
+      `        displayName: ${yamlScalar(job.name)}`,
       '        env:',
       `          CAPGO_TOKEN: $(${job.secret})`,
     )
@@ -441,13 +463,13 @@ function renderAzure(jobs: CiJob[]) {
 function renderBitbucketStep(job: CiJob, indent: string) {
   const lines = [
     `${indent}- step:`,
-    `${indent}    name: ${job.name}`,
+    `${indent}    name: ${yamlScalar(job.name)}`,
     `${indent}    caches:`,
     `${indent}      - node`,
     `${indent}    script:`,
   ]
   for (const command of [...setupCommands(job), shellCommand(job, '$BITBUCKET_PR_ID')])
-    lines.push(`${indent}      - ${command}`)
+    lines.push(`${indent}      - ${yamlScalar(command)}`)
   return lines
 }
 
@@ -504,8 +526,8 @@ function renderCircleci(jobs: CiJob[]) {
       lines.push(`      - run: ${command}`)
     lines.push(
       '      - run:',
-      `          name: ${job.name}`,
-      `          command: ${shellCommand(job, prVariable)}`,
+      `          name: ${yamlScalar(job.name)}`,
+      `          command: ${yamlScalar(shellCommand(job, prVariable))}`,
     )
   })
   const releaseBranches = pushBranches(jobs)

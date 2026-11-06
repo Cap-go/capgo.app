@@ -597,6 +597,8 @@
   "cicd-guide-step-label": "Step {number}",
   "cicd-guide-no-default-channel": "This app has no default channel yet, so CI has nowhere to ship. Create the production channel in the setup checklist first.",
   "cicd-guide-open-checklist": "Open the setup checklist",
+  "cicd-guide-channel-unsupported": "The default channel \"{channel}\" has a comma, a line break, or a space at the start or end, so the Capgo CLI can't target it. Rename it to generate the pipeline.",
+  "cicd-guide-open-channels": "Open channels",
   "cicd-guide-step-credentials-title": "Store your signing credentials on Capgo",
   "cicd-guide-step-credentials-description": "Run this in your project, on the computer where you ran build init. It uploads your saved certificates and keys, encrypted, so CI needs no signing secrets.",
   "cicd-guide-step-credentials-missing": "No credentials saved yet? Finish the Builder checklist first.",
