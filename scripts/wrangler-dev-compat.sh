@@ -11,6 +11,7 @@ for arg in "$@"; do
     esac
 done
 today_utc="$(date -u +%Y-%m-%d)"
+# Bun miniflare caps supported dates below production; pick min(today, max) unless WRANGLER_DEV_COMPATIBILITY_DATE is set.
 max_supported="${WRANGLER_DEV_MAX_COMPATIBILITY_DATE:-2026-11-11}"
 if [ -n "${WRANGLER_DEV_COMPATIBILITY_DATE:-}" ]; then
   compat="$WRANGLER_DEV_COMPATIBILITY_DATE"
