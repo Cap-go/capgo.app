@@ -4,6 +4,8 @@ import { sql } from 'drizzle-orm'
 import { getAppOnboardingLoginSource } from './app_onboarding_login.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
+import { trackPosthogEvent } from './posthog.ts'
+import { backgroundTask } from './utils.ts'
 
 /**
  * AI onboarding: the console shows live agent progress. The first CLI login or command
@@ -41,7 +43,9 @@ export async function markAiOnboardingAgentConnected(
     // ai_mcp_connected_at. Later events match no row and write nothing. When the console
     // recorded which organization is being set up, only that organization's key counts;
     // setups started before that field existed keep accepting any prompt key.
-    await getDrizzleClient(pool, { logger: false }).execute(sql`
+    // A marker equal to this transaction's now() was written by this UPDATE, so RETURNING
+    // tells which markers are new without a second query.
+    const result = await getDrizzleClient(pool, { logger: false }).execute<{ agent_first: boolean, mcp_first: boolean, intent: string | null, org_id: string | null }>(sql`
       UPDATE public.users
       SET onboarding = onboarding
         || jsonb_build_object('ai_agent_connected_at', coalesce(onboarding -> 'ai_agent_connected_at', to_jsonb(now())))
@@ -65,7 +69,31 @@ export async function markAiOnboardingAgentConnected(
           onboarding -> 'ai_agent_connected_at' IS NULL
           OR (${source}::text = 'mcp' AND onboarding -> 'ai_mcp_connected_at' IS NULL)
         )
+      RETURNING
+        coalesce(onboarding -> 'ai_agent_connected_at' = to_jsonb(now()), false) AS agent_first,
+        coalesce(onboarding -> 'ai_mcp_connected_at' = to_jsonb(now()), false) AS mcp_first,
+        onboarding ->> 'intent' AS intent,
+        onboarding ->> 'ai_setup_org_id' AS org_id
     `)
+    const row = result.rows[0]
+    // The console page only sees these markers while it is open, so the funnel events are
+    // sent from here, once, when the marker is first written.
+    const events = row
+      ? [row.agent_first && 'onboarding_ai_agent_connected', row.mcp_first && 'onboarding_ai_mcp_connected'].filter(name => typeof name === 'string')
+      : []
+    if (row && events.length) {
+      const orgId = row.org_id ?? undefined
+      await backgroundTask(c, Promise.all(events.map(name => trackPosthogEvent(c, {
+        channel: 'onboarding',
+        event: name,
+        user_id: auth.userId,
+        groups: orgId ? { organization: orgId } : undefined,
+        timeoutMs: 3000,
+        nonPersonTags: { source, ...(row.intent ? { intent: row.intent } : {}), ...(orgId ? { org_id: orgId } : {}) },
+      }))).catch((error) => {
+        cloudlogErr({ requestId: c.get('requestId'), message: 'ai onboarding agent tracking failed', error: serializeError(error) })
+      }))
+    }
   }
   catch (error) {
     // Best effort: the event itself must never fail because of this hint.
