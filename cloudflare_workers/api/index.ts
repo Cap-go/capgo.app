@@ -7,6 +7,7 @@ import { app as accept_invitation } from '../../supabase/functions/_backend/priv
 import { app as assistant } from '../../supabase/functions/_backend/private/assistant.ts'
 import { app as billing_region } from '../../supabase/functions/_backend/private/billing_region.ts'
 import { app as plan_prices } from '../../supabase/functions/_backend/private/plan_prices.ts'
+import { app as changelog } from '../../supabase/functions/_backend/private/changelog.ts'
 import { app as bundle_install_stats } from '../../supabase/functions/_backend/private/bundle_install_stats.ts'
 import { app as cli } from '../../supabase/functions/_backend/private/cli/index.ts'
 import { app as channel_device } from '../../supabase/functions/_backend/private/channel_device.ts'
@@ -171,6 +172,7 @@ appPrivate.route('/website_stats', publicStats)
 appPrivate.route('/cli', cli)
 appPrivate.route('/billing_region', billing_region)
 appPrivate.route('/plan_prices', plan_prices)
+appPrivate.route('/changelog', changelog)
 appPrivate.route('/config', config)
 appPrivate.route('/console', console_data)
 appPrivate.route('/assistant', assistant)
