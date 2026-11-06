@@ -69,7 +69,7 @@ async function copyLocalCommand() {
           <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
             {{ t('mcp-connect-api-key-description') }}
           </p>
-          <RouterLink to="/connect" class="d-btn d-btn-primary d-btn-sm mt-4">
+          <RouterLink to="/apikeys" class="d-btn d-btn-primary d-btn-sm mt-4">
             {{ t('mcp-connect-api-key-cta') }}
           </RouterLink>
         </section>

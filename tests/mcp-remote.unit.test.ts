@@ -697,23 +697,21 @@ describe('hosted MCP errors always give a way out', () => {
 })
 
 describe('hosted MCP tool analytics', () => {
-  const caller = { userId: 'user-1', apikeyId: 1, apikeyName: 'MCP · Claude', apikeyExpiresAt: null }
   const call = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_list_apps' } }
 
-  it('tracks a successful tool call with the OAuth client name', () => {
-    const event = hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { content: [] } }, caller)
+  it('builds the event for a successful tool call', () => {
+    const event = hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { content: [] } }, 'user-1')
     expect(event).toMatchObject({ event: 'Hosted MCP Tool Invoked', user_id: 'user-1', setPersonProperties: false })
-    expect(event?.nonPersonTags).toEqual({ tool_name: 'capgo_list_apps', success: true, client: 'Claude' })
+    expect(event?.nonPersonTags).toEqual({ tool_name: 'capgo_list_apps', success: true })
   })
 
-  it('marks isError results and JSON-RPC errors as failures', () => {
-    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { isError: true } }, caller)?.nonPersonTags.success).toBe(false)
-    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad' } }, caller)?.nonPersonTags.success).toBe(false)
+  it('marks tool errors and JSON-RPC errors as failures', () => {
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { isError: true } }, 'user-1')?.nonPersonTags.success).toBe(false)
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad' } }, 'user-1')?.nonPersonTags.success).toBe(false)
   })
 
-  it('never sends a user-chosen key name and ignores non-tool messages', () => {
-    const pasted = hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: {} }, { ...caller, apikeyName: 'my secret prod key' })
-    expect(pasted?.nonPersonTags.client).toBe('api_key')
-    expect(hostedMcpToolEvent({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 1, result: {} }, caller)).toBeNull()
+  it('ignores non-tool messages and notifications', () => {
+    expect(hostedMcpToolEvent({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 1, result: {} }, 'user-1')).toBeNull()
+    expect(hostedMcpToolEvent({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'capgo_list_apps' } }, null, 'user-1')).toBeNull()
   })
 })
