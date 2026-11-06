@@ -88,6 +88,7 @@ export async function markAiOnboardingAgentConnected(
         event: name,
         user_id: auth.userId,
         groups: orgId ? { organization: orgId } : undefined,
+        timeoutMs: 3000,
         nonPersonTags: { source, ...(row.intent ? { intent: row.intent } : {}), ...(orgId ? { org_id: orgId } : {}) },
       }))).catch((error) => {
         cloudlogErr({ requestId: c.get('requestId'), message: 'ai onboarding agent tracking failed', error: serializeError(error) })

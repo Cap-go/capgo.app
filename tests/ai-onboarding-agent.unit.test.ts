@@ -66,6 +66,7 @@ describe('markAiOnboardingAgentConnected', () => {
       user_id: 'user-1',
       groups: { organization: 'org-1' },
       nonPersonTags: { source: 'cli', intent: 'builder', org_id: 'org-1' },
+      timeoutMs: 3000,
     }))
 
     // Later events write nothing, so nothing is tracked again.
