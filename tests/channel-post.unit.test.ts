@@ -202,6 +202,23 @@ describe('public channel post', () => {
     expect(updateOrCreateChannel).toHaveBeenLastCalledWith(c, expect.anything(), 42, true)
   })
 
+  it('reads the existing channel past the Hyperdrive query cache', async () => {
+    const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
+    const channelLookups: string[] = []
+    const lookup = buildAdminChain({ existingChannelId: 42 })
+    adminQuery.mockImplementation((text: string, values: unknown[]) => {
+      if (text.includes('FROM public.channels'))
+        channelLookups.push(text)
+      return lookup(text, values)
+    })
+    await post(context(), { app_id: 'com.test.channel-cache', channel: 'pr-1' }, apiKey())
+    // Hyperdrive skips its cache for queries that call now(): a cached "no channel"
+    // row would otherwise turn every set within 60s of creation into a duplicate insert.
+    expect(channelLookups).toHaveLength(1)
+    expect(channelLookups[0]).toMatch(/now\(\)/)
+    expect(updateOrCreateChannel).toHaveBeenCalledWith(expect.anything(), expect.anything(), 42, true)
+  })
+
   it('rejects the concurrent update when the key has only creation permission', async () => {
     const { post } = await import('../supabase/functions/_backend/public/channel/post.ts')
     updateOrCreateChannel.mockRejectedValueOnce(Object.assign(new Error('duplicate channel'), { code: '23505', constraint: 'unique_name_app_id' }))

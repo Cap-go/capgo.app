@@ -381,9 +381,13 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
 }
 
 async function upsertChannel(c: Context<MiddlewareKeyVariables>, pg: PgClient, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
+  // Hyperdrive caches reads by text and parameters (60s by default), so a channel
+  // created moments ago can still read as missing and send us down the INSERT path,
+  // retry included. Hyperdrive never caches a query that calls now(); PostgreSQL
+  // does not evaluate the unreferenced CTE.
   const existingChannel = await queryJson<ExistingChannel>(
     pg,
-    'SELECT id, version, rollout_version, public, paused_at FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+    'WITH capgo_fresh_read AS (SELECT now()) SELECT id, version, rollout_version, public, paused_at FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
     [body.app_id, body.channel],
   ).then(rows => rows.length === 1 ? rows[0] : null).catch((error: unknown) => {
     logPgError(c, 'channel_post_existing_channel', error)
