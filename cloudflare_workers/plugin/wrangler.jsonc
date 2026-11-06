@@ -100,7 +100,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       // Stats of the requests the snippet answers itself (snippetEdgeReplay.ts):
       // Logpush -> R2 -> files queue -> replay queue, consumed by this worker only.
       // Create them first: bun run snippet-edge-stats:setup
@@ -108,6 +108,10 @@
         {
           "binding": "SNIPPET_EDGE_STATS_LOGS",
           "bucket_name": "capgo-snippet-edge-stats"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ],
       "queues": {
@@ -226,7 +230,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -263,6 +267,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -318,7 +328,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -355,6 +365,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -410,7 +426,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -447,6 +463,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -502,7 +524,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -539,6 +561,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -594,7 +622,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -631,6 +659,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -686,7 +720,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -723,6 +757,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -778,7 +818,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -815,6 +855,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -870,7 +916,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "c4524ce7f3aa4d43a649659070dcb65a" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
@@ -895,6 +941,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_AS_INDIA",
           "id": "7f6e8255a9124531b1b07f11fdc257a7"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -921,7 +973,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "9c405a5248604951a2a12125799bc21b" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "f14b6c6872c14415abee26a09112ab80" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "9c405a5248604951a2a12125799bc21b" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "f14b6c6872c14415abee26a09112ab80" }, { "binding": "PLUGIN_STATE", "id": "fc66f786a80e49b2a401527785e3b01b" }],
       "analytics_engine_datasets": [
         {
           "binding": "DEVICE_USAGE",
@@ -984,7 +1036,13 @@
       ],
       "placement": {
         "region": "gcp:europe-west8"
-      }
+      },
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-preprod"
+        }
+      ]
     },
     "alpha": {
       "name": "capgo_plugin-alpha",
@@ -1009,7 +1067,7 @@
           "database_id": "81236a0c-db6e-454d-87da-944fa9bc100c"
         }
       ],
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "16a85350d8a246ff857a645c8f51d6ae" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "d4442a6f6da448dda2fdcce3b7db8d5a" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "16a85350d8a246ff857a645c8f51d6ae" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "d4442a6f6da448dda2fdcce3b7db8d5a" }, { "binding": "PLUGIN_STATE", "id": "ab48229b68cb4203818933c612d1477b" }],
       "analytics_engine_datasets": [
         {
           "binding": "DEVICE_USAGE",
@@ -1076,7 +1134,13 @@
       ],
       "placement": {
         "region": "gcp:europe-west8"
-      }
+      },
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-alpha"
+        }
+      ]
     },
     "local": {
       "name": "capgo_plugin-local",
@@ -1084,7 +1148,26 @@
         "ENV_NAME": "capgo_plugin-local",
         "CAPGO_PREVENT_BACKGROUND_FUNCTIONS": "true"
       },
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "local-channel-self-store" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "local-plugin-notification-queue" }]
+      "kv_namespaces": [
+        {
+          "binding": "CHANNEL_SELF_STORE",
+          "id": "local-channel-self-store"
+        },
+        {
+          "binding": "PLUGIN_NOTIFICATION_QUEUE",
+          "id": "local-plugin-notification-queue"
+        },
+        {
+          "binding": "PLUGIN_STATE",
+          "id": "local-plugin-state"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "local-plugin-state-pointers"
+        }
+      ]
     }
   }
 }

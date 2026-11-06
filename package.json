@@ -107,6 +107,7 @@
     "test:cloudflare:all": "vitest run tests/* --config vitest.config.cloudflare.ts",
     "test:cloudflare:backend": "vitest run --exclude=tests/cli* --config vitest.config.cloudflare.ts",
     "test:cloudflare:plugin": "USE_CLOUDFLARE_WORKERS=true vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts tests/channel-rate-limit.test.ts --exclude=tests/*.unit.test.ts --exclude=tests/stats-export-cors.test.ts --config vitest.config.cloudflare-plugin.ts",
+    "test:cloudflare:plugin:kv": "USE_CLOUDFLARE_WORKERS=true vitest run tests/updates*.test.ts tests/stats*.test.ts tests/channel_self*.test.ts tests/channel-rate-limit.test.ts tests/plugin-kv-state*.test.ts --exclude=tests/*.unit.test.ts --exclude=tests/stats-export-cors.test.ts --config vitest.config.cloudflare-plugin-kv.ts",
     "test:cloudflare:api": "vitest run --exclude=tests/cli* --exclude=tests/updates* --exclude=tests/stats* --exclude=tests/channel_self* --exclude=tests/channel-rate-limit.test.ts --config vitest.config.cloudflare.ts",
     "test:cloudflare:updates": "vitest run tests/updates* --config vitest.config.cloudflare.ts",
     "bench": "vitest bench --config vitest.config.bench.ts --run",
