@@ -127,12 +127,13 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
 
 /**
  * PostHog event for one hosted MCP tool call, so hosted usage sits next to the CLI's
- * `MCP Tool Invoked`. Returns null when no tool ran (notifications get no response).
+ * `MCP Tool Invoked`. Returns null when no tool ran: notifications get no response, and
+ * requests rejected before dispatch (bad `jsonrpc` or `id`) get an error with `id: null`.
  * The caller adds `client` (see hostedMcpClient).
  */
 export function hostedMcpToolEvent(message: unknown, response: JsonRpcResponse | null | undefined, userId: string) {
   const msg = message as { method?: unknown, params?: { name?: unknown } } | null
-  if (msg?.method !== 'tools/call' || !response)
+  if (msg?.method !== 'tools/call' || !response || response.id === null)
     return null
   const toolName = typeof msg.params?.name === 'string' ? msg.params.name.slice(0, 100) : 'unknown'
   const result = response.result as { isError?: unknown } | undefined
@@ -154,6 +155,7 @@ async function hostedMcpClient(c: Context<MiddlewareKeyVariables>, apikeyId: num
   return rows[0]?.client_name ?? 'api_key'
 }
 
+/** Sends one PostHog event per tool that ran in this HTTP request, tagged with the OAuth client. */
 async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, caller: McpCaller, exchanges: [unknown, JsonRpcResponse | null][]) {
   const events = exchanges.map(([message, response]) => hostedMcpToolEvent(message, response, caller.userId)).filter(event => event !== null)
   if (events.length === 0)

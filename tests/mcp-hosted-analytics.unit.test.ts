@@ -45,7 +45,11 @@ describe('hosted MCP tool tracking route', () => {
   })
 
   it('sends nothing when no tool ran', async () => {
-    await post({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'capgo_list_apps' } })
+    await post([
+      { jsonrpc: '2.0', method: 'tools/call', params: { name: 'capgo_list_apps' } },
+      { jsonrpc: '1.0', id: 3, method: 'tools/call', params: { name: 'capgo_list_apps' } },
+      { jsonrpc: '2.0', id: { bad: true }, method: 'tools/call', params: { name: 'capgo_list_apps' } },
+    ])
     expect(mocks.query).not.toHaveBeenCalled()
     expect(mocks.track).not.toHaveBeenCalled()
   })
