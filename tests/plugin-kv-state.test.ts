@@ -29,7 +29,9 @@ describe.skipIf(process.env.PLUGIN_STATE_KV_TESTS !== 'true')('KV and replica pl
       rollout_enabled = false, rollout_version = NULL, rollout_percentage_bps = 0,
       rollout_paused_at = NULL, ios = true, android = true, allow_device_self_set = true
       WHERE app_id = $1 AND name = 'production'`, [fixture.appId, fixture.stable.id])
-    await syncPluginState()
+    // A semantic no-op still rewrites PostgreSQL heap rows and can change
+    // unordered list scan order. Republish this fixture for an exact pair.
+    await syncPluginState([fixture.appId])
   }, 60_000)
 
   afterAll(async () => {

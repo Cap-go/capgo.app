@@ -152,6 +152,14 @@ fallbacks. Dedicated differential tests explicitly select each local path and
 assert identical status and JSON. The local override header is ignored outside
 local worker environments.
 
+Legacy channel-list SQL has no ordering contract. A no-op SQL update can move
+a heap row without changing any channel settings; this can change list order
+without requiring a semantic state publication. Snapshots keep the source scan
+order at publication, rather than introducing alphabetical ordering. Exact
+array comparisons refresh the test fixture after those no-op setup writes.
+The only response value excluded from equality is an absolute retry timestamp,
+which is validated against each request's clock interval and retry duration.
+
 The benchmark uses isolated invented fixtures. It reports sample counts and
 latency distributions for existing/new bundle checks, channels, stats, and
 manifest sizes. Cache API eviction is reported separately from warm reads.
@@ -159,6 +167,11 @@ Local KV itself remains warm. Propagation probes bypass the setup's automatic
 drain and measure from database commit while the writer runs asynchronously.
 The benchmark must pass response parity and KV-source assertions before its
 timings can be used.
+
+Complete manifest-size maps retain their existing Cache API fast path. New
+version-2 entries carry purge tags; old untagged entries are not reused. A
+warm request needs neither a database lookup nor a KV document read. Maps
+filled by the KV path expire after 30 seconds.
 
 The worker size baseline is intentionally refreshed for this feature. A dry
 run of the unchanged branch base measured 474.43 KiB, gzip 141.80 KiB. The
@@ -172,3 +185,6 @@ new uploads and manifests, channel publishes, forced overrides, self-assignment,
 deletion, rollouts, and plan changes. Capture their commit times and the first
 matching response in each region. No global latency or savings claim is proven
 by this local test.
+
+The measured local comparison, including limitations and the raw report, is in
+[plugin-state-kv-results.md](plugin-state-kv-results.md).

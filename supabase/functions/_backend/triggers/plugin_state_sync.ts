@@ -591,6 +591,9 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
     return result
   const store = createSyncStore(namespace)
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
+  // A later claim in this invocation must not acknowledge new changes to an
+  // app whose keys the invocation's deduplication set has already written.
+  const processedApps = new Set<string>()
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
@@ -610,7 +613,12 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       result.claims++
 
       const appDeadline = Math.min(deadline, Date.now() + APP_BUDGET_MS)
-      const outcomes = await runLimited(claimed.apps, APP_CONCURRENCY, item => syncApp(db, store, item, appDeadline))
+      const outcomes = await runLimited(claimed.apps, APP_CONCURRENCY, async (item): Promise<AppOutcome> => {
+        if (processedApps.has(item.app_id))
+          return { appId: item.app_id, ok: false, deferred: true }
+        processedApps.add(item.app_id)
+        return syncApp(db, store, item, appDeadline)
+      })
       const done = outcomes.filter(outcome => outcome.ok)
       const failed = outcomes.filter(outcome => !outcome.ok && !outcome.deferred)
       const deferred = outcomes.filter(outcome => outcome.deferred)

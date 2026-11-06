@@ -273,7 +273,7 @@ describe('manifest download size cache', () => {
       { file_name: 'new.js', file_hash: 'hash-z', download_url: 'https://plugin.capgo.test/files/read/attachments/z?key=42' },
     ])
 
-    expect(cachedKeys).toEqual(['https://plugin.capgo.test/.manifest-sizes-v1?app_id=com.example.app&version_id=42'])
+    expect(cachedKeys).toEqual(['https://plugin.capgo.test/.manifest-sizes-v2?app_id=com.example.app&version_id=42'])
     expect(result.totalSize).toBe(125)
     expect(result.knownFiles).toBe(2)
     expect(result.unknownFiles).toBe(1)

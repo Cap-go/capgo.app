@@ -898,24 +898,33 @@ jobs:
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    name: Run Cloudflare plugin tests (${{ matrix.state }})
+    name: Run Cloudflare plugin tests (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
-        state: [db, kv]
+        include:
+          - name: db
+            state: db
+            shard: 1/1
+          - name: kv-1
+            state: kv
+            shard: 1/2
+          - name: kv-2
+            state: kv
+            shard: 2/2
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-cloudflare-plugin-${{ matrix.state }}-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
+      group: capgo-local-services-cloudflare-plugin-${{ matrix.name }}-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
       cancel-in-progress: false
     env:
       PLUGIN_STATE_KV: ${{ matrix.state == 'kv' && 'on' || 'off' }}
       PLUGIN_STATE_KV_AUTHORITATIVE: ${{ matrix.state == 'kv' && 'true' || 'false' }}
       PLUGIN_STATE_KV_STRICT: ${{ matrix.state == 'kv' && 'true' || 'false' }}
-      SUPABASE_WORKTREE_INSTANCE: cloudflare-plugin-${{ matrix.state }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SUPABASE_WORKTREE_INSTANCE: cloudflare-plugin-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
       SUPABASE_WORKTREE_PORT_OFFSET: 4800
       CLOUDFLARE_WORKER_PORT_OFFSET: 4800
-      CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-plugin-${{ matrix.state }}-4800
+      CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-plugin-${{ matrix.name }}-4800
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6 # v6
@@ -1003,7 +1012,7 @@ jobs:
       - name: Run Cloudflare plugin integration tests (serial)
         run: |
           if [ "${{ matrix.state }}" = "kv" ]; then
-            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin:kv
+            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin:kv --shard=${{ matrix.shard }}
           else
             bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin
           fi
@@ -1017,7 +1026,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: test-cloudflare-plugin-${{ matrix.state }}-background-service-logs
+          name: test-cloudflare-plugin-${{ matrix.name }}-background-service-logs
           path: |
             ${{ steps.bootstrap_edge_server.outputs.log_path }}
             ${{ steps.start_cloudflare_workers.outputs.log_path }}

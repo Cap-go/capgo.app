@@ -1,10 +1,11 @@
 import type { PluginStateAppDoc, PluginStateChannelRow, PluginStateManifestDoc } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { Hono } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getManifestDownloadSize } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
 import { getAppVersionsByAppIdPg } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { abandonPluginStateRequest, createPluginStateDatabase, PluginStateMiss, PluginStateSession, shouldUsePluginState, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { evalAppVersion, evalChannelById, evalChannelDevice, evalCompatibleChannels, evalDefaultChannel, evalManifestSizeLookup, evalManifestVersionSizes, evalPlanValid } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateEval.ts'
-import { pluginStateAppKey, pluginStateDeviceKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
+import { pluginStateAppKey, pluginStateDeviceKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { parsePluginStateShareBps, pluginStateBucket } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateManifest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateValidation.ts'
 
@@ -150,6 +151,39 @@ describe('plugin state query parity', () => {
 })
 
 describe('state read failures and boundaries', () => {
+  it('serves a warm KV size map without reading KV and bounds its cached lifetime', async () => {
+    const entries = new Map<string, Response>()
+    const cache = {
+      match: async (request: Request) => entries.get(request.url)?.clone(),
+      put: async (request: Request, response: Response) => { entries.set(request.url, response.clone()) },
+    }
+    vi.stubGlobal('caches', { open: async () => cache })
+    const appKey = await pluginStateAppKey(APP_ID)
+    const get = vi.fn((key: string) => {
+      if (key === appKey)
+        return appDoc()
+      if (key === pluginStateManifestKey(11))
+        return manifest({ sizes: [['shared', '200']] })
+      throw new Error('Unexpected KV read')
+    })
+    const app = new Hono()
+    app.get('/', async c => c.json(await getManifestDownloadSize(c, APP_ID, '1.0.0', 11, [
+      { file_name: 'index.js', file_hash: 'shared', download_url: 'https://example.com/files/read?key=11' },
+    ], 'device')))
+    const env = { PLUGIN_STATE: { get } }
+    const cold = await app.request('/', undefined, env)
+    expect(await cold.json()).toMatchObject({ totalSize: 200, knownFiles: 1, unknownFiles: 0 })
+    expect(get).toHaveBeenCalledTimes(2)
+    const sizeEntry = [...entries].find(([url]) => url.includes('/.manifest-sizes-v2?'))?.[1]
+    expect(sizeEntry?.headers.get('Cache-Control')).toBe('public, s-maxage=30')
+    expect(sizeEntry?.headers.get('Cache-Tag')).toBe(`capgo-updates-${APP_ID}`)
+    get.mockImplementation(() => { throw new Error('KV unavailable') })
+    const warm = await app.request('/', undefined, env)
+    expect(await warm.json()).toMatchObject({ totalSize: 200, knownFiles: 1, unknownFiles: 0 })
+    expect(warm.headers.get('X-Plugin-State')).toBe('kv')
+    expect(get).toHaveBeenCalledTimes(2)
+  })
+
   it.each([
     () => { throw new Error('KV unavailable') },
     () => ({ f: 2, app_id: APP_ID, exists: true }),

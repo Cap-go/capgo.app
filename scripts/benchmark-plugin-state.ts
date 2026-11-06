@@ -122,12 +122,14 @@ function shortBody(body: unknown) {
 }
 
 /** Force each side explicitly and fail if the new path silently falls back. */
-export async function comparePluginState(probe: PluginStateProbe, kvFirst = false) {
+export async function comparePluginState(probe: PluginStateProbe, kvFirst = false, beforeProbe?: () => Promise<void>) {
+  await beforeProbe?.()
   const first = await probePluginState(probe, kvFirst ? 'kv' : 'db')
   // Same-device, same-channel SET is intentionally limited to once/second.
   // Wait between equivalent mutations; each HTTP timing excludes this pause.
   if (probe.path === '/channel_self' && probe.method === 'POST')
     await setTimeout(1100)
+  await beforeProbe?.()
   const second = await probePluginState(probe, kvFirst ? 'db' : 'kv')
   const db = kvFirst ? second : first
   const kv = kvFirst ? first : second
@@ -344,8 +346,9 @@ export async function runPluginStateBenchmark(samples = 40) {
         warm.kv.push(result.kv.milliseconds)
       }
       for (let i = 0; i < Math.min(samples, 10); i++) {
-        await evictPluginStateCache(fixture.appId)
-        const result = await comparePluginState(freshDeviceProbe(probe), i % 2 === 0)
+        // Both cohorts must begin after eviction. A single purge before a
+        // pair lets the first response warm shared caches for the second.
+        const result = await comparePluginState(freshDeviceProbe(probe), i % 2 === 0, () => evictPluginStateCache(fixture.appId))
         evicted.db.push(result.db.milliseconds)
         evicted.kv.push(result.kv.milliseconds)
       }
@@ -356,7 +359,17 @@ export async function runPluginStateBenchmark(samples = 40) {
       surfing.push(...await comparePluginStateChannelSequence(fixture, pluginVersion, index % 2 === 1))
     // Keep write rate below the platform's per-key limit before changing the app doc again.
     await setTimeout(1100)
-    const propagation = await measurePluginStatePropagation(fixture, fixture.next)
+    // Publish a bundle that did not exist in the initial backfill. Leave its
+    // version and manifest jobs pending so propagation includes their sync.
+    const published = await createAppVersions('1.3.0', fixture.appId, {
+      external_url: 'https://example.com/plugin-state/published.zip',
+      checksum: 'published-checksum',
+    })
+    await insertManifestRows([
+      { app_version_id: published.id, file_name: 'index.html', file_hash: 'c'.repeat(64), s3_path: 'plugin-state/published/index.html', file_size: 192 },
+      { app_version_id: published.id, file_name: 'main.js', file_hash: 'd'.repeat(64), s3_path: 'plugin-state/published/main.js', file_size: 320 },
+    ])
+    const propagation = await measurePluginStatePropagation(fixture, published)
     return {
       generated_at: new Date().toISOString(),
       environment: 'Local workerd; DB and KV on this machine; serial interleaved requests',
@@ -370,7 +383,10 @@ export async function runPluginStateBenchmark(samples = 40) {
       ],
       measurements,
       channel_surfing: surfing,
-      bundle_propagation: propagation,
+      bundle_propagation: {
+        description: 'New bundle metadata and manifest pending sync; timer starts at channel-promotion COMMIT, after upload preparation.',
+        ...propagation,
+      },
     }
   }
   finally {
