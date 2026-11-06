@@ -21,6 +21,7 @@ describe('files entrypoint cache routing', () => {
   })
   it('bypasses mutable preview metadata and channel previews', () => {
     expect(buildWorkersCacheKey(new Request('https://app-123.preview.capgo.app/.capgo/preview.json'))).toBeNull()
+    expect(buildWorkersCacheKey(new Request('https://app-123.preview.capgo.app/robots.txt'))).toBeNull()
     expect(buildWorkersCacheKey(new Request('https://c12-app.preview.capgo.app/index.html'))).toBeNull()
   })
   it('preserves range and non-GET bypasses', () => {

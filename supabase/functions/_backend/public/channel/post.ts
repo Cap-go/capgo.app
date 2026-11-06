@@ -3,6 +3,8 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { PgQueryClient, SetChannelBody } from '../bundle/set_channel.ts'
 import { HTTPException } from 'hono/http-exception'
+import type { ExistingChannel } from '../../utils/channel_insert.ts'
+import { buildChannelInsertOrExistingSql, ChannelAlreadyExistsError, resolveChannelInsert } from '../../utils/channel_insert.ts'
 import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
@@ -199,19 +201,12 @@ const channelInsertColumns = [
 
 type ChannelInsertColumn = typeof channelInsertColumns[number]
 
-interface ExistingChannel {
-  id: number
-  version: number | null
-  rollout_version: number | null
-  public: boolean
-  paused_at: string | null
-}
-
 interface CreatedChannel {
   id: number
   public: boolean
 }
 
+/** Inserts the channel in the caller's transaction; throws ChannelAlreadyExistsError when it already exists. */
 async function insertChannelInTransaction(
   dbClient: PgQueryClient,
   channel: Database['public']['Tables']['channels']['Insert'],
@@ -252,18 +247,15 @@ async function insertChannelInTransaction(
   }
   // Column names are from the closed list above; request data is always a value.
   const columns = channelInsertColumns.filter(column => channelValues[column] !== undefined)
-  const result = await dbClient.query<{ id: string | number, public: boolean }>(
-    `INSERT INTO public.channels (${columns.join(', ')})
-     VALUES (${columns.map((_, index) => `$${index + 1}`).join(', ')})
-     RETURNING id, public`,
+  const insert = buildChannelInsertOrExistingSql(
+    columns,
     columns.map(column => channelValues[column]),
+    channel.app_id,
+    channel.name,
   )
-  const createdChannel = result.rows[0]
-  const channelId = Number(createdChannel?.id)
-  if ((result.rowCount ?? 0) !== 1 || !Number.isSafeInteger(channelId) || typeof createdChannel?.public !== 'boolean') {
-    throw new Error('Channel insert returned no row')
-  }
-  return { id: channelId, public: createdChannel.public }
+  const result = await dbClient.query(insert.text, insert.values)
+  const createdChannel = resolveChannelInsert(result.rows as Parameters<typeof resolveChannelInsert>[0])
+  return { id: createdChannel.id, public: createdChannel.public }
 }
 
 async function findVersionInTransaction(dbClient: PgQueryClient, appId: string, version: string, ownerOrg: string) {
@@ -282,6 +274,7 @@ async function findVersionInTransaction(dbClient: PgQueryClient, appId: string, 
   return result.rows[0].id
 }
 
+/** Creates a channel and promotes `versionName` to it in one transaction, rolling back on any failure. */
 async function createAndPromoteChannelInTransaction(
   c: Context<MiddlewareKeyVariables>,
   channel: Database['public']['Tables']['channels']['Insert'],
@@ -336,7 +329,7 @@ async function createAndPromoteChannelInTransaction(
         // Preserve the original database error when rollback itself fails.
       }
     }
-    if (error instanceof HTTPException || isChannelCreationConflict(error))
+    if (error instanceof HTTPException || error instanceof ChannelAlreadyExistsError || isChannelCreationConflict(error))
       throw error
     throwIfChannelUpdatePackageMismatch(error)
     logPgError(c, 'create_and_promote_channel', error)
@@ -354,6 +347,7 @@ function isChannelCreationConflict(error: unknown): boolean {
     && 'constraint' in error && error.constraint === 'unique_name_app_id'
 }
 
+/** POST /channel: creates or updates a channel, retrying once as an update when the channel turns out to exist. */
 export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   body = normalizeChannelSet(body)
   if (!body.app_id) {
@@ -368,6 +362,10 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
       return await upsertChannel(c, pg, body, apikey)
     }
     catch (error) {
+      // The lookup read a cached or stale "missing" (Hyperdrive caches reads), and the
+      // insert returned the real row instead of failing. Authorize and update that row.
+      if (error instanceof ChannelAlreadyExistsError)
+        return await upsertChannel(c, pg, body, apikey, error.existing)
       if (!isChannelCreationConflict(error))
         throw error
       // A concurrent creator won. Re-read and authorize the existing channel
@@ -380,8 +378,15 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   }
 }
 
-async function upsertChannel(c: Context<MiddlewareKeyVariables>, pg: PgClient, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
-  const existingChannel = await queryJson<ExistingChannel>(
+/** Authorizes and applies a channel create or update; `knownChannel` skips the lookup when the insert already returned the row. */
+async function upsertChannel(
+  c: Context<MiddlewareKeyVariables>,
+  pg: PgClient,
+  body: ChannelSet,
+  apikey: Database['public']['Tables']['apikeys']['Row'],
+  knownChannel?: ExistingChannel,
+): Promise<Response> {
+  const existingChannel = knownChannel ?? await queryJson<ExistingChannel>(
     pg,
     'SELECT id, version, rollout_version, public, paused_at FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
     [body.app_id, body.channel],
