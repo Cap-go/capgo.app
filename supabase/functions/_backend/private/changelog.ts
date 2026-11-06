@@ -162,12 +162,19 @@ export async function getPluginCatalog(c: Context): Promise<ChangelogPlugin[]> {
   return plugins
 }
 
-function resolveSource(product: unknown, repo: unknown) {
+async function resolveSource(c: Context, product: unknown, repo: unknown) {
   if (!isChangelogProduct(product))
     throw simpleError('invalid_changelog_product', 'product must be console, cli, updater or plugin', { product })
   const source = changelogSource(product, typeof repo === 'string' ? repo : undefined)
   if (!source)
     throw simpleError('invalid_changelog_repo', 'A valid plugin repo is required', { repo })
+  // GitHub calls may carry GITHUB_TOKEN: only repos of published @capgo npm plugins (public by definition)
+  // can be read, never an arbitrary Cap-go repo the token happens to see.
+  if (product === 'plugin') {
+    const plugins = await getPluginCatalog(c).catch(() => [])
+    if (!plugins.some(plugin => plugin.repo === source.repo))
+      throw simpleError('invalid_changelog_repo', 'Unknown plugin repo', { repo })
+  }
   return { product, source }
 }
 
@@ -334,7 +341,7 @@ app.use('*', useCors)
 
 // Release notes of one product, newest first. Search and filters run client-side.
 app.get('/', middlewareAuth, async (c) => {
-  const { product, source } = resolveSource(c.req.query('product'), c.req.query('repo'))
+  const { product, source } = await resolveSource(c, c.req.query('product'), c.req.query('repo'))
   const { releases, truncated } = await getReleases(c, source)
   return c.json({ product, repo: source.repo, latest: releases[0]?.version ?? null, truncated, releases })
 })
@@ -382,7 +389,7 @@ async function takeAiQuota(c: Context<MiddlewareKeyVariables>) {
 }
 
 export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: Record<string, unknown>) {
-  const { product, source } = resolveSource(body.product, body.repo)
+  const { product, source } = await resolveSource(c, body.product, body.repo)
   const fromVersion = versionBound(body.fromVersion)
   const requestedTo = versionBound(body.toVersion)
   if (!fromVersion)
