@@ -351,10 +351,9 @@ const detectedLabel = computed(() => {
   if (!detectedAt.value)
     return ''
   const productVia = product.value === 'ota' ? state.otaDetectedVia : state.builderDetectedVia
+  const productProvider = product.value === 'ota' ? state.otaCiProvider : state.builderCiProvider
   const via = productVia ?? state.detectedVia
-  const ciProvider = productVia
-    ? product.value === 'ota' ? state.otaCiProvider : state.builderCiProvider
-    : state.ciProvider
+  const ciProvider = productVia ? productProvider : state.ciProvider
   const fallbackKey = via === 'key' ? 'cicd-guide-status-from-key' : 'cicd-guide-status-from-ci'
   const from = ciProvider && ciProvider !== 'ci' ? ciProvider : t(fallbackKey)
   return t(product.value === 'builder' ? 'cicd-guide-status-detected-builder' : 'cicd-guide-status-detected-ota', { from, date: formatDate(detectedAt.value) })

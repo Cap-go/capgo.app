@@ -1,16 +1,18 @@
 import type { Json } from '~/types/database.types'
 import { parseAppOnboardingLedger } from '~/utils/appOnboardingProgress'
 
+type CiCdDetectionSource = 'ci' | 'key' | null
+
 // Mirrors apps.onboarding.cicd, written by record_app_cicd_setup (console) and
 // record_app_cicd_deploy (backend, on a CI bundle upload or build request).
 export interface CiCdSetupState {
   otaDetectedAt: string | null
   builderDetectedAt: string | null
-  detectedVia: 'ci' | 'key' | null
+  detectedVia: CiCdDetectionSource
   ciProvider: string | null
-  otaDetectedVia: 'ci' | 'key' | null
+  otaDetectedVia: CiCdDetectionSource
   otaCiProvider: string | null
-  builderDetectedVia: 'ci' | 'key' | null
+  builderDetectedVia: CiCdDetectionSource
   builderCiProvider: string | null
   keyCreatedAt: string | null
   markedDoneAt: string | null

@@ -78,7 +78,7 @@ export const CI_RESTORE_KEY_COMMAND = `echo "$${CI_ENCRYPTION_SECRET}" | base64 
 
 /** Run locally to get the secret value (one line on macOS and Linux). */
 export function encryptionSecretCommand(provider: 'github' | 'other', purpose: CiKeySpec['purpose'] = 'release') {
-  const value = `base64 < .capgo_key_v2 | tr -d '\\n'`
+  const value = String.raw`base64 < .capgo_key_v2 | tr -d '\n'`
   return provider === 'github' ? `${value} | ${githubSecretCommand(CI_ENCRYPTION_SECRET, purpose)}` : value
 }
 
@@ -287,6 +287,11 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
   }
 
   const buildCommand = (platform: CiPlatform) => `${CLI} build request ${appId} --platform ${platform} --use-stored-credentials`
+  const releaseCommand = (platform: CiPlatform) => {
+    if (strategy === 'main_preprod')
+      return `${buildCommand(platform)} --submit-to-store-review`
+    return platform === 'android' ? `${buildCommand(platform)} ${ANDROID_TESTER_TRACK}` : buildCommand(platform)
+  }
   // Release jobs first, so every provider lists the production branch first.
   const releases = options.platforms.map((platform): CiJob => ({
     id: `${platform}-release`,
@@ -298,9 +303,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
     secret: 'CAPGO_TOKEN',
     setup: 'build',
     sync: platform,
-    command: strategy === 'main_preprod'
-      ? `${buildCommand(platform)} --submit-to-store-review`
-      : platform === 'android' ? `${buildCommand(platform)} ${ANDROID_TESTER_TRACK}` : buildCommand(platform),
+    command: releaseCommand(platform),
     ...(strategy === 'main_preprod' ? {} : { env: NO_STORE_REVIEW }),
   }))
   if (strategy === 'main_preprod') {
@@ -443,8 +446,6 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       '      - uses: actions/checkout@v6',
       // A closed pull request can lose its merge ref; the base branch always has the config.
       ...(job.trigger.kind === 'pull_request_closed' ? ['        with:', `          ref: ${GITHUB_BASE_REF}`] : []),
-    )
-    lines.push(
       '      - uses: actions/setup-node@v6',
       '        with:',
       '          node-version: 24',
