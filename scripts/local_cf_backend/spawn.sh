@@ -13,8 +13,9 @@ error_exit() {
 ENV_FILE="./internal/cloudflare/.env.local"
 [ ! -f "$ENV_FILE" ] && error_exit "File not found: $ENV_FILE"
 
-# Prepare the base arguments
-ARGS=("bunx" "wrangler" "dev" "--port" "7777")
+# Prepare the base arguments (compat date: see scripts/wrangler-dev-compat.sh)
+COMPAT_DATE="${WRANGLER_DEV_COMPATIBILITY_DATE:-$(date -u +%Y-%m-%d)}"
+ARGS=("bunx" "wrangler" "dev" "--compatibility-date" "${COMPAT_DATE}" "--port" "7777")
 
 # Read the file line by line
 while IFS= read -r line || [ -n "$line" ]; do
