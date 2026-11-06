@@ -368,7 +368,7 @@ export class PluginStateSession implements PluginStateQueries {
     return pending
   }
 
-  /** Manifest of a bundle; throws PluginStateMiss when it was never synced (non-authoritative). */
+  /** Missing manifests always fall back: backfill only covers channel-referenced bundles. */
   manifest(versionId: number | string): Promise<PluginStateManifestDoc | null> {
     const id = String(versionId)
     let pending = this.manifests.get(id)
@@ -386,7 +386,7 @@ export class PluginStateSession implements PluginStateQueries {
           throw new PluginStateMiss('manifest identity mismatch')
         if (doc && doc.app_id !== this.appId)
           return null
-        if (!doc && !isPluginStateAuthoritative(this.c))
+        if (!doc)
           throw new PluginStateMiss(`manifest ${id}`)
         return doc
       })

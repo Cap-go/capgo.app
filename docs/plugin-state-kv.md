@@ -27,6 +27,12 @@ atomic across keys or locations. Missing dependencies and read failures must
 fall back to the existing replica path. Authoritative mode distinguishes a
 genuinely absent app from an unavailable or malformed store.
 
+Authoritative app mode does not make missing manifest keys authoritative.
+Backfill publishes channel-referenced manifests; historical and unpublished
+bundles may still exist only in the database. Their manifest-size requests
+fall back to the replica rather than returning zero sizes. Retain replica
+fallback until those remaining dependencies have a separate serving path.
+
 Do not infer worldwide latency or release visibility from local workerd. Keep
 all regional replicas and Worker placement until production measurements prove
 that both request latency and time to observe changes meet the existing

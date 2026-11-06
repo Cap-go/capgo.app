@@ -1,7 +1,10 @@
 import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { getPostgresClient, resetAndSeedAppData, resetAppData } from './test-utils.ts'
+import { Hono } from 'hono'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { getManifestDownloadSize } from '../supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts'
+import { pluginStateAppKey, pluginStateManifestKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
+import { getPostgresClient, POSTGRES_URL, resetAndSeedAppData, resetAppData } from './test-utils.ts'
 
 const APP_ID = `com.test.pluginstatesync.${randomUUID().slice(0, 8)}`
 let client: PoolClient
@@ -54,6 +57,55 @@ describe('plugin KV sync queue contracts', () => {
   afterAll(async () => {
     client?.release()
     await resetAppData(APP_ID)
+  })
+
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('returns replica sizes for a database-only manifest with authoritative apps enabled', async () => {
+    // Hono's Node adapter reads process.env rather than Worker bindings.
+    vi.stubEnv('ENV_NAME', 'capgo_plugin-local')
+    vi.stubEnv('LOCAL_READ_REPLICA_SUPABASE_DB_URL', POSTGRES_URL)
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('PLUGIN_STATE_KV_AUTHORITATIVE', 'true')
+    vi.stubEnv('PLUGIN_STATE_KV_STRICT', 'true')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const { rows: versions } = await client.query<{ id: string, name: string }>(`
+      INSERT INTO public.app_versions (app_id, name, owner_org, storage_provider)
+      SELECT app_id, '9.1.0', owner_org, 'r2' FROM public.apps WHERE app_id = $1
+      RETURNING id, name`, [APP_ID])
+    const version = { id: Number(versions[0].id), name: versions[0].name }
+    const fileHash = 'e'.repeat(64)
+    await client.query(`INSERT INTO public.manifest (app_version_id, file_name, file_hash, s3_path, file_size)
+      VALUES ($1, 'historical.js', $2, 'plugin-state-sync/historical.js', 256)`, [version.id, fileHash])
+    const appKey = await pluginStateAppKey(APP_ID)
+    const reads: string[] = []
+    const app = new Hono<{ Variables: { requireReadReplica: boolean } }>()
+    app.get('/', async (c) => {
+      c.set('requireReadReplica', true)
+      return c.json(await getManifestDownloadSize(c, APP_ID, version.name, version.id, [
+        { file_name: 'historical.js', file_hash: fileHash, download_url: `https://example.com/files/read?key=${version.id}` },
+      ], 'manifest-fallback-device'))
+    })
+    const response = await app.request('/', undefined, {
+      ENV_NAME: 'capgo_plugin-local',
+      LOCAL_READ_REPLICA_SUPABASE_DB_URL: POSTGRES_URL,
+      PLUGIN_STATE_KV: 'on',
+      PLUGIN_STATE_KV_AUTHORITATIVE: 'true',
+      PLUGIN_STATE_KV_STRICT: 'true',
+      PLUGIN_STATE: {
+        get: (key: string) => {
+          reads.push(key)
+          return key === appKey
+            ? { f: 1, app_id: APP_ID, built_at: Date.now(), exists: true, owner: { owner_org: '00000000-0000-4000-8000-000000000001' }, plan: { has_credits: false, customer_id: null, stripe: null }, channels: [], overrides: {}, manifest_ids: [] }
+            : null
+        },
+      },
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Plugin-State')).toBe('fallback')
+    expect(response.headers.get('X-Database-Source')).toBe('local_read_replica')
+    expect(reads).toContain(pluginStateManifestKey(version.id))
+    expect(await response.json()).toMatchObject({ totalSize: 256, knownFiles: 1, unknownFiles: 0 })
   })
 
   it('bounds each app claim and retains remaining work', async () => {

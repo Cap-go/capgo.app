@@ -151,6 +151,24 @@ describe('plugin state query parity', () => {
 })
 
 describe('state read failures and boundaries', () => {
+  it.each(['true', 'false'])('falls back for an unsynced manifest with authoritative apps %s', async (authoritative) => {
+    vi.stubEnv('PLUGIN_STATE_KV_AUTHORITATIVE', authoritative)
+    const appKey = await pluginStateAppKey(APP_ID)
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const session = await startPluginStateRequest(c, APP_ID, 'device')
+      expect(session).toBeInstanceOf(PluginStateSession)
+      await expect(session?.manifest(11)).rejects.toBeInstanceOf(PluginStateMiss)
+      return c.json({ done: true })
+    })
+    const response = await app.request('/', undefined, {
+      PLUGIN_STATE_KV: 'on',
+      PLUGIN_STATE_KV_AUTHORITATIVE: authoritative,
+      PLUGIN_STATE: { get: (key: string) => key === appKey ? appDoc() : null },
+    })
+    expect(response.status).toBe(200)
+  })
+
   it('serves a warm KV size map without reading KV and bounds its cached lifetime', async () => {
     const entries = new Map<string, Response>()
     const cache = {
