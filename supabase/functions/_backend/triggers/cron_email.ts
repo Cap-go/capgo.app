@@ -454,10 +454,28 @@ function billingPeriodMetricsRange(cycleStart: string, cycleEnd: string): {
   return { periodStart, periodEndExclusive, metricsEndInclusive }
 }
 
+/**
+ * Storage and bandwidth are fair use on paid plans, so only MAU and build time
+ * can push the billing summary toward an upgrade. Their percentages are still
+ * reported in the email metadata.
+ */
+function planUsageUpgradeSignal(percent: { mau: number, buildTime: number }): {
+  maxUsagePercent: number
+  highUsageMetrics: string[]
+} {
+  const highUsageMetrics: string[] = []
+  if (percent.mau >= 90)
+    highUsageMetrics.push('MAU')
+  if (percent.buildTime >= 90)
+    highUsageMetrics.push('Build Time')
+  return { maxUsagePercent: Math.max(percent.mau, percent.buildTime), highUsageMetrics }
+}
+
 export const billingPeriodStatsTestUtils = {
   toDateOnlyUtc,
   addDaysToDateOnly,
   billingPeriodMetricsRange,
+  planUsageUpgradeSignal,
 }
 
 async function handleBillingPeriodStats(c: Context, _email: string, orgId: string, cycleStart?: string, cycleEnd?: string) {
@@ -621,8 +639,8 @@ async function sendBillingPeriodStats(c: Context, pg: PgClient, orgId: string, c
   const storagePercent = currentPlan?.storage ? Math.round((storage / currentPlan.storage) * 100) : 0
   const buildTimePercent = currentPlan?.build_time_unit ? Math.round((buildTimeUnit / currentPlan.build_time_unit) * 100) : 0
 
-  // The highest usage percentage determines if we should recommend an upgrade
-  const maxUsagePercent = Math.max(mauPercent, bandwidthPercent, storagePercent, buildTimePercent)
+  // The highest plan-limited usage percentage determines if we should recommend an upgrade
+  const { maxUsagePercent, highUsageMetrics } = planUsageUpgradeSignal({ mau: mauPercent, buildTime: buildTimePercent })
 
   // Determine if the user should consider upgrading
   // If usage is >= 90% of any limit, or if the best plan is higher than current plan
@@ -637,7 +655,7 @@ async function sendBillingPeriodStats(c: Context, pg: PgClient, orgId: string, c
 
   // Should upgrade if:
   // 1. Best plan is higher tier than current plan (user exceeded their plan), OR
-  // 2. Usage is >= 90% of any metric limit (user is close to exceeding)
+  // 2. Usage is >= 90% of a plan-limited metric (MAU or build time)
   const exceededPlan = bestPlanIndex > currentPlanIndex
   const nearingLimits = maxUsagePercent >= 90
   const shouldUpgrade = exceededPlan || nearingLimits
@@ -655,17 +673,6 @@ async function sendBillingPeriodStats(c: Context, pg: PgClient, orgId: string, c
       recommendedPlan = planOrder[currentPlanIndex + 1]
     }
   }
-
-  // Determine which metrics are at high usage (>= 90%)
-  const highUsageMetrics: string[] = []
-  if (mauPercent >= 90)
-    highUsageMetrics.push('MAU')
-  if (bandwidthPercent >= 90)
-    highUsageMetrics.push('Bandwidth')
-  if (storagePercent >= 90)
-    highUsageMetrics.push('Storage')
-  if (buildTimePercent >= 90)
-    highUsageMetrics.push('Build Time')
 
   const metadata = {
     org_id: orgId,
