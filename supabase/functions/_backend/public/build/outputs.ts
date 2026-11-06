@@ -15,16 +15,16 @@ interface BuilderOutput {
   expiresAt?: number
 }
 
-export function pickSavedOutput(outputs: BuilderOutput[] | undefined, platform: string): SavedBuildOutput | undefined {
+export function pickSavedOutput(outputs: BuilderOutput[] | undefined, platform: string, now = Date.now()): SavedBuildOutput | undefined {
   const preferred = platform === 'ios' ? ['ios_ipa'] : ['android_apk', 'android_aab']
   for (const kind of preferred) {
-    const found = outputs?.find(output => output.kind === kind && typeof output.downloadUrl === 'string' && output.downloadUrl.startsWith('https://'))
-    if (!found?.downloadUrl)
+    const found = outputs?.find(output => output.kind === kind && typeof output.downloadUrl === 'string' && output.downloadUrl.startsWith('https://') && typeof output.expiresAt === 'number' && output.expiresAt > now)
+    if (!found?.downloadUrl || typeof found.expiresAt !== 'number')
       continue
     return {
       url: found.downloadUrl,
       kind: kind as SavedBuildOutput['kind'],
-      expires_at: new Date(found.expiresAt ?? 0).toISOString(),
+      expires_at: new Date(found.expiresAt).toISOString(),
     }
   }
   return undefined
@@ -42,15 +42,23 @@ export async function savedOutputsForJobs(c: Context, principal: RlsPrincipal, a
   )).rows)
   const outputs: Record<string, SavedBuildOutput> = {}
   await Promise.all(owned.map(async (row) => {
-    const response = await fetch(`${getEnv(c, 'BUILDER_URL')}/jobs/${encodeURIComponent(row.builder_job_id)}`, {
-      headers: { 'x-api-key': getEnv(c, 'BUILDER_API_KEY') },
-    })
-    if (!response.ok)
-      return
-    const body = await response.json().catch(() => undefined) as { outputs?: BuilderOutput[] } | undefined
-    const saved = pickSavedOutput(body?.outputs, row.platform)
-    if (saved)
-      outputs[row.builder_job_id] = saved
+    try {
+      const response = await fetch(`${getEnv(c, 'BUILDER_URL')}/jobs/${encodeURIComponent(row.builder_job_id)}`, {
+        headers: { 'x-api-key': getEnv(c, 'BUILDER_API_KEY') },
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) {
+        await response.body?.cancel()
+        return
+      }
+      const body = await response.json().catch(() => undefined) as { outputs?: BuilderOutput[] } | undefined
+      const saved = pickSavedOutput(body?.outputs, row.platform)
+      if (saved)
+        outputs[row.builder_job_id] = saved
+    }
+    catch {
+      // One stalled job must not hide the downloads that already succeeded.
+    }
   }))
   return outputs
 }

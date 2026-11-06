@@ -4171,5 +4171,6 @@
   "stop-simulator": "Stop simulator",
   "saved-build": "Saved build",
   "download-saved-build": "Download",
-  "open-in-simulator": "Open in simulator"
+  "open-in-simulator": "Open in simulator",
+  "saved-build-expired": "This saved build has expired."
 }

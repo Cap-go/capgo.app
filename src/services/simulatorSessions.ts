@@ -6,6 +6,17 @@ export interface RunningSimulator {
 }
 
 const sessionsByApp = reactive<Record<string, RunningSimulator[]>>({})
+let sessionEpoch = 0
+
+export function simulatorEpoch() {
+  return sessionEpoch
+}
+
+export function clearSimulatorSessions() {
+  sessionEpoch += 1
+  for (const appId of Object.keys(sessionsByApp))
+    delete sessionsByApp[appId]
+}
 
 export function runningSimulators(appId: string) {
   if (!sessionsByApp[appId])

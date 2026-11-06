@@ -5,6 +5,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { stripeEnabled, useConsole } from '~/services/console'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { clearSimulatorSessions } from '~/services/simulatorSessions'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { clearWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
@@ -660,6 +661,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       const listener = capgo.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
           listener.data.subscription.unsubscribe()
+          clearSimulatorSessions()
           clearWebsitePaidUserCookie()
           // Remove all from orgs
           _organizations.value = new Map()

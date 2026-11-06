@@ -28,6 +28,7 @@ const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
 const SIMULATOR_HOST_TIMEOUT_MS = 30_000
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
+const SAVED_IPA_TRANSFER_MS = 60_000
 
 export function savedIpaContentLength(header: string | null): number | undefined {
   if (!header)
@@ -260,12 +261,16 @@ async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: strin
   const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
   if (saved?.kind !== 'ios_ipa')
     throw new Error('This build has no saved iOS app.')
-  const file = await fetch(saved.url)
-  if (!file.ok || !file.body)
+  const file = await fetch(saved.url, { signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS) })
+  if (!file.ok || !file.body) {
+    await file.body?.cancel()
     throw new Error('The saved build could not be downloaded.')
+  }
   const length = savedIpaContentLength(file.headers.get('content-length'))
-  if (length !== undefined && length > SAVED_IPA_MAX_BYTES)
+  if (length !== undefined && length > SAVED_IPA_MAX_BYTES) {
+    await file.body.cancel()
     throw new Error('The saved build is too large to install.')
+  }
   const boundary = `capgo-${crypto.randomUUID()}`
   const installUrl = new URL('api/install', sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`)
   const init: RequestInit & { duplex?: 'half' } = {
@@ -276,6 +281,7 @@ async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: strin
     },
     body: multipartIpaStream(file.body, boundary),
     duplex: 'half',
+    signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS),
   }
   const response = await fetch(installUrl, init)
   if (!response.ok) {
@@ -325,6 +331,8 @@ async function savedBuildInstallError(input: {
     return null
   }
   catch (error) {
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))
+      return 'The saved build took too long to install.'
     return error instanceof Error ? error.message : 'The saved build could not be installed.'
   }
 }

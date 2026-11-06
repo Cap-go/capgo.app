@@ -13,7 +13,7 @@ import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingCheckli
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { rememberSimulator } from '~/services/simulatorSessions'
+import { rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -40,8 +40,8 @@ const showSteps = ref(false)
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const elements = ref<Element[]>([])
 const buildDurations = ref<Record<string, number>>({})
-const savedOutputs = ref<Record<string, { url: string, kind: string }>>({})
-const openingJob = ref('')
+const savedOutputs = ref<Record<string, { url: string, kind: string, expires_at: string }>>({})
+const openingJobs = ref<string[]>([])
 const isLoading = ref(true)
 const currentPage = ref(1)
 const total = ref(0)
@@ -339,7 +339,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
     })
     if (!response.ok)
       return
-    const body = await response.json() as { outputs?: Record<string, { url: string, kind: string }> }
+    const body = await response.json() as { outputs?: Record<string, { url: string, kind: string, expires_at: string }> }
     if (current())
       savedOutputs.value = body.outputs ?? {}
   }
@@ -349,10 +349,25 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
   }
 }
 
+function savedBuildIsCurrent(output: { expires_at?: string } | undefined) {
+  if (!output?.expires_at)
+    return false
+  return Date.parse(output.expires_at) > Date.now()
+}
+
 async function openSavedBuild(jobId: string) {
+  if (openingJobs.value.includes(jobId))
+    return
   const appId = props.appId
+  const epoch = simulatorEpoch()
+  const output = savedOutputs.value[jobId]
   const tab = window.open('', '_blank')
-  openingJob.value = jobId
+  if (!savedBuildIsCurrent(output)) {
+    tab?.close()
+    toast.error(t('saved-build-expired'))
+    return
+  }
+  openingJobs.value = [...openingJobs.value, jobId]
   try {
     const { data } = await capgo.auth.getSession()
     const token = data.session?.access_token
@@ -367,7 +382,7 @@ async function openSavedBuild(jobId: string) {
     if (!response.ok)
       throw new Error(payload.message || payload.error || t('simulator-did-not-start'))
     const url = payload.data?.url || ''
-    if (payload.data?.id)
+    if (payload.data?.id && epoch === simulatorEpoch())
       rememberSimulator(appId, { id: payload.data.id, url })
     if (url && tab)
       tab.location.replace(url)
@@ -381,33 +396,34 @@ async function openSavedBuild(jobId: string) {
     toast.error(error instanceof Error ? error.message : t('simulator-did-not-start'))
   }
   finally {
-    openingJob.value = ''
+    openingJobs.value = openingJobs.value.filter(id => id !== jobId)
   }
 }
 
 function savedBuildCell(elem: Element) {
   const output = elem.builder_job_id ? savedOutputs.value[elem.builder_job_id] : undefined
-  if (!output)
+  if (!savedBuildIsCurrent(output))
     return h('span', { class: 'text-gray-400 dark:text-gray-600' }, '-')
   const jobId = elem.builder_job_id as string
+  const opening = openingJobs.value.includes(jobId)
   const children = [
     h('a', {
-      href: output.url,
+      href: output?.url,
       target: '_blank',
       rel: 'noopener',
       class: 'text-sm font-semibold text-blue-600 dark:text-blue-400',
     }, t('download-saved-build')),
   ]
-  if (output.kind === 'ios_ipa') {
+  if (output?.kind === 'ios_ipa') {
     children.push(h('button', {
       type: 'button',
       class: 'px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0',
-      disabled: openingJob.value === jobId,
+      disabled: opening,
       onClick: (event: Event) => {
         event.stopPropagation()
         void openSavedBuild(jobId)
       },
-    }, openingJob.value === jobId ? t('simulator-starting') : t('open-in-simulator')))
+    }, opening ? t('simulator-starting') : t('open-in-simulator')))
   }
   return h('div', { class: 'flex items-center gap-2' }, children)
 }

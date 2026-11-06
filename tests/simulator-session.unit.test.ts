@@ -72,5 +72,13 @@ describe('simulator sessions', () => {
     expect(text.startsWith('--bound\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\n')).toBe(true)
     expect(text.endsWith('ipa\r\n--bound--\r\n')).toBe(true)
     await expect(new Response(multipartIpaStream(new Blob([new Uint8Array(8)]).stream(), 'bound', 4)).arrayBuffer()).rejects.toThrow('too large')
+    const chunks = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(3))
+        controller.enqueue(new Uint8Array(3))
+        controller.close()
+      },
+    })
+    await expect(new Response(multipartIpaStream(chunks, 'bound', 4)).arrayBuffer()).rejects.toThrow('too large')
   })
 })
