@@ -46,6 +46,8 @@ describe('CI/CD guide pipelines', () => {
           }
           expect(pipeline.language).toBe('yaml')
           expect(() => parse(pipeline.content), `${product}/${strategy}/${provider}`).not.toThrow()
+          if (provider === 'github')
+            expect(parse(pipeline.content).permissions).toEqual({ contents: 'read' })
         }
       }
     }

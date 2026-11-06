@@ -441,7 +441,7 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
     if (hasCleanup)
       lines.push('    types: [opened, synchronize, reopened, closed]')
   }
-  lines.push('', 'jobs:')
+  lines.push('', 'permissions:', '  contents: read', '', 'jobs:')
   // Fork pull requests get no secrets, so they skip instead of failing.
   const sameRepo = 'github.event.pull_request.head.repo.full_name == github.repository'
   jobs.forEach((job, index) => {
@@ -484,6 +484,8 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
     // Check after building, immediately before the upload can promote a channel.
     if (guardRelease) {
       lines.push(
+        '      # Private repos: this check uses the read-only checkout credentials.',
+        '      # With persist-credentials: false, authenticate git separately first.',
         '      - name: Check release commit is still the branch head',
         '        id: release_head',
         '        shell: bash',

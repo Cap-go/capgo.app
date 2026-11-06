@@ -58,3 +58,10 @@ first detection when:
 
 Older CLI versions do not send `x-cli-ci`. Their CI runs are only detected
 through a guide key, so those users can mark the step as set up from the guide.
+
+## Generated GitHub workflow authentication
+
+Generated GitHub workflows explicitly grant `GITHUB_TOKEN` only `contents: read`.
+The release-head guard uses the persisted checkout credentials to read the remote
+branch on private repositories. If you set `persist-credentials: false`, configure
+separate read-only Git authentication for that guard before running it.
