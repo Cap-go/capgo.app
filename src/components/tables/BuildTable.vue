@@ -349,6 +349,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
 }
 
 async function openSavedBuild(jobId: string) {
+  const appId = props.appId
   const tab = window.open('', '_blank')
   openingJob.value = jobId
   try {
@@ -359,14 +360,14 @@ async function openSavedBuild(jobId: string) {
     const response = await fetch(`${defaultApiHost}/private/simulator/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
-      body: JSON.stringify({ app_id: props.appId, platform: 'ios', build_job_id: jobId }),
+      body: JSON.stringify({ app_id: appId, platform: 'ios', build_job_id: jobId }),
     })
     const payload = await response.json() as { message?: string, error?: string, data?: { id?: string, url?: string, install_error?: string | null } }
     if (!response.ok)
       throw new Error(payload.message || payload.error || t('simulator-did-not-start'))
     const url = payload.data?.url || ''
     if (payload.data?.id)
-      rememberSimulator(props.appId, { id: payload.data.id, url })
+      rememberSimulator(appId, { id: payload.data.id, url })
     if (url && tab)
       tab.location.replace(url)
     else
