@@ -5,9 +5,12 @@ import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from '.
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
 import { cloudlog } from '../utils/logging.ts'
+import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
+import { backgroundTask } from '../utils/utils.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
+import { withPg } from './oauth_shared.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
 
 /**
@@ -122,6 +125,45 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
   }
 }
 
+/**
+ * PostHog event for one hosted MCP tool call, so hosted usage sits next to the CLI's
+ * `MCP Tool Invoked`. Returns null when no tool ran: notifications get no response, and
+ * requests rejected before dispatch (bad `jsonrpc` or `id`) get an error with `id: null`.
+ * The caller adds `client` (see hostedMcpClient).
+ */
+export function hostedMcpToolEvent(message: unknown, response: JsonRpcResponse | null | undefined, userId: string) {
+  const msg = message as { method?: unknown, params?: { name?: unknown } } | null
+  if (msg?.method !== 'tools/call' || !response || response.id === null)
+    return null
+  const toolName = typeof msg.params?.name === 'string' ? msg.params.name.slice(0, 100) : 'unknown'
+  const result = response.result as { isError?: unknown } | undefined
+  return {
+    channel: 'mcp-hosted',
+    event: 'Hosted MCP Tool Invoked',
+    user_id: userId,
+    setPersonProperties: false,
+    nonPersonTags: { tool_name: toolName, success: !response.error && !result?.isError },
+  }
+}
+
+/** Client name from the OAuth request that minted the key; never the user-editable key name. */
+async function hostedMcpClient(c: Context<MiddlewareKeyVariables>, apikeyId: number): Promise<string> {
+  const { rows } = await withPg(c, pg => pg.query<{ client_name: string }>(
+    'SELECT client_name FROM public.mcp_oauth_requests WHERE apikey_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [apikeyId],
+  ))
+  return rows[0]?.client_name ?? 'api_key'
+}
+
+/** Sends one PostHog event per tool that ran in this HTTP request, tagged with the OAuth client. */
+async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, caller: McpCaller, exchanges: [unknown, JsonRpcResponse | null][]) {
+  const events = exchanges.map(([message, response]) => hostedMcpToolEvent(message, response, caller.userId)).filter(event => event !== null)
+  if (events.length === 0)
+    return
+  const client = (await hostedMcpClient(c, caller.apikeyId).catch(() => 'unknown')).slice(0, 100)
+  await Promise.all(events.map(event => trackPosthogEvent(c, { ...event, nonPersonTags: { ...event.nonPersonTags, client } })))
+}
+
 export function createMcpApp(dispatch: McpDispatch) {
   const app = new Hono<MiddlewareKeyVariables>()
 
@@ -178,14 +220,17 @@ export function createMcpApp(dispatch: McpDispatch) {
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)
     const messages = Array.isArray(payload) ? payload : [payload]
     const responses: JsonRpcResponse[] = []
+    const exchanges: [unknown, JsonRpcResponse | null][] = []
     for (const message of messages) {
       const method = (message as { method?: unknown } | null)?.method
       if (method === 'tools/call')
         cloudlog({ requestId: c.get('requestId'), message: 'mcp_tool_call', tool: (message as { params?: { name?: unknown } }).params?.name, apikeyId: caller.apikeyId })
       const response = await handleJsonRpcMessage(message, ctx)
+      exchanges.push([message, response])
       if (response)
         responses.push(response)
     }
+    await backgroundTask(c, trackHostedMcpToolCalls(c, caller, exchanges))
 
     if (responses.length === 0) {
       // Notifications / responses only: the Streamable HTTP transport mandates 202 with no body.

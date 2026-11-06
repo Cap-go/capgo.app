@@ -9,6 +9,7 @@ import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
+import IconBot from '~icons/lucide/bot'
 import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
@@ -243,6 +244,11 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         icon: IconSparkles,
         key: '/changelog',
         group: 'help',
+      },
+      {
+        label: 'ai-assistant',
+        icon: IconBot,
+        key: '/mcp',
       },
       {
         label: 'documentation',

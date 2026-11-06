@@ -1027,6 +1027,17 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await hashed.first().waitFor({ state: 'visible', timeout: 30_000 })
     },
   },
+  {
+    slug: 'mcp-connect',
+    path: '/mcp',
+    auth: true,
+    prepare: async (page) => {
+      // /mcp does not exist on the base commit yet: the "before" capture shows the 404 page.
+      if (process.env.VISUAL_DIFF_PHASE !== 'after')
+        return
+      await page.locator('[data-test="mcp-connect-card"]').waitFor({ state: 'visible', timeout: 30_000 })
+    },
+  },
 ]
 
 export const visualDiffViewport = {
