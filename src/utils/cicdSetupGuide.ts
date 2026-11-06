@@ -471,8 +471,10 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
         : []),
       '    steps:',
       '      - uses: actions/checkout@v6',
+      '        with:',
+      '          persist-credentials: false',
       // A closed pull request can lose its merge ref; the base branch always has the config.
-      ...(job.trigger.kind === 'pull_request_closed' ? ['        with:', `          ref: ${GITHUB_BASE_REF}`] : []),
+      ...(job.trigger.kind === 'pull_request_closed' ? [`          ref: ${GITHUB_BASE_REF}`] : []),
       '      - uses: actions/setup-node@v6',
       '        with:',
       '          node-version: 24',
@@ -484,13 +486,14 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
     // Check after building, immediately before the upload can promote a channel.
     if (guardRelease) {
       lines.push(
-        '      # Private repos: this check uses the read-only checkout credentials.',
-        '      # With persist-credentials: false, authenticate git separately first.',
+        '      # Only this API check receives the read-only GitHub token.',
         '      - name: Check release commit is still the branch head',
         '        id: release_head',
         '        shell: bash',
+        '        env:',
+        `          GH_TOKEN: \${{ github.token }}`,
         '        run: |',
-        '          latest="$(git ls-remote --exit-code origin "$GITHUB_REF" | cut -f1)"',
+        `          latest="$(gh api "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/ref/\${GITHUB_REF#refs/}" --jq .object.sha)"`,
         '          if [ "$latest" = "$GITHUB_SHA" ]; then',
         '            echo "current=true" >> "$GITHUB_OUTPUT"',
         '          else',

@@ -62,6 +62,8 @@ through a guide key, so those users can mark the step as set up from the guide.
 ## Generated GitHub workflow authentication
 
 Generated GitHub workflows explicitly grant `GITHUB_TOKEN` only `contents: read`.
-The release-head guard uses the persisted checkout credentials to read the remote
-branch on private repositories. If you set `persist-credentials: false`, configure
-separate read-only Git authentication for that guard before running it.
+Every checkout sets `persist-credentials: false`, so dependency installation and
+build scripts do not inherit checkout credentials. After the build, the
+release-head guard receives `GH_TOKEN` through its own step environment and reads
+the branch through the GitHub API. This also authenticates private repositories
+without writing the token to Git configuration or passing it to other steps.

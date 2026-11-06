@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from 'node:process'
+import { promisify } from 'node:util'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import {
@@ -29,6 +31,7 @@ import {
 
 const appId = 'com.example.app'
 const base = { appId, productionChannels: ['production'] } as const
+const runFile = promisify(execFile)
 
 describe('CI/CD guide pipelines', () => {
   it('renders valid YAML for every product, strategy and provider', () => {
@@ -49,6 +52,21 @@ describe('CI/CD guide pipelines', () => {
           if (provider === 'github')
             expect(parse(pipeline.content).permissions).toEqual({ contents: 'read' })
         }
+      }
+    }
+  })
+
+  it.each(CI_PRODUCTS.flatMap(product => CI_STRATEGIES.map(strategy => ({ product, strategy }))))('scopes GitHub token access for $product/$strategy', ({ product, strategy }) => {
+    const workflow = parse(buildCiPipeline({ ...base, product, strategy, provider: 'github' }).content)
+    expect(workflow.env).toBeUndefined()
+    for (const job of Object.values<{ env?: unknown, steps: { uses?: string, id?: string, with?: { 'persist-credentials'?: boolean }, env?: Record<string, string> }[] }>(workflow.jobs)) {
+      expect(job.env).toBeUndefined()
+      expect(job.steps.find(step => step.uses === 'actions/checkout@v6')?.with?.['persist-credentials']).toBe(false)
+      for (const step of job.steps) {
+        if (step.id === 'release_head')
+          expect(step.env).toEqual({ GH_TOKEN: '${{ github.token }}' })
+        else
+          expect(Object.values(step.env ?? {})).not.toContain('${{ github.token }}')
       }
     }
   })
@@ -144,8 +162,8 @@ describe('CI/CD guide pipelines', () => {
       'npm ci',
       'npx @capgo/cli@latest channel delete pr-${{ github.event.pull_request.number }} com.example.app --delete-bundle --success-if-not-found',
     ])
-    expect(workflow.jobs['preview-cleanup'].steps[0].with).toEqual({ ref: '${{ github.event.pull_request.base.ref }}' })
-    expect(workflow.jobs.preview.steps[0].with).toBeUndefined()
+    expect(workflow.jobs['preview-cleanup'].steps[0].with).toEqual({ ref: '${{ github.event.pull_request.base.ref }}', 'persist-credentials': false })
+    expect(workflow.jobs.preview.steps[0].with).toEqual({ 'persist-credentials': false })
     // Fork pull requests have no secrets, so their jobs skip.
     expect(workflow.jobs.preview.if).toContain('github.event.pull_request.head.repo.full_name == github.repository')
     expect(pipeline.cleansUpPreviews).toBe(true)
@@ -356,36 +374,64 @@ describe('CI/CD guide pipelines', () => {
     }
   })
 
-  it('allows the current Git commit to upload and skips superseded commits', () => {
+  it('authenticates the branch check without Git credentials, skips superseded commits, and fails closed on API errors', async () => {
     const github = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
     const guard = github.jobs.production.steps.find((step: { id?: string }) => step.id === 'release_head')
     expect(guard.shell).toBe('bash')
     const directory = mkdtempSync(join(tmpdir(), 'capgo-release-order-'))
-    const gitEnv = { ...env, GIT_AUTHOR_NAME: 'CI Test', GIT_AUTHOR_EMAIL: 'ci-test@example.com', GIT_COMMITTER_NAME: 'CI Test', GIT_COMMITTER_EMAIL: 'ci-test@example.com' }
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', input: '', env: gitEnv }).trim()
+    const newer = 'b'.repeat(40)
+    const token = 'cicd-fixture-token'
+    const requests: { path: string | undefined, authenticated: boolean }[] = []
+    const server = createServer((request, response) => {
+      const authenticated = request.headers.authorization === `token ${token}`
+      requests.push({ path: request.url, authenticated })
+      response.setHeader('Content-Type', 'application/json')
+      if (!authenticated) {
+        response.writeHead(401).end(JSON.stringify({ message: 'Bad credentials' }))
+      }
+      else if (request.url === '/repos/example/app/git/ref/heads/release/stable') {
+        response.end(JSON.stringify({ object: { sha: newer } }))
+      }
+      else {
+        response.writeHead(404).end(JSON.stringify({ message: 'Not Found' }))
+      }
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string')
+      throw new Error('Expected a local API port')
+    const guardEnv = {
+      ...env,
+      GH_CONFIG_DIR: directory,
+      GH_TOKEN: token,
+      // gh uses its enterprise-token variable for the loopback API fixture.
+      GH_ENTERPRISE_TOKEN: token,
+      GITHUB_API_URL: `http://127.0.0.1:${address.port}`,
+      GITHUB_REPOSITORY: 'example/app',
+      GITHUB_REF: 'refs/heads/release/stable',
+    }
     try {
-      git('init', '--bare', '--quiet')
-      git('remote', 'add', 'origin', directory)
-      const tree = git('mktree')
-      const older = git('commit-tree', tree, '-m', 'older')
-      const newer = git('commit-tree', tree, '-p', older, '-m', 'newer')
-      git('update-ref', 'refs/heads/main', newer)
+      const older = 'a'.repeat(40)
       for (const [sha, expected] of [[older, 'false'], [newer, 'true']]) {
         const output = join(directory, `${sha}.output`)
-        execFileSync('bash', ['-e', '-o', 'pipefail', '-c', guard.run], {
+        await runFile('bash', ['-e', '-o', 'pipefail', '-c', guard.run], {
           cwd: directory,
-          env: { ...env, GITHUB_REF: 'refs/heads/main', GITHUB_SHA: sha, GITHUB_OUTPUT: output },
+          env: { ...guardEnv, GITHUB_SHA: sha, GITHUB_OUTPUT: output },
         })
         expect(readFileSync(output, 'utf8').trim()).toBe(`current=${expected}`)
       }
-      const failedOutput = join(directory, 'missing.output')
-      expect(() => execFileSync('bash', ['-e', '-o', 'pipefail', '-c', guard.run], {
-        cwd: directory,
-        env: { ...env, GITHUB_REF: 'refs/heads/missing', GITHUB_SHA: newer, GITHUB_OUTPUT: failedOutput },
-      })).toThrow()
-      expect(existsSync(failedOutput)).toBe(false)
+      expect(requests).toEqual(Array.from({ length: 2 }, () => ({ path: '/repos/example/app/git/ref/heads/release/stable', authenticated: true })))
+      for (const overrides of [{ GITHUB_REF: 'refs/heads/missing' }, { GH_TOKEN: 'invalid-fixture-token', GH_ENTERPRISE_TOKEN: 'invalid-fixture-token' }]) {
+        const failedOutput = join(directory, 'failed.output')
+        await expect(runFile('bash', ['-e', '-o', 'pipefail', '-c', guard.run], {
+          cwd: directory,
+          env: { ...guardEnv, ...overrides, GITHUB_SHA: newer, GITHUB_OUTPUT: failedOutput },
+        })).rejects.toThrow()
+        expect(existsSync(failedOutput)).toBe(false)
+      }
     }
     finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
       rmSync(directory, { recursive: true, force: true })
     }
   })
