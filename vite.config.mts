@@ -280,15 +280,30 @@ readdirSync('./messages/')
       locales.push(file.split('.')[0])
   })
 
+// One build version for both import.meta.env.VITE_APP_VERSION and /version.json (an env override
+// applies to both), so the update prompt never compares two different numbers for the same build.
+const appVersion = process.env.VITE_APP_VERSION || pack.version
+
 const frontendEnvironmentVariables: Record<string, string> = {
   locales: locales.join(','),
-  VITE_APP_VERSION: pack.version,
+  VITE_APP_VERSION: appVersion,
   VITE_APP_URL: getUrl(),
   VITE_API_HOST: getUrl('api_domain'),
   VITE_CAPTCHA_KEY: getFrontendKey('captcha_key'),
   VITE_BRANCH: branch,
   package_dependencies: JSON.stringify(pack.dependencies),
   domain: getUrl(),
+}
+
+// The running console polls /version.json to offer "new version available" with its changelog.
+function consoleVersionFilePlugin(): Plugin {
+  return {
+    name: 'console-version-file',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version: appVersion })}\n` })
+    },
+  }
 }
 
 function frontendEnvironmentPlugin(): Plugin {
@@ -356,6 +371,7 @@ export default defineConfig({
       },
     },
     wellKnownPasswordManagerPlugin(),
+    consoleVersionFilePlugin(),
     envFaviconPlugin(),
     routeChunkPreloadPlugin(),
     tailwindcss(),
