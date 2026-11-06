@@ -391,7 +391,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <h2 id="cicd-question-product" class="text-lg font-semibold text-slate-950 dark:text-white">
         <span class="mr-2 text-slate-400" aria-hidden="true">1.</span>{{ t('cicd-guide-question-product') }}
       </h2>
-      <div class="grid gap-3 sm:grid-cols-2" role="group" aria-labelledby="cicd-question-product">
+      <fieldset class="min-w-0 grid gap-3 sm:grid-cols-2" aria-labelledby="cicd-question-product">
         <button
           v-for="option in (['ota', 'builder'] as const)"
           :key="option"
@@ -409,7 +409,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           </span>
           <IconCheck v-if="product === option" class="h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
         </button>
-      </div>
+      </fieldset>
       <fieldset v-if="product === 'builder'" class="flex flex-wrap items-center gap-3 pt-1" data-test="cicd-platforms">
         <legend class="sr-only">
           {{ t('cicd-guide-platforms') }}
@@ -433,7 +433,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <h2 id="cicd-question-strategy" class="text-lg font-semibold text-slate-950 dark:text-white">
         <span class="mr-2 text-slate-400" aria-hidden="true">2.</span>{{ t('cicd-guide-question-strategy') }}
       </h2>
-      <div class="grid gap-3 md:grid-cols-3" role="group" aria-labelledby="cicd-question-strategy">
+      <fieldset class="min-w-0 grid gap-3 md:grid-cols-3" aria-labelledby="cicd-question-strategy">
         <button
           v-for="option in CI_STRATEGIES"
           :key="option"
@@ -451,7 +451,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           </span>
           <span class="mt-2 block text-sm leading-6 text-slate-600 dark:text-slate-300">{{ t(`cicd-guide-strategy-${product}-${option}-description`, strategyParams) }}</span>
         </button>
-      </div>
+      </fieldset>
       <div class="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
         <label class="block">
           <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('cicd-guide-production-branch') }}</span>
@@ -470,7 +470,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <h2 id="cicd-question-provider" class="text-lg font-semibold text-slate-950 dark:text-white">
         <span class="mr-2 text-slate-400" aria-hidden="true">3.</span>{{ t('cicd-guide-question-provider') }}
       </h2>
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" role="group" aria-labelledby="cicd-question-provider">
+      <fieldset class="min-w-0 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-labelledby="cicd-question-provider">
         <button
           v-for="option in CI_PROVIDERS"
           :key="option"
@@ -484,7 +484,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           <component :is="providerIcons[option]" class="h-7 w-7 text-slate-800 dark:text-slate-100" aria-hidden="true" />
           <span class="text-sm font-medium leading-5 text-slate-900 dark:text-white">{{ t(`cicd-guide-provider-${option}`) }}</span>
         </button>
-      </div>
+      </fieldset>
       <output v-if="provider && channelUnsupported" class="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-channel-unsupported">
         <IconTriangleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <span class="min-w-0 flex-1">

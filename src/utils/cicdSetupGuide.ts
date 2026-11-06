@@ -358,11 +358,10 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
       '    steps:',
+      '      - uses: actions/checkout@v6',
+      // A closed pull request can lose its merge ref; the base branch always has the config.
+      ...(job.trigger.kind === 'pull_request_closed' ? ['        with:', `          ref: ${GITHUB_BASE_REF}`] : []),
     )
-    lines.push('      - uses: actions/checkout@v6')
-    // A closed pull request can lose its merge ref; the base branch always has the config.
-    if (job.trigger.kind === 'pull_request_closed')
-      lines.push('        with:', `          ref: ${GITHUB_BASE_REF}`)
     lines.push(
       '      - uses: actions/setup-node@v6',
       '        with:',
