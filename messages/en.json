@@ -610,6 +610,7 @@
   "cicd-guide-key-why-app_developer": "Uploads bundles and creates the preprod channel on its first upload. It can't delete anything or change settings.",
   "cicd-guide-key-why-app_preview": "Creates pr-<number> channels and can only update or delete the channels it created, so a pull request can't touch production.",
   "cicd-guide-key-why-app_admin": "Builds with the signing credentials stored on Capgo, which needs app admin rights. It can only access this app.",
+  "cicd-guide-key-why-app_admin-preview": "Builds pull requests with the signing credentials stored on Capgo, so it needs app admin rights too. Branch pipelines can read it: keep it separate from the release key so you can revoke it on its own.",
   "cicd-guide-key-create": "Create {secret}",
   "cicd-guide-key-creating": "Creating key…",
   "cicd-guide-key-created": "Copy this key now. Capgo won't show it again.",

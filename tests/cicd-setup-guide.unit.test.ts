@@ -146,7 +146,15 @@ describe('CI/CD guide pipelines', () => {
     const jobs = buildCiJobs({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' })
     expect(jobs.find(job => job.id === 'android-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     expect(jobs.find(job => job.id === 'ios-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials')
-    expect(ciKeysFor('builder', 'pull_request')).toHaveLength(1)
+    // Pull request pipelines run on unprotected branches, so previews get their own key.
+    expect(jobs.filter(job => job.trigger.kind === 'pull_request').map(job => job.secret)).toEqual(['CAPGO_PREVIEW_TOKEN', 'CAPGO_PREVIEW_TOKEN'])
+    expect(jobs.filter(job => job.trigger.kind === 'push').map(job => job.secret)).toEqual(['CAPGO_TOKEN', 'CAPGO_TOKEN'])
+    expect(ciKeysFor('builder', 'pull_request')).toEqual([
+      { secret: 'CAPGO_TOKEN', role: 'app_admin', purpose: 'release' },
+      { secret: 'CAPGO_PREVIEW_TOKEN', role: 'app_admin', purpose: 'preview' },
+    ])
+    const gitlab = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['android'] }).content)
+    expect(gitlab['capgo-android-preview'].script.at(-1)).toBe('CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     const circleci = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' }).content)
     expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { filters: { branches: { ignore: ['main'] } } } })
   })

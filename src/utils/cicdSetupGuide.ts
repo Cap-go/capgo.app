@@ -123,8 +123,14 @@ export function ciProviderCleansUpPreviews(provider: CiProvider) {
 /** The keys CI needs, each limited to this one app with the smallest role that works. */
 export function ciKeysFor(product: CiProduct, strategy: CiStrategy): CiKeySpec[] {
   // Building with the signing credentials stored on Capgo needs app.update_settings.
-  if (product === 'builder')
-    return [{ secret: 'CAPGO_TOKEN', role: 'app_admin', purpose: 'release' }]
+  if (product === 'builder') {
+    return [
+      { secret: 'CAPGO_TOKEN', role: 'app_admin', purpose: 'release' },
+      // Pull request pipelines run on unprotected branches (GitLab protected
+      // variables never reach them), so they get their own revocable key.
+      ...(strategy === 'pull_request' ? [{ secret: 'CAPGO_PREVIEW_TOKEN', role: 'app_admin', purpose: 'preview' } as const] : []),
+    ]
+  }
   if (strategy === 'main_preprod') {
     // The developer role can create the preprod channel on its first upload.
     return [{ secret: 'CAPGO_TOKEN', role: 'app_developer', purpose: 'release' }]
@@ -236,7 +242,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       id: `${platform}-preview`,
       name: `Build ${platformLabel(platform)} pull request preview`,
       trigger: { kind: 'pull_request' },
-      secret: 'CAPGO_TOKEN',
+      secret: 'CAPGO_PREVIEW_TOKEN',
       build: true,
       sync: platform,
       // Android previews are installable debug APK links; iOS previews go to TestFlight.

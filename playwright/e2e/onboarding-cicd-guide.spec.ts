@@ -49,6 +49,17 @@ test.describe('CI/CD setup guide', () => {
 
     await page.locator('[data-test="cicd-copy-pipeline"]').click()
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('name: Capgo live updates')
+
+    // An uploader key cannot run Builder pipelines: a changed role asks for a new key.
+    await page.locator('[data-test="cicd-product-builder"]').click()
+    await expect(keyCard).toContainText('Role: App admin')
+    await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveCount(0)
+    await keyCard.locator('[data-test="cicd-create-key-CAPGO_TOKEN"]').click()
+    await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_2')
+    expect((await previewState(page)).apikeyCreates[1].bindings[1].role_name).toBe('app_admin')
+    // Going back to live updates shows the uploader key created earlier.
+    await page.locator('[data-test="cicd-product-ota"]').click()
+    await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_1')
   })
 
   test('creates a release key and a preview key for pull requests', async ({ page }) => {
@@ -108,6 +119,12 @@ test.describe('CI/CD setup guide', () => {
     await page.locator('[data-test="cicd-platform-ios"]').click()
     await expect(content).toContainText('--platform ios')
     await expect(page.locator('[data-test="cicd-latest"]')).toContainText('No build requested yet.')
+
+    // Pull request builds use a separate key that merge request pipelines can read.
+    await page.locator('[data-test="cicd-strategy-pull_request"]').click()
+    await expect(page.locator('[data-test="cicd-key-CAPGO_PREVIEW_TOKEN"]')).toContainText('Role: App admin')
+    await expect(page.locator('[data-test="cicd-key-CAPGO_PREVIEW_TOKEN"]')).toContainText('keep it separate from the release key')
+    await expect(content).toContainText('CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request')
   })
 
   test('remembers answers per app and warns when there is no default channel', async ({ page }) => {

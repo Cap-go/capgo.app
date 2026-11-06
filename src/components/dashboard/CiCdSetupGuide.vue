@@ -115,9 +115,13 @@ const docsHref = computed(() => product.value === 'ota'
   : 'https://capgo.app/docs/builder/github-actions/')
 const strategyParams = computed(() => ({ branch: productionBranch.value, preprod: preprodBranch.value, channel: productionChannel.value }))
 
-const createdKeys = reactive<Partial<Record<CiSecretName, string>>>({})
-const creatingKey = reactive<Partial<Record<CiSecretName, boolean>>>({})
-const keyErrors = reactive<Partial<Record<CiSecretName, 'permission' | 'generic'>>>({})
+// Keyed by secret and role: a key made for another answer (uploader vs admin)
+// cannot run this pipeline, so a changed role asks for a new key.
+type CiKeySlot = `${CiSecretName}:${CiKeySpec['role']}`
+const keySlot = (spec: CiKeySpec): CiKeySlot => `${spec.secret}:${spec.role}`
+const createdKeys = reactive<Partial<Record<CiKeySlot, string>>>({})
+const creatingKey = reactive<Partial<Record<CiKeySlot, boolean>>>({})
+const keyErrors = reactive<Partial<Record<CiKeySlot, 'permission' | 'generic'>>>({})
 
 watch([product, strategy, provider, platforms, productionBranch, preprodBranch], () => {
   if (!provider.value)
@@ -173,10 +177,11 @@ async function copy(text: string, event?: string) {
 }
 
 async function createKey(spec: CiKeySpec) {
-  if (creatingKey[spec.secret])
+  const slot = keySlot(spec)
+  if (creatingKey[slot])
     return
-  creatingKey[spec.secret] = true
-  keyErrors[spec.secret] = undefined
+  creatingKey[slot] = true
+  keyErrors[slot] = undefined
   const appId = props.appId
   try {
     const name = `${providerName.value || 'CI'} ${spec.purpose === 'preview' ? 'previews' : 'CI'} (${appId})`
@@ -188,16 +193,16 @@ async function createKey(spec: CiKeySpec) {
       throw new Error('The API returned no key')
     if (appId !== props.appId)
       return
-    createdKeys[spec.secret] = key
+    createdKeys[slot] = key
     track('onboarding_cicd_key_created', { role: spec.role })
   }
   catch (error) {
     console.error('Cannot create CI API key', error)
     const code = await getCapgoApiErrorCode(error)
-    keyErrors[spec.secret] = code === 'forbidden_binding' || code === 'not_authorized' ? 'permission' : 'generic'
+    keyErrors[slot] = code === 'forbidden_binding' || code === 'not_authorized' ? 'permission' : 'generic'
   }
   finally {
-    creatingKey[spec.secret] = false
+    creatingKey[slot] = false
   }
 }
 
@@ -505,11 +510,11 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   <span class="ml-auto rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-white/10 dark:text-slate-200">{{ t('cicd-guide-key-role', { role: t(roleLabels[spec.role]) }) }}</span>
                 </div>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t(`cicd-guide-key-why-${spec.role}`) }}
+                  {{ t(spec.purpose === 'preview' && spec.role === 'app_admin' ? 'cicd-guide-key-why-app_admin-preview' : `cicd-guide-key-why-${spec.role}`) }}
                 </p>
-                <template v-if="createdKeys[spec.secret]">
-                  <button type="button" class="mt-3" :class="[commandClass]" :aria-label="t('cicd-guide-key-copy')" :data-test="`cicd-key-value-${spec.secret}`" @click="copy(createdKeys[spec.secret]!, 'onboarding_cicd_key_copied')">
-                    <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ createdKeys[spec.secret] }}</code>
+                <template v-if="createdKeys[keySlot(spec)]">
+                  <button type="button" class="mt-3" :class="[commandClass]" :aria-label="t('cicd-guide-key-copy')" :data-test="`cicd-key-value-${spec.secret}`" @click="copy(createdKeys[keySlot(spec)]!, 'onboarding_cicd_key_copied')">
+                    <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ createdKeys[keySlot(spec)] }}</code>
                     <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
                   </button>
                   <p class="mt-2 flex items-start gap-2 text-sm font-medium text-amber-700 dark:text-amber-400" role="status">
@@ -521,16 +526,16 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   v-else
                   type="button"
                   class="d-btn d-btn-primary mt-3 min-h-11 px-4 text-sm"
-                  :disabled="creatingKey[spec.secret]"
+                  :disabled="creatingKey[keySlot(spec)]"
                   :data-test="`cicd-create-key-${spec.secret}`"
                   @click="createKey(spec)"
                 >
-                  <IconLoader v-if="creatingKey[spec.secret]" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
+                  <IconLoader v-if="creatingKey[keySlot(spec)]" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
                   <IconKey v-else class="h-4 w-4" aria-hidden="true" />
-                  {{ creatingKey[spec.secret] ? t('cicd-guide-key-creating') : t('cicd-guide-key-create', { secret: spec.secret }) }}
+                  {{ creatingKey[keySlot(spec)] ? t('cicd-guide-key-creating') : t('cicd-guide-key-create', { secret: spec.secret }) }}
                 </button>
-                <p v-if="keyErrors[spec.secret]" class="mt-2 text-sm text-red-700 dark:text-red-400" role="alert">
-                  {{ t(keyErrors[spec.secret] === 'permission' ? 'cicd-guide-key-error-permission' : 'cicd-guide-key-error') }}
+                <p v-if="keyErrors[keySlot(spec)]" class="mt-2 text-sm text-red-700 dark:text-red-400" role="alert">
+                  {{ t(keyErrors[keySlot(spec)] === 'permission' ? 'cicd-guide-key-error-permission' : 'cicd-guide-key-error') }}
                 </p>
               </div>
             </div>
