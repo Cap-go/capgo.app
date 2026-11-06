@@ -73,7 +73,14 @@ describe('CI/CD guide pipelines', () => {
       run: 'npx @capgo/cli@latest bundle upload com.example.app --channel pr-${{ github.event.pull_request.number }} --auto-bump patch --fail-on-incompatible',
       env: { CAPGO_TOKEN: '${{ secrets.CAPGO_PREVIEW_TOKEN }}' },
     })
-    expect(workflow.jobs['preview-cleanup'].steps.at(-1).run).toBe('npx @capgo/cli@latest channel delete pr-${{ github.event.pull_request.number }} com.example.app --delete-bundle --success-if-not-found')
+    expect(workflow.jobs['preview-cleanup'].steps.map((step: { uses?: string, run?: string }) => step.uses ?? step.run)).toEqual([
+      'actions/checkout@v6',
+      'actions/setup-node@v6',
+      'npm ci',
+      'npx @capgo/cli@latest channel delete pr-${{ github.event.pull_request.number }} com.example.app --delete-bundle --success-if-not-found',
+    ])
+    expect(workflow.jobs['preview-cleanup'].steps[0].with).toEqual({ ref: '${{ github.event.pull_request.base.ref }}' })
+    expect(workflow.jobs.preview.steps[0].with).toBeUndefined()
     // Fork pull requests have no secrets, so their jobs skip.
     expect(workflow.jobs.preview.if).toContain('github.event.pull_request.head.repo.full_name == github.repository')
     expect(pipeline.cleansUpPreviews).toBe(true)
@@ -91,7 +98,10 @@ describe('CI/CD guide pipelines', () => {
       auto_stop_in: '2 weeks',
     })
     expect(gitlab['capgo-preview-cleanup'].environment.action).toBe('stop')
+    // The CLI loads the Capacitor config, so cleanup keeps the checkout and installs dependencies.
+    expect(gitlab['capgo-preview-cleanup'].variables).toBeUndefined()
     expect(gitlab['capgo-preview-cleanup'].script).toEqual([
+      'npm ci',
       'CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest channel delete pr-$CI_MERGE_REQUEST_IID com.example.app --delete-bundle --success-if-not-found',
     ])
   })

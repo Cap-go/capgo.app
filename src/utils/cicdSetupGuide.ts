@@ -49,8 +49,11 @@ export interface CiJob {
   name: string
   trigger: CiTrigger
   secret: CiSecretName
-  /** Checkout, install dependencies, and build the web app first. */
-  build: boolean
+  /**
+   * Every job checks out the project: the CLI loads its Capacitor config even
+   * when the app id is passed. `install` skips the web build (channel cleanup).
+   */
+  setup: 'build' | 'install'
   /** Builder: run `npx cap sync <platform>` before requesting the build. */
   sync?: CiPlatform
   command: string
@@ -176,7 +179,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       name: `Upload live update to ${options.productionChannel}`,
       trigger: production,
       secret: 'CAPGO_TOKEN',
-      build: true,
+      setup: 'build',
       command: otaUpload(appId, options.productionChannel),
     }]
     if (strategy === 'main_preprod') {
@@ -185,7 +188,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
         name: `Upload live update to ${PREPROD_CHANNEL}`,
         trigger: preprod,
         secret: 'CAPGO_TOKEN',
-        build: true,
+        setup: 'build',
         command: otaUpload(appId, PREPROD_CHANNEL),
       })
     }
@@ -195,7 +198,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
         name: 'Upload pull request preview',
         trigger: { kind: 'pull_request' },
         secret: 'CAPGO_PREVIEW_TOKEN',
-        build: true,
+        setup: 'build',
         command: otaUpload(appId, `${PREVIEW_CHANNEL_PREFIX}${PR}`),
       })
       if (ciProviderCleansUpPreviews(options.provider)) {
@@ -204,7 +207,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
           name: 'Delete pull request preview',
           trigger: { kind: 'pull_request_closed' },
           secret: 'CAPGO_PREVIEW_TOKEN',
-          build: false,
+          setup: 'install',
           command: `${CLI} channel delete ${PREVIEW_CHANNEL_PREFIX}${PR} ${appId} --delete-bundle --success-if-not-found`,
         })
       }
@@ -222,7 +225,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       : `Build ${platformLabel(platform)} release`,
     trigger: production,
     secret: 'CAPGO_TOKEN',
-    build: true,
+    setup: 'build',
     sync: platform,
     command: strategy === 'main_preprod' ? `${buildCommand(platform)} --submit-to-store-review` : buildCommand(platform),
   }))
@@ -232,7 +235,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       name: `Build ${platformLabel(platform)} for testers`,
       trigger: preprod,
       secret: 'CAPGO_TOKEN',
-      build: true,
+      setup: 'build',
       sync: platform,
       command: buildCommand(platform),
     }))]
@@ -243,7 +246,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       name: `Build ${platformLabel(platform)} pull request preview`,
       trigger: { kind: 'pull_request' },
       secret: 'CAPGO_PREVIEW_TOKEN',
-      build: true,
+      setup: 'build',
       sync: platform,
       // Android previews are installable debug APK links; iOS previews go to TestFlight.
       command: platform === 'android'
@@ -286,9 +289,9 @@ function shellCommand(job: CiJob, prVariable: string) {
 }
 
 function setupCommands(job: CiJob) {
-  return job.build
+  return job.setup === 'build'
     ? ['npm ci', 'npm run build', ...(job.sync ? [`npx cap sync ${job.sync}`] : [])]
-    : []
+    : ['npm ci']
 }
 
 function yamlQuote(value: string) {
@@ -327,15 +330,16 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       '    runs-on: ubuntu-latest',
       '    steps:',
     )
-    if (job.build)
-      lines.push('      - uses: actions/checkout@v6')
+    lines.push('      - uses: actions/checkout@v6')
+    // A closed pull request can lose its merge ref; the base branch always has the config.
+    if (job.trigger.kind === 'pull_request_closed')
+      lines.push('        with:', `          ref: \${{ github.event.pull_request.base.ref }}`)
     lines.push(
       '      - uses: actions/setup-node@v6',
       '        with:',
       '          node-version: 24',
+      '          cache: npm',
     )
-    if (job.build)
-      lines.push('          cache: npm')
     for (const command of setupCommands(job))
       lines.push(`      - run: ${command}`)
     lines.push(
@@ -369,13 +373,12 @@ function renderGitlab(jobs: CiJob[]) {
       }
     }
     else {
-      // GitLab runs this stop job when the merge request is merged or closed.
+      // GitLab runs this stop job when the merge request is merged or closed. It
+      // keeps the default checkout: merge request refs outlive deleted branches.
       lines.push(
         '    - if: $CI_PIPELINE_SOURCE == "merge_request_event"',
         '      when: manual',
         '  allow_failure: true',
-        '  variables:',
-        '    GIT_STRATEGY: none',
         '  environment:',
         `    name: ${environment}`,
         '    action: stop',
@@ -496,8 +499,7 @@ function renderCircleci(jobs: CiJob[]) {
         '          command: if [ -z "$CIRCLE_PULL_REQUEST" ]; then circleci-agent step halt; fi',
       )
     }
-    if (job.build)
-      lines.push('      - checkout')
+    lines.push('      - checkout')
     for (const command of setupCommands(job))
       lines.push(`      - run: ${command}`)
     lines.push(
