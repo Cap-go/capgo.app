@@ -107,6 +107,26 @@ test.describe('CI/CD setup guide', () => {
     await expect(content).toContainText("'preprod':")
   })
 
+  test('requires a separate tester channel when preprod is a production default', async ({ page }) => {
+    await page.goto(`${fixture}&defaultChannel=preprod`)
+    await page.locator('[data-test="cicd-strategy-main_preprod"]').click()
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    const channel = page.locator('[data-test="cicd-preprod-channel"]')
+    const content = page.locator('[data-test="cicd-pipeline-content"]')
+    await expect(page.locator('[data-test="cicd-tester-channel-collision"]')).toBeVisible()
+    await expect(content).toHaveCount(0)
+    await channel.fill('ci-testers')
+    await expect(content).toContainText('--channel preprod --auto-bump')
+    await expect(content).toContainText('--channel ci-testers --auto-bump')
+    await expect(page.locator('[data-test="cicd-key-CAPGO_TOKEN"]')).toContainText('creates the ci-testers tester channel')
+    await page.reload()
+    await expect(channel).toHaveValue('ci-testers')
+    await expect(content).toContainText('--channel ci-testers --auto-bump')
+    await channel.fill('preprod,production')
+    await expect(channel).toHaveAttribute('aria-invalid', 'true')
+    await expect(content).toHaveCount(0)
+  })
+
   test('starts native builds with stored credentials for the platform from the checklist', async ({ page }) => {
     await page.goto(`${fixture}&product=builder&platform=android`)
     await expect(page.locator('[data-test="cicd-product-builder"]')).toHaveAttribute('aria-pressed', 'true')

@@ -112,6 +112,22 @@ describe('CI/CD guide pipelines', () => {
     expect(ciKeysFor('ota', 'main_preprod')).toEqual([{ secret: 'CAPGO_TOKEN', role: 'app_developer', purpose: 'release' }])
   })
 
+  it('keeps tester uploads distinct from every production default across providers', () => {
+    for (const provider of CI_PROVIDERS) {
+      const options = { ...base, product: 'ota', strategy: 'main_preprod', provider, productionChannels: ['ios', 'preprod'] } as const
+      expect(() => buildCiPipeline(options)).toThrow('different from every production default')
+      expect(() => buildCiPipeline({ ...options, preprodChannel: 'ios' })).toThrow('different from every production default')
+      for (const invalid of ['', ' a', 'a ', 'a,b', 'a\nb'])
+        expect(() => buildCiPipeline({ ...options, preprodChannel: invalid })).toThrow('supported by the CLI')
+      const pipeline = buildCiPipeline({ ...options, preprodChannel: 'ci-testers' })
+      expect(pipeline.jobs.find(job => job.id === 'production')?.command).toContain('--channel ios,preprod ')
+      expect(pipeline.jobs.find(job => job.id === 'preprod')?.command).toContain('--channel ci-testers ')
+      // Branch-only releases and native builds do not use this tester channel.
+      expect(() => buildCiPipeline({ ...options, strategy: 'main' })).not.toThrow()
+      expect(() => buildCiPipeline({ ...options, product: 'builder' })).not.toThrow()
+    }
+  })
+
   it('uses a separate preview key for pull requests and cleans up on GitHub', () => {
     const pipeline = buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'github' })
     const workflow = parse(pipeline.content)
@@ -436,6 +452,13 @@ describe('CI/CD guide selection storage', () => {
     expect(loadCiGuideSelection('user-1', appId)).toEqual({ product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['ios'], productionBranch: 'master', preprodBranch: 'preprod' })
     expect(loadCiGuideSelection('user-2', appId)).toEqual({})
     expect(loadCiGuideSelection(null, appId)).toEqual({})
+  })
+
+  it('remembers a valid custom tester channel and drops unsupported stored names', () => {
+    saveCiGuideSelection('user-1', appId, { product: 'ota', strategy: 'main_preprod', provider: 'github', platforms: ['ios'], productionBranch: 'main', preprodBranch: 'preprod', preprodChannel: 'ci-testers' })
+    expect(loadCiGuideSelection('user-1', appId).preprodChannel).toBe('ci-testers')
+    localStorage.setItem(`capgo:cicd-guide:user-1:${appId}`, JSON.stringify({ preprodChannel: 'production,preprod' }))
+    expect(loadCiGuideSelection('user-1', appId).preprodChannel).toBeUndefined()
   })
 
   it('drops unknown or malformed values', () => {

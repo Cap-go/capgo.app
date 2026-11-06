@@ -4394,5 +4394,8 @@
   "cicd-guide-builder-preview-circleci": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
   "cicd-guide-builder-preview-other": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
   "cicd-guide-builder-preview-fallback": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
-  "cicd-guide-secret-github-preview": "Used in CI/CD onboarding for live-update preview keys. Explains repository secrets. Keep provider UI names, code, and placeholders unchanged."
+  "cicd-guide-secret-github-preview": "Used in CI/CD onboarding for live-update preview keys. Explains repository secrets. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-tester-channel": "Used in CI/CD onboarding to choose a tester channel that must not match a production default. Keep code and placeholders unchanged.",
+  "cicd-guide-tester-channel-collision": "Used in CI/CD onboarding to choose a tester channel that must not match a production default. Keep code and placeholders unchanged.",
+  "cicd-guide-tester-channel-invalid": "Used in CI/CD onboarding to choose a tester channel that must not match a production default. Keep code and placeholders unchanged."
 }

@@ -39,6 +39,8 @@ export interface CiGuideOptions {
    * channel per platform; CI uploads to all of them (`--channel a,b`).
    */
   productionChannels?: readonly string[]
+  /** Live updates only: a tester channel distinct from all production defaults. */
+  preprodChannel?: string
   productionBranch?: string
   preprodBranch?: string
   /** Live updates only: the app encrypts bundles, so CI needs its private key. */
@@ -221,6 +223,7 @@ function resolved(options: CiGuideOptions) {
     ...options,
     platforms: platforms.length ? platforms : [...CI_PLATFORMS],
     productionChannels: normalizeCiChannels(options.productionChannels),
+    preprodChannel: options.preprodChannel ?? PREPROD_CHANNEL,
     productionBranch: normalizeCiBranch(options.productionBranch, DEFAULT_PRODUCTION_BRANCH),
     preprodBranch: normalizeCiBranch(options.preprodBranch, DEFAULT_PREPROD_BRANCH),
   }
@@ -234,8 +237,18 @@ function platformLabel(platform: CiPlatform) {
   return platform === 'ios' ? 'iOS' : 'Android'
 }
 
+function validateTesterChannel(options: ReturnType<typeof resolved>) {
+  if (options.product !== 'ota' || options.strategy !== 'main_preprod')
+    return
+  if (!isCiChannelSupported(options.preprodChannel))
+    throw new Error('Tester channel must be supported by the CLI')
+  if (options.productionChannels.includes(options.preprodChannel))
+    throw new Error('Tester channel must be different from every production default')
+}
+
 export function buildCiJobs(input: CiGuideOptions): CiJob[] {
   const options = resolved(input)
+  validateTesterChannel(options)
   const { appId, strategy, productionBranch, preprodBranch } = options
   if (strategy === 'main_preprod' && productionBranch === preprodBranch)
     throw new Error('Production and preproduction branches must be different')
@@ -255,11 +268,11 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
     if (strategy === 'main_preprod') {
       jobs.push({
         id: 'preprod',
-        name: `Upload live update to ${PREPROD_CHANNEL}`,
+        name: `Upload live update to ${options.preprodChannel}`,
         trigger: preprod,
         secret: 'CAPGO_TOKEN',
         setup: 'build',
-        command: otaUpload(appId, PREPROD_CHANNEL),
+        command: otaUpload(appId, options.preprodChannel),
         restoreKey: !!options.encrypted,
       })
     }
@@ -778,6 +791,7 @@ export interface CiGuideSelection {
   platforms: CiPlatform[]
   productionBranch: string
   preprodBranch: string
+  preprodChannel?: string
 }
 
 function selectionKey(userId: string | null | undefined, appId: string) {
@@ -799,6 +813,7 @@ export function loadCiGuideSelection(userId: string | null | undefined, appId: s
       ...(platforms.length ? { platforms: [...new Set(platforms)] } : {}),
       ...(typeof saved.productionBranch === 'string' ? { productionBranch: normalizeCiBranch(saved.productionBranch, DEFAULT_PRODUCTION_BRANCH) } : {}),
       ...(typeof saved.preprodBranch === 'string' ? { preprodBranch: normalizeCiBranch(saved.preprodBranch, DEFAULT_PREPROD_BRANCH) } : {}),
+      ...(typeof saved.preprodChannel === 'string' && isCiChannelSupported(saved.preprodChannel) ? { preprodChannel: saved.preprodChannel } : {}),
     }
   }
   catch {

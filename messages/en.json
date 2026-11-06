@@ -582,7 +582,7 @@
   "cicd-guide-strategy-main_preprod": "From {branch} and {preprod}",
   "cicd-guide-strategy-pull_request": "Pull requests too",
   "cicd-guide-strategy-ota-main-description": "Every merge to {branch} ships a live update to the {channel} channel.",
-  "cicd-guide-strategy-ota-main_preprod-description": "{preprod} ships to a preprod channel for testers. {branch} ships to {channel}.",
+  "cicd-guide-strategy-ota-main_preprod-description": "{preprod} ships to {testerChannel} for testers. {branch} ships to {channel}.",
   "cicd-guide-strategy-ota-pull_request-description": "Each pull request gets its own pr-<number> channel to test before merging. {branch} ships to {channel}.",
   "cicd-guide-strategy-builder-main-description": "Every merge to {branch} builds the app and uploads it to TestFlight and Google Play internal testing.",
   "cicd-guide-strategy-builder-main_preprod-description": "{preprod} builds go to TestFlight and internal testing. {branch} builds are submitted for store review.",
@@ -615,7 +615,7 @@
   "cicd-guide-key-preview": "Pull request previews",
   "cicd-guide-key-role": "Role: {role}",
   "cicd-guide-key-why-app_uploader": "Uploads bundles and links them to existing channels. It can't delete anything or change settings.",
-  "cicd-guide-key-why-app_developer": "Uploads bundles and creates the preprod channel on its first upload. It can't delete anything or change settings.",
+  "cicd-guide-key-why-app_developer": "Uploads bundles and creates the {channel} tester channel on its first upload. It cannot delete anything or change settings.",
   "cicd-guide-key-why-app_preview": "Creates pr-<number> channels and can only update or delete the channels it created, so a pull request can't touch production.",
   "cicd-guide-key-why-app_admin": "Builds with the signing credentials stored on Capgo, which needs app admin rights. It can only access this app.",
   "cicd-guide-key-why-app_admin-preview": "Native previews use stored signing credentials and need app admin access. Only trusted, reviewed code may use this key. Store it behind the approval restrictions below.",
@@ -4395,5 +4395,8 @@
   "cicd-guide-builder-preview-circleci": "Restrict the {scope} context to this project and a trusted maintainer security group; remove All members. This requires a GitHub-type CircleCI organization. A member of that group must inspect the exact commit and approve approve-builder-preview before its signing jobs run.",
   "cicd-guide-builder-preview-other": "Configure your CI secret store to require a trusted maintainer to review and authorize the exact commit before the job can read CAPGO_PREVIEW_TOKEN. A manual step in editable pipeline code alone is insufficient. Keep this key out of ordinary pull request jobs.",
   "cicd-guide-builder-preview-fallback": "If your provider, integration or plan cannot enforce these restrictions, use main and preprod releases instead. Build native test versions after reviewed code reaches a protected preprod branch.",
-  "cicd-guide-secret-github-preview": "In Settings → Secrets and variables → Actions, add {secret} as a repository secret with the preview key as its value."
+  "cicd-guide-secret-github-preview": "In Settings → Secrets and variables → Actions, add {secret} as a repository secret with the preview key as its value.",
+  "cicd-guide-tester-channel": "Tester channel",
+  "cicd-guide-tester-channel-collision": "Choose a tester channel that is different from every production default before generating the pipeline.",
+  "cicd-guide-tester-channel-invalid": "Enter a channel name without commas, control characters, or spaces at the start or end."
 }

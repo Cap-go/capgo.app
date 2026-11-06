@@ -49,6 +49,7 @@ import {
   loadCiGuideSelection,
   normalizeCiBranch,
   normalizeCiChannels,
+  PREPROD_CHANNEL,
   previewCleanupCommand,
   saveCiGuideSelection,
 } from '~/utils/cicdSetupGuide'
@@ -74,6 +75,7 @@ const provider = ref<CiProvider | null>(saved.provider ?? null)
 const platforms = ref<CiPlatform[]>(props.initialPlatform ? [props.initialPlatform] : saved.platforms ?? [...CI_PLATFORMS])
 const productionBranchInput = ref(saved.productionBranch ?? DEFAULT_PRODUCTION_BRANCH)
 const preprodBranchInput = ref(saved.preprodBranch ?? DEFAULT_PREPROD_BRANCH)
+const preprodChannel = ref(saved.preprodChannel ?? PREPROD_CHANNEL)
 const productionBranch = computed(() => normalizeCiBranch(productionBranchInput.value, DEFAULT_PRODUCTION_BRANCH))
 const preprodBranch = computed(() => normalizeCiBranch(preprodBranchInput.value, DEFAULT_PREPROD_BRANCH))
 const productionBranchInvalid = computed(() => productionBranchInput.value.trim() !== productionBranch.value)
@@ -90,6 +92,9 @@ type LoadStatus = 'loading' | 'ready' | 'error'
 const channelStatus = ref<LoadStatus>('loading')
 const productionChannels = computed(() => normalizeCiChannels(defaultChannels.value))
 const productionChannel = computed(() => productionChannels.value.join(', '))
+const showTesterChannel = computed(() => product.value === 'ota' && strategy.value === 'main_preprod')
+const testerChannelInvalid = computed(() => showTesterChannel.value && !isCiChannelSupported(preprodChannel.value))
+const testerChannelCollision = computed(() => showTesterChannel.value && productionChannels.value.includes(preprodChannel.value))
 
 // Encrypted apps need the private key in CI, or the CLI uploads plaintext
 // bundles (or fails when the organization enforces encryption).
@@ -103,6 +108,7 @@ const encrypted = computed(() => encryptionRequired.value || (encryptedChoice.va
 const unsupportedChannel = computed(() => productionChannels.value.find(channel => !isCiChannelSupported(channel)))
 const channelUnsupported = computed(() => product.value === 'ota' && unsupportedChannel.value !== undefined)
 const pipeline = computed(() => provider.value && !channelUnsupported.value && !branchesEqual.value
+  && !testerChannelInvalid.value && !testerChannelCollision.value
   && (product.value !== 'ota' || (channelStatus.value === 'ready' && encryptionStatus.value === 'ready'))
   ? buildCiPipeline({
       appId: props.appId,
@@ -111,6 +117,7 @@ const pipeline = computed(() => provider.value && !channelUnsupported.value && !
       provider: provider.value,
       platforms: platforms.value,
       productionChannels: productionChannels.value,
+      preprodChannel: preprodChannel.value,
       encrypted: encrypted.value,
       productionBranch: productionBranch.value,
       preprodBranch: preprodBranch.value,
@@ -143,7 +150,7 @@ const checklistPath = computed(() => `${getAppGettingStartedPath(props.appId)}?s
 const docsHref = computed(() => product.value === 'ota'
   ? 'https://capgo.app/docs/getting-started/cicd-integration/'
   : 'https://capgo.app/docs/builder/github-actions/')
-const strategyParams = computed(() => ({ branch: productionBranch.value, preprod: preprodBranch.value, channel: productionChannel.value }))
+const strategyParams = computed(() => ({ branch: productionBranch.value, preprod: preprodBranch.value, channel: productionChannel.value, testerChannel: preprodChannel.value }))
 
 // Keyed by secret and role: a key made for another answer (uploader vs admin)
 // cannot run this pipeline, so a changed role asks for a new key.
@@ -172,7 +179,7 @@ interface KeyRegistration {
 }
 const keyRegistrations = reactive<Partial<Record<CiKeySlot, KeyRegistration>>>({})
 
-watch([product, strategy, provider, platforms, productionBranch, preprodBranch], () => {
+watch([product, strategy, provider, platforms, productionBranch, preprodBranch, preprodChannel], () => {
   if (!provider.value)
     return
   saveCiGuideSelection(userId.value, props.appId, {
@@ -182,6 +189,7 @@ watch([product, strategy, provider, platforms, productionBranch, preprodBranch],
     platforms: platforms.value,
     productionBranch: productionBranch.value,
     preprodBranch: preprodBranch.value,
+    preprodChannel: preprodChannel.value,
   })
 }, { deep: true })
 
@@ -593,6 +601,12 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           <span v-if="branchesEqual" class="mt-1 block text-xs text-amber-700 dark:text-amber-400" data-test="cicd-branches-equal">{{ t('cicd-guide-branches-equal') }}</span>
           <span v-else-if="preprodBranchInvalid" class="mt-1 block text-xs text-amber-700 dark:text-amber-400">{{ t('cicd-guide-branch-invalid', { branch: preprodBranch }) }}</span>
         </label>
+        <label v-if="showTesterChannel" class="block">
+          <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ t('cicd-guide-tester-channel') }}</span>
+          <input v-model="preprodChannel" type="text" class="d-input mt-1 h-11 w-full rounded-lg border-slate-300 bg-white font-mono text-sm dark:border-white/20 dark:bg-slate-900" spellcheck="false" autocomplete="off" data-test="cicd-preprod-channel" :aria-invalid="testerChannelInvalid || testerChannelCollision">
+          <span v-if="testerChannelCollision" class="mt-1 block text-xs text-red-700 dark:text-red-400" data-test="cicd-tester-channel-collision">{{ t('cicd-guide-tester-channel-collision') }}</span>
+          <span v-else-if="testerChannelInvalid" class="mt-1 block text-xs text-red-700 dark:text-red-400">{{ t('cicd-guide-tester-channel-invalid') }}</span>
+        </label>
       </div>
     </section>
 
@@ -717,7 +731,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   <span class="ml-auto rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-white/10 dark:text-slate-200">{{ t('cicd-guide-key-role', { role: t(roleLabels[spec.role]) }) }}</span>
                 </div>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {{ t(spec.purpose === 'preview' && spec.role === 'app_admin' ? 'cicd-guide-key-why-app_admin-preview' : `cicd-guide-key-why-${spec.role}`) }}
+                  {{ t(spec.purpose === 'preview' && spec.role === 'app_admin' ? 'cicd-guide-key-why-app_admin-preview' : `cicd-guide-key-why-${spec.role}`, { channel: preprodChannel }) }}
                 </p>
                 <template v-if="createdKeys[keySlot(spec)]">
                   <button type="button" class="mt-3" :class="[commandClass]" :aria-label="t('cicd-guide-key-copy')" :data-test="`cicd-key-value-${spec.secret}`" @click="copy(createdKeys[keySlot(spec)]!, 'onboarding_cicd_key_copied')">
