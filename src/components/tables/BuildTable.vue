@@ -344,7 +344,8 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
       savedOutputs.value = body.outputs ?? {}
   }
   catch {
-    savedOutputs.value = {}
+    if (current())
+      savedOutputs.value = {}
   }
 }
 
