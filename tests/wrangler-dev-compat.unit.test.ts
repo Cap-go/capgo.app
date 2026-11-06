@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('wrangler dev compatibility date override', () => {
@@ -15,6 +18,9 @@ describe('wrangler dev compatibility date override', () => {
     const start = readFileSync(new URL('../scripts/start-cloudflare-workers.sh', import.meta.url), 'utf8')
     expect(start).toContain('scripts/wrangler-dev-compat.sh')
     expect(start).not.toMatch(/exec bunx wrangler dev/)
+    expect(start).toMatch(/cloudflare_workers\/api[^\n]*\$\{WRANGLER_DEV\}/)
+    expect(start).toMatch(/cloudflare_workers\/plugin[^\n]*\$\{WRANGLER_DEV\}/)
+    expect(start).toMatch(/cloudflare_workers\/files[^\n]*\$\{WRANGLER_DEV\}/)
   })
 
   it('spawn backend uses repo root paths for wrapper and env file', () => {
@@ -22,5 +28,39 @@ describe('wrangler dev compatibility date override', () => {
     expect(spawn).toContain('scripts/wrangler-dev-compat.sh')
     expect(spawn).toContain('REPO_ROOT')
     expect(spawn).toContain('internal/cloudflare/.env.local')
+  })
+
+  it('passes WRANGLER_DEV_COMPATIBILITY_DATE to bunx and skips inject when already set on argv', () => {
+    const scriptPath = new URL('../scripts/wrangler-dev-compat.sh', import.meta.url).pathname
+    const stubDir = mkdtempSync(join(tmpdir(), 'wrangler-dev-compat-bunx-'))
+    const bunxPath = join(stubDir, 'bunx')
+    writeFileSync(bunxPath, '#!/bin/sh\nprintf "%s\n" "$@"\n', 'utf8')
+    chmodSync(bunxPath, 0o755)
+    try {
+      const outOverride = execFileSync('bash', [scriptPath, '--dry-run'], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ''}`, WRANGLER_DEV_COMPATIBILITY_DATE: '2030-06-01' },
+      })
+      const lines = outOverride.trim().split('\n')
+      const idx = lines.indexOf('--compatibility-date')
+      expect(idx).toBeGreaterThanOrEqual(0)
+      expect(lines[idx + 1]).toBe('2030-06-01')
+
+      const outPassthrough = execFileSync('bash', [scriptPath, '--compatibility-date', '2025-03-01', '--port', '9999'], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ''}` },
+      })
+      expect(outPassthrough.trim().split('\n')).toEqual([
+        'wrangler',
+        'dev',
+        '--compatibility-date',
+        '2025-03-01',
+        '--port',
+        '9999',
+      ])
+    }
+    finally {
+      rmSync(stubDir, { recursive: true, force: true })
+    }
   })
 })

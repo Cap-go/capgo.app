@@ -78,7 +78,11 @@ export function wrapPluginReadOnlyClientForRequestSignal(db: PluginPgClient, sig
   const wrapped = new Proxy(db, {
     get(target, prop, receiver) {
       if (prop === 'query') {
-        return (...args: unknown[]) => pgAbortRace(signal, orig(...args) as Promise<unknown>)
+        return (...args: unknown[]) => {
+          if (signal.aborted)
+            return Promise.reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
+          return pgAbortRace(signal, orig(...args) as Promise<unknown>)
+        }
       }
       return Reflect.get(target, prop, receiver)
     },
@@ -610,7 +614,7 @@ export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
   const ensure = () => {
     inner ??= getPgClient(c, readOnly).then((db) => {
       const source = pgClientSources.get(db)
-      if (source)
+      if (source !== undefined)
         pgClientSources.set(client, source)
       return db
     }, (error: unknown) => {

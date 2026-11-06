@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { pluginReadClientSkipsEnd, wrapPluginReadOnlyClientForRequestSignal } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 
 describe('plugin read replica pg client', () => {
@@ -19,5 +19,16 @@ describe('plugin read replica pg client', () => {
     const db = { query: () => Promise.resolve({ rows: [] }) }
     const wrapped = wrapPluginReadOnlyClientForRequestSignal(db as any, new AbortController().signal)
     expect(pluginReadClientSkipsEnd(wrapped)).toBe(true)
+  })
+
+  it('does not invoke query when signal is already aborted', async () => {
+    const db = {
+      query: vi.fn(() => Promise.resolve({ rows: [] })),
+    }
+    const controller = new AbortController()
+    controller.abort()
+    const wrapped = wrapPluginReadOnlyClientForRequestSignal(db as any, controller.signal)
+    await expect(wrapped.query('SELECT 1')).rejects.toMatchObject({ name: 'AbortError' })
+    expect(db.query).not.toHaveBeenCalled()
   })
 })

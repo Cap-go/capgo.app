@@ -5,6 +5,7 @@ import { sendDiscordAlert500 } from './discord.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { isTransientDatabaseError, readPgErrorCode, readQuickErrorOriginalCause } from './pg_errors.ts'
 import { capturePosthogException } from './posthog.ts'
+import { redactSensitiveUrl } from '../../utils/sensitive_url.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -129,7 +130,7 @@ export function onError(functionName: string) {
         functionName,
         kind: 'request_cancelled',
         method: c.req.method,
-        url: c.req.url,
+        url: redactSensitiveUrl(c.req.url),
       })
       return c.json({
         error: 'request_cancelled',

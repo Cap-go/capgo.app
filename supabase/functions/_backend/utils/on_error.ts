@@ -171,7 +171,7 @@ export function onError(functionName: string) {
         functionName,
         kind: 'request_cancelled',
         method: c.req.method,
-        url: c.req.url,
+        url: redactSensitiveUrl(c.req.url),
       })
       return c.json({
         error: 'request_cancelled',
