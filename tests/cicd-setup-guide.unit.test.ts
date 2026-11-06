@@ -153,6 +153,23 @@ describe('CI/CD guide pipelines', () => {
     expect(bitbucket.pipelines.branches.main[0].parallel).toHaveLength(2)
   })
 
+  it('keeps tester and preview builds away from store review whatever the stored settings say', () => {
+    const jobs = buildCiJobs({ ...base, product: 'builder', strategy: 'main_preprod', provider: 'github' })
+    expect(jobs.filter(job => job.env?.CAPGO_STORE_SUBMIT_REVIEW === 'false').map(job => job.id)).toEqual(['ios-preprod', 'android-preprod'])
+    expect(jobs.find(job => job.id === 'android-preprod')?.command).toContain('--android-track internal --android-release-status draft')
+    expect(jobs.find(job => job.id === 'android-release')?.env).toBeUndefined()
+    const previews = buildCiJobs({ ...base, product: 'builder', strategy: 'pull_request', provider: 'github' })
+    expect(previews.filter(job => job.env).map(job => job.id)).toEqual(['ios-preview', 'android-preview'])
+
+    const github = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'main_preprod', provider: 'github' }).content)
+    expect(github.jobs['ios-preprod'].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '${{ secrets.CAPGO_TOKEN }}', CAPGO_STORE_SUBMIT_REVIEW: 'false' })
+    expect(github.jobs['ios-release'].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '${{ secrets.CAPGO_TOKEN }}' })
+    const azure = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'azure', platforms: ['ios'] }).content)
+    expect(azure.jobs[1].steps.at(-1).env).toEqual({ CAPGO_TOKEN: '$(CAPGO_PREVIEW_TOKEN)', CAPGO_STORE_SUBMIT_REVIEW: 'false' })
+    const gitlab = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['ios'] }).content)
+    expect(gitlab['capgo-ios-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials')
+  })
+
   it('builds installable Android previews and TestFlight iOS previews for pull requests', () => {
     const jobs = buildCiJobs({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' })
     expect(jobs.find(job => job.id === 'android-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
@@ -165,7 +182,7 @@ describe('CI/CD guide pipelines', () => {
       { secret: 'CAPGO_PREVIEW_TOKEN', role: 'app_admin', purpose: 'preview' },
     ])
     const gitlab = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['android'] }).content)
-    expect(gitlab['capgo-android-preview'].script.at(-1)).toBe('CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
+    expect(gitlab['capgo-android-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     const circleci = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' }).content)
     expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { filters: { branches: { ignore: ['main'] } } } })
   })

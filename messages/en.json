@@ -653,6 +653,7 @@
   "cicd-guide-note-incompatible": "--fail-on-incompatible stops the run when a change needs a native build, instead of sending devices a bundle they can't run.",
   "cicd-guide-note-stored-credentials": "--use-stored-credentials signs with the credentials from step 1, so CI only needs CAPGO_TOKEN.",
   "cicd-guide-note-store-review": "--submit-to-store-review on {branch} sends each build to Apple and Google for review. Remove it to submit releases yourself.",
+  "cicd-guide-note-tester-builds": "Tester and pull request builds set CAPGO_STORE_SUBMIT_REVIEW=false, and Android tester builds use the internal track as drafts, so release settings saved with your credentials never send them for store review.",
   "cicd-guide-note-package-manager": "Using pnpm, Yarn, or Bun? Replace npm ci and npm run build with your own install and build commands.",
   "cicd-guide-note-cleanup-auto": "When a pull request is merged or closed, its pr-<number> channel and bundle are deleted.",
   "cicd-guide-note-cleanup-manual": "{provider} has no event for closed pull requests, so pr-<number> channels stay. Delete them in Channels, or run:",

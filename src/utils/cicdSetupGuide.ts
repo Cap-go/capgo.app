@@ -57,7 +57,16 @@ export interface CiJob {
   /** Builder: run `npx cap sync <platform>` before requesting the build. */
   sync?: CiPlatform
   command: string
+  /** Extra environment for the command; values are plain flags, never secrets. */
+  env?: Record<string, string>
 }
+
+// Stored build credentials can carry release settings (store review, Play
+// track). Tester and preview builds override them instead of inheriting a
+// production submission: the CLI has no --no-submit-to-store-review flag, but
+// CAPGO_STORE_SUBMIT_REVIEW from the environment wins over stored values.
+const NO_STORE_REVIEW = { CAPGO_STORE_SUBMIT_REVIEW: 'false' } as const
+const ANDROID_TESTER_TRACK = '--android-track internal --android-release-status draft'
 
 export interface CiKeySpec {
   secret: CiSecretName
@@ -264,7 +273,8 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       secret: 'CAPGO_TOKEN',
       setup: 'build',
       sync: platform,
-      command: buildCommand(platform),
+      command: platform === 'android' ? `${buildCommand(platform)} ${ANDROID_TESTER_TRACK}` : buildCommand(platform),
+      env: NO_STORE_REVIEW,
     }))]
   }
   if (strategy === 'pull_request') {
@@ -279,6 +289,7 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
       command: platform === 'android'
         ? `${buildCommand(platform)} --build-mode debug --no-playstore-upload --output-upload`
         : buildCommand(platform),
+      env: NO_STORE_REVIEW,
     }))]
   }
   return releases
@@ -312,7 +323,15 @@ function withPr(command: string, variable: string) {
 // preview key is passed only to the command that needs it.
 function shellCommand(job: CiJob, prVariable: string) {
   const command = withPr(job.command, prVariable)
-  return job.secret === 'CAPGO_TOKEN' ? command : `CAPGO_TOKEN="$${job.secret}" ${command}`
+  const env = [
+    ...Object.entries(job.env ?? {}).map(([name, value]) => `${name}=${value}`),
+    ...(job.secret === 'CAPGO_TOKEN' ? [] : [`CAPGO_TOKEN="$${job.secret}"`]),
+  ]
+  return [...env, command].join(' ')
+}
+
+function yamlEnv(job: CiJob, indent: string) {
+  return Object.entries(job.env ?? {}).map(([name, value]) => `${indent}${name}: ${yamlQuote(value)}`)
 }
 
 function setupCommands(job: CiJob) {
@@ -374,6 +393,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       `      - run: ${yamlScalar(withPr(job.command, GITHUB_PR_NUMBER))}`,
       '        env:',
       `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
+      ...yamlEnv(job, '          '),
     )
   })
   return lines.join('\n')
@@ -461,6 +481,7 @@ function renderAzure(jobs: CiJob[]) {
       `        displayName: ${yamlScalar(job.name)}`,
       '        env:',
       `          CAPGO_TOKEN: $(${job.secret})`,
+      ...yamlEnv(job, '          '),
     )
   })
   return lines.join('\n')

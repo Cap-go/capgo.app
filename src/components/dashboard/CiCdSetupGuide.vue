@@ -726,6 +726,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
                   {{ t('cicd-guide-note-store-review', { branch: productionBranch }) }}
                 </li>
+                <li v-if="strategy !== 'main'" class="flex items-start gap-2" data-test="cicd-note-tester-builds">
+                  <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+                  {{ t('cicd-guide-note-tester-builds') }}
+                </li>
               </template>
               <template v-if="strategy === 'pull_request'">
                 <li v-if="provider === 'github'" class="flex items-start gap-2">

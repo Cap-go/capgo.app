@@ -4362,5 +4362,6 @@
   "cicd-guide-status-marked-done": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-status-error": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-waiting-ota": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "cicd-guide-waiting-builder": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "cicd-guide-waiting-builder": "Used in Capgo web console areas: components/dashboard. Role: status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-note-tester-builds": "Used in Capgo web console areas: components/dashboard. Role: helper text. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
