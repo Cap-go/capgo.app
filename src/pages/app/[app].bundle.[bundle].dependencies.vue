@@ -11,12 +11,12 @@ import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
+import PackageChangelogLink from '~/components/changelog/PackageChangelogLink.vue'
 import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '~/services/bundleCompatibility'
-import { fetchPlugins, UPDATER_PACKAGE } from '~/services/changelog'
+import { fetchPlugins } from '~/services/changelog'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
@@ -101,10 +101,6 @@ watch(() => nativePackages.value.some(pkg => pkg.name.startsWith('@capgo/')), as
   if (hasCapgo && !capgoPlugins.value.length)
     capgoPlugins.value = await fetchPlugins()
 }, { immediate: true })
-
-function capgoPluginFor(name: string) {
-  return capgoPlugins.value.find(plugin => plugin.name === name) ?? null
-}
 
 const displayNativePackages = computed(() => {
   if (!searchLower.value)
@@ -606,6 +602,9 @@ watch(bundleRouteKey, async (key) => {
                         <th scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
                           {{ t('version') }}
                         </th>
+                        <th scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
+                          {{ t('changelog-whats-new') }}
+                        </th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-white/5">
@@ -691,6 +690,9 @@ watch(bundleRouteKey, async (key) => {
                             {{ entry.candidateVersion }}
                           </span>
                         </td>
+                        <td class="px-6 py-4 text-sm whitespace-nowrap">
+                          <PackageChangelogLink v-if="entry.candidateVersion" :name="entry.name" :version="entry.candidateVersion" :from-version="entry.baselineVersion" :plugins="capgoPlugins" />
+                        </td>
                       </tr>
                     </tbody>
                   </table>
@@ -707,7 +709,7 @@ watch(bundleRouteKey, async (key) => {
                         <th scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
                           {{ t('version') }}
                         </th>
-                        <th v-if="capgoPlugins.length" scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
+                        <th scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
                           {{ t('changelog-whats-new') }}
                         </th>
                       </tr>
@@ -733,15 +735,8 @@ watch(bundleRouteKey, async (key) => {
                             {{ pkg.version }}
                           </span>
                         </td>
-                        <td v-if="capgoPlugins.length" class="px-6 py-4 text-sm whitespace-nowrap">
-                          <ChangelogUpdateBadge
-                            v-if="capgoPluginFor(pkg.name)"
-                            :product="pkg.name === UPDATER_PACKAGE ? 'updater' : 'plugin'"
-                            :repo="pkg.name === UPDATER_PACKAGE ? null : capgoPluginFor(pkg.name)?.repo"
-                            :current="pkg.version"
-                            :latest="capgoPluginFor(pkg.name)?.version"
-                            show-current
-                          />
+                        <td class="px-6 py-4 text-sm whitespace-nowrap">
+                          <PackageChangelogLink :name="pkg.name" :version="pkg.version" :plugins="capgoPlugins" />
                         </td>
                       </tr>
                     </tbody>

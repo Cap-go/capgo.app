@@ -369,6 +369,13 @@ watch(packageId, async () => {
                     <td class="px-0 py-3 font-medium break-all text-slate-900 dark:text-slate-100">
                       <div class="flex items-center gap-2">
                         <span>{{ version.plugin_version }}</span>
+                        <ChangelogUpdateBadge
+                          v-if="version.plugin_version !== '0.0.0'"
+                          product="updater"
+                          :current="version.plugin_version"
+                          :latest="version.latestForMajor"
+                          show-notes
+                        />
                         <span v-if="version.plugin_version === dominantPluginVersion?.plugin_version" class="d-badge d-badge-sm d-badge-ghost">
                           {{ t('native-observe-plugin-most-reported') }}
                         </span>
