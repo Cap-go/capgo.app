@@ -137,12 +137,13 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined
 let refreshing = false
 async function refreshCiCdState() {
   const orgId = organizationStore.currentOrganization?.gid
-  // Refresh only the current organization while a CI/CD nudge is visible.
+  // Poll only the displayed entries. When one completes, the next eligible app
+  // takes its place and is included on the following refresh.
   if (!orgId || refreshing || !cicdApps.value.length || document.visibilityState !== 'visible')
     return
   refreshing = true
   try {
-    await organizationStore.refreshAppsOnboarding(orgId)
+    await organizationStore.refreshAppsOnboarding(orgId, { appIds: cicdApps.value.map(app => app.app_id) })
   }
   finally {
     refreshing = false

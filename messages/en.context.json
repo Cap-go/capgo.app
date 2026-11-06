@@ -4381,5 +4381,19 @@
   "cicd-guide-secret-encryption-scopes": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-secret-github-encryption": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-secret-github-protect": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "cicd-guide-settings-loading": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "cicd-guide-settings-loading": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "$schema": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-secret-github-builder-1": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-secret-github-builder-preview": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-trust-title": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-trust": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-github": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-gitlab": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-gitlab-run": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-azure": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-bitbucket": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-circleci": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-other": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-builder-preview-fallback": "Used in Capgo CI/CD onboarding. Explain the trusted-code approval requirement for native preview builds. Keep provider UI names, code, and placeholders unchanged.",
+  "cicd-guide-secret-github-preview": "Used in CI/CD onboarding for live-update preview keys. Explains repository secrets. Keep provider UI names, code, and placeholders unchanged."
 }

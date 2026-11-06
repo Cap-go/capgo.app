@@ -18,6 +18,11 @@ At most three apps are listed, the most recently active first. There is no
 dismiss button: the entry stays until CI ships once or the guide marks it set
 up.
 
+Visible tabs refresh only the three displayed CI/CD entries every 30 seconds.
+When those entries connect, the next displayed apps are checked on the next
+tick. Initial organization refreshes still cover all apps; store updates batch
+changed rows and preserve newer reads and local writes.
+
 ## Stored state: `apps.onboarding.cicd`
 
 | Field | Written by | Meaning |

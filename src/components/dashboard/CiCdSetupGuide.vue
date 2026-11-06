@@ -35,6 +35,7 @@ import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
 import {
   buildCiPipeline,
+  BUILDER_PREVIEW_SCOPE,
   builderCredentialsPushCommand,
   CI_ENCRYPTION_SECRET,
   CI_PLATFORMS,
@@ -136,6 +137,8 @@ const roleLabels: Record<CiKeySpec['role'], string> = {
   app_admin: 'role-app-admin',
 }
 const providerName = computed(() => provider.value ? t(`cicd-guide-provider-${provider.value}`) : '')
+const builderPreview = computed(() => product.value === 'builder' && strategy.value === 'pull_request')
+const previewScope = computed(() => product.value === 'builder' ? BUILDER_PREVIEW_SCOPE : 'capgo-preview')
 const checklistPath = computed(() => `${getAppGettingStartedPath(props.appId)}?showChecklist=1${product.value === 'builder' ? '&path=builder' : ''}`)
 const docsHref = computed(() => product.value === 'ota'
   ? 'https://capgo.app/docs/getting-started/cicd-integration/'
@@ -146,6 +149,18 @@ const strategyParams = computed(() => ({ branch: productionBranch.value, preprod
 // cannot run this pipeline, so a changed role asks for a new key.
 type CiKeySlot = `${CiSecretName}:${CiKeySpec['role']}`
 const keySlot = (spec: CiKeySpec): CiKeySlot => `${spec.secret}:${spec.role}`
+function keyScope(spec: CiKeySpec) {
+  if (spec.purpose === 'release')
+    return 'capgo-release'
+  if (provider.value === 'gitlab' && product.value === 'ota')
+    return 'capgo/pr-*'
+  return previewScope.value
+}
+function secretInstruction(spec: CiKeySpec) {
+  if (provider.value === 'github' && spec.purpose === 'preview')
+    return product.value === 'builder' ? 'cicd-guide-secret-github-builder-preview' : 'cicd-guide-secret-github-preview'
+  return `cicd-guide-secret-${provider.value}-2`
+}
 const createdKeys = reactive<Partial<Record<CiKeySlot, string>>>({})
 const creatingKey = reactive<Partial<Record<CiKeySlot, boolean>>>({})
 const keyErrors = reactive<Partial<Record<CiKeySlot, 'permission' | 'generic'>>>({})
@@ -724,7 +739,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 >
                   <IconLoader v-if="creatingKey[keySlot(spec)]" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
                   <IconKey v-else class="h-4 w-4" aria-hidden="true" />
-                  {{ creatingKey[keySlot(spec)] ? t('cicd-guide-key-creating') : t('cicd-guide-key-create', { secret: spec.secret, scope: spec.purpose === 'preview' ? 'capgo-preview' : 'capgo-release' }) }}
+                  {{ creatingKey[keySlot(spec)] ? t('cicd-guide-key-creating') : t('cicd-guide-key-create', { secret: spec.secret }) }}
                 </button>
                 <div v-if="keyRegistrations[keySlot(spec)]?.status === 'error'" class="mt-3 text-sm text-amber-700 dark:text-amber-400" :data-test="`cicd-key-registration-error-${spec.secret}`">
                   <p role="alert">
@@ -760,10 +775,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
             </h3>
             <ol class="mt-3 list-decimal space-y-2 pl-5 text-sm leading-6 text-slate-700 marker:text-slate-400 dark:text-slate-200">
               <li v-if="provider !== 'other'">
-                {{ t(`cicd-guide-secret-${provider}-1`) }}
+                {{ t(provider === 'github' && builderPreview ? 'cicd-guide-secret-github-builder-1' : `cicd-guide-secret-${provider}-1`, { previewScope }) }}
               </li>
               <li v-for="spec in pipeline.keys" :key="spec.secret">
-                {{ t(`cicd-guide-secret-${provider}-2`, { secret: spec.secret, scope: spec.purpose === 'preview' ? 'capgo-preview' : 'capgo-release' }) }}
+                {{ t(secretInstruction(spec), { secret: spec.secret, scope: keyScope(spec) }) }}
               </li>
               <li v-if="provider === 'github'">
                 {{ t('cicd-guide-secret-github-protect', { branches: releaseBranches.join(', ') }) }}
@@ -787,7 +802,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 <li v-if="strategy === 'main_preprod'">
                   {{ t('cicd-guide-secret-gitlab-protect-preprod', { branch: preprodBranch }) }}
                 </li>
-                <li v-if="pipeline.keys.some(spec => spec.secret === 'CAPGO_PREVIEW_TOKEN')">
+                <li v-if="product === 'ota' && pipeline.keys.some(spec => spec.secret === 'CAPGO_PREVIEW_TOKEN')">
                   {{ t('cicd-guide-secret-gitlab-preview') }}
                 </li>
                 <li v-if="pipeline.extraSecrets.length && strategy === 'pull_request'">
@@ -808,6 +823,19 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                 {{ t('cicd-guide-secret-encryption-scopes', { secret: CI_ENCRYPTION_SECRET }) }}
               </li>
             </ol>
+            <div v-if="builderPreview" class="mt-4 space-y-2 rounded-xl border border-slate-200 p-4 text-sm leading-6 text-slate-700 dark:border-white/15 dark:text-slate-200" data-test="cicd-builder-preview-trust">
+              <h4 class="font-semibold text-slate-950 dark:text-white">
+                {{ t('cicd-guide-builder-preview-trust-title') }}
+              </h4>
+              <p>{{ t('cicd-guide-builder-preview-trust') }}</p>
+              <ol class="list-decimal space-y-2 pl-5">
+                <li>{{ t(`cicd-guide-builder-preview-${provider}`, { scope: previewScope, branch: productionBranch }) }}</li>
+                <li v-if="provider === 'gitlab'">
+                  {{ t('cicd-guide-builder-preview-gitlab-run', { branch: productionBranch }) }}
+                </li>
+                <li>{{ t('cicd-guide-builder-preview-fallback') }}</li>
+              </ol>
+            </div>
             <template v-if="provider === 'github'">
               <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">
                 {{ t('cicd-guide-secret-github-cli') }}
@@ -818,10 +846,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   :key="spec.secret"
                   type="button"
                   :class="commandClass"
-                  :aria-label="`${t('copy')}: ${githubSecretCommand(spec.secret, spec.purpose)}`"
-                  @click="copy(githubSecretCommand(spec.secret, spec.purpose))"
+                  :aria-label="`${t('copy')}: ${githubSecretCommand(spec.secret, spec.purpose, product)}`"
+                  @click="copy(githubSecretCommand(spec.secret, spec.purpose, product))"
                 >
-                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ githubSecretCommand(spec.secret, spec.purpose) }}</code>
+                  <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ githubSecretCommand(spec.secret, spec.purpose, product) }}</code>
                   <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
                 </button>
               </div>

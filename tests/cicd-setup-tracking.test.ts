@@ -43,6 +43,8 @@ async function cicd(appId: string) {
 }
 
 async function upsertBundle(appId: string, name: string, extraHeaders: Record<string, string> = {}, storageProvider?: string) {
+  // Both local test runtimes set CAPGO_PREVENT_BACKGROUND_FUNCTIONS=true, so
+  // this response also completes the detection task for this exact request.
   const response = await fetch(`${BASE_URL}/bundle/upsert`, {
     method: 'POST',
     headers: { ...headers, ...extraHeaders },
@@ -62,24 +64,20 @@ afterAll(async () => {
 describe('CI/CD setup tracking', () => {
   it('marks live updates done when the CLI uploads a bundle from CI', async () => {
     await upsertBundle(APP_UPSERT, '1.0.1-local')
-    // Recording runs after the response; give it the same time a CI upload would.
-    await new Promise(resolve => setTimeout(resolve, 1000))
     expect(isCiCdSetupDone((await executeSQL('SELECT onboarding FROM public.apps WHERE app_id = $1', [APP_UPSERT]))[0]?.onboarding)).toBe(false)
 
     // The initial row exists before transfer starts. An abandoned upload must not complete setup.
     await upsertBundle(APP_UPSERT, '1.0.2-ci', { 'x-cli-ci': 'GitHub Actions' }, 'r2-direct')
-    await new Promise(resolve => setTimeout(resolve, 1000))
     expect((await cicd(APP_UPSERT)).otaDetectedAt).toBeNull()
 
     // The CLI finalizes storage_provider after the zip and manifest are persisted.
     await upsertBundle(APP_UPSERT, '1.0.2-ci', { 'x-cli-ci': 'GitHub Actions' }, 'r2')
-    await expect.poll(async () => (await cicd(APP_UPSERT)).otaDetectedAt, { timeout: 10000 }).toBeTruthy()
+    expect((await cicd(APP_UPSERT)).otaDetectedAt).toBeTruthy()
     const state = await cicd(APP_UPSERT)
     expect(state).toEqual(expect.objectContaining({ detectedVia: 'ci', ciProvider: 'GitHub Actions', builderDetectedAt: null }))
 
     // Only the first CI upload is recorded.
     await upsertBundle(APP_UPSERT, '1.0.3-ci', { 'x-cli-ci': 'GitLab CI' }, 'r2')
-    await new Promise(resolve => setTimeout(resolve, 1000))
     expect(await cicd(APP_UPSERT)).toEqual(state)
 
     const [key] = await executeSQL<{ rbac_id: string }>('SELECT rbac_id::text AS rbac_id FROM public.apikeys WHERE key = $1', [APIKEY_TEST_ALL])
@@ -109,7 +107,7 @@ describe('CI/CD setup tracking', () => {
     expect(stored?.key_created_at).toBeTruthy()
 
     await upsertBundle(APP_KEY, '1.0.1-guide-key', {}, 'r2')
-    await expect.poll(async () => (await cicd(APP_KEY)).otaDetectedAt, { timeout: 10000 }).toBeTruthy()
+    expect((await cicd(APP_KEY)).otaDetectedAt).toBeTruthy()
     expect(await cicd(APP_KEY)).toEqual(expect.objectContaining({ detectedVia: 'key', ciProvider: null }))
 
     await executeSQL('SELECT public.record_app_cicd_deploy($1, $2, $3, $4)', [APP_KEY, 'builder', null, 'GitHub Actions'])

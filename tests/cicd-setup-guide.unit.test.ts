@@ -9,6 +9,7 @@ import { parse } from 'yaml'
 import {
   buildCiJobs,
   buildCiPipeline,
+  BUILDER_PREVIEW_SCOPE,
   builderCredentialsPushCommand,
   CI_ENCRYPTION_SECRET,
   CI_PRODUCTS,
@@ -17,6 +18,7 @@ import {
   CI_STRATEGIES,
   ciKeysFor,
   encryptionSecretCommand,
+  githubSecretCommand,
   isCiChannelSupported,
   loadCiGuideSelection,
   normalizeCiBranch,
@@ -76,14 +78,22 @@ describe('CI/CD guide pipelines', () => {
       const options = { ...base, product, strategy: 'pull_request' } as const
       const github = parse(buildCiPipeline({ ...options, provider: 'github' }).content)
       for (const [id, job] of Object.entries<{ environment?: string }>(github.jobs))
-        expect(job.environment, id).toBe(id.includes('preview') ? undefined : 'capgo-release')
+        expect(job.environment, id).toBe(id.includes('preview') ? product === 'builder' ? BUILDER_PREVIEW_SCOPE : undefined : 'capgo-release')
       const bitbucket = parse(buildCiPipeline({ ...options, provider: 'bitbucket', platforms: ['ios'] }).content)
       expect(bitbucket.pipelines.branches.main[0].step.environment).toBe('capgo-release')
-      expect(bitbucket.pipelines['pull-requests']['**'][0].step.environment).toBe('capgo-preview')
+      if (product === 'ota')
+        expect(bitbucket.pipelines['pull-requests']['**'][0].step.environment).toBe('capgo-preview')
+      else
+        expect(bitbucket.pipelines['pull-requests']['**'][1].stage.environment).toBe(BUILDER_PREVIEW_SCOPE)
       const circleci = parse(buildCiPipeline({ ...options, provider: 'circleci' }).content)
       for (const entry of circleci.workflows.capgo.jobs) {
-        const [id, config] = Object.entries<{ context: string }>(entry)[0]!
-        expect(config.context, id).toBe(id.includes('preview') ? 'capgo-preview' : 'capgo-release')
+        const [id, config] = Object.entries<{ context?: string, type?: string }>(entry)[0]!
+        if (config.type === 'approval') {
+          expect(config.context).toBeUndefined()
+          continue
+        }
+        const previewScope = product === 'builder' ? BUILDER_PREVIEW_SCOPE : 'capgo-preview'
+        expect(config.context, id).toBe(id.includes('preview') ? previewScope : 'capgo-release')
       }
       const testerJobs = buildCiJobs({ ...options, strategy: 'main', provider: 'github' })
       if (product === 'builder')
@@ -212,7 +222,7 @@ describe('CI/CD guide pipelines', () => {
     const jobs = buildCiJobs({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' })
     expect(jobs.find(job => job.id === 'android-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     expect(jobs.find(job => job.id === 'ios-preview')?.command).toBe('npx @capgo/cli@latest build request com.example.app --platform ios --use-stored-credentials')
-    // Pull request pipelines run on unprotected branches, so previews get their own key.
+    // Native previews use a separate key restricted to approved, trusted code.
     expect(jobs.filter(job => job.trigger.kind === 'pull_request').map(job => job.secret)).toEqual(['CAPGO_PREVIEW_TOKEN', 'CAPGO_PREVIEW_TOKEN'])
     expect(jobs.filter(job => job.trigger.kind === 'push').map(job => job.secret)).toEqual(['CAPGO_TOKEN', 'CAPGO_TOKEN'])
     expect(ciKeysFor('builder', 'pull_request')).toEqual([
@@ -222,7 +232,36 @@ describe('CI/CD guide pipelines', () => {
     const gitlab = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'gitlab', platforms: ['android'] }).content)
     expect(gitlab['capgo-android-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     const circleci = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' }).content)
-    expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { context: 'capgo-preview', filters: { branches: { ignore: ['main'] } } } })
+    expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { context: BUILDER_PREVIEW_SCOPE, requires: ['approve-builder-preview'], filters: { branches: { ignore: ['main'] } } } })
+  })
+
+  it('requires protected or approved credential access for native pull request builds', () => {
+    const options = { ...base, product: 'builder', strategy: 'pull_request' } as const
+    const github = parse(buildCiPipeline({ ...options, provider: 'github' }).content)
+    expect(github.jobs['ios-preview'].environment).toBe(BUILDER_PREVIEW_SCOPE)
+    expect(githubSecretCommand('CAPGO_PREVIEW_TOKEN', 'preview', 'builder')).toBe('gh secret set CAPGO_PREVIEW_TOKEN --env capgo-builder-preview')
+    expect(githubSecretCommand('CAPGO_PREVIEW_TOKEN', 'preview', 'ota')).toBe('gh secret set CAPGO_PREVIEW_TOKEN')
+    const gitlab = parse(buildCiPipeline({ ...options, provider: 'gitlab' }).content)
+    for (const platform of ['ios', 'android']) {
+      const preview = gitlab[`capgo-${platform}-preview`]
+      expect(preview.environment.name).toBe(BUILDER_PREVIEW_SCOPE)
+      expect(preview.rules[0]).toEqual({
+        if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_TARGET_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID',
+        when: 'manual',
+      })
+      expect(gitlab[`capgo-${platform}-release`].environment.name).toBe('capgo-release')
+    }
+    const azure = parse(buildCiPipeline({ ...options, provider: 'azure' }).content)
+    expect(azure.stages[1].variables).toEqual([{ group: BUILDER_PREVIEW_SCOPE }])
+    const bitbucket = parse(buildCiPipeline({ ...options, provider: 'bitbucket' }).content)
+    const previewStages = bitbucket.pipelines['pull-requests']['**']
+    expect(previewStages[0].step.environment).toBeUndefined()
+    expect(previewStages[0].step.script.join(' ')).not.toContain('CAPGO_')
+    expect(previewStages[1].stage.trigger).toBe('manual')
+    expect(previewStages[1].stage.environment).toBe(BUILDER_PREVIEW_SCOPE)
+    expect(previewStages[1].stage.steps).toHaveLength(2)
+    const circleci = parse(buildCiPipeline({ ...options, provider: 'circleci' }).content)
+    expect(circleci.workflows.capgo.jobs).toContainEqual({ 'approve-builder-preview': { type: 'approval', filters: { branches: { ignore: ['main'] } } } })
   })
 
   it('restores the encryption key before every live update upload of an encrypted app', () => {

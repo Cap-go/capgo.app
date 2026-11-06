@@ -28,7 +28,7 @@ test.describe('CI/CD setup guide', () => {
     await expect(content).toContainText("branches: ['main']")
     await expect(content).toContainText(`npx @capgo/cli@latest bundle upload ${appId} --channel production --auto-bump patch --fail-on-incompatible`)
     await expect(content).toContainText('CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}')
-    await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('Store release keys as capgo-release environment secrets and preview keys as repository secrets.')
+    await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('In capgo-release, add CAPGO_TOKEN as an environment secret')
     await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('gh secret set CAPGO_TOKEN')
     await expect(page.locator('[data-test="cicd-detection"]')).toContainText('Waiting for the first bundle uploaded from CI…')
 
@@ -127,11 +127,38 @@ test.describe('CI/CD setup guide', () => {
     await expect(content).toContainText('--platform ios')
     await expect(page.locator('[data-test="cicd-detection"]')).toContainText('Waiting for the first build requested from CI…')
 
-    // Pull request builds use a separate key that merge request pipelines can read.
+    // Native preview credentials are available only to trusted, approved code.
     await page.locator('[data-test="cicd-strategy-pull_request"]').click()
     await expect(page.locator('[data-test="cicd-key-CAPGO_PREVIEW_TOKEN"]')).toContainText('Role: App admin')
-    await expect(page.locator('[data-test="cicd-key-CAPGO_PREVIEW_TOKEN"]')).toContainText('keep it separate from the release key')
+    await expect(page.locator('[data-test="cicd-key-CAPGO_PREVIEW_TOKEN"]')).toContainText('Store it behind the approval restrictions below')
     await expect(content).toContainText('CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request')
+  })
+
+  test('guides native previews through provider-enforced trust restrictions', async ({ page }) => {
+    await page.goto(fixture)
+    await page.locator('[data-test="cicd-product-builder"]').click()
+    await page.locator('[data-test="cicd-strategy-pull_request"]').click()
+    await page.locator('[data-test="cicd-provider-gitlab"]').click()
+    const trust = page.locator('[data-test="cicd-builder-preview-trust"]')
+    await expect(trust).toContainText('Keep CAPGO_PREVIEW_TOKEN Protected and Masked')
+    await expect(trust).toContainText('Both branches must be protected')
+    await expect(page.locator('[data-test="cicd-step-secret"]')).not.toContainText('Turn Protect variable off')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CI_MERGE_REQUEST_SOURCE_BRANCH_PROTECTED')
+    for (const [provider, instruction] of [
+      ['github', 'Required reviewers'],
+      ['azure', 'Approvals and checks'],
+      ['bitbucket', 'only admins to deploy'],
+      ['circleci', 'remove All members'],
+      ['other', 'manual step in editable pipeline code alone is insufficient'],
+    ]) {
+      await page.locator(`[data-test="cicd-provider-${provider}"]`).click()
+      await expect(trust).toContainText(instruction)
+    }
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('gh secret set CAPGO_PREVIEW_TOKEN --env capgo-builder-preview')
+    await page.locator('[data-test="cicd-product-ota"]').click()
+    await expect(trust).toHaveCount(0)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('capgo-builder-preview')
   })
 
   test('remembers answers per app and warns when there is no default channel', async ({ page }) => {

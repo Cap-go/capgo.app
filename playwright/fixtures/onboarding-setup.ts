@@ -1,3 +1,4 @@
+import type { OrganizationApp } from '../../src/stores/organization'
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../../src/utils/onboardingChannelAnalytics'
 import gsap from 'gsap'
 import { createPinia } from 'pinia'
@@ -75,6 +76,7 @@ const state = {
   cicdStatusDelayMs: 0,
   cicdStatusRequests: 0,
   cicdStatusResponses: 0,
+  cicdSidebarRefreshes: [] as Array<string[] | null>,
   cicdRemoteLedger: null as Record<string, unknown> | null,
   latestBundles: (params.get('bundle') || params.get('encrypted') === '1' ? [{ name: params.get('bundle') ?? '1.0.0', created_at: '2026-11-06T10:00:00.000Z', key_id: params.get('encrypted') === '1' ? 'MIIB' : null }] : []) as Array<{ name: string | null, created_at: string, key_id: string | null }>,
 }
@@ -128,7 +130,7 @@ if (params.get('otaComplete') === '1') {
   state.channels.push({ id: 1, app_id: previewAppId, name: 'staging', public: true })
 }
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
-const preview = { state, cicdLedger, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
+const preview = { state, cicdLedger, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, sidebarApps: ref<OrganizationApp[]>([]), appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 const previewUserOnboarding = {
   profile_completed_at: '2026-09-25T00:00:00.000Z',
   abtests: {
@@ -459,12 +461,21 @@ organization.setCurrentOrganization = (orgId) => {
   preview.selectedOrgId.value = selectedOrganization.value.gid
 }
 organization.awaitInitialLoad = async () => true
-organization.refreshAppsOnboarding = async () => {
+organization.refreshAppsOnboarding = async (_orgId, options) => {
   state.cicdStatusRequests += 1
-  if (state.cicdRemoteLedger)
-    cicdLedger.value = state.cicdRemoteLedger
+  state.cicdSidebarRefreshes.push(options ? [...options.appIds] : null)
+  if (state.cicdRemoteLedger) {
+    if (!options || options.appIds.includes(previewAppId))
+      cicdLedger.value = state.cicdRemoteLedger
+    preview.sidebarApps.value = preview.sidebarApps.value.map((app) => {
+      if (options && !options.appIds.includes(app.app_id))
+        return app
+      const onboarding = app.onboarding && typeof app.onboarding === 'object' && !Array.isArray(app.onboarding) ? app.onboarding : {}
+      return { ...app, onboarding: { ...onboarding, cicd: state.cicdRemoteLedger } }
+    })
+  }
 }
-organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }] : []
+organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }, ...preview.sidebarApps.value] : []
 if (builderIntroView) {
   const builderApp = ref({ app_id: previewAppId, owner_org: previewOrganization.gid, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() })
   organization.getAppByAppId = appId => appId === previewAppId ? builderApp.value as any : undefined

@@ -809,6 +809,37 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     await expect(link).toHaveCount(0)
   })
 
+  test('limits periodic sidebar reads and refreshes the next apps as entries complete', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.evaluate(() => {
+      const preview = (window as any).onboardingSetupPreview
+      preview.sidebarApps.value = Array.from({ length: 4 }, (_, index) => ({
+        app_id: `com.example.sidebar-${index + 1}`,
+        owner_org: '00000000-0000-4000-8000-000000000002',
+        name: `Sidebar app ${index + 1}`,
+        icon_url: '',
+        need_onboarding: false,
+        onboarding: {
+          getting_started_dismissed_at: '2026-08-01T00:00:00.000Z',
+          features: { ota: { succeeded_at: '2026-08-01T00:00:00.000Z' } },
+        },
+      }))
+      preview.state.cicdRemoteLedger = { ota_detected_at: '2026-11-06T12:00:00.000Z', detected_via: 'ci' }
+    })
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(3)
+    await page.clock.fastForward(30000)
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(2)
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdSidebarRefreshes.at(-1))).toEqual([
+      appId, 'com.example.sidebar-1', 'com.example.sidebar-2',
+    ])
+    await page.clock.fastForward(30000)
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdSidebarRefreshes.at(-1))).toEqual([
+      'com.example.sidebar-3', 'com.example.sidebar-4',
+    ])
+  })
+
   for (const scenario of [
     { name: 'v4 Builder', query: 'version=4&assignment=builder-only', checklist: '[data-test="builder-checklist"]', pollsProgress: false },
   ]) {

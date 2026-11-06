@@ -21,6 +21,7 @@ export const DEFAULT_PREPROD_BRANCH = 'preprod'
 export const DEFAULT_PRODUCTION_CHANNEL = 'production'
 export const PREPROD_CHANNEL = 'preprod'
 export const PREVIEW_CHANNEL_PREFIX = 'pr-'
+export const BUILDER_PREVIEW_SCOPE = 'capgo-builder-preview'
 
 const CLI = 'npx @capgo/cli@latest'
 // Replaced by each provider's own pull request number variable.
@@ -195,8 +196,8 @@ export function ciKeysFor(product: CiProduct, strategy: CiStrategy): CiKeySpec[]
   if (product === 'builder') {
     return [
       { secret: 'CAPGO_TOKEN', role: 'app_admin', purpose: 'release' },
-      // Pull request pipelines run on unprotected branches (GitLab protected
-      // variables never reach them), so they get their own revocable key.
+      // Signing previews need their own key behind provider-enforced approval
+      // or trusted protected branches; they must never run untrusted code.
       ...(strategy === 'pull_request' ? [{ secret: 'CAPGO_PREVIEW_TOKEN', role: 'app_admin', purpose: 'preview' } as const] : []),
     ]
   }
@@ -358,8 +359,14 @@ function pushBranches(jobs: CiJob[]) {
 
 // These scopes need branch restrictions configured in the provider's settings.
 // YAML conditions alone cannot protect secrets from changes in a pull request.
-function secretScope(trigger: CiTrigger) {
-  return trigger.kind === 'push' ? 'capgo-release' : 'capgo-preview'
+function isBuilderPreview(job: CiJob) {
+  return job.trigger.kind === 'pull_request' && job.sync !== undefined
+}
+
+function secretScope(job: CiJob) {
+  if (isBuilderPreview(job))
+    return BUILDER_PREVIEW_SCOPE
+  return job.trigger.kind === 'push' ? 'capgo-release' : 'capgo-preview'
 }
 
 function withPr(command: string, variable: string) {
@@ -440,6 +447,7 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
       ...(job.trigger.kind === 'push' ? ['    environment: capgo-release'] : []),
+      ...(isBuilderPreview(job) ? [`    environment: ${BUILDER_PREVIEW_SCOPE}`] : []),
       ...(guardRelease
         ? ['    concurrency:', `      group: capgo-release-${options.appId}-${GITHUB_WORKFLOW}-${GITHUB_REF}`, '      cancel-in-progress: false', '      queue: max']
         : []),
@@ -496,10 +504,20 @@ function renderGitlab(jobs: CiJob[]) {
   for (const job of jobs) {
     lines.push('', `capgo-${job.id}:`, '  rules:')
     if (job.trigger.kind === 'push') {
-      lines.push(`    - if: $CI_COMMIT_BRANCH == "${job.trigger.branch}"`)
+      lines.push(`    - if: $CI_COMMIT_BRANCH == "${job.trigger.branch}"`, '  environment:', '    name: capgo-release')
     }
     else if (job.trigger.kind === 'pull_request') {
-      lines.push('    - if: $CI_PIPELINE_SOURCE == "merge_request_event"')
+      if (isBuilderPreview(job)) {
+        lines.push(
+          '    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_TARGET_BRANCH_PROTECTED == "true" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID',
+          '      when: manual',
+          '  environment:',
+          `    name: ${BUILDER_PREVIEW_SCOPE}`,
+        )
+      }
+      else {
+        lines.push('    - if: $CI_PIPELINE_SOURCE == "merge_request_event"')
+      }
       if (hasCleanup) {
         lines.push(
           `  resource_group: ${resourceGroup}`,
@@ -553,7 +571,7 @@ function renderAzure(jobs: CiJob[]) {
       '    dependsOn: []',
       `    condition: ${condition}`,
       '    variables:',
-      `      - group: ${secretScope(trigger)}`,
+      `      - group: ${secretScope(stageJobs[0]!)}`,
       '    jobs:',
     )
     for (const job of stageJobs) {
@@ -579,11 +597,11 @@ function renderAzure(jobs: CiJob[]) {
   return lines.join('\n')
 }
 
-function renderBitbucketStep(job: CiJob, indent: string) {
+function renderBitbucketStep(job: CiJob, indent: string, includeEnvironment = true) {
   const lines = [
     `${indent}- step:`,
     `${indent}    name: ${yamlScalar(job.name)}`,
-    `${indent}    environment: ${secretScope(job.trigger)}`,
+    ...(includeEnvironment ? [`${indent}    environment: ${secretScope(job)}`] : []),
     `${indent}    caches:`,
     `${indent}      - node`,
     `${indent}    script:`,
@@ -612,8 +630,26 @@ function renderBitbucket(jobs: CiJob[]) {
   }
   if (prGroups.length) {
     lines.push('  pull-requests:', `    ${yamlQuote('**')}:`)
-    for (const group of prGroups)
-      lines.push(...renderGroup(group, '      '))
+    for (const group of prGroups) {
+      if (group.jobs.some(isBuilderPreview)) {
+        // Bitbucket disallows a manual first step. This step gets no secrets.
+        lines.push(
+          '      - step:',
+          '          name: Review the preview commit before approving',
+          '          script:',
+          '            - echo "A trusted maintainer must review this commit before the signing build."',
+          '      - stage:',
+          '          name: Build approved native previews',
+          '          trigger: manual',
+          `          environment: ${BUILDER_PREVIEW_SCOPE}`,
+          '          steps:',
+          ...group.jobs.flatMap(job => renderBitbucketStep(job, '            ', false)),
+        )
+      }
+      else {
+        lines.push(...renderGroup(group, '      '))
+      }
+    }
   }
   return lines.join('\n')
 }
@@ -652,8 +688,20 @@ function renderCircleci(jobs: CiJob[]) {
   })
   const releaseBranches = pushBranches(jobs)
   lines.push('', 'workflows:', '  capgo:', '    jobs:')
+  if (jobs.some(isBuilderPreview)) {
+    lines.push(
+      '      - approve-builder-preview:',
+      '          type: approval',
+      '          filters:',
+      '            branches:',
+      `              ignore: [${releaseBranches.map(yamlQuote).join(', ')}]`,
+    )
+  }
   for (const job of jobs) {
-    lines.push(`      - ${job.id}:`, `          context: ${secretScope(job.trigger)}`, '          filters:', '            branches:')
+    lines.push(`      - ${job.id}:`, `          context: ${secretScope(job)}`)
+    if (isBuilderPreview(job))
+      lines.push('          requires:', '            - approve-builder-preview')
+    lines.push('          filters:', '            branches:')
     if (job.trigger.kind === 'push')
       lines.push(`              only: ${yamlQuote(job.trigger.branch)}`)
     else
@@ -676,6 +724,8 @@ function renderOther(jobs: CiJob[]) {
     group.jobs.forEach((job, index) => {
       if (group.jobs.length > 1)
         lines.push(...(index > 0 ? [''] : []), `# ${job.name}`)
+      if (isBuilderPreview(job))
+        lines.push('# Require trusted-maintainer approval of this exact commit before exposing signing credentials.')
       lines.push(...setupCommands(job), shellCommand(job, '$PR_NUMBER'))
     })
   }
@@ -705,8 +755,11 @@ export function buildCiPipeline(input: CiGuideOptions): CiPipeline {
 }
 
 /** `gh secret set` reads the value from stdin, so the key never lands in shell history. */
-export function githubSecretCommand(secret: CiSecretName | typeof CI_ENCRYPTION_SECRET, purpose: CiKeySpec['purpose'] = 'release') {
-  return `gh secret set ${secret}${purpose === 'release' ? ' --env capgo-release' : ''}`
+export function githubSecretCommand(secret: CiSecretName | typeof CI_ENCRYPTION_SECRET, purpose: CiKeySpec['purpose'] = 'release', product: CiProduct = 'ota') {
+  if (purpose === 'preview' && product === 'ota')
+    return `gh secret set ${secret}`
+  const scope = purpose === 'release' ? 'capgo-release' : BUILDER_PREVIEW_SCOPE
+  return `gh secret set ${secret} --env ${scope}`
 }
 
 /** Builder: store this machine's signing credentials on Capgo so CI only needs CAPGO_TOKEN. */
