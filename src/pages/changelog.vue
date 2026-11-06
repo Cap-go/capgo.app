@@ -46,7 +46,9 @@ const tabs = computed<Tab[]>(() => [
 
 function queryString(key: string) {
   const value = route.query[key]
-  return typeof value === 'string' ? value : Array.isArray(value) ? value[0] ?? '' : ''
+  if (Array.isArray(value))
+    return value[0] ?? ''
+  return typeof value === 'string' ? value : ''
 }
 
 const product = computed<ChangelogProduct>(() => {
@@ -119,18 +121,21 @@ async function load() {
 
 watch([product, pluginRepo], load, { immediate: true })
 
-watch(product, async (value) => {
-  if (value !== 'plugin' || plugins.value.length)
+// Plugins tab without a repo (first visit, or back from another tab): load the catalog once,
+// then open the most recently released plugin so the tab is never empty.
+watch([product, pluginRepo], async ([value]) => {
+  if (value !== 'plugin')
     return
-  pluginsLoading.value = true
-  plugins.value = await fetchPlugins()
-  pluginsLoading.value = false
-  // Open the most recently released plugin so the tab is never empty.
-  if (product.value === 'plugin' && !pluginRepo.value) {
-    const first = [...plugins.value].filter(p => p.name !== UPDATER_PACKAGE).sort((a, b) => b.date.localeCompare(a.date))[0]
-    if (first)
-      setQuery({ repo: first.repo })
+  if (!plugins.value.length && !pluginsLoading.value) {
+    pluginsLoading.value = true
+    plugins.value = await fetchPlugins()
+    pluginsLoading.value = false
   }
+  if (product.value !== 'plugin' || pluginRepo.value)
+    return
+  const newest = plugins.value.filter(p => p.name !== UPDATER_PACKAGE).toSorted((a, b) => b.date.localeCompare(a.date))[0]
+  if (newest)
+    setQuery({ repo: newest.repo })
 }, { immediate: true })
 
 watch(since, (value) => {

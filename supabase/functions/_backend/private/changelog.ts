@@ -7,6 +7,7 @@ import { CacheHelper } from '../utils/cache.ts'
 import {
   buildFallbackDigest,
   changelogSource,
+  requiredActions,
   isChangelogProduct,
   normalizeReleases,
   releasesBetween,
@@ -33,8 +34,9 @@ const GITHUB_PAGE_SIZE = 100
 const MAX_PAGES_SHARED_REPO = 5
 const MAX_PAGES_SINGLE_REPO = 3
 const MAX_DIGEST_RELEASES = 80
-// Non-reasoning model: summaries need the whole token budget for output, and a fast first token keeps the modal snappy.
-const DEFAULT_CHANGELOG_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+// DeepSeek V4.1 Flash (Workers AI, Oct 2026): 1M context, JSON schema output. Thinking is turned off per
+// request (reasoning_effort: none) so the whole token budget goes to the summary and the modal stays fast.
+const DEFAULT_CHANGELOG_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
 const LOCALE_PATTERN = /^[a-z]{2}(?:-[a-z0-9]{2,4})?$/i
 const VERSION_PATTERN = /^v?\d+\.\d+\.\d+(?:[-+][\w.]+)?$/
 const SECTION_TYPES = new Set<ChangelogSectionType>(['added', 'changed', 'fixed', 'security', 'removed', 'deprecated', 'other'])
@@ -70,9 +72,10 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
   const maxPages = source.tagPrefix ? MAX_PAGES_SHARED_REPO : MAX_PAGES_SINGLE_REPO
   const raw: unknown[] = []
   let truncated = false
+  // Pages are read one by one on purpose: we stop at the first short page instead of firing every request.
   for (let page = 1; page <= maxPages; page++) {
     const url = `https://api.github.com/repos/${GITHUB_ORG}/${encodeURIComponent(source.repo)}/releases?per_page=${GITHUB_PAGE_SIZE}&page=${page}`
-    const response = await fetch(url, { headers: githubHeaders(c) })
+    const response = await fetch(url, { headers: githubHeaders(c) }) // NOSONAR: sequential pagination, see above
     if (response.status === 404)
       throw quickError(404, 'changelog_repo_not_found', 'No releases found for this product', { repo: source.repo })
     if (!response.ok) {
@@ -112,7 +115,8 @@ interface NpmSearchResponse {
 async function fetchPluginCatalog(): Promise<ChangelogPlugin[]> {
   const plugins = new Map<string, ChangelogPlugin>()
   for (const from of [0, 250]) {
-    const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent('@capgo/capacitor')}&size=250&from=${from}`)
+    const response = await fetch( // NOSONAR: the second page is only needed when the first one is full
+`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent('@capgo/capacitor')}&size=250&from=${from}`)
     if (!response.ok)
       break
     const json = await response.json() as NpmSearchResponse
@@ -201,12 +205,22 @@ function aiDigestRecord(value: unknown): Record<string, unknown> | null {
   return parseJsonObjectFromAiText(extractAiText(value))
 }
 
+const TRAILING_PUNCTUATION = new Set([' ', ',', ';', ':', '–', '-'])
+
+function endSentence(text: string) {
+  let end = text.length
+  while (end > 0 && TRAILING_PUNCTUATION.has(text[end - 1]))
+    end--
+  const trimmed = text.slice(0, end)
+  return !trimmed || /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
+}
+
 export function parseAiDigest(value: unknown, knownVersions: Set<string>, fallbackVersion: string) {
   const record = aiDigestRecord(value)
   if (!record)
     return null
   // Models sometimes stop mid-list ("…and Android fixes,"): end the sentence cleanly.
-  const headline = clampText(record.headline, 400).replace(/[\s,;:–-]+$/, '').replace(/([^.!?])$/, '$1.')
+  const headline = endSentence(clampText(record.headline, 400))
   if (!headline || !Array.isArray(record.highlights))
     return null
   const highlights: DigestHighlight[] = record.highlights.slice(0, 8).flatMap((entry) => {
@@ -243,16 +257,20 @@ async function aiDigest(
   if (!ai || !releases.length)
     return fallback
   const model = getEnv(c, 'CHANGELOG_MODEL') || DEFAULT_CHANGELOG_MODEL
+  const productLabel = fallback.product === 'plugin' ? `${PRODUCT_LABELS.plugin} (${fallback.repo})` : PRODUCT_LABELS[fallback.product]
+  const prompt = releasesToPromptText(releases)
   try {
     const result = await ai.run(model, {
       temperature: 0.2,
-      max_tokens: 1200,
+      max_tokens: 1600,
+      reasoning_effort: 'none',
+      chat_template_kwargs: { enable_thinking: false },
       response_format: { type: 'json_schema', json_schema: digestSchema() },
       messages: [
         {
           role: 'system',
           content: [
-            `You summarize release notes of ${PRODUCT_LABELS[fallback.product]}${fallback.product === 'plugin' ? ` (${fallback.repo})` : ''} for a developer who is on version ${fallback.fromVersion ?? 'unknown'} and could move to ${fallback.toVersion ?? 'the latest'}.`,
+            `You summarize release notes of ${productLabel} for a developer who is on version ${fallback.fromVersion ?? 'unknown'} and could move to ${fallback.toVersion ?? 'the latest'}.`,
             'Return between 1 and 6 highlights a developer would care about: security and breaking changes first, then new capabilities, then fixes that affect their platforms or features.',
             'Each title names the concrete feature or fix (e.g. "Download gates for metered networks"), never a generic label such as "Security fixes" or "Bug fixes". detail is one or two plain sentences on what changes for the developer.',
             'Merge near-duplicate items across versions. Skip tooling, dependency bumps, docs and CI noise unless they change behavior.',
@@ -268,12 +286,12 @@ async function aiDigest(
           role: 'user',
           content: JSON.stringify({
             developer: { platforms: context.platforms, features: context.features, currentVersion: fallback.fromVersion },
-            releaseNotes: releasesToPromptText(releases),
+            releaseNotes: prompt.text,
           }),
         },
       ],
     })
-    const parsed = parseAiDigest(result, new Set(releases.map(release => release.version)), releases[0].version)
+    const parsed = parseAiDigest(result, new Set(prompt.included), releases[0].version)
     if (!parsed?.highlights.length) {
       cloudlog({ requestId: c.get('requestId'), message: 'changelog digest: invalid AI response', product: fallback.product, repo: fallback.repo })
       return fallback
@@ -284,7 +302,12 @@ async function aiDigest(
       ...highlight,
       relevant: highlight.relevant && needles.some(needle => `${highlight.title} ${highlight.detail}`.toLowerCase().includes(needle)),
     }))
-    return { ...fallback, ...parsed, highlights, aiGenerated: true }
+    // Releases that did not fit the prompt budget never reached the model: keep their required actions
+    // and security/breaking entries from the deterministic digest so nothing important is dropped.
+    const omitted = releases.filter(release => !prompt.included.has(release.version))
+    const omittedHighlights = fallback.highlights.filter(h => !prompt.included.has(h.version) && h.impact === 'high')
+    const actionRequired = [...new Set([...parsed.actionRequired, ...requiredActions(omitted)])].slice(0, 6)
+    return { ...fallback, ...parsed, highlights: [...highlights, ...omittedHighlights].slice(0, 8), actionRequired, aiGenerated: true }
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'changelog digest AI failed', product: fallback.product, repo: fallback.repo, error: serializeError(error) })
@@ -328,8 +351,12 @@ export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: 
   const locale = typeof body.locale === 'string' && LOCALE_PATTERN.test(body.locale) ? body.locale.toLowerCase() : 'en'
   const context = sanitizeDigestContext(body.context)
 
-  const { releases, truncated } = await getReleases(c, source)
-  const inRange = releasesBetween(releases, fromVersion, requestedTo).slice(0, MAX_DIGEST_RELEASES)
+  const { releases, truncated: historyTruncated } = await getReleases(c, source)
+  const fullRange = releasesBetween(releases, fromVersion, requestedTo)
+  const inRange = fullRange.slice(0, MAX_DIGEST_RELEASES)
+  // Incomplete when GitHub history ran out before fromVersion, or the range is longer than one digest covers.
+  const reachedFromVersion = releasesBetween(releases, null, fromVersion).length > 0
+  const truncated = (historyTruncated && !reachedFromVersion) || fullRange.length > inRange.length
   const toVersion = requestedTo ?? inRange[0]?.version ?? releases[0]?.version ?? null
 
   const cache = new CacheHelper(c)

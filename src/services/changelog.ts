@@ -225,7 +225,7 @@ export interface HighlightPart {
 
 /** Split text into parts so the template can wrap search hits in <mark> without v-html. */
 export function highlightParts(text: string, query: string): HighlightPart[] {
-  const words = query.split(/\s+/).filter(Boolean).map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const words = query.split(/\s+/).filter(Boolean).map(word => word.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))
   if (!words.length)
     return [{ text, match: false }]
   const pattern = new RegExp(`(${words.join('|')})`, 'gi')

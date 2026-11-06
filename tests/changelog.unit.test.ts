@@ -7,6 +7,8 @@ import {
   normalizeReleases,
   parseReleaseBody,
   releasesBetween,
+  releasesToPromptText,
+  requiredActions,
   sanitizeDigestContext,
 } from '../supabase/functions/_backend/utils/changelog.ts'
 
@@ -114,6 +116,11 @@ describe('buildFallbackDigest', () => {
     expect(digest.counts.fixed).toBe(2)
   })
 
+  it('ignores ordinary uses of the word migration', () => {
+    const notes = normalizeReleases([release('cli-9.0.0', '## Fixed\n- Fixed database image migration scripts\n## Changed\n- **Migration note**: enable the proxy in your config')], 'cli-')
+    expect(requiredActions(notes)).toEqual(['**Migration note**: enable the proxy in your config'])
+  })
+
   it('lists breaking changes and explicit migrations as actions', () => {
     const breaking = normalizeReleases([release('capgo-23.0.0', '## Breaking\n- Dropped Node 18\n## Changed\n- You must now set httpsOnly to keep HTTP updates')], 'capgo-')
     expect(buildFallbackDigest('console', 'capgo.app', breaking, '22.30.0', null, { platforms: [], features: [] }).actionRequired)
@@ -122,6 +129,27 @@ describe('buildFallbackDigest', () => {
 
   it('says up to date when nothing is in range', () => {
     expect(buildFallbackDigest('cli', 'capgo.app', [], '8.99.2', null, { platforms: [], features: [] }).headline).toMatch(/latest/)
+  })
+})
+
+describe('releasesToPromptText', () => {
+  const releases = normalizeReleases([release('capgo-22.30.0'), release('capgo-22.29.4'), release('capgo-22.29.3')], 'capgo-')
+
+  it('reports which releases fit the budget so omitted ones can be kept from the fallback', () => {
+    const { text, included } = releasesToPromptText(releases, 700)
+    expect([...included]).toEqual(['22.30.0', '22.29.4'])
+    expect(text).not.toContain('22.29.3')
+  })
+
+  it('never sends an empty prompt when the newest release alone is over budget', () => {
+    const { text, included } = releasesToPromptText(releases, 50)
+    expect([...included]).toEqual(['22.30.0'])
+    expect(text.length).toBe(50)
+  })
+
+  it('keeps required actions of releases the model did not see', () => {
+    const old = normalizeReleases([release('capgo-21.0.0', '## Breaking\n- Dropped the v1 API')], 'capgo-')
+    expect(requiredActions(old)).toEqual(['Dropped the v1 API'])
   })
 })
 
@@ -142,6 +170,12 @@ describe('parseAiDigest', () => {
     expect(parsed?.highlights[0]).toMatchObject({ version: '22.30.0', type: 'security', relevant: true })
     expect(parsed?.highlights[1]).toMatchObject({ type: 'other', impact: 'low', version: '22.30.0', relevant: false })
     expect(parsed?.actionRequired).toEqual(['Rotate keys'])
+    expect(parsed?.headline).toBe('Upgrade for safer logs.')
+  })
+
+  it('ends a headline the model cut mid-list', () => {
+    const parsed = parseAiDigest({ response: { headline: 'Faster sync, and Android fixes, ', highlights: [{ title: 't', detail: '', type: 'fixed', version: '22.30.0', impact: 'low', relevant: false }], actionRequired: [] } }, versions, '22.30.0')
+    expect(parsed?.headline).toBe('Faster sync, and Android fixes.')
   })
 
   it('reads the object form Workers AI returns under response', () => {

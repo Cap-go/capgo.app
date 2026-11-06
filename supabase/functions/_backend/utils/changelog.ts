@@ -83,12 +83,23 @@ export function sectionTypeFromHeading(heading: string): ChangelogSectionType | 
   return 'other'
 }
 
+const BULLET = /^[-*+]\s/
+const SECTION_ORDER: ChangelogSectionType[] = ['security', 'removed', 'added', 'changed', 'fixed', 'deprecated', 'other']
+
 function cleanItem(line: string) {
-  return line
-    .replace(/^\s*[-*+]\s+/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_ITEM_LENGTH)
+  return line.slice(1).replaceAll(/\s+/g, ' ').trim().slice(0, MAX_ITEM_LENGTH)
+}
+
+function headingText(line: string): string | null {
+  if (!line.startsWith('#'))
+    return null
+  const text = line.replace(/^#+/, '')
+  return text.startsWith(' ') ? text.trim() : null
+}
+
+/** Footer: a "---" rule then the "Full Changelog" compare link. */
+function isFooter(line: string) {
+  return /^-{3,}$/.test(line) || line.toLowerCase().includes('full changelog')
 }
 
 /** Parse one release body into typed sections; unknown prose lands in "other". */
@@ -97,23 +108,15 @@ export function parseReleaseBody(body: string | null | undefined): ChangelogSect
     return []
   const sections = new Map<ChangelogSectionType, string[]>()
   let current: ChangelogSectionType = 'other'
-  for (const rawLine of body.replace(/\r\n/g, '\n').split('\n')) {
-    const line = rawLine.trim()
-    if (!line)
-      continue
-    // Footer: "---" then the compare link.
-    if (/^-{3,}$/.test(line) || /full changelog/i.test(line))
+  for (const line of body.split(/\r?\n/).map(raw => raw.trim())) {
+    if (isFooter(line))
       break
-    const heading = /^#{1,6}\s+(.+)$/.exec(line)
-    if (heading) {
-      const type = sectionTypeFromHeading(heading[1])
-      if (type)
-        current = type
+    const heading = headingText(line)
+    if (heading !== null) {
+      current = sectionTypeFromHeading(heading) ?? current
       continue
     }
-    if (!/^[-*+]\s+/.test(line))
-      continue
-    const item = cleanItem(line)
+    const item = BULLET.test(line) ? cleanItem(line) : ''
     if (!item)
       continue
     const items = sections.get(current) ?? []
@@ -121,8 +124,7 @@ export function parseReleaseBody(body: string | null | undefined): ChangelogSect
       items.push(item)
     sections.set(current, items)
   }
-  const order: ChangelogSectionType[] = ['security', 'removed', 'added', 'changed', 'fixed', 'deprecated', 'other']
-  return order
+  return SECTION_ORDER
     .filter(type => sections.get(type)?.length)
     .map(type => ({ type, items: sections.get(type)! }))
 }
@@ -238,7 +240,7 @@ export interface ChangelogDigest {
 }
 
 // Only explicit calls to act: words like "no longer" or "removed" also describe ordinary fixes.
-const ACTION_PATTERN = /\b(breaking change|deprecated|migrate|migration|must (?:now )?(?:set|update|upgrade|migrate|add|use|change)|action required)\b/i
+const ACTION_PATTERN = /\b(breaking change|deprecated|migration (?:note|guide|required)|action required|(?:you )?must (?:now )?(?:set|update|upgrade|migrate|add|use|change|enable)|you need to)\b/i
 const ALLOWED_PLATFORMS = new Set(['ios', 'android', 'electron', 'web'])
 const FEATURE_PATTERN = /^[\w\s./-]{1,40}$/
 
@@ -251,7 +253,8 @@ export function sanitizeDigestContext(value: unknown): ChangelogDigestContext {
   const features = Array.isArray(record.features)
     ? [...new Set(record.features.filter((f): f is string => typeof f === 'string' && FEATURE_PATTERN.test(f)).map(f => f.trim().toLowerCase()))].slice(0, 12)
     : []
-  return { platforms: platforms.sort(), features: features.sort() }
+  const byName = (a: string, b: string) => a.localeCompare(b)
+  return { platforms: platforms.toSorted(byName), features: features.toSorted(byName) }
 }
 
 function mentions(item: string, needles: string[]) {
@@ -260,13 +263,60 @@ function mentions(item: string, needles: string[]) {
 }
 
 function firstSentence(item: string) {
-  const bold = /^\*\*(.+?)\*\*\s*(.*)$/.exec(item)
-  if (bold)
-    return { title: bold[1].replace(/[.:]$/, ''), detail: bold[2] }
+  if (item.startsWith('**')) {
+    const close = item.indexOf('**', 2)
+    if (close > 2)
+      return { title: item.slice(2, close).replace(/[.:]$/, ''), detail: item.slice(close + 2).trim() }
+  }
   const cut = item.search(/[.:;]\s/)
   if (cut > 20 && cut < 120)
     return { title: item.slice(0, cut), detail: item.slice(cut + 1).trim() }
-  return { title: item.length > 110 ? `${item.slice(0, 107)}…` : item, detail: item.length > 110 ? item : '' }
+  if (item.length > 110)
+    return { title: `${item.slice(0, 107)}…`, detail: item }
+  return { title: item, detail: '' }
+}
+
+const SECTION_SCORE: Record<ChangelogSectionType, number> = { security: 3, removed: 3, added: 2, changed: 1, fixed: 0.5, deprecated: 0.5, other: 0.5 }
+
+function impactForScore(score: number): DigestImpact {
+  if (score >= 3)
+    return 'high'
+  if (score >= 2)
+    return 'medium'
+  return 'low'
+}
+
+/** Items the developer must act on: every breaking or deprecated entry, plus explicit migration wording. */
+export function requiredActions(releases: ChangelogRelease[]): string[] {
+  return releases.flatMap(release => release.sections.flatMap((section) => {
+    if (section.type === 'removed' || section.type === 'deprecated')
+      return section.items
+    return section.items.filter(item => ACTION_PATTERN.test(item))
+  }))
+}
+
+function rankHighlights(releases: ChangelogRelease[], needles: string[]) {
+  const scored: Array<DigestHighlight & { score: number }> = []
+  for (const release of releases) {
+    for (const section of release.sections) {
+      const base = SECTION_SCORE[section.type]
+      for (const item of section.items) {
+        const relevant = needles.length > 0 && mentions(item, needles)
+        scored.push({ ...firstSentence(item), type: section.type, version: release.version, impact: impactForScore(base), relevant, score: base + (relevant ? 2 : 0) })
+      }
+    }
+  }
+  return scored.toSorted((a, b) => b.score - a.score).map(({ score: _score, ...highlight }) => highlight)
+}
+
+function fallbackHeadline(counts: Record<ChangelogSectionType, number>, total: number, fromVersion: string | null) {
+  if (total === 0)
+    return 'You are on the latest version.'
+  const releases = total === 1 ? '1 release' : `${total} releases`
+  const parts = [`${counts.added} new`, `${counts.changed} improved`, `${counts.fixed} fixed`]
+  if (counts.security)
+    parts.push(`${counts.security} security`)
+  return `${releases} since ${fromVersion ?? 'your version'}: ${parts.join(', ')}.`
 }
 
 /**
@@ -284,57 +334,43 @@ export function buildFallbackDigest(
   maxHighlights = 6,
 ): ChangelogDigest {
   const counts = countSections(releases)
-  const needles = [...context.platforms, ...context.features]
-  const scored: Array<DigestHighlight & { score: number }> = []
-  for (const release of releases) {
-    for (const section of release.sections) {
-      for (const item of section.items) {
-        const relevant = needles.length > 0 && mentions(item, needles)
-        const base = section.type === 'security' || section.type === 'removed'
-          ? 3
-          : section.type === 'added' ? 2 : section.type === 'changed' ? 1 : 0.5
-        const impact: DigestImpact = base >= 3 ? 'high' : base >= 2 ? 'medium' : 'low'
-        const { title, detail } = firstSentence(item)
-        scored.push({ title, detail, type: section.type, version: release.version, impact, relevant, score: base + (relevant ? 2 : 0) })
-      }
-    }
-  }
-  scored.sort((a, b) => b.score - a.score)
-  const highlights = scored.slice(0, maxHighlights).map(({ score: _score, ...highlight }) => highlight)
-  const actionRequired = releases
-    .flatMap(release => release.sections.flatMap(section => section.type === 'removed' || section.type === 'deprecated'
-      ? section.items
-      : section.items.filter(item => ACTION_PATTERN.test(item))))
-    .slice(0, 4)
-  const total = releases.length
-  const headline = total === 0
-    ? 'You are on the latest version.'
-    : `${total} release${total === 1 ? '' : 's'} since ${fromVersion ?? 'your version'}: ${counts.added} new, ${counts.changed} improved, ${counts.fixed} fixed${counts.security ? `, ${counts.security} security` : ''}.`
   return {
     product,
     repo,
     fromVersion,
     toVersion: toVersion ?? releases[0]?.version ?? null,
-    releaseCount: total,
+    releaseCount: releases.length,
     counts,
-    headline,
-    highlights,
-    actionRequired,
+    headline: fallbackHeadline(counts, releases.length, fromVersion),
+    highlights: rankHighlights(releases, [...context.platforms, ...context.features]).slice(0, maxHighlights),
+    actionRequired: requiredActions(releases).slice(0, 4),
     aiGenerated: false,
   }
 }
 
-/** Compact text sent to the model: newest first, capped so one digest stays cheap. */
+const MAX_PROMPT_ITEM_CHARS = 400
+
+/**
+ * Compact text sent to the model: newest first, capped so one digest stays cheap.
+ * `included` lists the versions that fit, so the caller can keep what the
+ * model never saw (required actions, security fixes) from the deterministic digest.
+ */
 export function releasesToPromptText(releases: ChangelogRelease[], maxChars = 12_000) {
   let text = ''
+  const included = new Set<string>()
   for (const release of releases) {
-    const block = [`## ${release.version} (${release.date.slice(0, 10)})`]
+    const lines = [`## ${release.version} (${release.date.slice(0, 10)})`]
     for (const section of release.sections)
-      block.push(...section.items.map(item => `- [${section.type}] ${item}`))
-    const chunk = `${block.join('\n')}\n`
-    if (text.length + chunk.length > maxChars)
-      break
+      lines.push(...section.items.map(item => `- [${section.type}] ${item.slice(0, MAX_PROMPT_ITEM_CHARS)}`))
+    let chunk = `${lines.join('\n')}\n`
+    if (text.length + chunk.length > maxChars) {
+      // A single huge release still goes in, cut to the budget, so the prompt is never empty.
+      if (included.size > 0)
+        break
+      chunk = chunk.slice(0, maxChars)
+    }
     text += chunk
+    included.add(release.version)
   }
-  return text
+  return { text, included }
 }
