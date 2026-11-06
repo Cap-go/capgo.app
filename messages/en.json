@@ -1120,6 +1120,7 @@
   "cli-doc": "CLI doc",
   "cli-login-guidance-command-copied": "CLI login command copied",
   "cli-login-guidance-description": "Skip manual API key creation. Run the login command and let Capgo securely create and configure the right key for you.",
+  "cli-login-guidance-mcp-link": "Using an AI assistant? Connect it with MCP →",
   "cli-login-guidance-title": "Using the Capgo CLI?",
   "cli-login-ai-caption": "The prompt gives your AI assistant the Capgo command and clear instructions to guide you through the complete setup.",
   "cli-login-ai-copied": "AI setup prompt copied.",
@@ -4229,5 +4230,18 @@
   "console-update-later": "Later",
   "console-update-reload": "Reload now",
   "console-updated-toast": "Capgo was updated to v{version}.",
-  "changelog-history-truncated": "Only the most recent releases are listed here. Older history is on"
+  "changelog-history-truncated": "Only the most recent releases are listed here. Older history is on",
+  "ai-assistant": "AI assistant",
+  "mcp-connect-api-key-cta": "Generate a key",
+  "mcp-connect-api-key-description": "Lovable in API key mode, n8n or your own scripts can send a Capgo API key as a Bearer token instead of signing in.",
+  "mcp-connect-api-key-title": "Client without sign-in?",
+  "mcp-connect-copy-local-command": "Copy local MCP command",
+  "mcp-connect-copy-url": "Copy MCP server URL",
+  "mcp-connect-description": "Manage apps, channels, rollouts and Observe from Claude, ChatGPT, Cursor, VS Code or Lovable. Add this URL as a custom connector and sign in to Capgo. Nothing to install.",
+  "mcp-connect-local-copied": "Local MCP command copied",
+  "mcp-connect-local-description": "Run the MCP server on your machine to upload bundles, request native builds and run doctor from Claude Code, Cursor or Codex.",
+  "mcp-connect-local-title": "Working in your project folder?",
+  "mcp-connect-setup-guide": "Setup guide",
+  "mcp-connect-title": "Connect your AI assistant",
+  "mcp-connect-url-copied": "MCP server URL copied"
 }

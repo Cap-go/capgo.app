@@ -16,6 +16,7 @@ import {
   sanitizeClientName,
   verifyPkceS256,
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
+import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
 import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
 
@@ -692,5 +693,25 @@ describe('hosted MCP errors always give a way out', () => {
   it.concurrent('points to tools/list for an unknown tool', async () => {
     const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_nope', arguments: {} } }, failingContext(500, null))
     expect(response?.error?.message).toContain('tools/list')
+  })
+})
+
+describe('hosted MCP tool analytics', () => {
+  const call = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_list_apps' } }
+
+  it('builds the event for a successful tool call', () => {
+    const event = hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { content: [] } }, 'user-1')
+    expect(event).toMatchObject({ event: 'Hosted MCP Tool Invoked', user_id: 'user-1', setPersonProperties: false })
+    expect(event?.nonPersonTags).toEqual({ tool_name: 'capgo_list_apps', success: true })
+  })
+
+  it('marks tool errors and JSON-RPC errors as failures', () => {
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { isError: true } }, 'user-1')?.nonPersonTags.success).toBe(false)
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad' } }, 'user-1')?.nonPersonTags.success).toBe(false)
+  })
+
+  it('ignores non-tool messages and notifications', () => {
+    expect(hostedMcpToolEvent({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 1, result: {} }, 'user-1')).toBeNull()
+    expect(hostedMcpToolEvent({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'capgo_list_apps' } }, null, 'user-1')).toBeNull()
   })
 })
