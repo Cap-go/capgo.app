@@ -123,6 +123,7 @@ declare module 'vue' {
     LogAsDialogField: typeof import('./components/LogAsDialogField.vue')['default']
     LogMetadataPopover: typeof import('./components/tables/LogMetadataPopover.vue')['default']
     LogTable: typeof import('./components/tables/LogTable.vue')['default']
+    McpConnectCard: typeof import('./components/McpConnectCard.vue')['default']
     NativeDeviceMetricCard: typeof import('./components/dashboard/NativeDeviceMetricCard.vue')['default']
     NativePlatformTrendChart: typeof import('./components/dashboard/NativePlatformTrendChart.vue')['default']
     NativeReleaseStatsPanel: typeof import('./components/dashboard/NativeReleaseStatsPanel.vue')['default']
