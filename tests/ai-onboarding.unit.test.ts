@@ -12,6 +12,7 @@ import {
   defaultAiOrganizationName,
   initialChecklistOpen,
   initialOnboardingSetupScreen,
+  manualSetupCliCommand,
   readAiAgentProgress,
   readAiOnboardingGoal,
   readOnboardingSetupMode,
@@ -228,6 +229,23 @@ describe('AI onboarding goal', () => {
       expect(prompt).toContain('wait for my confirmation')
     }
     expect(promptFor('both')).toContain('Help me pick the order')
+  })
+})
+
+describe('manual setup CLI command', () => {
+  it.concurrent('runs the Builder setup when the user wants native builds', () => {
+    expect(manualSetupCliCommand({ intent: 'builder' }, 'key-1')).toBe('npx @capgo/cli@latest build init -a key-1')
+    expect(manualSetupCliCommand({ intent: 'publish' }, 'key-1')).toBe('npx @capgo/cli@latest build init -a key-1')
+  })
+
+  it.concurrent('runs the live update init for every other intent', () => {
+    for (const intent of ['ota', 'both', 'exploring', undefined])
+      expect(manualSetupCliCommand({ intent }, 'key-1')).toBe('npx @capgo/cli@latest i key-1')
+    expect(manualSetupCliCommand(null, 'key-1')).toBe('npx @capgo/cli@latest i key-1')
+  })
+
+  it.concurrent('keeps the local API host flag', () => {
+    expect(manualSetupCliCommand({ intent: 'builder' }, 'key-1', ' --api-host http://localhost')).toBe('npx @capgo/cli@latest build init -a key-1 --api-host http://localhost')
   })
 })
 

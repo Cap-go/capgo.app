@@ -40,6 +40,7 @@ import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSmartphone from '~icons/lucide/smartphone'
 import IconSparkles from '~icons/lucide/sparkles'
 import IconStore from '~icons/lucide/store'
+import IconTerminal from '~icons/lucide/terminal'
 import IconTrash from '~icons/lucide/trash-2'
 import IconUsers from '~icons/lucide/users-round'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
@@ -104,7 +105,7 @@ import {
   readOnboardingSetupHandoff,
 } from '~/utils/onboardingRedirect'
 import { openOnboardingResumeDialog } from '~/utils/onboardingResumeDialog'
-import { checklistTaskListMode } from '~/utils/onboardingSetupMode'
+import { checklistTaskListMode, manualSetupCliCommand, manualSetupUsesBuilder } from '~/utils/onboardingSetupMode'
 import { slugifyOnboardingSegment } from '~/utils/onboardingSlug'
 import {
   buildUserOnboardingProgress,
@@ -473,6 +474,10 @@ const cliCommandArgs = computed(() => {
 
   return args
 })
+// Users leaving the AI path land on this wizard: the one command to run in their project comes first.
+const manualCliCommand = computed(() => !props.preOrg && !props.setupAppId && !createdApp.value && apiKey.value
+  ? manualSetupCliCommand(main.user?.onboarding, apiKey.value, localCommand)
+  : '')
 const currentOrg = computed(() => organizationStore.currentOrganization)
 
 const resumeAppId = computed(() => props.setupAppId ?? '')
@@ -2432,7 +2437,7 @@ async function copyText(text: string) {
   }
 }
 
-function trackSuccessfulCopy(event: OnboardingCopyEvent, placement?: OnboardingCopyEventProperties['placement']) {
+function trackSuccessfulCopy(event: OnboardingCopyEvent, placement?: OnboardingCopyEventProperties['placement'], setupCommand?: OnboardingCopyEventProperties['setup_command']) {
   const orgId = currentOrg.value?.gid
   const appId = createdApp.value?.app_id || generatedAppId.value || undefined
   progressTracker?.trackCopyEvent(event, {
@@ -2440,7 +2445,7 @@ function trackSuccessfulCopy(event: OnboardingCopyEvent, placement?: OnboardingC
     ...(existingApp.value !== null ? { existing_app: existingApp.value } : {}),
     ...(selectedIntent.value ? { intent: selectedIntent.value } : {}),
     ...(orgId ? { org_id: orgId } : {}),
-    setup_command: usesBuilderSetupCommand.value ? 'builder' : 'ota',
+    setup_command: setupCommand ?? (usesBuilderSetupCommand.value ? 'builder' : 'ota'),
     ...(placement ? { placement } : {}),
   })
 }
@@ -2452,6 +2457,11 @@ async function copyCliCommand() {
   const copied = await copyText(cliCommand.value)
   if (copied)
     trackSuccessfulCopy('onboarding_cli_command_copied')
+}
+
+async function copyManualCliCommand() {
+  if (await copyText(manualCliCommand.value))
+    trackSuccessfulCopy('onboarding_cli_command_copied', 'manual_start', manualSetupUsesBuilder(main.user?.onboarding) ? 'builder' : 'ota')
 }
 
 async function copyBuilderCliCommand(platform: BuilderPlatform) {
@@ -2932,7 +2942,28 @@ defineExpose({
           </div>
         </div>
 
-        <div v-if="flowStep === 'details'">
+        <div v-if="flowStep === 'details'" class="space-y-6">
+          <div v-if="manualCliCommand" class="space-y-4 rounded-2xl border border-primary-500 bg-white p-5 shadow-sm ring-2 ring-primary-500/15 sm:p-6 dark:bg-slate-900/95" data-test="app-onboarding-manual-cli">
+            <div>
+              <h2 class="flex items-center gap-2 text-xl font-semibold text-slate-950 dark:text-white">
+                <IconTerminal class="h-5 w-5 shrink-0 text-primary-500" aria-hidden="true" />
+                {{ t('app-onboarding-manual-cli-title') }}
+              </h2>
+              <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ manualSetupUsesBuilder(main.user?.onboarding) ? t('app-onboarding-manual-cli-desc-builder') : t('app-onboarding-manual-cli-desc-ota') }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="d-btn group relative h-auto min-h-0 w-full justify-start whitespace-normal rounded-2xl border-0 bg-slate-950 p-5 pr-14 text-left font-normal ring-1 ring-white/10 transition hover:bg-slate-950 hover:ring-white/20"
+              data-test="app-onboarding-manual-cli-copy"
+              :aria-label="t('app-onboarding-command-copy')"
+              @click="copyManualCliCommand"
+            >
+              <code class="block whitespace-pre-wrap break-all text-sm text-slate-200">{{ manualCliCommand }}</code>
+              <IconCopy class="absolute right-4 top-4 h-5 w-5 text-muted-blue-300 transition group-hover:text-white" />
+            </button>
+          </div>
           <div class="onboarding-details-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900/95">
             <div class="onboarding-details-card-content space-y-6">
               <div class="onboarding-details-heading">
