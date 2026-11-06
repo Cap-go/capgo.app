@@ -1446,349 +1446,365 @@ async function transferAppOwnership() {
 
 <template>
   <div class="h-full pb-8 md:pb-0 max-h-fit grow">
-    <form id="update-app" novalidate @submit.prevent="onSubmit">
-      <!-- Panel body -->
-      <div class="p-6 space-y-6">
-        <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
-          {{ t('app-info') }}
-        </h2>
-        <div class="text-sm dark:text-gray-100">
-          {{ t('app-info-desc') }}
-        </div>
-        <!-- Picture -->
-        <section>
-          <div class="flex items-center">
-            <div class="mr-4">
-              <img
-                v-if="appRef?.icon_url" class="object-cover w-20 h-20 d-mask d-mask-squircle" :src="appRef?.icon_url"
-                width="80" height="80" alt="User upload"
-              >
-              <div
-                v-else-if="isAppIconLoading"
-                class="flex items-center justify-center w-20 h-20 bg-gray-700 d-mask d-mask-squircle"
-                :aria-label="t('loading')"
-              >
-                <span class="w-8 h-8 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
-                <span class="sr-only">{{ t('loading') }}</span>
-              </div>
-              <div v-else class="p-6 text-xl bg-gray-700 d-mask d-mask-squircle">
-                <span class="font-medium text-gray-300">
-                  {{ acronym }}
-                </span>
-              </div>
-            </div>
-            <button id="change-org-pic" type="button" class="px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 focus:ring-4 focus:ring-blue-300 border-slate-500 dark:hover:bg-gray-600 dark:focus:ring-blue-800 focus:outline-hidden" @click="editPhoto">
-              {{ t('change') }}
-            </button>
+    <div class="bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
+      <form id="update-app" novalidate @submit.prevent="onSubmit">
+        <!-- Panel body -->
+        <div class="p-6 space-y-6">
+          <h2 class="mb-5 text-2xl font-bold dark:text-white text-slate-800">
+            {{ t('app-info') }}
+          </h2>
+          <div class="text-sm dark:text-gray-100">
+            {{ t('app-info-desc') }}
           </div>
-        </section>
+          <!-- Picture -->
+          <section>
+            <div class="flex items-center">
+              <div class="mr-4">
+                <img
+                  v-if="appRef?.icon_url" class="object-cover w-20 h-20 d-mask d-mask-squircle" :src="appRef?.icon_url"
+                  width="80" height="80" alt="User upload"
+                >
+                <div
+                  v-else-if="isAppIconLoading"
+                  class="flex items-center justify-center w-20 h-20 bg-gray-700 d-mask d-mask-squircle"
+                  :aria-label="t('loading')"
+                >
+                  <span class="w-8 h-8 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
+                  <span class="sr-only">{{ t('loading') }}</span>
+                </div>
+                <div v-else class="p-6 text-xl bg-gray-700 d-mask d-mask-squircle">
+                  <span class="font-medium text-gray-300">
+                    {{ acronym }}
+                  </span>
+                </div>
+              </div>
+              <button id="change-org-pic" type="button" class="d-btn d-btn-outline" @click="editPhoto">
+                {{ t('change') }}
+              </button>
+            </div>
+          </section>
 
-        <!-- Personal Info -->
-        <section v-if="!isFirstLoading && !isLoading">
-          <div class="mt-5 space-y-4 sm:flex sm:items-center sm:space-y-0 sm:space-x-4">
-            <div class="sm:w-1/2">
-              <FormField
-                type="text"
-                name="app_id"
-                :prefix-icon="IconName"
-                :model-value="appRef?.app_id ?? ''"
-                :label="t('app-id')"
-                :disabled="true"
-              />
-              <FormField
-                v-model="appNameInput"
-                type="text"
-                name="app_name"
-                :prefix-icon="IconName"
-                :label="t('app-name')"
-              />
-              <FormField
-                v-model="iosStoreUrlInput"
-                type="url"
-                name="ios_store_url"
-                label="App Store link"
-                placeholder="https://apps.apple.com/..."
-              />
-              <FormField
-                v-model="androidStoreUrlInput"
-                type="url"
-                name="android_store_url"
-                label="Google Play link"
-                placeholder="https://play.google.com/store/apps/details?id=..."
-              />
-              <div v-if="shouldShowStoreIconImport" class="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                <div class="text-sm font-medium text-slate-800 dark:text-slate-100">
-                  Import the app icon from the store
-                </div>
-                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  Your app does not have an icon yet. We can fetch it from one of the store links above.
-                </p>
-                <button
-                  type="button"
-                  class="d-btn d-btn-sm mt-3"
-                  :class="{ 'd-btn-disabled': isImportingStoreIcon }"
-                  :disabled="isImportingStoreIcon"
-                  @click="importIconFromStore"
-                >
-                  {{ isImportingStoreIcon ? 'Importing...' : 'Import icon' }}
-                </button>
-              </div>
-              <div v-else-if="!appRef?.icon_url" class="mb-3 rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
-                Add an App Store or Google Play link to auto-import the app icon if you do not want to upload one manually.
-              </div>
-              <div
-                :key="forceBump"
-                class="flex flex-row cursor-pointer"
-                role="button"
-                tabindex="0"
-                @click="setDefaultChannel"
-                @keydown.enter.prevent="setDefaultChannel"
-                @keydown.space.prevent="setDefaultChannel"
-              >
+          <!-- Personal Info -->
+          <section v-if="!isFirstLoading && !isLoading">
+            <div class="mt-5 space-y-4 sm:flex sm:items-center sm:space-y-0 sm:space-x-4">
+              <div class="sm:w-1/2">
                 <FormField
                   type="text"
-                  name="default_upload_channel"
-                  outer-class="flex-1 min-w-0"
-                  input-class="cursor-pointer w-full truncate"
-                  readonly
-                  :prefix-icon="ArrowUpTray"
-                  :model-value="appRef?.default_upload_channel ?? t('not-set')"
-                  :label="t('default-upload-channel')"
-                >
-                  <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" :aria-label="t('default-upload-channel')" @click.stop="setDefaultChannel">
-                      <Pencil width="24px" height="24px" aria-hidden="true" />
-                    </button>
-                  </template>
-                </FormField>
-              </div>
-              <div
-                :key="`download-${forceDownloadBump}`"
-                class="flex flex-row mt-3 cursor-pointer"
-                role="button"
-                tabindex="0"
-                @click="openDefaultDownloadChannelDialog"
-                @keydown.enter.prevent="openDefaultDownloadChannelDialog"
-                @keydown.space.prevent="openDefaultDownloadChannelDialog"
-              >
+                  name="app_id"
+                  :prefix-icon="IconName"
+                  :model-value="appRef?.app_id ?? ''"
+                  :label="t('app-id')"
+                  :disabled="true"
+                />
                 <FormField
+                  v-model="appNameInput"
                   type="text"
-                  name="default_download_channel"
-                  outer-class="flex-1 min-w-0"
-                  input-class="cursor-pointer w-full truncate"
-                  readonly
-                  :prefix-icon="ArrowDownTray"
-                  :model-value="downloadChannelLabel"
-                  :label="t('default-download-channel')"
-                  :help="t('default-download-channel-help')"
-                >
-                  <template #suffix>
-                    <button type="button" class="w-6 h-6 ml-auto mr-1" :aria-label="t('default-download-channel')" @click.stop="openDefaultDownloadChannelDialog">
-                      <Pencil width="24px" height="24px" aria-hidden="true" />
-                    </button>
-                  </template>
-                </FormField>
-              </div>
-              <p
-                v-if="downloadChannelWarning"
-                class="-mt-3 mb-4 text-xs font-medium text-amber-600 dark:text-amber-400"
-              >
-                {{ downloadChannelWarning }}
-              </p>
-              <!-- Bundle Retention Setting -->
-              <div class="mb-4">
-                <label for="app-retention-preset" class="inline-flex mb-1 text-sm font-bold text-neutral-700 dark:text-neutral-300">{{ t('retention-label') }}</label>
-                <div class="flex items-center w-full px-3 py-2 text-base border border-neutral-400 rounded-lg shadow bg-white dark:bg-transparent dark:border-neutral-500 focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
-                  <IconGearSix class="mr-2 -ml-1 w-[1em] h-[1em] shrink-0 text-neutral-600 dark:text-neutral-300" aria-hidden="true" />
-                  <select
-                    id="app-retention-preset"
-                    v-model="selectedRetentionPreset"
-                    name="retention_preset"
-                    class="w-full min-w-0 p-0 text-base bg-transparent border-none outline-hidden focus:ring-0 text-neutral-700 dark:text-neutral-300"
-                  >
-                    <option v-for="option in retentionOptions" :key="option.value" :value="option.value">
-                      {{ option.label }}
-                    </option>
-                  </select>
-                </div>
-              </div>
-              <div v-if="isCustomRetention">
+                  name="app_name"
+                  :prefix-icon="IconName"
+                  :label="t('app-name')"
+                />
                 <FormField
-                  :model-value="customRetentionValue"
-                  type="number"
-                  name="custom_retention"
-                  :prefix-icon="IconGearSix"
-                  :label="t('retention-custom-value')"
-                  :help="t('retention-custom-help')"
-                  :min="0"
-                  :max="63113903"
-                  @update:model-value="setCustomRetentionValue"
+                  v-model="iosStoreUrlInput"
+                  type="url"
+                  name="ios_store_url"
+                  label="App Store link"
+                  placeholder="https://apps.apple.com/..."
                 />
-              </div>
-              <p v-if="effectiveRetentionValue === 0" class="text-xs font-medium text-amber-600 dark:text-amber-400">
-                {{ t('retention-immediate-warning') }}
-              </p>
-              <p v-if="effectiveRetentionValue >= 63113904" class="text-xs font-medium text-blue-600 dark:text-blue-400">
-                {{ t('retention-never-info') }}
-              </p>
-              <FormField
-                v-model="buildTimeoutMinutesInput"
-                type="number"
-                name="build_timeout_minutes"
-                :prefix-icon="IconGearSix"
-                :label="t('build-timeout-label')"
-                :help="t('build-timeout-help')"
-                :min="MIN_BUILD_TIMEOUT_MINUTES"
-                :max="MAX_BUILD_TIMEOUT_MINUTES"
-              />
-              <FormCheckbox
-                v-model="exposeMetadataInput"
-                name="expose_metadata"
-                :label="t('expose-metadata')"
-                :help="t('expose-metadata-help')"
-              />
-              <FormCheckbox
-                v-model="allowPreviewInput"
-                name="allow_preview"
-                :label="t('allow-preview')"
-                :help="t('allow-preview-help')"
-              />
-              <FormCheckbox
-                v-model="allowDeviceCustomIdInput"
-                name="allow_device_custom_id"
-                :label="t('allow-device-custom-id')"
-                :help="t('allow-device-custom-id-help')"
-              />
-              <FormCheckbox
-                v-model="blockProviderInfraRequestsInput"
-                name="block_provider_infra_requests"
-                :label="t('block-provider-infra-requests')"
-                :help="t('block-provider-infra-requests-help')"
-              />
-              <details
-                id="device-data-collection"
-                class="pt-2 group"
-                data-test="device-data-collection"
-                :open="deviceDataCollectionOpen"
-                @toggle="deviceDataCollectionOpen = ($event.target as HTMLDetailsElement).open"
-              >
-                <summary class="flex items-center justify-between gap-3 py-2 list-none cursor-pointer select-none [&::-webkit-details-marker]:hidden">
-                  <span>
-                    <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">
-                      {{ t('device-data-collection') }}
-                    </span>
-                    <span class="block text-sm text-neutral-600 dark:text-neutral-400" data-test="device-data-collection-summary">
-                      {{ deviceDataCollectedCount === DEVICE_DATA_COLLECTION_KEYS.length
-                        ? t('device-data-collection-summary-all')
-                        : t('device-data-collection-summary-custom', { count: deviceDataCollectedCount, total: DEVICE_DATA_COLLECTION_KEYS.length }) }}
-                    </span>
-                  </span>
-                  <span class="text-sm font-medium text-sky-600 dark:text-sky-400 shrink-0">
-                    <span class="group-open:hidden">{{ t('device-data-collection-customize') }}</span>
-                    <span class="hidden group-open:inline">{{ t('device-data-collection-hide') }}</span>
-                  </span>
-                </summary>
-                <p class="mt-2 mb-3 text-sm text-neutral-700 dark:text-neutral-300">
-                  {{ t('device-data-collection-help') }}
-                </p>
-                <FormCheckbox
-                  id="collect-country"
-                  v-model="collectInputs.country"
-                  name="collect_country"
-                  :label="t('collect-country')"
-                  :help="t('collect-country-help')"
+                <FormField
+                  v-model="androidStoreUrlInput"
+                  type="url"
+                  name="android_store_url"
+                  label="Google Play link"
+                  placeholder="https://play.google.com/store/apps/details?id=..."
                 />
-                <FormCheckbox
-                  id="collect-platform"
-                  v-model="collectInputs.platform"
-                  name="collect_platform"
-                  :label="t('collect-platform')"
-                  :help="t('collect-platform-help')"
-                />
-                <FormCheckbox
-                  id="collect-os-version"
-                  v-model="collectInputs.os_version"
-                  name="collect_os_version"
-                  :label="t('collect-os-version')"
-                  :help="t('collect-os-version-help')"
-                />
-                <FormCheckbox
-                  id="collect-plugin-version"
-                  v-model="collectInputs.plugin_version"
-                  name="collect_plugin_version"
-                  :label="t('collect-plugin-version')"
-                  :help="t('collect-plugin-version-help')"
-                />
-                <FormCheckbox
-                  id="collect-version-build"
-                  v-model="collectInputs.version_build"
-                  name="collect_version_build"
-                  :label="t('collect-version-build')"
-                  :help="t('collect-version-build-help')"
-                />
-                <FormCheckbox
-                  id="collect-is-emulator"
-                  v-model="collectInputs.is_emulator"
-                  name="collect_is_emulator"
-                  :label="t('collect-is-emulator')"
-                  :help="t('collect-is-emulator-help')"
-                />
-                <FormCheckbox
-                  id="collect-is-prod"
-                  v-model="collectInputs.is_prod"
-                  name="collect_is_prod"
-                  :label="t('collect-is-prod')"
-                  :help="t('collect-is-prod-help')"
-                />
-                <FormCheckbox
-                  id="collect-install-source"
-                  v-model="collectInputs.install_source"
-                  name="collect_install_source"
-                  :label="t('collect-install-source')"
-                  :help="t('collect-install-source-help')"
-                />
-              </details>
-              <div class="flex flex-col mb-4">
-                <p class="block mb-1 text-sm text-neutral-700 dark:text-neutral-300">
-                  {{ t('change-app-organisation-owner') }}
-                </p>
-                <div>
+                <div v-if="shouldShowStoreIconImport" class="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                  <div class="text-sm font-medium text-slate-800 dark:text-slate-100">
+                    Import the app icon from the store
+                  </div>
+                  <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    Your app does not have an icon yet. We can fetch it from one of the store links above.
+                  </p>
                   <button
                     type="button"
-                    class="inline-flex items-center px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 dark:text-white border-slate-500 focus:ring-4 focus:outline-hidden focus:ring-blue-300 dark:focus:ring-blue-800 cursor-pointer"
-                    @click="transferAppOwnership"
+                    class="d-btn d-btn-outline mt-3"
+                    :disabled="isImportingStoreIcon"
+                    @click="importIconFromStore"
                   >
-                    <IconTransfer class="w-4 h-4 mr-2" aria-hidden="true" />
-                    {{ t('transfer-app-ownership') }}
+                    {{ isImportingStoreIcon ? 'Importing...' : 'Import icon' }}
                   </button>
+                </div>
+                <div v-else-if="!appRef?.icon_url" class="mb-3 rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
+                  Add an App Store or Google Play link to auto-import the app icon if you do not want to upload one manually.
+                </div>
+                <div
+                  :key="forceBump"
+                  class="flex flex-row cursor-pointer"
+                  role="button"
+                  tabindex="0"
+                  @click="setDefaultChannel"
+                  @keydown.enter.prevent="setDefaultChannel"
+                  @keydown.space.prevent="setDefaultChannel"
+                >
+                  <FormField
+                    type="text"
+                    name="default_upload_channel"
+                    outer-class="flex-1 min-w-0"
+                    input-class="cursor-pointer w-full truncate"
+                    readonly
+                    :prefix-icon="ArrowUpTray"
+                    :model-value="appRef?.default_upload_channel ?? t('not-set')"
+                    :label="t('default-upload-channel')"
+                  >
+                    <template #suffix>
+                      <button type="button" class="w-6 h-6 ml-auto mr-1" :aria-label="t('default-upload-channel')" @click.stop="setDefaultChannel">
+                        <Pencil width="24px" height="24px" aria-hidden="true" />
+                      </button>
+                    </template>
+                  </FormField>
+                </div>
+                <div
+                  :key="`download-${forceDownloadBump}`"
+                  class="flex flex-row mt-3 cursor-pointer"
+                  role="button"
+                  tabindex="0"
+                  @click="openDefaultDownloadChannelDialog"
+                  @keydown.enter.prevent="openDefaultDownloadChannelDialog"
+                  @keydown.space.prevent="openDefaultDownloadChannelDialog"
+                >
+                  <FormField
+                    type="text"
+                    name="default_download_channel"
+                    outer-class="flex-1 min-w-0"
+                    input-class="cursor-pointer w-full truncate"
+                    readonly
+                    :prefix-icon="ArrowDownTray"
+                    :model-value="downloadChannelLabel"
+                    :label="t('default-download-channel')"
+                    :help="t('default-download-channel-help')"
+                  >
+                    <template #suffix>
+                      <button type="button" class="w-6 h-6 ml-auto mr-1" :aria-label="t('default-download-channel')" @click.stop="openDefaultDownloadChannelDialog">
+                        <Pencil width="24px" height="24px" aria-hidden="true" />
+                      </button>
+                    </template>
+                  </FormField>
+                </div>
+                <p
+                  v-if="downloadChannelWarning"
+                  class="-mt-3 mb-4 text-xs font-medium text-amber-600 dark:text-amber-400"
+                >
+                  {{ downloadChannelWarning }}
+                </p>
+                <!-- Bundle Retention Setting -->
+                <div class="mb-4">
+                  <label for="app-retention-preset" class="inline-flex mb-1 text-sm font-bold text-neutral-700 dark:text-neutral-300">{{ t('retention-label') }}</label>
+                  <div class="flex items-center w-full px-3 py-2 text-base border border-neutral-400 rounded-lg shadow bg-white dark:bg-transparent dark:border-neutral-500 focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
+                    <IconGearSix class="mr-2 -ml-1 w-[1em] h-[1em] shrink-0 text-neutral-600 dark:text-neutral-300" aria-hidden="true" />
+                    <select
+                      id="app-retention-preset"
+                      v-model="selectedRetentionPreset"
+                      name="retention_preset"
+                      class="w-full min-w-0 p-0 text-base bg-transparent border-none outline-hidden focus:ring-0 text-neutral-700 dark:text-neutral-300"
+                    >
+                      <option v-for="option in retentionOptions" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </div>
+                </div>
+                <div v-if="isCustomRetention">
+                  <FormField
+                    :model-value="customRetentionValue"
+                    type="number"
+                    name="custom_retention"
+                    :prefix-icon="IconGearSix"
+                    :label="t('retention-custom-value')"
+                    :help="t('retention-custom-help')"
+                    :min="0"
+                    :max="63113903"
+                    @update:model-value="setCustomRetentionValue"
+                  />
+                </div>
+                <p v-if="effectiveRetentionValue === 0" class="text-xs font-medium text-amber-600 dark:text-amber-400">
+                  {{ t('retention-immediate-warning') }}
+                </p>
+                <p v-if="effectiveRetentionValue >= 63113904" class="text-xs font-medium text-blue-600 dark:text-blue-400">
+                  {{ t('retention-never-info') }}
+                </p>
+                <FormField
+                  v-model="buildTimeoutMinutesInput"
+                  type="number"
+                  name="build_timeout_minutes"
+                  :prefix-icon="IconGearSix"
+                  :label="t('build-timeout-label')"
+                  :help="t('build-timeout-help')"
+                  :min="MIN_BUILD_TIMEOUT_MINUTES"
+                  :max="MAX_BUILD_TIMEOUT_MINUTES"
+                />
+                <FormCheckbox
+                  v-model="exposeMetadataInput"
+                  name="expose_metadata"
+                  :label="t('expose-metadata')"
+                  :help="t('expose-metadata-help')"
+                />
+                <FormCheckbox
+                  v-model="allowPreviewInput"
+                  name="allow_preview"
+                  :label="t('allow-preview')"
+                  :help="t('allow-preview-help')"
+                />
+                <FormCheckbox
+                  v-model="allowDeviceCustomIdInput"
+                  name="allow_device_custom_id"
+                  :label="t('allow-device-custom-id')"
+                  :help="t('allow-device-custom-id-help')"
+                />
+                <FormCheckbox
+                  v-model="blockProviderInfraRequestsInput"
+                  name="block_provider_infra_requests"
+                  :label="t('block-provider-infra-requests')"
+                  :help="t('block-provider-infra-requests-help')"
+                />
+                <details
+                  id="device-data-collection"
+                  class="pt-2 group"
+                  data-test="device-data-collection"
+                  :open="deviceDataCollectionOpen"
+                  @toggle="deviceDataCollectionOpen = ($event.target as HTMLDetailsElement).open"
+                >
+                  <summary class="flex items-center justify-between gap-3 py-2 list-none cursor-pointer select-none [&::-webkit-details-marker]:hidden">
+                    <span>
+                      <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">
+                        {{ t('device-data-collection') }}
+                      </span>
+                      <span class="block text-sm text-neutral-600 dark:text-neutral-400" data-test="device-data-collection-summary">
+                        {{ deviceDataCollectedCount === DEVICE_DATA_COLLECTION_KEYS.length
+                          ? t('device-data-collection-summary-all')
+                          : t('device-data-collection-summary-custom', { count: deviceDataCollectedCount, total: DEVICE_DATA_COLLECTION_KEYS.length }) }}
+                      </span>
+                    </span>
+                    <span class="text-sm font-medium text-sky-600 dark:text-sky-400 shrink-0">
+                      <span class="group-open:hidden">{{ t('device-data-collection-customize') }}</span>
+                      <span class="hidden group-open:inline">{{ t('device-data-collection-hide') }}</span>
+                    </span>
+                  </summary>
+                  <p class="mt-2 mb-3 text-sm text-neutral-700 dark:text-neutral-300">
+                    {{ t('device-data-collection-help') }}
+                  </p>
+                  <FormCheckbox
+                    id="collect-country"
+                    v-model="collectInputs.country"
+                    name="collect_country"
+                    :label="t('collect-country')"
+                    :help="t('collect-country-help')"
+                  />
+                  <FormCheckbox
+                    id="collect-platform"
+                    v-model="collectInputs.platform"
+                    name="collect_platform"
+                    :label="t('collect-platform')"
+                    :help="t('collect-platform-help')"
+                  />
+                  <FormCheckbox
+                    id="collect-os-version"
+                    v-model="collectInputs.os_version"
+                    name="collect_os_version"
+                    :label="t('collect-os-version')"
+                    :help="t('collect-os-version-help')"
+                  />
+                  <FormCheckbox
+                    id="collect-plugin-version"
+                    v-model="collectInputs.plugin_version"
+                    name="collect_plugin_version"
+                    :label="t('collect-plugin-version')"
+                    :help="t('collect-plugin-version-help')"
+                  />
+                  <FormCheckbox
+                    id="collect-version-build"
+                    v-model="collectInputs.version_build"
+                    name="collect_version_build"
+                    :label="t('collect-version-build')"
+                    :help="t('collect-version-build-help')"
+                  />
+                  <FormCheckbox
+                    id="collect-is-emulator"
+                    v-model="collectInputs.is_emulator"
+                    name="collect_is_emulator"
+                    :label="t('collect-is-emulator')"
+                    :help="t('collect-is-emulator-help')"
+                  />
+                  <FormCheckbox
+                    id="collect-is-prod"
+                    v-model="collectInputs.is_prod"
+                    name="collect_is_prod"
+                    :label="t('collect-is-prod')"
+                    :help="t('collect-is-prod-help')"
+                  />
+                  <FormCheckbox
+                    id="collect-install-source"
+                    v-model="collectInputs.install_source"
+                    name="collect_install_source"
+                    :label="t('collect-install-source')"
+                    :help="t('collect-install-source-help')"
+                  />
+                </details>
+                <div class="flex flex-col mb-4">
+                  <p class="block mb-1 text-sm text-neutral-700 dark:text-neutral-300">
+                    {{ t('change-app-organisation-owner') }}
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      class="d-btn d-btn-outline"
+                      @click="transferAppOwnership"
+                    >
+                      <IconTransfer class="w-4 h-4 mr-2" aria-hidden="true" />
+                      {{ t('transfer-app-ownership') }}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </section>
-      </div>
-      <!-- Panel footer -->
-      <footer>
-        <div class="flex flex-col px-6 py-5 border-t dark:border-slate-600">
-          <div class="flex self-end">
-            <button v-if="canDeleteApp" type="button" class="p-2 text-red-600 border border-red-400 rounded-lg hover:text-white hover:bg-red-600" @click="openDeleteAppDialog()">
-              {{ t('delete-app') }}
-            </button>
-            <button
-              class="ml-3 d-btn d-btn-primary"
-              type="submit"
-              color="secondary"
-              shape="round"
-            >
-              <span v-if="!isLoading" class="rounded-4xl">
-                {{ t('update') }}
-              </span>
-              <Spinner v-else size="w-8 h-8" class="px-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
-            </button>
-          </div>
+          </section>
         </div>
-      </footer>
-    </form>
+        <footer class="px-6 pb-6">
+          <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading">
+            <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+            <span v-else>{{ t('save') }}</span>
+          </button>
+        </footer>
+      </form>
+    </div>
+
+    <!-- Danger zone -->
+    <section
+      v-if="canDeleteApp"
+      data-test="app-danger-zone"
+      class="mt-6 bg-white border border-red-300 shadow-sm md:rounded-xl dark:bg-slate-800/60 dark:border-red-500/40"
+      aria-labelledby="app-danger-zone-title"
+    >
+      <header class="px-6 pt-5 pb-4 border-b border-red-200 dark:border-red-500/30">
+        <h3 id="app-danger-zone-title" class="text-lg font-semibold text-red-600 dark:text-red-400">
+          {{ t('danger-zone') }}
+        </h3>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          {{ t('danger-zone-description') }}
+        </p>
+      </header>
+      <div class="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
+        <div class="min-w-0">
+          <p class="font-medium text-slate-800 dark:text-white">
+            {{ t('delete-app') }}
+          </p>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            {{ t('delete-app-danger-description') }}
+          </p>
+        </div>
+        <button type="button" class="d-btn d-btn-error shrink-0" @click="openDeleteAppDialog()">
+          {{ t('delete-app') }}
+        </button>
+      </div>
+    </section>
 
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === APP_DELETE_DIALOG_ID && appRef" defer to="#dialog-v2-content">
       <AppDeleteDialogContent

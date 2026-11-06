@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import type { Tab } from './comp_def'
 import { onClickOutside } from '@vueuse/core'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import IconSettings from '~icons/lucide/settings'
 import { isSpoofTab, useAppNavigation } from '~/composables/useAppNavigation'
 import { useMainStore } from '~/stores/main'
+import { useOrganizationStore } from '~/stores/organization'
 import DropdownProfile from '../components/dashboard/DropdownProfile.vue'
 import GettingStartedNav from '../components/dashboard/GettingStartedNav.vue'
 import LogAsDialogField from './LogAsDialogField.vue'
@@ -15,6 +18,7 @@ const props = defineProps<{
 
 const emit = defineEmits(['closeSidebar'])
 const main = useMainStore()
+const organizationStore = useOrganizationStore()
 const isRail = computed(() => !!props.sidebarCollapsed)
 const { t } = useI18n()
 const sidebar = useTemplateRef('sidebar')
@@ -30,8 +34,18 @@ onClickOutside(sidebar, () => emit('closeSidebar'))
 
 // Group destinations the way capgo.app groups products: where you work first,
 // then help and community links that open outside the console.
+// Settings of the organization currently selected in the switcher.
+const organizationSettingsTab: Tab = { label: 'settings', icon: IconSettings, key: '/settings/organization' }
+
 const navGroups = computed(() => [
-  { key: 'workspace', label: 'section-group-workspace', tabs: tabs.value.filter(tab => !tab.redirect) },
+  {
+    key: 'workspace',
+    label: 'section-group-workspace',
+    tabs: [
+      ...tabs.value.filter(tab => !tab.redirect),
+      ...(organizationStore.currentOrganization ? [organizationSettingsTab] : []),
+    ],
+  },
   { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect) },
 ].filter(group => group.tabs.length))
 </script>
