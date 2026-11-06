@@ -7,6 +7,7 @@ import AppOnboardingBuilderChecklist from '../../src/components/dashboard/AppOnb
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
 import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
+import CiCdSetupGuide from '../../src/components/dashboard/CiCdSetupGuide.vue'
 import ChannelIntroduction from '../../src/components/dashboard/ChannelIntroduction.vue'
 import GettingStartedNav from '../../src/components/dashboard/GettingStartedNav.vue'
 import OnboardingExploreBanner from '../../src/components/dashboard/OnboardingExploreBanner.vue'
@@ -29,6 +30,7 @@ Object.defineProperty(window, 'posthog', { configurable: true, value: { capture:
 const builderIntroView = params.get('view') === 'builder-intro'
 const navigationView = builderIntroView || params.get('view') === 'navigation' || location.pathname.startsWith('/app/') || location.pathname === '/onboarding/app'
 const builderComponentView = params.get('view') === 'builder'
+const cicdView = params.get('view') === 'cicd'
 const assignment = params.get('assignment')
 const previewAppId = 'com.example.onboarding-preview'
 const savedChannelStatus = params.get('channelStatus')
@@ -64,7 +66,12 @@ const state = {
   builderActivated: false,
   skips: [] as string[],
   skipReasons: [] as string[],
+  apikeyCreates: [] as unknown[],
+  apikeyError: params.get('apikeyError'),
+  latestBundles: (params.get('bundle') ? [{ name: params.get('bundle'), created_at: '2026-11-06T10:00:00.000Z' }] : []) as Array<{ name: string | null, created_at: string }>,
 }
+if (cicdView && params.get('defaultChannel') !== '0')
+  state.channels.push({ id: 1, app_id: previewAppId, name: params.get('defaultChannel') ?? 'production', public: true })
 if (params.get('checklistState') === 'completed') {
   for (const id of ['login_cli_mcp', 'add_updater', 'add_code', 'add_channel', 'run_device', 'upload_bundle', 'test_update'])
     state.steps[id] = { status: id === 'add_code' ? 'skipped' : 'done' }
@@ -225,6 +232,16 @@ const fixtureFetch: typeof fetch = async (input, init) => {
   }
   if (url.pathname.endsWith('/build_requests'))
     return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json', 'Content-Range': '*/0' } })
+  if (url.pathname.endsWith('/app_versions'))
+    return new Response(JSON.stringify(state.latestBundles), { headers: { 'Content-Type': 'application/json' } })
+  // The CI/CD guide creates app-scoped secure keys through the API key endpoint.
+  if (url.pathname.endsWith('/apikey') && method === 'POST') {
+    const body = JSON.parse(String(init?.body))
+    state.apikeyCreates.push(body)
+    if (state.apikeyError)
+      return new Response(JSON.stringify({ error: state.apikeyError }), { status: 403, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ key: `cap_ci_preview_key_${state.apikeyCreates.length}`, id: state.apikeyCreates.length }), { headers: { 'Content-Type': 'application/json' } })
+  }
   if (url.pathname.includes('/rpc/')) {
     return new Response(JSON.stringify(state.channelPermissions), { headers: { 'Content-Type': 'application/json' } })
   }
@@ -264,6 +281,8 @@ const fixtureFetch: typeof fetch = async (input, init) => {
     const single = new Headers(init?.headers).get('Accept')?.includes('object')
     return new Response(JSON.stringify(single ? rows[0] ?? {} : rows), { headers: { 'Content-Type': 'application/json' } })
   }
+  if (cicdView && url.pathname.endsWith('/apps'))
+    return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: '00000000-0000-4000-8000-000000000002' }]), { headers: { 'Content-Type': 'application/json' } })
   if (builderComponentView && url.pathname.endsWith('/apps')) {
     return new Response(JSON.stringify({ onboarding: previewOnboarding() }), { headers: { 'Content-Type': 'application/json' } })
   }
@@ -334,6 +353,12 @@ const app = createApp(defineComponent({
               })
             : params.get('view') === 'flow'
             ? h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined })
+            : cicdView
+            ? h(CiCdSetupGuide, {
+                appId: preview.appId.value,
+                initialProduct: params.get('product') === 'builder' ? 'builder' : undefined,
+                initialPlatform: params.get('platform') === 'ios' || params.get('platform') === 'android' ? params.get('platform') as 'ios' | 'android' : undefined,
+              })
             : builderComponentView
               ? h(AppOnboardingBuilderChecklist, {
                   appId: preview.appId.value,

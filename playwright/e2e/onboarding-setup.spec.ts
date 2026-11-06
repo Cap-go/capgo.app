@@ -89,7 +89,7 @@ test.describe('Actionable onboarding setup checklist', () => {
     await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.events)).toContain('hide')
   })
 
-  test('follows persisted progress, stops polling on completion, and keeps CI/CD optional', async ({ page, context }) => {
+  test('follows persisted progress, stops polling on completion, and keeps CI/CD optional', async ({ page }) => {
     const time = new Date('2026-09-16T12:00:00Z')
     await page.clock.install({ time: new Date(time.getTime() - 60_000) })
     await page.clock.pauseAt(time)
@@ -100,23 +100,18 @@ test.describe('Actionable onboarding setup checklist', () => {
     await expect(listToggle).toHaveAttribute('aria-expanded', 'false')
     await listToggle.click()
     const optionalStep = page.locator('[data-test="setup-checklist-cicd-step"]')
-    const cicdGuide = optionalStep.getByRole('link', { name: 'CI/CD integration guide', exact: true })
-    const cicdHref = 'https://capgo.app/docs/getting-started/cicd-integration/'
+    const cicdGuide = optionalStep.getByRole('link', { name: 'Set up CI/CD', exact: true })
+    const cicdPath = '/app/com.example.onboarding-preview/ci-cd?product=ota'
     await expect(page.locator('[data-test="onboarding-setup-cli"] nav ol > li')).toHaveCount(7)
     await expect(page.locator('ol [data-test="setup-checklist-cicd-step"]')).toHaveCount(0)
     await expect(optionalStep).toContainText('Optional next step')
     await expect(optionalStep).toContainText('Automate updates with CI/CD')
     await expect(optionalStep.locator('button, input')).toHaveCount(0)
-    await expect(cicdGuide).toHaveAttribute('href', cicdHref)
-    await expect(cicdGuide).toHaveAttribute('target', '_blank')
-    await expect(cicdGuide).toHaveAttribute('rel', 'noopener noreferrer')
-    await context.route(cicdHref, route => route.fulfill({ contentType: 'text/html', body: 'Documentation preview' }))
-    const popupPromise = page.waitForEvent('popup')
+    // The guide opens in the console, next to the checklist, instead of the docs.
+    await expect(cicdGuide).toHaveAttribute('href', cicdPath)
+    await expect(cicdGuide).not.toHaveAttribute('target', '_blank')
     await cicdGuide.click()
-    const popup = await popupPromise
-    await popup.waitForLoadState()
-    expect(popup.url()).toBe(cicdHref)
-    await popup.close()
+    await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(cicdPath)
     expect(await page.evaluate(() => {
       const { appWrites, setupWrites, userWrites, skips, steps, outcome } = (window as any).onboardingSetupPreview.state
       return { appWrites, setupWrites, userWrites, skips, steps, outcome }
