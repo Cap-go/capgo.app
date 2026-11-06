@@ -108,7 +108,10 @@ const completed = computed(() => steps.value.length > 0
   && steps.value.every(step => step.status === 'done' || step.status === 'skipped')
   && steps.value.at(-1)?.status === 'done')
 const platformCommand = computed(() => viewedPlatform.value && props.command ? `${props.command} --platform ${viewedPlatform.value}` : '')
-const cicdGuidePath = computed(() => `/app/${encodeURIComponent(props.appId)}/ci-cd?product=builder${viewedPlatform.value ? `&platform=${viewedPlatform.value}` : ''}`)
+const cicdGuidePath = computed(() => {
+  const query = new URLSearchParams({ product: 'builder', ...(viewedPlatform.value ? { platform: viewedPlatform.value } : {}) })
+  return `/app/${encodeURIComponent(props.appId)}/ci-cd?${query}`
+})
 const guideHref = computed(() => {
   if (viewedPlatform.value === 'android' && selectedStep.value?.id === 'connect_google_play')
     return 'https://capgo.app/docs/cli/reference/build/'

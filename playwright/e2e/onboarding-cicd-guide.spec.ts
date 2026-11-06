@@ -13,8 +13,8 @@ test.describe('CI/CD setup guide', () => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.goto(fixture)
     await expect(page.getByRole('heading', { name: 'Automate releases with CI/CD' })).toBeVisible()
-    await expect(page.locator('[data-test="cicd-product-ota"]')).toHaveAttribute('aria-checked', 'true')
-    await expect(page.locator('[data-test="cicd-strategy-main"]')).toHaveAttribute('aria-checked', 'true')
+    await expect(page.locator('[data-test="cicd-product-ota"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('[data-test="cicd-strategy-main"]')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-test="cicd-strategy-main"]')).toContainText('Every merge to main ships a live update to the production channel.')
     await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
     await expect(page.locator('[data-test="cicd-choose-provider"]')).toBeVisible()
@@ -109,7 +109,7 @@ test.describe('CI/CD setup guide', () => {
 
   test('starts native builds with stored credentials for the platform from the checklist', async ({ page }) => {
     await page.goto(`${fixture}&product=builder&platform=android`)
-    await expect(page.locator('[data-test="cicd-product-builder"]')).toHaveAttribute('aria-checked', 'true')
+    await expect(page.locator('[data-test="cicd-product-builder"]')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-test="cicd-platform-android"]')).toBeChecked()
     await expect(page.locator('[data-test="cicd-platform-ios"]')).not.toBeChecked()
     await page.locator('[data-test="cicd-provider-circleci"]').click()
@@ -140,7 +140,7 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-no-default-channel"]')).toBeVisible()
     await expect(page.locator('[data-test="cicd-pipeline-file"]')).toHaveText('shell')
     await page.reload()
-    await expect(page.locator('[data-test="cicd-provider-other"]')).toHaveAttribute('aria-checked', 'true')
+    await expect(page.locator('[data-test="cicd-provider-other"]')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
   })
 

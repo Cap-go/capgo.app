@@ -113,8 +113,13 @@ export function isCiChannelSupported(name: string) {
   return name.length > 0 && name === name.trim() && !name.includes(',') && !CONTROL_CHARACTERS.test(name)
 }
 
+// Inside single quotes only the quote itself needs escaping: close, escape, reopen.
+const SHELL_QUOTE_ESCAPE = String.raw`'\''`
+
 function shellArg(value: string) {
-  return /^[\w./@%+=:-]+$/.test(value) ? value : `'${value.replaceAll('\'', `'\\''`)}'`
+  if (/^[\w./@%+=:-]+$/.test(value))
+    return value
+  return `'${value.replaceAll('\'', SHELL_QUOTE_ESCAPE)}'`
 }
 
 /** Plain YAML when it cannot be misread, otherwise a single-quoted scalar. */
@@ -320,6 +325,9 @@ function yamlQuote(value: string) {
   return `'${value.replaceAll('\'', '\'\'')}'`
 }
 
+const GITHUB_PR_NUMBER = '$' + '{{ github.event.pull_request.number }}'
+const GITHUB_BASE_REF = '$' + '{{ github.event.pull_request.base.ref }}'
+
 function renderGithub(jobs: CiJob[], workflowName: string) {
   const branches = pushBranches(jobs)
   const hasPr = jobs.some(job => job.trigger.kind !== 'push')
@@ -343,9 +351,8 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       condition = `github.event_name == 'pull_request' && github.event.action != 'closed' && ${sameRepo}`
     else
       condition = `github.event_name == 'pull_request' && github.event.action == 'closed' && ${sameRepo}`
-    if (index > 0)
-      lines.push('')
     lines.push(
+      ...(index > 0 ? [''] : []),
       `  ${job.id}:`,
       `    name: ${yamlScalar(job.name)}`,
       `    if: ${condition}`,
@@ -355,7 +362,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
     lines.push('      - uses: actions/checkout@v6')
     // A closed pull request can lose its merge ref; the base branch always has the config.
     if (job.trigger.kind === 'pull_request_closed')
-      lines.push('        with:', `          ref: \${{ github.event.pull_request.base.ref }}`)
+      lines.push('        with:', `          ref: ${GITHUB_BASE_REF}`)
     lines.push(
       '      - uses: actions/setup-node@v6',
       '        with:',
@@ -365,7 +372,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
     for (const command of setupCommands(job))
       lines.push(`      - run: ${command}`)
     lines.push(
-      `      - run: ${yamlScalar(withPr(job.command, `\${{ github.event.pull_request.number }}`))}`,
+      `      - run: ${yamlScalar(withPr(job.command, GITHUB_PR_NUMBER))}`,
       '        env:',
       `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
     )
@@ -486,8 +493,8 @@ function renderBitbucket(jobs: CiJob[]) {
   if (branchGroups.length) {
     lines.push('  branches:')
     for (const group of branchGroups) {
-      lines.push(`    ${group.trigger.kind === 'push' ? group.trigger.branch : ''}:`)
-      lines.push(...renderGroup(group, '      '))
+      const branch = group.trigger.kind === 'push' ? group.trigger.branch : ''
+      lines.push(`    ${branch}:`, ...renderGroup(group, '      '))
     }
   }
   if (prGroups.length) {

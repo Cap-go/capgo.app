@@ -38,7 +38,7 @@ function lastActivity(app: OrganizationApp) {
   const features = parseAppOnboardingLedger(app.onboarding).features ?? {}
   return [features.ota?.last_used_at, features.builder?.last_used_at, features.ota?.succeeded_at, features.builder?.succeeded_at]
     .filter((value): value is string => !!value)
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .at(-1) ?? ''
 }
 

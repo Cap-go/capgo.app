@@ -269,9 +269,8 @@ const detectedLabel = computed(() => {
   const state = cicdState.value
   if (!detectedAt.value)
     return ''
-  const from = state.ciProvider && state.ciProvider !== 'ci'
-    ? state.ciProvider
-    : t(state.detectedVia === 'key' ? 'cicd-guide-status-from-key' : 'cicd-guide-status-from-ci')
+  const fallbackKey = state.detectedVia === 'key' ? 'cicd-guide-status-from-key' : 'cicd-guide-status-from-ci'
+  const from = state.ciProvider && state.ciProvider !== 'ci' ? state.ciProvider : t(fallbackKey)
   const builderFirst = !state.otaDetectedAt || (!!state.builderDetectedAt && state.builderDetectedAt < state.otaDetectedAt)
   return t(builderFirst ? 'cicd-guide-status-detected-builder' : 'cicd-guide-status-detected-ota', { from, date: formatDate(detectedAt.value) })
 })
@@ -366,14 +365,14 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <p class="mt-3 max-w-3xl text-base leading-7 text-slate-600 dark:text-slate-300">
         {{ t('cicd-guide-subtitle') }}
       </p>
-      <p v-if="detectedAt" class="mt-4 flex items-start gap-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/10 dark:text-emerald-200" role="status" data-test="cicd-status-detected">
+      <output v-if="detectedAt" class="mt-4 flex items-start gap-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/10 dark:text-emerald-200" data-test="cicd-status-detected">
         <IconCheck class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <span>{{ detectedLabel }}</span>
-      </p>
-      <p v-else-if="cicdState.markedDoneAt" class="mt-4 flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 dark:border-white/15 dark:bg-slate-900 dark:text-slate-200" role="status" data-test="cicd-status-marked-done">
+      </output>
+      <output v-else-if="cicdState.markedDoneAt" class="mt-4 flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 dark:border-white/15 dark:bg-slate-900 dark:text-slate-200" data-test="cicd-status-marked-done">
         <IconCheck class="mt-0.5 h-5 w-5 shrink-0 text-slate-400" aria-hidden="true" />
         <span>{{ t('cicd-guide-status-marked-done', { date: formatDate(cicdState.markedDoneAt) }) }}</span>
-      </p>
+      </output>
       <button
         v-else
         type="button"
@@ -392,13 +391,12 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <h2 id="cicd-question-product" class="text-lg font-semibold text-slate-950 dark:text-white">
         <span class="mr-2 text-slate-400" aria-hidden="true">1.</span>{{ t('cicd-guide-question-product') }}
       </h2>
-      <div class="grid gap-3 sm:grid-cols-2" role="radiogroup" :aria-label="t('cicd-guide-question-product')">
+      <div class="grid gap-3 sm:grid-cols-2" role="group" aria-labelledby="cicd-question-product">
         <button
           v-for="option in (['ota', 'builder'] as const)"
           :key="option"
           type="button"
-          role="radio"
-          :aria-checked="product === option"
+          :aria-pressed="product === option"
           class="flex min-h-24 items-start gap-4 rounded-2xl border p-5 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500"
           :class="choiceClass(product === option)"
           :data-test="`cicd-product-${option}`"
@@ -435,13 +433,12 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <h2 id="cicd-question-strategy" class="text-lg font-semibold text-slate-950 dark:text-white">
         <span class="mr-2 text-slate-400" aria-hidden="true">2.</span>{{ t('cicd-guide-question-strategy') }}
       </h2>
-      <div class="grid gap-3 md:grid-cols-3" role="radiogroup" :aria-label="t('cicd-guide-question-strategy')">
+      <div class="grid gap-3 md:grid-cols-3" role="group" aria-labelledby="cicd-question-strategy">
         <button
           v-for="option in CI_STRATEGIES"
           :key="option"
           type="button"
-          role="radio"
-          :aria-checked="strategy === option"
+          :aria-pressed="strategy === option"
           class="flex min-h-28 flex-col items-start rounded-2xl border p-5 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500"
           :class="choiceClass(strategy === option)"
           :data-test="`cicd-strategy-${option}`"
@@ -473,13 +470,12 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <h2 id="cicd-question-provider" class="text-lg font-semibold text-slate-950 dark:text-white">
         <span class="mr-2 text-slate-400" aria-hidden="true">3.</span>{{ t('cicd-guide-question-provider') }}
       </h2>
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" role="radiogroup" :aria-label="t('cicd-guide-question-provider')">
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" role="group" aria-labelledby="cicd-question-provider">
         <button
           v-for="option in CI_PROVIDERS"
           :key="option"
           type="button"
-          role="radio"
-          :aria-checked="provider === option"
+          :aria-pressed="provider === option"
           class="flex min-h-24 flex-col items-center justify-center gap-2 rounded-2xl border px-3 py-4 text-center shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500"
           :class="choiceClass(provider === option)"
           :data-test="`cicd-provider-${option}`"
@@ -489,13 +485,13 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           <span class="text-sm font-medium leading-5 text-slate-900 dark:text-white">{{ t(`cicd-guide-provider-${option}`) }}</span>
         </button>
       </div>
-      <p v-if="provider && channelUnsupported" class="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" role="status" data-test="cicd-channel-unsupported">
+      <output v-if="provider && channelUnsupported" class="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-channel-unsupported">
         <IconTriangleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <span class="min-w-0 flex-1">
           {{ t('cicd-guide-channel-unsupported', { channel: productionChannel }) }}
           <RouterLink :to="`/app/${encodeURIComponent(appId)}/channels`" class="ml-1 font-medium underline underline-offset-4">{{ t('cicd-guide-open-channels') }}</RouterLink>
         </span>
-      </p>
+      </output>
       <p v-if="!provider" class="rounded-2xl border border-dashed border-slate-300 px-6 py-5 text-center text-sm text-slate-500 dark:border-white/15 dark:text-slate-400" data-test="cicd-choose-provider">
         {{ t('cicd-guide-choose-provider') }}
       </p>
@@ -511,13 +507,13 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
         </p>
       </div>
 
-      <p v-if="product === 'ota' && defaultChannel === null" class="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" role="status" data-test="cicd-no-default-channel">
+      <output v-if="product === 'ota' && defaultChannel === null" class="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-no-default-channel">
         <IconTriangleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <span class="min-w-0 flex-1">{{ t('cicd-guide-no-default-channel') }}</span>
         <RouterLink :to="checklistPath" class="font-medium underline underline-offset-4">
           {{ t('cicd-guide-open-checklist') }}
         </RouterLink>
-      </p>
+      </output>
 
       <ol class="space-y-4">
         <li v-if="product === 'builder'" class="flex gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900" data-test="cicd-step-credentials">
@@ -586,10 +582,10 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                     <code class="min-w-0 break-all font-mono text-sm leading-6 text-sky-200">{{ createdKeys[keySlot(spec)] }}</code>
                     <IconCopy class="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white" aria-hidden="true" />
                   </button>
-                  <p class="mt-2 flex items-start gap-2 text-sm font-medium text-amber-700 dark:text-amber-400" role="status">
+                  <output class="mt-2 flex items-start gap-2 text-sm font-medium text-amber-700 dark:text-amber-400">
                     <IconTriangleAlert class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                     {{ t('cicd-guide-key-created') }}
-                  </p>
+                  </output>
                 </template>
                 <button
                   v-else

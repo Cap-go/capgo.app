@@ -34,7 +34,7 @@ export function parseCiCdSetupState(onboarding: unknown): CiCdSetupState {
 
 /** First CI evidence, or the user saying CI/CD already ships this app. */
 export function ciCdDetectedAt(state: CiCdSetupState) {
-  return [state.otaDetectedAt, state.builderDetectedAt].filter((value): value is string => !!value).sort()[0] ?? null
+  return [state.otaDetectedAt, state.builderDetectedAt].filter((value): value is string => !!value).sort((a, b) => a.localeCompare(b))[0] ?? null
 }
 
 export function isCiCdSetupDone(onboarding: unknown) {
