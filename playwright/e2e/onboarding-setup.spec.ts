@@ -770,6 +770,28 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     })
   }
 
+  test('replaces Getting started with a CI/CD entry until CI/CD is set up', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    const link = page.locator('[data-test="cicd-nav-link"]')
+    await expect(link).toHaveAccessibleName('Set up CI/CD — My Capacitor app')
+    await expect(page.locator('[data-test="getting-started-nav-dismiss"]')).toHaveCount(0)
+    await link.click()
+    await expect(page).toHaveURL(`/app/${appId}/ci-cd`)
+    await expect(page.getByRole('heading', { name: 'Automate releases with CI/CD' })).toBeVisible()
+    await expect(link).toHaveAttribute('aria-current', 'page')
+    await page.locator('[data-test="cicd-mark-done"]').click()
+    await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+    await expect(link).toHaveCount(0)
+
+    // Apps whose CI already uploaded, or that never shipped, get no entry.
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1&cicd=detected`)
+    await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+    await expect(link).toHaveCount(0)
+    await page.goto(`/app/${appId}?version=3&checklistState=dismissed`)
+    await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+    await expect(link).toHaveCount(0)
+  })
+
   for (const scenario of [
     { name: 'v4 Builder', query: 'version=4&assignment=builder-only', checklist: '[data-test="builder-checklist"]', pollsProgress: false },
   ]) {

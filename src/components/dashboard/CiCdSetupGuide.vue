@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Json } from '~/types/database.types'
 import type { CiKeySpec, CiPlatform, CiProduct, CiProvider, CiSecretName, CiStrategy } from '~/utils/cicdSetupGuide'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -47,6 +48,7 @@ import {
   previewCleanupCommand,
   saveCiGuideSelection,
 } from '~/utils/cicdSetupGuide'
+import { ciCdDetectedAt, parseCiCdSetupState, withCiCdMarkedDone } from '~/utils/cicdSetupState'
 import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 
 const props = defineProps<{
@@ -198,6 +200,7 @@ async function createKey(spec: CiKeySpec) {
       return
     createdKeys[slot] = key
     track('onboarding_cicd_key_created', { role: spec.role })
+    void recordCreatedKey(spec, (data as { rbac_id?: unknown } | null)?.rbac_id)
   }
   catch (error) {
     console.error('Cannot create CI API key', error)
@@ -223,72 +226,108 @@ async function loadDefaultChannel() {
   defaultChannel.value = error ? 'production' : (data?.[0]?.name ?? null)
 }
 
-interface LatestActivity {
-  label: string
-  at: string
-}
-const latest = ref<LatestActivity | null | undefined>(undefined)
-const latestError = ref(false)
-const latestLoading = ref(false)
-let latestTimer: ReturnType<typeof setInterval> | undefined
-let latestGeneration = 0
+// CI/CD state from apps.onboarding.cicd. The backend fills the detection fields
+// when a bundle upload or build request comes from CI, so polling picks up the
+// user's first pipeline run without a reload.
+const onboarding = ref<unknown>(organizationStore.getAppByAppId(props.appId)?.onboarding)
+const cicdState = computed(() => parseCiCdSetupState(onboarding.value))
+const detectedAt = computed(() => ciCdDetectedAt(cicdState.value))
+const statusError = ref(false)
+const statusLoading = ref(false)
+const markingDone = ref(false)
+let statusTimer: ReturnType<typeof setInterval> | undefined
+let statusGeneration = 0
 
-async function refreshLatest() {
-  const generation = ++latestGeneration
+function applyOnboarding(value: unknown) {
+  onboarding.value = value
+  organizationStore.updateAppOnboarding(props.appId, value as Json)
+}
+
+async function refreshStatus() {
+  const generation = ++statusGeneration
   const appId = props.appId
-  const isBuilder = product.value === 'builder'
-  latestLoading.value = true
+  statusLoading.value = true
   try {
-    const { data, error } = isBuilder
-      ? await capgo.from('build_requests').select('platform, status, created_at').eq('app_id', appId).order('created_at', { ascending: false }).limit(1)
-      : await capgo.from('app_versions').select('name, created_at').eq('app_id', appId).eq('deleted', false).neq('storage_provider', 'revert_to_builtin').order('created_at', { ascending: false }).limit(1)
-    if (generation !== latestGeneration)
+    const { data, error } = await capgo.from('apps').select('onboarding').eq('app_id', appId).maybeSingle()
+    if (generation !== statusGeneration || appId !== props.appId)
       return
-    latestError.value = !!error
-    if (error) {
-      latest.value = null
-      return
+    statusError.value = !!error
+    if (!error && data) {
+      const wasDone = !!detectedAt.value
+      applyOnboarding(data.onboarding)
+      if (!wasDone && detectedAt.value)
+        track('onboarding_cicd_detected', { via: cicdState.value.detectedVia ?? 'unknown' })
     }
-    const row = (data as Array<Record<string, string>> | null)?.[0]
-    if (!row) {
-      latest.value = null
-      return
-    }
-    latest.value = isBuilder
-      ? { label: t('cicd-guide-latest-build', { platform: t(`cicd-guide-platform-${row.platform === 'ios' ? 'ios' : 'android'}`), status: row.status }), at: row.created_at! }
-      : { label: t('cicd-guide-latest-bundle', { name: row.name }), at: row.created_at! }
   }
   finally {
-    if (generation === latestGeneration)
-      latestLoading.value = false
+    if (generation === statusGeneration)
+      statusLoading.value = false
   }
 }
 
-watch(product, () => {
-  latest.value = undefined
-  if (provider.value)
-    void refreshLatest()
+const detectedLabel = computed(() => {
+  const state = cicdState.value
+  if (!detectedAt.value)
+    return ''
+  const from = state.ciProvider && state.ciProvider !== 'ci'
+    ? state.ciProvider
+    : t(state.detectedVia === 'key' ? 'cicd-guide-status-from-key' : 'cicd-guide-status-from-ci')
+  const builderFirst = !state.otaDetectedAt || (!!state.builderDetectedAt && state.builderDetectedAt < state.otaDetectedAt)
+  return t(builderFirst ? 'cicd-guide-status-detected-builder' : 'cicd-guide-status-detected-ota', { from, date: formatDate(detectedAt.value) })
 })
-watch(provider, (value, previous) => {
-  if (value && !previous)
-    void refreshLatest()
-})
+
+async function markDone() {
+  if (markingDone.value)
+    return
+  markingDone.value = true
+  const appId = props.appId
+  try {
+    const { data, error } = await capgo.rpc('record_app_cicd_setup', { p_app_id: appId, p_event: 'marked_done' })
+    if (error)
+      throw error
+    if (appId === props.appId)
+      applyOnboarding(data ?? withCiCdMarkedDone(onboarding.value))
+    track('onboarding_cicd_marked_done')
+  }
+  catch (error) {
+    console.error('Cannot mark CI/CD as set up', error)
+    toast.error(t('cicd-guide-mark-done-error'))
+  }
+  finally {
+    markingDone.value = false
+  }
+}
+
+// Tracks the guide key so its first use from CI marks this step done, even
+// where the CLI cannot tell it runs in CI.
+async function recordCreatedKey(spec: CiKeySpec, rbacId: unknown) {
+  if (typeof rbacId !== 'string' || !rbacId)
+    return
+  const { data, error } = await capgo.rpc('record_app_cicd_setup', {
+    p_app_id: props.appId,
+    p_event: 'key_created',
+    p_apikey_rbac_id: rbacId,
+    p_selection: { product: product.value, strategy: strategy.value, provider: provider.value },
+  })
+  if (error)
+    console.error('Cannot record the CI/CD key', error)
+  else if (data)
+    applyOnboarding(data)
+}
 
 onMounted(() => {
   void loadDefaultChannel()
-  if (provider.value)
-    void refreshLatest()
+  void refreshStatus()
   track('onboarding_cicd_guide_opened')
-  // Pick up the first CI upload without a reload while the user follows the steps.
-  latestTimer = setInterval(() => {
-    if (provider.value && document.visibilityState === 'visible')
-      void refreshLatest()
+  statusTimer = setInterval(() => {
+    if (!detectedAt.value && document.visibilityState === 'visible')
+      void refreshStatus()
   }, 15000)
 })
 
 onUnmounted(() => {
-  if (latestTimer)
-    clearInterval(latestTimer)
+  if (statusTimer)
+    clearInterval(statusTimer)
 })
 
 const stepIds = computed(() => {
@@ -327,6 +366,26 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       <p class="mt-3 max-w-3xl text-base leading-7 text-slate-600 dark:text-slate-300">
         {{ t('cicd-guide-subtitle') }}
       </p>
+      <p v-if="detectedAt" class="mt-4 flex items-start gap-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/10 dark:text-emerald-200" role="status" data-test="cicd-status-detected">
+        <IconCheck class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+        <span>{{ detectedLabel }}</span>
+      </p>
+      <p v-else-if="cicdState.markedDoneAt" class="mt-4 flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 dark:border-white/15 dark:bg-slate-900 dark:text-slate-200" role="status" data-test="cicd-status-marked-done">
+        <IconCheck class="mt-0.5 h-5 w-5 shrink-0 text-slate-400" aria-hidden="true" />
+        <span>{{ t('cicd-guide-status-marked-done', { date: formatDate(cicdState.markedDoneAt) }) }}</span>
+      </p>
+      <button
+        v-else
+        type="button"
+        class="mt-4 inline-flex min-h-11 items-center gap-2 rounded-sm text-sm font-medium text-slate-600 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 disabled:opacity-50 dark:text-slate-300"
+        :disabled="markingDone"
+        data-test="cicd-mark-done"
+        @click="markDone"
+      >
+        <IconLoader v-if="markingDone" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
+        <IconCheck v-else class="h-4 w-4" aria-hidden="true" />
+        {{ t('cicd-guide-mark-done') }}
+      </button>
     </header>
 
     <section aria-labelledby="cicd-question-product" class="space-y-3">
@@ -714,21 +773,17 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
             <p v-if="strategy === 'pull_request'" class="mt-2 max-w-prose text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t(product === 'ota' ? 'cicd-guide-step-verify-preview-ota' : 'cicd-guide-step-verify-preview-builder') }}
             </p>
-            <output class="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-sm dark:bg-slate-950/60" aria-live="polite" data-test="cicd-latest">
-              <IconLoader v-if="latest === undefined" class="h-4 w-4 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
-              <IconTriangleAlert v-else-if="latestError" class="h-4 w-4 text-amber-600" aria-hidden="true" />
-              <IconCheck v-else-if="latest" class="h-4 w-4 text-emerald-600" aria-hidden="true" />
-              <IconInfo v-else class="h-4 w-4 text-slate-400" aria-hidden="true" />
+            <output class="mt-4 flex flex-wrap items-center gap-3 rounded-xl px-4 py-3 text-sm" :class="detectedAt ? 'bg-emerald-50 dark:bg-emerald-500/10' : 'bg-slate-50 dark:bg-slate-950/60'" aria-live="polite" data-test="cicd-detection">
+              <IconCheck v-if="detectedAt" class="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
+              <IconTriangleAlert v-else-if="statusError" class="h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+              <IconLoader v-else class="h-4 w-4 shrink-0 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
               <span class="min-w-0 flex-1 text-slate-700 dark:text-slate-200">
-                <template v-if="latestError">{{ t('cicd-guide-latest-error') }}</template>
-                <template v-else-if="latest">
-                  <span class="font-medium">{{ latest.label }}</span>
-                  <span class="text-slate-500 dark:text-slate-400"> · {{ formatDate(latest.at) }}</span>
-                </template>
-                <template v-else-if="latest === null">{{ t(product === 'ota' ? 'cicd-guide-latest-none-ota' : 'cicd-guide-latest-none-builder') }}</template>
+                <template v-if="detectedAt">{{ detectedLabel }}</template>
+                <template v-else-if="statusError">{{ t('cicd-guide-status-error') }}</template>
+                <template v-else>{{ t(product === 'ota' ? 'cicd-guide-waiting-ota' : 'cicd-guide-waiting-builder') }}</template>
               </span>
-              <button type="button" class="d-btn d-btn-ghost d-btn-sm min-h-9 text-sky-700 dark:text-azure-300" :disabled="latestLoading" data-test="cicd-latest-refresh" @click="refreshLatest">
-                <IconRefresh class="h-4 w-4" :class="{ 'motion-safe:animate-spin': latestLoading }" aria-hidden="true" />
+              <button v-if="!detectedAt" type="button" class="d-btn d-btn-ghost d-btn-sm min-h-9 text-sky-700 dark:text-azure-300" :disabled="statusLoading" data-test="cicd-detection-refresh" @click="refreshStatus">
+                <IconRefresh class="h-4 w-4" :class="{ 'motion-safe:animate-spin': statusLoading }" aria-hidden="true" />
                 {{ t('cicd-guide-refresh') }}
               </button>
             </output>

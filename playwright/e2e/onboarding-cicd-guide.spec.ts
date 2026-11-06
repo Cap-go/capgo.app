@@ -30,13 +30,20 @@ test.describe('CI/CD setup guide', () => {
     await expect(content).toContainText('CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}')
     await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('Name it CAPGO_TOKEN, paste the key, and click Add secret.')
     await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('gh secret set CAPGO_TOKEN')
-    await expect(page.locator('[data-test="cicd-latest"]')).toContainText('No bundle uploaded yet.')
+    await expect(page.locator('[data-test="cicd-detection"]')).toContainText('Waiting for the first bundle uploaded from CI…')
 
     const keyCard = page.locator('[data-test="cicd-key-CAPGO_TOKEN"]')
     await expect(keyCard).toContainText('Role: App uploader')
     await keyCard.locator('[data-test="cicd-create-key-CAPGO_TOKEN"]').click()
     await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_1')
     await expect(keyCard).toContainText('Copy this key now. Capgo won\'t show it again.')
+    // The key is tracked on the app so its first use from CI completes the step.
+    await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls)).toEqual([{
+      p_app_id: appId,
+      p_event: 'key_created',
+      p_apikey_rbac_id: '00000000-0000-4000-8000-000000000001',
+      p_selection: { product: 'ota', strategy: 'main', provider: 'github' },
+    }])
     const [create] = (await previewState(page)).apikeyCreates
     expect(create).toEqual({
       name: `GitHub Actions CI (${appId})`,
@@ -118,7 +125,7 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-platform-android"]')).toBeChecked()
     await page.locator('[data-test="cicd-platform-ios"]').click()
     await expect(content).toContainText('--platform ios')
-    await expect(page.locator('[data-test="cicd-latest"]')).toContainText('No build requested yet.')
+    await expect(page.locator('[data-test="cicd-detection"]')).toContainText('Waiting for the first build requested from CI…')
 
     // Pull request builds use a separate key that merge request pipelines can read.
     await page.locator('[data-test="cicd-strategy-pull_request"]').click()
@@ -128,11 +135,10 @@ test.describe('CI/CD setup guide', () => {
   })
 
   test('remembers answers per app and warns when there is no default channel', async ({ page }) => {
-    await page.goto(`${fixture}&defaultChannel=0&bundle=1.4.2`)
+    await page.goto(`${fixture}&defaultChannel=0`)
     await page.locator('[data-test="cicd-provider-other"]').click()
     await expect(page.locator('[data-test="cicd-no-default-channel"]')).toBeVisible()
     await expect(page.locator('[data-test="cicd-pipeline-file"]')).toHaveText('shell')
-    await expect(page.locator('[data-test="cicd-latest"]')).toContainText('Latest bundle: 1.4.2')
     await page.reload()
     await expect(page.locator('[data-test="cicd-provider-other"]')).toHaveAttribute('aria-checked', 'true')
     await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
@@ -149,6 +155,25 @@ test.describe('CI/CD setup guide', () => {
     await page.locator('[data-test="cicd-product-builder"]').click()
     await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toHaveCount(0)
     await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
+  })
+
+  test('shows when CI already shipped this app', async ({ page }) => {
+    await page.goto(`${fixture}&cicd=detected`)
+    await expect(page.locator('[data-test="cicd-status-detected"]')).toContainText('CI/CD is connected: Capgo received a bundle from GitHub Actions on')
+    await expect(page.locator('[data-test="cicd-mark-done"]')).toHaveCount(0)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-detection"]')).toContainText('CI/CD is connected')
+    await expect(page.locator('[data-test="cicd-detection-refresh"]')).toHaveCount(0)
+  })
+
+  test('lets users who already deploy from CI mark it as set up', async ({ page }) => {
+    await page.goto(fixture)
+    await page.locator('[data-test="cicd-mark-done"]').click()
+    await expect(page.locator('[data-test="cicd-status-marked-done"]')).toContainText('Marked as set up on')
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls)).toEqual([{ p_app_id: appId, p_event: 'marked_done' }])
+    await page.goto(`${fixture}&cicd=marked`)
+    await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+    await expect(page.locator('[data-test="cicd-mark-done"]')).toHaveCount(0)
   })
 
   test('explains when only an admin can create the CI key', async ({ page }) => {

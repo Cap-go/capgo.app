@@ -4226,6 +4226,7 @@ export type Database = {
         Returns: boolean
       }
       app_has_real_bundle: { Args: { p_app_id: string }; Returns: boolean }
+      app_onboarding_cicd_timestamp: { Args: never; Returns: string }
       app_version_manifest_jsonb_unmigrated: {
         Args: {
           p_manifest: Database["public"]["CompositeTypes"]["manifest_entry"][]
@@ -5928,6 +5929,24 @@ export type Database = {
       readable_app_version_ids: { Args: never; Returns: number[] }
       readable_group_ids: { Args: never; Returns: string[] }
       readable_org_customer_ids: { Args: never; Returns: string[] }
+      record_app_cicd_deploy: {
+        Args: {
+          p_apikey_rbac_id: string
+          p_app_id: string
+          p_ci_provider: string
+          p_product: string
+        }
+        Returns: boolean
+      }
+      record_app_cicd_setup: {
+        Args: {
+          p_apikey_rbac_id?: string
+          p_app_id: string
+          p_event: string
+          p_selection?: Json
+        }
+        Returns: Json
+      }
       record_build_time: {
         Args: {
           p_app_id: string

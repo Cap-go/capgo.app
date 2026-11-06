@@ -16,6 +16,7 @@ import DialogV2 from '../../src/components/DialogV2.vue'
 import BuildTable from '../../src/components/tables/BuildTable.vue'
 import { i18n } from '../../src/modules/i18n'
 import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
+import CiCdPage from '../../src/pages/app/[app].ci-cd.vue'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { BUILDER_STEP_IDS } from '../../src/services/builderOnboardingChecklist'
 import { useConsole } from '../../src/services/console'
@@ -70,6 +71,13 @@ const state = {
   apikeyError: params.get('apikeyError'),
   latestBundles: (params.get('bundle') ? [{ name: params.get('bundle'), created_at: '2026-11-06T10:00:00.000Z' }] : []) as Array<{ name: string | null, created_at: string }>,
 }
+// apps.onboarding.cicd, reactive so the sidebar follows the guide's writes.
+const cicdLedger = ref<Record<string, unknown> | undefined>(params.get('cicd') === 'detected'
+  ? { ota_detected_at: '2026-11-06T10:00:00.000Z', detected_via: 'ci', ci_provider: 'GitHub Actions' }
+  : params.get('cicd') === 'marked'
+    ? { marked_done_at: '2026-11-05T10:00:00.000Z' }
+    : undefined)
+const cicdSetupCalls: Array<Record<string, unknown>> = []
 if (cicdView && params.get('defaultChannel') !== '0')
   state.channels.push({ id: 1, app_id: previewAppId, name: params.get('defaultChannel') ?? 'production', public: true })
 if (params.get('checklistState') === 'completed') {
@@ -107,7 +115,7 @@ if (params.get('otaComplete') === '1') {
   state.channels.push({ id: 1, app_id: previewAppId, name: 'staging', public: true })
 }
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
-const preview = { state, events, copyAiPlacements, channelEvents, gsap, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
+const preview = { state, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 const previewUserOnboarding = {
   profile_completed_at: '2026-09-25T00:00:00.000Z',
   abtests: {
@@ -144,8 +152,9 @@ function previewOnboarding() {
   const selectedPath = assignment === 'both-ota' || assignment === 'ota-only' ? 'ota' : 'builder'
   const hasBuilder = state.builderActivated || builderComponentView || assignment === 'builder-only' || assignment === 'both-builder' || assignment === 'both-ota'
   const hasOta = (state.builderActivated && state.version === 3) || assignment === 'ota-only' || assignment === 'both-builder' || assignment === 'both-ota'
+  const cicd = cicdLedger.value ? { cicd: cicdLedger.value } : {}
   if (hasBuilder || hasOta) {
-    return { ...dismissal, features, setup: {
+    return { ...dismissal, ...cicd, features, setup: {
       todo_list_version: 4,
       ...(hasBuilder ? { builder_todo_list_version: '1' } : {}),
       ...(hasOta ? { ota_todo_list_version: '1' } : {}),
@@ -160,7 +169,7 @@ function previewOnboarding() {
       source: params.has('checklistState') ? 'cli' : undefined,
     } }
   }
-  return { ...dismissal, features, setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome, source: params.has('checklistState') ? 'cli' : undefined } }
+  return { ...dismissal, ...cicd, features, setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome, source: params.has('checklistState') ? 'cli' : undefined } }
 }
 
 // This isolated component fixture never sends requests to production.
@@ -240,7 +249,17 @@ const fixtureFetch: typeof fetch = async (input, init) => {
     state.apikeyCreates.push(body)
     if (state.apikeyError)
       return new Response(JSON.stringify({ error: state.apikeyError }), { status: 403, headers: { 'Content-Type': 'application/json' } })
-    return new Response(JSON.stringify({ key: `cap_ci_preview_key_${state.apikeyCreates.length}`, id: state.apikeyCreates.length }), { headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ key: `cap_ci_preview_key_${state.apikeyCreates.length}`, id: state.apikeyCreates.length, rbac_id: `00000000-0000-4000-8000-${String(state.apikeyCreates.length).padStart(12, '0')}` }), { headers: { 'Content-Type': 'application/json' } })
+  }
+  if (url.pathname.endsWith('/rpc/record_app_cicd_setup')) {
+    const args = JSON.parse(String(init?.body)) as Record<string, unknown>
+    cicdSetupCalls.push(args)
+    const at = '2026-11-06T12:00:00.000Z'
+    if (args.p_event === 'marked_done')
+      cicdLedger.value = { ...cicdLedger.value, marked_done_at: at }
+    else
+      cicdLedger.value = { ...cicdLedger.value, keys: [args.p_apikey_rbac_id], key_created_at: at }
+    return new Response(JSON.stringify(previewOnboarding()), { headers: { 'Content-Type': 'application/json' } })
   }
   if (url.pathname.includes('/rpc/')) {
     return new Response(JSON.stringify(state.channelPermissions), { headers: { 'Content-Type': 'application/json' } })
@@ -282,7 +301,7 @@ const fixtureFetch: typeof fetch = async (input, init) => {
     return new Response(JSON.stringify(single ? rows[0] ?? {} : rows), { headers: { 'Content-Type': 'application/json' } })
   }
   if (cicdView && url.pathname.endsWith('/apps'))
-    return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: '00000000-0000-4000-8000-000000000002' }]), { headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: '00000000-0000-4000-8000-000000000002', onboarding: previewOnboarding() }]), { headers: { 'Content-Type': 'application/json' } })
   if (builderComponentView && url.pathname.endsWith('/apps')) {
     return new Response(JSON.stringify({ onboarding: previewOnboarding() }), { headers: { 'Content-Type': 'application/json' } })
   }
@@ -436,6 +455,7 @@ const router = createRouter({
             return () => h(GettingStartedPage)
           },
         }) },
+        { path: '/app/:app/ci-cd', name: '/app/[app].ci-cd', component: defineComponent({ setup: () => () => h('div', [h(GettingStartedNav), h(CiCdPage)]) }) },
         // A resume id renders the setup UI the way Getting started embeds it.
         { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => builderIntroView ? h(BuildTable, { appId: previewAppId }) : h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined }) }) },
       ]
