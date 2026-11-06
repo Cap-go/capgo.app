@@ -14,6 +14,7 @@ export const ORG_SETTINGS_EMAIL_PREFERENCE_KEYS = [
   'device_error',
   'channel_self_rejected',
   'onboarding',
+  'trial_usage_recap',
   'builder_onboarding',
 ] as const satisfies readonly EmailPreferenceKey[]
 

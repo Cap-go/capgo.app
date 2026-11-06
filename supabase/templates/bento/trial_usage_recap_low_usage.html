@@ -1,0 +1,60 @@
+<!-- Bento events: org:trial_usage_recap, org:trial_end_usage_recap -->
+<!-- email_variant: low_usage -->
+<!-- Subject: Finish your first Capgo ship before {{ event.details.trial_end_date_label }} -->
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0;padding:24px 0;background-color:#f4f6f8;font-family:Helvetica,Arial,sans-serif;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;">
+        <tr>
+          <td style="padding:28px 28px 8px 28px;color:#0f172a;font-size:20px;font-weight:700;line-height:1.3;">
+            {% if event.details.kind == 'trial_usage_recap' %}
+              Three days left: ship your first update
+            {% else %}
+              Your trial ends soon: ship your first update
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 28px 16px 28px;color:#475569;font-size:15px;line-height:1.55;">
+            We do not show empty stats as wins. Your trial ends on
+            <strong>{{ event.details.trial_end_date_label }}</strong> (UTC calendar date). Follow these steps to get live updates working.
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 28px 12px 28px;color:#0f172a;font-size:15px;line-height:1.6;">
+            <ol style="margin:0;padding-left:20px;">
+              <li style="margin-bottom:10px;">
+                Run onboarding in your Capacitor project:
+                <a href="{{ event.details.docs_cli_url }}" style="color:#119eff;font-weight:600;">Onboarding docs</a>
+              </li>
+              <li style="margin-bottom:10px;">
+                Upload your first bundle:
+                <a href="{{ event.details.docs_upload_url }}" style="color:#119eff;font-weight:600;">Upload a bundle</a>
+              </li>
+              <li style="margin-bottom:10px;">
+                Point devices at the right channel:
+                <a href="{{ event.details.docs_channels_url }}" style="color:#119eff;font-weight:600;">Channels</a>
+              </li>
+            </ol>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 28px 28px 28px;">
+            <a href="{{ event.details.plans_url }}/" style="display:inline-block;background-color:#119eff;color:#0f172a;text-decoration:none;font-weight:700;font-size:15px;padding:12px 20px;border-radius:8px;">
+              Choose a plan
+            </a>
+            {% if event.details.show_pay_as_you_go %}
+            <p style="margin:16px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">
+              Under 500 active devices in a day: pay as you go credits can fit a small rollout. Open Usage to add credits, then review plans.
+            </p>
+            <p style="margin:8px 0 0 0;">
+              <a href="{{ event.details.usage_url }}/" style="color:#119eff;font-weight:600;text-decoration:underline;font-size:14px;">Open Usage</a>
+            </p>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>

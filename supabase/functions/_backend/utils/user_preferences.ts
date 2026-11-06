@@ -22,6 +22,7 @@ const EMAIL_PREF_DISABLED_TAGS: Record<EmailPreferenceKey, string> = {
   usage_limit: 'usage_limit_disabled',
   credit_usage: 'credit_usage_disabled',
   onboarding: 'onboarding_disabled',
+  trial_usage_recap: 'trial_usage_recap_disabled',
   builder_onboarding: 'builder_onboarding_disabled',
   weekly_stats: 'weekly_stats_disabled',
   monthly_stats: 'monthly_stats_disabled',

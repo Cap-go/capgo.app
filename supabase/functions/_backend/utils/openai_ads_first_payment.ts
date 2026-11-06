@@ -65,7 +65,11 @@ export function getSubscriptionActivationSource(stripeEvent: Stripe.Event | null
   if (stripeEvent?.type !== 'customer.subscription.updated' || stripeEvent.data.object.status !== 'active')
     return null
   const previousStatus = (stripeEvent.data.previous_attributes as Partial<Stripe.Subscription> | undefined)?.status
-  return previousStatus === 'incomplete' || previousStatus === 'trialing' ? previousStatus : null
+  if (previousStatus === 'incomplete')
+    return 'incomplete'
+  if (previousStatus === 'trialing')
+    return 'trialing'
+  return null
 }
 
 export function isIncompleteSubscriptionActivation(stripeEvent: Stripe.Event | null | undefined): boolean {

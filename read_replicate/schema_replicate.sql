@@ -425,7 +425,7 @@ CREATE TABLE public.orgs (
     stats_updated_at timestamp without time zone,
     last_stats_updated_at timestamp without time zone,
     enforcing_2fa boolean DEFAULT false NOT NULL,
-    email_preferences jsonb DEFAULT '{"onboarding": true, "usage_limit": true, "credit_usage": true, "device_error": true, "weekly_stats": true, "monthly_stats": true, "bundle_created": true, "bundle_deployed": true, "deploy_stats_24h": true, "billing_period_stats": true, "channel_self_rejected": true}'::jsonb NOT NULL,
+    email_preferences jsonb DEFAULT '{"onboarding": true, "usage_limit": true, "credit_usage": true, "device_error": true, "weekly_stats": true, "monthly_stats": true, "bundle_created": true, "bundle_deployed": true, "deploy_stats_24h": true, "trial_usage_recap": true, "billing_period_stats": true, "channel_self_rejected": true}'::jsonb NOT NULL,
     password_policy_config jsonb,
     enforce_hashed_api_keys boolean DEFAULT false NOT NULL,
     require_apikey_expiration boolean DEFAULT false NOT NULL,
