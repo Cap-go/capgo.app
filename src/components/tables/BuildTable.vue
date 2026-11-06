@@ -13,6 +13,7 @@ import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingCheckli
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
+import { rememberSimulator } from '~/services/simulatorSessions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -348,6 +349,7 @@ async function loadSavedOutputs(builds: Element[], current: () => boolean) {
 }
 
 async function openSavedBuild(jobId: string) {
+  const tab = window.open('', '_blank')
   openingJob.value = jobId
   try {
     const { data } = await capgo.auth.getSession()
@@ -359,15 +361,21 @@ async function openSavedBuild(jobId: string) {
       headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
       body: JSON.stringify({ app_id: props.appId, platform: 'ios', build_job_id: jobId }),
     })
-    const payload = await response.json() as { message?: string, error?: string, data?: { url?: string, install_error?: string | null } }
+    const payload = await response.json() as { message?: string, error?: string, data?: { id?: string, url?: string, install_error?: string | null } }
     if (!response.ok)
       throw new Error(payload.message || payload.error || t('simulator-did-not-start'))
-    if (payload.data?.url)
-      window.open(payload.data.url, '_blank', 'noopener')
+    const url = payload.data?.url || ''
+    if (payload.data?.id)
+      rememberSimulator(props.appId, { id: payload.data.id, url })
+    if (url && tab)
+      tab.location.replace(url)
+    else
+      tab?.close()
     if (payload.data?.install_error)
       toast.error(payload.data.install_error)
   }
   catch (error) {
+    tab?.close()
     toast.error(error instanceof Error ? error.message : t('simulator-did-not-start'))
   }
   finally {

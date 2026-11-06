@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, simulatorBillableSeconds, simulatorBillingInstant, simulatorCreateWasInterrupted, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillingInstant, simulatorCreateWasInterrupted, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -62,5 +62,15 @@ describe('simulator sessions', () => {
       platform: 'ios',
       orgId: '91f8cce5-76bc-48f7-8c0e-f4ca64fa2f57',
     }).id).toBe('6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4')
+  })
+
+  it('streams a saved IPA and stops when the declared size is past the device limit', async () => {
+    expect(savedIpaContentLength(null)).toBeUndefined()
+    expect(savedIpaContentLength(String(SAVED_IPA_MAX_BYTES))).toBe(SAVED_IPA_MAX_BYTES)
+    expect(savedIpaContentLength(String(SAVED_IPA_MAX_BYTES + 1))).toBeGreaterThan(SAVED_IPA_MAX_BYTES)
+    const text = new TextDecoder().decode(await new Response(multipartIpaStream(new Blob(['ipa']).stream(), 'bound')).arrayBuffer())
+    expect(text.startsWith('--bound\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\n')).toBe(true)
+    expect(text.endsWith('ipa\r\n--bound--\r\n')).toBe(true)
+    await expect(new Response(multipartIpaStream(new Blob([new Uint8Array(8)]).stream(), 'bound', 4)).arrayBuffer()).rejects.toThrow('too large')
   })
 })

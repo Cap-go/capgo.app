@@ -27,6 +27,35 @@ export interface EmulatorSessionData {
 const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
 const SIMULATOR_HOST_TIMEOUT_MS = 30_000
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
+
+export function savedIpaContentLength(header: string | null): number | undefined {
+  if (!header)
+    return undefined
+  const length = Number(header)
+  if (!Number.isFinite(length) || length < 0)
+    return undefined
+  return length
+}
+
+export function multipartIpaStream(body: ReadableStream<Uint8Array>, boundary: string, maxBytes = SAVED_IPA_MAX_BYTES): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder()
+  let sent = 0
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`--${boundary}\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\nContent-Type: application/octet-stream\r\n\r\n`))
+    },
+    transform(chunk, controller) {
+      sent += chunk.byteLength
+      if (sent > maxBytes)
+        throw new Error('The saved build is too large to install.')
+      controller.enqueue(chunk)
+    },
+    flush(controller) {
+      controller.enqueue(encoder.encode(`\r\n--${boundary}--\r\n`))
+    },
+  }))
+}
 
 export function emulatorSessionCreateBody(input: { id?: string, appId: string, platform: 'ios' | 'android', orgId: string, name?: string }) {
   return {
@@ -232,19 +261,23 @@ async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: strin
   if (!saved || saved.kind !== 'ios_ipa')
     throw new Error('This build has no saved iOS app.')
   const file = await fetch(saved.url)
-  if (!file.ok)
+  if (!file.ok || !file.body)
     throw new Error('The saved build could not be downloaded.')
-  const bytes = await file.arrayBuffer()
-  if (bytes.byteLength > 200 * 1024 * 1024)
+  const length = savedIpaContentLength(file.headers.get('content-length'))
+  if (length !== undefined && length > SAVED_IPA_MAX_BYTES)
     throw new Error('The saved build is too large to install.')
-  const form = new FormData()
-  form.append('ipa', new Blob([bytes], { type: 'application/octet-stream' }), 'app.ipa')
+  const boundary = `capgo-${crypto.randomUUID()}`
   const installUrl = new URL('api/install', sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`)
-  const response = await fetch(installUrl, {
+  const init: RequestInit & { duplex?: 'half' } = {
     method: 'POST',
-    headers: { authorization: `Bearer ${accessKey}` },
-    body: form,
-  })
+    headers: {
+      'authorization': `Bearer ${accessKey}`,
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+    },
+    body: multipartIpaStream(file.body, boundary),
+    duplex: 'half',
+  }
+  const response = await fetch(installUrl, init)
   if (!response.ok) {
     const text = await response.text().catch(() => '')
     throw new Error(text.slice(0, 300) || 'The simulator could not install the build.')
