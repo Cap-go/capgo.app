@@ -19,7 +19,7 @@ ENV_FILE="${REPO_ROOT}/internal/cloudflare/.env.local"
 cd "$REPO_ROOT" || error_exit "cannot cd to repo root"
 
 # Compat date for local wrangler dev: see scripts/wrangler-dev-compat.sh
-ARGS=("bash" "scripts/wrangler-dev-compat.sh" "--port" "7777")
+ARGS=("bash" "scripts/wrangler-dev-compat.sh" "-c" "cloudflare_workers/api/wrangler.jsonc" "--port" "7777")
 
 # Read the file line by line
 while IFS= read -r line || [ -n "$line" ]; do

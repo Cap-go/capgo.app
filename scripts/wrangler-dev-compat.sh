@@ -8,7 +8,13 @@ for arg in "$@"; do
     --compatibility-date|--compatibility-date=*)
       exec bunx wrangler dev "$@"
       ;;
-  esac
+    esac
 done
-compat="${WRANGLER_DEV_COMPATIBILITY_DATE:-$(date -u +%Y-%m-%d)}"
+today_utc="$(date -u +%Y-%m-%d)"
+max_supported="${WRANGLER_DEV_MAX_COMPATIBILITY_DATE:-2026-11-11}"
+if [ -n "${WRANGLER_DEV_COMPATIBILITY_DATE:-}" ]; then
+  compat="$WRANGLER_DEV_COMPATIBILITY_DATE"
+else
+  compat="$(printf '%s\n%s\n' "$today_utc" "$max_supported" | sort -V | head -n1)"
+fi
 exec bunx wrangler dev --compatibility-date "${compat}" "$@"
