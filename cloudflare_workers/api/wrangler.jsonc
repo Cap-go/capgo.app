@@ -143,6 +143,12 @@
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
         }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
+        }
       ]
     },
     "preprod": {
@@ -246,6 +252,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-preprod"
         }
       ]
     },
@@ -351,6 +363,12 @@
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
           "id": "ae1fe6178b564adc9fc9a71ccc769a35"
         }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-alpha"
+        }
       ]
     },
     "local": {
@@ -372,7 +390,26 @@
       "vars": {
         "ENV_NAME": "capgo_api-local"
       },
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "local-channel-self-store" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "local-plugin-notification-queue" }, { "binding": "PLUGIN_STATE", "id": "local-plugin-state" }]
+      "kv_namespaces": [
+        {
+          "binding": "CHANNEL_SELF_STORE",
+          "id": "local-channel-self-store"
+        },
+        {
+          "binding": "PLUGIN_NOTIFICATION_QUEUE",
+          "id": "local-plugin-notification-queue"
+        },
+        {
+          "binding": "PLUGIN_STATE",
+          "id": "local-plugin-state"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "local-plugin-state-pointers"
+        }
+      ]
     }
   }
 }

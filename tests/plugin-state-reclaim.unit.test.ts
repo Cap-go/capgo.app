@@ -3,6 +3,7 @@ import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/util
 import { PgDialect } from 'drizzle-orm/pg-core'
 import { Hono } from 'hono/tiny'
 import { describe, expect, it, vi } from 'vitest'
+import { publicationProviders } from './plugin-state-publication-fixture.ts'
 import { pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { drainPluginStateSync } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
 
@@ -18,6 +19,7 @@ vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
   getPgClient: async () => ({}),
   getDrizzleClient: () => ({ execute: provider.execute }),
   closeClient: provider.close,
+  withPgTransaction: async <T>(client: unknown, run: (client: unknown) => Promise<T>) => run(client),
 }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: provider.log,
@@ -52,6 +54,7 @@ describe('plugin state same-app reclaim', () => {
         return { rows: [{ result: {
           status: 'ok',
           lease_token: `lease-${claimCount}`,
+          generation: String(claimCount),
           has_more: claimCount === 1,
           apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: bundleName }], attempts: 1 }],
         } }] }
@@ -65,35 +68,32 @@ describe('plugin state same-app reclaim', () => {
       return { rows: [] }
     })
 
-    const values = new Map<string, unknown>()
-    const put = vi.fn(async (key: string, value: string) => {
-      values.set(key, JSON.parse(value))
-    })
-    const binding = { put }
+    const storage = publicationProviders()
+    const put = storage.namespace.put
     const app = new Hono<MiddlewareKeyVariables>()
     app.post('/', async (c) => {
       c.set('requestId', 'plugin-state-reclaim-test')
       return c.json(await drainPluginStateSync(c))
     })
 
-    const first = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: binding })
+    const first = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
     expect(await first.json()).toEqual({ claims: 2, apps: 1, failed: 0 })
     expect(versionReads).toBe(1)
     expect(put).toHaveBeenCalledTimes(1)
-    expect(values.get(await pluginStateVersionKey(appId, bundleName))).toMatchObject({ id: 101 })
+    expect(storage.publishedValue(await pluginStateVersionKey(appId, bundleName))).toMatchObject({ id: 101 })
     expect(argument(acks[0], 'p_done')).toEqual([appId])
     expect(argument(acks[0], 'p_deferred')).toEqual([])
     expect(argument(acks[1], 'p_done')).toEqual([])
     expect(argument(acks[1], 'p_failed')).toEqual([])
     expect(argument(acks[1], 'p_deferred')).toEqual([appId])
 
-    const second = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: binding })
+    const second = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
     expect(await second.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
     expect(versionReads).toBe(2)
     expect(put).toHaveBeenCalledTimes(2)
-    expect(values.get(await pluginStateVersionKey(appId, bundleName))).toMatchObject({ id: 202 })
+    expect(storage.publishedValue(await pluginStateVersionKey(appId, bundleName))).toMatchObject({ id: 202 })
     expect(argument(acks[2], 'p_done')).toEqual([appId])
     expect(argument(acks[2], 'p_deferred')).toEqual([])
-    expect(provider.close).toHaveBeenCalledTimes(2)
+    expect(provider.close).toHaveBeenCalledTimes(4)
   })
 })

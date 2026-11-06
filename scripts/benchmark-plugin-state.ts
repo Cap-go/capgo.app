@@ -133,6 +133,7 @@ export async function comparePluginState(probe: PluginStateProbe, kvFirst = fals
   const second = await probePluginState(probe, kvFirst ? 'db' : 'kv')
   const db = kvFirst ? second : first
   const kv = kvFirst ? first : second
+  strictEqual(db.state === 'kv' || db.state === 'kv-escaped', false, `${probe.name}: DB request selected KV`)
   strictEqual(kv.state, 'kv', `${probe.name}: KV was not authoritative (${kv.state ?? 'none'}), status ${kv.status}, body ${shortBody(kv.body)}`)
   strictEqual(kv.status, db.status, `${probe.name}: status parity`)
   strictEqual(timedErrorBody.safeParse(kv.body).success, timedErrorBody.safeParse(db.body).success,
@@ -273,6 +274,8 @@ export async function measurePluginStatePropagation(fixture: PluginStateFixture,
     let requests = 0
     while (performance.now() - committed < timeoutMs) {
       const response = await probePluginState(probe, mode)
+      if (mode === 'db')
+        strictEqual(response.state === 'kv' || response.state === 'kv-escaped', false, 'Bundle propagation: DB request selected KV')
       requests++
       const body = z.object({ version: z.string().optional() }).passthrough().safeParse(response.body)
       if (response.status === 200 && body.success && body.data.version === target.name && (mode === 'db' || response.state === 'kv'))
@@ -316,6 +319,7 @@ export async function comparePluginStateChannelSequence(fixture: PluginStateFixt
     const db = kvFirst ? second : first
     const kv = kvFirst ? first : second
     const name = `${pluginVersion} ${step.label}`
+    strictEqual(db.state === 'kv' || db.state === 'kv-escaped', false, `${name}: DB request selected KV`)
     strictEqual(db.status, 200, `${name}: DB HTTP status, body ${shortBody(db.body)}`)
     strictEqual(kv.status, db.status, `${name}: HTTP status parity`)
     strictEqual(kv.state, 'kv', `${name}: KV must serve the response, body ${shortBody(kv.body)}`)
@@ -373,13 +377,15 @@ export async function runPluginStateBenchmark(samples = 40) {
     return {
       generated_at: new Date().toISOString(),
       environment: 'Local workerd; DB and KV on this machine; serial interleaved requests',
+      publication: 'Immutable Workers KV values selected by conditional R2 pointers; Cache API in front',
       limitations: [
         'Local timings do not predict worldwide latency or KV replication lag.',
         'Cache API evictions do not evict the KV service cache or database buffers.',
         'Propagation is primary COMMIT to observed reply while an independently invoked writer drain and local tag purge run in flight; polling resolution is 25ms plus request time. No writer completion is awaited before polling.',
         'Channel surfing rows are single operations, not latency distributions.',
         'Channel surfing uses independent fresh devices per mode for the same SET/read/DELETE/read sequence; SET always performs its first assignment. Which mode runs first alternates by plugin generation.',
-        'Every measured DB/KV pair has identical HTTP status and parsed JSON except absolute rateLimitResetAt timestamps, which are checked against each request interval and retryAfterSeconds. KV replies must carry X-Plugin-State: kv.',
+        'Every measured DB/KV pair has identical HTTP status and parsed JSON except absolute rateLimitResetAt timestamps, which are checked against each request interval and retryAfterSeconds. KV replies must carry X-Plugin-State: kv, and DB replies must not carry a KV marker.',
+        'The fixture has fewer than 500 forced overrides and fitting manifests. Large override sets and manifests marked for replica fallback require separate regional cost and latency measurements.',
       ],
       measurements,
       channel_surfing: surfing,

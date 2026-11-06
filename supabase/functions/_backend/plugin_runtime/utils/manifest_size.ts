@@ -380,11 +380,12 @@ function pluginStateManifestSizeRows(session: PluginStateSession): ManifestSizeR
           await load(file.version_id)
       }
       let fallback: Parameters<typeof evalManifestSizeLookup>[2] = null
-      if (versionId != null) {
+      const hasUnscopedFiles = files.some(file => file.version_id == null)
+      if (hasUnscopedFiles && versionId != null) {
         await load(versionId)
         fallback = { versionId }
       }
-      else if (versionName != null) {
+      else if (hasUnscopedFiles && versionName != null) {
         const version = await session.versionByName(versionName)
         if (version && version.deleted === false)
           await load(version.id)

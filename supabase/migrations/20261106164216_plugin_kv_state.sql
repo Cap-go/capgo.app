@@ -9,8 +9,9 @@
 -- leave every data center.
 --
 -- The write path only records work and tolerates sync failures:
--- - triggers only INSERT into an identity-keyed queue (no unique constraint,
---   so no writer blocks on another writer's row) and queue one wake per
+-- - triggers INSERT into an identity-keyed queue and deduplicate only within
+--   their own producer xid8, so another producer never conflicts on a queue
+--   row; notifications use one indexed unique lookup per logical key and one wake per
 --   transaction, sent after commit (http_dispatch_post);
 -- - claim_plugin_state_sync() leases every due row of up to p_limit apps in
 --   its own short transaction, never an app that another claim still holds,
@@ -24,8 +25,8 @@
 --
 -- Execution model: service_role-only internal RPCs; no new policy or public
 -- request-path function. Claims are serialized in short transactions, limited
--- to 200 apps and 128 pending rows per app. The worker requests 4 apps per
--- claim and shares an 800-KV-operation invocation budget. Full backfills page
+-- to 200 apps and 48 pending rows per app. The worker requests 4 apps per
+-- claim and shares an 800-provider-operation invocation budget. Full backfills page
 -- by (app_id, name) / (app_id, device_id) and persist their cursor.
 -- apps/channels/orgs are console-scale; app_versions/channel_devices can be
 -- large, and manifest/delta datasets contain millions of rows. prod.sql
@@ -42,6 +43,16 @@
 -- idx_channels_rollout_version, apps.owner_org finx_apps_owner_org,
 -- orgs.customer_id idx_orgs_customer_id, version_files.file_ids
 -- version_files_file_ids_gin_idx, app_versions primary key).
+-- Transaction-local enqueue dedup uses
+-- plugin_state_sync_pending_producer_job_unique (producer_xid, producer_job_key).
+-- The existing pgcrypto digest(text,text), text length, concatenation and
+-- integer output functions are immutable. No extension or function grant is added.
+
+-- Claims allocate a global fencing generation under their short advisory
+-- lock. Values are strings in JSON so bigint precision survives JavaScript.
+CREATE SEQUENCE public.plugin_state_sync_generation AS bigint;
+ALTER SEQUENCE public.plugin_state_sync_generation OWNER TO postgres;
+REVOKE ALL ON SEQUENCE public.plugin_state_sync_generation FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE TABLE public.plugin_state_sync_pending (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -54,7 +65,21 @@ CREATE TABLE public.plugin_state_sync_pending (
   due_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
   attempts integer NOT NULL DEFAULT 0,
   lease_token uuid,
-  leased_until timestamptz
+  leased_until timestamptz,
+  -- A transaction can touch the same app/manifest thousands of times through
+  -- row-level view triggers. Other producer transactions must always retain
+  -- their own invalidation, even while an earlier job is leased.
+  producer_xid xid8 NOT NULL DEFAULT pg_catalog.pg_current_xact_id(),
+  -- Fixed-width index keys also support long app/device/version identifiers.
+  -- Character-count prefixes make the three text components unambiguous.
+  -- Explicit digest(text,text) is immutable, unlike client-encoded textsend.
+  producer_job_key bytea GENERATED ALWAYS AS (extensions.digest(
+    pg_catalog.length(app_id)::text || ':' || app_id
+    || pg_catalog.length(kind)::text || ':' || kind
+    || pg_catalog.length(ref)::text || ':' || ref,
+    'sha256'
+  )) STORED,
+  CONSTRAINT plugin_state_sync_pending_producer_job_unique UNIQUE (producer_xid, producer_job_key)
 );
 CREATE INDEX plugin_state_sync_pending_due_at_idx ON public.plugin_state_sync_pending (due_at);
 CREATE INDEX plugin_state_sync_pending_app_id_idx ON public.plugin_state_sync_pending (app_id);
@@ -94,7 +119,11 @@ CREATE TABLE public.plugin_state_sync_cooldowns (
 CREATE TABLE public.plugin_state_sync_state (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
   backfill_after text,
-  backfill_done_at timestamptz
+  backfill_done_at timestamptz,
+  gc_cursor text,
+  gc_due_at timestamptz NOT NULL DEFAULT '-infinity',
+  gc_lease_token uuid,
+  gc_leased_until timestamptz
 );
 INSERT INTO public.plugin_state_sync_state (id) VALUES (true) ON CONFLICT DO NOTHING;
 
@@ -179,12 +208,19 @@ BEGIN
   INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
   SELECT DISTINCT item.app_id, p_kind, COALESCE(item.ref, '')
   FROM ROWS FROM (pg_catalog.unnest(p_app_ids), pg_catalog.unnest(COALESCE(p_refs, ARRAY[]::text[]))) AS item (app_id, ref)
-  WHERE item.app_id IS NOT NULL AND item.app_id <> '';
+  WHERE item.app_id IS NOT NULL AND item.app_id <> ''
+  ON CONFLICT ON CONSTRAINT plugin_state_sync_pending_producer_job_unique DO NOTHING;
 
   -- One wake per transaction (an app delete cascades to several statements).
   IF pg_catalog.current_setting('capgo.plugin_state_wake_sent', true) IS DISTINCT FROM 'on' THEN
     PERFORM pg_catalog.set_config('capgo.plugin_state_wake_sent', 'on', true);
-    PERFORM public.wake_plugin_state_sync();
+    BEGIN
+      PERFORM public.wake_plugin_state_sync();
+    EXCEPTION WHEN OTHERS THEN
+      -- A dispatch failure must roll back only the wake, never the pending
+      -- changes inserted above. The existing tick retries the durable work.
+      RAISE WARNING 'plugin state wake failed: %', SQLERRM;
+    END;
   END IF;
 EXCEPTION WHEN OTHERS THEN
   -- The sync is an accelerator; never fail the business write.
@@ -237,6 +273,7 @@ DECLARE
   v_lease interval := '2 minutes';
   v_token uuid := pg_catalog.gen_random_uuid();
   v_apps jsonb;
+  v_generation text;
 BEGIN
   -- Claims are serialized: an app is never leased by two drains at once.
   IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('plugin_state_sync_claim')) THEN
@@ -275,7 +312,7 @@ BEGIN
         AND (p.lease_token IS NULL OR p.leased_until <= v_now)
         AND p.attempts < 5
       ORDER BY p.id
-      LIMIT 128
+      LIMIT 48
     ) AS candidate
   ),
   claimed AS (
@@ -299,8 +336,10 @@ BEGIN
     RETURN pg_catalog.jsonb_build_object('status', 'empty');
   END IF;
 
+  v_generation := pg_catalog.nextval('public.plugin_state_sync_generation'::pg_catalog.regclass)::text;
   RETURN pg_catalog.jsonb_build_object(
     'status', 'ok',
+    'generation', v_generation,
     'lease_token', v_token,
     'apps', v_apps,
     'has_more', EXISTS (
@@ -326,7 +365,8 @@ CREATE OR REPLACE FUNCTION public.ack_plugin_state_sync(
   p_retry_after_seconds integer DEFAULT 10,
   p_full_done text[] DEFAULT '{}',
   p_removed text[] DEFAULT '{}',
-  p_deferred text[] DEFAULT '{}'
+  p_deferred text[] DEFAULT '{}',
+  p_versions_changed text[] DEFAULT '{}'
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -337,6 +377,39 @@ DECLARE
   v_now timestamptz := pg_catalog.clock_timestamp();
   v_dropped integer;
 BEGIN
+  -- An expired/replaced drain must not settle work or overwrite bookkeeping
+  -- for its replacement. R2 publication itself is independently CAS-fenced.
+  p_done := ARRAY(SELECT DISTINCT p.app_id FROM public.plugin_state_sync_pending p
+    WHERE p.lease_token = p_lease_token AND p.leased_until > v_now AND p.app_id = ANY (COALESCE(p_done, '{}')));
+  p_failed := ARRAY(SELECT DISTINCT p.app_id FROM public.plugin_state_sync_pending p
+    WHERE p.lease_token = p_lease_token AND p.leased_until > v_now AND p.app_id = ANY (COALESCE(p_failed, '{}')));
+  p_deferred := ARRAY(SELECT DISTINCT p.app_id FROM public.plugin_state_sync_pending p
+    WHERE p.lease_token = p_lease_token AND p.leased_until > v_now AND p.app_id = ANY (COALESCE(p_deferred, '{}')));
+
+  -- Persist purges in this same transaction before removing sync work. Do
+  -- not call the best-effort notify helper here: its EXCEPTION handler may
+  -- swallow insertion errors, which would otherwise lose invalidation work.
+  INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial, scope)
+  SELECT DISTINCT done.app_id, v_now, true, scopes.scope
+  FROM pg_catalog.unnest(COALESCE(p_done, '{}')) AS done (app_id)
+  CROSS JOIN LATERAL (
+    SELECT 'app'::text AS scope
+    UNION ALL
+    SELECT 'versions'::text WHERE done.app_id = ANY (COALESCE(p_versions_changed, '{}'))
+  ) AS scopes
+  WHERE EXISTS (
+    SELECT 1 FROM public.plugin_state_sync_pending p
+    WHERE p.app_id = done.app_id AND p.lease_token = p_lease_token
+  );
+
+  IF pg_catalog.cardinality(COALESCE(p_done, '{}')) > 0 THEN
+    BEGIN
+      PERFORM public.wake_updates_cache_purge();
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'plugin state purge wake failed: %', SQLERRM;
+    END;
+  END IF;
+
   DELETE FROM public.plugin_state_sync_pending
   WHERE lease_token = p_lease_token AND app_id = ANY (COALESCE(p_done, '{}'));
 
@@ -395,10 +468,55 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[]) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[]) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[]) TO service_role;
+ALTER FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) TO service_role;
+
+-- GC coordination is one indexed operational row, service-only and never
+-- on a plugin request path. Partial pages resume on the next existing tick.
+CREATE OR REPLACE FUNCTION public.claim_plugin_state_gc()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_state public.plugin_state_sync_state%ROWTYPE;
+  v_token uuid := pg_catalog.gen_random_uuid();
+BEGIN
+  SELECT * INTO v_state FROM public.plugin_state_sync_state WHERE id FOR UPDATE SKIP LOCKED;
+  IF NOT FOUND OR v_state.gc_due_at > pg_catalog.clock_timestamp()
+    OR (v_state.gc_lease_token IS NOT NULL AND v_state.gc_leased_until > pg_catalog.clock_timestamp()) THEN
+    RETURN NULL;
+  END IF;
+  UPDATE public.plugin_state_sync_state
+  SET gc_lease_token = v_token, gc_leased_until = pg_catalog.clock_timestamp() + interval '2 minutes'
+  WHERE id;
+  RETURN pg_catalog.jsonb_build_object('lease_token', v_token, 'cursor', v_state.gc_cursor);
+END;
+$$;
+ALTER FUNCTION public.claim_plugin_state_gc() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.claim_plugin_state_gc() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_plugin_state_gc() TO service_role;
+
+CREATE OR REPLACE FUNCTION public.ack_plugin_state_gc(p_lease_token uuid, p_cursor text, p_complete boolean)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  UPDATE public.plugin_state_sync_state
+  SET gc_cursor = CASE WHEN p_complete THEN NULL ELSE p_cursor END,
+      gc_due_at = pg_catalog.clock_timestamp() + CASE WHEN p_complete THEN interval '1 day' ELSE interval '0 seconds' END,
+      gc_lease_token = NULL, gc_leased_until = NULL
+  WHERE id AND gc_lease_token = p_lease_token;
+END;
+$$;
+ALTER FUNCTION public.ack_plugin_state_gc(uuid, text, boolean) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.ack_plugin_state_gc(uuid, text, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_plugin_state_gc(uuid, text, boolean) TO service_role;
 
 -- Cron tick (every 10s): first sync of every app in app_id order (paced by
 -- the pending queue), daily rebuild of every app document, and a wake while
@@ -506,6 +624,10 @@ BEGIN
     SELECT 1 FROM public.plugin_state_sync_pending
     WHERE due_at <= pg_catalog.clock_timestamp()
       AND (lease_token IS NULL OR leased_until <= pg_catalog.clock_timestamp())
+  ) OR EXISTS (
+    SELECT 1 FROM public.plugin_state_sync_state WHERE id
+      AND gc_due_at <= pg_catalog.clock_timestamp()
+      AND (gc_lease_token IS NULL OR gc_leased_until <= pg_catalog.clock_timestamp())
   ) THEN
     PERFORM public.wake_plugin_state_sync();
   END IF;

@@ -108,6 +108,10 @@
         {
           "binding": "SNIPPET_EDGE_STATS_LOGS",
           "bucket_name": "capgo-snippet-edge-stats"
+        },
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ],
       "queues": {
@@ -264,6 +268,12 @@
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
         }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
+        }
       ]
     },
     "prod_hk": {
@@ -355,6 +365,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -448,6 +464,12 @@
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
         }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
+        }
       ]
     },
     "prod_as": {
@@ -539,6 +561,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -632,6 +660,12 @@
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
         }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
+        }
       ]
     },
     "prod_af": {
@@ -723,6 +757,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -816,6 +856,12 @@
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
           "id": "0efae3d612984c16b030f1447e269442"
         }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
+        }
       ]
     },
     "prod_sa": {
@@ -895,6 +941,12 @@
         {
           "binding": "HYPERDRIVE_CAPGO_READ_AS_INDIA",
           "id": "7f6e8255a9124531b1b07f11fdc257a7"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-prod"
         }
       ]
     },
@@ -984,7 +1036,13 @@
       ],
       "placement": {
         "region": "gcp:europe-west8"
-      }
+      },
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-preprod"
+        }
+      ]
     },
     "alpha": {
       "name": "capgo_plugin-alpha",
@@ -1076,7 +1134,13 @@
       ],
       "placement": {
         "region": "gcp:europe-west8"
-      }
+      },
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "capgo-plugin-state-pointers-alpha"
+        }
+      ]
     },
     "local": {
       "name": "capgo_plugin-local",
@@ -1084,7 +1148,26 @@
         "ENV_NAME": "capgo_plugin-local",
         "CAPGO_PREVENT_BACKGROUND_FUNCTIONS": "true"
       },
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "local-channel-self-store" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "local-plugin-notification-queue" }, { "binding": "PLUGIN_STATE", "id": "local-plugin-state" }]
+      "kv_namespaces": [
+        {
+          "binding": "CHANNEL_SELF_STORE",
+          "id": "local-channel-self-store"
+        },
+        {
+          "binding": "PLUGIN_NOTIFICATION_QUEUE",
+          "id": "local-plugin-notification-queue"
+        },
+        {
+          "binding": "PLUGIN_STATE",
+          "id": "local-plugin-state"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "local-plugin-state-pointers"
+        }
+      ]
     }
   }
 }

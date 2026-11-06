@@ -1,5 +1,5 @@
-import type { PluginStateAppDoc, PluginStateChannelRow, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStatePlan, PluginStateStripe, PluginStateVersionDoc } from './pluginStateFormat.ts'
-import { PLUGIN_STATE_FORMAT } from './pluginStateFormat.ts'
+import type { PluginStateAppDoc, PluginStateChannelRow, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStateManifestFallbackDoc, PluginStatePlan, PluginStatePointer, PluginStateStripe, PluginStateVersionDoc } from './pluginStateFormat.ts'
+import { isPluginStateGeneration, PLUGIN_STATE_FORMAT } from './pluginStateFormat.ts'
 
 // Match the dependency-free predicates used by plugin_schemas/*.is.ts. Pulling
 // a schema interpreter into this hot-path worker exceeds its bundle-size budget.
@@ -57,7 +57,7 @@ function isApp(value: unknown): value is PluginStateAppDoc {
     && typeof value.app_id === 'string'
     && typeof value.built_at === 'number'
     && typeof value.exists === 'boolean'
-    && (value.owner === undefined || (isRecord(value.owner) && typeof value.owner.owner_org === 'string'))
+    && (value.owner === undefined || (isRecord(value.owner) && typeof value.owner.owner_org === 'string' && typeof value.owner.block_provider_infra_requests === 'boolean'))
     && (value.plan === undefined || isPlan(value.plan))
     && (value.channels === undefined || (Array.isArray(value.channels) && value.channels.every(isChannelRow)))
     && (value.channel_list_ids === undefined || (Array.isArray(value.channel_list_ids) && value.channel_list_ids.every(id => typeof id === 'number')))
@@ -79,7 +79,7 @@ export function parsePluginStateVersion(value: unknown): PluginStateVersionDoc {
 }
 
 export function parsePluginStateDevice(value: unknown): PluginStateDeviceDoc {
-  if (!isRecord(value) || typeof value.channel_id !== 'number')
+  if (!isRecord(value) || (value.channel_id !== null && typeof value.channel_id !== 'number'))
     throw new Error('Invalid plugin device state')
   return { channel_id: value.channel_id }
 }
@@ -101,4 +101,20 @@ export function parsePluginStateManifest(value: unknown): PluginStateManifestDoc
   if (!isManifest(value))
     throw new Error('Invalid plugin manifest state')
   return value
+}
+
+export function parsePluginStateManifestStorage(value: unknown): PluginStateManifestDoc | PluginStateManifestFallbackDoc {
+  if (isRecord(value) && value.f === PLUGIN_STATE_FORMAT && typeof value.built_at === 'number'
+    && typeof value.version_id === 'number' && typeof value.app_id === 'string'
+    && value.fallback === 'replica' && (value.reason === 'kv_value_limit' || value.reason === 'worker_memory_limit')) {
+    return { f: value.f, built_at: value.built_at, version_id: value.version_id, app_id: value.app_id, fallback: value.fallback, reason: value.reason }
+  }
+  return parsePluginStateManifest(value)
+}
+
+export function parsePluginStatePointer(value: unknown): PluginStatePointer {
+  if (!isRecord(value) || value.f !== PLUGIN_STATE_FORMAT || !isPluginStateGeneration(value.generation)
+    || (value.kvKey !== null && typeof value.kvKey !== 'string'))
+    throw new Error('Invalid plugin state publication pointer')
+  return { f: value.f, generation: value.generation, kvKey: value.kvKey }
 }

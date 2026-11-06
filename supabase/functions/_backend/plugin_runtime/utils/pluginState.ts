@@ -1,6 +1,6 @@
 import type { KVNamespace } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
-import type { PluginStateAppDoc, PluginStateManifestDoc, PluginStateVersionDoc } from './pluginStateFormat.ts'
+import type { PluginStateAppDoc, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStateManifestFallbackDoc, PluginStateVersionDoc } from './pluginStateFormat.ts'
 import type { PluginStateQueries } from './pluginStateRegistry.ts'
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
@@ -26,8 +26,9 @@ import {
 } from './pluginStateEval.ts'
 import { PLUGIN_STATE_FORMAT, pluginStateAppKey, pluginStateDeviceKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
 import { bindPluginStateQueries, PluginStateMiss } from './pluginStateRegistry.ts'
+import { readPublishedPluginState } from './pluginStateStore.ts'
 import { isPluginStateStrict, markPluginStateServed, parsePluginStateShareBps, pluginStateBucket, unmarkPluginStateServed } from './pluginStateSwitch.ts'
-import { parsePluginStateApp, parsePluginStateDevice, parsePluginStateManifest, parsePluginStateVersion } from './pluginStateValidation.ts'
+import { parsePluginStateApp, parsePluginStateDevice, parsePluginStateManifestStorage, parsePluginStateVersion } from './pluginStateValidation.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
 
@@ -52,6 +53,7 @@ import { backgroundTask, getEnv } from './utils.ts'
  */
 
 const APP_CACHE_PATH = '/.plugin-state-app-v1'
+const DEVICE_CACHE_PATH = '/.plugin-state-device-v1'
 const VERSION_CACHE_PATH = '/.plugin-state-version-v1'
 const MANIFEST_CACHE_PATH = '/.plugin-state-manifest-v1'
 /** A stale KV refill must not be amplified into hours of Cache API staleness. */
@@ -60,12 +62,10 @@ const VERSION_CACHE_TTL_SECONDS = 30
 const MANIFEST_CACHE_TTL_SECONDS = 30
 /** A missing key is cached shorter: its creation purges it anyway. */
 const NEGATIVE_CACHE_TTL_SECONDS = 60
-/** KV's minimum read cache TTL, not a bound on global write propagation. */
-const KV_CACHE_TTL_SECONDS = 30
 /** App documents can be large: allow more than the default 20ms Cache API read. */
 const CACHE_MATCH_TIMEOUT_MS = 50
 const CACHE_PUT_TIMEOUT_MS = 200
-const BUILT_AT_HEADER = 'X-Plugin-State-Built-At'
+const REVISION_HEADER = 'X-Plugin-State-Revision'
 const MEMORY_MAX_ENTRIES = 256
 /** Conservative parsed-object estimate; avoid retaining hundreds of large manifests. */
 const MEMORY_MAX_BYTES = 16 * 1024 * 1024
@@ -114,7 +114,7 @@ export function shouldUsePluginState(c: AnyContext, appId: string, deviceId: str
 }
 
 interface CachedDoc<T> {
-  builtAt: number
+  revision: string
   value: T | null
 }
 
@@ -152,8 +152,8 @@ interface DocLoadOptions<T> {
   kvKey: string
   tags: string[]
   ttlSeconds: number
-  /** Revision of a large document: lets a Cache API hit reuse the parsed copy kept in memory. */
-  builtAt?: (value: T) => number
+  /** Large documents can reuse a parsed copy of the same immutable publication. */
+  reuseParsed?: boolean
   parse: (value: unknown) => T
 }
 
@@ -166,9 +166,9 @@ async function loadDoc<T>(c: AnyContext, store: KVNamespace, options: DocLoadOpt
   const request = helper.buildRequest(options.cachePath, options.params)
   const cached = await helper.matchResponse(request, { timeoutMs: CACHE_MATCH_TIMEOUT_MS })
   if (cached) {
-    const builtAt = Number(cached.headers.get(BUILT_AT_HEADER))
-    const remembered = options.builtAt ? memory.get(request.url) as CachedDoc<T> | undefined : undefined
-    if (remembered && Number.isFinite(builtAt) && builtAt > 0 && remembered.builtAt === builtAt) {
+    const revision = cached.headers.get(REVISION_HEADER)
+    const remembered = options.reuseParsed ? memory.get(request.url) as CachedDoc<T> | undefined : undefined
+    if (remembered && revision && remembered.revision === revision) {
       await cached.body?.cancel().catch(() => undefined)
       return remembered.value
     }
@@ -177,8 +177,8 @@ async function loadDoc<T>(c: AnyContext, store: KVNamespace, options: DocLoadOpt
       if (!envelope || typeof envelope !== 'object' || !('v' in envelope))
         throw new Error('Invalid cached plugin state envelope')
       const value = envelope.v === null ? null : options.parse(envelope.v)
-      if (options.builtAt)
-        rememberDoc(request.url, { builtAt, value })
+      if (options.reuseParsed && revision)
+        rememberDoc(request.url, { revision, value })
       return value
     }
     catch {
@@ -187,20 +187,21 @@ async function loadDoc<T>(c: AnyContext, store: KVNamespace, options: DocLoadOpt
   }
 
   let value: T | null
+  let revision: string | null
   try {
-    const raw = await store.get<unknown>(options.kvKey, { type: 'json', cacheTtl: KV_CACHE_TTL_SECONDS })
-    value = raw === null ? null : options.parse(raw)
+    const published = await readPublishedPluginState(c, store, options.kvKey)
+    value = published.value === null ? null : options.parse(published.value)
+    revision = published.revision
   }
   catch {
     throw new PluginStateMiss('document unavailable or invalid')
   }
-  const builtAt = value === null || !options.builtAt ? 0 : options.builtAt(value)
-  if (options.builtAt && builtAt > 0)
-    rememberDoc(request.url, { builtAt, value })
+  if (options.reuseParsed && revision)
+    rememberDoc(request.url, { revision, value })
   await backgroundTask(c, helper.putJson(request, { v: value }, value === null ? NEGATIVE_CACHE_TTL_SECONDS : options.ttlSeconds, {
     tags: options.tags,
     timeoutMs: CACHE_PUT_TIMEOUT_MS,
-    headers: { [BUILT_AT_HEADER]: String(builtAt) },
+    headers: revision ? { [REVISION_HEADER]: revision } : undefined,
   }))
   return value
 }
@@ -212,7 +213,7 @@ function loadAppDoc(c: AnyContext, store: KVNamespace, appId: string, kvKey: str
     kvKey,
     tags: [updatesAppCacheTag(appId)],
     ttlSeconds: APP_CACHE_TTL_SECONDS,
-    builtAt: doc => doc.built_at,
+    reuseParsed: true,
     parse: parsePluginStateApp,
   })
 }
@@ -338,8 +339,19 @@ export class PluginStateSession implements PluginStateQueries {
     let pending = this.overrides.get(deviceId)
     if (!pending) {
       pending = pluginStateDeviceKey(this.appId, deviceId)
-        .then(key => this.store.get<unknown>(key, { type: 'json', cacheTtl: KV_CACHE_TTL_SECONDS }))
-        .then(value => value === null ? null : parsePluginStateDevice(value).channel_id)
+        .then(kvKey => loadDoc<PluginStateDeviceDoc>(this.c, this.store, {
+          cachePath: DEVICE_CACHE_PATH,
+          params: { app_id: this.appId, device_id: deviceId },
+          kvKey,
+          tags: [updatesAppCacheTag(this.appId)],
+          ttlSeconds: APP_CACHE_TTL_SECONDS,
+          parse: parsePluginStateDevice,
+        }))
+        .then((value) => {
+          if (value === null)
+            throw new PluginStateMiss('device override not synced')
+          return parsePluginStateDevice(value).channel_id
+        })
         .catch(() => { throw new PluginStateMiss('device override unavailable or invalid') })
       this.overrides.set(deviceId, pending)
     }
@@ -359,7 +371,7 @@ export class PluginStateSession implements PluginStateQueries {
         ttlSeconds: VERSION_CACHE_TTL_SECONDS,
         parse: parsePluginStateVersion,
       })).then((doc) => {
-        if (!doc && !isPluginStateAuthoritative(this.c))
+        if (!doc)
           throw new PluginStateMiss('bundle name not synced')
         return doc
       })
@@ -373,14 +385,14 @@ export class PluginStateSession implements PluginStateQueries {
     const id = String(versionId)
     let pending = this.manifests.get(id)
     if (!pending) {
-      pending = loadDoc<PluginStateManifestDoc>(this.c, this.store, {
+      pending = loadDoc<PluginStateManifestDoc | PluginStateManifestFallbackDoc>(this.c, this.store, {
         cachePath: MANIFEST_CACHE_PATH,
         params: { version_id: id },
         kvKey: pluginStateManifestKey(id),
         tags: [updatesAppCacheTag(this.appId)],
         ttlSeconds: MANIFEST_CACHE_TTL_SECONDS,
-        builtAt: doc => doc.built_at,
-        parse: parsePluginStateManifest,
+        reuseParsed: true,
+        parse: parsePluginStateManifestStorage,
       }).then((doc) => {
         if (doc && String(doc.version_id) !== id)
           throw new PluginStateMiss('manifest identity mismatch')
@@ -388,6 +400,8 @@ export class PluginStateSession implements PluginStateQueries {
           return null
         if (!doc)
           throw new PluginStateMiss(`manifest ${id}`)
+        if ('fallback' in doc)
+          throw new PluginStateMiss(`manifest exceeds snapshot limit: ${doc.reason}`)
         return doc
       })
       this.manifests.set(id, pending)

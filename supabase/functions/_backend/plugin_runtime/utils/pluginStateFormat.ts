@@ -86,7 +86,32 @@ export interface PluginStateVersionDoc {
 }
 
 export interface PluginStateDeviceDoc {
-  channel_id: number
+  channel_id: number | null
+}
+
+export interface PluginStateManifestFallbackDoc {
+  f: typeof PLUGIN_STATE_FORMAT
+  built_at: number
+  version_id: number
+  app_id: string
+  fallback: 'replica'
+  reason: 'kv_value_limit' | 'worker_memory_limit'
+}
+
+export interface PluginStatePointer {
+  f: typeof PLUGIN_STATE_FORMAT
+  generation: string
+  kvKey: string | null
+}
+
+export function isPluginStateGeneration(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= 9223372036854775807n
+}
+
+export async function pluginStateImmutableKey(logicalKey: string, generation: string) {
+  if (!isPluginStateGeneration(generation))
+    throw new Error('Invalid plugin state generation')
+  return `${KEY_PREFIX}:i:${generation.padStart(20, '0')}:${await sha256Hex(logicalKey)}`
 }
 
 export interface PluginStateManifestEntry {
@@ -132,21 +157,26 @@ export function pluginStateAppKey(appId: string) {
 }
 
 /** Prefix of every bundle-name key of an app (for listing). */
-export function pluginStateVersionKeyPrefix(appId: string) {
-  return `${KEY_PREFIX}:v:${encodePart(appId)}:`
+async function appKeyPart(appId: string) {
+  const encoded = encodePart(appId)
+  return encoded.length <= 160 ? encoded : `#${await sha256Hex(appId)}`
 }
 
-export function pluginStateVersionKey(appId: string, versionName: string) {
-  return boundKey(pluginStateVersionKeyPrefix(appId), encodePart(versionName))
+export async function pluginStateVersionKeyPrefix(appId: string) {
+  return `${KEY_PREFIX}:v:${await appKeyPart(appId)}:`
+}
+
+export async function pluginStateVersionKey(appId: string, versionName: string) {
+  return boundKey(await pluginStateVersionKeyPrefix(appId), encodePart(versionName))
 }
 
 /** Prefix of every device override key of an app (for listing). */
-export function pluginStateDeviceKeyPrefix(appId: string) {
-  return `${KEY_PREFIX}:d:${encodePart(appId)}:`
+export async function pluginStateDeviceKeyPrefix(appId: string) {
+  return `${KEY_PREFIX}:d:${await appKeyPart(appId)}:`
 }
 
-export function pluginStateDeviceKey(appId: string, deviceId: string) {
-  return boundKey(pluginStateDeviceKeyPrefix(appId), encodePart(deviceId))
+export async function pluginStateDeviceKey(appId: string, deviceId: string) {
+  return boundKey(await pluginStateDeviceKeyPrefix(appId), encodePart(deviceId))
 }
 
 export function pluginStateManifestKey(versionId: number | string) {

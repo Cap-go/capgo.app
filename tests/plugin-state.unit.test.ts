@@ -5,9 +5,13 @@ import { getManifestDownloadSize } from '../supabase/functions/_backend/plugin_r
 import { getAppVersionsByAppIdPg } from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { abandonPluginStateRequest, createPluginStateDatabase, PluginStateMiss, PluginStateSession, shouldUsePluginState, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { evalAppVersion, evalChannelById, evalChannelDevice, evalCompatibleChannels, evalDefaultChannel, evalManifestSizeLookup, evalManifestVersionSizes, evalPlanValid } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateEval.ts'
-import { pluginStateAppKey, pluginStateDeviceKey, pluginStateManifestKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
+import { pluginStateAppKey, pluginStateDeviceKey, pluginStateDeviceKeyPrefix, pluginStateManifestKey, pluginStateVersionKey, pluginStateVersionKeyPrefix } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { parsePluginStateShareBps, pluginStateBucket } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateManifest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateValidation.ts'
+
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts', () => ({
+  readPublishedPluginState: async (_context: unknown, store: { get: (key: string, options: object) => unknown }, key: string) => ({ value: await store.get(key, { type: 'json', cacheTtl: 30 }), revision: null }),
+}))
 
 const APP_ID = 'com.example.pluginstate'
 const ORG_ID = '00000000-0000-4000-8000-000000000001'
@@ -86,6 +90,113 @@ describe('plugin state rollout', () => {
     app.get('/', c => c.json({ enabled: shouldUsePluginState(c, APP_ID, 'device') }))
     const response = await app.request('/', { headers: { 'x-capgo-plugin-state': 'kv' } }, { ENV_NAME: 'capgo-prod', PLUGIN_STATE_KV: 'off', PLUGIN_STATE: {} })
     expect(await response.json()).toEqual({ enabled: false })
+  })
+})
+
+describe('plugin state storage and selection boundaries', () => {
+  it('bounds long app prefixes and long names without changing their listing scope', async () => {
+    const appId = `com.${'a'.repeat(506)}`
+    const otherApp = `${appId.slice(0, -1)}b`
+    const versionPrefix = await pluginStateVersionKeyPrefix(appId)
+    const devicePrefix = await pluginStateDeviceKeyPrefix(appId)
+    const keys = [await pluginStateVersionKey(appId, '界'.repeat(1000)), await pluginStateDeviceKey(appId, 'x'.repeat(1000))]
+    expect(keys[0].startsWith(versionPrefix)).toBe(true)
+    expect(keys[1].startsWith(devicePrefix)).toBe(true)
+    expect(keys.every(key => new TextEncoder().encode(key).length <= 512)).toBe(true)
+    expect(await pluginStateVersionKeyPrefix(otherApp)).not.toBe(versionPrefix)
+  })
+
+  it('honors local DB forcing while KV is enabled', async () => {
+    vi.stubEnv('ENV_NAME', 'capgo_plugin-local')
+    const get = vi.fn(() => appDoc())
+    const app = new Hono()
+    app.get('/', async c => c.json({ source: await startPluginStateRequest(c, APP_ID, 'device') ? 'kv' : 'db' }))
+    const env = { PLUGIN_STATE: { get } }
+    const db = await app.request('/', { headers: { 'x-capgo-plugin-state': 'db' } }, env)
+    expect(await db.json()).toEqual({ source: 'db' })
+    expect(get).not.toHaveBeenCalled()
+    expect(await (await app.request('/', undefined, env)).json()).toEqual({ source: 'kv' })
+  })
+
+  it('selects nested percentage cohorts through the request selector', async () => {
+    const devices = Array.from({ length: 1000 }, (_, i) => `selected-${i}`)
+    const app = new Hono()
+    app.get('/', c => c.json({ selected: shouldUsePluginState(c, APP_ID, c.req.query('device') ?? '') }))
+    const select = async (percentage: string) => {
+      vi.stubEnv('PLUGIN_STATE_KV', percentage)
+      return Promise.all(devices.map(async (device) => {
+        const result = await app.request(`/?device=${device}`, undefined, { PLUGIN_STATE: {} })
+        const body = await result.json<{ selected: boolean }>()
+        return body.selected
+      }))
+    }
+    const low = await select('1%')
+    const high = await select('10%')
+    expect(low.some(Boolean)).toBe(true)
+    expect(low.some(value => !value)).toBe(true)
+    expect(low.every((selected, i) => !selected || high[i])).toBe(true)
+    devices.forEach((device, i) => expect(low[i]).toBe(pluginStateBucket(APP_ID, device) < 100))
+  })
+
+  it('rejects a missing provider-block flag instead of accepting malformed app state', () => {
+    expect(() => parsePluginStateApp({ ...appDoc(), owner: { owner_org: ORG_ID } })).toThrow()
+  })
+
+  it('rejects a missing bundle key even in authoritative app mode', async () => {
+    const appKey = await pluginStateAppKey(APP_ID)
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const session = await startPluginStateRequest(c, APP_ID, 'device')
+      await expect(session?.versionByName('not-yet-propagated')).rejects.toBeInstanceOf(PluginStateMiss)
+      return c.json({ done: true })
+    })
+    expect((await app.request('/', undefined, { PLUGIN_STATE: { get: (key: string) => key === appKey ? appDoc() : null } })).status).toBe(200)
+  })
+
+  it('distinguishes an unsynced device override from an explicit no-override tombstone', async () => {
+    const appKey = await pluginStateAppKey(APP_ID)
+    for (const known of [false, true]) {
+      const app = new Hono()
+      app.get('/', async (c) => {
+        const session = await startPluginStateRequest(c, APP_ID, 'device')
+        if (known)
+          expect(await session?.overrideChannelId('device')).toBeNull()
+        else
+          await expect(session?.overrideChannelId('device')).rejects.toBeInstanceOf(PluginStateMiss)
+        return c.json({ done: true })
+      })
+      const response = await app.request('/', undefined, { PLUGIN_STATE: { get: (key: string) => key === appKey ? { ...appDoc(), overrides: null } : known ? { channel_id: null } : null } })
+      expect(response.status).toBe(200)
+    }
+  })
+
+  it('does not load an unused fallback manifest when all requested files are version scoped', async () => {
+    const appKey = await pluginStateAppKey(APP_ID)
+    const read = vi.fn((key: string) => key === appKey ? appDoc() : key === pluginStateManifestKey(11) ? manifest({ sizes: [['a', '10']] }) : key === pluginStateManifestKey(12) ? manifest({ version_id: 12, sizes: [['b', '20']] }) : null)
+    const app = new Hono()
+    app.get('/', async c => c.json(await getManifestDownloadSize(c, APP_ID, 'unused', 99, [
+      { file_name: 'a.js', file_hash: 'a', download_url: 'https://example.com/read?key=11' },
+      { file_name: 'b.js', file_hash: 'b', download_url: 'https://example.com/read?key=12' },
+    ], 'device')))
+    const response = await app.request('/', undefined, { PLUGIN_STATE: { get: read } })
+    expect(await response.json()).toMatchObject({ totalSize: 30, knownFiles: 2 })
+    expect(read.mock.calls.some(([key]) => key === pluginStateManifestKey(99))).toBe(false)
+  })
+
+  it('excludes a deleted manifest even when its bundle-name record is stale', () => {
+    const version = { id: 11, owner_org: ORG_ID, deleted: false }
+    expect(evalManifestSizeLookup(APP_ID, [{ file_hash: 'shared', version_id: null }], { versionName: '1.0.0', version }, new Map([[11, manifest({ deleted: true })]]))).toEqual([])
+  })
+
+  it.each(['kv_value_limit', 'worker_memory_limit'])('falls back intentionally for a %s manifest marker', async (reason) => {
+    const appKey = await pluginStateAppKey(APP_ID)
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const session = await startPluginStateRequest(c, APP_ID, 'device')
+      await expect(session?.manifest(11)).rejects.toBeInstanceOf(PluginStateMiss)
+      return c.json({ done: true })
+    })
+    expect((await app.request('/', undefined, { PLUGIN_STATE: { get: (key: string) => key === appKey ? appDoc() : { f: 1, built_at: NOW, version_id: 11, app_id: APP_ID, fallback: 'replica', reason } } })).status).toBe(200)
   })
 })
 

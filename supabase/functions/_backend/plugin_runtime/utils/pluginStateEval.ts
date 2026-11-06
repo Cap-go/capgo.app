@@ -394,8 +394,9 @@ export function evalManifestSizeLookup(
     else if (fallback.version && fallback.version.deleted === false) {
       const manifest = manifests.get(fallback.version.id) ?? null
       // The name branch reads the bundle row itself (app and deleted checked above).
-      if (manifest && manifest.app_id === appId)
-        rows.push(...groupSizes(fallback.version.id, manifest.sizes, unscopedHashes))
+      const sizes = sizeRowsOf(manifest, appId)
+      if (sizes)
+        rows.push(...groupSizes(fallback.version.id, sizes, unscopedHashes))
     }
   }
   return rows

@@ -3,7 +3,8 @@
 // public.plugin_state_sync_pending (migration plugin_kv_state); each wake
 // drains the queue in its own short transactions:
 //   claim_plugin_state_sync() -> rebuild the KV keys -> ack_plugin_state_sync()
-// then queues the existing edge cache purge, so the Cache API copies of the
+// The acknowledgement durably queues the edge purge before deleting sync
+// work, so the Cache API copies of the
 // old documents leave every data center (with the purge pipeline's re-purges
 // covering Workers KV propagation).
 //
@@ -15,9 +16,9 @@
 // Runs in the Cloudflare API worker (PLUGIN_STATE binding). A runtime without
 // the binding (Supabase functions) forwards the wake to CLOUDFLARE_FUNCTION_URL.
 
-import type { KVNamespace } from '@cloudflare/workers-types'
+import type { KVNamespace, KVNamespacePutOptions, R2Bucket, R2Conditional, R2ListOptions } from '@cloudflare/workers-types'
 import type { Context } from 'hono'
-import type { PluginStateAppDoc, PluginStateChannelRow, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStatePlan, PluginStateStripe, PluginStateVersionDoc } from '../plugin_runtime/utils/pluginStateFormat.ts'
+import type { PluginStateAppDoc, PluginStateChannelRow, PluginStateDeviceDoc, PluginStateManifestDoc, PluginStateManifestFallbackDoc, PluginStatePlan, PluginStateStripe, PluginStateVersionDoc } from '../plugin_runtime/utils/pluginStateFormat.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono/tiny'
@@ -25,19 +26,22 @@ import { z } from 'zod'
 import {
   PLUGIN_STATE_FORMAT,
   PLUGIN_STATE_INLINE_OVERRIDES_LIMIT,
+  isPluginStateGeneration,
   pluginStateAppKey,
   pluginStateDeviceKey,
   pluginStateDeviceKeyPrefix,
+  pluginStateImmutableKey,
   pluginStateManifestKey,
   pluginStateVersionKey,
   pluginStateVersionKeyPrefix,
 } from '../plugin_runtime/utils/pluginStateFormat.ts'
+import { parsePluginStateApp, parsePluginStatePointer } from '../plugin_runtime/utils/pluginStateValidation.ts'
 import { selectPluginStateChannelListIds, selectPluginStateChannels, selectPluginStateOwner } from '../plugin_runtime/utils/pluginStateSelects.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from '../plugin_runtime/utils/updatesCacheTag.ts'
 import { versionManifestRowsWithSizeSql } from '../plugin_runtime/utils/version_manifest_sql.ts'
 import { BRES, middlewareAPISecret, parseBody } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
-import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
+import { closeClient, getDrizzleClient, getPgClient, withPgTransaction } from '../utils/pg.ts'
 import { backgroundTask, getEnv } from '../utils/utils.ts'
 import { purgeUpdatesCacheTags } from './updates_cache_purge.ts'
 
@@ -48,12 +52,18 @@ const APP_BUDGET_MS = 8_000
 const CLAIM_LIMIT = 4
 const APP_CONCURRENCY = 4
 const KV_CONCURRENCY = 32
-/** Eight simultaneous 5k-file bundles across four apps stay within Worker memory. */
+/** Small batches limit cursor replay; a separate invocation-wide gate bounds manifest memory. */
 const MANIFEST_CONCURRENCY = 2
-const PAGE_SIZE = 128
-/** Leave room for SQL, purge requests and connection cleanup below the 1,000-operation limit. */
-const KV_OPERATION_BUDGET = 800
-const KV_LIST_LIMIT = 1000
+const PAGE_SIZE = 48
+/** All KV and R2 operations share this cap, leaving room below the 1,000-operation limit. */
+const PROVIDER_OPERATION_BUDGET = 800
+const KV_LIST_LIMIT = 48
+const KV_MAX_VALUE_BYTES = 25 * 1024 * 1024
+/** Reserve headroom for rows, JS strings, document arrays, JSON encoding and Worker code. */
+const MANIFEST_MEMORY_LIMIT_BYTES = 4 * 1024 * 1024
+const MAX_PUBLICATION_ATTEMPTS = 5
+const IMMUTABLE_GC_AGE_MS = 24 * 60 * 60 * 1000
+const IMMUTABLE_KEY_PREFIX = 'ps1:i:'
 const MAX_BUSY_RETRIES = 40
 const FORWARD_TIMEOUT_MS = 25_000
 const FORWARDED_HEADER = 'x-capgo-plugin-state-forwarded'
@@ -70,6 +80,7 @@ interface ClaimedApp {
 interface ClaimResult {
   status: 'busy' | 'empty' | 'ok'
   lease_token?: string
+  generation?: string
   apps?: ClaimedApp[]
   has_more?: boolean
 }
@@ -92,6 +103,10 @@ interface AppOutcome {
 
 export function getPluginStateStore(c: SyncContext): KVNamespace | null {
   return (c.env as { PLUGIN_STATE?: KVNamespace } | undefined)?.PLUGIN_STATE ?? null
+}
+
+export function getPluginStatePointers(c: SyncContext): R2Bucket | null {
+  return (c.env as { PLUGIN_STATE_POINTERS?: R2Bucket } | undefined)?.PLUGIN_STATE_POINTERS ?? null
 }
 
 async function rows<T>(db: Db, query: ReturnType<typeof sql>): Promise<T[]> {
@@ -117,44 +132,170 @@ async function runLimited<T, R>(items: T[], limit: number, run: (item: T) => Pro
 
 class KvBudgetExhausted extends Error {}
 
-/** One invocation shares a budget and never mutates one key twice. App leases
- * and the SQL cooldown keep separate invocations at least one second apart. */
-function createSyncStore(namespace: KVNamespace) {
-  let remaining = KV_OPERATION_BUDGET
-  const written = new Set<string>()
-  function reserve() {
-    if (remaining <= 0)
-      throw new KvBudgetExhausted('plugin state KV operation budget exhausted')
-    remaining--
-  }
-  return {
-    get remaining() { return remaining },
-    async getApp(key: string) {
-      reserve()
-      return namespace.get<PluginStateAppDoc>(key, { type: 'json' })
-    },
-    async list(options: { prefix: string, cursor?: string, limit: number }) {
-      reserve()
-      return namespace.list(options)
-    },
-    async delete(key: string) {
-      if (written.has(key))
-        return
-      reserve()
-      await namespace.delete(key)
-      written.add(key)
-    },
-    async putJson(key: string, value: unknown) {
-      if (written.has(key))
-        return
-      reserve()
-      await namespace.put(key, JSON.stringify(value))
-      written.add(key)
-    },
+export function createPluginStateWorkLimiter(limit: number) {
+  let active = 0
+  const waiting: (() => void)[] = []
+  return async function run<T>(work: () => Promise<T>): Promise<T> {
+    await new Promise<void>((resolve) => {
+      if (active < limit) {
+        active++
+        resolve()
+      }
+      else {
+        waiting.push(resolve)
+      }
+    })
+    try {
+      return await work()
+    }
+    finally {
+      const next = waiting.shift()
+      if (next)
+        next()
+      else
+        active--
+    }
   }
 }
 
-type SyncStore = ReturnType<typeof createSyncStore>
+/** This internal change-driven publisher materializes durable edge state. Each
+ * source read uses a fresh, consistent primary snapshot rather than freezing a
+ * previously cached SELECT into KV until the next change. Short transactions
+ * release their checked-out connection before all KV/R2 work. Plugin requests
+ * and the global Hyperdrive cache configuration are unchanged. */
+export function createPluginStateSourceReader(c: SyncContext, deadline: number) {
+  const sources = createPluginStateWorkLimiter(APP_CONCURRENCY)
+  const manifests = createPluginStateWorkLimiter(1)
+  return {
+    async read<T>(run: (db: Db) => Promise<T>): Promise<T> {
+      return sources(async () => {
+        if (Date.now() >= deadline)
+          throw new KvBudgetExhausted('plugin state snapshot deadline exhausted')
+        const pg = await getPgClient(c)
+        try {
+          return await withPgTransaction(pg, client => run(getDrizzleClient(client, { logger: false })), {
+            appendSql: 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY',
+          })
+        }
+        finally {
+          closeClient(c, pg)
+        }
+      })
+    },
+    manifest: manifests,
+  }
+}
+
+type SourceReader = ReturnType<typeof createPluginStateSourceReader>
+
+function sourceRows<T>(source: SourceReader, query: ReturnType<typeof sql>) {
+  return source.read(db => rows<T>(db, query))
+}
+
+interface PublicationBudget { remaining: number }
+interface KvStore {
+  get: (key: string, options: { type: 'json' }) => Promise<unknown>
+  put: (key: string, value: string, options?: KVNamespacePutOptions) => Promise<void>
+  delete: (key: string) => Promise<void>
+  list: (options: { prefix: string, cursor?: string, limit: number }) => Promise<{
+    keys: { name: string, metadata?: unknown }[]
+    list_complete: boolean
+    cursor?: string
+  }>
+}
+interface PointerStore {
+  get: (key: string) => Promise<{ etag: string, json: () => Promise<unknown> } | null>
+  put: (key: string, value: string, options: { onlyIf: R2Conditional, httpMetadata: { contentType: string } }) => Promise<unknown | null>
+  list: (options: R2ListOptions) => Promise<{ objects: { key: string }[], truncated: boolean, cursor?: string }>
+}
+
+function reserveProviderOperation(budget: PublicationBudget) {
+  if (budget.remaining <= 0)
+    throw new KvBudgetExhausted('plugin state provider operation budget exhausted')
+  budget.remaining--
+}
+
+/** Immutable KV values plus an R2 compare-and-set pointer fence late writers.
+ * A lease check alone cannot protect KV after an awaited operation or a lost
+ * DB connection. No old generation can replace a newer R2 pointer, even if
+ * the old Worker resumes after its lease expired. */
+export function createPluginStateSyncStore(namespace: KvStore, pointers: PointerStore, generation: string, budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }) {
+  const written = new Set<string>()
+  const reserve = () => reserveProviderOperation(budget)
+  async function readPointer(key: string) {
+    reserve()
+    const object = await pointers.get(key)
+    return object ? { value: parsePluginStatePointer(await object.json()), etag: object.etag } : null
+  }
+  async function publish(key: string, value: unknown, deleted: boolean) {
+    if (written.has(key))
+      return
+    let previous = await readPointer(key)
+    if (previous && BigInt(previous.value.generation) >= BigInt(generation)) {
+      written.add(key)
+      return
+    }
+    const kvKey = deleted ? null : await pluginStateImmutableKey(key, generation)
+    if (kvKey !== null) {
+      reserve()
+      await namespace.put(kvKey, JSON.stringify(value), {
+        metadata: { logical_key: key, generation, written_at: Date.now() },
+      })
+    }
+    for (let attempt = 0; attempt < MAX_PUBLICATION_ATTEMPTS; attempt++) {
+      reserve()
+      const object = await pointers.put(key, JSON.stringify({ f: 1, generation, kvKey }), {
+        onlyIf: previous ? { etagMatches: previous.etag } : { etagDoesNotMatch: '*' },
+        httpMetadata: { contentType: 'application/json' },
+      })
+      if (object) {
+        written.add(key)
+        return
+      }
+      previous = await readPointer(key)
+      if (previous && BigInt(previous.value.generation) >= BigInt(generation)) {
+        written.add(key)
+        return
+      }
+    }
+    throw new Error('plugin state pointer compare-and-set contention exceeded 5 attempts')
+  }
+  return {
+    get remaining() { return budget.remaining },
+    async getApp(key: string) {
+      const pointer = await readPointer(key)
+      if (!pointer?.value.kvKey)
+        return null
+      reserve()
+      const value = await namespace.get(pointer.value.kvKey, { type: 'json' })
+      if (value === null)
+        return null
+      try {
+        return parsePluginStateApp(value)
+      }
+      catch {
+        // A corrupt previous document must not prevent the repair writer
+        // from replacing it with a fresh primary-backed snapshot.
+        return null
+      }
+    },
+    async list(options: { prefix: string, cursor?: string, limit: number }) {
+      reserve()
+      const listed = await pointers.list(options)
+      if (listed.truncated && !listed.cursor)
+        throw new Error('plugin state pointer listing has no continuation cursor')
+      return {
+        keys: listed.objects.map(object => ({ name: object.key })),
+        list_complete: !listed.truncated,
+        cursor: listed.cursor ?? '',
+      }
+    },
+    delete: (key: string) => publish(key, null, true),
+    putJson: (key: string, value: unknown) => publish(key, value, false),
+  }
+}
+
+type SyncStore = ReturnType<typeof createPluginStateSyncStore>
 
 function putJson(store: SyncStore, key: string, value: unknown) {
   return store.putJson(key, value)
@@ -218,11 +359,41 @@ function servedVersionIds(channels: PluginStateChannelRow[]) {
   return [...ids]
 }
 
-export async function buildManifestDoc(db: Db, versionId: number): Promise<PluginStateManifestDoc | null> {
+function manifestFallback(version: { id: string | number, app_id: string }, reason: PluginStateManifestFallbackDoc['reason'] = 'kv_value_limit'): PluginStateManifestFallbackDoc {
+  return {
+    f: PLUGIN_STATE_FORMAT,
+    built_at: Date.now(),
+    app_id: version.app_id,
+    version_id: Number(version.id),
+    fallback: 'replica',
+    reason,
+  }
+}
+
+async function buildManifestDocSnapshot(db: Db, versionId: number): Promise<PluginStateManifestDoc | PluginStateManifestFallbackDoc | null> {
   const [version] = await rows<{ id: string | number, app_id: string, deleted: boolean | null }>(db, sql`
     SELECT av.id, av.app_id, av.deleted FROM public.app_versions av WHERE av.id = ${versionId}::bigint`)
   if (!version)
     return null
+  // Aggregate in Postgres before buffering rows in the Worker. A valid
+  // 10k-entry manifest with long paths can exceed both KV's 25MiB value cap
+  // and the Worker memory budget when several builders run concurrently.
+  // This conservative estimate includes JSON string escaping and duplicate
+  // hashes in the sizes list; an oversize result never transfers the rows.
+  const [size] = await rows<{ estimated_bytes: string | number }>(db, sql`
+    SELECT COALESCE(SUM(
+      pg_catalog.octet_length(pg_catalog.to_json(manifest.file_name)::text)
+      + pg_catalog.octet_length(pg_catalog.to_json(manifest.s3_path)::text)
+      + 2 * pg_catalog.octet_length(pg_catalog.to_json(manifest.file_hash)::text)
+      + COALESCE(pg_catalog.octet_length(pg_catalog.to_json(manifest.file_size)::text), 4)
+      + 128
+    ), 0) + 4096 AS estimated_bytes
+    FROM (${versionManifestRowsWithSizeSql(sql`${versionId}::bigint`)}) AS manifest`)
+  const estimatedBytes = Number(size?.estimated_bytes ?? 0)
+  if (estimatedBytes > KV_MAX_VALUE_BYTES)
+    return manifestFallback(version)
+  if (estimatedBytes > MANIFEST_MEMORY_LIMIT_BYTES)
+    return manifestFallback(version, 'worker_memory_limit')
   const files = await rows<{ file_name: string, file_hash: string, s3_path: string, file_size: number | string | null, expected: number | string }>(
     db,
     versionManifestRowsWithSizeSql(sql`${versionId}::bigint`),
@@ -239,17 +410,40 @@ export async function buildManifestDoc(db: Db, versionId: number): Promise<Plugi
   }
 }
 
-async function syncManifests(db: Db, store: SyncStore, versionIds: number[]) {
-  await runLimited(versionIds, MANIFEST_CONCURRENCY, async (versionId) => {
-    const doc = await buildManifestDoc(db, versionId)
-    if (doc)
-      await putJson(store, pluginStateManifestKey(versionId), doc)
-    else
-      await store.delete(pluginStateManifestKey(versionId))
-  })
+export function buildManifestDoc(source: SourceReader, versionId: number) {
+  return source.read(db => buildManifestDocSnapshot(db, versionId))
 }
 
-export async function buildAppDoc(db: Db, appId: string, previousManifestIds: number[] = []): Promise<{ doc: PluginStateAppDoc, newManifestIds: number[] }> {
+/** The replica remains the source of truth for a valid manifest larger
+ * than KV accepts. Publishing an explicit marker avoids poison retries and
+ * replaces any previously cached smaller representation of this bundle. */
+export function pluginStateManifestPublication(doc: PluginStateManifestDoc | PluginStateManifestFallbackDoc) {
+  if ('fallback' in doc)
+    return doc
+  const serialized = JSON.stringify(doc)
+  if (new TextEncoder().encode(serialized).byteLength <= KV_MAX_VALUE_BYTES)
+    return doc
+  return {
+    f: PLUGIN_STATE_FORMAT,
+    built_at: doc.built_at,
+    app_id: doc.app_id,
+    version_id: doc.version_id,
+    fallback: 'replica',
+    reason: 'kv_value_limit',
+  }
+}
+
+async function syncManifests(source: SourceReader, store: SyncStore, versionIds: number[]) {
+  await runLimited(versionIds, MANIFEST_CONCURRENCY, versionId => source.manifest(async () => {
+    const doc = await buildManifestDoc(source, versionId)
+    if (doc)
+      await putJson(store, pluginStateManifestKey(versionId), pluginStateManifestPublication(doc))
+    else
+      await store.delete(pluginStateManifestKey(versionId))
+  }))
+}
+
+async function buildAppDocSnapshot(db: Db, appId: string, previousManifestIds: number[] = []): Promise<{ doc: PluginStateAppDoc, newManifestIds: number[] }> {
   const owner = await selectPluginStateOwner(db, appId)
   if (!owner)
     return { doc: { f: PLUGIN_STATE_FORMAT, app_id: appId, built_at: Date.now(), exists: false }, newManifestIds: [] }
@@ -276,6 +470,10 @@ export async function buildAppDoc(db: Db, appId: string, previousManifestIds: nu
     },
     newManifestIds: served.filter(id => !known.has(id)),
   }
+}
+
+export function buildAppDoc(source: SourceReader, appId: string, previousManifestIds: number[] = []) {
+  return source.read(db => buildAppDocSnapshot(db, appId, previousManifestIds))
 }
 
 /** A stable revision lets a multi-invocation manifest pass detect channel
@@ -326,21 +524,21 @@ export async function syncPluginStateManifestPage(options: {
 /** Writes the app document, after the manifests of the bundles it serves.
  * Large rebuilds become a paginated full-sync continuation before any of
  * their manifests are written, so they cannot replay the same prefix forever. */
-async function writeAppDoc(db: Db, store: SyncStore, appId: string) {
+async function writeAppDoc(source: SourceReader, store: SyncStore, appId: string) {
   const appKey = await pluginStateAppKey(appId)
   const previous = await store.getApp(appKey)
-  const { doc, newManifestIds } = await buildAppDoc(db, appId, previous?.manifest_ids ?? [])
+  const { doc, newManifestIds } = await buildAppDoc(source, appId, previous?.manifest_ids ?? [])
   if (newManifestIds.length > Math.min(MANIFEST_CONCURRENCY, Math.max(store.remaining - 1, 0)))
     return { doc, continuation: JSON.stringify({ p: 'manifests', after: null, revision: null }) }
   if (newManifestIds.length > 0)
-    await syncManifests(db, store, newManifestIds)
+    await syncManifests(source, store, newManifestIds)
   await putJson(store, appKey, doc)
   return { doc }
 }
 
-async function syncVersionNames(db: Db, store: SyncStore, appId: string, names: string[]) {
+async function syncVersionNames(source: SourceReader, store: SyncStore, appId: string, names: string[]) {
   const unique = [...new Set(names)]
-  const found = await rows<{ id: string | number, owner_org: string, name: string, deleted: boolean | null }>(db, sql`
+  const found = await sourceRows<{ id: string | number, owner_org: string, name: string, deleted: boolean | null }>(source, sql`
     SELECT av.id, av.owner_org, av.name, av.deleted
     FROM public.app_versions av
     WHERE av.app_id = ${appId} AND av.name = ANY (${sql.param(unique)}::text[])`)
@@ -355,9 +553,9 @@ async function syncVersionNames(db: Db, store: SyncStore, appId: string, names: 
   })
 }
 
-async function syncDevices(db: Db, store: SyncStore, appId: string, deviceIds: string[]) {
+async function syncDevices(source: SourceReader, store: SyncStore, appId: string, deviceIds: string[]) {
   const unique = [...new Set(deviceIds)]
-  const found = await rows<{ device_id: string, channel_id: string | number }>(db, sql`
+  const found = await sourceRows<{ device_id: string, channel_id: string | number }>(source, sql`
     SELECT cd.device_id, cd.channel_id
     FROM public.channel_devices cd
     WHERE cd.app_id = ${appId} AND cd.device_id = ANY (${sql.param(unique)}::text[])`)
@@ -368,7 +566,7 @@ async function syncDevices(db: Db, store: SyncStore, appId: string, deviceIds: s
     if (row)
       await putJson(store, key, { channel_id: Number(row.channel_id) } satisfies PluginStateDeviceDoc)
     else
-      await store.delete(key)
+      await putJson(store, key, { channel_id: null } satisfies PluginStateDeviceDoc)
   })
 }
 
@@ -420,8 +618,8 @@ function listedNames(keys: { name: string }[], prefix: string) {
  * keys whose rows are gone, then the served manifests and the app document.
  * A missing app only gets the cleanup and a tombstone.
  */
-async function fullSync(db: Db, store: SyncStore, appId: string, ref: string, deadline: number): Promise<{ done: boolean, removed: boolean, cursor?: string }> {
-  const exists = (await rows<{ found: number }>(db, sql`SELECT 1 AS found FROM public.apps WHERE app_id = ${appId} LIMIT 1`)).length > 0
+async function fullSync(source: SourceReader, store: SyncStore, appId: string, ref: string, deadline: number): Promise<{ done: boolean, removed: boolean, cursor?: string }> {
+  const exists = (await sourceRows<{ found: number }>(source, sql`SELECT 1 AS found FROM public.apps WHERE app_id = ${appId} LIMIT 1`)).length > 0
   let cursor = parseCursor(ref)
   if (!exists && (cursor.p === 'versions' || cursor.p === 'devices'))
     cursor = { p: 'clean_versions', cursor: null }
@@ -430,7 +628,7 @@ async function fullSync(db: Db, store: SyncStore, appId: string, ref: string, de
     try {
       switch (cursor.p) {
       case 'versions': {
-        const page = await rows<{ id: string | number, owner_org: string, name: string, deleted: boolean | null }>(db, sql`
+        const page = await sourceRows<{ id: string | number, owner_org: string, name: string, deleted: boolean | null }>(source, sql`
           SELECT av.id, av.owner_org, av.name, av.deleted
           FROM public.app_versions av
           WHERE av.app_id = ${appId} AND (${cursor.after}::text IS NULL OR av.name > ${cursor.after}::text)
@@ -441,7 +639,7 @@ async function fullSync(db: Db, store: SyncStore, appId: string, ref: string, de
         break
       }
       case 'devices': {
-        const page = await rows<{ device_id: string, channel_id: string | number }>(db, sql`
+        const page = await sourceRows<{ device_id: string, channel_id: string | number }>(source, sql`
           SELECT cd.device_id, cd.channel_id
           FROM public.channel_devices cd
           WHERE cd.app_id = ${appId} AND (${cursor.after}::text IS NULL OR cd.device_id > ${cursor.after}::text)
@@ -452,29 +650,29 @@ async function fullSync(db: Db, store: SyncStore, appId: string, ref: string, de
         break
       }
       case 'clean_versions': {
-        const prefix = pluginStateVersionKeyPrefix(appId)
+        const prefix = await pluginStateVersionKeyPrefix(appId)
         const listed = await store.list({ prefix, cursor: cursor.cursor ?? undefined, limit: KV_LIST_LIMIT })
         const names = listedNames(listed.keys, prefix)
         const kept = exists && names.length > 0
-          ? new Set((await rows<{ name: string }>(db, sql`SELECT av.name FROM public.app_versions av WHERE av.app_id = ${appId} AND av.name = ANY (${sql.param(names)}::text[])`)).map(row => row.name))
+          ? new Set((await sourceRows<{ name: string }>(source, sql`SELECT av.name FROM public.app_versions av WHERE av.app_id = ${appId} AND av.name = ANY (${sql.param(names)}::text[])`)).map(row => row.name))
           : new Set<string>()
         await runLimited(names.filter(name => !kept.has(name)), KV_CONCURRENCY, async name => store.delete(await pluginStateVersionKey(appId, name)))
         cursor = listed.list_complete ? { p: 'clean_devices', cursor: null } : { p: 'clean_versions', cursor: listed.cursor }
         break
       }
       case 'clean_devices': {
-        const prefix = pluginStateDeviceKeyPrefix(appId)
+        const prefix = await pluginStateDeviceKeyPrefix(appId)
         const listed = await store.list({ prefix, cursor: cursor.cursor ?? undefined, limit: KV_LIST_LIMIT })
         const deviceIds = listedNames(listed.keys, prefix)
         const kept = exists && deviceIds.length > 0
-          ? new Set((await rows<{ device_id: string }>(db, sql`SELECT cd.device_id FROM public.channel_devices cd WHERE cd.app_id = ${appId} AND cd.device_id = ANY (${sql.param(deviceIds)}::text[])`)).map(row => row.device_id))
+          ? new Set((await sourceRows<{ device_id: string }>(source, sql`SELECT cd.device_id FROM public.channel_devices cd WHERE cd.app_id = ${appId} AND cd.device_id = ANY (${sql.param(deviceIds)}::text[])`)).map(row => row.device_id))
           : new Set<string>()
         await runLimited(deviceIds.filter(deviceId => !kept.has(deviceId)), KV_CONCURRENCY, async deviceId => store.delete(await pluginStateDeviceKey(appId, deviceId)))
         cursor = listed.list_complete ? { p: 'manifests', after: null, revision: null } : { p: 'clean_devices', cursor: listed.cursor }
         break
       }
       case 'manifests': {
-        const { doc } = await buildAppDoc(db, appId)
+        const { doc } = await buildAppDoc(source, appId)
         const ids = doc.manifest_ids ?? []
         const revision = await manifestRevision(ids)
         const after = cursor.revision === revision ? cursor.after : null
@@ -483,7 +681,7 @@ async function fullSync(db: Db, store: SyncStore, appId: string, ref: string, de
           after,
           deadline,
           available: () => store.remaining,
-          write: batch => syncManifests(db, store, batch),
+          write: batch => syncManifests(source, store, batch),
         })
         cursor = progress.done
           ? { p: 'final', revision }
@@ -493,7 +691,7 @@ async function fullSync(db: Db, store: SyncStore, appId: string, ref: string, de
         break
       }
       case 'final': {
-        const { doc } = await buildAppDoc(db, appId)
+        const { doc } = await buildAppDoc(source, appId)
         const revision = await manifestRevision(doc.manifest_ids ?? [])
         if (cursor.revision !== revision) {
           // Channel targets changed while this pass was running. Build their
@@ -519,12 +717,12 @@ async function fullSync(db: Db, store: SyncStore, appId: string, ref: string, de
 
 // ---- Drain --------------------------------------------------------------------
 
-async function isFullySynced(db: Db, appId: string) {
-  const [row] = await rows<{ full_synced_at: string | null }>(db, sql`SELECT s.full_synced_at::text FROM public.plugin_state_sync_apps s WHERE s.app_id = ${appId}`)
+async function isFullySynced(source: SourceReader, appId: string) {
+  const [row] = await sourceRows<{ full_synced_at: string | null }>(source, sql`SELECT s.full_synced_at::text FROM public.plugin_state_sync_apps s WHERE s.app_id = ${appId}`)
   return Boolean(row?.full_synced_at)
 }
 
-async function syncApp(db: Db, store: SyncStore, item: ClaimedApp, deadline: number): Promise<AppOutcome> {
+async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp, deadline: number): Promise<AppOutcome> {
   const appId = item.app_id
   try {
     const refsOf = (kind: ClaimedApp['jobs'][number]['kind']) => item.jobs.filter(job => job.kind === kind).map(job => job.ref).filter(Boolean)
@@ -537,23 +735,23 @@ async function syncApp(db: Db, store: SyncStore, item: ClaimedApp, deadline: num
     // Single keys first: they read the database now, so they are never older
     // than what a concurrent full sync wrote.
     if (versionNames.length > 0)
-      await syncVersionNames(db, store, appId, versionNames)
+      await syncVersionNames(source, store, appId, versionNames)
     if (deviceIds.length > 0)
-      await syncDevices(db, store, appId, deviceIds)
+      await syncDevices(source, store, appId, deviceIds)
     if (manifestIds.length > 0)
-      await syncManifests(db, store, manifestIds)
+      await syncManifests(source, store, manifestIds)
 
-    if (fullJobs.length > 0 || (wantsApp && !(await isFullySynced(db, appId)))) {
+    if (fullJobs.length > 0 || (wantsApp && !(await isFullySynced(source, appId)))) {
       // A fresh request restarts the full sync; otherwise resume the cursor.
       const ref = fullJobs.length === 0 || fullJobs.some(job => !job.ref) ? '' : fullJobs[0].ref
-      const result = await fullSync(db, store, appId, ref, deadline)
+      const result = await fullSync(source, store, appId, ref, deadline)
       if (!result.done)
         return { appId, ok: true, continuation: result.cursor, versionsChanged: true }
       return { appId, ok: true, fullDone: true, removed: result.removed, versionsChanged: true }
     }
 
     if (wantsApp) {
-      const written = await writeAppDoc(db, store, appId)
+      const written = await writeAppDoc(source, store, appId)
       if (written.continuation !== undefined)
         return { appId, ok: true, continuation: written.continuation, versionsChanged: versionNames.length > 0 }
       if (!written.doc.exists) {
@@ -573,6 +771,73 @@ async function claim(db: Db): Promise<ClaimResult> {
   return row?.result ?? { status: 'empty' }
 }
 
+const immutableMetadataSchema = z.object({
+  logical_key: z.string().min(1).max(512),
+  generation: z.string().refine(isPluginStateGeneration),
+  written_at: z.number().finite(),
+})
+
+/** KV listing is restricted to maintenance. A key is garbage only after the
+ * reader-cache grace period and a strong R2 read proves it is not current. */
+export async function collectPluginStateGarbage(namespace: KvStore, pointers: PointerStore, options: {
+  budget: PublicationBudget
+  cursor: string | null
+  deadline: number
+  now?: number
+}) {
+  const startCursor = options.cursor
+  const limit = Math.min(512, Math.floor((options.budget.remaining - 1) / 2))
+  if (limit <= 0)
+    return { cursor: startCursor, complete: false, deleted: 0 }
+  reserveProviderOperation(options.budget)
+  const listed = await namespace.list({ prefix: IMMUTABLE_KEY_PREFIX, cursor: startCursor ?? undefined, limit })
+  const now = options.now ?? Date.now()
+  let completed = true
+  let deleted = 0
+  await runLimited(listed.keys, KV_CONCURRENCY, async (key) => {
+    if (Date.now() >= options.deadline) {
+      completed = false
+      return
+    }
+    const metadata = immutableMetadataSchema.safeParse(key.metadata)
+    if (!metadata.success || metadata.data.written_at > now - IMMUTABLE_GC_AGE_MS)
+      return
+    if (key.name !== await pluginStateImmutableKey(metadata.data.logical_key, metadata.data.generation))
+      return
+    reserveProviderOperation(options.budget)
+    const object = await pointers.get(metadata.data.logical_key)
+    const pointer = object ? parsePluginStatePointer(await object.json()) : null
+    if (!pointer || pointer.kvKey === key.name)
+      return
+    const order = BigInt(pointer.generation) - BigInt(metadata.data.generation)
+    // A missing/older pointer may still be waiting for this candidate's
+    // publisher. Only a newer pointer or same-generation tombstone proves
+    // this immutable key can never become reachable in a future CAS.
+    if (order < 0n || (order === 0n && pointer.kvKey !== null))
+      return
+    reserveProviderOperation(options.budget)
+    await namespace.delete(key.name)
+    deleted++
+  })
+  // If a deadline interrupted the page, replay it next time. Completed
+  // deletions are idempotent and no unvisited key falls behind the cursor.
+  return {
+    cursor: completed ? (listed.list_complete ? null : listed.cursor ?? startCursor) : startCursor,
+    complete: completed && listed.list_complete,
+    deleted,
+  }
+}
+
+async function drainPluginStateGarbage(db: Db, namespace: KvStore, pointers: PointerStore, budget: PublicationBudget, deadline: number) {
+  const [claimed] = await rows<{ result: { lease_token: string, cursor: string | null } | null }>(db, sql`SELECT public.claim_plugin_state_gc() AS result`)
+  if (!claimed?.result)
+    return
+  const progress = await collectPluginStateGarbage(namespace, pointers, { budget, deadline, cursor: claimed.result.cursor })
+  await db.execute(sql`SELECT public.ack_plugin_state_gc(
+    ${claimed.result.lease_token}::uuid, ${progress.cursor}::text, ${progress.complete}::boolean
+  )`)
+}
+
 export interface PluginStateDrainResult {
   claims: number
   apps: number
@@ -586,20 +851,22 @@ export interface PluginStateDrainResult {
  */
 export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?: number, purgeNow?: boolean } = {}): Promise<PluginStateDrainResult> {
   const namespace = getPluginStateStore(c)
+  const pointers = getPluginStatePointers(c)
   const result: PluginStateDrainResult = { claims: 0, apps: 0, failed: 0 }
-  if (!namespace)
+  if (!namespace || !pointers)
     return result
-  const store = createSyncStore(namespace)
+  const budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
   // A later claim in this invocation must not acknowledge new changes to an
   // app whose keys the invocation's deduplication set has already written.
   const processedApps = new Set<string>()
+  const source = createPluginStateSourceReader(c, deadline)
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
     const db = getDrizzleClient(pg, { logger: false })
     let busyRetries = 0
-    while (Date.now() < deadline && store.remaining > 0) {
+    while (Date.now() < deadline && budget.remaining > 0) {
       const claimed = await claim(db)
       if (claimed.status === 'busy') {
         if (++busyRetries > MAX_BUSY_RETRIES)
@@ -610,6 +877,9 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       busyRetries = 0
       if (claimed.status !== 'ok' || !claimed.apps?.length || !claimed.lease_token)
         break
+      if (!claimed.generation)
+        throw new Error('plugin state claim has no publication generation')
+      const store = createPluginStateSyncStore(namespace, pointers, claimed.generation, budget)
       result.claims++
 
       const appDeadline = Math.min(deadline, Date.now() + APP_BUDGET_MS)
@@ -617,7 +887,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         if (processedApps.has(item.app_id))
           return { appId: item.app_id, ok: false, deferred: true }
         processedApps.add(item.app_id)
-        return syncApp(db, store, item, appDeadline)
+        return syncApp(source, store, item, appDeadline)
       })
       const done = outcomes.filter(outcome => outcome.ok)
       const failed = outcomes.filter(outcome => !outcome.ok && !outcome.deferred)
@@ -637,7 +907,8 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         p_deferred => ${sql.param(deferred.map(outcome => outcome.appId))}::text[],
         p_retry_after_seconds => 10,
         p_full_done => ${sql.param(done.filter(outcome => outcome.fullDone && !outcome.removed).map(outcome => outcome.appId))}::text[],
-        p_removed => ${sql.param(done.filter(outcome => outcome.removed).map(outcome => outcome.appId))}::text[]
+        p_removed => ${sql.param(done.filter(outcome => outcome.removed).map(outcome => outcome.appId))}::text[],
+        p_versions_changed => ${sql.param(done.filter(outcome => outcome.versionsChanged).map(outcome => outcome.appId))}::text[]
       )`)
       result.apps += done.length
       result.failed += failed.length
@@ -645,17 +916,16 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       const appIds = done.map(outcome => outcome.appId)
       const versionAppIds = done.filter(outcome => outcome.versionsChanged).map(outcome => outcome.appId)
       if (appIds.length > 0) {
-        // The purge pipeline evicts the old copies everywhere and re-purges
-        // after Workers KV propagation.
-        await db.execute(sql`SELECT public.notify_updates_edge_cache_purge(${sql.param(appIds)}::text[], 'app')`)
-        if (versionAppIds.length > 0)
-          await db.execute(sql`SELECT public.notify_updates_edge_cache_purge(${sql.param(versionAppIds)}::text[], 'versions')`)
+        // ACK already persisted purge work. Tests can additionally await
+        // immediate invalidation; production wake/tick drains the durable queue.
         if (options.purgeNow)
           await purgeUpdatesCacheTags(c, [...appIds.map(updatesAppCacheTag), ...versionAppIds.map(updatesVersionsCacheTag)])
       }
       if (!claimed.has_more || deferred.length > 0)
         break
     }
+    if (Date.now() < deadline && budget.remaining >= 3)
+      await drainPluginStateGarbage(db, namespace, pointers, budget, deadline)
   }
   catch (error) {
     result.failed++
@@ -671,7 +941,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
 }
 
 export function shouldForwardPluginStateSync(c: SyncContext) {
-  return !getPluginStateStore(c)
+  return (!getPluginStateStore(c) || !getPluginStatePointers(c))
     && Boolean(getEnv(c, 'CLOUDFLARE_FUNCTION_URL'))
     && c.req.header(FORWARDED_HEADER) !== '1'
 }
@@ -689,7 +959,7 @@ export const app = new Hono<MiddlewareKeyVariables>()
 
 app.post('/', middlewareAPISecret, async (c) => {
   const body = await parseBody<{ wake?: boolean, drain?: boolean, apps?: unknown } | null>(c).catch(() => null) ?? {}
-  if (!getPluginStateStore(c)) {
+  if (!getPluginStateStore(c) || !getPluginStatePointers(c)) {
     if (!shouldForwardPluginStateSync(c))
       return c.json({ ...BRES, skipped: true })
     // No KV binding here (Supabase function): the Cloudflare API worker syncs.
