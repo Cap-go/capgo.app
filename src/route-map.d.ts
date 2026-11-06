@@ -269,6 +269,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/changelog': RouteRecordInfo<
+      '/changelog',
+      '/changelog',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/confirm-signup': RouteRecordInfo<
       '/confirm-signup',
       '/confirm-signup',
@@ -884,6 +891,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/apps.vue': {
       routes:
         | '/apps'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/changelog.vue': {
+      routes:
+        | '/changelog'
       views:
         | never
       pathParamNames:

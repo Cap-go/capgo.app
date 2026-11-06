@@ -13,5 +13,7 @@
   Content-Type: text/html; charset=utf-8
 /.well-known/*
   Content-Type: application/json
+/version.json
+  cache-control: no-store
 /manifest.webmanifest
   Content-Type: application/manifest+json

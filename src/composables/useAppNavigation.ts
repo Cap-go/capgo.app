@@ -12,6 +12,7 @@ import IconDiscord from '~icons/ic/round-discord'
 import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
+import IconSparkles from '~icons/lucide/sparkles'
 import IconVenetianMask from '~icons/lucide/venetian-mask'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
@@ -235,6 +236,13 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         label: 'api-keys',
         icon: IconApiKey,
         key: '/apikeys',
+      },
+      // In-console page, listed with help links: release notes of the console, CLI, updater and plugins.
+      {
+        label: 'changelog-whats-new',
+        icon: IconSparkles,
+        key: '/changelog',
+        group: 'help',
       },
       {
         label: 'documentation',

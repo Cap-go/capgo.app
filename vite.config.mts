@@ -291,6 +291,17 @@ const frontendEnvironmentVariables: Record<string, string> = {
   domain: getUrl(),
 }
 
+// The running console polls /version.json to offer "new version available" with its changelog.
+function consoleVersionFilePlugin(): Plugin {
+  return {
+    name: 'console-version-file',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version: pack.version })}\n` })
+    },
+  }
+}
+
 function frontendEnvironmentPlugin(): Plugin {
   return EnvironmentPlugin(frontendEnvironmentVariables, { defineOn: 'import.meta.env' })
 }
@@ -356,6 +367,7 @@ export default defineConfig({
       },
     },
     wellKnownPasswordManagerPlugin(),
+    consoleVersionFilePlugin(),
     envFaviconPlugin(),
     routeChunkPreloadPlugin(),
     tailwindcss(),
