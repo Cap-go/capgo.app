@@ -363,7 +363,7 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
   const hasCleanup = jobs.some(job => job.trigger.kind === 'pull_request_closed')
   const lines = [`name: ${workflowName}`, '', 'on:']
   if (branches.length)
-    lines.push('  push:', `    branches: [${branches.join(', ')}]`)
+    lines.push('  push:', `    branches: [${branches.map(yamlQuote).join(', ')}]`)
   if (hasPr) {
     lines.push('  pull_request:')
     if (hasCleanup)
@@ -386,6 +386,11 @@ function renderGithub(jobs: CiJob[], workflowName: string) {
       `    name: ${yamlScalar(job.name)}`,
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
+      // Without this, cleanup can finish before an in-flight preview upload,
+      // which then recreates the deleted channel. Closing cancels the upload.
+      ...(hasCleanup && job.trigger.kind !== 'push'
+        ? ['    concurrency:', `      group: capgo-preview-${GITHUB_PR_NUMBER}`, '      cancel-in-progress: true']
+        : []),
       '    steps:',
       '      - uses: actions/checkout@v6',
       // A closed pull request can lose its merge ref; the base branch always has the config.
@@ -413,6 +418,7 @@ function renderGitlab(jobs: CiJob[]) {
   const lines = ['default:', '  image: node:24']
   const prVariable = '$CI_MERGE_REQUEST_IID'
   const environment = `capgo/${PREVIEW_CHANNEL_PREFIX}$CI_MERGE_REQUEST_IID`
+  const resourceGroup = `capgo-${PREVIEW_CHANNEL_PREFIX}$CI_MERGE_REQUEST_IID`
   const hasCleanup = jobs.some(job => job.trigger.kind === 'pull_request_closed')
   for (const job of jobs) {
     lines.push('', `capgo-${job.id}:`, '  rules:')
@@ -423,6 +429,7 @@ function renderGitlab(jobs: CiJob[]) {
       lines.push('    - if: $CI_PIPELINE_SOURCE == "merge_request_event"')
       if (hasCleanup) {
         lines.push(
+          `  resource_group: ${resourceGroup}`,
           '  environment:',
           `    name: ${environment}`,
           '    on_stop: capgo-preview-cleanup',
@@ -437,6 +444,8 @@ function renderGitlab(jobs: CiJob[]) {
         '    - if: $CI_PIPELINE_SOURCE == "merge_request_event"',
         '      when: manual',
         '  allow_failure: true',
+        // Waits for a running preview upload of the same merge request.
+        `  resource_group: ${resourceGroup}`,
         '  environment:',
         `    name: ${environment}`,
         '    action: stop',
@@ -454,7 +463,7 @@ function renderAzure(jobs: CiJob[]) {
   const hasPr = jobs.some(job => job.trigger.kind === 'pull_request')
   const lines = ['trigger:', '  branches:', '    include:']
   for (const branch of branches)
-    lines.push(`      - ${branch}`)
+    lines.push(`      - ${yamlQuote(branch)}`)
   if (hasPr)
     lines.push('', 'pr:', '  branches:', '    include:', `      - ${yamlQuote('*')}`)
   else
@@ -524,7 +533,7 @@ function renderBitbucket(jobs: CiJob[]) {
     lines.push('  branches:')
     for (const group of branchGroups) {
       const branch = group.trigger.kind === 'push' ? group.trigger.branch : ''
-      lines.push(`    ${branch}:`, ...renderGroup(group, '      '))
+      lines.push(`    ${yamlQuote(branch)}:`, ...renderGroup(group, '      '))
     }
   }
   if (prGroups.length) {
@@ -572,9 +581,9 @@ function renderCircleci(jobs: CiJob[]) {
   for (const job of jobs) {
     lines.push(`      - ${job.id}:`, '          filters:', '            branches:')
     if (job.trigger.kind === 'push')
-      lines.push(`              only: ${job.trigger.branch}`)
+      lines.push(`              only: ${yamlQuote(job.trigger.branch)}`)
     else
-      lines.push(`              ignore: [${releaseBranches.join(', ')}]`)
+      lines.push(`              ignore: [${releaseBranches.map(yamlQuote).join(', ')}]`)
   }
   return lines.join('\n')
 }

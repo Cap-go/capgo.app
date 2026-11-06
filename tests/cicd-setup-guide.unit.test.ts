@@ -46,6 +46,7 @@ describe('CI/CD guide pipelines', () => {
     const workflow = parse(pipeline.content)
     expect(pipeline.file).toBe('.github/workflows/capgo.yml')
     expect(workflow.on).toEqual({ push: { branches: ['main'] } })
+    expect(pipeline.content).toContain("branches: ['main']")
     const steps = workflow.jobs.production.steps
     expect(steps.map((step: { run?: string }) => step.run).filter(Boolean)).toEqual([
       'npm ci',
@@ -186,6 +187,29 @@ describe('CI/CD guide pipelines', () => {
     expect(gitlab['capgo-android-preview'].script.at(-1)).toBe('CAPGO_STORE_SUBMIT_REVIEW=false CAPGO_TOKEN="$CAPGO_PREVIEW_TOKEN" npx @capgo/cli@latest build request com.example.app --platform android --use-stored-credentials --build-mode debug --no-playstore-upload --output-upload')
     const circleci = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'circleci' }).content)
     expect(circleci.workflows.capgo.jobs).toContainEqual({ 'android-preview': { filters: { branches: { ignore: ['main'] } } } })
+  })
+
+  it('keeps numeric-looking branch names as strings in every provider', () => {
+    const options = { ...base, product: 'ota' as const, strategy: 'main_preprod' as const, productionBranch: '1.0', preprodBranch: 'null' }
+    expect(parse(buildCiPipeline({ ...options, provider: 'github' }).content).on.push.branches).toEqual(['1.0', 'null'])
+    expect(parse(buildCiPipeline({ ...options, provider: 'azure' }).content).trigger.branches.include).toEqual(['1.0', 'null'])
+    expect(Object.keys(parse(buildCiPipeline({ ...options, provider: 'bitbucket' }).content).pipelines.branches)).toEqual(['1.0', 'null'])
+    const circleci = parse(buildCiPipeline({ ...options, provider: 'circleci' }).content)
+    expect(circleci.workflows.capgo.jobs[0].production.filters.branches.only).toBe('1.0')
+    expect(parse(buildCiPipeline({ ...options, provider: 'gitlab' }).content)['capgo-production'].rules).toEqual([{ if: '$CI_COMMIT_BRANCH == "1.0"' }])
+  })
+
+  it('runs pull request previews and their cleanup one at a time per pull request', () => {
+    const github = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'github' }).content)
+    const concurrency = { group: 'capgo-preview-${{ github.event.pull_request.number }}', 'cancel-in-progress': true }
+    expect(github.jobs.preview.concurrency).toEqual(concurrency)
+    expect(github.jobs['preview-cleanup'].concurrency).toEqual(concurrency)
+    expect(github.jobs.production.concurrency).toBeUndefined()
+    const gitlab = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'gitlab' }).content)
+    expect(gitlab['capgo-preview'].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
+    expect(gitlab['capgo-preview-cleanup'].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
+    // Builder previews have no cleanup to race with.
+    expect(parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'github' }).content).jobs['ios-preview'].concurrency).toBeUndefined()
   })
 
   it('rejects branch and channel names that would break the YAML', () => {
