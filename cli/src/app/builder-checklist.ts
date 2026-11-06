@@ -1,3 +1,6 @@
+import type { AgentTrial } from '../shared/agent-notices'
+import { formatAgentTodoTrialItem } from '../shared/agent-notices'
+
 export const BUILDER_STEP_IDS = {
   ios: ['start_setup', 'choose_destination', 'connect_app_store', 'prepare_certificate', 'prepare_profile', 'successful_cloud_build'],
   android: ['start_setup', 'prepare_keystore', 'connect_google_play', 'successful_cloud_build'],
@@ -55,6 +58,20 @@ export function getBuilderOnlyChecklist(value: unknown) {
   const setup = getBuilderOnlySetup(value)
   if (!setup)
     return null
+  return parseBuilderChecklist(setup)
+}
+
+export function getBuilderChecklist(value: unknown) {
+  const raw = onboardingRecord(value)
+  const setup = Object.hasOwn(raw, 'setup') ? onboardingRecord(raw.setup) : raw
+  if (setup.todo_list_version !== 4 || setup.builder_todo_list_version !== '1'
+    || !Array.isArray(setup.paths) || !setup.paths.includes('builder')) {
+    return null
+  }
+  return parseBuilderChecklist(setup)
+}
+
+function parseBuilderChecklist(setup: Record<string, unknown>) {
   const selectedPlatform: BuilderChecklistPlatform | undefined = setup.selected_builder_platform === 'ios' || setup.selected_builder_platform === 'android'
     ? setup.selected_builder_platform : undefined
   const builder = onboardingRecord(onboardingRecord(setup.steps).builder)
@@ -75,7 +92,7 @@ export function getBuilderOnlyChecklist(value: unknown) {
   return { version: 4, path: 'builder' as const, selectedPlatform, steps }
 }
 
-export function formatBuilderOnlyChecklist(appId: string, checklist: NonNullable<ReturnType<typeof getBuilderOnlyChecklist>>, options: { color?: boolean } = {}): string {
+export function formatBuilderOnlyChecklist(appId: string, checklist: NonNullable<ReturnType<typeof getBuilderOnlyChecklist>>, options: { color?: boolean, trial?: AgentTrial } = {}): string {
   const colorize = (value: string, code: string) => options.color ? `\u001B[${code}m${value}\u001B[0m` : value
   const lines = [colorize(`App: ${appId} — Todo list v4 — Builder checklist`, '1')]
   const done = checklist.steps.filter(step => step.status === 'done').length
@@ -103,6 +120,8 @@ export function formatBuilderOnlyChecklist(appId: string, checklist: NonNullable
   const next = checklist.selectedPlatform
     ? openSteps.find(step => step.platform === checklist.selectedPlatform) ?? openSteps[0]
     : undefined
+  if (options.trial)
+    lines.push('', formatAgentTodoTrialItem(options.trial, true))
   lines.push('')
   if (!openSteps.length)
     lines.push('Both platform checklists are complete.')

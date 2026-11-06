@@ -82,8 +82,7 @@ async function manageMemberInternal(action: MemberAction, orgId: string, options
     apikey,
     method: request.method,
     body: request.body,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
 
   if (error) {

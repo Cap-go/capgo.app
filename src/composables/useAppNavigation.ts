@@ -9,15 +9,17 @@ import IconDoc from '~icons/gg/loadbar-doc'
 import IconChart from '~icons/heroicons/chart-bar'
 import IconShield from '~icons/heroicons/shield-check'
 import IconDiscord from '~icons/ic/round-discord'
+import IconBot from '~icons/lucide/bot'
 import IconGift from '~icons/lucide/gift'
 import IconHeadset from '~icons/lucide/headset'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
+import IconSparkles from '~icons/lucide/sparkles'
 import IconVenetianMask from '~icons/lucide/venetian-mask'
 import IconApiKey from '~icons/mdi/shield-key'
 import IconAppStore from '~icons/simple-icons/appstore'
 import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
+import { isSpoofed, unspoofUser } from '~/services/console'
 import { logAsUser } from '~/services/logAs'
-import { isSpoofed, unspoofUser } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -235,6 +237,18 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         label: 'api-keys',
         icon: IconApiKey,
         key: '/apikeys',
+      },
+      // In-console page, listed with help links: release notes of the console, CLI, updater and plugins.
+      {
+        label: 'changelog-whats-new',
+        icon: IconSparkles,
+        key: '/changelog',
+        group: 'help',
+      },
+      {
+        label: 'ai-assistant',
+        icon: IconBot,
+        key: '/mcp',
       },
       {
         label: 'documentation',

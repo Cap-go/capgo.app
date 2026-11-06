@@ -1,5 +1,5 @@
 import type { useDialogV2Store } from '~/stores/dialogv2'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { getUpdatePackageLabel } from '~/utils/channelUpdatePackageCopy'
 import { confirmConsequentialChannelChange } from '~/utils/confirmConsequentialChannelChange'
 

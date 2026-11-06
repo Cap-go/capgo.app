@@ -4,9 +4,9 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { honoFactory, quickError, simpleError } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_middleware.ts'
 import { closeClient, getPgClient } from '../../utils/pg.ts'
-import { supabaseAdmin, supabaseWithAuth } from '../../utils/supabase.ts'
+import { queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { attachApiKeyGlobalPermissions } from './global_permissions.ts'
-import { ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, filterApiKeysManageableByAuth, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, selectOwnedApiKeyByIdentifier } from './scope.ts'
+import { apiKeyManagerPrincipal, ensureApiKeyCanManageTargetOrgIds, ensureApiKeyManagementAllowed, filterApiKeysManageableByAuth, getApiKeyBindingOrgIds, isValidApiKeyIdFormat, requireApiKeyManagementAuth, selectOwnedApiKeyByIdentifier } from './scope.ts'
 
 type ApiKeyRow = Database['public']['Tables']['apikeys']['Row']
 type ApiKeyPublicSelectRow = Pick<ApiKeyRow, 'created_at' | 'expires_at' | 'id' | 'key_hash' | 'name' | 'rbac_id' | 'updated_at' | 'user_id'>
@@ -56,16 +56,20 @@ app.get('/', middlewareAuth(), async (c) => {
 
   await ensureApiKeyManagementAllowed(c, auth, apikey, 'cannot_list_apikeys')
 
-  const { data: apikeys, error } = await (auth.authType === 'apikey' ? supabaseAdmin(c) : supabaseWithAuth(c, auth))
-    .from('apikeys')
-    .select(APIKEY_PUBLIC_COLUMNS)
-    .eq('user_id', auth.userId)
-
-  if (error) {
+  let apikeys: ApiKeyPublicSelectRow[]
+  try {
+    // LIMIT keeps the PostgREST max_rows cap the old query had
+    apikeys = await withRlsContext(c, apiKeyManagerPrincipal(c, auth), client => queryJson<ApiKeyPublicSelectRow>(
+      client,
+      'SELECT created_at, expires_at, id, key_hash, name, rbac_id, updated_at, user_id FROM public.apikeys WHERE user_id = $1::uuid LIMIT 1000',
+      [auth.userId],
+    ))
+  }
+  catch (error) {
     throw quickError(500, 'failed_to_list_apikeys', 'Failed to list API keys', { supabaseError: error })
   }
 
-  const publicApiKeys = ((apikeys ?? []) as ApiKeyPublicSelectRow[]).map(toApiKeyPublicRow)
+  const publicApiKeys = apikeys.map(toApiKeyPublicRow)
   const manageableApiKeys = await filterApiKeysManageableByAuth(c, auth, apikey, publicApiKeys)
   return c.json(await withGlobalPermissions(c, manageableApiKeys))
 })

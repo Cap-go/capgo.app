@@ -4,7 +4,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { isBentoConfigured, trackBentoEvent } from './bento.ts'
 import { CacheHelper } from './cache.ts'
 import { cloudlog } from './logging.ts'
-import { claimNotifOrgOnceWithResult, hasNotifOrgClaim, sendNotifOrg, sendNotifOrgOnce } from './notifications.ts'
+import { buildNotifDeliveryUniqId, claimNotifOrgOnceWithResult, hasNotifOrgClaim, sendNotifOrg, sendNotifOrgOnce } from './notifications.ts'
 import { closeClient, getDrizzleClient, getPgClient, logPgError } from './pg.ts'
 import * as schema from './postgres_schema.ts'
 import { logSkippedSupabaseWrite, shouldQueuePluginNotifications, shouldSkipSupabaseNotificationWrites } from './supabase_write_guard.ts'
@@ -497,8 +497,17 @@ export async function sendEmailToOrgMembers(
   if (!isBentoConfigured(c))
     return 0
 
-  const client = drizzleClient ?? getDrizzleClient(await getPgClient(c, true))
-  const { recipients } = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, client)
+  const ownedPgClient = drizzleClient ? undefined : await getPgClient(c, true)
+  let targets: Awaited<ReturnType<typeof getPreparedEligibleEmailTargets>>
+  try {
+    const client = drizzleClient ?? getDrizzleClient(ownedPgClient!)
+    targets = await getPreparedEligibleEmailTargets(c, orgId, preferenceKey, client)
+  }
+  finally {
+    if (ownedPgClient)
+      await closeClient(c, ownedPgClient)
+  }
+  const { recipients } = targets
   if (!recipients) {
     cloudlog({ requestId: c.get('requestId'), message: 'sendEmailToOrgMembers: org not found', orgId })
     return 0
@@ -631,6 +640,17 @@ export async function sendNotifToOrgMembers(
  */
 export type OrgMembersOnceResult = 'sent' | 'already_claimed' | 'no_recipients' | 'org_not_found' | 'failed'
 
+export interface OrgMembersOnceOptions {
+  /**
+   * Make the org-level `uniqId` claim mean "at least one recipient got the
+   * email". Each successful send writes a delivery marker, the no-recipient
+   * path claims `${uniqId}:no_recipients` instead of `uniqId`, and the org
+   * claim is only backfilled from earlier recipient claims when one of them
+   * has a delivery marker. Used by gates that delete data after a warning.
+   */
+  recordDelivery?: boolean
+}
+
 export async function sendNotifToOrgMembersOnce(
   c: Context,
   eventName: string,
@@ -653,7 +673,9 @@ export async function sendNotifToOrgMembersOnceWithResult(
   uniqId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   audience: NotificationAudience = 'admins',
+  options: OrgMembersOnceOptions = {},
 ): Promise<OrgMembersOnceResult> {
+  const recordDelivery = options.recordDelivery === true
   if (shouldSkipSupabaseNotificationWrites(c)) {
     logSkippedSupabaseWrite(c, 'sendNotifToOrgMembersOnce')
     return 'failed'
@@ -718,7 +740,9 @@ export async function sendNotifToOrgMembersOnceWithResult(
         orgId,
       })
       // Claim anyway so once-dedup (SQL + retries) does not re-queue forever.
-      const claim = await claimNotifOrgOnceWithResult(c, eventName, orgId, uniqId, writeClient)
+      // Delivery-gated callers get a distinct claim so it never reads as sent.
+      const claimUniqId = recordDelivery ? `${uniqId}:no_recipients` : uniqId
+      const claim = await claimNotifOrgOnceWithResult(c, eventName, orgId, claimUniqId, writeClient)
       return claim === 'failed' ? 'failed' : 'no_recipients'
     }
 
@@ -748,7 +772,7 @@ export async function sendNotifToOrgMembersOnceWithResult(
         continue
       }
 
-      const sendResult = await sendNotifOrgOnce(c, eventName, eventData, orgId, recipient.recipientUniqId, recipient.email, drizzleClient, writeClient)
+      const sendResult = await sendNotifOrgOnce(c, eventName, eventData, orgId, recipient.recipientUniqId, recipient.email, drizzleClient, writeClient, { recordDelivery })
       sendResults.push({ ...recipient, ...sendResult })
     }
 
@@ -777,6 +801,32 @@ export async function sendNotifToOrgMembersOnceWithResult(
     const unresolvedResults = sendResults.filter(result => !result.sent && !result.wasAlreadyClaimedBeforeRun)
     if (unresolvedResults.length > 0)
       return 'failed'
+
+    if (recordDelivery && sentEmails.length === 0) {
+      // Every recipient was claimed by an earlier run. A claim left behind by a
+      // failed send is not proof of delivery, so only backfill the org claim
+      // when at least one earlier send recorded its delivery marker.
+      let deliveredBefore = false
+      for (const recipient of recipientEntries) {
+        const delivered = await hasNotifOrgClaim(c, writeClient, eventName, orgId, buildNotifDeliveryUniqId(recipient.recipientUniqId))
+        if (delivered === null)
+          return 'failed'
+        if (delivered) {
+          deliveredBefore = true
+          break
+        }
+      }
+      if (!deliveredBefore) {
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'sendNotifToOrgMembersOnce: recipient claims without delivery marker',
+          eventName,
+          preferenceKey,
+          orgId,
+        })
+        return 'already_claimed'
+      }
+    }
 
     const orgClaim = await claimNotifOrgOnceWithResult(c, eventName, orgId, uniqId, writeClient)
     if (orgClaim === 'failed')

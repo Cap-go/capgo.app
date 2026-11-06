@@ -41,7 +41,7 @@ watch(rowInput, useDebounceFn(() => {
       :class="{
         'basis-full text-left': isLongText,
         'flex-[1_1_12rem] text-right': !isLongText,
-        'cursor-pointer underline underline-offset-4 text-blue-600 active dark:text-blue-500 font-bold text-dust': props.isLink,
+        'cursor-pointer underline underline-offset-4 text-blue-600 active dark:text-blue-500 font-bold': props.isLink,
         'text-gray-600 dark:text-gray-200': !props.isLink,
       }"
     >

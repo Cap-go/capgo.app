@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import process from 'node:process'
 import { TextDecoder } from 'node:util'
 
-export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins' | 'r2_inventory' | 'bento_dispatch'
+export type DeployTarget = 'supabase' | 'api' | 'translation' | 'files' | 'plugins'
 export type DeployScope = Record<DeployTarget, boolean>
 type GitRunner = (args: string[]) => string
 
@@ -13,7 +13,7 @@ export interface DeployScopeResult {
   scope: DeployScope
 }
 
-const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins', 'r2_inventory', 'bento_dispatch'] as const satisfies readonly DeployTarget[]
+const deployTargets = ['supabase', 'api', 'translation', 'files', 'plugins'] as const satisfies readonly DeployTarget[]
 
 const workerDependencyMatchers = [
   /^package\.json$/,
@@ -32,16 +32,6 @@ const backendUtilityMatchers = [
 ]
 
 export const deployMatchers: Record<DeployTarget, RegExp[]> = {
-  bento_dispatch: [
-    ...workerDependencyMatchers,
-    ...backendUtilityMatchers,
-    /^cloudflare_workers\/bento_dispatch\//,
-    /^cloudflare_workers\/api\/email_templates\/render\.ts$/,
-    /^scripts\/ensure-bento-dispatch-queue\.ts$/,
-    /^scripts\/lib\/posthog-queues\.ts$/,
-    /^scripts\/deploy-scope\.ts$/,
-    /^\.github\/workflows\/build_and_deploy\.yml$/,
-  ],
   supabase: [
     ...backendDependencyMatchers,
     /^supabase\/config\.toml$/,
@@ -79,15 +69,6 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
     /^supabase\/functions\/_backend\/private\/(download_link|upload_link)\.ts$/,
     /^supabase\/functions\/_backend\/public\/ok\.ts$/,
     /^supabase\/functions\/shared\/preview-subdomain\.ts$/,
-  ],
-  r2_inventory: [
-    ...workerDependencyMatchers,
-    ...backendDependencyMatchers,
-    ...backendUtilityMatchers,
-    /^cloudflare_workers\/r2_inventory\//,
-    /^scripts\/ensure-r2-inventory-queues\.ts$/,
-    /^scripts\/deploy-scope\.ts$/,
-    /^\.github\/workflows\/build_and_deploy\.yml$/,
   ],
   plugins: [
     ...workerDependencyMatchers,

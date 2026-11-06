@@ -3,8 +3,9 @@ import type { AuthInfo } from '../../utils/hono.ts'
 import { z } from 'zod'
 import { numberLikeSchema, safeParseSchema } from '../../utils/schema_validation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { apikeyHasOrgRightWithPolicy, supabaseWithAuth } from '../../utils/supabase.ts'
+import { apikeyHasOrgRightWithPolicy } from '../../utils/supabase.ts'
 
 const bodySchema = z.object({
   orgId: z.string(),
@@ -46,14 +47,14 @@ export async function getAuditLogs(c: Context, bodyRaw: unknown): Promise<Respon
     throw simpleError('not_authorized', 'Not authorized')
   }
 
-  const supabase = supabaseWithAuth(c, auth)
+  const principal = authPrincipal(c, auth)
   if (auth.authType === 'apikey') {
     if (!auth.apikey) {
       throw simpleError('not_authorized', 'Not authorized')
     }
 
     // Enforce org scoping + API key policy (expiration) before checking user rights.
-    const orgCheck = await apikeyHasOrgRightWithPolicy(c, auth.apikey, body.orgId, supabase)
+    const orgCheck = await apikeyHasOrgRightWithPolicy(c, auth.apikey, body.orgId, principal)
     if (!orgCheck.valid) {
       if (orgCheck.error === 'org_requires_expiring_key') {
         throw quickError(401, 'org_requires_expiring_key', 'This organization requires API keys with an expiration date. Please use a different key or update this key with an expiration date.')
@@ -73,24 +74,32 @@ export async function getAuditLogs(c: Context, bodyRaw: unknown): Promise<Respon
   const from = page * limit
   const to = (page + 1) * limit - 1
 
-  let query = supabase
-    .from('audit_logs')
-    .select('*', { count: 'exact' })
-    .eq('org_id', body.orgId)
-    .order('created_at', { ascending: false })
-    .range(from, to)
-
+  const filters = ['org_id = $1']
+  const params: unknown[] = [body.orgId]
   // Apply optional filters
   if (body.tableName) {
-    query = query.eq('table_name', body.tableName)
+    params.push(body.tableName)
+    filters.push(`table_name = $${params.length}`)
   }
   if (body.operation) {
-    query = query.eq('operation', body.operation)
+    params.push(body.operation)
+    filters.push(`operation = $${params.length}`)
   }
+  const where = filters.join(' AND ')
 
-  const { data, error, count } = await query
-
-  if (error) {
+  let data: unknown[]
+  let count: number | null
+  try {
+    ({ data, count } = await withRlsContext(c, principal, async client => ({
+      data: await queryJson(
+        client,
+        `SELECT * FROM public.audit_logs WHERE ${where} ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, to - from + 1, from],
+      ),
+      count: (await queryJsonOne<{ count: number }>(client, `SELECT count(*)::int AS count FROM public.audit_logs WHERE ${where}`, params))?.count ?? null,
+    })))
+  }
+  catch (error) {
     throw simpleError('cannot_get_audit_logs', 'Cannot get audit logs', { error })
   }
 

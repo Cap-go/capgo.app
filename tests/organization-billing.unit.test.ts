@@ -8,55 +8,25 @@ const visibleOptions = {
 }
 
 describe('isCreditsOnlyOrg', () => {
-  it.concurrent('returns true when unpaid, no trial, and credits remain', () => {
-    expect(isCreditsOnlyOrg({
-      paying: false,
-      trial_left: 0,
-      credit_available: 120,
-    })).toBe(true)
-  })
-
-  it.concurrent('returns false when paying', () => {
-    expect(isCreditsOnlyOrg({
-      paying: true,
-      trial_left: 0,
-      credit_available: 120,
-    })).toBe(false)
-  })
-
-  it.concurrent('returns false when trial remains', () => {
-    expect(isCreditsOnlyOrg({
-      paying: false,
-      trial_left: 3,
-      credit_available: 120,
-    })).toBe(false)
-  })
-
-  it.concurrent('returns false when credits are empty', () => {
-    expect(isCreditsOnlyOrg({
-      paying: false,
-      trial_left: 0,
-      credit_available: 0,
-    })).toBe(false)
-  })
-
-  it.concurrent('returns false for null org', () => {
-    expect(isCreditsOnlyOrg(null)).toBe(false)
+  it.concurrent.each([
+    ['unpaid, no trial, and credits remain', { paying: false, trial_left: 0, credit_available: 120 }, true],
+    ['paying', { paying: true, trial_left: 0, credit_available: 120 }, false],
+    ['trial remains', { paying: false, trial_left: 3, credit_available: 120 }, false],
+    ['credits are empty', { paying: false, trial_left: 0, credit_available: 0 }, false],
+    ['null org', null, false],
+  ])('when %s', (_label, org, expected) => {
+    expect(isCreditsOnlyOrg(org)).toBe(expected)
   })
 })
 
 describe('resolveOrgBillingStatus', () => {
-  it.concurrent('hides when stripe is disabled', () => {
+  it.concurrent.each([
+    ['stripe is disabled', { stripeEnabled: false }],
+    ['security access is missing', { lacksSecurityAccess: true }],
+  ])('hides when %s', (_label, options) => {
     expect(resolveOrgBillingStatus({ paying: false, trial_left: 10 }, {
       ...visibleOptions,
-      stripeEnabled: false,
-    }).kind).toBe('hidden')
-  })
-
-  it.concurrent('hides when security access is missing', () => {
-    expect(resolveOrgBillingStatus({ paying: false, trial_left: 10 }, {
-      ...visibleOptions,
-      lacksSecurityAccess: true,
+      ...options,
     }).kind).toBe('hidden')
   })
 
@@ -71,14 +41,6 @@ describe('resolveOrgBillingStatus', () => {
       tone: 'trial',
       cta: 'go_plans',
     })
-  })
-
-  it.concurrent('keeps one day of trial as trial, not inactive', () => {
-    expect(resolveOrgBillingStatus({
-      paying: false,
-      trial_left: 1,
-      can_use_more: true,
-    }, visibleOptions).kind).toBe('trial')
   })
 
   it.concurrent('shows trial over when the trial has ended', () => {
@@ -121,21 +83,11 @@ describe('resolveOrgBillingStatus', () => {
     })
   })
 
-  it.concurrent('shows plan limit reached when a paid org is over quota without credits', () => {
-    expect(resolveOrgBillingStatus({
-      paying: true,
-      trial_left: 0,
-      can_use_more: false,
-      credit_available: 0,
-    }, visibleOptions).kind).toBe('limit_reached')
-  })
-
-  it.concurrent('shows using credits when a paid org is over quota with credits', () => {
-    expect(resolveOrgBillingStatus({
-      paying: true,
-      trial_left: 0,
-      can_use_more: false,
-      credit_available: 40,
-    }, visibleOptions).kind).toBe('limit_reached_credits')
+  it.concurrent.each([
+    ['one day of trial stays trial, not inactive', { paying: false, trial_left: 1, can_use_more: true }, 'trial'],
+    ['a paid org over quota without credits', { paying: true, trial_left: 0, can_use_more: false, credit_available: 0 }, 'limit_reached'],
+    ['a paid org over quota with credits', { paying: true, trial_left: 0, can_use_more: false, credit_available: 40 }, 'limit_reached_credits'],
+  ])('resolves %s', (_label, org, kind) => {
+    expect(resolveOrgBillingStatus(org, visibleOptions).kind).toBe(kind)
   })
 })

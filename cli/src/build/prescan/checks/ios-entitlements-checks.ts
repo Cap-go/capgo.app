@@ -211,25 +211,27 @@ export const apsEnvironmentVsMode: PrescanCheck = {
     const profileValue = primaryProfile
       ? profileEntitlementsOf(primaryProfile.base64)['aps-environment']
       : undefined
-    const profileMismatch = typeof profileValue === 'string' && profileValue !== value
+    // On an App Store export, Xcode re-signs with the distribution profile and takes
+    // aps-environment from it, so development in App.entitlements + production in
+    // the profile is the normal Capacitor setup, not a mismatch.
+    const exportRewritesToProduction = ctx.distributionMode === 'app_store' && value === 'development' && profileValue === 'production'
+    const profileMismatch = typeof profileValue === 'string' && profileValue !== value && !exportRewritesToProduction
 
     const findings: Finding[] = []
     if (ctx.distributionMode === 'app_store' && value === 'development' && !profileMismatch) {
       // The default Capacitor App.entitlements ships aps-environment=development.
-      // On a push-free app this is a benign leftover the cloud builder neither
-      // rewrites nor fails the archive on — so it must NOT hard-block an App Store
-      // build. Only escalate to a blocking error when there is independent evidence
-      // the app genuinely uses push (a remote-notification background mode); the
-      // mapped-profile production mismatch is caught separately below as an error.
+      // Xcode's App Store export rewrites it to the distribution profile's
+      // production value, so it never blocks the build. Surface it as a warning
+      // only, with stronger wording when the app declares remote notifications.
       const usesPush = appUsesRemoteNotifications(ctx.projectDir)
       findings.push({
         id: 'ios/entitlements-aps-environment-vs-mode',
-        severity: usesPush ? 'error' : 'warning',
+        severity: 'warning',
         title: 'aps-environment is "development" but the build distributes to the App Store / TestFlight',
         detail: usesPush
-          ? 'The app declares the remote-notification background mode, so it needs a production push environment for App Store / TestFlight'
-          : 'App Store and TestFlight push needs a production environment; this is the default Capacitor leftover and is harmless unless the app uses push notifications',
-        fix: 'Set aps-environment=production in App.entitlements and use a production push profile (or remove aps-environment if the app does not use push)',
+          ? 'The app declares the remote-notification background mode; the App Store export uses the distribution profile\'s production push environment, so make sure the App ID has the Push Notifications capability'
+          : 'This is the default Capacitor leftover; the App Store export uses the distribution profile\'s push environment, so it is harmless unless push is misconfigured',
+        fix: 'Optionally set aps-environment=production in App.entitlements (or remove aps-environment if the app does not use push)',
       })
     }
     else if (ctx.distributionMode === 'ad_hoc' && value === 'production' && !profileMismatch) {

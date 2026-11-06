@@ -2,19 +2,27 @@ import type { Context } from 'hono'
 import type { BillingAccount } from './stripe_billing.ts'
 import type { Database } from './supabase.types.ts'
 import Stripe from 'stripe'
+import type { PriceTier } from './country_price_tier.ts'
+import { FULL_PRICE_TIER, priceTierForCountries } from './country_price_tier.ts'
 import { simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
+import { queryJson, servicePrincipal, withRlsContext } from './pg_rls.ts'
+import { getCustomerBilling, getPriceTier, isRegionalCurrency } from './regional_price.ts'
 import {
   BillingAccountUnavailableError,
   getBillingAccountForCustomer,
   getPlanPriceId,
+  getRegionalPlanPriceId,
+  getRequestCountry,
+  getStripePublishableKey,
   getStripeSecretKey,
   isAutomaticTaxEnabled,
   isStripeConfiguredForAccount,
   planProductIdOrFilter,
   resolveCheckoutPlanProductId,
+  singleRowOrNull,
+  TRIAL_PLAN_SCHEDULE_METADATA_KEY,
 } from './stripe_billing.ts'
-import { supabaseAdmin } from './supabase.ts'
 import { getEnv, isStripeConfigured, trimTrailingSlashes } from './utils.ts'
 
 export type { BillingAccount } from './stripe_billing.ts'
@@ -249,9 +257,97 @@ function getSubscriptionEndDate(subscription: Stripe.Subscription, item: Stripe.
   return stripeTimestampToIso(endSeconds)
 }
 
-export async function getSubscriptionData(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount) {
+export type SubscriptionSyncData = {
+  productId: string | null
+  extraMau: number
+  status: Stripe.Subscription.Status
+  trialPlanFirstInvoiceUnpaid: boolean
+  cycleStart: string | null
+  cycleEnd: string | null
+  canceledAt: string | null
+  subscriptionId: string
+  cancel_at_period_end: boolean
+}
+
+export type SubscriptionLookupResult =
+  | { ok: true, data: SubscriptionSyncData }
+  | { ok: false, reason: 'missing_subscription_id' }
+  | { ok: false, reason: 'stripe_not_configured' }
+  | { ok: false, reason: 'not_found' }
+  | { ok: false, reason: 'read_error', error: unknown }
+
+const STRIPE_RATE_LIMIT_MAX_ATTEMPTS = 5
+const STRIPE_RATE_LIMIT_BASE_DELAY_MS = 250
+
+export function isStripeRateLimitError(error: unknown): boolean {
+  return error instanceof Stripe.errors.StripeRateLimitError
+    || (typeof error === 'object' && error !== null && (error as { statusCode?: number }).statusCode === 429)
+    || (typeof error === 'object' && error !== null && (error as { code?: string }).code === 'rate_limit')
+}
+
+async function sleepMs(ms: number) {
+  await new Promise(resolve => setTimeout(resolve, ms))
+}
+
+export async function callStripeWithRetry<T>(c: Context, fn: () => Promise<T>): Promise<T> {
+  let attempt = 0
+  while (true) {
+    try {
+      return await fn()
+    }
+    catch (error) {
+      if (!isStripeRateLimitError(error) || attempt >= STRIPE_RATE_LIMIT_MAX_ATTEMPTS - 1)
+        throw error
+      const delayMs = STRIPE_RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'Stripe rate limit, retrying',
+        attempt: attempt + 1,
+        delayMs,
+      })
+      await sleepMs(delayMs)
+      attempt++
+    }
+  }
+}
+
+function subscriptionDataFromStripeSubscription(c: Context, subscription: Stripe.Subscription): SubscriptionSyncData {
+  const currentItem = getLicensedSubscriptionItem(subscription.items.data)
+  const productId = getSubscriptionProductId(c, currentItem)
+  const cycleStart = stripeTimestampToIso(currentItem?.current_period_start)
+  const cycleEnd = stripeTimestampToIso(currentItem?.current_period_end)
+  const canceledAt = getSubscriptionEndDate(subscription, currentItem)
+
+  const latestInvoice = typeof subscription.latest_invoice === 'object' ? subscription.latest_invoice : null
+  const trialPlanFirstInvoiceUnpaid = subscription.metadata?.[TRIAL_PLAN_SCHEDULE_METADATA_KEY] === 'true'
+    && latestInvoice?.billing_reason === 'subscription_create'
+    && latestInvoice.status !== 'paid'
+
+  return {
+    productId,
+    extraMau: getExtraMau(subscription.items.data),
+    status: subscription.status,
+    trialPlanFirstInvoiceUnpaid,
+    cycleStart,
+    cycleEnd,
+    canceledAt,
+    subscriptionId: subscription.id,
+    cancel_at_period_end: subscription.cancel_at_period_end,
+  }
+}
+
+function stripeLookupErrorFromCatch(c: Context, context: string, subscriptionId: string | null, error: unknown): SubscriptionLookupResult {
+  if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
+    cloudlog({ requestId: c.get('requestId'), message: 'Subscription not found', subscriptionId, error: error.code })
+    return { ok: false, reason: 'not_found' }
+  }
+  cloudlogErr({ requestId: c.get('requestId'), message: context, error })
+  return { ok: false, reason: 'read_error', error }
+}
+
+export async function getSubscriptionData(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount): Promise<SubscriptionLookupResult> {
   if (!subscriptionId)
-    return null
+    return { ok: false, reason: 'missing_subscription_id' }
   try {
     cloudlog({ requestId: c.get('requestId'), message: 'Fetching subscription data', customerId, subscriptionId })
 
@@ -259,75 +355,56 @@ export async function getSubscriptionData(c: Context, customerId: string, subscr
       ? buildStripeContext(c, billingAccount)
       : await getStripeContextForCustomer(c, customerId)
     if (!stripeContext.configured)
-      return null
+      return { ok: false, reason: 'stripe_not_configured' }
 
-    // Retrieve the specific subscription from Stripe
-    const subscription = await stripeContext.stripe.subscriptions.retrieve(subscriptionId, {
-      expand: ['items.data.price'], // Correct expand path for retrieve
-    })
+    const subscription = await callStripeWithRetry(c, () => stripeContext.stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['items.data.price', 'latest_invoice'],
+    }))
 
     cloudlog({
       requestId: c.get('requestId'),
       context: 'getSubscriptionData',
-      // subscriptionsFound: subscriptions.data.length, // Removed - retrieve returns one or throws
       subscriptionId: subscription.id,
       subscriptionStatus: subscription.status,
     })
 
-    const currentItem = getLicensedSubscriptionItem(subscription.items.data)
-    const productId = getSubscriptionProductId(c, currentItem)
-    const cycleStart = stripeTimestampToIso(currentItem?.current_period_start)
-    const cycleEnd = stripeTimestampToIso(currentItem?.current_period_end)
-    const canceledAt = getSubscriptionEndDate(subscription, currentItem)
-
-    return {
-      productId,
-      extraMau: getExtraMau(subscription.items.data),
-      status: subscription.status,
-      cycleStart,
-      cycleEnd,
-      canceledAt,
-      subscriptionId: subscription.id,
-      cancel_at_period_end: subscription.cancel_at_period_end,
-    }
+    return { ok: true, data: subscriptionDataFromStripeSubscription(c, subscription) }
   }
   catch (error) {
-    // Handle specific Stripe errors if needed, e.g., resource_missing
-    if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
-      cloudlog({ requestId: c.get('requestId'), message: 'Subscription not found', subscriptionId, error: error.code })
-    }
-    else {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'getSubscriptionData', error })
-    }
-    return null
+    return stripeLookupErrorFromCatch(c, 'getSubscriptionData', subscriptionId, error)
   }
 }
 
-async function getActiveSubscription(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount) {
+export async function getActiveSubscription(c: Context, customerId: string, subscriptionId: string | null, billingAccount?: BillingAccount): Promise<SubscriptionLookupResult> {
   cloudlog({ requestId: c.get('requestId'), message: 'Stored subscription not tracked or not found, checking for others.', customerId, storedSubscriptionId: subscriptionId })
 
   const stripeContext = billingAccount
     ? buildStripeContext(c, billingAccount)
     : await getStripeContextForCustomer(c, customerId)
   if (!stripeContext.configured)
-    return null
+    return { ok: false, reason: 'stripe_not_configured' }
 
-  for (const status of TRACKED_STRIPE_SUBSCRIPTION_STATUSES) {
-    const subscriptions = await stripeContext.stripe.subscriptions.list({
-      customer: customerId,
-      status,
-      limit: 1,
-    })
+  try {
+    for (const status of TRACKED_STRIPE_SUBSCRIPTION_STATUSES) {
+      const subscriptions = await callStripeWithRetry(c, () => stripeContext.stripe.subscriptions.list({
+        customer: customerId,
+        status,
+        limit: 1,
+      }))
 
-    if (subscriptions.data.length > 0) {
-      const activeSub = subscriptions.data[0]
-      cloudlog({ requestId: c.get('requestId'), message: 'Found a tracked subscription, fetching its data.', activeSubscriptionId: activeSub.id, status: activeSub.status })
-      return getSubscriptionData(c, customerId, activeSub.id, stripeContext.billingAccount)
+      if (subscriptions.data.length > 0) {
+        const activeSub = subscriptions.data[0]
+        cloudlog({ requestId: c.get('requestId'), message: 'Found a tracked subscription, fetching its data.', activeSubscriptionId: activeSub.id, status: activeSub.status })
+        return getSubscriptionData(c, customerId, activeSub.id, stripeContext.billingAccount)
+      }
     }
-  }
 
-  cloudlog({ requestId: c.get('requestId'), message: 'No other tracked subscriptions found for customer.', customerId })
-  return null
+    cloudlog({ requestId: c.get('requestId'), message: 'No other tracked subscriptions found for customer.', customerId })
+    return { ok: false, reason: 'not_found' }
+  }
+  catch (error) {
+    return stripeLookupErrorFromCatch(c, 'getActiveSubscription', subscriptionId, error)
+  }
 }
 
 export async function syncSubscriptionData(c: Context, customerId: string, subscriptionId: string | null): Promise<void> {
@@ -335,37 +412,113 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return
   try {
-    // Get subscription data from Stripe using the ID stored in our DB
-    let subscriptionData = await getSubscriptionData(c, customerId, subscriptionId, billingAccount)
+    let subscriptionData: SubscriptionSyncData | null = null
+    let stripeConfirmedAbsent = false
+
+    const primaryLookup = await getSubscriptionData(c, customerId, subscriptionId, billingAccount)
+    if (primaryLookup.ok) {
+      subscriptionData = primaryLookup.data
+    }
+    else if (primaryLookup.reason === 'read_error') {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'syncSubscriptionData skipping update after Stripe read error',
+        customerId,
+        subscriptionId,
+        error: primaryLookup.error,
+      })
+      return
+    }
+    else if (primaryLookup.reason === 'stripe_not_configured') {
+      return
+    }
+    else if (primaryLookup.reason === 'not_found') {
+      stripeConfirmedAbsent = true
+    }
 
     if (!subscriptionData) {
-      subscriptionData = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
+      const activeLookup = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
+      if (activeLookup.ok) {
+        subscriptionData = activeLookup.data
+        stripeConfirmedAbsent = false
+      }
+      else if (activeLookup.reason === 'read_error') {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'syncSubscriptionData skipping update after Stripe read error',
+          customerId,
+          subscriptionId,
+          error: activeLookup.error,
+        })
+        return
+      }
+      else if (activeLookup.reason === 'stripe_not_configured') {
+        return
+      }
+      else if (activeLookup.reason === 'not_found') {
+        stripeConfirmedAbsent = true
+      }
     }
     else if (!TRACKED_STRIPE_SUBSCRIPTION_STATUSES.includes(subscriptionData.status as typeof TRACKED_STRIPE_SUBSCRIPTION_STATUSES[number])) {
-      const replacementSubscriptionData = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
-      if (replacementSubscriptionData || subscriptionData.status !== 'canceled')
-        subscriptionData = replacementSubscriptionData
+      const replacementLookup = await getActiveSubscription(c, customerId, subscriptionId, billingAccount)
+      if (!replacementLookup.ok) {
+        if (replacementLookup.reason === 'read_error') {
+          cloudlogErr({
+            requestId: c.get('requestId'),
+            message: 'syncSubscriptionData skipping update after Stripe read error',
+            customerId,
+            subscriptionId,
+            error: replacementLookup.error,
+          })
+          return
+        }
+        if (subscriptionData.status !== 'canceled') {
+          subscriptionData = null
+          if (replacementLookup.reason === 'not_found')
+            stripeConfirmedAbsent = true
+        }
+      }
+      else {
+        subscriptionData = replacementLookup.data
+      }
+    }
+
+    if (!subscriptionData && !stripeConfirmedAbsent) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'syncSubscriptionData skipping update without Stripe confirmation',
+        customerId,
+        subscriptionId,
+      })
+      return
     }
 
     let dbStatus: Database['public']['Enums']['stripe_status'] = 'canceled'
 
     if (subscriptionData) {
       if (subscriptionData.status === 'canceled') {
-        if (subscriptionData.cycleEnd && new Date(subscriptionData.cycleEnd) > new Date())
+        // Paid access runs to period end, but a never-paid trial plan grants none.
+        if (subscriptionData.cycleEnd && new Date(subscriptionData.cycleEnd) > new Date() && !subscriptionData.trialPlanFirstInvoiceUnpaid)
           dbStatus = 'succeeded'
+      }
+      else if (subscriptionData.trialPlanFirstInvoiceUnpaid) {
+        // Live in Stripe but never paid: keep the org non-paying, as the webhook does.
+        dbStatus = 'failed'
       }
       else if (subscriptionData.status === 'active' || subscriptionData.status === 'trialing' || subscriptionData.status === 'past_due') {
         dbStatus = 'succeeded'
       }
     }
 
-    const { data: currentStripeInfo, error: currentStripeInfoError } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .select('status, past_due_at')
-      .eq('customer_id', customerId)
-      .maybeSingle()
-
-    if (currentStripeInfoError) {
+    let currentStripeInfo: { status: string | null, past_due_at: string | null } | null
+    try {
+      currentStripeInfo = await withRlsContext(c, servicePrincipal, async client => singleRowOrNull(await queryJson<{ status: string | null, past_due_at: string | null }>(
+        client,
+        'SELECT status, past_due_at FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        [customerId],
+      )))
+    }
+    catch (currentStripeInfoError) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'syncSubscriptionData current stripe_info', error: currentStripeInfoError })
       return
     }
@@ -404,12 +557,10 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
     // Extra MAU only counts while the subscription that bought it is live.
     updateData.extra_mau = dbStatus === 'succeeded' ? subscriptionData?.extraMau ?? 0 : 0
 
-    const { error: updateError } = await supabaseAdmin(c)
-      .from('stripe_info')
-      .update(updateData)
-      .eq('customer_id', customerId)
-
-    if (updateError) {
+    try {
+      await withRlsContext(c, servicePrincipal, client => updateStripeInfoByCustomer(client, customerId, updateData))
+    }
+    catch (updateError) {
       cloudlogErr({ requestId: c.get('requestId'), message: 'syncSubscriptionData', error: updateError })
     }
   }
@@ -418,21 +569,54 @@ export async function syncSubscriptionData(c: Context, customerId: string, subsc
   }
 }
 
+const STRIPE_INFO_SYNC_COLUMNS = new Set([
+  'status',
+  'past_due_at',
+  'churn_reason',
+  'product_id',
+  'subscription_id',
+  'subscription_anchor_start',
+  'subscription_anchor_end',
+  'canceled_at',
+  'extra_mau',
+])
+
+// Column names come from the fixed set above; values are always bound.
+async function updateStripeInfoByCustomer(client: Parameters<typeof queryJson>[0], customerId: string, updateData: Record<string, unknown>) {
+  const columns = Object.keys(updateData).filter(column => STRIPE_INFO_SYNC_COLUMNS.has(column))
+  if (!columns.length)
+    return
+  const assignments = columns.map((column, index) => `"${column}" = $${index + 2}`).join(', ')
+  await client.query(`UPDATE public.stripe_info SET ${assignments} WHERE customer_id = $1`, [customerId, ...columns.map(column => updateData[column])])
+}
+
 export type PortalFlow = 'cancel_subscription'
 
-async function getActiveSubscriptionId(c: Context, customerId: string) {
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .select('subscription_id, status')
-    .eq('customer_id', customerId)
-    .maybeSingle()
-  if (error) {
+// known is false on a stripe_info read error: the subscription may exist, so callers must not
+// treat null as "no subscription" for destructive work (e.g. spare-card detach).
+export async function lookupActiveSubscriptionId(c: Context, customerId: string) {
+  let data: { subscription_id: string | null, status: string | null } | null
+  try {
+    data = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = await client.query<{ subscription_id: string | null, status: string | null }>(
+        'SELECT subscription_id, status FROM public.stripe_info WHERE customer_id = $1 LIMIT 2',
+        [customerId],
+      )
+      return singleRowOrNull(result.rows)
+    })
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getActiveSubscriptionId', error })
-    return null
+    return { subscriptionId: null as string | null, known: false }
   }
   if (!data?.subscription_id || data.status === 'canceled' || data.status === 'deleted')
-    return null
-  return data.subscription_id
+    return { subscriptionId: null as string | null, known: true }
+  return { subscriptionId: data.subscription_id, known: true }
+}
+
+export async function getActiveSubscriptionId(c: Context, customerId: string) {
+  const { subscriptionId } = await lookupActiveSubscriptionId(c, customerId)
+  return subscriptionId
 }
 
 export async function createPortal(c: Context, customerId: string, callbackUrl: string, flow?: PortalFlow) {
@@ -551,16 +735,17 @@ export async function syncStripeCustomerCountry(c: Context, customerId: string |
   if (customerCountry === undefined)
     return undefined
 
-  const { data, error } = await supabaseAdmin(c)
-    .from('stripe_info')
-    .update({ customer_country: customerCountry })
-    .eq('customer_id', customerId)
-    .select('customer_id')
-
-  if (error) {
+  let updatedRows: number | null = null
+  try {
+    updatedRows = await withRlsContext(c, servicePrincipal, async (client) => {
+      const result = await client.query('UPDATE public.stripe_info SET customer_country = $2 WHERE customer_id = $1', [customerId, customerCountry])
+      return result.rowCount ?? 0
+    })
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'syncStripeCustomerCountry', customerId, error })
   }
-  else if (!data?.length) {
+  if (updatedRows === 0) {
     cloudlog({ requestId: c.get('requestId'), message: 'syncStripeCustomerCountry no stripe_info row matched', customerId, customerCountry })
   }
 
@@ -610,6 +795,47 @@ export function isSubscriptionInvoice(invoice: Pick<OpenInvoiceShape, 'billing_r
   return typeof invoice.billing_reason === 'string' && invoice.billing_reason.startsWith('subscription')
 }
 
+// charge.failed fires for every charge, including credit auto top-ups and one-off
+// purchases. Only a failed subscription invoice says anything about the plan.
+// Errors propagate so the webhook is retried instead of guessing.
+// One webhook checks the same charge twice (subscription check, backup retry): look it up once.
+const chargeInvoiceLookups = new WeakMap<object, Promise<Stripe.Invoice | null>>()
+
+// The invoice a charge paid (or tried to pay), through its PaymentIntent.
+export function findInvoiceForCharge(stripe: Stripe, charge: Pick<Stripe.Charge, 'payment_intent'>) {
+  let lookup = chargeInvoiceLookups.get(charge)
+  if (!lookup) {
+    lookup = lookupInvoiceForCharge(stripe, charge)
+    chargeInvoiceLookups.set(charge, lookup)
+    // Errors must not stick: a retried webhook delivery parses a new charge object anyway.
+    lookup.catch(() => chargeInvoiceLookups.delete(charge))
+  }
+  return lookup
+}
+
+async function lookupInvoiceForCharge(stripe: Stripe, charge: Pick<Stripe.Charge, 'payment_intent'>) {
+  const paymentIntentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id
+  if (!paymentIntentId)
+    return null
+  const payments = await stripe.invoicePayments.list({
+    payment: { type: 'payment_intent', payment_intent: paymentIntentId },
+    limit: 1,
+    expand: ['data.invoice'],
+  })
+  const invoice = payments.data[0]?.invoice
+  if (!invoice || typeof invoice === 'string' || invoice.deleted)
+    return null
+  return invoice
+}
+
+export async function isSubscriptionCharge(stripe: Stripe, charge: Pick<Stripe.Charge, 'payment_intent'>) {
+  // Legacy charges without a PaymentIntent keep the previous behavior.
+  if (!charge.payment_intent)
+    return true
+  const invoice = await findInvoiceForCharge(stripe, charge)
+  return !!invoice && isSubscriptionInvoice(invoice)
+}
+
 export function toOpenSubscriptionInvoiceSummary(invoice: OpenInvoiceShape): OpenSubscriptionInvoiceSummary {
   return {
     hosted_invoice_url: invoice.hosted_invoice_url ?? null,
@@ -622,17 +848,22 @@ export function toOpenSubscriptionInvoiceSummary(invoice: OpenInvoiceShape): Ope
   }
 }
 
+export async function findLatestOpenSubscriptionInvoice(c: Context, customerId: string, billingAccount: BillingAccount = 'ee'): Promise<Stripe.Invoice | null> {
+  // Stripe lists newest first; page past newer non-subscription invoices.
+  for await (const invoice of getStripe(c, billingAccount).invoices.list({ customer: customerId, status: 'open', limit: 10 })) {
+    if (isSubscriptionInvoice(invoice))
+      return invoice
+  }
+  return null
+}
+
 // Best effort: dunning emails and the past-due banner still work without the pay link.
 export async function getLatestOpenSubscriptionInvoice(c: Context, customerId: string, billingAccount: BillingAccount = 'ee'): Promise<OpenSubscriptionInvoiceSummary | null> {
   if (!isStripeConfiguredForAccount(c, billingAccount) || !customerId)
     return null
   try {
-    // Stripe lists newest first; page past newer non-subscription invoices.
-    for await (const invoice of getStripe(c, billingAccount).invoices.list({ customer: customerId, status: 'open', limit: 10 })) {
-      if (isSubscriptionInvoice(invoice))
-        return toOpenSubscriptionInvoiceSummary(invoice)
-    }
-    return null
+    const invoice = await findLatestOpenSubscriptionInvoice(c, customerId, billingAccount)
+    return invoice ? toOpenSubscriptionInvoiceSummary(invoice) : null
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getLatestOpenSubscriptionInvoice', customerId, billingAccount, error })
@@ -640,20 +871,23 @@ export async function getLatestOpenSubscriptionInvoice(c: Context, customerId: s
   }
 }
 
-async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount): Promise<string | null> {
+async function getStoredPlanPriceId(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount, tier: PriceTier): Promise<string | null> {
   try {
-    const { data, error } = await supabaseAdmin(c)
-      .from('plans')
-      .select('price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us')
-      .or(planProductIdOrFilter(planId))
-      .single()
-
-    if (error) {
-      cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error })
+    planProductIdOrFilter(planId)
+    const plans = await withRlsContext(c, servicePrincipal, client => queryJson<Pick<Database['public']['Tables']['plans']['Row'], 'price_m_id' | 'price_y_id' | 'price_m_id_us' | 'price_y_id_us' | 'stripe_id' | 'stripe_id_us' | 'regional_price_ids'>>(
+      client,
+      'SELECT price_m_id, price_y_id, price_m_id_us, price_y_id_us, stripe_id, stripe_id_us, regional_price_ids FROM public.plans WHERE stripe_id = $1 OR stripe_id_us = $1 LIMIT 2',
+      [planId],
+    ))
+    // `.single()`: anything but exactly one plan is an error.
+    const data = plans.length === 1 ? plans[0] : null
+    if (!data) {
+      cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error: { code: 'PGRST116', rows: plans.length } })
       return null
     }
 
-    return getPlanPriceId(data, billingAccount, recurrence)
+    // A tier without its own price sells the full price: never a cheaper tier's.
+    return getRegionalPlanPriceId(data.regional_price_ids, tier, billingAccount, recurrence) ?? getPlanPriceId(data, billingAccount, recurrence)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'getStoredPlanPriceId', planId, recurrence, error })
@@ -661,26 +895,63 @@ async function getStoredPlanPriceId(c: Context, planId: string, recurrence: stri
   }
 }
 
-async function getPriceIds(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount): Promise<{ priceId: string | null }> {
+async function getPriceIds(c: Context, planId: string, recurrence: string, billingAccount: BillingAccount, tier: PriceTier = FULL_PRICE_TIER): Promise<{ priceId: string | null }> {
   let priceId = null
   if (!isStripeConfiguredForAccount(c, billingAccount))
+    return { priceId }
+  // The plans table names the price Checkout sells: a replaced price stays active in Stripe until it is
+  // archived after the release, so the Stripe listing alone could still pick it.
+  priceId = await getStoredPlanPriceId(c, planId, recurrence, billingAccount, tier)
+  if (priceId)
     return { priceId }
   try {
     const prices = await listPricesByProduct(c, planId, billingAccount)
     cloudlog({ requestId: c.get('requestId'), message: 'prices stripe', prices })
     prices.data.forEach((price) => {
-      if (price.recurring?.interval === recurrence && price.active && price.recurring?.usage_type === 'licensed')
+      // Regional tier prices are only sold through plans.regional_price_ids, never by this fallback.
+      const priceTier = price.metadata?.capgo_tier
+      if (price.recurring?.interval === recurrence && price.active && price.recurring?.usage_type === 'licensed' && (!priceTier || priceTier === FULL_PRICE_TIER))
         priceId = price.id
     })
   }
   catch (err) {
     cloudlog({ requestId: c.get('requestId'), message: 'search err', error: err })
   }
-  if (!priceId) {
-    priceId = await getStoredPlanPriceId(c, planId, recurrence, billingAccount)
-    cloudlog({ requestId: c.get('requestId'), message: 'prices fallback', planId, recurrence, priceId })
-  }
+  cloudlog({ requestId: c.get('requestId'), message: 'prices fallback', planId, recurrence, priceId })
   return { priceId }
+}
+
+// Stripe sets unit_amount_decimal alone for sub-unit amounts.
+function readStripeUnitAmount(source: { unit_amount?: number | null, unit_amount_decimal?: { toString: () => string } | null }) {
+  if (typeof source.unit_amount === 'number')
+    return source.unit_amount
+  if (source.unit_amount_decimal === null || source.unit_amount_decimal === undefined)
+    return null
+  const decimal = Number(source.unit_amount_decimal.toString())
+  return Number.isFinite(decimal) ? decimal : null
+}
+
+// Smallest-unit amount per currency, exactly as configured on the Stripe price (currency_options).
+export function getPriceCurrencyAmounts(price: Pick<Stripe.Price, 'currency' | 'unit_amount' | 'unit_amount_decimal' | 'currency_options'>): Record<string, number> {
+  const amounts: Record<string, number> = {}
+  for (const [currency, option] of Object.entries(price.currency_options ?? {})) {
+    const amount = readStripeUnitAmount(option)
+    if (amount !== null)
+      amounts[currency.toLowerCase()] = amount
+  }
+  const amount = readStripeUnitAmount(price)
+  if (amount !== null)
+    amounts[price.currency.toLowerCase()] = amount
+  return amounts
+}
+
+// The price Checkout would sell for this plan, with every currency it is sold in.
+export async function getCheckoutPlanPrice(c: Context, planProductId: string, recurrence: 'month' | 'year', billingAccount: BillingAccount, tier: PriceTier): Promise<Stripe.Price | null> {
+  const resolvedPlanId = await resolveCheckoutPlanProductId(c, planProductId, billingAccount)
+  const { priceId } = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
+  if (!priceId)
+    return null
+  return await getStripe(c, billingAccount).prices.retrieve(priceId, { expand: ['currency_options'] })
 }
 
 export interface MeteredData {
@@ -772,6 +1043,26 @@ export function buildExtraMauTiers(steps: MauTierStep[], includedMau: number, in
   return tiers
 }
 
+// USD-cent tiers re-priced with the plan's own ratio for that currency (local minor units per USD cent),
+// so extra MAU follows the same per-currency pricing as the plan it is billed with.
+export function scaleTiersToCurrency(tiers: Stripe.PriceCreateParams.Tier[], ratio: number): Stripe.PriceCreateParams.Tier[] {
+  return tiers.map(({ unit_amount, ...tier }) => {
+    const amount = Math.round((unit_amount ?? 0) * ratio * 10_000) / 10_000
+    if (Number.isInteger(amount))
+      return { ...tier, unit_amount: amount }
+    // Plain string on purpose: the SDK form-encodes a Stripe.Decimal as its internal fields.
+    return { ...tier, unit_amount_decimal: String(amount) as unknown as Stripe.Decimal }
+  })
+}
+
+// Local minor units per USD cent for each currency of a plan price; empty without a USD amount.
+export function getCurrencyRatios(amounts: Record<string, number>): Record<string, number> {
+  const usd = amounts.usd
+  if (!usd)
+    return {}
+  return Object.fromEntries(Object.entries(amounts).map(([currency, amount]) => [currency, amount / usd]))
+}
+
 // Short stable hash so a tier change gets a new price (lookup keys are unique).
 function hashString(value: string) {
   let hash = 0x811C9DC5
@@ -783,17 +1074,30 @@ function hashString(value: string) {
 }
 
 // Found by lookup key, created (with its product) on first use.
-async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null, billingAccount: BillingAccount = 'ee') {
-  const { data: steps, error } = await supabaseAdmin(c)
-    .from('capgo_credits_steps')
-    .select('step_min, step_max, price_per_unit')
-    .eq('type', 'mau')
-    .is('org_id', null)
+// `currencyRatios` (local minor units per USD cent, from the plan price) mirrors the plan's currency_options,
+// so a non-USD checkout can bill both items in one currency at the plan's local pricing.
+async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'month' | 'year', taxBehavior: Stripe.Price.TaxBehavior | null, billingAccount: BillingAccount = 'ee', currencyRatios: Record<string, number> = {}) {
+  let steps: { step_min: number, step_max: number, price_per_unit: number }[] | null = null
+  let error: unknown = null
+  try {
+    steps = await withRlsContext(c, servicePrincipal, client => queryJson<{ step_min: number, step_max: number, price_per_unit: number }>(
+      client,
+      'SELECT step_min, step_max, price_per_unit FROM public.capgo_credits_steps WHERE type = $1 AND org_id IS NULL',
+      ['mau'],
+    ))
+  }
+  catch (stepsError) {
+    error = stepsError
+  }
   if (error || !steps?.length)
     throw simpleError('mau_tiers_not_found', 'Cannot load MAU price tiers', { error })
 
   const tiers = buildExtraMauTiers(steps, includedMau, interval)
-  const lookupKey = `${EXTRA_MAU_LOOKUP_KEY_PREFIX}${interval}_${hashString(JSON.stringify({ includedMau, tiers }))}`
+  const currencies = Object.keys(currencyRatios).filter(currency => currency !== 'usd').sort((a, b) => a.localeCompare(b))
+  const currencyTiers = Object.fromEntries(currencies.map(currency => [currency, scaleTiersToCurrency(tiers, currencyRatios[currency])]))
+  const hashInput = currencies.length ? { includedMau, tiers, currencyTiers } : { includedMau, tiers }
+  const lookupKey = `${EXTRA_MAU_LOOKUP_KEY_PREFIX}${interval}_${hashString(JSON.stringify(hashInput))}`
+  const taxBehaviorParam = taxBehavior && taxBehavior !== 'unspecified' ? { tax_behavior: taxBehavior } : {}
   const existing = await getStripe(c, billingAccount).prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })
   if (existing.data[0])
     return existing.data[0].id
@@ -814,7 +1118,10 @@ async function getExtraMauPriceId(c: Context, includedMau: number, interval: 'mo
       lookup_key: lookupKey,
       nickname: `Enterprise extra MAU (${interval})`,
       metadata: { capgo_kind: EXTRA_MAU_PRICE_KIND, included_mau: String(includedMau) },
-      ...(taxBehavior && taxBehavior !== 'unspecified' ? { tax_behavior: taxBehavior } : {}),
+      ...taxBehaviorParam,
+      ...(currencies.length
+        ? { currency_options: Object.fromEntries(currencies.map(currency => [currency, { tiers: currencyTiers[currency], ...taxBehaviorParam }])) }
+        : {}),
     })
   }
   catch (error) {
@@ -874,22 +1181,98 @@ export interface ExtraMauCheckout {
   extraMau: number
 }
 
-export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, clientReferenceId?: string, attributionId?: string, datafastAttribution?: DatafastAttribution, affonsoReferral?: string | null, extraMau?: ExtraMauCheckout) {
+// Embedded sessions render inside Capgo; url is only set for the hosted fallback.
+export interface CheckoutSessionResult {
+  url: string | null
+  clientSecret?: string | null
+  publishableKey?: string
+  sessionId?: string
+}
+
+// The emulator only serves hosted pages, and Stripe.js needs the account's publishable key.
+function getEmbeddedCheckoutPublishableKey(c: Context, billingAccount: BillingAccount, embedded?: boolean) {
+  if (!embedded || isStripeEmulatorEnabled(c))
+    return ''
+  return getStripePublishableKey(c, billingAccount)
+}
+
+function getCheckoutRedirectParams(publishableKey: string, successUrl: string, cancelUrl: string): Pick<Stripe.Checkout.SessionCreateParams, 'ui_mode' | 'return_url' | 'redirect_on_completion' | 'success_url' | 'cancel_url'> {
+  if (!publishableKey)
+    return { success_url: successUrl, cancel_url: cancelUrl }
+  // Cards complete in place; redirect-based methods come back to the same success URL.
+  const separator = successUrl.includes('?') ? '&' : '?'
+  return {
+    ui_mode: 'embedded_page',
+    redirect_on_completion: 'if_required',
+    return_url: successUrl.includes('{CHECKOUT_SESSION_ID}') ? successUrl : `${successUrl}${separator}session_id={CHECKOUT_SESSION_ID}`,
+  }
+}
+
+function toCheckoutSessionResult(session: Stripe.Checkout.Session, publishableKey: string): CheckoutSessionResult {
+  if (!publishableKey)
+    return { url: session.url }
+  return { url: null, clientSecret: session.client_secret, publishableKey, sessionId: session.id }
+}
+
+// The server owns the currency: a billed customer keeps theirs even when the client sends none.
+function resolveCheckoutCurrency(customerCurrency: string | null, planCurrencies: string[], requestedCurrency: string | undefined) {
+  if (customerCurrency && requestedCurrency && customerCurrency !== requestedCurrency)
+    throw simpleError('currency_locked', 'This organization is already billed in another currency', { currency: requestedCurrency, customerCurrency })
+  const checkoutCurrency = customerCurrency ?? requestedCurrency
+  if (checkoutCurrency && !planCurrencies.includes(checkoutCurrency))
+    throw simpleError('invalid_currency', 'This plan is not sold in the requested currency', { currency: checkoutCurrency })
+  return checkoutCurrency
+}
+
+export interface CheckoutOptions {
+  clientReferenceId?: string
+  attributionId?: string
+  datafastAttribution?: DatafastAttribution
+  affonsoReferral?: string | null
+  extraMau?: ExtraMauCheckout
+  // Embedded session rendered in Capgo instead of the hosted page.
+  embedded?: boolean
+  // Lowercase ISO currency; must be one of the plan price's Stripe currency_options.
+  currency?: string
+  // The buyer turned down the regional discount (card or address from another country): sell the full price.
+  standardPrice?: boolean
+}
+
+export async function createCheckout(c: Context, customerId: string, recurrence: string, planId: string, successUrl: string, cancelUrl: string, options: CheckoutOptions = {}): Promise<CheckoutSessionResult> {
+  const { clientReferenceId, attributionId, datafastAttribution, affonsoReferral, extraMau, embedded } = options
+  const requestedCurrency = options.currency?.trim().toLowerCase() || undefined
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
   assertBillingAccountReachableForUser(c, billingAccount, customerId)
   if (!isStripeConfiguredForAccount(c, billingAccount))
     return { url: '' }
   const resolvedPlanId = await resolveCheckoutPlanProductId(c, planId, billingAccount)
-  const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount)
-  cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId })
-  if (!prices.priceId)
-    return Promise.reject(new Error('Cannot find price'))
-  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: prices.priceId, quantity: 1 }]
+  // Same tier as the Plans page: the most expensive of the visitor, billing address and saved card countries.
+  const customerBilling = await getCustomerBilling(getStripe(c, billingAccount), customerId)
+  const countries = [getRequestCountry(c), ...customerBilling.countries]
+  const loadPlanPrice = async (tier: PriceTier) => {
+    const prices = await getPriceIds(c, resolvedPlanId, recurrence, billingAccount, tier)
+    cloudlog({ requestId: c.get('requestId'), message: 'prices', prices, billingAccount, resolvedPlanId, tier })
+    if (!prices.priceId)
+      throw new Error('Cannot find price')
+    const price = await getStripe(c, billingAccount).prices.retrieve(prices.priceId, { expand: ['currency_options'] })
+    const amounts = getPriceCurrencyAmounts(price)
+    const currencies = Object.keys(amounts)
+    return { priceId: prices.priceId, price, amounts, currencies }
+  }
+  const tier = options.standardPrice ? FULL_PRICE_TIER : priceTierForCountries(countries)
+  let checkoutPrice = await loadPlanPrice(tier)
+  // A regional price is only sold in its region's currency: any other one buys the full price. Decided
+  // before validating the currency, which the regional price may not list while the full price does.
+  const billedCurrency = customerBilling.currency ?? requestedCurrency ?? checkoutPrice.price.currency
+  if (!isRegionalCurrency(countries, tier, billedCurrency, checkoutPrice.currencies))
+    checkoutPrice = await loadPlanPrice(FULL_PRICE_TIER)
+  const { priceId, price: planPrice, amounts: planAmounts } = checkoutPrice
+  const checkoutCurrency = resolveCheckoutCurrency(customerBilling.currency, checkoutPrice.currencies, requestedCurrency)
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: priceId, quantity: 1 }]
   if (extraMau && extraMau.extraMau > 0) {
     // Same interval as the plan: Checkout bills every item of a subscription together.
     const interval = recurrence === 'year' ? 'year' : 'month'
-    const planPrice = await getStripe(c, billingAccount).prices.retrieve(prices.priceId)
-    const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount)
+    const extraMauPriceId = await getExtraMauPriceId(c, extraMau.includedMau, interval, planPrice.tax_behavior ?? null, billingAccount, getCurrencyRatios(planAmounts))
     lineItems.push({ price: extraMauPriceId, quantity: extraMau.extraMau / EXTRA_MAU_UNIT })
   }
   const metadata = {
@@ -899,13 +1282,14 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
   }
   const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
   const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
+  const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
   const session = await getStripe(c, billingAccount).checkout.sessions.create({
     allow_promotion_codes: true,
-    billing_address_collection: 'auto',
+    // A regional discount needs a billing address: the webhook checks it and the card against the region.
+    billing_address_collection: getPriceTier(planPrice) === FULL_PRICE_TIER ? 'auto' : 'required',
     mode: 'subscription',
     customer: customerId,
-    success_url: `${allowedSuccessUrl}?success=true`,
-    cancel_url: allowedCancelUrl,
+    ...getCheckoutRedirectParams(publishableKey, `${allowedSuccessUrl}?success=true`, allowedCancelUrl),
     automatic_tax: { enabled: isAutomaticTaxEnabled(billingAccount) },
     client_reference_id: clientReferenceId,
     metadata: Object.keys(metadata).length ? metadata : undefined,
@@ -916,8 +1300,9 @@ export async function createCheckout(c: Context, customerId: string, recurrence:
     tax_id_collection: { enabled: true },
     saved_payment_method_options: CHECKOUT_SAVED_PAYMENT_METHOD_OPTIONS,
     line_items: lineItems,
+    ...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
   })
-  return { url: session.url }
+  return toCheckoutSessionResult(session, publishableKey)
 }
 
 async function listPricesByProduct(c: Context, productId: string, billingAccount: BillingAccount, active?: boolean) {
@@ -955,7 +1340,8 @@ export async function createOneTimeCheckout(
   clientReferenceId?: string,
   datafastAttribution?: DatafastAttribution,
   affonsoReferral?: string | null,
-) {
+  embedded?: boolean,
+): Promise<CheckoutSessionResult> {
   const billingAccount = await getBillingAccountForCustomer(c, customerId)
   assertBillingAccountReachableForUser(c, billingAccount, customerId)
   if (!isStripeConfiguredForAccount(c, billingAccount))
@@ -968,13 +1354,13 @@ export async function createOneTimeCheckout(
   const allowedSuccessUrl = getAllowedRedirectUrl(c, successUrl, 'success_url')
   const allowedCancelUrl = getAllowedRedirectUrl(c, cancelUrl, 'cancel_url')
   const successUrlWithFlag = allowedSuccessUrl.includes('?') ? `${allowedSuccessUrl}&success=true` : `${allowedSuccessUrl}?success=true`
+  const publishableKey = getEmbeddedCheckoutPublishableKey(c, billingAccount, embedded)
 
   const session = await getStripe(c, billingAccount).checkout.sessions.create({
     billing_address_collection: 'auto',
     mode: 'payment',
     customer: customerId,
-    success_url: successUrlWithFlag,
-    cancel_url: allowedCancelUrl,
+    ...getCheckoutRedirectParams(publishableKey, successUrlWithFlag, allowedCancelUrl),
     automatic_tax: { enabled: isAutomaticTaxEnabled(billingAccount) },
     client_reference_id: clientReferenceId,
     customer_update: {
@@ -1015,7 +1401,7 @@ export async function createOneTimeCheckout(
       ...getAffonsoReferralMetadata(affonsoReferral),
     },
   })
-  return { url: session.url }
+  return toCheckoutSessionResult(session, publishableKey)
 }
 
 export async function getCreditCheckoutDetails(c: Context, session: Stripe.Checkout.Session, expectedProductId: string, billingAccount: BillingAccount = 'ee'): Promise<CreditCheckoutDetails> {

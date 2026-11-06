@@ -393,132 +393,28 @@ describeBackend('[POST] /webhooks', () => {
     reassignCreatorUserId = null
   })
 
-  it('create webhook with missing required fields', async () => {
+  it.each([
+    ['missing required fields', { name: 'Missing URL Webhook' }, 'invalid_body'],
+    ['invalid URL', { name: 'Invalid URL Webhook', url: 'not-a-valid-url', events: ['app_versions'] }, 'invalid_body'],
+    ['HTTP URL (non-HTTPS)', { name: 'HTTP URL Webhook', url: 'http://example.com/webhook?token=secret-token', events: ['app_versions'] }, 'invalid_url'],
+    ['invalid events', { name: 'Invalid Events Webhook', url: webhookUrl, events: ['invalid_event_type'] }, 'invalid_events'],
+    ['invalid delivery version', { name: 'Invalid Version Webhook', url: webhookUrl, events: ['app_versions'], deliveryVersion: 'invalid' }, 'invalid_delivery_version'],
+    ['empty events array', { name: 'Empty Events Webhook', url: webhookUrl, events: [] }, 'invalid_body'],
+    ['localhost URL', { name: 'Localhost Webhook', url: 'http://localhost:3000/webhook', events: ['app_versions'] }, 'invalid_url'],
+    ['unknown orgId', { orgId: randomUUID(), name: 'Invalid Org Webhook', url: webhookUrl, events: ['app_versions'] }, null],
+  ] as const)('create webhook rejects %s', async (_label, body, expectedError) => {
     const response = await fetchTestRequest(webhookEndpoint(), {
       method: 'POST',
       headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: WEBHOOK_TEST_ORG_ID,
-        name: 'Missing URL Webhook',
-        // Missing url and events
-      }),
+      body: JSON.stringify({ orgId: WEBHOOK_TEST_ORG_ID, ...body }),
     })
     expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_body')
-  })
-
-  it('create webhook with invalid URL', async () => {
-    const response = await fetchTestRequest(webhookEndpoint(), {
-      method: 'POST',
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: WEBHOOK_TEST_ORG_ID,
-        name: 'Invalid URL Webhook',
-        url: 'not-a-valid-url',
-        events: ['app_versions'],
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_body')
-  })
-
-  it('create webhook with HTTP URL (non-HTTPS)', async () => {
-    const response = await fetchTestRequest(webhookEndpoint(), {
-      method: 'POST',
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: WEBHOOK_TEST_ORG_ID,
-        name: 'HTTP URL Webhook',
-        url: 'http://example.com/webhook?token=secret-token',
-        events: ['app_versions'],
-      }),
-    })
-    expect(response.status).toBe(400)
+    if (!expectedError)
+      return
     const data = await response.json() as { error: string, moreInfo?: any }
-    expect(data.error).toBe('invalid_url')
-    expectSanitizedUrlInfo(data)
-  })
-
-  it('create webhook with invalid events', async () => {
-    const response = await fetchTestRequest(webhookEndpoint(), {
-      method: 'POST',
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: WEBHOOK_TEST_ORG_ID,
-        name: 'Invalid Events Webhook',
-        url: webhookUrl,
-        events: ['invalid_event_type'],
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_events')
-  })
-
-  it('create webhook with invalid delivery version', async () => {
-    const response = await fetchTestRequest(webhookEndpoint(), {
-      method: 'POST',
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: WEBHOOK_TEST_ORG_ID,
-        name: 'Invalid Version Webhook',
-        url: webhookUrl,
-        events: ['app_versions'],
-        deliveryVersion: 'invalid',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_delivery_version')
-  })
-
-  it('create webhook with empty events array', async () => {
-    const response = await fetchTestRequest(webhookEndpoint(), {
-      method: 'POST',
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: WEBHOOK_TEST_ORG_ID,
-        name: 'Empty Events Webhook',
-        url: webhookUrl,
-        events: [],
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_body')
-  })
-
-  it('create webhook with invalid orgId', async () => {
-    const invalidOrgId = randomUUID()
-    const response = await fetchTestRequest(webhookEndpoint(), {
-      method: 'POST',
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: invalidOrgId,
-        name: 'Invalid Org Webhook',
-        url: webhookUrl,
-        events: ['app_versions'],
-      }),
-    })
-    expect(response.status).toBe(400)
-  })
-
-  it('create webhook rejects localhost URL', async () => {
-    const response = await fetchTestRequest(webhookEndpoint(), {
-      method: 'POST',
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        orgId: WEBHOOK_TEST_ORG_ID,
-        name: 'Localhost Webhook',
-        url: 'http://localhost:3000/webhook',
-        events: ['app_versions'],
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_url')
+    expect(data.error).toBe(expectedError)
+    if ('url' in body && body.url.includes('secret-token'))
+      expectSanitizedUrlInfo(data)
   })
 })
 

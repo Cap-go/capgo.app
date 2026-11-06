@@ -79,10 +79,10 @@ describe('plugin region versions', () => {
     expect(body).toContain('Cannot find authorization')
   })
 
-  it('returns ok when every plugin region runs the same version', async () => {
+  it.each(['/', '/versions'])('returns ok from %s when every plugin region runs the same version', async (path) => {
     mockRegionFetch({})
 
-    const response = await requestPluginRegions()
+    const response = await requestPluginRegions(path)
     const body = await response.json() as PluginRegionVersionsResponse
 
     expect(response.status).toBe(200)
@@ -92,20 +92,6 @@ describe('plugin region versions', () => {
     })
     expect(body.regions).toHaveLength(PLUGIN_REGIONS.length)
     expect(body.regions.every(region => region.version === '1.0.0')).toBe(true)
-  })
-
-  it('serves the same ok payload from the versions alias', async () => {
-    mockRegionFetch({})
-
-    const response = await requestPluginRegions('/versions')
-    const body = await response.json() as PluginRegionVersionsResponse
-
-    expect(response.status).toBe(200)
-    expect(body).toMatchObject({
-      status: 'ok',
-      version: '1.0.0',
-    })
-    expect(body.regions).toHaveLength(PLUGIN_REGIONS.length)
   })
 
   it('lists the differing regions when one plugin region is behind', async () => {

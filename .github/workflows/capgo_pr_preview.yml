@@ -21,6 +21,7 @@ on:
       - "bun.lock"
       - "vite.config.mts"
       - "capacitor.config.ts"
+      - "scripts/cleanup-pr-preview-bundles.ts"
       - ".github/workflows/capgo_pr_preview.yml"
 
 permissions: {}
@@ -69,6 +70,13 @@ jobs:
         run: |
           base_version="$(bun -e 'console.log(require("./package.json").version)')"
           echo "bundle=${base_version}-pr.${PR_NUMBER}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Delete orphaned PR preview bundles
+        timeout-minutes: 5
+        env:
+          CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Failed uploads can leave R2-backed bundles that block manifest inventory on the next run.
+        run: bun scripts/cleanup-pr-preview-bundles.ts
       - name: Upload bundle to the PR channel
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}

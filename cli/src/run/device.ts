@@ -1,5 +1,5 @@
 import type { PlatformChoice } from '../init/command'
-import { exit, stdin, stdout } from 'node:process'
+import { cwd, exit, stdin, stdout } from 'node:process'
 import { cancel as clackCancel, isCancel as clackIsCancel, log as clackLog, select as clackSelect } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
 import { normalizeRunDevicePlatform, resolveRunDeviceCommand, runPackageRunnerSync } from '../init/command'
@@ -7,6 +7,7 @@ import { cancel as pCancel, log as pLog, outro as pOutro, spinner as pSpinner } 
 import { setInitScreen } from '../init/runtime'
 import { formatRunnerCommand } from '../runner-command'
 import { formatError, getPMAndCommand } from '../utils'
+import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from './ios-compatibility'
 
 interface RunDeviceTestOptions {
   launch?: boolean
@@ -142,6 +143,18 @@ export async function testRunDeviceCommand(platformName?: string, options: RunDe
     void trackEvent({ channel: 'cli-usage', event: 'Run On Device', tags: { platform: platformNameChoice } })
 
     if (!interactive) {
+      if (platformNameChoice === 'ios') {
+        const compatibility = checkIosSimulatorCompatibility(cwd())
+        if (compatibility.kind === 'unsupported') {
+          clackLog.warn(formatIosSimulatorGuidance(compatibility))
+          const command = formatRunnerCommand(pm.runner, ['cap', 'open', 'ios'])
+          if (options.launch === false) {
+            output.finish(`Manual iOS launch required. Open Xcode with: ${command}`)
+            return
+          }
+          output.fail(`Manual iOS launch required. Open Xcode with: ${command}`)
+        }
+      }
       const runCommand = getNonInteractiveRunDeviceCommand(pm, platformNameChoice)
       if (options.launch === false) {
         output.finish(`Resolved run command: ${runCommand.command}`)
@@ -159,6 +172,11 @@ export async function testRunDeviceCommand(platformName?: string, options: RunDe
     setRunDeviceScreen(platformNameChoice)
     const runCommand = await resolveRunDeviceCommand(exitCanceledRunDeviceTest, pm, platformNameChoice)
     if (!runCommand.args) {
+      if (runCommand.manualInstructions) {
+        pLog.warn(runCommand.manualInstructions)
+        output.finish(`Manual iOS launch required. Open Xcode with: ${runCommand.command}`)
+        return
+      }
       output.finish(`Skipped device launch. Manual command: ${runCommand.command}`)
       return
     }

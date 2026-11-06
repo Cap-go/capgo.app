@@ -48,14 +48,14 @@ export interface AppflowAppProps {
   /** Migration scope ('ios' | 'android') from the single-platform "migrating from Appflow?" gate. */
   scope: MigrationScope
   apikey?: string
-  supaHost?: string
+  apiHost?: string
   journeyId: string
   onStep?: (step: string) => void
   onResult?: (result: OnboardingResult) => void
   onBeforeExit?: OnboardingBeforeExit
 }
 
-const AppflowApp: FC<AppflowAppProps> = ({ appId, packageName, scope, apikey, supaHost, journeyId, onStep, onResult, onBeforeExit }) => {
+const AppflowApp: FC<AppflowAppProps> = ({ appId, packageName, scope, apikey, apiHost, journeyId, onStep, onResult, onBeforeExit }) => {
   const { exit } = useApp()
   const { rows: terminalRows } = useTerminalSize()
   const [progress, setProgress] = useState<AppflowProgress>(() => ({ scope, capgoAppId: appId, migratable: { ios: false, android: false }, completedSteps: [] }))
@@ -157,7 +157,7 @@ const AppflowApp: FC<AppflowAppProps> = ({ appId, packageName, scope, apikey, su
           carried: ctx,
           tailOptions: {
             apikey,
-            supaHost,
+            apiHost,
             journeyId,
             carried: ctx as Record<string, unknown>,
             onBuildOutput: (line: string) => {

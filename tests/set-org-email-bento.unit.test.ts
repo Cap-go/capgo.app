@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   checkPermissionMock,
-  supabaseWithAuthMock,
-  supabaseAdminMock,
+  orgLookupMock,
+  orgUpdateMock,
+  withRlsContextMock,
   updateCustomerEmailMock,
   syncBillingBentoTagsFromStoredStripeInfoMock,
 } = vi.hoisted(() => ({
   checkPermissionMock: vi.fn(async () => true),
-  supabaseWithAuthMock: vi.fn(),
-  supabaseAdminMock: vi.fn(),
+  orgLookupMock: vi.fn(),
+  orgUpdateMock: vi.fn(),
+  withRlsContextMock: vi.fn(),
   updateCustomerEmailMock: vi.fn(async () => undefined),
   syncBillingBentoTagsFromStoredStripeInfoMock: vi.fn(async () => undefined),
 }))
@@ -29,9 +31,26 @@ vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({
   updateCustomerEmail: updateCustomerEmailMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseWithAuth: supabaseWithAuthMock,
-  supabaseAdmin: supabaseAdminMock,
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    authPrincipal: (_c: unknown, auth: { userId: string }) => ({ kind: 'jwt', userId: auth.userId }),
+    withRlsContext: withRlsContextMock,
+  }
+})
+
+// The org read runs as the caller (withRlsContext), the write on the connection role (getPgClient).
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: () => undefined,
+  getPgClient: async () => ({
+    query: async (text: string, values: unknown[]) => {
+      if (!text.startsWith('UPDATE public.orgs SET management_email'))
+        throw new Error(`unexpected query ${text}`)
+      const updatedOrg = orgUpdateMock(values)
+      return { rows: updatedOrg ? [updatedOrg] : [] }
+    },
+  }),
 }))
 
 vi.mock('../supabase/functions/_backend/triggers/stripe_event.ts', () => ({
@@ -45,29 +64,18 @@ const CUSTOMER_ID = 'cus_billing_email'
 const CREATOR_ID = '22222222-2222-4222-8222-222222222222'
 
 function mockOrgLookup(organization: Record<string, unknown> | null) {
-  supabaseWithAuthMock.mockReturnValue({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: async () => ({ data: organization, error: null }),
-        }),
-      }),
-    }),
-  })
+  withRlsContextMock.mockImplementation(async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({
+    query: async (text: string, values: unknown[]) => {
+      if (!text.includes('FROM public.orgs WHERE id = $1'))
+        throw new Error(`unexpected query ${text}`)
+      orgLookupMock(values)
+      return { rows: organization ? [{ row: organization }] : [] }
+    },
+  }))
 }
 
 function mockOrgUpdate(updatedOrg: { id: string } | null) {
-  supabaseAdminMock.mockReturnValue({
-    from: () => ({
-      update: () => ({
-        eq: () => ({
-          select: () => ({
-            maybeSingle: async () => ({ data: updatedOrg, error: null }),
-          }),
-        }),
-      }),
-    }),
-  })
+  orgUpdateMock.mockReturnValue(updatedOrg)
 }
 
 describe('set_org_email Bento billing tag sync', () => {
@@ -75,8 +83,9 @@ describe('set_org_email Bento billing tag sync', () => {
     checkPermissionMock.mockReset().mockResolvedValue(true)
     updateCustomerEmailMock.mockReset().mockResolvedValue(undefined)
     syncBillingBentoTagsFromStoredStripeInfoMock.mockReset().mockResolvedValue(undefined)
-    supabaseWithAuthMock.mockReset()
-    supabaseAdminMock.mockReset()
+    orgLookupMock.mockReset()
+    orgUpdateMock.mockReset()
+    withRlsContextMock.mockReset()
   })
 
   it('applies billing tags to the new management email after Stripe and DB succeed', async () => {
@@ -98,6 +107,8 @@ describe('set_org_email Bento billing tag sync', () => {
     })
 
     expect(response.status).toBe(200)
+    expect(orgLookupMock).toHaveBeenCalledWith([ORG_ID])
+    expect(orgUpdateMock).toHaveBeenCalledWith(['invoices@example.com', ORG_ID])
     expect(updateCustomerEmailMock).toHaveBeenCalledWith(expect.anything(), CUSTOMER_ID, 'invoices@example.com')
     expect(syncBillingBentoTagsFromStoredStripeInfoMock).toHaveBeenCalledWith(expect.anything(), {
       created_by: CREATOR_ID,

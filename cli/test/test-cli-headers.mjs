@@ -23,7 +23,7 @@ assertCliUserError(
 
 assertCliUserError(
   () => buildCliRequestHeaders({ Authorization: cyrillicKey }),
-  'Authorization header contains invalid characters (only ASCII is allowed). Check your Capgo API key or Supabase anon key configuration.',
+  'Authorization header contains invalid characters (only ASCII is allowed). Check your Capgo API key configuration.',
 )
 
 // Undefined API key headers must fail before fetch, not as undici TypeError.

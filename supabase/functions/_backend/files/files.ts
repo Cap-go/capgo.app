@@ -28,11 +28,13 @@ import { app as files_config } from './files_config.ts'
 import { parseUploadMetadata } from './parse.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
 import { supabaseTusCreateHandler, supabaseTusHeadHandler, supabaseTusPatchHandler } from './supabaseTusProxy.ts'
-import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, encodeR2KeyForUploadLocation, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, MAX_UPLOAD_LENGTH_BYTES, NO_TRANSFORM_CACHE_CONTROL, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
+import { ALLOWED_HEADERS, ALLOWED_METHODS, buildFileHttpMetadata, decodeUploadLocationKey, encodeR2KeyForUploadLocation, EXPOSED_HEADERS, getSafeAttachmentReadCandidateKeys, headFirstExistingAttachmentCandidate, isRetryableDurableObjectResetError, isSafeAttachmentKey, MAX_UPLOAD_LENGTH_BYTES, NO_TRANSFORM_CACHE_CONTROL, parseAppScopedAttachmentPath, toBase64, TUS_EXTENSIONS, TUS_VERSION, withNoTransformCacheControl, X_CHECKSUM_SHA256, X_UPLOAD_HANDLER_RETRYABLE } from './util.ts'
 
 const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
 const DO_FETCH_RETRY_DELAY_MS = 250
+
+// # test deploy
 
 const ATTACHMENT_PREFIX = 'attachments'
 const ATTACHMENT_PLAN_LIMIT: Array<'mau' | 'bandwidth' | 'storage'> = ['mau', 'bandwidth', 'storage']
@@ -458,9 +460,9 @@ async function getHandler(c: Context): Promise<Response> {
   const candidateKeys = wantsReceipt
     ? [fileId]
     : [...new Set(
-        getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
-          .flatMap(key => getDotfileDeltaStorageCandidateKeys(key)),
-      )]
+      getSafeAttachmentReadCandidateKeys(fileId, rawFileId)
+        .flatMap(key => getDotfileDeltaStorageCandidateKeys(key)),
+    )]
   const cacheKey = buildFileReadCacheRequest(c.req.raw)
   let response = cache ? await cache.match(cacheKey) : null
   if (response != null) {
@@ -719,7 +721,7 @@ export function calculateBytesTransferred(objLen: number, r2Range: R2Range | und
 
 type ParsedAttachmentByteRange
   = | { kind: 'partial', start: number, end: number, bytesTransferred: number }
-    | { kind: 'invalid' }
+  | { kind: 'invalid' }
 
 export function parseAttachmentByteRange(rangeHeader: string, fileSize: number): ParsedAttachmentByteRange {
   if (!isPositiveFiniteNumber(fileSize)) {
@@ -900,7 +902,18 @@ async function uploadHandler(c: Context) {
     const uploadPrefix = `/upload/${ATTACHMENT_PREFIX}/`
     const prefixIndex = requestUrl.pathname.indexOf(uploadPrefix)
     if (prefixIndex >= 0) {
-      requestUrl.pathname = `${requestUrl.pathname.slice(0, prefixIndex + uploadPrefix.length)}${encodeR2KeyForUploadLocation(normalizedRequestId)}`
+      const routePrefix = requestUrl.pathname.slice(0, prefixIndex + uploadPrefix.length)
+      requestUrl.pathname = `${routePrefix}${encodeR2KeyForUploadLocation(normalizedRequestId)}`
+      // The URL parser may normalize the path (for example dot segments). The
+      // durable object writes to the key from this URL, so it must be exactly
+      // the key that was authorized.
+      const forwardedKey = requestUrl.pathname.startsWith(routePrefix)
+        ? decodeUploadLocationKey(requestUrl.pathname.slice(routePrefix.length))
+        : null
+      if (!isSafeAttachmentKey(normalizedRequestId) || forwardedKey !== normalizedRequestId) {
+        cloudlog({ requestId: c.get('requestId'), message: 'upload handler - forwarded key mismatch', fileId: normalizedRequestId, forwardedKey })
+        throw simpleError('invalid_file_path', 'Invalid file path')
+      }
     }
   }
 

@@ -206,7 +206,7 @@ async function startPreview() {
   >
     <button
       type="button"
-      class="inline-flex min-h-12 w-full max-w-xs items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+      class="d-btn d-btn-primary min-h-12 w-full max-w-xs gap-2"
       :disabled="startPreviewDisabled"
       @click="startPreview"
     >

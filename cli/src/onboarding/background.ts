@@ -2,7 +2,10 @@ import type { Command } from 'commander'
 import { randomUUID } from 'node:crypto'
 import { cwd } from 'node:process'
 import { Worker } from 'node:worker_threads'
+import { isOfflineCommand } from '../analytics/opt-out'
 import { registerOnboardingCheck } from './background-workers'
+import { setupDebug, setupError } from './setup-diagnostics'
+import { shouldEvaluateSetupNotice } from './setup-notice-policy'
 
 export interface OnboardingCheckOptions {
   cwd: string
@@ -14,11 +17,14 @@ export interface OnboardingCheckOptions {
   capacitorConfig?: string
   packageJson?: string
   mainFile?: string
-  supaHost?: string
-  supaAnon?: string
+  apiHost?: string
+  setupNotice?: boolean
 }
 
-export function startOnboardingCheck(command: Command, commandPath: string, workerUrl: URL, attemptIds?: string[]): void {
+export function startOnboardingCheck(command: Command, commandPath: string, workerUrl: URL, attemptIds?: string[], ci = false): void {
+  // Offline packers must not report onboarding progress to Capgo.
+  if (isOfflineCommand(commandPath))
+    return
   try {
     const options = command.optsWithGlobals()
     const argument = (name: string) => {
@@ -37,24 +43,27 @@ export function startOnboardingCheck(command: Command, commandPath: string, work
       capacitorConfig: text(options.capacitorConfig),
       packageJson: text(options.packageJson),
       mainFile: text(options.mainFile),
-      supaHost: text(options.supaHost),
-      supaAnon: text(options.supaAnon),
+      apiHost: text(options.apiHost),
+      setupNotice: shouldEvaluateSetupNotice(commandPath, options),
     }
+    setupDebug('worker starting', { command: commandPath, notice_enabled: workerData.setupNotice, ci })
     const worker = new Worker(workerUrl, { workerData, stdout: true, stderr: true })
     // Discovery/config loading must not write into terminal UIs or MCP stdout.
     // Discard captured streams so incoming output cannot reference the worker's IPC port.
     worker.stdout?.destroy()
     worker.stderr?.destroy()
-    worker.on('error', () => {})
+    worker.on('online', () => setupDebug('worker online'))
+    worker.on('error', error => setupDebug('worker failed', { error: setupError(error) }))
     registerOnboardingCheck(worker, attemptIds ?? [attemptId])
     // Both detection and reporting can be abandoned when the command exits.
     worker.unref()
   }
-  catch {
+  catch (error) {
+    setupDebug('worker start failed', { error: setupError(error) })
     // Optional onboarding detection must never affect the requested command.
   }
 }
 
-export function startOnboardingChecks(command: Command, commandPath: string): void {
-  startOnboardingCheck(command, commandPath, new URL('./onboarding-worker.js', import.meta.url), [randomUUID(), randomUUID()])
+export function startOnboardingChecks(command: Command, commandPath: string, ci = false): void {
+  startOnboardingCheck(command, commandPath, new URL('./onboarding-worker.js', import.meta.url), [randomUUID(), randomUUID()], ci)
 }

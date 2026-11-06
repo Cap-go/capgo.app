@@ -31,18 +31,6 @@ async function seedStaleCreatedByOrg() {
   const supabase = getSupabaseClient()
   const staleCreatedByOrgId = randomUUID()
 
-  const { error: cleanupError } = await supabase
-    .from('orgs')
-    .delete()
-    .eq('id', staleCreatedByOrgId)
-  expect(cleanupError).toBeNull()
-
-  const { error: stripeInfoCleanupError } = await supabase
-    .from('stripe_info')
-    .delete()
-    .eq('customer_id', `pending_${staleCreatedByOrgId}`)
-  expect(stripeInfoCleanupError).toBeNull()
-
   const { error: orgError } = await supabase
     .from('orgs')
     .insert({

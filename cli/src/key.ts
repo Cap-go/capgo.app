@@ -1,5 +1,5 @@
 import type { ExtConfigPairs } from './config'
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { intro, log, outro, confirm as pConfirm } from '@clack/prompts'
 import { trackEvent } from './analytics/track'
@@ -157,7 +157,9 @@ export async function createKeyInternal(options: Options, silent = false, existi
       log.error('Private Key already exists, use --force to overwrite')
     throw new Error('Private key already exists')
   }
-  writeFileSync(privateKeyPath, privateKey)
+  writeFileSync(privateKeyPath, privateKey, { mode: 0o600 })
+  // `mode` only applies when the file is created; tighten an overwritten (--force) key too.
+  chmodSync(privateKeyPath, 0o600)
 
   const extConfig = existingConfig && !getConfigWriteTarget()
     ? existingConfig

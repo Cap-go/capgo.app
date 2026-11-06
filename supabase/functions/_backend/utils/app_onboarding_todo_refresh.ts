@@ -7,9 +7,10 @@ import type { BuilderBuildOutcome } from './builder_onboarding_checklist.ts'
 import type { MiddlewareKeyVariables } from './hono.ts'
 import type { getDrizzleClient } from './pg.ts'
 import { sql } from 'drizzle-orm'
+import { emitCommittedAppOnboardingBento } from './app_onboarding_bento.ts'
 import { buildAppOnboardingStepPosthogEvent } from './app_onboarding_posthog.ts'
 import { gatherTodoEvidence, getTodoEvidenceNeeds, loadTodoEvidenceCandidates } from './app_onboarding_todo_evidence.ts'
-import { APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION, appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, hasSupportedOtaTodoList, parseAppOnboarding } from './appOnboarding.ts'
+import { appendAppOnboardingStepHistory, applyAppOnboardingPatch, getAppOnboardingStepHistoryChanges, inferredAddCodeStep, parseAppOnboarding, shouldInferAddCode } from './appOnboarding.ts'
 import { buildBuilderBuildOutcomePatch } from './builder_onboarding_checklist.ts'
 import { cloudlogErr } from './logging.ts'
 import { trackPosthogEventBatch } from './posthog.ts'
@@ -32,15 +33,6 @@ interface StepEvent {
 }
 
 type BuilderBuildEvidence = Map<string, Array<Pick<BuilderBuildOutcome, 'platform' | 'status'>>>
-
-function shouldInferAddCode(onboarding: unknown, hasTestUpdateEvidence = false): boolean {
-  const current = parseAppOnboarding(onboarding)
-  return current.outcome !== 'completed'
-    && current.outcome !== 'skipped'
-    && hasSupportedOtaTodoList(current)
-    && current.steps.add_code?.status !== 'done'
-    && (current.steps.test_update?.status === 'done' || hasTestUpdateEvidence)
-}
 
 async function loadBuilderBuildEvidence(database: Pick<Database, 'execute'>, appIds: string[]): Promise<BuilderBuildEvidence> {
   if (!appIds.length)
@@ -83,17 +75,21 @@ function positiveTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, buildEv
     patch.steps!.upload_bundle = { status: 'done', at }
   if (needs.update && evidence.update.has(row.app_id))
     patch.steps!.test_update = { status: 'done', at }
-  if (shouldInferAddCode(row.onboarding, evidence.update.has(row.app_id))) {
-    patch.steps!.add_code = {
-      status: 'done',
-      at,
-      annotation: APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION,
-      annotationType: 'note',
-    }
-  }
+  if (shouldInferAddCode(parseAppOnboarding(row.onboarding), evidence.update.has(row.app_id)))
+    patch.steps!.add_code = inferredAddCodeStep(at)
   const buildPatch = buildBuilderBuildOutcomePatch(row.onboarding, buildEvidence.get(row.app_id) ?? [], () => at)
   if (buildPatch?.builderSteps)
     patch.builderSteps = buildPatch.builderSteps
+  return patch
+}
+
+function changingTodoPatch(row: LockedApp, evidence: TodoEvidenceResult, buildEvidence: BuilderBuildEvidence, at: string): AppOnboardingPatch | null {
+  const current = parseAppOnboarding(row.onboarding)
+  if (current.outcome === 'completed' || current.outcome === 'skipped')
+    return null
+  const patch = positiveTodoPatch(row, evidence, buildEvidence, at)
+  if (!Object.keys(patch.steps ?? {}).length && !Object.keys(patch.builderSteps ?? {}).length)
+    return null
   return patch
 }
 
@@ -114,10 +110,14 @@ export async function refreshAppOnboardingTodoBatch(
     cloudlogErr({ requestId: c.get('requestId'), message: 'onboarding todo evidence query failed', source: error.source, appIds: error.appIds, error: error.message })
   }
   const buildEvidence = await loadBuilderBuildEvidence(database, candidates.map(candidate => candidate.appId))
-  const inferredAddCodeIds = candidates
-    .filter(candidate => shouldInferAddCode(candidate.onboarding, evidence.update.has(candidate.appId)))
+  // Lock only apps whose committed snapshot would actually change. Builds and
+  // channels stay as evidence forever, so without this every refresh locked
+  // already-done apps and queued behind CLI/MCP onboarding writers.
+  const snapshotAt = new Date().toISOString()
+  const positiveIds = candidates
+    .filter(candidate => changingTodoPatch({ app_id: candidate.appId, onboarding: candidate.onboarding, owner_org: candidate.ownerOrg }, evidence, buildEvidence, snapshotAt))
     .map(candidate => candidate.appId)
-  const positiveIds = [...new Set([...evidence.channel, ...evidence.device, ...evidence.bundle, ...evidence.update, ...buildEvidence.keys(), ...inferredAddCodeIds])].sort((a, b) => a.localeCompare(b))
+    .sort((a, b) => a.localeCompare(b))
   if (!positiveIds.length)
     return { updated: 0, steps: 0, cfErrors: evidence.errors.length }
 
@@ -134,12 +134,9 @@ export async function refreshAppOnboardingTodoBatch(
     const changed: StepEvent[] = []
     const updates: Array<{ app_id: string, onboarding: Record<string, unknown> }> = []
     for (const row of rows) {
-      const current = parseAppOnboarding(row.onboarding)
-      if (current.outcome === 'completed' || current.outcome === 'skipped')
-        continue
       const at = new Date().toISOString()
-      const patch = positiveTodoPatch(row, evidence, buildEvidence, at)
-      if (!Object.keys(patch.steps ?? {}).length && !Object.keys(patch.builderSteps ?? {}).length)
+      const patch = changingTodoPatch(row, evidence, buildEvidence, at)
+      if (!patch)
         continue
 
       const merged = applyAppOnboardingPatch(row.onboarding, patch, () => at)
@@ -166,6 +163,7 @@ export async function refreshAppOnboardingTodoBatch(
 
   const stepCount = events.reduce((sum, event) => sum + event.changes.length, 0)
   if (stepCount) {
+    await emitCommittedAppOnboardingBento(c, events.map(event => ({ ...event, historyChanges: event.changes })))
     const payloads = events.flatMap(event => event.changes.map(change => buildAppOnboardingStepPosthogEvent({
       appId: event.appId,
       change,

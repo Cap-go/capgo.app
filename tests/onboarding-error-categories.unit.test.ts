@@ -3,154 +3,58 @@ import { MissingScopesError } from '../cli/src/build/onboarding/android/oauth-go
 import { CertificateLimitError } from '../cli/src/build/onboarding/apple-api.ts'
 import { mapAndroidOnboardingError, mapIosOnboardingError, mapSaValidationKindToCategory } from '../cli/src/build/onboarding/error-categories.ts'
 
+const httpError = (message: string, extra: Record<string, unknown>) => Object.assign(new Error(message), extra)
+
 describe('mapIosOnboardingError', () => {
-  it.concurrent('maps 401 from App Store Connect to apple_api_unauthorized', () => {
-    const err = Object.assign(new Error('Unauthorized'), { status: 401 })
-    expect(mapIosOnboardingError(err)).toBe('apple_api_unauthorized')
-  })
-
-  it.concurrent('maps a 403 with the agreements code to apple_agreements_missing', () => {
-    const err = Object.assign(
-      new Error('Apple API error (403): A required agreement is missing or has expired. — sign it (FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED)'),
-      { status: 403, code: 'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED' },
-    )
-    expect(mapIosOnboardingError(err)).toBe('apple_agreements_missing')
-  })
-
-  it.concurrent('maps a 403 agreements error by message when no code is present', () => {
-    const err = Object.assign(new Error('A required agreement is missing or has expired.'), { status: 403 })
-    expect(mapIosOnboardingError(err)).toBe('apple_agreements_missing')
-  })
-
-  it.concurrent('maps the friendly agreement message to apple_agreements_missing even when status/code are stripped (real TUI flow)', () => {
-    // The iOS TUI engine collapses the AppleApiHttpError to its message string and
-    // reconstructs a plain Error(message) before mapping — no status/code survive.
-    // The mapper must still classify it from the message alone, or PostHog records
-    // 'unknown' for the exact scenario this whole feature targets.
-    const reconstructed = new Error(
-      'Apple is blocking App Store Connect API access because your developer account has a required agreement that is unsigned or has expired.\n'
-      + '  - Sign in as the Account Holder at https://appstoreconnect.apple.com',
-    )
-    expect(mapIosOnboardingError(reconstructed, 'verifying-key')).toBe('apple_agreements_missing')
-  })
-
-  it.concurrent('does NOT classify an unrelated 403 that loosely mentions "agreement" as agreements-missing', () => {
-    // The phrase requires "required agreement" adjacent to a signing/expiry word;
-    // a generic mention must fall through to apple_api_forbidden.
-    const err = Object.assign(new Error('Forbidden: your team agreement role is insufficient'), { status: 403 })
-    expect(mapIosOnboardingError(err)).toBe('apple_api_forbidden')
-  })
-
-  it.concurrent('maps other 403s to apple_api_forbidden', () => {
-    const err = Object.assign(new Error('Forbidden'), { status: 403 })
-    expect(mapIosOnboardingError(err)).toBe('apple_api_forbidden')
-  })
-
-  it.concurrent('maps 429 to apple_api_rate_limited', () => {
-    const err = Object.assign(new Error('Too many'), { status: 429 })
-    expect(mapIosOnboardingError(err)).toBe('apple_api_rate_limited')
-  })
-
-  it.concurrent('maps CertificateLimitError instances to cert_limit_reached', () => {
-    expect(mapIosOnboardingError(new CertificateLimitError([]))).toBe('cert_limit_reached')
-  })
-
-  it.concurrent('maps profile creation failures to profile_creation_failed', () => {
-    const err = Object.assign(new Error('Profile create failed'), { phase: 'profile' as const })
-    expect(mapIosOnboardingError(err)).toBe('profile_creation_failed')
-  })
-
-  it.concurrent('maps P8 read errors to p8_invalid', () => {
-    const err = Object.assign(new Error('Cannot parse P8'), { phase: 'p8' as const })
-    expect(mapIosOnboardingError(err)).toBe('p8_invalid')
-  })
-
-  it.concurrent('returns unknown for anything else', () => {
-    expect(mapIosOnboardingError(new Error('something else'))).toBe('unknown')
-    expect(mapIosOnboardingError('a string')).toBe('unknown')
-    expect(mapIosOnboardingError(undefined)).toBe('unknown')
-  })
-
-  it.concurrent('maps import-scanning failures to keychain_no_identities', () => {
-    expect(mapIosOnboardingError(new Error('no identities'), 'import-scanning')).toBe('keychain_no_identities')
-  })
-
-  it.concurrent('maps import-exporting failures to keychain_export_failed', () => {
-    expect(mapIosOnboardingError(new Error('wrong password'), 'import-exporting')).toBe('keychain_export_failed')
-  })
-
-  it.concurrent('maps import-provide-profile-path failures to profile_read_failed', () => {
-    // The 'import-fetching-profile' step was removed (commit 36a7c282)
-    // alongside the Rescan recovery option; the .mobileprovision file
-    // picker step 'import-provide-profile-path' replaces it for the
-    // "read profile from disk" failure class — parse + 3 invariant
-    // checks (bundle id, distribution, cert SHA1) + the generic catch
-    // all surface here.
-    expect(mapIosOnboardingError(new Error('fs error'), 'import-provide-profile-path')).toBe('profile_read_failed')
-  })
-
-  it.concurrent('maps import-pick-profile and import-no-match-recovery to profile_no_match', () => {
-    expect(mapIosOnboardingError(new Error('no match'), 'import-pick-profile')).toBe('profile_no_match')
-    expect(mapIosOnboardingError(new Error('no match'), 'import-no-match-recovery')).toBe('profile_no_match')
-  })
-
-  it.concurrent('structural discriminators take precedence over failedStep', () => {
-    // Even if failedStep is an import step, a 401 still maps to apple_api_unauthorized
-    // (e.g. the helper precompile or fetch could theoretically throw an ASC error).
-    const err = Object.assign(new Error('Unauthorized'), { status: 401 })
-    expect(mapIosOnboardingError(err, 'import-scanning')).toBe('apple_api_unauthorized')
-  })
-
-  it.concurrent('returns unknown for non-import failedStep with no structural discriminator', () => {
-    expect(mapIosOnboardingError(new Error('???'), 'welcome')).toBe('unknown')
-    expect(mapIosOnboardingError(new Error('???'), 'creating-certificate')).toBe('unknown')
-  })
-
-  it.concurrent('returns unknown when no failedStep and no structural discriminator', () => {
-    expect(mapIosOnboardingError(new Error('something else'), undefined)).toBe('unknown')
+  it.concurrent.each([
+    ['401 from App Store Connect', httpError('Unauthorized', { status: 401 }), undefined, 'apple_api_unauthorized'],
+    ['403 with the agreements code', httpError('Apple API error (403): A required agreement is missing or has expired. — sign it (FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED)', { status: 403, code: 'FORBIDDEN.REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED' }), undefined, 'apple_agreements_missing'],
+    ['403 agreements error by message only', httpError('A required agreement is missing or has expired.', { status: 403 }), undefined, 'apple_agreements_missing'],
+    // The iOS TUI collapses the AppleApiHttpError to a plain Error(message): no status/code survive.
+    ['friendly agreement message with status/code stripped', new Error('Apple is blocking App Store Connect API access because your developer account has a required agreement that is unsigned or has expired.\n  - Sign in as the Account Holder at https://appstoreconnect.apple.com'), 'verifying-key', 'apple_agreements_missing'],
+    // "required agreement" must sit next to a signing/expiry word; loose mentions stay forbidden.
+    ['unrelated 403 loosely mentioning agreement', httpError('Forbidden: your team agreement role is insufficient', { status: 403 }), undefined, 'apple_api_forbidden'],
+    ['other 403s', httpError('Forbidden', { status: 403 }), undefined, 'apple_api_forbidden'],
+    ['429', httpError('Too many', { status: 429 }), undefined, 'apple_api_rate_limited'],
+    ['CertificateLimitError', new CertificateLimitError([]), undefined, 'cert_limit_reached'],
+    ['profile creation failures', httpError('Profile create failed', { phase: 'profile' }), undefined, 'profile_creation_failed'],
+    ['P8 read errors', httpError('Cannot parse P8', { phase: 'p8' }), undefined, 'p8_invalid'],
+    ['import-scanning failures', new Error('no identities'), 'import-scanning', 'keychain_no_identities'],
+    ['import-exporting failures', new Error('wrong password'), 'import-exporting', 'keychain_export_failed'],
+    ['import-provide-profile-path failures', new Error('fs error'), 'import-provide-profile-path', 'profile_read_failed'],
+    ['import-pick-profile', new Error('no match'), 'import-pick-profile', 'profile_no_match'],
+    ['import-no-match-recovery', new Error('no match'), 'import-no-match-recovery', 'profile_no_match'],
+    ['a 401 during an import step (structural discriminators win)', httpError('Unauthorized', { status: 401 }), 'import-scanning', 'apple_api_unauthorized'],
+    ['an unknown error', new Error('something else'), undefined, 'unknown'],
+    ['a string', 'a string', undefined, 'unknown'],
+    ['undefined', undefined, undefined, 'unknown'],
+    ['a non-import welcome step', new Error('???'), 'welcome', 'unknown'],
+    ['a non-import creating-certificate step', new Error('???'), 'creating-certificate', 'unknown'],
+  ] as const)('maps %s', (_label, error, failedStep, expected) => {
+    expect(mapIosOnboardingError(error, failedStep as never)).toBe(expected)
   })
 })
 
 describe('mapAndroidOnboardingError', () => {
-  it.concurrent('maps MissingScopesError to google_oauth_failed', () => {
-    expect(mapAndroidOnboardingError(new MissingScopesError(['scope1'], ''))).toBe('google_oauth_failed')
-  })
-
-  it.concurrent('maps keystore parse failures to keystore_invalid', () => {
-    const err = Object.assign(new Error('Bad keystore'), { phase: 'keystore' as const })
-    expect(mapAndroidOnboardingError(err)).toBe('keystore_invalid')
-  })
-
-  it.concurrent('maps oauth token failures to google_oauth_failed', () => {
-    const err = Object.assign(new Error('Token refresh failed'), { phase: 'oauth' as const })
-    expect(mapAndroidOnboardingError(err)).toBe('google_oauth_failed')
-  })
-
-  it.concurrent('maps play account id failures to play_account_id_invalid', () => {
-    const err = Object.assign(new Error('Bad ID'), { phase: 'play_account_id' as const })
-    expect(mapAndroidOnboardingError(err)).toBe('play_account_id_invalid')
-  })
-
-  it.concurrent('returns unknown for everything else', () => {
-    expect(mapAndroidOnboardingError(new Error('???'))).toBe('unknown')
-    expect(mapAndroidOnboardingError(null)).toBe('unknown')
+  it.concurrent.each([
+    ['MissingScopesError', new MissingScopesError(['scope1'], ''), 'google_oauth_failed'],
+    ['keystore parse failures', httpError('Bad keystore', { phase: 'keystore' }), 'keystore_invalid'],
+    ['oauth token failures', httpError('Token refresh failed', { phase: 'oauth' }), 'google_oauth_failed'],
+    ['play account id failures', httpError('Bad ID', { phase: 'play_account_id' }), 'play_account_id_invalid'],
+    ['an unknown error', new Error('???'), 'unknown'],
+    ['null', null, 'unknown'],
+  ] as const)('maps %s', (_label, error, expected) => {
+    expect(mapAndroidOnboardingError(error)).toBe(expected)
   })
 })
 
 describe('mapSaValidationKindToCategory', () => {
-  it.concurrent('maps shape-error to sa_json_shape_invalid', () => {
-    expect(mapSaValidationKindToCategory('shape-error')).toBe('sa_json_shape_invalid')
-  })
-
-  it.concurrent('maps token-error to sa_json_token_rejected', () => {
-    expect(mapSaValidationKindToCategory('token-error')).toBe('sa_json_token_rejected')
-  })
-
-  it.concurrent('maps no-app-access to sa_json_no_app_access', () => {
-    expect(mapSaValidationKindToCategory('no-app-access')).toBe('sa_json_no_app_access')
-  })
-
-  it.concurrent('maps network-error to sa_json_network_error', () => {
-    expect(mapSaValidationKindToCategory('network-error')).toBe('sa_json_network_error')
+  it.concurrent.each([
+    ['shape-error', 'sa_json_shape_invalid'],
+    ['token-error', 'sa_json_token_rejected'],
+    ['no-app-access', 'sa_json_no_app_access'],
+    ['network-error', 'sa_json_network_error'],
+  ] as const)('maps %s to %s', (kind, expected) => {
+    expect(mapSaValidationKindToCategory(kind)).toBe(expected)
   })
 })

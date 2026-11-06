@@ -26,7 +26,11 @@ function resolveEndpointProtocol(c: Context): 'http' | 'https' {
   return getEnv(c, 'S3_SSL') === 'true' ? 'https' : 'http'
 }
 
-export function resolveStorageEndpoint(c: Context): string {
+/**
+ * `serverSide` is for requests this runtime sends itself rather than presigned
+ * URLs handed to clients. It only changes the local Supabase Storage endpoint.
+ */
+export function resolveStorageEndpoint(c: Context, options: { serverSide?: boolean } = {}): string {
   const storageEndpoint = getEnv(c, 'S3_ENDPOINT')
   const protocol = resolveEndpointProtocol(c)
   const rawEndpoint = storageEndpoint.includes('://')
@@ -42,8 +46,19 @@ export function resolveStorageEndpoint(c: Context): string {
     if (!looksLikeLocalStorage || !rewriteLocalEndpoint)
       return endpointUrl.toString()
 
-    let forwardedHost = firstForwardedHeaderValue(c.req.header('X-Forwarded-Host'))
     const forwardedPort = firstForwardedHeaderValue(c.req.header('X-Forwarded-Port'))
+    if (options.serverSide) {
+      // Local Kong tells Storage its published port, and Storage checks the
+      // signature against that host. The caller's host is not reachable from the
+      // edge runtime container, so go back through the Docker host on that port.
+      endpointUrl.protocol = `${protocol}:`
+      endpointUrl.hostname = 'host.docker.internal'
+      if (forwardedPort)
+        endpointUrl.port = forwardedPort
+      return endpointUrl.toString()
+    }
+
+    let forwardedHost = firstForwardedHeaderValue(c.req.header('X-Forwarded-Host'))
     const hostHeader = c.req.header('Host')
 
     if (forwardedHost && !forwardedHost.includes(':') && forwardedPort) {
@@ -59,13 +74,13 @@ export function resolveStorageEndpoint(c: Context): string {
   }
 }
 
-function initS3(c: Context) {
+export function initS3(c: Context, options: { serverSide?: boolean } = {}) {
   const access_key_id = getEnv(c, 'S3_ACCESS_KEY_ID')
   const access_key_secret = getEnv(c, 'S3_SECRET_ACCESS_KEY')
   const storageRegion = getEnv(c, 'S3_REGION') || 'us-east-1'
   const bucket = getEnv(c, 'S3_BUCKET')
   const client = new S3Client({
-    endPoint: resolveStorageEndpoint(c),
+    endPoint: resolveStorageEndpoint(c, options),
     accessKey: access_key_id,
     pathStyle: true,
     secretKey: access_key_secret,
@@ -554,9 +569,235 @@ async function getObject(c: Context, fileId: string): Promise<Response | null> {
   }
 }
 
+export interface ListedObject { key: string, lastModified: Date }
+
+/** One listing page (at most 1,000 keys) plus the token for the next page. */
+async function listObjectPage(c: Context, prefix: string, continuationToken: string | null, pageSize = 1_000) {
+  const client = initS3(c)
+  const iterator = client.listObjectsGrouped({ prefix, pageSize, maxResults: pageSize, continuationToken: continuationToken ?? undefined })
+  const objects: ListedObject[] = []
+  let result = await iterator.next()
+  while (!result.done) {
+    if (result.value.type === 'Object')
+      objects.push({ key: result.value.key, lastModified: result.value.lastModified })
+    result = await iterator.next()
+  }
+  return { objects, nextToken: result.value ?? null }
+}
+
+/** Server-side copy into the lifecycle trash; the source stays in place. */
+async function copyObjectToTrash(c: Context, fileId: string) {
+  if (fileId.startsWith(R2_TRASH_PREFIX))
+    return true
+  try {
+    await initS3(c).copyObject({ sourceKey: fileId }, getTrashPath(fileId))
+    return true
+  }
+  catch (error) {
+    if (isMissingObjectError(error))
+      return false
+    cloudlogErr({ requestId: c.get('requestId'), message: 'copy R2 object to trash failed', fileId, error: serializeStorageError(error) })
+    return false
+  }
+}
+
+/** Bounded delete: the request is aborted after `timeoutMs`. */
+/**
+ * Restores `fileId` from its lifecycle-trash copy when it is definitely
+ * missing. 'unknown' means presence could not be established; retry later.
+ */
+async function restoreFromTrashIfMissing(c: Context, fileId: string): Promise<'present' | 'restored' | 'unknown' | 'failed'> {
+  const presence = await getObjectPresence(c, fileId)
+  if (presence === 'present')
+    return 'present'
+  if (presence === 'unknown')
+    return 'unknown'
+  try {
+    await initS3(c).copyObject({ sourceKey: getTrashPath(fileId) }, fileId)
+    cloudlog({ requestId: c.get('requestId'), message: 'restored R2 object from trash after unsettled delete', fileId })
+    return 'restored'
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'restore R2 object from trash failed', fileId, error: serializeStorageError(error) })
+    return 'failed'
+  }
+}
+
+async function deleteObjectKey(c: Context, fileId: string, timeoutMs = 10_000) {
+  try {
+    const url = await initS3(c).getPresignedUrl('DELETE', fileId)
+    const response = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(timeoutMs) })
+    await response.body?.cancel()
+    if ((response.status >= 200 && response.status < 300) || response.status === 404)
+      return true
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delete R2 object failed', fileId, status: response.status })
+    return false
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'delete R2 object failed', fileId, error: serializeStorageError(error) })
+    return false
+  }
+}
+
+export interface StoredObjectInfo {
+  size: number
+  etag: string | null
+  lastModified: number | null
+}
+
+/** HEAD an object: null when absent, throws when the storage answer is not definitive. */
+async function statObject(c: Context, fileId: string): Promise<StoredObjectInfo | null> {
+  const client = initS3(c)
+  const url = await client.getPresignedUrl('HEAD', fileId)
+  const response = await fetch(url, { method: 'HEAD', headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(15_000) })
+  await response.body?.cancel()
+  if (response.status === 404)
+    return null
+  if (response.status !== 200)
+    throw new Error(`Storage HEAD returned ${response.status}`)
+  const lastModified = Date.parse(response.headers.get('last-modified') ?? '')
+  return {
+    size: Number.parseInt(response.headers.get('content-length') ?? '0', 10) || 0,
+    etag: response.headers.get('etag')?.replaceAll('"', '') || null,
+    lastModified: Number.isFinite(lastModified) ? lastModified : null,
+  }
+}
+
+async function putObject(c: Context, fileId: string, data: Uint8Array, contentType = 'application/octet-stream'): Promise<{ etag: string | null }> {
+  const url = await initS3(c).getPresignedUrl('PUT', fileId, {
+    expirySeconds: 300,
+    parameters: { 'X-Amz-Content-Sha256': 'UNSIGNED-PAYLOAD', 'x-id': 'PutObject' },
+  })
+  const response = await fetch(url, {
+    method: 'PUT',
+    body: data as Uint8Array<ArrayBuffer>,
+    headers: { 'Content-Type': contentType },
+    signal: AbortSignal.timeout(60_000),
+  })
+  await response.body?.cancel()
+  if (!response.ok)
+    throw new Error(`Storage PUT returned ${response.status}`)
+  return { etag: response.headers.get('etag')?.replaceAll('"', '') || null }
+}
+
+/** The object no longer has the ETag the caller pinned (it was overwritten). */
+export class StorageObjectChangedError extends Error {
+  constructor(readonly path: string) {
+    super(`Storage object ${path} changed`)
+  }
+}
+
+function normalizeEtag(value: string | null | undefined): string | null {
+  return value?.replace(/^W\//, '').replaceAll('"', '') || null
+}
+
+/** Pin a read to one object version: send If-Match and verify the ETag that was served. */
+function conditionalReadHeaders(ifMatch: string | null | undefined, headers: Record<string, string>) {
+  return ifMatch ? { ...headers, 'If-Match': `"${ifMatch}"` } : headers
+}
+
+export function assertServedEtag(path: string, response: Response, ifMatch: string | null | undefined) {
+  if (!ifMatch)
+    return
+  const served = normalizeEtag(response.headers.get('etag'))
+  if (response.status === 412 || (served && served !== ifMatch))
+    throw new StorageObjectChangedError(path)
+}
+
+async function getObjectRange(c: Context, fileId: string, offset: number, length: number, ifMatch?: string | null): Promise<Uint8Array> {
+  const client = initS3(c)
+  const url = await client.getPresignedUrl('GET', fileId, { expirySeconds: 60 })
+  const response = await fetch(url, {
+    headers: conditionalReadHeaders(ifMatch, { 'Range': `bytes=${offset}-${offset + length - 1}`, 'Accept-Encoding': 'identity' }),
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (response.status !== 206 && response.status !== 200) {
+    await response.body?.cancel()
+    assertServedEtag(fileId, response, ifMatch)
+    throw new Error(`Storage range GET returned ${response.status}`)
+  }
+  try {
+    assertServedEtag(fileId, response, ifMatch)
+  }
+  catch (error) {
+    await response.body?.cancel()
+    throw error
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  // A server ignoring Range returns the whole object; slice the requested window.
+  return response.status === 200 ? bytes.subarray(offset, offset + length) : bytes
+}
+
+/** Full object stream for server-side processing; null when absent. */
+async function readObjectStream(c: Context, fileId: string, ifMatch?: string | null): Promise<Response | null> {
+  const url = await initS3(c).getPresignedUrl('GET', fileId, { expirySeconds: 300 })
+  const response = await fetch(url, { headers: conditionalReadHeaders(ifMatch, { 'Accept-Encoding': 'identity' }) })
+  if (response.status === 404) {
+    await response.body?.cancel()
+    return null
+  }
+  try {
+    assertServedEtag(fileId, response, ifMatch)
+  }
+  catch (error) {
+    await response.body?.cancel()
+    throw error
+  }
+  if (!response.ok) {
+    await response.body?.cancel()
+    throw new Error(`Storage GET returned ${response.status}`)
+  }
+  return response
+}
+
+/**
+ * Server-side copy inside the bucket. With `ifMatch`, the copy only happens while the
+ * source still has that ETag (x-amz-copy-source-if-match), so the destination is exactly
+ * the object version the caller verified.
+ */
+async function copyObject(c: Context, sourceKey: string, destinationKey: string, ifMatch?: string | null): Promise<void> {
+  const client = initS3(c)
+  const bucket = getEnv(c, 'S3_BUCKET')
+  const headers = new Headers()
+  headers.set('x-amz-copy-source', `${bucket}/${sourceKey.split('/').map(part => encodeURIComponent(part)).join('/')}`)
+  if (ifMatch)
+    headers.set('x-amz-copy-source-if-match', `"${ifMatch}"`)
+  let text: string
+  try {
+    const response = await client.makeRequest({ method: 'PUT', objectName: destinationKey, headers, returnBody: true })
+    text = await response.text()
+  }
+  catch (error) {
+    if ((error as { statusCode?: number })?.statusCode === 412)
+      throw new StorageObjectChangedError(sourceKey)
+    throw error
+  }
+  // S3 can answer 200 with an error document when the copy fails mid-way.
+  if (!text.includes('CopyObjectResult'))
+    throw new Error(`Storage copy failed: ${text.slice(0, 200)}`)
+}
+
+async function removeObject(c: Context, fileId: string): Promise<void> {
+  const url = await initS3(c).getPresignedUrl('DELETE', fileId)
+  const response = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(15_000) })
+  await response.body?.cancel()
+  if (response.status >= 300 && response.status !== 404)
+    throw new Error(`Storage DELETE returned ${response.status}`)
+}
+
 export const s3 = {
+  copyObjectToTrash,
+  restoreFromTrashIfMissing,
+  deleteObjectKey,
+  listObjectPage,
   getSize,
   deleteObject,
+  statObject,
+  putObject,
+  getObjectRange,
+  readObjectStream,
+  copyObject,
+  removeObject,
   getSizeDiagnostics,
   moveObjectToTrash,
   deleteObjectsWithPrefix,

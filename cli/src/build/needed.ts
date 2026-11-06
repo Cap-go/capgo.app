@@ -1,17 +1,17 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { CapgoClient } from '../utils'
 import type { BuildNeededOptions } from '../schemas/build'
 import type { Compatibility } from '../schemas/common'
-import type { Database } from '../types/supabase.types'
 import process, { env, stdout } from 'node:process'
 import { log } from '@clack/prompts'
 import { difference, parse } from '@std/semver'
 import { trackEvent } from '../analytics/track'
-import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { checkAppExistsAndHasPermissionOrgErr } from '../api/app'
+import { fetchCliChannels } from '../api/cli-data'
 import { formatTable } from '../terminal-table'
 import { CliUserError } from '../shared/cli-user-error'
 import {
   checkCompatibilityCloud,
-  createSupabaseClient,
+  createCapgoClient,
   findSavedKey,
   formatError,
   getCompatibilityDetails,
@@ -107,24 +107,22 @@ export function selectDefaultChannelName(rows: PublicChannelRow[]): string {
 }
 
 async function getPublicDefaultChannelName(
-  supabase: SupabaseClient<Database>,
+  client: CapgoClient,
   appId: string,
 ): Promise<string> {
-  const { data, error } = await supabase
-    .from('channels')
-    .select('name')
-    .eq('app_id', appId)
-    .eq('public', true)
-    .or('ios.eq.true,android.eq.true')
-
-  if (error)
+  let rows: Awaited<ReturnType<typeof fetchCliChannels>>
+  try {
+    rows = await fetchCliChannels(client, appId)
+  }
+  catch (error) {
     throw new Error(`Cannot load default channel: ${formatError(error)}`)
+  }
 
-  return selectDefaultChannelName((data ?? []) as PublicChannelRow[])
+  return selectDefaultChannelName(rows.filter(row => row.public && (row.ios || row.android)))
 }
 
 async function resolveBuildNeededChannel(
-  supabase: SupabaseClient<Database>,
+  client: CapgoClient,
   appId: string,
   options: BuildNeededOptions,
   config: unknown,
@@ -137,7 +135,7 @@ async function resolveBuildNeededChannel(
   if (configuredDefaultChannel)
     return configuredDefaultChannel
 
-  return getPublicDefaultChannelName(supabase, appId)
+  return getPublicDefaultChannelName(client, appId)
 }
 
 export function getVersionChangeType(entry: Compatibility): VersionChangeType {
@@ -270,29 +268,29 @@ export async function getBuildNeeded(
   if (!enrichedOptions.apikey)
     throw new Error('Missing API key')
 
-  const supabase = await createSupabaseClient(
+  const client = await createCapgoClient(
     enrichedOptions.apikey,
-    enrichedOptions.supaHost,
-    enrichedOptions.supaAnon,
+    enrichedOptions.apiHost,
   )
 
-  await check2FAComplianceForApp(supabase, resolvedAppId, true)
   await checkAppExistsAndHasPermissionOrgErr(
-    supabase,
+    client,
     enrichedOptions.apikey,
     resolvedAppId,
     'app.read_bundles',
     true,
-    true,
   )
 
-  const channel = await resolveBuildNeededChannel(supabase, resolvedAppId, enrichedOptions, extConfig?.config)
+  const channel = await resolveBuildNeededChannel(client, resolvedAppId, enrichedOptions, extConfig?.config)
   const compatibility = await checkCompatibilityCloud(
-    supabase,
+    enrichedOptions.apikey,
     resolvedAppId,
     channel,
     enrichedOptions.packageJson,
     enrichedOptions.nodeModules,
+    {
+      apiHost: enrichedOptions.apiHost,
+    },
   )
 
   return {

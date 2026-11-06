@@ -37,5 +37,5 @@ export async function handleBundleUploadCommand(appId: string, options: OptionsU
   else
     // Don't forward options.path — for `bundle upload` it's the web asset dir,
     // but `build request` treats `path` as the Capacitor project root.
-    await requestBuildCommand(resolvedAppId, { apikey: options.apikey, supaHost: options.supaHost, supaAnon: options.supaAnon })
+    await requestBuildCommand(resolvedAppId, { apikey: options.apikey, apiHost: options.apiHost })
 }

@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import { groupCompatibilityEvents } from '~/services/compatibilityEvents'
-import { useSupabase } from '~/services/supabase'
+import { useConsole } from '~/services/console'
 
 const props = defineProps<{
   appId: string
@@ -12,7 +12,7 @@ const props = defineProps<{
 
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 
 const unresolvedCount = ref(0)
 
@@ -26,7 +26,7 @@ async function fetchUnresolvedCount() {
     // Count occurrences, not raw rows: one channel change is many per-platform
     // rows. Group the unresolved rows the same way the history page does so the
     // banner count matches what the user sees there.
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('compatibility_events')
       .select('id, platform, channel_id, current_version_id, previous_version_id, source, change_occurred_at, created_at, resolved_at')
       .eq('app_id', props.appId)

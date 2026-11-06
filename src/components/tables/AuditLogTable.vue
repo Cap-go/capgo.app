@@ -1,21 +1,21 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
-import { FormKit } from '@formkit/vue'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconDown from '~icons/ic/round-keyboard-arrow-down'
 import IconFastBackward from '~icons/ic/round-keyboard-double-arrow-left'
-import IconSearch from '~icons/ic/round-search?raw'
+import IconSearch from '~icons/ic/round-search'
 import IconSortDown from '~icons/lucide/chevron-down'
 import IconSortUp from '~icons/lucide/chevron-up'
 import IconSort from '~icons/lucide/chevrons-up-down'
 import IconFilter from '~icons/system-uicons/filtering'
 import IconReload from '~icons/tabler/reload'
+import FormField from '~/components/forms/FormField.vue'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -51,7 +51,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 
@@ -336,9 +336,11 @@ async function fetchAuditLogs() {
   try {
     await loadMembers()
 
-    let query = supabase
+    // Estimated: exact up to PostgREST's row cap, planner estimate beyond it, so a
+    // large organization's audit trail is never counted row by row per page.
+    let query = capgo
       .from('audit_logs')
-      .select('*', { count: 'exact' })
+      .select('*', { count: 'estimated' })
       .eq('org_id', props.orgId)
       .order('created_at', { ascending: false })
 
@@ -476,7 +478,7 @@ onUnmounted(() => {
   <div class="pb-4 md:pb-0">
     <div class="flex items-start justify-between p-3 pb-4 overflow-visible md:items-center">
       <div class="flex h-10 md:mb-0">
-        <button class="inline-flex items-center py-1.5 px-3 mr-2 text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden" type="button" @click="refreshData">
+        <button class="d-btn d-btn-outline mr-2 px-3 font-medium" type="button" :aria-label="t('reload')" @click="refreshData">
           <IconReload v-if="!isLoading" class="m-1 md:mr-2" />
           <Spinner v-else size="w-[16.8px] h-[16.8px] m-1 mr-2" />
           <span class="hidden text-sm md:block">{{ t('reload') }}</span>
@@ -487,7 +489,7 @@ onUnmounted(() => {
       <div ref="filterDropdownRef" class="relative h-10 mr-2 md:mr-auto">
         <button
           type="button"
-          class="relative inline-flex items-center py-1.5 px-3 h-full text-sm font-medium text-gray-500 bg-white rounded-md border border-gray-300 cursor-pointer dark:text-white dark:bg-gray-800 dark:border-gray-600 hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-700 dark:focus:ring-gray-700 focus:outline-hidden"
+          class="relative d-btn d-btn-outline h-full px-3 font-medium"
           @click="toggleFilterDropdown"
         >
           <div
@@ -543,15 +545,14 @@ onUnmounted(() => {
       </div>
 
       <div class="flex overflow-hidden md:w-auto">
-        <FormKit
+        <FormField
           v-model="search"
           :placeholder="t('search-by-record-id')"
+          :aria-label="t('search-by-record-id')"
           :prefix-icon="IconSearch"
           :disabled="isLoading"
           enterkeyhint="send"
-          :classes="{
-            outer: 'mb-0! md:w-96',
-          }"
+          outer-class="mb-0! md:w-96"
         />
       </div>
     </div>
@@ -610,7 +611,7 @@ onUnmounted(() => {
       <button
         v-if="auditLogs.length < total"
         type="button"
-        class="flex items-center justify-center h-10 px-4 py-2 space-x-2 text-sm font-medium transition-colors border border-gray-300 rounded-md whitespace-nowrap dark:text-white dark:border-gray-700 focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background dark:hover:bg-primary/90 hover:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-ring"
+        class="d-btn d-btn-outline whitespace-nowrap font-medium"
         @click="loadMore"
       >
         <IconFastBackward />

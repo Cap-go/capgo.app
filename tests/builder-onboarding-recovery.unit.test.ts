@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { BUILDER_RECOVERY_MILESTONES, buildBuilderOnboardingBentoEvent } from '../supabase/functions/_backend/utils/builder_onboarding_recovery.ts'
+import { buildBuilderOnboardingBentoEvent } from '../supabase/functions/_backend/utils/builder_onboarding_recovery.ts'
 
 const base = { orgId: 'org-1', appId: 'com.demo.app', platform: 'ios', orgName: 'Demo Org', appName: 'Demo' }
 
 describe('buildBuilderOnboardingBentoEvent', () => {
-  it.concurrent('exposes the milestone steps that trigger a fetch', () => {
-    expect(BUILDER_RECOVERY_MILESTONES.has('welcome')).toBe(true)
-    expect(BUILDER_RECOVERY_MILESTONES.has('build-complete')).toBe(true)
-    expect(BUILDER_RECOVERY_MILESTONES.has('verifying-key')).toBe(false)
-  })
-
   it.concurrent('returns a started payload on the welcome step', () => {
     const r = buildBuilderOnboardingBentoEvent({ event: 'Builder Onboarding Step', step: 'welcome', ...base })
     expect(r).toBeDefined()
@@ -18,7 +12,12 @@ describe('buildBuilderOnboardingBentoEvent', () => {
     expect(r!.cron).toBe('* * * * *')
     expect(r!.uniqId).toBe('builder_onboarding_started:com.demo.app:ios')
     expect(r!.data).toMatchObject({
-      org_id: 'org-1', org_name: 'Demo Org', app_id: 'com.demo.app', app_name: 'Demo', platform: 'ios', step: 'welcome',
+      org_id: 'org-1',
+      org_name: 'Demo Org',
+      app_id: 'com.demo.app',
+      app_name: 'Demo',
+      platform: 'ios',
+      step: 'welcome',
     })
   })
 

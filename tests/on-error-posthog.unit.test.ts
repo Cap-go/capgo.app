@@ -120,6 +120,54 @@ describe('onError PostHog capture', () => {
     expect(alertBody).not.toContain('Password1!')
   })
 
+  it('never copies build secrets or assistant conversations into alerts and redacts tokens in URLs', async () => {
+    const { onError, SECRET_ROUTE_BODY_PLACEHOLDER } = await import('../supabase/functions/_backend/utils/on_error.ts')
+    const secretBody = JSON.stringify({ P12_PASSWORD: 'p12-secret', APPLE_KEY_CONTENT: 'p8-secret', ANDROID_KEYSTORE_FILE: 'keystore-secret' })
+    const urls = [
+      'https://api.capgo.app/build/credentials/upload/payload.signature-secret',
+      'https://api.capgo.app/build/credentials',
+      'https://example.com/functions/v1/build/credentials/upload-url',
+      'https://api.capgo.app/build/request',
+      'https://api.capgo.app/private/assistant/responses',
+      'https://example.com/functions/v1/private/assistant/responses',
+      'https://api.capgo.app/private/%61ssistant/responses',
+      'https://example.com/functions/v1/%70rivate/assistant/responses',
+      'https://api.capgo.app/private/%61ssistant/%ZZ',
+      'https://api.capgo.app/build/%63redentials/upload-url',
+    ]
+    for (const url of urls) {
+      sendDiscordAlert500Mock.mockClear()
+      cloudlogErrMock.mockClear()
+      const request = new Request(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: secretBody })
+      const response = await onError('build')(new HTTPException(503, { cause: { error: 'database_unavailable', message: 'Cannot verify upload permission', moreInfo: {} } }), createContext(request))
+      expect(response.status).toBe(503)
+      expect(request.bodyUsed).toBe(false)
+      expect(sendDiscordAlert500Mock).toHaveBeenCalledOnce()
+      expect(sendDiscordAlert500Mock.mock.calls[0]?.[2]).toBe(SECRET_ROUTE_BODY_PLACEHOLDER)
+      const logged = JSON.stringify(cloudlogErrMock.mock.calls)
+      expect(logged).not.toContain('signature-secret')
+      expect(logged).not.toContain('p12-secret')
+    }
+  })
+
+  it('redacts secret-looking keys in alert bodies on any route', async () => {
+    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+    await onError('private')(new HTTPException(500, { cause: { error: 'internal_error', message: 'boom', moreInfo: {} } }), createContext(new Request('https://example.com/functions/v1/private/something', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        app_id: 'com.example.app',
+        P12_PASSWORD: 'p12-secret',
+        nested: { APPLE_KEY_CONTENT: 'p8', BUILD_CERTIFICATE_BASE64: 'cert', BUILD_PROVISION_PROFILE_BASE64: 'prov', ANDROID_KEYSTORE_FILE: 'ks', PLAY_CONFIG_JSON: '{}', SENTRY_AUTH_TOKEN: 't', webhook_secret: 's', apikey: 'k' },
+      }),
+    })))
+    expect(sendDiscordAlert500Mock.mock.calls[0]?.[2]).toBe(JSON.stringify({
+      app_id: 'com.example.app',
+      P12_PASSWORD: '[redacted]',
+      nested: { APPLE_KEY_CONTENT: '[redacted]', BUILD_CERTIFICATE_BASE64: '[redacted]', BUILD_PROVISION_PROFILE_BASE64: '[redacted]', ANDROID_KEYSTORE_FILE: '[redacted]', PLAY_CONFIG_JSON: '[redacted]', SENTRY_AUTH_TOKEN: '[redacted]', webhook_secret: '[redacted]', apikey: '[redacted]' },
+    }))
+  })
+
   it('logs 4xx HTTP exceptions without console.error or stack so they stay out of Workers Issues', async () => {
     const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
 
@@ -339,78 +387,51 @@ describe('onError PostHog capture', () => {
     })
   })
 
-  it('returns 503 without PostHog capture for transient Drizzle errors', async () => {
-    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
+  const pgTerminated = () => Object.assign(new Error('Connection terminated unexpectedly'), { code: '57P01' })
+  const notificationsRequest = () => new Request('https://api.capgo.app/notifications/settings?app_id=com.demo.app')
 
-    const response = await onError('api')({
-      cause: Object.assign(new Error('Connection terminated unexpectedly'), {
-        code: '57P01',
-      }),
-      message: `Failed query:
+  interface TransientCase { name: string, error: () => unknown, makeRequest: () => Request | undefined, logsPgCode?: boolean }
+  it.each<TransientCase>([
+    {
+      name: 'transient Drizzle errors',
+      error: () => ({
+        cause: pgTerminated(),
+        message: `Failed query:
       SELECT app_id, push_update_enabled
       FROM public.notification_app_settings
       WHERE app_id = $1
     `,
-      name: 'DrizzleQueryError',
-    }, createContext(new Request('https://api.capgo.app/notifications/settings?app_id=com.demo.app')))
-
-    expect(backgroundTaskMock).not.toHaveBeenCalled()
-    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
-    expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
-    expect(response).toEqual({
-      body: {
-        error: 'upstream_unavailable',
-        message: 'Database temporarily unavailable',
-        moreInfo: {},
-      },
-      status: 503,
-    })
-  })
-
-  it('returns 503 without PostHog capture for transient native pg errors', async () => {
+        name: 'DrizzleQueryError',
+      }),
+      makeRequest: notificationsRequest,
+    },
+    { name: 'transient native pg errors', error: pgTerminated, makeRequest: notificationsRequest, logsPgCode: true },
+    {
+      name: 'transient database errors wrapped in quickError',
+      error: () => new HTTPException(500, {
+        cause: {
+          error: 'failed_to_load_settings',
+          message: 'Failed to load notification settings',
+          moreInfo: {},
+          originalCause: pgTerminated(),
+        },
+      }),
+      makeRequest: () => undefined,
+    },
+  ])('returns 503 without PostHog capture for $name', async ({ error, makeRequest, logsPgCode }) => {
     const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
 
-    const response = await onError('api')(Object.assign(new Error('Connection terminated unexpectedly'), {
-      code: '57P01',
-    }), createContext(new Request('https://api.capgo.app/notifications/settings?app_id=com.demo.app')))
+    const response = await onError('api')(error() as any, createContext(makeRequest()))
 
     expect(backgroundTaskMock).not.toHaveBeenCalled()
     expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
     expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
-    expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'transient_pg_error',
-      moreInfo: { pgErrorCode: '57P01' },
-    }))
-    expect(response).toEqual({
-      body: {
-        error: 'upstream_unavailable',
-        message: 'Database temporarily unavailable',
-        moreInfo: {},
-      },
-      status: 503,
-    })
-  })
-
-  it('returns 503 without PostHog capture for transient database errors wrapped in quickError', async () => {
-    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
-
-    const originalCause = Object.assign(new Error('Connection terminated unexpectedly'), {
-      code: '57P01',
-    })
-    const error = new HTTPException(500, {
-      cause: {
-        error: 'failed_to_load_settings',
-        message: 'Failed to load notification settings',
-        moreInfo: {},
-        originalCause,
-      },
-    })
-
-    const response = await onError('api')(error, createContext())
-
-    expect(backgroundTaskMock).not.toHaveBeenCalled()
-    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
-    expect(capturePosthogExceptionMock).not.toHaveBeenCalled()
+    if (logsPgCode) {
+      expect(cloudlogErrMock).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'transient_pg_error',
+        moreInfo: { pgErrorCode: '57P01' },
+      }))
+    }
     expect(response).toEqual({
       body: {
         error: 'upstream_unavailable',
@@ -441,24 +462,28 @@ describe('onError PostHog capture', () => {
     expect(capturePosthogExceptionMock).toHaveBeenCalledOnce()
   })
 
-  it('skips Discord for expected files Durable Object storage timeouts', async () => {
+  const doTimeoutMessage = 'Durable Object storage operation exceeded timeout which caused object to be reset.'
+  it.each([
+    {
+      name: 'expected files Durable Object storage timeouts',
+      functionName: 'files',
+      error: () => Object.assign(new Error(doTimeoutMessage), { durableObjectReset: true, overloaded: true }),
+      backgroundCalls: 1,
+    },
+    { name: 'expected TUS handler Durable Object storage timeouts', functionName: 'TUS handler', error: () => new Error(doTimeoutMessage), backgroundCalls: 1 },
+    { name: 'Cloudflare internal errors on the files upload path', functionName: 'files', error: () => new Error('internal error; reference = 0123abcd-4567-89ef') },
+  ])('skips Discord for $name', async ({ functionName, error, backgroundCalls }) => {
     const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
 
-    const error = Object.assign(
-      new Error('Durable Object storage operation exceeded timeout which caused object to be reset.'),
-      {
-        durableObjectReset: true,
-        overloaded: true,
-      },
-    )
+    const response = await onError(functionName)(error(), createContext())
 
-    const response = await onError('files')(error, createContext())
-
-    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
-    expect(backgroundTaskMock.mock.calls[0]?.[1]).toBeInstanceOf(Promise)
+    if (backgroundCalls !== undefined) {
+      expect(backgroundTaskMock).toHaveBeenCalledTimes(backgroundCalls)
+      expect(backgroundTaskMock.mock.calls[0]?.[1]).toBeInstanceOf(Promise)
+    }
     expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
     expect(capturePosthogExceptionMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      functionName: 'files',
+      functionName,
       kind: 'unhandled_error',
       status: 500,
     }))
@@ -470,35 +495,6 @@ describe('onError PostHog capture', () => {
       },
       status: 500,
     })
-  })
-
-  it('skips Discord for expected TUS handler Durable Object storage timeouts', async () => {
-    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
-
-    const response = await onError('TUS handler')(new Error('Durable Object storage operation exceeded timeout which caused object to be reset.'), createContext())
-
-    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
-    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
-    expect(capturePosthogExceptionMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      functionName: 'TUS handler',
-      kind: 'unhandled_error',
-      status: 500,
-    }))
-    expect(response.status).toBe(500)
-  })
-
-  it('skips Discord for Cloudflare internal errors on the files upload path', async () => {
-    const { onError } = await import('../supabase/functions/_backend/utils/on_error.ts')
-
-    const response = await onError('files')(new Error('internal error; reference = 0123abcd-4567-89ef'), createContext())
-
-    expect(sendDiscordAlert500Mock).not.toHaveBeenCalled()
-    expect(capturePosthogExceptionMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      functionName: 'files',
-      kind: 'unhandled_error',
-      status: 500,
-    }))
-    expect(response.status).toBe(500)
   })
 
   it('captures generic unhandled errors in PostHog', async () => {

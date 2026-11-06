@@ -11,14 +11,14 @@ import IconKey from '~icons/heroicons/key'
 import IconLock from '~icons/heroicons/lock-closed'
 import ConnectAppPicker from '~/components/connect/ConnectAppPicker.vue'
 import { createAiApiKey } from '~/services/apikeys'
+import { useConsole } from '~/services/console'
 import { createSignedImageUrl, resolveImagePath } from '~/services/storage'
-import { useSupabase } from '~/services/supabase'
 import { isAdminRole, useOrganizationStore } from '~/stores/organization'
 
 type Role = 'admin' | 'member'
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 
 const tokenName = ref(t('connect-token-name-default'))
@@ -100,7 +100,7 @@ async function loadApps(orgIds: string[]): Promise<void> {
   }
   isLoadingApps.value = true
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select('id, app_id, name, owner_org, icon_url')
       .in('owner_org', orgIds)
@@ -191,7 +191,7 @@ async function generate(): Promise<void> {
           .map(([id, appRole]) => ({ uuid: id, orgId: appById.get(id)!.ownerOrg, role: appRole }))
       : undefined
 
-    const { data, error } = await createAiApiKey(supabase, tokenName.value.trim() || t('connect-token-name-default'), {
+    const { data, error } = await createAiApiKey(capgo, tokenName.value.trim() || t('connect-token-name-default'), {
       orgIds: [...selectedOrgIds.value],
       role: role.value,
       apps: chosenApps,
@@ -471,7 +471,7 @@ function back(): void {
             </code>
             <button
               type="button"
-              class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-700 transition-colors hover:border-azure-500/45 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+              class="d-btn d-btn-outline h-auto shrink-0 gap-1.5 rounded-xl px-3.5"
               @click="copy(generatedKey ?? '')"
             >
               <IconClipboard class="h-4 w-4" />
@@ -491,7 +491,7 @@ function back(): void {
             </code>
             <button
               type="button"
-              class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition-colors hover:border-azure-500/45 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+              class="d-btn d-btn-outline h-auto shrink-0 gap-1.5 rounded-xl px-3"
               @click="copy(pasteLine)"
             >
               <IconClipboard class="h-4 w-4" />
@@ -507,7 +507,7 @@ function back(): void {
         <div class="mt-6">
           <button
             type="button"
-            class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3.5 text-base font-semibold text-slate-700 transition-colors hover:border-azure-500/45 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+            class="d-btn d-btn-outline d-btn-lg w-full rounded-xl"
             @click="back"
           >
             <IconArrowLeft class="h-5 w-5" />

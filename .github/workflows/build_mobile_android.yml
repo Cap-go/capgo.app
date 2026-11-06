@@ -34,10 +34,13 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag }}
       - name: Validate tag
+        # Ask the remote for this one tag instead of fetching every branch and tag
+        # (`git fetch --all --tags` took ~4 minutes on this repository).
+        env:
+          TAG: ${{ github.event.inputs.tag }}
         run: |
-          git fetch --all --tags
-          if ! git tag -l | grep -q "^${{ github.event.inputs.tag }}$"; then
-            echo "Error: Tag ${{ github.event.inputs.tag }} does not exist."
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null; then
+            echo "Error: Tag ${TAG} does not exist."
             exit 1
           fi
       - name: Setup bun
@@ -59,7 +62,19 @@ jobs:
         # regenerate it here before `capgo build request` uploads the workspace.
         run: |
           bun run build
+          bash scripts/vendor-workspace-native-plugins.sh
           bunx cap sync android
+      - name: Add Firebase config for push notifications
+        # google-services.json is gitignored. Without it the google-services Gradle
+        # plugin is skipped and FCM (Capgo update pushes) cannot start on Android.
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret is missing; Android push notifications are disabled in this build"
+          fi
       - name: Request Android build through Capgo CLI
         env:
           CAPGO_TOKEN: ${{ secrets.CAPGO_TOKEN }}

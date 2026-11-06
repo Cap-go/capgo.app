@@ -93,65 +93,24 @@ describe('rbac permission system', () => {
 
   describe('rbac_check_permission_direct SQL function', () => {
     describe('rbac permission inputs', () => {
-      it('should allow app read permission for an authorized user', async () => {
+      it.each([
+        ['allow app read for an authorized user', 'app.read', USER_ID, true],
+        ['allow app upload for an authorized user', 'app.upload_bundle', USER_ID, true],
+        ['deny a non-existent user', 'app.read', '00000000-0000-0000-0000-000000000000', false],
+        ['deny an unknown permission', 'unknown.permission', USER_ID, false],
+      ])('should %s', async (_label, permission, userId, expected) => {
         const result = await query(`
           SELECT public.rbac_check_permission_direct(
-            'app.read',
-            $1::uuid,
+            $1,
             $2::uuid,
-            $3,
+            $3::uuid,
+            $4,
             NULL::bigint,
             NULL
           ) as allowed
-        `, [USER_ID, ORG_ID, TEST_APP_ID])
+        `, [permission, userId, ORG_ID, TEST_APP_ID])
 
-        expect(result.rows[0].allowed).toBe(true)
-      })
-
-      it('should allow app upload permission for an authorized user', async () => {
-        const result = await query(`
-          SELECT public.rbac_check_permission_direct(
-            'app.upload_bundle',
-            $1::uuid,
-            $2::uuid,
-            $3,
-            NULL::bigint,
-            NULL
-          ) as allowed
-        `, [USER_ID, ORG_ID, TEST_APP_ID])
-
-        expect(result.rows[0].allowed).toBe(true)
-      })
-
-      it('should deny permission for non-existent user', async () => {
-        const fakeUserId = '00000000-0000-0000-0000-000000000000'
-        const result = await query(`
-          SELECT public.rbac_check_permission_direct(
-            'app.read',
-            $1::uuid,
-            $2::uuid,
-            $3,
-            NULL::bigint,
-            NULL
-          ) as allowed
-        `, [fakeUserId, ORG_ID, TEST_APP_ID])
-
-        expect(result.rows[0].allowed).toBe(false)
-      })
-
-      it('should deny unknown permission', async () => {
-        const result = await query(`
-          SELECT public.rbac_check_permission_direct(
-            'unknown.permission',
-            $1::uuid,
-            $2::uuid,
-            $3,
-            NULL::bigint,
-            NULL
-          ) as allowed
-        `, [USER_ID, ORG_ID, TEST_APP_ID])
-
-        expect(result.rows[0].allowed).toBe(false)
+        expect(result.rows[0].allowed).toBe(expected)
       })
 
       it('should deny org permissions outside bound org for api keys', async () => {
@@ -242,23 +201,6 @@ describe('rbac permission system', () => {
     })
 
     describe('rbac permission checks', () => {
-      it('should check permissions via RBAC system', async () => {
-        // The user should have permissions via role_bindings
-        const result = await query(`
-          SELECT public.rbac_check_permission_direct(
-            'app.read',
-            $1::uuid,
-            $2::uuid,
-            $3,
-            NULL::bigint,
-            NULL
-          ) as allowed
-        `, [USER_ID, ORG_ID, TEST_APP_ID])
-
-        // Should be allowed because user has role_bindings for this org
-        expect(result.rows[0].allowed).toBe(true)
-      })
-
       it('should keep org-scoped app permissions for a new app id before the app row exists', async () => {
         const newAppId = 'com.demo.precreate'
         const result = await query(`
@@ -1827,46 +1769,6 @@ describe('rbac permission system', () => {
           [channel.rows[0].id],
         )
         expect(deletedChannel.rows).toEqual([{ id: channel.rows[0].id }])
-      })
-
-      it('should deny org permissions outside bound org for api keys', async () => {
-        const allowedOrgId = randomUUID()
-        const targetOrgId = randomUUID()
-        const scopedKey = `rbac-bound-${randomUUID()}`
-
-        await query(`
-          INSERT INTO public.orgs (id, name, management_email, created_by)
-          VALUES
-            ($1::uuid, $3, $5, $6::uuid),
-            ($2::uuid, $4, $5, $6::uuid)
-        `, [allowedOrgId, targetOrgId, `RBAC Allowed ${allowedOrgId}`, `RBAC Target ${targetOrgId}`, `rbac-bound-${randomUUID()}@capgo.app`, USER_ID])
-
-        await createApiKeyForOrg(scopedKey, `RBAC bound ${allowedOrgId}`, allowedOrgId)
-
-        const deniedResult = await query(`
-          SELECT public.rbac_check_permission_direct(
-            'org.delete',
-            $1::uuid,
-            $2::uuid,
-            NULL::text,
-            NULL::bigint,
-            $3
-          ) AS allowed
-        `, [USER_ID, targetOrgId, scopedKey])
-
-        const allowedResult = await query(`
-          SELECT public.rbac_check_permission_direct(
-            'org.delete',
-            $1::uuid,
-            $2::uuid,
-            NULL::text,
-            NULL::bigint,
-            $3
-          ) AS allowed
-        `, [USER_ID, allowedOrgId, scopedKey])
-
-        expect(deniedResult.rows[0].allowed).toBe(false)
-        expect(allowedResult.rows[0].allowed).toBe(true)
       })
 
       it('should block direct channel version updates when promote_bundle is denied for the channel', async () => {

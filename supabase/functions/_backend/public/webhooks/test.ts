@@ -1,9 +1,11 @@
 import type { Context } from 'hono'
 import type { AuthInfo, MiddlewareKeyVariables } from '../../utils/hono.ts'
+import type { Database } from '../../utils/supabase.types.ts'
 import { z } from 'zod'
 import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { simpleError } from '../../utils/hono.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { queryJsonOne } from '../../utils/pg_rls.ts'
 import {
   createDeliveryRecord,
   createTestPayload,
@@ -20,6 +22,19 @@ const bodySchema = z.object({
   webhookId: z.string(),
 })
 
+async function getWebhookForTest(c: Context<MiddlewareKeyVariables>, webhookId: string) {
+  const pg = await getPgClient(c)
+  try {
+    return await queryJsonOne<Database['public']['Tables']['webhooks']['Row']>(pg, 'SELECT * FROM public.webhooks WHERE id = $1', [webhookId])
+  }
+  catch {
+    return null
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
 export async function test(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, auth: AuthInfo): Promise<Response> {
   const bodyParsed = safeParseSchema(bodySchema, bodyRaw)
   if (!bodyParsed.success) {
@@ -29,16 +44,10 @@ export async function test(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
 
   await checkWebhookPermissionV2(c, body.orgId, auth)
 
-  const supabase = supabaseAdmin(c)
-
   // Get webhook
-  const { data: webhook, error: fetchError } = await supabase
-    .from('webhooks')
-    .select('*')
-    .eq('id', body.webhookId)
-    .single()
+  const webhook = await getWebhookForTest(c, body.webhookId)
 
-  if (fetchError || !webhook) {
+  if (!webhook) {
     throw simpleError('webhook_not_found', 'Webhook not found', { webhookId: body.webhookId })
   }
 
@@ -83,15 +92,17 @@ export async function test(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown,
   )
 
   // Update attempt count
-  const { error: attemptCountError } = await supabase
-    .from('webhook_deliveries')
-    .update({ attempt_count: 1 })
-    .eq('id', delivery.id)
-
-  if (attemptCountError) {
+  const pg = await getPgClient(c)
+  try {
+    await pg.query('UPDATE public.webhook_deliveries SET attempt_count = 1 WHERE id = $1', [delivery.id])
+  }
+  catch {
     throw simpleError('cannot_update_delivery', 'Cannot update delivery attempt count', {
       deliveryId: delivery.id,
     })
+  }
+  finally {
+    closeClient(c, pg)
   }
 
   return c.json({

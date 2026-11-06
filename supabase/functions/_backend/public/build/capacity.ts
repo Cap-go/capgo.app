@@ -2,7 +2,6 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import { timingSafeEqual } from 'hono/utils/buffer'
 import { z } from 'zod'
-import { recordBuilderCapacityIfChanged } from '../../utils/builder_capacity.ts'
 import { BRES, parseBody, quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { getEnv } from '../../utils/utils.ts'
@@ -29,17 +28,15 @@ export async function reportBuilderCapacity(c: Context<MiddlewareKeyVariables>) 
     })
   }
 
+  // Pool-size history is recorded by the admin dashboard, which polls the
+  // builder itself. The report is still authenticated and acknowledged so the
+  // builder keeps working until it stops sending it.
   const source = parsed.data.source ?? 'builder'
-  const event = await recordBuilderCapacityIfChanged(c, parsed.data.workers_total, source)
   cloudlog({
     requestId: c.get('requestId'),
     message: 'builder capacity report',
     workers_total: parsed.data.workers_total,
     source,
-    recorded: !!event,
-    delta: event?.delta ?? 0,
   })
-  return c.json(event
-    ? { status: 'ok', recorded: true, workers_total: event.workers_total, delta: event.delta }
-    : { ...BRES, recorded: false, workers_total: parsed.data.workers_total })
+  return c.json({ ...BRES, recorded: false, workers_total: parsed.data.workers_total })
 }

@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { TooltipClickHandler } from '~/services/chartTooltip'
-import { CategoryScale, Chart, Filler, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
-import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import ChartCard from '~/components/dashboard/ChartCard.vue'
+import { Line } from '~/components/dashboard/lazyCharts'
 import { createTooltipConfig } from '~/services/chartTooltip'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatLocalDateShort } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 // Bundle version mix of one channel, the channel-scoped counterpart of the
 // app-wide "Active bundle" chart on the Live release page.
@@ -19,8 +18,6 @@ const props = defineProps<{
   channelId: number
   days: number
 }>()
-
-Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Filler)
 
 interface ChannelStatsResponse {
   labels: string[]
@@ -35,7 +32,7 @@ interface ChannelStatsResponse {
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const stats = ref<ChannelStatsResponse | null>(null)
 const loading = ref(false)
 const failed = ref(false)
@@ -47,7 +44,7 @@ async function fetchStats() {
   loading.value = true
   failed.value = false
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     if (!sessionData.session)
       return
     const response = await fetch(`${defaultApiHost}/private/channel_stats`, {
@@ -91,7 +88,7 @@ async function navigateToBundle(versionName: string) {
     router.push(`/app/${encodeURIComponent(props.appId)}/bundle/${cached}`)
     return
   }
-  const { data } = await supabase
+  const { data } = await capgo
     .from('app_versions')
     .select('id')
     .eq('app_id', props.appId)

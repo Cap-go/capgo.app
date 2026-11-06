@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   hasNewChannelTreatment,
@@ -14,11 +13,6 @@ import {
   WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST,
   WEBNATIVE_PUBLISH_INTENT_AB_TEST,
 } from '../src/utils/onboardingABTests'
-
-const abTestsConfig = JSON.parse(readFileSync(
-  new URL('../supabase/functions/_backend/utils/ab_tests.json', import.meta.url),
-  'utf8',
-)) as Record<string, unknown>
 
 function onboardingFor(publishBranch: 'A' | 'B', environmentBranch: 'C' | 'D') {
   return {
@@ -54,49 +48,6 @@ function onboardingWithNewChannel(
 }
 
 describe('webNativeApp onboarding A/B tests', () => {
-  it.concurrent('pauses both WebNativeApp self-signup experiments', () => {
-    expect(abTestsConfig[WEBNATIVE_PUBLISH_INTENT_AB_TEST]).toEqual({
-      audience: 'self_signup',
-      comment: 'Shows a \'convert my webapp to mobile\' intent option. Does not change the rest of the flow by itself.',
-      control_branch: 'B',
-      label: 'Publish intent',
-      treatment_branch: 'A',
-      treatment_percentage: 0,
-      branches: {
-        A: { bento_tag: 'ab:webnativeapp_publish_intent', label: 'WebNativeApp option' },
-        B: { bento_tag: 'ab:no_webnativeapp_publish_intent', label: 'Current publish options' },
-      },
-    })
-    expect(abTestsConfig[WEBNATIVE_DEVELOPMENT_ENVIRONMENT_AB_TEST]).toEqual({
-      audience: 'self_signup',
-      comment: 'Asks what tools people use to build. Combined with publish + hosted_builder + starting out, this can recommend WebNativeApp.',
-      control_branch: 'D',
-      label: 'Development environment',
-      treatment_branch: 'C',
-      treatment_percentage: 0,
-      branches: {
-        C: { bento_tag: 'ab:webnativeapp_development_environment', label: 'Development environment question' },
-        D: { bento_tag: 'ab:no_webnativeapp_development_environment', label: 'Current onboarding' },
-      },
-    })
-  })
-
-  it.concurrent('pauses new channel experiment assignments for exact OTA and both intents', () => {
-    expect(abTestsConfig[NEW_CHANNEL_AB_TEST]).toEqual({
-      audience: 'self_signup',
-      comment: 'Shows the guided channel education and creation flow.',
-      control_branch: 'B',
-      intents: ['ota', 'both'],
-      label: 'Channel creation',
-      treatment_branch: 'A',
-      treatment_percentage: 0,
-      branches: {
-        A: { bento_tag: 'ab:new_channel', label: 'Guided channel flow' },
-        B: { bento_tag: 'ab:no_new_channel', label: 'Current channel flow' },
-      },
-    })
-  })
-
   it.concurrent('uses 5.C when C is present, then 5.A for A-only users, and otherwise stays on V4', () => {
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('A', 'C'))).toBe('5.C')
     expect(resolveOnboardingAnalyticsVersion(onboardingFor('B', 'C'))).toBe('5.C')

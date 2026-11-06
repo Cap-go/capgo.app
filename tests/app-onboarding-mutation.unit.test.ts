@@ -39,7 +39,7 @@ beforeEach(() => {
   statements = []
   order = []
   mocks.getPool.mockReturnValue(pool)
-  mocks.getDrizzle.mockReturnValue({ transaction: mocks.transaction })
+  mocks.getDrizzle.mockReturnValue({ transaction: mocks.transaction, execute: mocks.execute })
   mocks.transaction.mockImplementation(async (callback: (client: unknown) => Promise<unknown>) => {
     order.push('begin')
     const result = await callback(tx)
@@ -184,13 +184,14 @@ describe('authorized onboarding mutation', () => {
 })
 
 describe('tracking CLI and MCP onboarding', () => {
-  it.each([['user-login', 'User CLI login', 'cli'], ['cli-usage', 'CLI Command Invoked', 'cli'], ['mcp', 'MCP Tool Invoked', 'mcp']])('keeps %s multi-app changes in one transaction and emits only after commit', async (channel, event, source) => {
+  it.each([['user-login', 'User CLI login', 'cli'], ['cli-usage', 'CLI Command Invoked', 'cli'], ['mcp', 'MCP Tool Invoked', 'mcp']])('mutates %s apps in separate transactions and emits after each commit', async (channel, event, source) => {
     rows.push({ app_id: 'com.test.second', owner_org: 'second-org', onboarding: { setup: { todo_list_version: 4, ota_todo_list_version: '1', steps: { ota: {} } } } })
     mocks.permission.mockImplementation(async (_c, permission) => permission === 'app.read')
     await markAppOnboardingLoginFromTracking(context(), channel, event)
-    expect(mocks.transaction).toHaveBeenCalledOnce()
-    expect(statements[0].sql).toContain('FOR UPDATE')
+    expect(mocks.transaction).toHaveBeenCalledTimes(2)
+    expect(statements[0].sql).not.toContain('FOR UPDATE')
     expect(statements[0].sql).toContain('onboarding ->> \'created_by_user_id\'')
+    expect(statements.filter(query => query.sql.includes('FOR UPDATE'))).toHaveLength(2)
     expect(statements.filter(query => query.sql.includes('try_complete_pending_onboarding_if_setup_done'))).toHaveLength(2)
     expect(mocks.track).toHaveBeenCalledTimes(2)
     for (const [index, row] of rows.entries()) {
@@ -204,14 +205,22 @@ describe('tracking CLI and MCP onboarding', () => {
     expect(mocks.close).toHaveBeenCalledOnce()
   })
 
-  it('does not emit any derived history if the outer multi-app commit fails', async () => {
+  it('keeps already-emitted history when a later per-app commit fails', async () => {
+    rows.push({ app_id: 'com.test.second', owner_org: 'second-org', onboarding: { setup: { todo_list_version: 3, steps: {} } } })
+    mocks.permission.mockImplementation(async (_c, permission) => permission === 'app.read')
+    let commits = 0
     mocks.transaction.mockImplementation(async (callback) => {
-      await callback(tx)
-      throw new Error('commit failed')
+      order.push('begin')
+      const result = await callback(tx)
+      commits += 1
+      if (commits === 2)
+        throw new Error('commit failed')
+      order.push('commit')
+      return result
     })
     await markAppOnboardingLoginFromTracking(context(), 'mcp', 'MCP Tool Invoked')
     expect(order).toContain('write')
-    expect(mocks.track).not.toHaveBeenCalled()
+    expect(mocks.track).toHaveBeenCalledOnce()
     expect(mocks.log).toHaveBeenCalledOnce()
     expect(mocks.close).toHaveBeenCalledOnce()
   })
@@ -225,6 +234,10 @@ describe('tracking CLI and MCP onboarding', () => {
     await markAppOnboardingLoginFromTracking(context(), 'mcp', 'MCP Tool Invoked')
     expect(order).not.toContain('write')
     expect(mocks.track).not.toHaveBeenCalled()
+    // Every CLI/MCP event lands here: no-op apps must not take the org or row lock.
+    expect(mocks.transaction).not.toHaveBeenCalled()
+    expect(mocks.permission).not.toHaveBeenCalled()
+    expect(statements.some(query => query.sql.includes('FOR UPDATE') || query.sql.includes('lock_rbac_orgs'))).toBe(false)
   })
 
   it('promotes CLI to MCP with the existing timestamp and history behavior', async () => {

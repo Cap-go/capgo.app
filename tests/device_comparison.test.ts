@@ -13,19 +13,60 @@ import {
   toComparableExisting,
 } from '../supabase/functions/_backend/utils/deviceComparison.ts'
 
-// Helper to simulate replica storage behavior
-// This matches what cloudflare.ts writes to the replica store
-function simulateReplicaStorage(device: DeviceWithoutCreatedAt): DeviceExistingRowLike {
-  const comparable = toComparableDevice(device)
+function device(overrides: Partial<DeviceWithoutCreatedAt> = {}): DeviceWithoutCreatedAt {
+  return { device_id: 'test-device', app_id: 'test-app', platform: 'android', is_prod: false, is_emulator: false, ...overrides } as DeviceWithoutCreatedAt
+}
 
-  // Write the comparable values directly - defaults are already applied in toComparableDevice()
+const FULL_FIELDS = {
+  platform: 'android',
+  plugin_version: '1.0.0',
+  os_version: '14',
+  version_build: '100',
+  custom_id: 'custom-123',
+  version_name: 'v1.0.0',
+  is_prod: true,
+  is_emulator: false,
+  default_channel: 'production',
+} as const
+
+const TYPICAL_PROD_DEVICE = device({
+  device_id: '12345-abcde',
+  app_id: 'com.example.app',
+  platform: 'ios',
+  plugin_version: '6.3.3',
+  os_version: '17.5.1',
+  version_build: '1.0.0',
+  custom_id: '',
+  version_name: '1.0.0',
+  is_prod: true,
+  default_channel: 'production',
+})
+
+// Replica column defaults: plugin_version/os_version/custom_id NOT NULL (''), version_build DEFAULT 'builtin',
+// version_name/default_channel NULLABLE.
+const REPLICA_DEFAULTS = {
+  platform: null,
+  plugin_version: '',
+  os_version: '',
+  version_build: 'builtin',
+  custom_id: '',
+  version_name: null,
+  is_prod: false,
+  is_emulator: false,
+  default_channel: null,
+  key_id: null,
+}
+
+// Simulates what cloudflare.ts writes to the replica store and reads back.
+function simulateReplicaStorage(input: DeviceWithoutCreatedAt): DeviceExistingRowLike {
+  const comparable = toComparableDevice(input)
   return {
     platform: comparable.platform,
     plugin_version: comparable.plugin_version,
     os_version: comparable.os_version,
     version_build: comparable.version_build,
-    custom_id: comparable.custom_id, // Already has '' default from toComparableDevice()
-    version_name: comparable.version_name, // Already has 'unknown' default from toComparableDevice()
+    custom_id: comparable.custom_id,
+    version_name: comparable.version_name,
     is_prod: comparable.is_prod ? 1 : 0,
     is_emulator: comparable.is_emulator ? 1 : 0,
     install_source: comparable.install_source,
@@ -35,1481 +76,256 @@ function simulateReplicaStorage(device: DeviceWithoutCreatedAt): DeviceExistingR
   }
 }
 
-describe('deviceComparison utilities', () => {
-  describe('normalizeOptionalString', () => {
-    it('should normalize undefined to null', () => {
-      expect(normalizeOptionalString(undefined)).toBe(null)
-    })
+describe('normalizeOptionalString', () => {
+  it.each([
+    [undefined, null],
+    [null, null],
+    ['', null],
+    ['test', 'test'],
+    ['  ', '  '],
+  ])('normalizes %j to %j', (input, expected) => {
+    expect(normalizeOptionalString(input)).toBe(expected)
+  })
+})
 
-    it('should normalize null to null', () => {
-      expect(normalizeOptionalString(null)).toBe(null)
-    })
+describe('normalizeDeviceCountryCode', () => {
+  it.concurrent('normalizes valid country codes', () => {
+    expect(normalizeDeviceCountryCode('fr')).toBe('FR')
+    expect(normalizeDeviceCountryCode(' US ')).toBe('US')
+  })
 
-    it('should normalize empty string to null', () => {
-      expect(normalizeOptionalString('')).toBe(null)
-    })
+  it.concurrent('rejects invalid country codes', () => {
+    for (const value of [undefined, '', 'USA', '1A'])
+      expect(normalizeDeviceCountryCode(value)).toBe(null)
+  })
+})
 
-    it('should keep non-empty strings', () => {
-      expect(normalizeOptionalString('test')).toBe('test')
-    })
+describe('toComparableDevice', () => {
+  it('converts a device with all fields', () => {
+    expect(toComparableDevice(device({ ...FULL_FIELDS, install_source: 'google_play', key_id: 'my-encryption-key' })))
+      .toEqual({ ...FULL_FIELDS, install_source: 'google_play', key_id: 'my-encryption-key' })
+  })
 
-    it('should keep whitespace-only strings', () => {
-      expect(normalizeOptionalString('  ')).toBe('  ')
+  it('normalizes empty strings and applies replica defaults', () => {
+    expect(toComparableDevice(device({
+      platform: 'ios',
+      plugin_version: '',
+      os_version: '',
+      version_build: '',
+      custom_id: '',
+      version_name: '',
+      default_channel: '',
+    }))).toEqual({ ...REPLICA_DEFAULTS, platform: 'ios' })
+  })
+
+  it('applies replica defaults to undefined/null fields', () => {
+    expect(toComparableDevice({
+      device_id: 'test-device',
+      app_id: 'test-app',
+      updated_at: new Date().toISOString(),
+      platform: null,
+      plugin_version: undefined,
+      os_version: null,
+      version_build: undefined,
+      custom_id: null,
+      version_name: undefined,
+      is_prod: undefined,
+      is_emulator: undefined,
+      default_channel: null,
+    } as unknown as DeviceWithoutCreatedAt)).toEqual(REPLICA_DEFAULTS)
+  })
+
+  it.each([null, undefined, ''])('normalizes key_id %j to null', (keyId) => {
+    expect(toComparableDevice(device({ key_id: keyId })).key_id).toBe(null)
+  })
+
+  it('treats a missing key_id field as null (backward compatibility)', () => {
+    const { key_id: _omitted, ...withoutKey } = device()
+    expect(toComparableDevice(withoutKey as DeviceWithoutCreatedAt).key_id).toBe(null)
+  })
+})
+
+describe('toComparableExisting', () => {
+  it('converts an existing device with all fields', () => {
+    expect(toComparableExisting({ ...FULL_FIELDS, install_source: 'app_store', key_id: 'test-key-id' }))
+      .toEqual({ ...FULL_FIELDS, install_source: 'app_store', key_id: 'test-key-id' })
+  })
+
+  it('converts numeric database booleans', () => {
+    const comparable = toComparableExisting({ platform: 'ios', is_prod: 1, is_emulator: 0 })
+    expect(comparable.is_prod).toBe(true)
+    expect(comparable.is_emulator).toBe(false)
+  })
+
+  it('keeps null is_prod and defaults undefined is_emulator to false', () => {
+    const comparable = toComparableExisting({ platform: 'android', is_prod: null, is_emulator: undefined })
+    expect(comparable.is_prod).toBeNull()
+    expect(comparable.is_emulator).toBe(false)
+  })
+
+  it.each([null, undefined])('returns replica defaults for a %s existing device', (existing) => {
+    expect(toComparableExisting(existing)).toEqual(REPLICA_DEFAULTS)
+  })
+
+  it.each(['', undefined])('normalizes existing key_id %j to null', (keyId) => {
+    expect(toComparableExisting({ platform: 'android', key_id: keyId }).key_id).toBe(null)
+  })
+})
+
+describe('hasComparableDeviceChanged', () => {
+  const reported = device({ platform: 'ios', plugin_version: '8.0.0', os_version: '18', version_build: '100', custom_id: '', version_name: 'v1.0.0', is_prod: true, default_channel: 'production' })
+
+  it('compares install_source only when the client reports it', () => {
+    const existing = simulateReplicaStorage({ ...reported, install_source: 'app_store' })
+    expect(hasComparableDeviceChanged(existing, reported)).toBe(false)
+    expect(hasComparableDeviceChanged(existing, { ...reported, install_source: 'testflight' })).toBe(true)
+  })
+
+  it.concurrent('compares country only when the backend reports it', () => {
+    const existing = simulateReplicaStorage({ ...reported, country_code: 'FR' })
+    expect(hasComparableDeviceChanged(existing, reported)).toBe(false)
+    expect(hasComparableDeviceChanged(existing, { ...reported, country_code: 'de' })).toBe(true)
+    expect(buildNormalizedDeviceForWrite({ ...reported, country_code: 'de' }).country_code).toBe('DE')
+  })
+
+  it('returns false when devices are identical', () => {
+    expect(hasComparableDeviceChanged({ ...FULL_FIELDS }, device(FULL_FIELDS))).toBe(false)
+  })
+
+  it.each([
+    ['plugin_version', '1.0.0', '2.0.0', true],
+    ['os_version', '16.0', '17.0', true],
+    ['is_prod', false, true, true],
+    ['is_emulator', false, true, true],
+    ['default_channel', 'production', 'development', true],
+    ['custom_id', 'old-custom', 'new-custom', true],
+    ['platform', 'android', 'ios', true],
+    ['version_build', '100', '101', true],
+    ['version_name', 'v1.0.0', 'v2.0.0', true],
+    ['key_id', null, 'new-encryption-key', true],
+    ['key_id', 'old-encryption-key', null, true],
+    ['key_id', 'key-version-1', 'key-version-2', true],
+    ['key_id', 'same-key', 'same-key', false],
+    ['key_id', null, null, false],
+    ['key_id', '', null, false],
+    ['key_id', undefined, null, false],
+    ['plugin_version', '', null, false],
+    ['plugin_version', undefined, null, false],
+  ] as const)('%s %j -> %j changed=%s', (field, existingValue, deviceValue, expected) => {
+    const existing: DeviceExistingRowLike = { platform: 'android', is_prod: false, is_emulator: false, [field]: existingValue }
+    expect(hasComparableDeviceChanged(existing, device({ [field]: deviceValue }))).toBe(expected)
+  })
+
+  it('treats numeric database booleans as equal to JS booleans', () => {
+    expect(hasComparableDeviceChanged({ platform: 'android', is_prod: 1, is_emulator: 0 }, device({ is_prod: true }))).toBe(false)
+  })
+
+  it('reports a change for a new device (no existing row)', () => {
+    expect(hasComparableDeviceChanged(null, device({ plugin_version: '1.0.0' }))).toBe(true)
+  })
+
+  it('treats all null/undefined/empty fields as equal', () => {
+    const existing: DeviceExistingRowLike = {
+      platform: null,
+      plugin_version: null,
+      os_version: undefined,
+      version_build: '',
+      custom_id: null,
+      version_name: undefined,
+      is_prod: null,
+      is_emulator: undefined,
+      default_channel: '',
+    }
+    expect(hasComparableDeviceChanged(existing, {
+      device_id: 'test-device',
+      app_id: 'test-app',
+      updated_at: new Date().toISOString(),
+      platform: undefined,
+      plugin_version: undefined,
+      os_version: null,
+      version_build: null,
+      custom_id: '',
+      version_name: '',
+      is_prod: null,
+      is_emulator: undefined,
+      default_channel: null,
+    } as unknown as DeviceWithoutCreatedAt)).toBe(false)
+  })
+})
+
+describe('buildNormalizedDeviceForWrite', () => {
+  it('builds the write payload without default_channel, device_id or app_id', () => {
+    const normalized = buildNormalizedDeviceForWrite(device(FULL_FIELDS))
+    const { default_channel: _channel, ...writeFields } = FULL_FIELDS
+    expect(normalized).toEqual({ ...writeFields, key_id: null })
+    expect(normalized).not.toHaveProperty('default_channel')
+    expect(normalized).not.toHaveProperty('device_id')
+    expect(normalized).not.toHaveProperty('app_id')
+  })
+
+  it('normalizes empty strings and applies replica defaults', () => {
+    expect(buildNormalizedDeviceForWrite(device({
+      platform: 'ios',
+      plugin_version: '',
+      os_version: '',
+      version_build: '',
+      custom_id: '',
+      version_name: '',
+    }))).toEqual({
+      version_name: null,
+      platform: 'ios',
+      plugin_version: '',
+      os_version: '',
+      version_build: 'builtin',
+      custom_id: '',
+      is_prod: false,
+      is_emulator: false,
+      key_id: null,
     })
   })
 
-  describe('normalizeDeviceCountryCode', () => {
-    it.concurrent('normalizes valid country codes', () => {
-      expect(normalizeDeviceCountryCode('fr')).toBe('FR')
-      expect(normalizeDeviceCountryCode(' US ')).toBe('US')
-    })
+  it.each([
+    ['encryption-key-456', 'encryption-key-456'],
+    [null, null],
+  ])('writes key_id %j as %j', (keyId, expected) => {
+    expect(buildNormalizedDeviceForWrite(device({ key_id: keyId })).key_id).toBe(expected)
+  })
+})
 
-    it.concurrent('rejects invalid country codes', () => {
-      expect(normalizeDeviceCountryCode(undefined)).toBe(null)
-      expect(normalizeDeviceCountryCode('')).toBe(null)
-      expect(normalizeDeviceCountryCode('USA')).toBe(null)
-      expect(normalizeDeviceCountryCode('1A')).toBe(null)
-    })
+describe('replica write/read cycle', () => {
+  // A device re-reporting the same info after its replica row was written must not trigger another write.
+  it.each([
+    ['null/undefined client values', device({ plugin_version: '1.0.0', os_version: null, version_build: null, custom_id: undefined, version_name: 'v1.0.0', is_prod: true, default_channel: undefined }), {}],
+    ['custom_id empty string then undefined', device({ custom_id: '' }), { custom_id: undefined }],
+    ['a typical production payload', TYPICAL_PROD_DEVICE, {}],
+    ['a typical production payload with key_id', { ...TYPICAL_PROD_DEVICE, key_id: 'prod-encryption-key' }, {}],
+    ['default_channel empty string then undefined', device({ plugin_version: '1.0.0', is_prod: true, default_channel: '' }), { default_channel: undefined }],
+    ['a full device with key_id', device({ ...FULL_FIELDS, key_id: 'my-encryption-key' }), {}],
+    ['key_id null then empty string', device({ plugin_version: '1.0.0', is_prod: true, key_id: null }), { key_id: '' }],
+    ['key_id undefined then null', device({ plugin_version: '1.0.0', is_prod: true, key_id: undefined }), { key_id: null }],
+  ] as const)('does not detect a change for %s', (_name, first, next) => {
+    expect(hasComparableDeviceChanged(simulateReplicaStorage(first), { ...first, ...next })).toBe(false)
   })
 
-  describe('toComparableDevice', () => {
-    it('should convert a device with all fields', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        install_source: 'google_play',
-        default_channel: 'production',
-      }
-
-      const comparable = toComparableDevice(device)
-
-      expect(comparable).toEqual({
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        install_source: 'google_play',
-        default_channel: 'production',
-        key_id: null,
-      })
-    })
-
-    it('should normalize empty strings and apply replica defaults', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        plugin_version: '',
-        os_version: '',
-        version_build: '',
-        custom_id: '',
-        version_name: '',
-        is_prod: false,
-        is_emulator: false,
-        default_channel: '',
-      }
-
-      const comparable = toComparableDevice(device)
-
-      expect(comparable).toEqual({
-        platform: 'ios',
-        plugin_version: '', // replica NOT NULL
-        os_version: '', // replica NOT NULL
-        version_build: 'builtin', // replica DEFAULT 'builtin'
-        custom_id: '', // replica DEFAULT '' NOT NULL
-        version_name: null, // replica NULLABLE
-        is_prod: false,
-        is_emulator: false,
-        default_channel: null, // replica NULLABLE
-        key_id: null,
-      })
-    })
-
-    it('should handle undefined/null fields and apply replica defaults', () => {
-      const device = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        updated_at: new Date().toISOString(),
-        platform: null,
-        plugin_version: undefined,
-        os_version: null,
-        version_build: undefined,
-        custom_id: null,
-        version_name: undefined,
-        is_prod: undefined,
-        is_emulator: undefined,
-        default_channel: null,
-      } as unknown as DeviceWithoutCreatedAt
-
-      const comparable = toComparableDevice(device)
-
-      expect(comparable).toEqual({
-        platform: null,
-        plugin_version: '', // replica NOT NULL
-        os_version: '', // replica NOT NULL
-        version_build: 'builtin', // replica DEFAULT 'builtin'
-        custom_id: '', // replica DEFAULT '' NOT NULL
-        version_name: null, // replica NULLABLE
-        is_prod: false,
-        is_emulator: false,
-        default_channel: null, // replica NULLABLE
-        key_id: null,
-      })
-    })
+  it.each([
+    ['plugin_version upgrade', device({ plugin_version: '6.0.0', is_prod: true }), { plugin_version: '6.1.0' }],
+    ['os_version upgrade', device({ platform: 'ios', os_version: '17.0', is_prod: true }), { os_version: '17.5' }],
+    ['switching from prod to dev', device({ is_prod: true }), { is_prod: false }],
+    ['key_id rotation', device({ plugin_version: '1.0.0', is_prod: true, key_id: 'encryption-key-v1' }), { key_id: 'encryption-key-v2' }],
+  ] as const)('detects %s', (_name, first, next) => {
+    expect(hasComparableDeviceChanged(simulateReplicaStorage(first), { ...first, ...next })).toBe(true)
   })
 
-  describe('toComparableExisting', () => {
-    it('should convert existing device with all fields', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        install_source: 'app_store',
-        default_channel: 'production',
-      }
-
-      const comparable = toComparableExisting(existing)
-
-      expect(comparable).toEqual({
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        install_source: 'app_store',
-        default_channel: 'production',
-        key_id: null,
-      })
-    })
-
-    it('should handle numeric is_prod and is_emulator (database format)', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'ios',
-        is_prod: 1,
-        is_emulator: 0,
-      }
-
-      const comparable = toComparableExisting(existing)
-
-      expect(comparable.is_prod).toBe(true)
-      expect(comparable.is_emulator).toBe(false)
-    })
-
-    it('should handle null/undefined for booleans', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        is_prod: null,
-        is_emulator: undefined,
-      }
-
-      const comparable = toComparableExisting(existing)
-
-      expect(comparable.is_prod).toBeNull()
-      expect(comparable.is_emulator).toBe(false)
-    })
-
-    it('should handle null existing device with replica defaults', () => {
-      const comparable = toComparableExisting(null)
-
-      expect(comparable).toEqual({
-        platform: null,
-        plugin_version: '', // replica NOT NULL
-        os_version: '', // replica NOT NULL
-        version_build: 'builtin', // replica DEFAULT 'builtin'
-        custom_id: '', // replica DEFAULT '' NOT NULL
-        version_name: null, // replica NULLABLE
-        is_prod: false,
-        is_emulator: false,
-        default_channel: null, // replica NULLABLE
-        key_id: null,
-      })
-    })
-
-    it('should handle undefined existing device with replica defaults', () => {
-      const comparable = toComparableExisting(undefined)
-
-      expect(comparable).toEqual({
-        platform: null,
-        plugin_version: '', // replica NOT NULL
-        os_version: '', // replica NOT NULL
-        version_build: 'builtin', // replica DEFAULT 'builtin'
-        custom_id: '', // replica DEFAULT '' NOT NULL
-        version_name: null, // replica NULLABLE
-        is_prod: false,
-        is_emulator: false,
-        default_channel: null, // replica NULLABLE
-        key_id: null,
-      })
-    })
-  })
-
-  describe('hasComparableDeviceChanged', () => {
-    it('should compare install_source only when the client reports it', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        plugin_version: '8.0.0',
-        os_version: '18',
-        version_build: '100',
-        custom_id: '',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-      const existing = simulateReplicaStorage({
-        ...device,
-        install_source: 'app_store',
-      })
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-      expect(hasComparableDeviceChanged(existing, { ...device, install_source: 'testflight' })).toBe(true)
-    })
-
-    it.concurrent('should compare country only when the backend reports it', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        plugin_version: '8.0.0',
-        os_version: '18',
-        version_build: '100',
-        custom_id: '',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-      const existing = simulateReplicaStorage({
-        ...device,
-        country_code: 'FR',
-      })
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-      expect(hasComparableDeviceChanged(existing, { ...device, country_code: 'de' })).toBe(true)
-      expect(buildNormalizedDeviceForWrite({ ...device, country_code: 'de' }).country_code).toBe('DE')
-    })
-    it('should return false when devices are identical', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-    })
-
-    it('should return true when plugin_version changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        plugin_version: '1.0.0',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '2.0.0',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should return true when os_version changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'ios',
-        os_version: '16.0',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        os_version: '17.0',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should return true when is_prod changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        is_prod: true,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should return true when is_emulator changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        is_prod: false,
-        is_emulator: true,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should handle numeric boolean conversion from database', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        is_prod: 1, // Database numeric boolean
-        is_emulator: 0,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        is_prod: true, // JavaScript boolean
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-    })
-
-    it('should return false when empty string equals null', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        plugin_version: '',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: null,
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-    })
-
-    it('should return false when undefined equals null', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        plugin_version: undefined,
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: null,
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-    })
-
-    it('should handle null existing device (new device)', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      // Should return true because plugin_version is different (null vs '1.0.0')
-      expect(hasComparableDeviceChanged(null, device)).toBe(true)
-    })
-
-    it('should handle default_channel changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        default_channel: 'production',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        default_channel: 'development',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should handle custom_id changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        custom_id: 'old-custom',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        custom_id: 'new-custom',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should handle platform changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should handle version_build changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        version_build: '100',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        version_build: '101',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should handle version_name changes', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: 'android',
-        version_name: 'v1.0.0',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        version_name: 'v2.0.0',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-    })
-
-    it('should handle edge case: all fields null/undefined/empty', () => {
-      const existing: DeviceExistingRowLike = {
-        platform: null,
-        plugin_version: null,
-        os_version: undefined,
-        version_build: '',
-        custom_id: null,
-        version_name: undefined,
-        is_prod: null,
-        is_emulator: undefined,
-        default_channel: '',
-      }
-
-      const device = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        updated_at: new Date().toISOString(),
-        platform: undefined,
-        plugin_version: undefined,
-        os_version: null,
-        version_build: null,
-        custom_id: '',
-        version_name: '',
-        is_prod: null,
-        is_emulator: undefined,
-        default_channel: null,
-      } as unknown as DeviceWithoutCreatedAt
-
-      expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-    })
-  })
-
-  describe('buildNormalizedDeviceForWrite', () => {
-    it('should build normalized device with all fields', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-
-      const normalized = buildNormalizedDeviceForWrite(device)
-
-      expect(normalized).toEqual({
-        version_name: 'v1.0.0',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: '14',
-        version_build: '100',
-        custom_id: 'custom-123',
-        is_prod: true,
-        is_emulator: false,
-        key_id: null,
-      })
-    })
-
-    it('should normalize empty strings and apply replica defaults', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        plugin_version: '',
-        os_version: '',
-        version_build: '',
-        custom_id: '',
-        version_name: '',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const normalized = buildNormalizedDeviceForWrite(device)
-
-      expect(normalized).toEqual({
-        version_name: null, // replica NULLABLE
-        platform: 'ios',
-        plugin_version: '', // replica NOT NULL
-        os_version: '', // replica NOT NULL
-        version_build: 'builtin', // replica DEFAULT 'builtin'
-        custom_id: '', // replica DEFAULT '' NOT NULL
-        is_prod: false,
-        is_emulator: false,
-        key_id: null,
-      })
-    })
-
-    it('should not include default_channel in write data', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        default_channel: 'production',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const normalized = buildNormalizedDeviceForWrite(device)
-
-      expect(normalized).not.toHaveProperty('default_channel')
-    })
-
-    it('should not include device_id and app_id in write data', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const normalized = buildNormalizedDeviceForWrite(device)
-
-      expect(normalized).not.toHaveProperty('device_id')
-      expect(normalized).not.toHaveProperty('app_id')
-    })
-  })
-
-  describe('replica write/read cycle simulation - real world scenarios', () => {
-    it('should NOT detect change after replica write/read cycle with null values', () => {
-      // Initial device from client with null/undefined values
-      const deviceFromClient: DeviceWithoutCreatedAt = {
-        device_id: 'test-device-1',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: null, // Client sends null
-        version_build: null,
-        custom_id: undefined, // Client doesn't send
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: undefined, // Client doesn't send
-      }
-
-      // Simulate what the replica stores (based on cloudflare.ts lines 167-181)
-      const storedInReplica = simulateReplicaStorage(deviceFromClient)
-
-      // Next request: same device from client
-      const deviceFromClientAgain: DeviceWithoutCreatedAt = {
-        device_id: 'test-device-1',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        os_version: null,
-        version_build: null,
-        custom_id: undefined,
-        version_name: 'v1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: undefined,
-      }
-
-      // This should be FALSE (no change) to avoid unnecessary writes
-      const changed = hasComparableDeviceChanged(storedInReplica, deviceFromClientAgain)
-      expect(changed).toBe(false)
-    })
-
-    it('should NOT detect change when custom_id is empty string vs undefined', () => {
-      const deviceFromClient: DeviceWithoutCreatedAt = {
-        device_id: 'test-device-2',
-        app_id: 'test-app',
-        platform: 'android',
-        custom_id: '', // Empty string
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      const storedInReplica = simulateReplicaStorage(deviceFromClient)
-
-      // Next request with undefined
-      const deviceAgain: DeviceWithoutCreatedAt = {
-        device_id: 'test-device-2',
-        app_id: 'test-app',
-        platform: 'android',
-        custom_id: undefined,
-        is_prod: false,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(storedInReplica, deviceAgain)).toBe(false)
-    })
-
-    it('should NOT detect change with typical production device payload', () => {
-      // Typical real-world device payload from Capacitor plugin
-      const typicalDevice: DeviceWithoutCreatedAt = {
-        device_id: '12345-abcde',
-        app_id: 'com.example.app',
-        platform: 'ios',
-        plugin_version: '6.3.3',
-        os_version: '17.5.1',
-        version_build: '1.0.0',
-        custom_id: '',
-        version_name: '1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-
-      const storedInReplica = simulateReplicaStorage(typicalDevice)
-
-      // Same device on next update check
-      const sameDeviceAgain: DeviceWithoutCreatedAt = {
-        device_id: '12345-abcde',
-        app_id: 'com.example.app',
-        platform: 'ios',
-        plugin_version: '6.3.3',
-        os_version: '17.5.1',
-        version_build: '1.0.0',
-        custom_id: '',
-        version_name: '1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-
-      expect(hasComparableDeviceChanged(storedInReplica, sameDeviceAgain)).toBe(false)
-    })
-
-    it('should DETECT change when plugin_version actually changes', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '6.0.0',
-        is_prod: true,
-        is_emulator: false,
-      }
-
-      const storedInReplica = simulateReplicaStorage(device)
-
-      // Plugin updated
-      const updatedDevice: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '6.1.0', // Changed!
-        is_prod: true,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(storedInReplica, updatedDevice)).toBe(true)
-    })
-
-    it('should DETECT change when os_version changes', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        os_version: '17.0',
-        is_prod: true,
-        is_emulator: false,
-      }
-
-      const storedInReplica = simulateReplicaStorage(device)
-
-      // OS updated
-      const updatedDevice: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'ios',
-        os_version: '17.5', // Changed!
-        is_prod: true,
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(storedInReplica, updatedDevice)).toBe(true)
-    })
-
-    it('should DETECT change when switching from prod to dev', () => {
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        is_prod: true,
-        is_emulator: false,
-      }
-
-      const storedInReplica = simulateReplicaStorage(device)
-
-      // Switched to dev build
-      const devDevice: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        is_prod: false, // Changed!
-        is_emulator: false,
-      }
-
-      expect(hasComparableDeviceChanged(storedInReplica, devDevice)).toBe(true)
-    })
-
-    it('should expose bug: default_channel empty string vs null causes false positive', () => {
-      // This test exposes the bug in cloudflare.ts line 180
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: '', // Empty string from client
-      }
-
-      const storedInReplica = simulateReplicaStorage(device)
-      // replica stores: default_channel = '' (from device.default_channel ?? null)
-
-      // Next request: undefined
-      const deviceAgain: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: undefined, // undefined from client
-      }
-
-      // What gets stored: undefined ?? null = null
-      // But replica has '' from first write
-      // Comparison: toComparableExisting('') = null, toComparableDevice(undefined) = null
-      // Should be FALSE (no change)
-
-      const changed = hasComparableDeviceChanged(storedInReplica, deviceAgain)
-
-      // BUG: This might be TRUE because:
-      // storedInReplica.default_channel = '' (from device.default_channel ?? null when device had '')
-      // But when compared, both normalize to null, so should be false
-      expect(changed).toBe(false)
-    })
-  })
-
-  describe('key_id field tests', () => {
-    describe('device tracking with key_id present', () => {
-      it('should include key_id in comparable device', () => {
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: 'encryption-key-123',
-        }
-
-        const comparable = toComparableDevice(device)
-
-        expect(comparable.key_id).toBe('encryption-key-123')
-      })
-
-      it('should include key_id in normalized device for write', () => {
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: 'encryption-key-456',
-        }
-
-        const normalized = buildNormalizedDeviceForWrite(device)
-
-        expect(normalized.key_id).toBe('encryption-key-456')
-      })
-
-      it('should track devices with key_id correctly', () => {
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'device-with-key',
-          app_id: 'test-app',
-          platform: 'ios',
-          plugin_version: '2.0.0',
-          os_version: '17.0',
-          version_build: '200',
-          custom_id: 'custom-abc',
-          version_name: 'v2.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-          key_id: 'my-encryption-key',
-        }
-
-        const comparable = toComparableDevice(device)
-
-        expect(comparable).toEqual({
-          platform: 'ios',
-          plugin_version: '2.0.0',
-          os_version: '17.0',
-          version_build: '200',
-          custom_id: 'custom-abc',
-          version_name: 'v2.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-          key_id: 'my-encryption-key',
-        })
-      })
-    })
-
-    describe('device tracking with key_id null/missing (backward compatibility)', () => {
-      it('should handle null key_id', () => {
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        const comparable = toComparableDevice(device)
-
-        expect(comparable.key_id).toBe(null)
-      })
-
-      it('should handle undefined key_id', () => {
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: undefined,
-        }
-
-        const comparable = toComparableDevice(device)
-
-        expect(comparable.key_id).toBe(null)
-      })
-
-      it('should handle empty string key_id', () => {
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: '',
-        }
-
-        const comparable = toComparableDevice(device)
-
-        expect(comparable.key_id).toBe(null)
-      })
-
-      it('should handle missing key_id field (backward compatibility)', () => {
-        const device = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          // key_id is not present at all
-        } as DeviceWithoutCreatedAt
-
-        const comparable = toComparableDevice(device)
-
-        expect(comparable.key_id).toBe(null)
-      })
-
-      it('should normalize device for write with null key_id', () => {
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        const normalized = buildNormalizedDeviceForWrite(device)
-
-        expect(normalized.key_id).toBe(null)
-      })
-    })
-
-    describe('device change detection includes key_id changes', () => {
-      it('should detect change when key_id is added', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: 'new-encryption-key',
-        }
-
-        expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-      })
-
-      it('should detect change when key_id is removed', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: 'old-encryption-key',
-        }
-
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-      })
-
-      it('should detect change when key_id value changes', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: 'key-version-1',
-        }
-
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: 'key-version-2',
-        }
-
-        expect(hasComparableDeviceChanged(existing, device)).toBe(true)
-      })
-
-      it('should NOT detect change when key_id remains the same', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: 'same-key',
-        }
-
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: 'same-key',
-        }
-
-        expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-      })
-
-      it('should NOT detect change when key_id is null in both', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-      })
-
-      it('should handle key_id normalization (empty string vs null)', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: '', // Empty string
-        }
-
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: null, // null
-        }
-
-        // Both normalize to null, so no change
-        expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-      })
-
-      it('should handle key_id normalization (undefined vs null)', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: undefined, // undefined
-        }
-
-        const device: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: false,
-          is_emulator: false,
-          key_id: null, // null
-        }
-
-        // Both normalize to null, so no change
-        expect(hasComparableDeviceChanged(existing, device)).toBe(false)
-      })
-    })
-
-    describe('replica write/read cycle simulation with key_id', () => {
-      it('should NOT detect change after replica write/read cycle with key_id', () => {
-        const deviceFromClient: DeviceWithoutCreatedAt = {
-          device_id: 'test-device-key',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          os_version: '14',
-          version_build: '100',
-          custom_id: 'custom-123',
-          version_name: 'v1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-          key_id: 'my-encryption-key',
-        }
-
-        // Simulate replica storage
-        const storedInReplica = simulateReplicaStorage(deviceFromClient)
-
-        // Next request: same device
-        const deviceFromClientAgain: DeviceWithoutCreatedAt = {
-          device_id: 'test-device-key',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          os_version: '14',
-          version_build: '100',
-          custom_id: 'custom-123',
-          version_name: 'v1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-          key_id: 'my-encryption-key',
-        }
-
-        const changed = hasComparableDeviceChanged(storedInReplica, deviceFromClientAgain)
-        expect(changed).toBe(false)
-      })
-
-      it('should NOT detect change when key_id transitions from null to empty string', () => {
-        const deviceFromClient: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        const storedInReplica = simulateReplicaStorage(deviceFromClient)
-
-        // Next request with empty string
-        const deviceAgain: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: '',
-        }
-
-        expect(hasComparableDeviceChanged(storedInReplica, deviceAgain)).toBe(false)
-      })
-
-      it('should NOT detect change when key_id transitions from undefined to null', () => {
-        const deviceFromClient: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: undefined,
-        }
-
-        const storedInReplica = simulateReplicaStorage(deviceFromClient)
-
-        // Next request with null
-        const deviceAgain: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: null,
-        }
-
-        expect(hasComparableDeviceChanged(storedInReplica, deviceAgain)).toBe(false)
-      })
-
-      it('should DETECT change when key_id rotates', () => {
-        const deviceFromClient: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: 'encryption-key-v1',
-        }
-
-        const storedInReplica = simulateReplicaStorage(deviceFromClient)
-
-        // Key rotation happens
-        const deviceAfterRotation: DeviceWithoutCreatedAt = {
-          device_id: 'test-device',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          key_id: 'encryption-key-v2',
-        }
-
-        expect(hasComparableDeviceChanged(storedInReplica, deviceAfterRotation)).toBe(true)
-      })
-
-      it('should handle typical production device with key_id', () => {
-        const typicalDevice: DeviceWithoutCreatedAt = {
-          device_id: '12345-abcde',
-          app_id: 'com.example.app',
-          platform: 'ios',
-          plugin_version: '6.3.3',
-          os_version: '17.5.1',
-          version_build: '1.0.0',
-          custom_id: '',
-          version_name: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-          key_id: 'prod-encryption-key',
-        }
-
-        const storedInReplica = simulateReplicaStorage(typicalDevice)
-
-        // Same device on next update check
-        const sameDeviceAgain: DeviceWithoutCreatedAt = {
-          device_id: '12345-abcde',
-          app_id: 'com.example.app',
-          platform: 'ios',
-          plugin_version: '6.3.3',
-          os_version: '17.5.1',
-          version_build: '1.0.0',
-          custom_id: '',
-          version_name: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-          key_id: 'prod-encryption-key',
-        }
-
-        expect(hasComparableDeviceChanged(storedInReplica, sameDeviceAgain)).toBe(false)
-      })
-    })
-
-    describe('toComparableExisting with key_id', () => {
-      it('should handle existing device with key_id', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          plugin_version: '1.0.0',
-          os_version: '14',
-          version_build: '100',
-          custom_id: 'custom-123',
-          version_name: 'v1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-          key_id: 'test-key-id',
-        }
-
-        const comparable = toComparableExisting(existing)
-
-        expect(comparable.key_id).toBe('test-key-id')
-      })
-
-      it('should handle null existing device with key_id field', () => {
-        const comparable = toComparableExisting(null)
-
-        expect(comparable.key_id).toBe(null)
-      })
-
-      it('should handle undefined existing device with key_id field', () => {
-        const comparable = toComparableExisting(undefined)
-
-        expect(comparable.key_id).toBe(null)
-      })
-
-      it('should normalize empty string key_id to null', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          key_id: '',
-        }
-
-        const comparable = toComparableExisting(existing)
-
-        expect(comparable.key_id).toBe(null)
-      })
-
-      it('should normalize undefined key_id to null', () => {
-        const existing: DeviceExistingRowLike = {
-          platform: 'android',
-          key_id: undefined,
-        }
-
-        const comparable = toComparableExisting(existing)
-
-        expect(comparable.key_id).toBe(null)
-      })
-    })
-
-    it('should handle replica NOT NULL constraints correctly', () => {
-      // storage requires plugin_version, os_version, custom_id as NOT NULL
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'test-device',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: null,
-        os_version: null,
-        default_channel: null,
-        is_prod: true,
-        is_emulator: false,
-      }
-
-      const storedInReplica = simulateReplicaStorage(device)
-
-      // storage schema: plugin_version & os_version are NOT NULL → ''
-      // storage schema: custom_id is NOT NULL, default_channel is NULLABLE → null
-      expect(storedInReplica.plugin_version).toBe('')
-      expect(storedInReplica.os_version).toBe('')
-      expect(storedInReplica.default_channel).toBe(null)
-    })
-
-    it('should handle typical update check scenario without false positives', () => {
-      // Device makes 100 update checks with same info
-      const device: DeviceWithoutCreatedAt = {
-        device_id: 'frequent-checker',
-        app_id: 'test-app',
-        platform: 'android',
-        plugin_version: '6.3.3',
-        os_version: '14',
-        version_build: '1.0.0',
-        custom_id: '',
-        version_name: '1.0.0',
-        is_prod: true,
-        is_emulator: false,
-        default_channel: 'production',
-      }
-
-      // First write
-      const storedInReplica = simulateReplicaStorage(device)
-
-      // Next 99 requests should NOT trigger writes
-      for (let i = 0; i < 99; i++) {
-        const sameDevice: DeviceWithoutCreatedAt = {
-          device_id: 'frequent-checker',
-          app_id: 'test-app',
-          platform: 'android',
-          plugin_version: '6.3.3',
-          os_version: '14',
-          version_build: '1.0.0',
-          custom_id: '',
-          version_name: '1.0.0',
-          is_prod: true,
-          is_emulator: false,
-          default_channel: 'production',
-        }
-
-        const changed = hasComparableDeviceChanged(storedInReplica, sameDevice)
-        expect(changed).toBe(false) // Should NEVER trigger write
-      }
-    })
+  it('stores NOT NULL replica columns as empty strings and default_channel as null', () => {
+    const stored = simulateReplicaStorage(device({ plugin_version: null, os_version: null, default_channel: null, is_prod: true }))
+    expect(stored.plugin_version).toBe('')
+    expect(stored.os_version).toBe('')
+    expect(stored.default_channel).toBe(null)
   })
 })
 
 describe('canSkipDeviceInfoWrite (trackDevicesCF colo cache)', () => {
-  const device: DeviceWithoutCreatedAt = {
+  const cachedDevice = device({
     device_id: 'cache-device',
     app_id: 'com.example.cache',
     platform: 'ios',
@@ -1519,56 +335,51 @@ describe('canSkipDeviceInfoWrite (trackDevicesCF colo cache)', () => {
     custom_id: '',
     version_name: '2.0.0',
     is_prod: true,
-    is_emulator: false,
     default_channel: 'production',
-  }
+  })
   const nowMs = Date.parse('2026-09-30T12:00:00.000Z')
+  const ttlMs = DEVICE_INFO_REFRESH_TTL_SECONDS * 1000
 
   function cachedAt(ageMs: number, overrides: Partial<DeviceWithoutCreatedAt> = {}): DeviceInfoWriteCachePayload {
     return {
-      ...toComparableDevice({ ...device, ...overrides }),
-      app_id: device.app_id,
-      device_id: device.device_id,
+      ...toComparableDevice({ ...cachedDevice, ...overrides }),
+      app_id: cachedDevice.app_id,
+      device_id: cachedDevice.device_id,
       cached_at: new Date(nowMs - ageMs).toISOString(),
     }
   }
 
-  it('uses a one day refresh TTL', () => {
-    expect(DEVICE_INFO_REFRESH_TTL_SECONDS).toBe(86400)
-  })
-
   it('skips the write for an unchanged device written recently', () => {
-    expect(canSkipDeviceInfoWrite(cachedAt(60_000), device, nowMs)).toBe(true)
-    expect(canSkipDeviceInfoWrite(cachedAt(DEVICE_INFO_REFRESH_TTL_SECONDS * 1000 - 1), device, nowMs)).toBe(true)
+    expect(canSkipDeviceInfoWrite(cachedAt(60_000), cachedDevice, nowMs)).toBe(true)
+    expect(canSkipDeviceInfoWrite(cachedAt(ttlMs - 1), cachedDevice, nowMs)).toBe(true)
   })
 
   it('forces a write when there is no cache entry', () => {
-    expect(canSkipDeviceInfoWrite(null, device, nowMs)).toBe(false)
-    expect(canSkipDeviceInfoWrite(undefined, device, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite(null, cachedDevice, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite(undefined, cachedDevice, nowMs)).toBe(false)
   })
 
-  it('forces a refresh once the last write is older than the TTL, even if unchanged', () => {
-    expect(canSkipDeviceInfoWrite(cachedAt(DEVICE_INFO_REFRESH_TTL_SECONDS * 1000), device, nowMs)).toBe(false)
+  it('forces a refresh once the last write is older than the one-day TTL, even if unchanged', () => {
+    expect(canSkipDeviceInfoWrite(cachedAt(ttlMs), cachedDevice, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite(cachedAt(24 * 60 * 60 * 1000), cachedDevice, nowMs)).toBe(false)
     // Entries written under the previous one-year cache max-age.
-    expect(canSkipDeviceInfoWrite(cachedAt(200 * 24 * 60 * 60 * 1000), device, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite(cachedAt(200 * 24 * 60 * 60 * 1000), cachedDevice, nowMs)).toBe(false)
   })
 
   it('forces a write when the device changed (for example a rollback)', () => {
-    expect(canSkipDeviceInfoWrite(cachedAt(60_000, { version_name: '1.0.0' }), device, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite(cachedAt(60_000, { version_name: '1.0.0' }), cachedDevice, nowMs)).toBe(false)
   })
 
   it('forces a write for missing, invalid or future write timestamps', () => {
     const entry = cachedAt(60_000)
-    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: 'not-a-date' }, device, nowMs)).toBe(false)
-    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: undefined as unknown as string }, device, nowMs)).toBe(false)
-    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: new Date(nowMs + 60_000).toISOString() }, device, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: 'not-a-date' }, cachedDevice, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: undefined as unknown as string }, cachedDevice, nowMs)).toBe(false)
+    expect(canSkipDeviceInfoWrite({ ...entry, cached_at: new Date(nowMs + 60_000).toISOString() }, cachedDevice, nowMs)).toBe(false)
   })
 
   it('keeps the plugin_runtime copy in sync', () => {
-    const entry = cachedAt(60_000)
-    const stale = cachedAt(DEVICE_INFO_REFRESH_TTL_SECONDS * 1000 + 1)
     expect(pluginRuntimeDeviceComparison.DEVICE_INFO_REFRESH_TTL_SECONDS).toBe(DEVICE_INFO_REFRESH_TTL_SECONDS)
-    expect(pluginRuntimeDeviceComparison.canSkipDeviceInfoWrite(entry, device, nowMs)).toBe(true)
-    expect(pluginRuntimeDeviceComparison.canSkipDeviceInfoWrite(stale, device, nowMs)).toBe(false)
+    expect(pluginRuntimeDeviceComparison.canSkipDeviceInfoWrite(cachedAt(60_000), cachedDevice, nowMs)).toBe(true)
+    expect(pluginRuntimeDeviceComparison.canSkipDeviceInfoWrite(cachedAt(ttlMs + 1), cachedDevice, nowMs)).toBe(false)
   })
 })

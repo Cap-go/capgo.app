@@ -4,8 +4,17 @@ import { requireEnterprisePlan } from '../supabase/functions/_backend/utils/plan
 
 const mocks = vi.hoisted(() => ({ single: vi.fn(), subscription: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: () => ({ from: () => ({ select: () => ({ eq: () => ({ single: mocks.single }), or: () => ({ single: mocks.single }) }) }) }),
   getCurrentPlanNameOrg: vi.fn(),
+}))
+// mocks.single answers each lookup in order with a supabase-js style `{ data }`.
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  servicePrincipal: { kind: 'service' },
+  withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => Promise<unknown>) => run({
+    query: async () => {
+      const { data } = await mocks.single()
+      return { rows: data ? [data] : [] }
+    },
+  }),
 }))
 vi.mock('../supabase/functions/_backend/utils/stripe.ts', () => ({ getSubscriptionData: mocks.subscription, planProductIdOrFilter: (productId: string) => `stripe_id.eq.${productId},stripe_id_us.eq.${productId}` }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: vi.fn() }))
@@ -14,7 +23,7 @@ const paidPlan = { status: 'succeeded', is_good_plan: true, product_id: 'enterpr
 
 beforeEach(() => {
   vi.resetAllMocks()
-  mocks.subscription.mockResolvedValue({ status: 'active', productId: 'enterprise-product' })
+  mocks.subscription.mockResolvedValue({ ok: true, data: { status: 'active', productId: 'enterprise-product' } })
 })
 function billing(info: Partial<Omit<typeof paidPlan, 'paid_at' | 'past_due_at'> & { paid_at: string | null, past_due_at: string | null }>, plan = 'Enterprise') {
   mocks.single.mockResolvedValueOnce({ data: { customer_id: 'customer-id' } })
@@ -40,13 +49,13 @@ describe('paid Enterprise feature gating', () => {
 
   it.each(['trialing', 'past_due', 'canceled', 'incomplete', undefined])('rejects a live subscription with status %s', async (status) => {
     billing({})
-    mocks.subscription.mockResolvedValueOnce(status ? { status, productId: 'enterprise-product' } : null)
+    mocks.subscription.mockResolvedValueOnce(status ? { ok: true, data: { status, productId: 'enterprise-product' } } : { ok: false, reason: 'not_found' })
     await expect(requireEnterprisePlan(context, 'org-id', 'Custom domains', true)).rejects.toMatchObject({ status: 403 })
   })
 
   it('rejects a stale Enterprise billing row when the live subscription has another product', async () => {
     billing({})
-    mocks.subscription.mockResolvedValueOnce({ status: 'active', productId: 'team-product' })
+    mocks.subscription.mockResolvedValueOnce({ ok: true, data: { status: 'active', productId: 'team-product' } })
     await expect(requireEnterprisePlan(context, 'org-id', 'Custom domains', true)).rejects.toMatchObject({ status: 403 })
   })
 

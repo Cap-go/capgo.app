@@ -14,15 +14,15 @@
 import type { PastDueStatus } from '~/services/stripe'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { toast } from 'vue-sonner'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
-import { getFormatLocale } from '~/services/formatLocale'
+import CardFormModal from '~/components/billing/CardFormModal.vue'
+import { getLocalConfig, stripeEnabled } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
 import { pushEvent } from '~/services/posthog'
-import { getPastDueStatus, openBlank, openPortal } from '~/services/stripe'
-import { getLocalConfig, stripeEnabled } from '~/services/supabase'
+import { formatStripeAmount, getPastDueStatus, payOpenInvoice } from '~/services/stripe'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
-import { stripeAmountToMajorUnits } from '../../../supabase/functions/shared/stripe-amount.ts'
 
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
@@ -30,6 +30,9 @@ const config = getLocalConfig()
 const hideExternalPurchaseFlows = isNativeAppStoreContext()
 
 const pastDue = ref<PastDueStatus | null>(null)
+const isPaying = ref(false)
+// setup: save a new card then retry. invoice: pay the invoice with a new card directly.
+const cardModalMode = ref<'setup' | 'invoice' | null>(null)
 let lookupRun = 0
 
 const currentOrg = computed(() => organizationStore.currentOrganization)
@@ -52,7 +55,7 @@ watch([orgId, () => !!stripeEnabled.value], async ([id, enabled]) => {
     return
   pastDue.value = status
   if (status?.past_due) {
-    pushEvent('past_due_banner_shown', config.supaHost, {
+    pushEvent('past_due_banner_shown', config.apiHost, {
       org_id: id,
       attempt_count: status.invoice?.attempt_count ?? 0,
     })
@@ -62,34 +65,61 @@ watch([orgId, () => !!stripeEnabled.value], async ([id, enabled]) => {
 const invoice = computed(() => pastDue.value?.invoice ?? null)
 const showBanner = computed(() => !!pastDue.value?.past_due)
 
-const formattedAmount = computed(() => {
-  const value = invoice.value
-  if (!value)
-    return ''
-  try {
-    return new Intl.NumberFormat(getFormatLocale(), { style: 'currency', currency: value.currency.toUpperCase() })
-      .format(stripeAmountToMajorUnits(value.amount_due, value.currency))
-  }
-  catch {
-    return `${stripeAmountToMajorUnits(value.amount_due, value.currency)} ${value.currency.toUpperCase()}`
-  }
-})
+const formattedAmount = computed(() => invoice.value ? formatStripeAmount(invoice.value.amount_due, invoice.value.currency) : '')
 
 const message = computed(() => formattedAmount.value
   ? t('past-due-banner-message-amount', { amount: formattedAmount.value })
   : t('past-due-banner-message'))
 
-async function payNow() {
-  const url = invoice.value?.hosted_invoice_url
-  if (!url)
-    return
-  pushEvent('past_due_banner_pay_clicked', config.supaHost, { org_id: orgId.value })
-  await openBlank(url)
+async function onPaid() {
+  pastDue.value = null
+  const id = orgId.value
+  await organizationStore.fetchOrganizations()
+  if (id)
+    organizationStore.setCurrentOrganization(id)
 }
 
-async function updateCard() {
-  pushEvent('past_due_banner_update_card_clicked', config.supaHost, { org_id: orgId.value })
-  await openPortal(orgId.value, t)
+// Retry with the saved card first; fall back to entering a new card in place.
+async function retryPayment() {
+  isPaying.value = true
+  try {
+    const result = await payOpenInvoice(orgId.value)
+    if (result.status === 'paid') {
+      toast.success(t('billing-invoice-paid'))
+      await onPaid()
+      return
+    }
+    toast.error(result.message || t('billing-payment-failed'))
+    cardModalMode.value = 'invoice'
+  }
+  catch (error) {
+    console.error('Cannot pay past-due invoice', error)
+    toast.error(t('billing-payment-failed'))
+  }
+  finally {
+    isPaying.value = false
+  }
+}
+
+async function payNow() {
+  if (isPaying.value)
+    return
+  pushEvent('past_due_banner_pay_clicked', config.apiHost, { org_id: orgId.value })
+  await retryPayment()
+}
+
+function updateCard() {
+  pushEvent('past_due_banner_update_card_clicked', config.apiHost, { org_id: orgId.value })
+  cardModalMode.value = 'setup'
+}
+
+async function onCardSaved() {
+  const mode = cardModalMode.value
+  cardModalMode.value = null
+  if (mode === 'invoice')
+    await onPaid()
+  else if (invoice.value)
+    await retryPayment()
 }
 </script>
 
@@ -121,14 +151,24 @@ async function updateCard() {
         {{ t('past-due-banner-update-card') }}
       </button>
       <button
-        v-if="invoice?.hosted_invoice_url"
+        v-if="invoice"
         type="button"
         class="d-btn d-btn-sm d-btn-warning text-black"
+        :disabled="isPaying"
         data-test="past-due-pay-now"
         @click="payNow"
       >
+        <span v-if="isPaying" class="d-loading d-loading-spinner d-loading-xs" />
         {{ t('past-due-banner-pay-now') }}
       </button>
     </div>
+    <CardFormModal
+      v-if="cardModalMode"
+      :org-id="orgId"
+      :mode="cardModalMode"
+      :amount-label="formattedAmount"
+      @close="cardModalMode = null"
+      @saved="onCardSaved"
+    />
   </aside>
 </template>

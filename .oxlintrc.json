@@ -10,12 +10,12 @@
     "public/**",
     "supabase/functions/_script/**",
     "**/supabase.types*",
+    "**/database.types*",
     "supabase/functions/_backend/scripts/**",
     "CHANGELOG.md",
     "src/services/posthog.ts",
     "cli/dist/**",
-    "cli/test/**",
-    "cli/src/types/supabase.types.ts"
+    "cli/test/**"
   ],
   "rules": {
     "no-debugger": "off"

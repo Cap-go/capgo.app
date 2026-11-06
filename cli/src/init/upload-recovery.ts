@@ -2,9 +2,9 @@ import { resolve } from 'node:path'
 import { shellQuotePath } from '../app/info'
 import { formatRunnerCommand } from '../runner-command'
 
-export const MONOREPO_ROOT_PATHS_NOTE = 'These must be the monorepo/workspace root paths — the workspace package.json and the hoisted node_modules folder — not the app package under apps/ or packages/.'
+export const MONOREPO_ROOT_PATHS_NOTE = 'Use the Capacitor app package.json, not the workspace manifest. Dependencies resolve from app-local and hoisted node_modules automatically; provide explicit paths only to override discovery.'
 
-export const MONOREPO_UPLOAD_RETRY_HINT = 'If this app lives in a monorepo, retry the upload with the monorepo root package.json and the monorepo root node_modules paths (not the app package folder).'
+export const MONOREPO_UPLOAD_RETRY_HINT = 'If this app lives in a monorepo, verify the selected app directory and its package.json before installing dependencies. Hoisted node_modules are discovered automatically.'
 
 export type BundleUploadRecoveryChoice = 'retry' | 'retry-with-monorepo-paths'
 
@@ -13,8 +13,8 @@ export function getBundleUploadFailureRecoveryOptions(): { value: BundleUploadRe
     { value: 'retry', label: 'Retry bundle upload' },
     {
       value: 'retry-with-monorepo-paths',
-      label: 'Provide monorepo root package.json and node_modules paths, then retry',
-      hint: 'Workspace root, not the app package folder',
+      label: 'Provide app package.json and dependency paths, then retry',
+      hint: 'App manifest; app-local or hoisted node_modules',
     },
   ]
 }

@@ -67,10 +67,10 @@ vi.mock('~/services/apikeys', async (importOriginal) => {
   }
 })
 vi.mock('~/services/onboardingTracking', () => ({ sendOnboardingEvent: vi.fn() }))
-vi.mock('~/services/supabase', () => ({
-  getLocalConfig: () => ({ supaHost: 'https://sb.capgo.app', supaKey: 'anon-key' }),
+vi.mock('~/services/console', () => ({
+  getLocalConfig: () => ({ apiHost: 'https://api.capgo.app' }),
   isLocal: () => false,
-  useSupabase: () => {
+  useConsole: () => {
     const query = {
       eq: () => query,
       maybeSingle: async () => ({ data: null, error: null }),
@@ -148,8 +148,6 @@ async function reachIconStep(container: Element) {
   await nextTick()
 
   await click(container, '[data-test="app-onboarding-continue"]')
-  await vi.waitFor(() => expect(container.querySelector('[data-test="app-onboarding-skip-app-id"]')).not.toBeNull())
-  await click(container, '[data-test="app-onboarding-skip-app-id"]')
   await vi.waitFor(() => expect(container.textContent).toContain('app-onboarding-icon-step-title'))
 }
 

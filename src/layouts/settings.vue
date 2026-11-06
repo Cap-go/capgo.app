@@ -12,10 +12,9 @@ import Tabs from '~/components/Tabs.vue'
 import { accountTabs } from '~/constants/accountTabs'
 import { organizationTabs as baseOrgTabs } from '~/constants/organizationTabs'
 import { settingsTabs } from '~/constants/settingsTabs'
+import { stripeEnabled } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
-import { openPortal } from '~/services/stripe'
-import { stripeEnabled } from '~/services/supabase'
 import { useOrganizationStore } from '~/stores/organization'
 import {
   BILLING_TAB_KEY,
@@ -35,12 +34,10 @@ const hideExternalPurchaseFlows = isNativeAppStoreContext()
 
 const restrictedPurchaseKeys = new Set([
   '/billing',
+  '/settings/organization/billing',
   '/settings/organization/credits',
   '/settings/organization/plans',
 ])
-
-// Modal state for non-admin billing access (triggered by billing tab click)
-const showBillingModal = ref(false)
 
 // Check if user needs to setup 2FA or update password for organization access
 const needsSecurityCompliance = computed(() => {
@@ -78,13 +75,6 @@ const canReadBilling = computedAsync(async () => {
   if (!orgId)
     return false
   return await checkPermissions('org.read_billing', { orgId })
-}, false)
-
-const canUpdateBilling = computedAsync(async () => {
-  const orgId = organizationStore.currentOrganization?.gid
-  if (!orgId)
-    return false
-  return await checkPermissions('org.update_billing', { orgId })
 }, false)
 
 const auditLogsAccessEvaluating = ref(false)
@@ -128,6 +118,7 @@ watchEffect(() => {
     const path = route.path.replace(/\/$/, '')
     const billingPaths = [
       ...(hideExternalPurchaseFlows ? [] : ['/settings/organization/usage']),
+      '/settings/organization/billing',
       '/settings/organization/credits',
       '/settings/organization/plans',
       '/billing',
@@ -162,13 +153,7 @@ watchEffect(() => {
       {
         label: 'billing-portal-tab',
         icon: IconBilling,
-        key: '/billing',
-        onClick: () => {
-          if (canUpdateBilling.value)
-            openPortal(organizationStore.currentOrganization?.gid ?? '', t)
-          else
-            showBillingModal.value = true
-        },
+        key: '/settings/organization/billing',
       },
     ]
   }
@@ -280,13 +265,6 @@ function handleTertiary(val: string) {
         v-if="showAdminOnlyModal && adminOnlyRouteGate"
         :title="adminOnlyRouteGate.title"
         :permission="adminOnlyRouteGate.permission"
-      />
-      <!-- Permission modal for the billing tab click -->
-      <RbacPermissionOnlyModal
-        v-if="showBillingModal"
-        :title="t('billing-access-required')"
-        permission="org.update_billing"
-        @close="showBillingModal = false"
       />
     </main>
   </div>

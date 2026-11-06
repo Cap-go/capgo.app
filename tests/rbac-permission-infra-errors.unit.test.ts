@@ -54,6 +54,18 @@ function makeContext(auth: Record<string, unknown> | undefined = {
   } as any
 }
 
+const USER_ID = '00000000-0000-4000-8000-000000000001'
+const JWT_AUTH = { userId: USER_ID, authType: 'jwt', apikey: null }
+type Scope = Parameters<typeof checkPermissionPg>[2]
+
+function runPg(permission: Parameters<typeof checkPermissionPg>[1], scope: Scope) {
+  return checkPermissionPg(makeContext(), permission, scope, getDrizzleClientMock() as any, USER_ID, 'capgo_test_key')
+}
+
+function runFreshRetry(permission: Parameters<typeof checkPermissionPg>[1], scope: Scope) {
+  return checkPermissionPgFreshRetry(makeContext(), permission, scope, USER_ID, 'capgo_test_key', false)
+}
+
 describe('rbac permission infra errors', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -80,8 +92,8 @@ describe('rbac permission infra errors', () => {
       .toMatchObject({
         status: 503,
         cause: {
-        error: 'database_unavailable',
-        message: 'Database temporarily unavailable',
+          error: 'database_unavailable',
+          message: 'Database temporarily unavailable',
         },
       })
 
@@ -91,14 +103,7 @@ describe('rbac permission infra errors', () => {
   it('checkPermissionPg surfaces Hyperdrive connect timeouts as 503', async () => {
     executeMock.mockRejectedValueOnce(new Error('timeout exceeded when trying to connect'))
 
-    await expect(checkPermissionPg(
-      makeContext(),
-      'app.upload_bundle',
-      { appId: 'ai.offthetools.app' },
-      getDrizzleClientMock() as any,
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-    )).rejects.toMatchObject({
+    await expect(runPg('app.upload_bundle', { appId: 'ai.offthetools.app' })).rejects.toMatchObject({
       status: 503,
       cause: {
         error: 'database_unavailable',
@@ -111,14 +116,7 @@ describe('rbac permission infra errors', () => {
       .mockRejectedValueOnce(new Error('timeout exceeded when trying to connect'))
       .mockResolvedValueOnce({ rows: [{ allowed: true }] })
 
-    await expect(checkPermissionPgFreshRetry(
-      makeContext(),
-      'app.upload_bundle',
-      { appId: 'ai.offthetools.app' },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      false,
-    )).resolves.toBe(true)
+    await expect(runFreshRetry('app.upload_bundle', { appId: 'ai.offthetools.app' })).resolves.toBe(true)
 
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
     expect(closeClientMock).toHaveBeenCalledTimes(2)
@@ -135,14 +133,7 @@ describe('rbac permission infra errors', () => {
       .mockImplementationOnce(() => ({ clientId: ++pgClientSerial }))
     executeMock.mockResolvedValueOnce({ rows: [{ allowed: true }] })
 
-    await expect(checkPermissionPgFreshRetry(
-      makeContext(),
-      'app.upload_bundle',
-      { appId: 'ai.offthetools.app' },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      false,
-    )).resolves.toBe(true)
+    await expect(runFreshRetry('app.upload_bundle', { appId: 'ai.offthetools.app' })).resolves.toBe(true)
 
     expect(getPgClientMock).toHaveBeenCalledTimes(2)
     expect(waitAuthPgRetryJitterMock).toHaveBeenCalledTimes(1)
@@ -155,14 +146,7 @@ describe('rbac permission infra errors', () => {
       throw configError
     })
 
-    await expect(checkPermissionPgFreshRetry(
-      makeContext(),
-      'app.upload_bundle',
-      { appId: 'ai.offthetools.app' },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      false,
-    )).rejects.toBe(configError)
+    await expect(runFreshRetry('app.upload_bundle', { appId: 'ai.offthetools.app' })).rejects.toBe(configError)
 
     expect(getPgClientMock).toHaveBeenCalledTimes(1)
     expect(waitAuthPgRetryJitterMock).not.toHaveBeenCalled()
@@ -174,14 +158,7 @@ describe('rbac permission infra errors', () => {
     })
     executeMock.mockRejectedValueOnce(invalidUuidError)
 
-    await expect(checkPermissionPgFreshRetry(
-      makeContext(),
-      'org.read',
-      { orgId: 'bad' },
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-      false,
-    )).resolves.toBe(false)
+    await expect(runFreshRetry('org.read', { orgId: 'bad' })).resolves.toBe(false)
 
     expect(getPgClientMock).toHaveBeenCalledTimes(1)
     expect(waitAuthPgRetryJitterMock).not.toHaveBeenCalled()
@@ -193,14 +170,7 @@ describe('rbac permission infra errors', () => {
     })
     executeMock.mockRejectedValueOnce(invalidUuidError)
 
-    await expect(checkPermissionPg(
-      makeContext(),
-      'org.read',
-      { orgId: 'non-user-org-id' },
-      getDrizzleClientMock() as any,
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-    )).resolves.toBe(false)
+    await expect(runPg('org.read', { orgId: 'non-user-org-id' })).resolves.toBe(false)
   })
 
   it('checkPermission treats Drizzle-wrapped invalid UUID cast as ACL deny', async () => {
@@ -226,14 +196,7 @@ describe('rbac permission infra errors', () => {
     })
     executeMock.mockRejectedValueOnce(drizzleWrapped)
 
-    await expect(checkPermissionPg(
-      makeContext(),
-      'app.upload_bundle',
-      { appId: 'ai.offthetools.app' },
-      getDrizzleClientMock() as any,
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-    )).rejects.toMatchObject({
+    await expect(runPg('app.upload_bundle', { appId: 'ai.offthetools.app' })).rejects.toMatchObject({
       status: 503,
       cause: { error: 'database_unavailable' },
     })
@@ -243,38 +206,20 @@ describe('rbac permission infra errors', () => {
     const httpError = new HTTPException(409, { message: 'conflict' })
     executeMock.mockRejectedValueOnce(httpError)
 
-    await expect(checkPermissionPg(
-      makeContext(),
-      'app.upload_bundle',
-      { appId: 'ai.offthetools.app' },
-      getDrizzleClientMock() as any,
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-    )).rejects.toBe(httpError)
+    await expect(runPg('app.upload_bundle', { appId: 'ai.offthetools.app' })).rejects.toBe(httpError)
   })
 
   it('checkPermissionPg returns false for real ACL denials', async () => {
     executeMock.mockResolvedValueOnce({ rows: [{ allowed: false }] })
 
-    await expect(checkPermissionPg(
-      makeContext(),
-      'app.upload_bundle',
-      { appId: 'ai.offthetools.app' },
-      getDrizzleClientMock() as any,
-      '00000000-0000-4000-8000-000000000001',
-      'capgo_test_key',
-    )).resolves.toBe(false)
+    await expect(runPg('app.upload_bundle', { appId: 'ai.offthetools.app' })).resolves.toBe(false)
   })
 
   it('checkPermission allows JWT auth through the non-rbac_id query path', async () => {
     executeMock.mockResolvedValueOnce({ rows: [{ allowed: true }] })
 
     await expect(checkPermission(
-      makeContext({
-        userId: '00000000-0000-4000-8000-000000000001',
-        authType: 'jwt',
-        apikey: null,
-      }),
+      makeContext(JWT_AUTH),
       'app.upload_bundle',
       { appId: 'ai.offthetools.app' },
     )).resolves.toBe(true)
@@ -287,11 +232,7 @@ describe('rbac permission infra errors', () => {
     ))
 
     await expect(checkPermission(
-      makeContext({
-        userId: '00000000-0000-4000-8000-000000000001',
-        authType: 'jwt',
-        apikey: null,
-      }),
+      makeContext(JWT_AUTH),
       'org.invite_user',
       { orgId: '00000000-0000-4000-8000-000000000099' },
     )).rejects.toMatchObject({
@@ -307,11 +248,7 @@ describe('rbac permission infra errors', () => {
     ))
 
     await expect(checkPermissionPg(
-      makeContext({
-        userId: '00000000-0000-4000-8000-000000000001',
-        authType: 'jwt',
-        apikey: null,
-      }),
+      makeContext(JWT_AUTH),
       'app.upload_bundle',
       { appId: 'ai.offthetools.app' },
       getDrizzleClientMock() as any,

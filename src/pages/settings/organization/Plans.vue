@@ -1,7 +1,6 @@
 <script setup lang="ts">
+import type { Plan } from '~/services/console'
 import type { CreditPricingStep } from '~/services/creditPricing'
-import type { Database } from '~/types/supabase.types'
-import { Capacitor } from '@capacitor/core'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -9,25 +8,28 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheckCircle from '~icons/lucide/check-circle'
+import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
+import EmbeddedCheckoutModal from '~/components/billing/EmbeddedCheckoutModal.vue'
 import CreditsCta from '~/components/CreditsCta.vue'
 import CreditsOnlyTip from '~/components/CreditsOnlyTip.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
-import { invokeCapgoApi } from '~/services/capgoApi'
+import { getCreditPricingSteps, getCurrentPlanNameOrg } from '~/services/console'
 import { ENTERPRISE_MAU_STOPS, formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
-import { formatNumber, formatNumberValue } from '~/services/formatLocale'
+import { formatNumberValue, getFormatLocale } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
 import { checkPermissions } from '~/services/permissions'
+import { formatPlanAmount, usePlanPrices } from '~/services/planPrices'
 import { createPlansVisitTracker } from '~/services/plansVisitTracking'
 import { getSignupAttributionEventTags } from '~/services/signupAttribution'
-import { getAffonsoReferral, getDatafastAttribution, openCheckout, openPortal } from '~/services/stripe'
-import { getCreditPricingSteps, getCurrentPlanNameOrg, useSupabase } from '~/services/supabase'
+import { startSubscriptionCheckout } from '~/services/stripe'
 import { openSupport } from '~/services/support'
 import { sendEvent } from '~/services/tracking'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { PLAN_CHECKOUT_PARAM, readPlanCheckoutParam } from '~/utils/billingDeepLinks'
 import { isCreditsOnlyOrg } from '~/utils/organizationBilling'
 
 const { t } = useI18n()
@@ -51,13 +53,17 @@ const isMobile = isNativeAppStoreContext()
 
 // Modal state for non-admin access
 const showAdminModal = ref(false)
+const showCancelModal = ref(false)
+const embeddedCheckout = ref<{ clientSecret: string, publishableKey: string, planName: string } | null>(null)
 
 const { currentOrganization } = storeToRefs(organizationStore)
 const billingOrgId = computed(() => currentOrganization.value?.gid)
-const { paidAt, billingLookupFailed } = useBillingPaidAt(billingOrgId, isMobile)
+const { paidAt, billingLookupFailed, trialSkipped } = useBillingPaidAt(billingOrgId, isMobile)
 const showExpiredTrialState = computed(() => {
   return shouldShowExpiredTrialPlansState(organizationStore.currentOrganizationFailed, isMobile, paidAt.value)
 })
+// Direct-offer orgs never had a trial: invite them to start instead of saying it ended.
+const showNoTrialState = computed(() => showExpiredTrialState.value && trialSkipped.value)
 const showPlanFailureBanner = computed(() => {
   return shouldShowPlanFailureBanner(organizationStore.currentOrganizationFailed, isMobile, paidAt.value, billingLookupFailed.value)
 })
@@ -85,7 +91,7 @@ const planFeatureLabelKeysByPlan: Record<string, string[]> = {
   ],
 }
 
-function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
+function planFeatures(plan: Plan) {
   // Convert build time from seconds to hours or minutes for display
   const buildTimeSeconds = plan.build_time_unit || 0
   const buildTimeHours = Math.floor(buildTimeSeconds / 3600)
@@ -94,16 +100,16 @@ function planFeatures(plan: Database['public']['Tables']['plans']['Row']) {
   let buildTimeDisplay = ''
   if (buildTimeSeconds > 0) {
     if (buildTimeHours >= 1) {
-      buildTimeDisplay = `${buildTimeHours} ${t('build-hours')}`
+      buildTimeDisplay = t('build-hours', { count: formatNumberValue(buildTimeHours) }, buildTimeHours)
     }
     else {
-      buildTimeDisplay = `${buildTimeMinutes} ${t('build-minutes')}`
+      buildTimeDisplay = t('build-minutes', { count: formatNumberValue(buildTimeMinutes) }, buildTimeMinutes)
     }
   }
 
-  const mauFeature = `${formatNumberValue(displayedPlanMau(plan))} ${t('mau')}`
-  const storageFeature = `${formatNumberValue(plan.storage)} ${t('plan-storage')}`
-  const bandwidthFeature = `${formatNumberValue(plan.bandwidth)} ${t('plan-bandwidth')}`
+  const mauFeature = t('plan-mau', { count: formatNumberValue(displayedPlanMau(plan)) }, displayedPlanMau(plan))
+  const storageFeature = t('plan-storage', { count: formatNumberValue(plan.storage) })
+  const bandwidthFeature = t('plan-bandwidth', { count: formatNumberValue(plan.bandwidth) })
 
   const buildTimeFeature = buildTimeDisplay ? planFeature(buildTimeDisplay, true) : null
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency
@@ -145,8 +151,8 @@ function convertKey(key: string) {
   return key
 }
 
-const currentPlan = ref<Database['public']['Tables']['plans']['Row'] | undefined>(undefined)
-const currentPlanSuggest = ref<Database['public']['Tables']['plans']['Row'] | undefined>(undefined)
+const currentPlan = ref<Plan | undefined>(undefined)
+const currentPlanSuggest = ref<Plan | undefined>(undefined)
 
 watch(() => main.bestPlan, (newBestPlan) => {
   currentPlanSuggest.value = mainStore.plans.find(plan => plan.name === newBestPlan)
@@ -167,7 +173,7 @@ const enterpriseMauIndex = ref(2)
 const currentEnterpriseMau = ref<number | null>(null)
 let enterpriseScaleLoadSeq = 0
 
-function isEnterprisePlan(plan: Database['public']['Tables']['plans']['Row']) {
+function isEnterprisePlan(plan: Plan) {
   return plan.name === ENTERPRISE_PLAN_NAME
 }
 
@@ -180,12 +186,42 @@ const enterpriseQuote = computed(() => {
   return quoteEnterpriseScale(pricingSteps.value, plan.mau, plan.price_m, ENTERPRISE_MAU_STOPS[enterpriseMauIndex.value])
 })
 
-function formatUsd(value: number) {
-  return formatNumber(value, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', maximumFractionDigits: 0 })
+// Real Stripe amounts per currency (price currency_options); USD from the plans table until they load.
+const { amountsFor, currencies: priceCurrencies, currency: priceCurrency, discount: regionalDiscount, failed: pricesFailed, hasPricesFor, hasRegionalPrice, lockedCurrency, lockedCurrencyUnavailable, ready: pricesReady, regionalDiscount: offeredRegionalDiscount, regularAmountsFor, reload: reloadPrices, setCurrency, setStandardPrice, showsStandardPrice, standardPrice, usdRatioFor } = usePlanPrices(billingOrgId)
+
+function planAmounts(plan: Plan) {
+  const stripeAmounts = amountsFor(plan.stripe_id)
+  return stripeAmounts && priceCurrency.value
+    ? { ...stripeAmounts, currency: priceCurrency.value }
+    : { month: plan.price_m, year: plan.price_y, currency: 'usd' }
+}
+
+// Enterprise extra MAU: USD tiers converted with the plan's own currency ratio for the billed interval,
+// matching the extra MAU price Checkout creates.
+function localExtraMauMonthly(plan: Plan) {
+  const usd = enterpriseQuote.value?.extraMauPriceMonthly ?? 0
+  if (!amountsFor(plan.stripe_id))
+    return usd
+  return usd * (usdRatioFor(plan.stripe_id, isCheckoutYearly(plan) ? 'year' : 'month') ?? 1)
+}
+
+// Whole amounts drop the decimals; fractional Stripe prices (19.99) keep the currency's digits.
+function formatPlanPrice(plan: Plan, value: number) {
+  return formatPlanAmount(value, planAmounts(plan).currency, Number.isInteger(value) ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {})
+}
+
+function currencyLabel(code: string) {
+  try {
+    const name = new Intl.DisplayNames([getFormatLocale()], { type: 'currency' }).of(code.toUpperCase())
+    return name ? `${code.toUpperCase()} - ${name}` : code.toUpperCase()
+  }
+  catch {
+    return code.toUpperCase()
+  }
 }
 
 // Enterprise card lists the MAU picked on the slider, other plans their allowance.
-function displayedPlanMau(plan: Database['public']['Tables']['plans']['Row']) {
+function displayedPlanMau(plan: Plan) {
   return isEnterprisePlan(plan) && enterpriseQuote.value ? enterpriseQuote.value.targetMau : plan.mau
 }
 
@@ -219,47 +255,27 @@ async function loadEnterpriseScale(orgId: string) {
     enterpriseMauIndex.value = index
 }
 
-async function prefetchStripeCheckoutUrl(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
+async function startPlanCheckout(plan: Plan, isYear: boolean) {
   if (!plan.stripe_id)
-    return
-  const supabase = useSupabase()
-  const session = await supabase.auth.getSession()
-  if (!session)
-    return
-
-  const successUrl = `${window.location.href}?success=1`
-  const cancelUrl = `${window.location.href}?cancel=1`
-  const datafastAttribution = await getDatafastAttribution()
-  const affonsoReferral = await getAffonsoReferral()
-  try {
-    const resp = await invokeCapgoApi('private/stripe_checkout', {
-      body: JSON.stringify({
-        priceId: plan.stripe_id,
-        successUrl,
-        cancelUrl,
-        recurrence: isYear ? 'year' : 'month',
-        orgId: currentOrganization.value?.gid ?? '',
-        attributionId: datafastAttribution.visitorId,
-        datafastVisitorId: datafastAttribution.visitorId,
-        datafastSessionId: datafastAttribution.sessionId,
-        affonsoReferral,
-        // Enterprise only: MAU added to the plan quota, billed on the same subscription.
-        ...(isEnterprisePlan(plan) && enterpriseQuote.value?.extraMau
-          ? { extraMau: enterpriseQuote.value.extraMau }
-          : {}),
-      }),
-    })
-
-    if (!resp.error && resp.data?.url)
-      return resp.data.url as string
-    return undefined
-  }
-  catch {
-    return undefined
-  }
+    return null
+  // Strip a previous ?success/?cancel so Stripe returns to a clean plans URL.
+  const returnUrl = `${globalThis.location.origin}${route.path}`
+  return await startSubscriptionCheckout({
+    priceId: plan.stripe_id,
+    successUrl: `${returnUrl}?success=1`,
+    cancelUrl: `${returnUrl}?cancel=1`,
+    isYear,
+    orgId: currentOrganization.value?.gid ?? '',
+    // Enterprise only: MAU added to the plan quota, billed on the same subscription.
+    extraMau: isEnterprisePlan(plan) ? enterpriseQuote.value?.extraMau : undefined,
+    // Only a currency Stripe sells this plan in; otherwise Checkout uses the price default.
+    currency: amountsFor(plan.stripe_id) ? priceCurrency.value ?? undefined : undefined,
+    // The page shows the full price (opt-out, or a currency the discount is not sold in): checkout sells it.
+    standardPrice: showsStandardPrice(plan.stripe_id),
+  })
 }
 
-function trackPlanCheckoutStarted(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean, checkoutSource: string) {
+function trackPlanCheckoutStarted(plan: Plan, isYear: boolean, checkoutSource: string) {
   const orgId = currentOrganization.value?.gid
   if (!orgId || !plan.stripe_id)
     return
@@ -283,39 +299,6 @@ function trackPlanCheckoutStarted(plan: Database['public']['Tables']['plans']['R
   }).catch()
 }
 
-async function openWebStripeCheckout(plan: Database['public']['Tables']['plans']['Row'], isYear: boolean) {
-  const url = await prefetchStripeCheckoutUrl(plan, isYear)
-  if (!url) {
-    toast.error('Cannot get your checkout')
-    return false
-  }
-
-  // Confirm dialog with a real <a href> so checkout opens under a fresh user gesture.
-  // Avoids popup blockers after the async Stripe session create.
-  dialogStore.openDialog({
-    title: t('open-in-new-tab'),
-    description: t('stripe-checkout-will-be-opened-in-a-new-tab'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('button-confirm'),
-        id: 'confirm-button',
-        role: 'primary',
-        href: url,
-        target: '_blank',
-        rel: 'noopener noreferrer',
-        handler: () => trackPlanCheckoutStarted(plan, isYear, 'web_confirm'),
-      },
-    ],
-  })
-
-  const dismissedByCancel = await dialogStore.onDialogDismiss()
-  return !dismissedByCancel
-}
-
 const canCancelPlan = computed(() => !!currentOrganization.value?.paying && !isCreditsOnly.value)
 
 async function openCancelPlan() {
@@ -324,10 +307,27 @@ async function openCancelPlan() {
     showAdminModal.value = true
     return
   }
-  await openPortal(orgId, t, 'cancel_subscription')
+  showCancelModal.value = true
 }
 
-async function openChangePlan(plan: Database['public']['Tables']['plans']['Row'], index: number) {
+async function onPlanCanceled() {
+  showCancelModal.value = false
+  const orgId = currentOrganization.value?.gid
+  await organizationStore.fetchOrganizations()
+  if (orgId)
+    organizationStore.setCurrentOrganization(orgId)
+}
+
+async function onCheckoutComplete() {
+  embeddedCheckout.value = null
+  thankYouPage.value = true
+  const orgId = currentOrganization.value?.gid
+  await organizationStore.fetchOrganizations()
+  if (orgId)
+    organizationStore.setCurrentOrganization(orgId)
+}
+
+async function openChangePlan(plan: Plan, index: number) {
   // Show the permission modal instead of blocking when the user can't manage billing.
   const orgId = currentOrganization.value?.gid
   if (!orgId || !(await checkPermissions('org.update_billing', { orgId }))) {
@@ -342,38 +342,100 @@ async function openChangePlan(plan: Database['public']['Tables']['plans']['Row']
   // get the current url
   isSubscribeLoading.value[index] = true
   if (plan.stripe_id) {
-    const checkoutIsYearly = hasYearlyDiscount(plan) ? isYearly.value : false
-    if (Capacitor.getPlatform() === 'web') {
-      const shouldContinue = await openWebStripeCheckout(plan, checkoutIsYearly)
-      if (!shouldContinue) {
-        isSubscribeLoading.value[index] = false
-        return
-      }
+    const checkoutIsYearly = isCheckoutYearly(plan)
+    const session = await startPlanCheckout(plan, checkoutIsYearly)
+    if (!session) {
+      toast.error(t('billing-checkout-error'))
+    }
+    else if (session.kind === 'embedded') {
+      embeddedCheckout.value = { ...session, planName: plan.name }
+      trackPlanCheckoutStarted(plan, checkoutIsYearly, 'embedded')
     }
     else {
-      const didOpenCheckout = await openCheckout(plan.stripe_id, `${globalThis.location.href}?success=1`, `${globalThis.location.href}?cancel=1`, checkoutIsYearly, currentOrganization?.value?.gid ?? '')
-      if (didOpenCheckout)
-        trackPlanCheckoutStarted(plan, checkoutIsYearly, 'direct')
+      // Local Stripe emulator only serves hosted pages.
+      trackPlanCheckoutStarted(plan, checkoutIsYearly, 'hosted')
+      globalThis.location.href = session.url
     }
   }
   isSubscribeLoading.value[index] = false
 }
 
-function hasYearlyDiscount(plan: Database['public']['Tables']['plans']['Row']): boolean {
-  return plan.price_y > 0 && Math.round(plan.price_y / 12) < plan.price_m
+// Like the card buttons, a deep-linked checkout waits for the billing currency; a failed lookup keeps it
+// pending until Retry loads the prices.
+const pendingPlanCheckout = ref<{ planName: string, linkedOrgId: unknown } | null>(null)
+
+// `?plan=<solo|maker|team>` starts that plan's checkout right away when the trial is over or was skipped.
+function startPlanCheckoutFromQuery() {
+  const planName = readPlanCheckoutParam(route.query)
+  if (!planName || route.path !== '/settings/organization/plans')
+    return
+  const linkedOrgId = route.query.oid
+  void router.replace({ query: { ...route.query, [PLAN_CHECKOUT_PARAM]: undefined } })
+  pendingPlanCheckout.value = { planName, linkedOrgId }
 }
 
-function getPrice(plan: Database['public']['Tables']['plans']['Row'], t: 'm' | 'y'): number {
-  if (t === 'm' || !hasYearlyDiscount(plan)) {
-    return plan.price_m
+watch(billingOrgId, () => {
+  pendingPlanCheckout.value = null
+})
+watch([pendingPlanCheckout, pricesReady], async ([pending, ready]) => {
+  if (!pending || !ready)
+    return
+  const index = mainStore.plans.findIndex(plan => plan.name === pending.planName)
+  // Kept until the plan's prices load, so a successful Retry still opens the linked checkout.
+  if (index >= 0 && !hasPricesFor(mainStore.plans[index].stripe_id))
+    return
+  pendingPlanCheckout.value = null
+  const org = currentOrganization.value
+  // Never start a checkout for another org than the one the link named.
+  if (org && (!pending.linkedOrgId || pending.linkedOrgId === org.gid) && !org.paying && !isTrial.value && !lockedCurrencyUnavailable.value && index >= 0)
+    await openChangePlan(mainStore.plans[index], index)
+})
+
+function hasYearlyDiscount(plan: Plan): boolean {
+  const { month, year } = planAmounts(plan)
+  return year > 0 && Math.round(year / 12) < month
+}
+
+// Yearly only when this currency's price is actually discounted; drives checkout and current-plan state.
+// The toggle only promises free months when some plan is actually discounted in this currency.
+const anyYearlyDiscount = computed(() => mainStore.plans.some(hasYearlyDiscount))
+
+function isCheckoutYearly(plan: Plan) {
+  return isYearly.value && hasYearlyDiscount(plan)
+}
+
+function isCurrentSubscription(plan: Plan) {
+  return !!currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isCheckoutYearly(plan)
+}
+
+function getPrice(plan: Plan, t: 'm' | 'y'): number {
+  const { month, year } = planAmounts(plan)
+  if (t === 'm' || !hasYearlyDiscount(plan))
+    return month
+  return Math.round(year / 12)
+}
+
+// Full monthly figure behind a regional discount, on the same monthly/yearly basis as getPrice.
+function getRegularPrice(plan: Plan, t: 'm' | 'y'): number | null {
+  const regular = regularAmountsFor(plan.stripe_id)
+  if (!regular)
+    return null
+  const value = t === 'm' || !hasYearlyDiscount(plan) ? regular.month : Math.round(regular.year / 12)
+  return value > getPrice(plan, t) ? value : null
+}
+
+function regionalCountryName(code: string | null) {
+  if (!code)
+    return ''
+  try {
+    return new Intl.DisplayNames([getFormatLocale()], { type: 'region' }).of(code) ?? code
   }
-  else {
-    const p = plan.price_y
-    return Math.round(p / 12)
+  catch {
+    return code
   }
 }
 
-function isYearlyPlan(plan: Database['public']['Tables']['plans']['Row'], t: 'm' | 'y'): boolean {
+function isYearlyPlan(plan: Plan, t: 'm' | 'y'): boolean {
   return t === 'y'
 }
 
@@ -533,7 +595,7 @@ watchEffect(async (onCleanup) => {
         }
       }
 
-      loadData(true).catch((error) => {
+      loadData(true).then(startPlanCheckoutFromQuery).catch((error) => {
         // Never let a load failure escape as an unhandled rejection on the
         // billing page — the graceful no-org path is handled inside loadData.
         console.error('Failed to load plans data', error)
@@ -544,21 +606,21 @@ watchEffect(async (onCleanup) => {
   }
 })
 // create function to check button status
-function isCurrentEnterpriseScale(p: Database['public']['Tables']['plans']['Row']) {
+function isCurrentEnterpriseScale(p: Plan) {
   return isEnterprisePlan(p) && currentEnterpriseMau.value === enterpriseQuote.value?.targetMau
 }
 
-function buttonName(p: Database['public']['Tables']['plans']['Row']) {
+function buttonName(p: Plan) {
   if (isMobile)
     return t('check-on-web')
   if (isEnterprisePlan(p) && enterpriseQuote.value) {
-    if (isCurrentEnterpriseScale(p) && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value)
+    if (isCurrentEnterpriseScale(p) && isCurrentSubscription(p))
       return t('Current')
     if (currentEnterpriseMau.value)
       return t('enterprise-scale-change', { mau: formatMau(enterpriseQuote.value.targetMau) })
     return t('enterprise-scale-get', { mau: formatMau(enterpriseQuote.value.targetMau) })
   }
-  if (currentPlan.value?.name === p.name && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value) {
+  if (currentPlan.value?.name === p.name && isCurrentSubscription(p)) {
     return t('Current')
   }
   if (showExpiredTrialState.value)
@@ -566,25 +628,32 @@ function buttonName(p: Database['public']['Tables']['plans']['Row']) {
   if (isTrial.value || organizationStore.currentOrganizationFailed) {
     return t('plan-upgrade')
   }
+  // Not subscribed (credits-only, canceled, unpaid): nothing to upgrade/downgrade from.
+  // Keyed on the org, not currentPlan, so paying orgs keep Upgrade/Downgrade while the plan loads.
+  if (isCreditsOnly.value || !currentOrganization.value?.paying)
+    return t('choose-plan-name', { plan: p.name })
   return p.price_m >= (currentPlan.value?.price_m ?? 0) ? (t('plan-upgrade-v2')) : (t('downgrade'))
 }
 
-function isDisabled(plan: Database['public']['Tables']['plans']['Row']) {
+function isDisabled(plan: Plan) {
   // Disabled if: current plan (already subscribed) or mobile
   // Above the allowance, checkout needs the MAU price to add the extra MAU item.
   if (isEnterprisePlan(plan) && enterpriseMauIndex.value > 0 && !enterpriseQuote.value)
     return true
+  // Wait for the billing currency and the plan's Stripe prices; never start a checkout Stripe would reject for currency.
+  if (!pricesReady.value || lockedCurrencyUnavailable.value || !hasPricesFor(plan.stripe_id))
+    return true
   if (isEnterprisePlan(plan) && !isCurrentEnterpriseScale(plan))
     return isMobile
-  return (currentPlan.value?.name === plan.name && currentOrganization.value?.paying && currentOrganization.value?.is_yearly === isYearly.value) || isMobile
+  return (currentPlan.value?.name === plan.name && isCurrentSubscription(plan)) || isMobile
 }
 
-function isRecommended(p: Database['public']['Tables']['plans']['Row']) {
+function isRecommended(p: Plan) {
   if (showExpiredTrialState.value)
     return false
   return currentPlanSuggest.value?.name === p.name && (currentPlanSuggest.value?.price_m ?? 0) > (currentPlan.value?.price_m ?? 0)
 }
-function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
+function buttonStyle(p: Plan) {
   if (isDisabled(p)) {
     return 'cursor-not-allowed bg-gray-500 dark:bg-gray-400 text-white'
   }
@@ -603,7 +672,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
         <div class="flex-1">
           <div class="flex flex-wrap items-center gap-3">
             <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
-              {{ t(showExpiredTrialState ? 'trial-ended-title' : 'plan-pricing-plans') }}
+              {{ t(showNoTrialState ? 'no-trial-choose-plan-title' : showExpiredTrialState ? 'trial-ended-title' : 'plan-pricing-plans') }}
             </h1>
             <span
               v-if="isCreditsOnly"
@@ -629,7 +698,10 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </button>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            {{ t(showExpiredTrialState ? 'trial-ended-plans-description' : isCreditsOnly ? 'credits-only-plan-page-desc' : 'plan-desc') }}
+            {{ t(showNoTrialState ? 'no-trial-choose-plan-description' : showExpiredTrialState ? 'trial-ended-plans-description' : isCreditsOnly ? 'credits-only-plan-page-desc' : 'plan-desc') }}
+          </p>
+          <p v-if="showNoTrialState" class="mt-1 text-sm font-medium text-gray-700 dark:text-gray-300" data-test="no-trial-money-back">
+            {{ t('no-trial-money-back-guarantee-description') }}
           </p>
           <p v-if="!isMobile" class="mt-2 text-sm">
             <a class="font-medium text-blue-600 hover:underline dark:text-blue-300" href="https://capgo.app/pricing/#compare-plans">
@@ -638,25 +710,50 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           </p>
         </div>
 
-        <!-- Toggle -->
-        <div class="flex items-center p-1 bg-gray-200 rounded-lg dark:bg-base-200">
-          <button
-            type="button"
-            class="py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
-            :class="segmentVal === 'm' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
-            @click="segmentVal = 'm'"
-          >
-            {{ t('monthly-plan') }}
-          </button>
-          <button
-            type="button"
-            class="flex gap-2 items-center py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
-            :class="segmentVal === 'y' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
-            @click="segmentVal = 'y'"
-          >
-            {{ t('yearly') }}
-            <span class="py-0.5 px-1.5 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">{{ t('yearly-two-months-free') }}</span>
-          </button>
+        <div class="flex flex-col items-start gap-2 sm:items-end">
+          <!-- Toggle -->
+          <div class="flex items-center p-1 bg-gray-200 rounded-lg dark:bg-base-200">
+            <button
+              type="button"
+              class="py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
+              :class="segmentVal === 'm' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
+              @click="segmentVal = 'm'"
+            >
+              {{ t('monthly-plan') }}
+            </button>
+            <button
+              type="button"
+              class="flex gap-2 items-center py-1.5 px-4 text-sm font-medium rounded-md transition-all duration-200"
+              :class="segmentVal === 'y' ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
+              @click="segmentVal = 'y'"
+            >
+              {{ t('yearly') }}
+              <span v-if="anyYearlyDiscount" class="py-0.5 px-1.5 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">{{ t('yearly-two-months-free') }}</span>
+            </button>
+          </div>
+          <!-- Billing currency: only currencies set on the Stripe prices -->
+          <label v-if="priceCurrencies.length > 1 && !lockedCurrency" class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('plans-display-currency') }}
+            <select
+              data-test="plans-currency-select"
+              class="d-select d-select-xs d-select-bordered"
+              :value="priceCurrency"
+              @change="setCurrency(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="code in priceCurrencies" :key="code" :value="code">
+                {{ currencyLabel(code) }}
+              </option>
+            </select>
+          </label>
+          <p v-if="pricesFailed" data-test="plans-prices-failed" class="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+            {{ t('plans-prices-load-failed') }}
+            <button type="button" class="d-btn d-btn-xs" @click="reloadPrices()">
+              {{ t('retry') }}
+            </button>
+          </p>
+          <p v-if="lockedCurrency" data-test="plans-currency-locked" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t(lockedCurrencyUnavailable ? 'plans-currency-unavailable' : 'plans-currency-locked', { currency: lockedCurrency.toUpperCase() }) }}
+          </p>
         </div>
       </div>
 
@@ -705,21 +802,21 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
           <div v-if="isEnterprisePlan(p) && enterpriseQuote" class="mb-6 shrink-0" data-test="enterprise-scale">
             <div class="flex items-baseline">
               <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-                {{ formatUsd(getPrice(p, segmentVal) + enterpriseQuote.extraMauPriceMonthly) }}
+                {{ formatPlanPrice(p, getPrice(p, segmentVal) + localExtraMauMonthly(p)) }}
               </span>
               <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               <template v-if="enterpriseQuote.extraMau > 0">
                 <template v-if="isYearlyPlan(p, segmentVal) && hasYearlyDiscount(p)">
-                  {{ t('enterprise-scale-breakdown-yearly', { base: formatUsd(p.price_y), extra: formatUsd(enterpriseQuote.extraMauPriceMonthly * 12), mau: formatMau(enterpriseQuote.extraMau) }) }}
+                  {{ t('enterprise-scale-breakdown-yearly', { base: formatPlanPrice(p, planAmounts(p).year), extra: formatPlanPrice(p, localExtraMauMonthly(p) * 12), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
                 <template v-else>
-                  {{ t('enterprise-scale-breakdown', { base: formatUsd(getPrice(p, segmentVal)), extra: formatUsd(enterpriseQuote.extraMauPriceMonthly), mau: formatMau(enterpriseQuote.extraMau) }) }}
+                  {{ t('enterprise-scale-breakdown', { base: formatPlanPrice(p, getPrice(p, segmentVal)), extra: formatPlanPrice(p, localExtraMauMonthly(p)), mau: formatMau(enterpriseQuote.extraMau) }) }}
                 </template>
               </template>
               <template v-else-if="isYearlyPlan(p, segmentVal)">
-                {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ hasYearlyDiscount(p) ? p.price_y : p.price_m }}
+                {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatPlanPrice(p, hasYearlyDiscount(p) ? planAmounts(p).year : planAmounts(p).month) }}
               </template>
             </p>
 
@@ -741,7 +838,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
                 step="1"
                 class="w-full h-2 rounded-full appearance-none cursor-pointer accent-blue-600"
                 :style="{ background: `linear-gradient(to right, rgb(37 99 235) ${enterpriseSliderPercent}%, rgb(209 213 219) ${enterpriseSliderPercent}%)` }"
-                :aria-valuetext="`${formatMau(enterpriseQuote.targetMau)} ${t('mau')}`"
+                :aria-valuetext="t('plan-mau', { count: formatMau(enterpriseQuote.targetMau) }, enterpriseQuote.targetMau)"
                 :disabled="isMobile"
               >
               <div class="flex justify-between mt-1 text-[10px] text-gray-400">
@@ -758,14 +855,31 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
 
           <!-- Price -->
           <div v-else class="mb-6 shrink-0">
-            <div class="flex items-baseline">
-              <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-                ${{ getPrice(p, segmentVal) }}
+            <div class="flex flex-wrap items-baseline gap-x-2">
+              <span v-if="getRegularPrice(p, segmentVal) !== null" data-test="plan-regular-price" class="text-lg font-semibold text-gray-400 line-through dark:text-gray-500">
+                {{ formatPlanPrice(p, getRegularPrice(p, segmentVal)!) }}
               </span>
-              <span class="ml-1 text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
+              <span class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
+                {{ formatPlanPrice(p, getPrice(p, segmentVal)) }}
+              </span>
+              <span class="text-sm font-medium text-gray-500 dark:text-gray-400">/{{ t('mo') }}</span>
             </div>
+            <template v-if="getRegularPrice(p, segmentVal) !== null && regionalDiscount">
+              <span data-test="plan-regional-discount" class="inline-block py-0.5 px-2 mt-2 text-xs font-bold text-green-600 bg-green-100 rounded-full dark:text-green-400 dark:bg-green-900/30">
+                {{ t('plans-regional-discount', { percent: regionalDiscount.percent }) }}
+              </span>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ regionalDiscount.country ? t('plans-regional-discount-requirement', { country: regionalCountryName(regionalDiscount.country) }) : t('plans-regional-discount-requirement-generic') }}
+              </p>
+              <button type="button" data-test="plan-standard-price" class="mt-1 text-xs font-medium text-blue-600 underline dark:text-blue-400 hover:text-blue-500" @click="setStandardPrice(true)">
+                {{ regionalDiscount.country ? t('plans-regional-discount-opt-out', { country: regionalCountryName(regionalDiscount.country) }) : t('plans-regional-discount-opt-out-generic') }}
+              </button>
+            </template>
+            <button v-else-if="standardPrice && offeredRegionalDiscount && hasRegionalPrice(p.stripe_id)" type="button" data-test="plan-regional-price" class="block mt-2 text-xs font-medium text-blue-600 underline dark:text-blue-400 hover:text-blue-500" @click="setStandardPrice(false)">
+              {{ t('plans-regional-discount-opt-in', { percent: offeredRegionalDiscount.percent }) }}
+            </button>
             <p v-if="isYearlyPlan(p, segmentVal)" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} ${{ hasYearlyDiscount(p) ? p.price_y : p.price_m }}
+              {{ hasYearlyDiscount(p) ? t('billed-annually-at') : t('billed-monthly-at') }} {{ formatPlanPrice(p, hasYearlyDiscount(p) ? planAmounts(p).year : planAmounts(p).month) }}
             </p>
           </div>
 
@@ -844,7 +958,7 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
             </p>
           </div>
           <a
-            class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg border-none bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 sm:w-auto"
+            class="d-btn d-btn-sm h-auto min-h-10 w-full shrink-0 justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-xs font-semibold d-btn-primary sm:w-auto"
             href="https://capgo.app/premium-support/"
             rel="noopener noreferrer"
             target="_blank"
@@ -884,6 +998,22 @@ function buttonStyle(p: Database['public']['Tables']['plans']['Row']) {
       </section>
     </div>
 
+    <EmbeddedCheckoutModal
+      v-if="embeddedCheckout"
+      :title="t('billing-checkout-title', { plan: embeddedCheckout.planName })"
+      :client-secret="embeddedCheckout.clientSecret"
+      :publishable-key="embeddedCheckout.publishableKey"
+      @close="embeddedCheckout = null"
+      @complete="onCheckoutComplete"
+    />
+    <CancelPlanModal
+      v-if="showCancelModal && currentOrganization?.gid"
+      :org-id="currentOrganization.gid"
+      :plan-name="currentPlan?.name"
+      @close="showCancelModal = false"
+      @canceled="onPlanCanceled"
+      @saved="onPlanCanceled"
+    />
     <!-- Permission modal shown when the user can't manage billing -->
     <RbacPermissionOnlyModal
       v-if="showAdminModal"

@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import { ref, watch } from 'vue'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import { defaultApiHost, useConsole } from '~/services/console'
 
 export const RELEASE_LIVE_POLL_INTERVAL_MS = 60_000
 
@@ -45,6 +45,23 @@ export interface ReleaseLiveRollout {
   } | null
 }
 
+// Failed update checks sent as download_fail by updater plugins older than
+// fixed_in. The backend already leaves them out of every failure count.
+export interface LegacyCheckFailures {
+  excluded: number
+  plugin_versions: string[]
+  fixed_in: string
+}
+
+const MAX_LISTED_PLUGIN_VERSIONS = 3
+
+// "8.51.15, 8.51.16" or "6.40.0, 8.51.15, 8.51.16 +2": the notice stays one line.
+export function formatLegacyPluginVersions(pluginVersions: string[]) {
+  const listed = pluginVersions.slice(-MAX_LISTED_PLUGIN_VERSIONS).join(', ')
+  const hidden = pluginVersions.length - MAX_LISTED_PLUGIN_VERSIONS
+  return hidden > 0 ? `${listed} +${hidden}` : listed
+}
+
 export interface ReleaseLiveResponse {
   release: (ReleaseLiveDeployment & { bundle_id: number | null }) | null
   window?: {
@@ -70,6 +87,7 @@ export interface ReleaseLiveResponse {
     recovered: number
     stuck: number
   } | null
+  legacy_check_failures?: LegacyCheckFailures | null
   series?: ReleaseLiveBucket[]
   // Set when the release is the target of a progressive rollout.
   rollout?: ReleaseLiveRollout | null
@@ -87,7 +105,7 @@ export function useReleaseLive(
     enabled: boolean
   },
 ) {
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const data = ref<ReleaseLiveResponse | null>(null) as Ref<ReleaseLiveResponse | null>
   const loading = ref(false)
   const error = ref(false)
@@ -107,7 +125,7 @@ export function useReleaseLive(
     if (!options.silent)
       loading.value = true
     try {
-      const { data: sessionData } = await supabase.auth.getSession()
+      const { data: sessionData } = await capgo.auth.getSession()
       if (!sessionData.session)
         throw new Error('not_authenticated')
 

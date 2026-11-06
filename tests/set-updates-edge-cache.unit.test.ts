@@ -1,9 +1,15 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { parseJsonc, WRANGLER_PATH } from '../scripts/generate-plugin-route-hosts.ts'
-import { normalizeEdgeCacheValue, pluginEnvs, resolveTargetEnvs } from '../scripts/set-updates-edge-cache.ts'
+import { normalizeEdgeCacheValue, pluginEnvs, purgeSnippetEdgeAnswers, resolveSecretName, resolveTargetEnvs, SNIPPET_EDGE_ANSWERS_TAG } from '../scripts/set-updates-edge-cache.ts'
 
 describe('updates-edge-cache:set', () => {
+  it('sets the edge cache switch unless the snippet answers switch is named', () => {
+    expect(resolveSecretName(['1%'])).toBe('UPDATES_EDGE_CACHE')
+    expect(resolveSecretName(['--secret=SNIPPET_EDGE_ANSWER', '1%'])).toBe('SNIPPET_EDGE_ANSWER')
+    expect(() => resolveSecretName(['--secret=JWT_SECRET'])).toThrow()
+  })
+
   it('normalizes the rollout value', () => {
     expect(normalizeEdgeCacheValue('ON')).toBe('on')
     expect(normalizeEdgeCacheValue('off')).toBe('off')
@@ -30,5 +36,14 @@ describe('updates-edge-cache:set', () => {
 
   it('leaves UPDATES_EDGE_CACHE out of wrangler vars (a var would block the secret)', () => {
     expect(readFileSync(WRANGLER_PATH, 'utf8')).not.toMatch(/"UPDATES_EDGE_CACHE"\s*:/)
+  })
+
+  it('purges the stored snippet answers in every zone and reports failed zones', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => Response.json({ success: !String(url).includes('zone-b') }))
+    expect(await purgeSnippetEdgeAnswers('token', ['zone-a', 'zone-b'], fetchImpl as unknown as typeof fetch)).toEqual(['zone-b'])
+    expect(fetchImpl).toHaveBeenCalledWith('https://api.cloudflare.com/client/v4/zones/zone-a/purge_cache', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ tags: [SNIPPET_EDGE_ANSWERS_TAG] }),
+    }))
   })
 })

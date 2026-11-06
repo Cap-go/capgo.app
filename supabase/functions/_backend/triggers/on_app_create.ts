@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import type { BentoTrackingPayload } from '../utils/tracking.ts'
@@ -7,15 +8,35 @@ import { buildAppCreatorEventDetails } from '../utils/app_creator.ts'
 import { createIfNotExistStoreInfo } from '../utils/cloudflare.ts'
 import { purgeOnPremCache } from '../utils/cloudflare_cache_purge.ts'
 import { BRES, middlewareAPISecret, simpleError, triggerValidator } from '../utils/hono.ts'
+import { cleanStoredImageMetadata } from '../utils/image.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { buildOnboardingIntentBentoEventData, parseOrgOnboardingIntent } from '../utils/org_onboarding_intent.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../utils/pg.ts'
 import * as schema from '../utils/postgres_schema.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 import { sendEventToTracking } from '../utils/tracking.ts'
 import { backgroundTask } from '../utils/utils.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
+
+interface OrgRow {
+  name: string
+  website: string | null
+  onboarding: Database['public']['Tables']['orgs']['Row']['onboarding']
+}
+
+async function getOrg(c: Context<MiddlewareKeyVariables>, orgId: string): Promise<{ data: OrgRow | null, error: unknown }> {
+  const pg = await getPgClient(c)
+  try {
+    const { rows } = await pg.query<OrgRow>('SELECT name, website, onboarding FROM public.orgs WHERE id = $1', [orgId])
+    return { data: rows[0] ?? null, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
 
 app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c) => {
   const record = c.get('webhookBody') as Database['public']['Tables']['apps']['Row']
@@ -25,8 +46,6 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
     cloudlog({ requestId: c.get('requestId'), message: 'No id' })
     throw simpleError('no_id', 'No id', { record })
   }
-
-  const supabase = supabaseAdmin(c)
 
   // The app_versions table uses a DB trigger (auto_owner_org_by_app_id) that derives owner_org
   // from apps.app_id. If the app is deleted before this async trigger runs, inserting default
@@ -60,11 +79,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
       return c.json(BRES)
     }
 
-    const { data, error } = await supabase
-      .from('orgs')
-      .select('*')
-      .eq('id', ownerOrg)
-      .single()
+    const { data, error } = await getOrg(c, ownerOrg)
     if (error || !data) {
       // In prod, INSERT triggers are processed async via PGMQ; the app (and even org)
       // may be deleted before the queued handler runs. If this handler was invoked
@@ -108,11 +123,7 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
   let appCreatedBentoEvent: BentoTrackingPayload | undefined
   if (!isDemo && !isPendingOnboarding) {
     const creatorDetails = buildAppCreatorEventDetails(record.onboarding)
-    appCreatedBentoEvent = await supabase
-      .from('orgs')
-      .select('*')
-      .eq('id', ownerOrg)
-      .single()
+    appCreatedBentoEvent = await getOrg(c, ownerOrg)
       .then(({ data, error }) => {
         if (error || !data) {
           throw simpleError('error_fetching_organization', 'Error fetching organization', { error })
@@ -153,6 +164,11 @@ app.post('/', middlewareAPISecret, triggerValidator('apps', 'INSERT'), async (c)
 
   // Purge on-prem cache for this app to clear any stale responses
   await backgroundTask(c, purgeOnPremCache(c, record.app_id))
+  if (record.icon_url && record.owner_org) {
+    // Moves an icon a pre-8.90.1 CLI wrote to Supabase Storage into R2, then strips metadata.
+    await backgroundTask(c, cleanStoredImageMetadata(c, record.icon_url, { orgId: record.owner_org, appId: record.app_id })
+      .catch(error => cloudlog({ requestId: c.get('requestId'), message: 'app icon import failed', error, app_id: record.app_id })))
+  }
   // Skip onboarding emails for demo apps
   if (!isDemo && !isPendingOnboarding) {
     await backgroundTask(c, createIfNotExistStoreInfo(c, {

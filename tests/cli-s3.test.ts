@@ -20,38 +20,6 @@ describe('upload_link', async () => {
     await resetAppDataStats(APPNAME)
   })
 
-  it('should get upload url from supabase', async () => {
-    const testParams = {
-      bucket: 'capgo',
-      key: `orgs/${seedOptions.orgId}/apps/${APPNAME}/${fileId}.zip`,
-    }
-
-    const supabase = getSupabaseClient()
-    const { data, error: error2 } = await supabase.storage
-      .from(testParams.bucket)
-      .createSignedUploadUrl(testParams.key)
-
-    if (error2)
-      throw error2
-    expect(data.signedUrl).toBeDefined()
-
-    // Test the upload URL
-    const testContent = 'Hello World'
-    const uploadRes = await fetch(data.signedUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: testContent,
-    })
-    expect(uploadRes.status).toBe(200)
-    const { error: error3 } = await supabase.storage
-      .from('capgo')
-      .remove([testParams.key])
-    if (error3)
-      throw error3
-  })
-
   it('should return a valid upload url', async () => {
     const filePath = `orgs/${seedOptions.orgId}/apps/${APPNAME}/${fileId}.zip`
     //  be sure to remove the file from the bucket before running the test

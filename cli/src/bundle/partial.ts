@@ -5,7 +5,6 @@ import { createHash } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
 import { platform as osPlatform } from 'node:os'
 import { join, posix, win32 } from 'node:path'
-import { cwd } from 'node:process'
 import { buffer as readBuffer } from 'node:stream/consumers'
 import { createBrotliCompress } from 'node:zlib'
 import { parse } from '@std/semver'
@@ -16,7 +15,7 @@ import { buildCliRequestHeaders } from '../analytics/cli-headers'
 import { encryptChecksum, encryptChecksumV3, encryptSource } from '../api/crypto'
 import { CliUserError } from '../shared/cli-user-error'
 import { isTransientNetworkError } from '../shared/network-error'
-import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findRoot, formatVerboseError, generateManifest, getContentType, getInstalledVersion, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
+import { appAddHintMessage, BROTLI_MIN_UPDATER_VERSION_V5, BROTLI_MIN_UPDATER_VERSION_V6, BROTLI_MIN_UPDATER_VERSION_V7, deltaManifestTooLargeMessage, findProjectRoot, formatVerboseError, generateManifest, getContentType, getInstalledVersion, isAppNotFoundError, isDeprecatedPluginVersion, MAX_MANIFEST_ENTRIES, sendEvent, TUS_UPLOAD_RETRY_DELAYS } from '../utils'
 import type { ManifestUploadRequestEntry, ResolvedManifestUpload, ResolvedManifestUploadEntry } from './manifest-upload'
 import { getUploadReporter } from './reporter'
 import { getManifestUploadAbandonError, ManifestUploadAbandonController, ManifestUploadAbandonError, parseManifestUploadAbandonBody } from './upload-abandon-error'
@@ -77,7 +76,7 @@ export async function fileExistsAtUploadTarget(existenceCheckUrlPrefix: string, 
     try {
       const response = await fetch(url.toString(), {
         method: 'GET',
-        redirect: 'error',
+        redirect: 'manual',
         headers: buildCliRequestHeaders({ 'cache-control': 'no-cache' }),
       })
       if (response.status === 404)
@@ -115,7 +114,7 @@ const BROTLI_MIN_SIZE = 8192
 
 // Check if the updater version supports .br extension
 async function getUpdaterVersion(uploadOptions: OptionsUpload): Promise<{ version: string | null, supportsBrotliV2: boolean }> {
-  const root = findRoot(cwd())
+  const root = findProjectRoot()
   const updaterVersion = await getInstalledVersion('@capgo/capacitor-updater', root, uploadOptions.packageJson)
   let coerced
   try {
@@ -193,15 +192,16 @@ async function shouldUseBrotli(
   }
 }
 
-export async function prepareBundlePartialFiles(
+/**
+ * Build the delta manifest (per-file sha256, optionally signed with the v2 key).
+ * Local only: shared by the online delta upload and the offline `bundle zip --delta-pack`.
+ */
+export async function generateDeltaManifest(
   path: string,
-  apikey: string,
-  orgId: string,
-  appid: string,
   encryptionMethod: 'none' | 'v2' | 'v1',
   finalKeyData: string,
   supportsHexChecksum: boolean = false,
-) {
+): Promise<manifestType> {
   const spinner = getUploadReporter().spinner()
   spinner.start(encryptionMethod !== 'v2' ? 'Generating the update manifest' : `Generating the update manifest with ${supportsHexChecksum ? 'V3' : 'V2'} encryption`)
   const manifest = await generateManifest(path)
@@ -216,6 +216,19 @@ export async function prepareBundlePartialFiles(
   }
 
   spinner.stop('Manifest generated successfully')
+  return manifest
+}
+
+export async function prepareBundlePartialFiles(
+  path: string,
+  apikey: string,
+  orgId: string,
+  appid: string,
+  encryptionMethod: 'none' | 'v2' | 'v1',
+  finalKeyData: string,
+  supportsHexChecksum: boolean = false,
+) {
+  const manifest = await generateDeltaManifest(path, encryptionMethod, finalKeyData, supportsHexChecksum)
 
   await sendEvent(apikey, {
     channel: 'partial-update',
@@ -307,6 +320,8 @@ export async function prepareManifestUploadEntries(
   path: string,
   encryptionOptions: PartialEncryptionOptions | undefined,
   options: OptionsUpload,
+  /** Receives the exact bytes the delta upload would send for each entry (used by the offline delta pack). */
+  onPayload?: (entry: ManifestUploadRequestEntry, uploadedBytes: Buffer) => void | Promise<void>,
 ): Promise<ManifestUploadRequestEntry[]> {
   await validatePartialUpload(manifest, options)
   if (manifest.length === 0)
@@ -314,14 +329,17 @@ export async function prepareManifestUploadEntries(
   const entries: ManifestUploadRequestEntry[] = []
   for (const [id, file] of manifest.entries()) {
     const payload = await preparePartialPayload(file, path, encryptionOptions, options)
-    entries.push({
+    const entry: ManifestUploadRequestEntry = {
       id,
       file_name: payload.fileName,
       compression: payload.compression,
       file_hash: file.hash,
       uploaded_bytes_sha256: payload.uploadedBytesSha256,
       uploaded_bytes_size: payload.uploadedBytesSize,
-    })
+    }
+    entries.push(entry)
+    if (onPayload)
+      await onPayload(entry, payload.buffer)
   }
   return entries
 }

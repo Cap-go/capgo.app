@@ -53,9 +53,11 @@ describe('bundle upload reporting', () => {
     })
   })
 
-  it('keeps the late permission check silent for internal uploads', async () => {
+  it('runs upload preflight with the silent flag for internal uploads', async () => {
     const source = readFileSync(new URL('../cli/src/bundle/upload.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("checkAppExistsAndHasPermissionOrgErr(supabase, apikey, appid, 'app.upload_bundle', silent, true)")
+    expect(source).toContain("permission: 'app.upload_bundle'")
+    expect(source).toMatch(/runCliPreflight\([\s\S]*?\{\s*silent,/m)
+    expect(source).not.toContain('checkAppExistsAndHasPermissionOrgErr')
   })
 })

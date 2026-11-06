@@ -93,12 +93,12 @@ test.describe('channel pause and revert are saved (isolated app)', () => {
   })
 
   test('pause, resume, revert with rollout, then reassign a bundle', async ({ page }) => {
-    const supabase = getSupabaseClient()
-    const { data: channelRow } = await supabase.from('channels').select('id').eq('app_id', appId).eq('name', 'beta').single().throwOnError()
-    const { data: rolloutVersion } = await supabase.from('app_versions').select('id').eq('app_id', appId).eq('name', '1.360.0').single().throwOnError()
+    const capgo = getSupabaseClient()
+    const { data: channelRow } = await capgo.from('channels').select('id').eq('app_id', appId).eq('name', 'beta').single().throwOnError()
+    const { data: rolloutVersion } = await capgo.from('app_versions').select('id').eq('app_id', appId).eq('name', '1.360.0').single().throwOnError()
     // An active rollout must be cleared by the full revert.
-    await supabase.from('channels').update({ rollout_version: rolloutVersion.id, rollout_enabled: true, rollout_percentage_bps: 1000 }).eq('id', channelRow.id).throwOnError()
-    const readChannel = async () => (await supabase.from('channels').select('version, paused_at, rollout_version, rollout_enabled').eq('id', channelRow.id).single().throwOnError()).data
+    await capgo.from('channels').update({ rollout_version: rolloutVersion.id, rollout_enabled: true, rollout_percentage_bps: 1000 }).eq('id', channelRow.id).throwOnError()
+    const readChannel = async () => (await capgo.from('channels').select('version, paused_at, rollout_version, rollout_enabled').eq('id', channelRow.id).single().throwOnError()).data
 
     await page.route('**/private/sso/check-enforcement', async (route) => {
       await route.fulfill({

@@ -1,38 +1,34 @@
 <script setup lang="ts">
-import type { Factor } from '@supabase/supabase-js'
 import type { Ref } from 'vue'
+import type { Factor } from '~/services/consoleClient'
 import type { LoginAuthStatus } from '~/utils/loginActions'
 import { Capacitor } from '@capacitor/core'
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
 import dayjs from 'dayjs'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import VueTurnstile from 'vue-turnstile'
 import IconRollback from '~icons/heroicons/arrow-uturn-left'
 import IconDevice from '~icons/heroicons/device-phone-mobile'
 import IconTeam from '~icons/heroicons/user-group'
 import IconScanQrCode from '~icons/lucide/scan-qr-code'
-import iconEmail from '~icons/oui/email?raw'
-import iconPassword from '~icons/ph/key?raw'
-import mfaIcon from '~icons/simple-icons/2fas?raw'
-import { captureAppleOAuthCallback, completeAppleOAuth, consumeAppleOAuthLandingError, hasPendingAppleOAuth, isWebAppleLoginAvailable, startAppleOAuth } from '~/services/appleOAuth'
+import IconEmail from '~icons/oui/email'
+import IconPassword from '~icons/ph/key'
+import IconMfa from '~icons/simple-icons/2fas'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
+import { autoAuth, defaultApiHost, hashEmail, useConsole } from '~/services/console'
 import { hideLoader } from '~/services/loader'
-import { isNativeAppleLoginAvailable, signInWithApple } from '~/services/nativeAppleLogin'
-import { autoAuth, defaultApiHost, hashEmail, useSupabase } from '~/services/supabase'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
+import { rules, validateField } from '~/utils/formValidation'
 import { getLoginActionVisibility } from '~/utils/loginActions'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
-const supabase = useSupabase()
+const capgo = useConsole()
 const isLoading = ref(false)
-const isAppleLoading = ref(false)
-const appleLoginAvailable = computed(() => isNativeAppleLoginAvailable() || isWebAppleLoginAvailable())
 const isMobile = ref(Capacitor.isNativePlatform())
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
@@ -58,6 +54,17 @@ const passwordPathReady = ref(false)
 const domainCheckTimeoutMs = 5000
 const domainCheckDebounceMs = 350
 const isCheckingSavedSession = ref(true)
+// A saved session usually means auto-login: show a sign-in status instead of flashing the form.
+const hasStoredSession = (() => {
+  try {
+    return Object.keys(globalThis.localStorage ?? {}).some(key => /^sb-.+-auth-token$/.test(key))
+  }
+  catch {
+    return false
+  }
+})()
+const showSigningIn = computed(() => hasStoredSession && isCheckingSavedSession.value)
+const profileUnavailable = computed(() => route.query.profile_unavailable === '1')
 const captchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(captchaKey.value ? 'loading' : 'disabled')
 let captchaInitTimeout: ReturnType<typeof setTimeout> | null = null
 let domainCheckTimer: ReturnType<typeof setTimeout> | null = null
@@ -66,9 +73,19 @@ let domainCheckSeq = 0
 const version = import.meta.env.VITE_APP_VERSION
 const isLoginStep = computed(() => statusAuth.value === 'login')
 const loginActionVisibility = computed(() => getLoginActionVisibility(statusAuth.value, passwordPathReady.value))
-const emailValidation = computed(() => (isLoginStep.value ? 'required:trim|email' : ''))
-const passwordValidation = computed(() => (passwordPathReady.value ? 'required:trim' : ''))
-const mfaValidation = computed(() => (statusAuth.value === '2fa' ? 'required|mfa_code_validation' : ''))
+const mfaRegex = /^(?:\d{6}|\d{3} \d{3})$/
+const loginPassword = ref('')
+const submitted = ref(false)
+const formErrors = ref<string[]>([])
+const emailErrors = computed(() => (isLoginStep.value
+  ? validateField(emailForLogin.value, [rules.required(t('email'), { trim: true }), rules.email()])
+  : []))
+const passwordErrors = computed(() => (passwordPathReady.value
+  ? validateField(loginPassword.value, [rules.required(t('password'), { trim: true })])
+  : []))
+const mfaErrors = computed(() => (statusAuth.value === '2fa'
+  ? validateField(mfaCode.value, [rules.required(t('2fa-code')), rules.matches(mfaRegex, t('login-2fa-code-invalid'))])
+  : []))
 const autofillPreserveHiddenStyle = {
   position: 'absolute',
   width: '1px',
@@ -77,7 +94,6 @@ const autofillPreserveHiddenStyle = {
   overflow: 'hidden',
   pointerEvents: 'none',
 } as const
-const mfaRegex = /^(?:\d{6}|\d{3} \d{3})$/
 const shouldBlockForCaptcha = computed(() => !!captchaKey.value && captchaStatus.value === 'loading' && !turnstileToken.value)
 const loginHeroChips = computed(() => [
   t('login-chip-live-updates'),
@@ -231,10 +247,29 @@ async function nextLogin() {
   }, 500)
 }
 
+async function logoutFromProfileRecovery() {
+  if (isLoading.value)
+    return
+  isLoading.value = true
+  try {
+    const { error } = await capgo.auth.signOut()
+    if (error)
+      throw error
+    await router.replace('/login')
+  }
+  catch (error) {
+    console.error('Failed to sign out from account recovery', error)
+    toast.error(t('cannot-sign-off'))
+  }
+  finally {
+    isLoading.value = false
+  }
+}
+
 async function checkMfa() {
-  const { data: mfaFactors, error: mfaError } = await supabase.auth.mfa.listFactors()
+  const { data: mfaFactors, error: mfaError } = await capgo.auth.mfa.listFactors()
   if (mfaError) {
-    setErrors('login-account', ['See browser console'], {})
+    formErrors.value = ['See browser console']
     console.error('Cannot get MFA factors', mfaError)
     return false
   }
@@ -242,7 +277,7 @@ async function checkMfa() {
   const unverified = mfaFactors.all.filter(factor => factor.status === 'unverified')
   if (unverified && unverified.length > 0) {
     console.log(`Found ${unverified.length} unverified MFA factors, removing all`)
-    const responses = await Promise.all(unverified.map(factor => supabase.auth.mfa.unenroll({ factorId: factor.id })))
+    const responses = await Promise.all(unverified.map(factor => capgo.auth.mfa.unenroll({ factorId: factor.id })))
 
     responses.filter(res => !!res.error).forEach((res) => {
       console.error('Failed to unregister', res.error)
@@ -254,10 +289,10 @@ async function checkMfa() {
 
   if (hasMfa) {
     mfaLoginFactor.value = mfaFactor
-    const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: mfaFactor.id })
+    const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: mfaFactor.id })
     if (errorChallenge) {
       isLoading.value = false
-      setErrors('login-account', ['See browser console'], {})
+      formErrors.value = ['See browser console']
       console.error('Cannot challenge mfa', errorChallenge)
       return false
     }
@@ -277,40 +312,40 @@ async function checkMfa() {
 
 async function checkReviewAccount(form: { email: string }) {
   // this is a review account, we need to check if the user is banned for Apple and Google to check delete feature
-  const { data: userPreData, error: userPreError } = await supabase.from('users').select('ban_time').eq('email', form.email).single()
+  const { data: userPreData, error: userPreError } = await capgo.from('users').select('ban_time').eq('email', form.email).single()
   if (!userPreData && userPreError) {
     isLoading.value = false
     console.error('error', userPreError)
-    setErrors('login-account', [userPreError.message], {})
+    formErrors.value = [userPreError.message]
     toast.error(t('failed-to-get-user'))
     return
   }
 
   if (!!userPreData.ban_time && dayjs().isBefore(userPreData.ban_time)) {
     isLoading.value = false
-    setErrors('login-account', ['Invalid login credentials'], {})
+    formErrors.value = ['Invalid login credentials']
     toast.error(t('failed-to-get-user'))
   }
 }
 
 async function login(form: { email: string, password: string }) {
   const hashedEmail = await hashEmail(form.email)
-  const { data: deleted, error: errorDeleted } = await supabase
+  const { data: deleted, error: errorDeleted } = await capgo
     .rpc('is_not_deleted', { email_check: hashedEmail })
   if (errorDeleted) {
     console.error(errorDeleted)
     isLoading.value = false
-    setErrors('login-account', [errorDeleted.message], {})
+    formErrors.value = [errorDeleted.message]
     return
   }
 
   if (!deleted) {
     toast.error(t('used-to-create'))
     isLoading.value = false
-    setErrors('login-account', [t('used-to-create')], {})
+    formErrors.value = [t('used-to-create')]
     return
   }
-  const { error } = await supabase.auth.signInWithPassword({
+  const { error } = await capgo.auth.signInWithPassword({
     email: form.email,
     password: form.password,
     options: {
@@ -323,7 +358,7 @@ async function login(form: { email: string, password: string }) {
       || error.code === 'captcha_failed'
     if (!isExpectedAuthError)
       console.error('Login failed', error)
-    setErrors('login-account', [error.message], {})
+    formErrors.value = [error.message]
     if (error.code === 'invalid_credentials' || error.message.includes('Invalid login credentials')) {
       turnstileToken.value = ''
       safeResetTurnstile(captchaComponent.value)
@@ -347,61 +382,11 @@ async function login(form: { email: string, password: string }) {
   await checkMfa()
 }
 
-async function handleAppleLogin() {
-  if (isLoading.value || !appleLoginAvailable.value)
-    return
-
-  isLoading.value = true
-  isAppleLoading.value = true
-  let hasAppleSession = false
-  try {
-    if (!isNativeAppleLoginAvailable()) {
-      await startAppleOAuth(new URL(location.href))
-      return
-    }
-    const result = await signInWithApple(supabase, turnstileToken.value || undefined)
-    if (!result)
-      return
-    hasAppleSession = true
-    if (!result.user.email)
-      throw new Error('Apple login did not return an email')
-
-    // Keep the same deleted-account and enforced-SSO rules as password login.
-    const [deleted, domain] = await Promise.all([
-      hashEmail(result.user.email).then(email => supabase.rpc('is_not_deleted', { email_check: email })),
-      checkDomain(result.user.email),
-    ])
-    if (deleted.error)
-      throw deleted.error
-    if (!deleted.data || (domain.has_sso && domain.enforce_sso)) {
-      await supabase.auth.signOut({ scope: 'local' })
-      toast.error(t(!deleted.data ? 'used-to-create' : 'sso-required'))
-      return
-    }
-
-    if (result.profileSaveFailed)
-      toast.warning(t('apple-login-name-save-failed'))
-    if (!await checkMfa())
-      throw new Error('Apple login could not complete MFA setup')
-  }
-  catch {
-    if (hasAppleSession)
-      await supabase.auth.signOut({ scope: 'local' })
-    turnstileToken.value = ''
-    safeResetTurnstile(captchaComponent.value)
-    toast.error(t('apple-login-failed'))
-  }
-  finally {
-    isAppleLoading.value = false
-    isLoading.value = false
-  }
-}
-
 async function checkDomain(email: string): Promise<{ has_sso: boolean, enforce_sso?: boolean, provider_id?: string, org_id?: string }> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), domainCheckTimeoutMs)
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     const token = sessionData?.session?.access_token
 
     const headers: Record<string, string> = {
@@ -559,7 +544,7 @@ async function handleSsoLogin() {
       redirectUrl.searchParams.set('to', validateRedirectPath(route.query.to))
     }
 
-    const { data, error } = await supabase.auth.signInWithSSO({
+    const { data, error } = await capgo.auth.signInWithSSO({
       domain,
       options: {
         redirectTo: redirectUrl.toString(),
@@ -596,7 +581,7 @@ async function handleSsoLogin() {
 
 async function handleMfaSubmit(form: { code: string }) {
   isLoading.value = true
-  const verify = await supabase.auth.mfa.verify({
+  const verify = await capgo.auth.mfa.verify({
     factorId: mfaLoginFactor.value!.id!,
     challengeId: mfaChallengeId.value!,
     code: form.code.replaceAll(' ', ''),
@@ -621,7 +606,7 @@ async function goToForgotPassword() {
 }
 
 async function checkAuthUser() {
-  const { data: mfaData, error: mfaError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  const { data: mfaData, error: mfaError } = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
   if (mfaError) {
     console.error('Cannot guard auth', mfaError)
     isLoading.value = false
@@ -629,9 +614,9 @@ async function checkAuthUser() {
   }
 
   if (mfaData.currentLevel === 'aal1' && mfaData.nextLevel === 'aal2') {
-    const { data: mfaFactors, error } = await supabase.auth.mfa.listFactors()
+    const { data: mfaFactors, error } = await capgo.auth.mfa.listFactors()
     if (error) {
-      setErrors('login-account', ['See browser console'], {})
+      formErrors.value = ['See browser console']
       console.error('Cannot get MFA factors', error)
       isLoading.value = false
       return
@@ -639,9 +624,9 @@ async function checkAuthUser() {
 
     const mfaFactor = mfaFactors?.all.find(factor => factor.status === 'verified')
 
-    const { data: challenge, error: errorChallenge } = await supabase.auth.mfa.challenge({ factorId: mfaFactor!.id })
+    const { data: challenge, error: errorChallenge } = await capgo.auth.mfa.challenge({ factorId: mfaFactor!.id })
     if (errorChallenge) {
-      setErrors('login-account', ['See browser console'], {})
+      formErrors.value = ['See browser console']
       console.error('Cannot challenge mfa', errorChallenge)
       isLoading.value = false
       return
@@ -694,7 +679,7 @@ async function checkMagicLink() {
     if (authType === 'email_change') {
       const email = logSession.user.email
       const id = logSession.user.id
-      await supabase
+      await capgo
         .from('users')
         .upsert({
           id,
@@ -713,7 +698,7 @@ async function openScan() {
 
 async function acceptQuerySession() {
   isLoading.value = true
-  const res = await supabase.auth.setSession({
+  const res = await capgo.auth.setSession({
     access_token: querySessionAccessToken.value,
     refresh_token: querySessionRefreshToken.value,
   })
@@ -764,42 +749,13 @@ async function handleQuerySessionHandoff(accessToken: string, refreshToken: stri
   hideLoader()
 }
 
-async function handleAppleOAuthLanding(parsedUrl: URL) {
-  if (consumeAppleOAuthLandingError()) {
-    toast.error(t('apple-login-failed'))
-    return false
-  }
-  if (parsedUrl.searchParams.get('apple_oauth') === '1' && !Capacitor.isNativePlatform()) {
-    // Console owns the verifier and resulting session across the Apple round trip.
-    const entry = new URL(parsedUrl)
-    parsedUrl.searchParams.delete('apple_oauth')
-    parsedUrl.searchParams.delete('apple_website_state')
-    globalThis.history.replaceState({}, '', parsedUrl)
-    try {
-      await startAppleOAuth(entry)
-      return true
-    }
-    catch {
-      toast.error(t('apple-login-failed'))
-      return false
-    }
-  }
-  captureAppleOAuthCallback(parsedUrl)
-  if (hasPendingAppleOAuth()) {
-    isLoading.value = false
-    hideLoader()
-    if (!captchaKey.value || turnstileToken.value)
-      await finishAppleOAuth()
-    return true
-  }
-  return false
-}
-
 async function checkLogin() {
   try {
-    const parsedUrl = new URL(route.fullPath, globalThis.location.origin)
-    if (await handleAppleOAuthLanding(parsedUrl))
+    if (profileUnavailable.value) {
+      hideLoader()
       return
+    }
+    const parsedUrl = new URL(route.fullPath, globalThis.location.origin)
     const params = new URLSearchParams(parsedUrl.search)
 
     if (params.get('message') === 'sso_account_linked') {
@@ -817,22 +773,21 @@ async function checkLogin() {
     }
 
     isLoading.value = true
-    const { data: claimsData } = await supabase.auth.getClaims()
+    const { data: claimsData } = await capgo.auth.getClaims()
     const hasUser = !!claimsData?.claims?.sub
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     const session = sessionData?.session
     if (hasUser) {
       await checkAuthUser()
     }
     else if (!session && route.query.code && typeof route.query.code === 'string') {
-      const { data, error } = await supabase.auth.exchangeCodeForSession(route.query.code)
-      if (!error && data.session) {
-        await nextLogin()
-      }
-      else {
+      const { data, error } = await capgo.auth.exchangeCodeForSession(route.query.code)
+      if (error || !data.session) {
         isLoading.value = false
         hideLoader()
+        return
       }
+      await nextLogin()
     }
     else if (!session && route.hash) {
       await checkMagicLink()
@@ -852,36 +807,6 @@ async function checkLogin() {
   }
 }
 
-async function finishAppleOAuth() {
-  if (isAppleLoading.value || !hasPendingAppleOAuth())
-    return
-  isAppleLoading.value = true
-  isLoading.value = true
-  let hasAppleSession = false
-  try {
-    await completeAppleOAuth(supabase, turnstileToken.value || undefined)
-    hasAppleSession = true
-    if (!await checkMfa())
-      throw new Error('Apple login could not complete MFA setup')
-  }
-  catch {
-    if (hasAppleSession)
-      await supabase.auth.signOut({ scope: 'local' })
-    turnstileToken.value = ''
-    safeResetTurnstile(captchaComponent.value)
-    toast.error(t('apple-login-failed'))
-  }
-  finally {
-    isAppleLoading.value = false
-    isLoading.value = false
-  }
-}
-
-watch(turnstileToken, (token) => {
-  if (token && hasPendingAppleOAuth())
-    void finishAppleOAuth()
-})
-
 function declineQuerySession() {
   hasQuerySession.value = false
   querySessionAccessToken.value = ''
@@ -890,12 +815,22 @@ function declineQuerySession() {
   hideLoader()
 }
 
-function mfa_code_validation(node: { value: any }) {
-  return Promise.resolve(mfaRegex.test(node.value))
+// A new step (password revealed, 2FA asked) starts with untouched fields: only show its
+// errors after the user tries to submit that step.
+watch([passwordPathReady, statusAuth], () => {
+  submitted.value = false
+})
+
+function onLoginSubmit() {
+  submitted.value = true
+  formErrors.value = []
+  if (emailErrors.value.length || passwordErrors.value.length || mfaErrors.value.length)
+    return
+  return handleLoginSubmit({ email: emailForLogin.value, password: loginPassword.value, code: mfaCode.value })
 }
 
 async function goback() {
-  const { error } = await supabase.auth.signOut()
+  const { error } = await capgo.auth.signOut()
 
   if (error) {
     toast.error(t('cannot-sign-off'))
@@ -1007,7 +942,22 @@ onMounted(checkLogin)
           </div>
 
           <div class="relative mt-5 sm:mt-6">
-            <div v-if="hasQuerySession" :class="authStepCardClass">
+            <div v-if="showSigningIn && !profileUnavailable" role="status" aria-live="polite" class="flex min-h-40 flex-col items-center justify-center gap-3 text-sm text-slate-600 dark:text-slate-300" data-test="login-signing-in">
+              <Spinner size="w-8 h-8" />
+              {{ t('login-signing-in') }}
+            </div>
+            <div v-else-if="profileUnavailable" class="space-y-4" data-test="account-load-recovery">
+              <p role="alert" class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {{ t('account-load-failed') }}
+              </p>
+              <button type="button" :class="authPrimaryButtonClass" :disabled="isLoading" data-test="account-load-retry" @click="nextLogin">
+                {{ t('retry') }}
+              </button>
+              <button type="button" :class="authSecondaryButtonClass" :disabled="isLoading" data-test="account-load-logout" @click="logoutFromProfileRecovery">
+                {{ t('logout') }}
+              </button>
+            </div>
+            <div v-else-if="hasQuerySession" :class="authStepCardClass">
               <div class="space-y-4 text-slate-500 dark:text-slate-300" :class="authCardBodyClass">
                 <p class="text-sm">
                   {{ t('login-query-session-prompt') }}
@@ -1019,7 +969,7 @@ onMounted(checkLogin)
                 >
                   <svg
                     v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                    xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
+                    xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading" aria-hidden="true"
                   >
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                     <path
@@ -1041,21 +991,22 @@ onMounted(checkLogin)
 
             <div v-else :class="authStepCardClass">
               <div class="text-slate-500 dark:text-slate-300" :class="authCardBodyClass">
-                <FormKit id="login-account" type="form" :actions="false" autocapitalize="off" data-test="login-form" @submit="handleLoginSubmit">
+                <form id="login-account" novalidate autocapitalize="off" data-test="login-form" @submit.prevent="onLoginSubmit">
                   <div class="space-y-5">
                     <div v-show="isLoginStep" class="space-y-5">
-                      <FormKit
+                      <FormField
                         id="login-email"
                         v-model="emailForLogin"
                         type="email"
                         name="email"
                         enterkeyhint="next"
                         :placeholder="t('email')"
-                        :prefix-icon="iconEmail"
+                        :prefix-icon="IconEmail"
                         inputmode="email"
                         :label="t('email')"
                         autocomplete="username"
-                        :validation="emailValidation"
+                        :errors="emailErrors"
+                        :submitted="submitted"
                         data-test="email"
                       />
 
@@ -1074,7 +1025,7 @@ onMounted(checkLogin)
                         >
                           <svg
                             v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading" aria-hidden="true"
                           >
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                             <path
@@ -1094,14 +1045,16 @@ onMounted(checkLogin)
                         :style="passwordPathReady ? undefined : autofillPreserveHiddenStyle"
                         :data-password-ready="passwordPathReady ? 'true' : 'false'"
                       >
-                        <FormKit
+                        <FormField
                           id="passwordInput"
+                          v-model="loginPassword"
                           type="password"
                           :placeholder="t('password')"
                           name="password"
                           :label="t('password')"
-                          :prefix-icon="iconPassword"
-                          :validation="passwordValidation"
+                          :prefix-icon="IconPassword"
+                          :errors="passwordErrors"
+                          :submitted="submitted"
                           enterkeyhint="send"
                           autocomplete="current-password"
                           data-test="password"
@@ -1125,27 +1078,28 @@ onMounted(checkLogin)
                       a TOTP during the same prompt. Reveal it only when MFA is required.
                     -->
                     <div :style="statusAuth === '2fa' ? undefined : autofillPreserveHiddenStyle">
-                      <FormKit
+                      <FormField
                         v-model="mfaCode"
                         type="text"
                         name="code"
                         :disabled="isLoading && statusAuth === '2fa'"
-                        :prefix-icon="mfaIcon"
+                        :prefix-icon="IconMfa"
                         inputmode="numeric"
                         :label="t('2fa-code')"
-                        :validation-rules="{ mfa_code_validation }"
-                        :validation-messages="{
-                          mfa_code_validation: t('login-2fa-code-invalid'),
-                        }"
                         placeholder="xxx xxx"
                         autocomplete="one-time-code"
-                        :validation="mfaValidation"
+                        :errors="mfaErrors"
+                        :submitted="submitted"
                         :validation-visibility="statusAuth === '2fa' ? 'live' : 'blur'"
                         data-test="2fa-code"
                       />
                     </div>
 
-                    <FormKitMessages data-test="form-error" />
+                    <ul v-if="formErrors.length" role="alert" data-test="form-error" class="mb-1.5">
+                      <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+                        {{ error }}
+                      </li>
+                    </ul>
 
                     <div v-show="loginActionVisibility.login">
                       <div class="inline-flex justify-center items-center w-full">
@@ -1158,7 +1112,7 @@ onMounted(checkLogin)
                         >
                           <svg
                             v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading" aria-hidden="true"
                           >
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                             <path
@@ -1169,19 +1123,6 @@ onMounted(checkLogin)
                           {{ t('log-in') }}
                         </button>
                       </div>
-                    </div>
-
-                    <div v-if="appleLoginAvailable" v-show="isLoginStep" class="space-y-5">
-                      <div class="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                        <span class="h-px flex-1 bg-slate-200 dark:bg-slate-700" />
-                        <span>{{ t('login-or-separator') }}</span>
-                        <span class="h-px flex-1 bg-slate-200 dark:bg-slate-700" />
-                      </div>
-                      <AppleSignInButton
-                        :disabled="isLoading || shouldBlockForCaptcha || isCheckingSavedSession"
-                        :loading="isAppleLoading"
-                        @click="handleAppleLogin"
-                      />
                     </div>
 
                     <div v-show="loginActionVisibility.verify">
@@ -1195,7 +1136,7 @@ onMounted(checkLogin)
                         >
                           <svg
                             v-if="isLoading" class="inline-block mr-3 -ml-1 w-5 h-5 text-white align-middle animate-spin"
-                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" data-test="loading" aria-hidden="true"
                           >
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                             <path
@@ -1227,7 +1168,7 @@ onMounted(checkLogin)
                         :class="authInlineLinkClass"
                         @click="goToForgotPassword"
                       >
-                        {{ t('forgot') }} {{ t('password') }} ?
+                        {{ t('forgot-password') }}
                       </button>
                     </div>
 
@@ -1237,7 +1178,7 @@ onMounted(checkLogin)
                       </button>
                     </div>
                   </div>
-                </FormKit>
+                </form>
               </div>
             </div>
 

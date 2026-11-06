@@ -21,7 +21,7 @@ test.describe('App overview', () => {
     await expect(page.locator('[data-testid="overview-kpis"] a')).toHaveCount(3)
     await expect(page.locator('[data-testid="release-live"]')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Installs', exact: true })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Active Bundle', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Active bundle', exact: true })).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Active bundle' })).toBeVisible()
 
     // The whole summary fits above the fold.

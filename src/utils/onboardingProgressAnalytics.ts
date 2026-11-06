@@ -1,6 +1,7 @@
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties, OnboardingChannelStage } from '~/utils/onboardingChannelAnalytics'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 
+export const PROFILE_ONBOARDING_ANALYTICS_VERSION = 6
 export const ONBOARDING_ANALYTICS_VERSION = 4
 export const WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION = '5.A'
 export const WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.C'
@@ -8,7 +9,8 @@ export const NEW_CHANNEL_ANALYTICS_VERSION = '5.E'
 export const NEW_CHANNEL_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION = '5.F'
 export const NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION = '5.G'
 export type OnboardingAnalyticsVersion
-  = | typeof ONBOARDING_ANALYTICS_VERSION
+  = | typeof PROFILE_ONBOARDING_ANALYTICS_VERSION
+    | typeof ONBOARDING_ANALYTICS_VERSION
     | typeof WEBNATIVE_PUBLISH_INTENT_ANALYTICS_VERSION
     | typeof WEBNATIVE_DEVELOPMENT_ENVIRONMENT_ANALYTICS_VERSION
     | typeof NEW_CHANNEL_ANALYTICS_VERSION
@@ -16,12 +18,14 @@ export type OnboardingAnalyticsVersion
     | typeof NEW_CHANNEL_PUBLISH_INTENT_ANALYTICS_VERSION
 
 export type OnboardingAnalyticsFlow = 'pre_org' | 'existing_org'
-export type OnboardingAnalyticsStep = 'welcome' | 'intent' | 'publish_app_question' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'channel' | 'install' | 'setup'
+export type OnboardingAnalyticsStep = 'name' | 'welcome' | 'intent' | 'publish_app_question' | 'details' | 'app_name' | 'app_id' | 'app_icon' | 'organization' | 'choice' | 'channel' | 'install' | 'setup'
 export type OnboardingCopyEvent = 'onboarding_ai_instructions_copied' | 'onboarding_cli_command_copied'
 export type OnboardingDevelopmentEnvironment = 'hosted_builder' | 'ai_assistant' | 'hand_coded' | 'other' | 'local_project' | 'exploring' | 'skipped'
 export type OnboardingIntent = 'ota' | 'builder' | 'both' | 'exploring' | 'publish'
 export type OnboardingInteractionEvent
   = | OnboardingChannelEvent
+    | 'onboarding_profile_saved'
+    | 'onboarding_profile_save_failed'
     | 'onboarding_development_environment_selected'
     | 'onboarding_organization_import_opened'
     | 'onboarding_organization_import_submitted'
@@ -36,7 +40,10 @@ export type OnboardingInteractionEvent
     | 'onboarding_webnative_continue_with_capgo'
     | 'onboarding_webnative_recommendation_clicked'
 export type OnboardingDetailsEvent
-  = | 'onboarding_app_creation_failed'
+  = | 'onboarding_first_name_entered'
+    | 'onboarding_last_name_entered'
+    | 'onboarding_company_name_entered'
+    | 'onboarding_app_creation_failed'
     | 'onboarding_app_creation_started'
     | 'onboarding_app_creation_succeeded'
     | 'onboarding_app_icon_import_selected'
@@ -50,6 +57,8 @@ export type OnboardingDetailsEvent
     | 'onboarding_app_icon_picker_opened'
     | 'onboarding_app_icon_upload_failed'
     | 'onboarding_app_icon_uploaded'
+    | 'onboarding_app_id_advanced_hidden'
+    | 'onboarding_app_id_advanced_shown'
     | 'onboarding_app_name_entered'
     | 'onboarding_store_import_failed'
     | 'onboarding_store_import_hidden'
@@ -66,9 +75,9 @@ export type OnboardingDetailsEvent
 
 type AnalyticsPrimitive = string | number | boolean
 type AnalyticsProperties = Record<string, AnalyticsPrimitive>
-type CaptureEvent = (name: string, supaHost: string, properties?: AnalyticsProperties) => void
+type CaptureEvent = (name: string, apiHost: string, properties?: AnalyticsProperties) => void
 
-const captureOnboardingEvent: CaptureEvent = (name, _supaHost, properties) => {
+const captureOnboardingEvent: CaptureEvent = (name, _apiHost, properties) => {
   sendOnboardingEvent(name, properties)
 }
 
@@ -81,12 +90,13 @@ interface OnboardingResumeCandidate {
 
 interface CreateOnboardingTelemetryIdentityOptions {
   capture?: CaptureEvent
-  // Continue an attempt handed off by another page instead of starting one.
-  continueFrom?: { attemptId: string, runId: string } | null
+  // A handoff retains the run; a resumed visit omits runId to start a new run
+  // within the same saved attempt.
+  continueFrom?: { attemptId: string, runId?: string } | null
   flow: OnboardingAnalyticsFlow
   idFactory?: () => string
   onboardingVersion?: () => OnboardingAnalyticsVersion
-  supaHost: string
+  apiHost: string
 }
 
 export interface OnboardingStepCompletionProperties {
@@ -134,9 +144,11 @@ export interface OnboardingCopyEventProperties {
   intent?: OnboardingIntent
   org_id?: string
   setup_command: 'builder' | 'ota'
+  /** Where the AI prompt was copied: the first-task buttons or the card shown on later tasks. */
+  placement?: 'start' | 'checklist'
 }
 
-export type OnboardingDetailsField = 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'
+export type OnboardingDetailsField = 'first_name' | 'last_name' | 'company_name' | 'app_id' | 'app_name' | 'icon_store_url' | 'store_url'
 
 export function createOnboardingDetailsFieldDebouncer(
   emit: (
@@ -202,7 +214,7 @@ export function createOnboardingTelemetryIdentity(options: CreateOnboardingTelem
 
   function safelyCapture(name: string, properties: AnalyticsProperties) {
     try {
-      capture(name, options.supaHost, properties)
+      capture(name, options.apiHost, properties)
     }
     catch {
       // Analytics must never interrupt onboarding.
@@ -267,7 +279,7 @@ interface CreateOnboardingProgressTrackerOptions {
   onboardingVersion?: () => OnboardingAnalyticsVersion
   resumed: boolean
   steps: readonly OnboardingAnalyticsStep[]
-  supaHost: string
+  apiHost: string
 }
 
 export function createOnboardingProgressTracker(options: CreateOnboardingProgressTrackerOptions) {
@@ -298,7 +310,7 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
 
   function safelyCapture(name: string, properties: AnalyticsProperties) {
     try {
-      capture(name, options.supaHost, properties)
+      capture(name, options.apiHost, properties)
     }
     catch {
       // Analytics must never interrupt onboarding.
@@ -429,6 +441,8 @@ export function createOnboardingProgressTracker(options: CreateOnboardingProgres
       eventProperties.intent = details.intent
     if (details.org_id)
       eventProperties.org_id = details.org_id
+    if (details.placement)
+      eventProperties.placement = details.placement
 
     safelyCapture(name, eventProperties)
     return eventProperties

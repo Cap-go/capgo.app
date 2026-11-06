@@ -80,6 +80,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pg.ts', () => ({
   getDrizzleClient: getDrizzleClientMock,
   getEffectiveDeviceChannelNamePostgres: getEffectiveDeviceChannelNamePostgresMock,
   getPgClient: getPgClientMock,
+  getReadReplicaBinding: vi.fn(() => null),
 }))
 
 vi.mock('../supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts', () => ({

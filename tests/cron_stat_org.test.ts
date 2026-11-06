@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BASE_URL, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, PRODUCT_ID, postUpdate, TEST_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
+import { BASE_URL, executeSQL, fetchTestRequest, getBaseData, getSupabaseClient, postUpdate, PRODUCT_ID, TEST_EMAIL, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
 
 // Create unique IDs for this test file to avoid parallel test interference
 const id = randomUUID()
@@ -128,440 +128,112 @@ afterAll(async () => {
   await supabase.from('orgs').delete().eq('id', TEST_ORG_ID)
 })
 
+type UsageKind = 'mau' | 'storage' | 'bandwidth'
+
+// Solo plan limits: MAU ~ thousands, storage 1073741824 (1GB), bandwidth 13958643712 (~13GB).
+const OVER_LIMIT: Record<UsageKind, number> = { mau: 1_000_000, storage: 2_000_000_000, bandwidth: 20_000_000_000 }
+const USAGE_KINDS = Object.keys(OVER_LIMIT) as UsageKind[]
+
+async function setUsage(kind: UsageKind, value: number) {
+  const supabase = getSupabaseClient()
+  // beforeEach leaves exactly one daily_mau/daily_bandwidth row (today) per app.
+  const { error } = kind === 'mau'
+    ? await supabase.from('daily_mau').update({ mau: value }).eq('app_id', APPNAME)
+    : kind === 'bandwidth'
+      ? await supabase.from('daily_bandwidth').update({ bandwidth: value }).eq('app_id', APPNAME)
+      : await supabase.from('app_versions_meta').update({ size: value }).eq('app_id', APPNAME)
+  expect(error).toBeFalsy()
+}
+
+async function runCronStatOrg(body: Record<string, unknown> = { orgId: TEST_ORG_ID }) {
+  return fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+}
+
+async function readStripeInfoVersion() {
+  const [row] = await executeSQL<{ row_version: string, updated_at: string }>(`
+    SELECT xmin::text AS row_version,
+           updated_at::text AS updated_at
+    FROM public.stripe_info
+    WHERE customer_id = $1
+  `, [TEST_STRIPE_CUSTOMER_ID])
+  return row
+}
+
+async function isExceeded(kind: UsageKind) {
+  const { data, error } = await getSupabaseClient().rpc(`is_${kind}_exceeded_by_org`, { org_id: TEST_ORG_ID })
+  expect(error).toBeFalsy()
+  return data
+}
+
+async function isAllowed(kind: UsageKind) {
+  const { data, error } = await getSupabaseClient().rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: [kind] })
+  expect(error).toBeFalsy()
+  return data
+}
+
+async function markGoodPlan(extra: { trial_at?: string } = {}) {
+  const { error } = await getSupabaseClient()
+    .from('stripe_info')
+    .update({ is_good_plan: true, ...extra })
+    .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
+  if (error)
+    throw error
+}
+
 describe('[POST] /triggers/cron_stat_org', () => {
   it('should return 400 when orgId is missing', async () => {
-    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({}),
-    })
+    const response = await runCronStatOrg({})
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data.error).toBe('no_orgId')
   })
 
   it('does not rewrite stripe_info when the calculated plan state is unchanged', async () => {
-    const firstResponse = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(firstResponse.status).toBe(200)
+    expect((await runCronStatOrg()).status).toBe(200)
+    const before = await readStripeInfoVersion()
 
-    const [before] = await executeSQL<{
-      row_version: string
-      updated_at: string
-    }>(`
-      SELECT xmin::text AS row_version,
-             updated_at::text AS updated_at
-      FROM public.stripe_info
-      WHERE customer_id = $1
-    `, [TEST_STRIPE_CUSTOMER_ID])
-
-    const secondResponse = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(secondResponse.status).toBe(200)
-
-    const [after] = await executeSQL<{
-      row_version: string
-      updated_at: string
-    }>(`
-      SELECT xmin::text AS row_version,
-             updated_at::text AS updated_at
-      FROM public.stripe_info
-      WHERE customer_id = $1
-    `, [TEST_STRIPE_CUSTOMER_ID])
-
-    expect(after).toEqual(before)
+    expect((await runCronStatOrg()).status).toBe(200)
+    expect(await readStripeInfoVersion()).toEqual(before)
   })
 
-  it('should handle too big MAU correctly', async () => {
-    const supabase = getSupabaseClient()
-    const { error: latestMauError, data: latestMauData } = await supabase
-      .from('daily_mau')
-      .select('*')
-      .eq('app_id', APPNAME)
-      .order('date', { ascending: false })
-      .limit(1)
-      .single()
-    expect(latestMauError).toBeFalsy()
+  it.each(USAGE_KINDS)('flags only the exceeded %s usage and blocks only that action', async (kind) => {
+    await setUsage(kind, OVER_LIMIT[kind])
+    await markGoodPlan({ trial_at: new Date(0).toISOString() })
 
-    const { error: setMauError } = await supabase
-      .from('daily_mau')
-      .update({ mau: 1000000 })
-      .eq('app_id', APPNAME)
-      .eq('date', latestMauData?.date ?? '')
-    expect(setMauError).toBeFalsy()
+    expect((await runCronStatOrg()).status).toBe(200)
 
-    const { error } = await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true, trial_at: new Date(0).toISOString() })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-    if (error)
-      throw error
-
-    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(response.status).toBe(200)
-
-    const { data: stripeInfoData } = await supabase
+    const { data: stripeInfoData } = await getSupabaseClient()
       .from('stripe_info')
       .select('*')
       .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
       .single()
     expect(stripeInfoData?.is_good_plan).toBe(false)
 
-    const { data: mauExceeded, error: mauExceededError } = await supabase
-      .rpc('is_mau_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(mauExceededError).toBeFalsy()
-    expect(mauExceeded).toBe(true)
+    for (const other of USAGE_KINDS) {
+      expect(await isExceeded(other), `${other} exceeded`).toBe(other === kind)
+      expect(await isAllowed(other), `${other} allowed`).toBe(other !== kind)
+    }
 
-    const { data: storageExceeded, error: storageExceededError } = await supabase
-      .rpc('is_storage_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(storageExceededError).toBeFalsy()
-    expect(storageExceeded).toBe(false)
-
-    const { data: bandwidthExceeded, error: bandwidthExceededError } = await supabase
-      .rpc('is_bandwidth_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(bandwidthExceededError).toBeFalsy()
-    expect(bandwidthExceeded).toBe(false)
-
-    const { data: isAllowedActionMau, error: isAllowedActionMauError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['mau'] as const })
-    expect(isAllowedActionMauError).toBeFalsy()
-    expect(isAllowedActionMau).toBe(false)
-
-    const { data: isAllowedActionStorage, error: isAllowedActionStorageError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['storage'] as const })
-    expect(isAllowedActionStorageError).toBeFalsy()
-    expect(isAllowedActionStorage).toBe(true)
-
-    const { data: isAllowedActionBandwidth, error: isAllowedActionBandwidthError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['bandwidth'] as const })
-    expect(isAllowedActionBandwidthError).toBeFalsy()
-    expect(isAllowedActionBandwidth).toBe(true)
-
-    const baseData = getBaseData(APPNAME)
-    const updateResponse = await postUpdate(baseData)
-
-    expect(updateResponse.status).toBe(429)
-    expect(await updateResponse.json<{ error: string }>().then(data => data.error)).toEqual('on_premise_app')
+    if (kind === 'mau') {
+      const updateResponse = await postUpdate(getBaseData(APPNAME))
+      expect(updateResponse.status).toBe(429)
+      expect(await updateResponse.json<{ error: string }>().then(data => data.error)).toEqual('on_premise_app')
+    }
   })
 
-  it('should handle too big storage correctly', async () => {
-    const supabase = getSupabaseClient()
+  it.each(USAGE_KINDS)('clears the %s exceeded flag once usage drops back under the limit', async (kind) => {
+    await setUsage(kind, OVER_LIMIT[kind])
+    await markGoodPlan()
+    await runCronStatOrg()
+    expect(await isExceeded(kind)).toBe(true)
 
-    // Solo plan storage limit is 1073741824 (1GB), so we need to exceed that
-    const { error: setStorageError } = await supabase
-      .from('app_versions_meta')
-      .update({ size: 2000000000 })
-      .eq('app_id', APPNAME)
-    expect(setStorageError).toBeFalsy()
-
-    const { error } = await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true, trial_at: new Date(0).toISOString() })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-    if (error)
-      throw error
-
-    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(response.status).toBe(200)
-
-    const { data: stripeInfoData } = await supabase
-      .from('stripe_info')
-      .select('*')
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-      .single()
-    expect(stripeInfoData?.is_good_plan).toBe(false)
-
-    const { data: mauExceeded, error: mauExceededError } = await supabase
-      .rpc('is_mau_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(mauExceededError).toBeFalsy()
-    expect(mauExceeded).toBe(false)
-
-    const { data: storageExceeded, error: storageExceededError } = await supabase
-      .rpc('is_storage_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(storageExceededError).toBeFalsy()
-    expect(storageExceeded).toBe(true)
-
-    const { data: bandwidthExceeded, error: bandwidthExceededError } = await supabase
-      .rpc('is_bandwidth_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(bandwidthExceededError).toBeFalsy()
-    expect(bandwidthExceeded).toBe(false)
-
-    const { data: isAllowedActionStorage, error: isAllowedActionStorageError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['storage'] as const })
-    expect(isAllowedActionStorageError).toBeFalsy()
-    expect(isAllowedActionStorage).toBe(false)
-
-    const { data: isAllowedActionMau, error: isAllowedActionMauError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['mau'] as const })
-    expect(isAllowedActionMauError).toBeFalsy()
-    expect(isAllowedActionMau).toBe(true)
-
-    const { data: isAllowedActionBandwidth, error: isAllowedActionBandwidthError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['bandwidth'] as const })
-    expect(isAllowedActionBandwidthError).toBeFalsy()
-    expect(isAllowedActionBandwidth).toBe(true)
-  })
-
-  it('should handle too big bandwidth correctly', async () => {
-    const supabase = getSupabaseClient()
-    const { error: latestBandwidthError, data: latestBandwidthData } = await supabase
-      .from('daily_bandwidth')
-      .select('*')
-      .eq('app_id', APPNAME)
-      .order('date', { ascending: false })
-      .limit(1)
-      .single()
-    expect(latestBandwidthError).toBeFalsy()
-
-    // Solo plan bandwidth limit is 13958643712 (~13GB), so we need to exceed that
-    const { error: setBandwidthError } = await supabase
-      .from('daily_bandwidth')
-      .update({ bandwidth: 20000000000 })
-      .eq('app_id', APPNAME)
-      .eq('date', latestBandwidthData?.date ?? '')
-    expect(setBandwidthError).toBeFalsy()
-
-    const { error } = await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true, trial_at: new Date(0).toISOString() })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-    if (error)
-      throw error
-
-    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(response.status).toBe(200)
-
-    const { data: stripeInfoData } = await supabase
-      .from('stripe_info')
-      .select('*')
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-      .single()
-    expect(stripeInfoData?.is_good_plan).toBe(false)
-
-    const { data: mauExceeded, error: mauExceededError } = await supabase
-      .rpc('is_mau_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(mauExceededError).toBeFalsy()
-    expect(mauExceeded).toBe(false)
-
-    const { data: storageExceeded, error: storageExceededError } = await supabase
-      .rpc('is_storage_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(storageExceededError).toBeFalsy()
-    expect(storageExceeded).toBe(false)
-
-    const { data: bandwidthExceeded, error: bandwidthExceededError } = await supabase
-      .rpc('is_bandwidth_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(bandwidthExceededError).toBeFalsy()
-    expect(bandwidthExceeded).toBe(true)
-
-    const { data: isAllowedActionBandwidth, error: isAllowedActionBandwidthError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['bandwidth'] as const })
-    expect(isAllowedActionBandwidthError).toBeFalsy()
-    expect(isAllowedActionBandwidth).toBe(false)
-
-    const { data: isAllowedActionMau, error: isAllowedActionMauError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['mau'] as const })
-    expect(isAllowedActionMauError).toBeFalsy()
-    expect(isAllowedActionMau).toBe(true)
-
-    const { data: isAllowedActionStorage, error: isAllowedActionStorageError } = await supabase
-      .rpc('is_allowed_action_org_action', { orgid: TEST_ORG_ID, actions: ['storage'] as const })
-    expect(isAllowedActionStorageError).toBeFalsy()
-    expect(isAllowedActionStorage).toBe(true)
-  })
-
-  it('should correctly handle MAU reset', async () => {
-    const supabase = getSupabaseClient()
-
-    // First set MAU to exceeded
-    const { error: latestMauError, data: latestMauData } = await supabase
-      .from('daily_mau')
-      .select('*')
-      .eq('app_id', APPNAME)
-      .order('date', { ascending: false })
-      .limit(1)
-      .single()
-    expect(latestMauError).toBeFalsy()
-
-    await supabase
-      .from('daily_mau')
-      .update({ mau: 1000000 })
-      .eq('app_id', APPNAME)
-      .eq('date', latestMauData?.date ?? '')
-
-    await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-
-    // Trigger cron to set mau_exceeded
-    await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-
-    // Verify MAU is exceeded
-    const { data: mauExceeded } = await supabase
-      .rpc('is_mau_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(mauExceeded).toBe(true)
-
-    // Now reset MAU to 0
-    await supabase
-      .from('daily_mau')
-      .update({ mau: 0 })
-      .eq('app_id', APPNAME)
-      .eq('date', latestMauData?.date ?? '')
-
-    await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-
-    // Trigger cron again
-    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(response.status).toBe(200)
-
-    // Verify MAU is no longer exceeded
-    const { data: mauExceededAfter, error: mauExceededErrorAfter } = await supabase
-      .rpc('is_mau_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(mauExceededErrorAfter).toBeFalsy()
-    expect(mauExceededAfter).toBe(false)
-  })
-
-  it('should correctly handle storage reset', async () => {
-    const supabase = getSupabaseClient()
-
-    // First set storage to exceeded (Solo plan limit is 1073741824, so use 2GB)
-    await supabase
-      .from('app_versions_meta')
-      .update({ size: 2000000000 })
-      .eq('app_id', APPNAME)
-
-    await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-
-    // Trigger cron to set storage_exceeded
-    await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-
-    // Verify storage is exceeded
-    const { data: storageExceeded } = await supabase
-      .rpc('is_storage_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(storageExceeded).toBe(true)
-
-    // Now reset storage to 0
-    await supabase
-      .from('app_versions_meta')
-      .update({ size: 0 })
-      .eq('app_id', APPNAME)
-
-    await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-
-    // Trigger cron again
-    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(response.status).toBe(200)
-
-    // Verify storage is no longer exceeded
-    const { data: storageExceededAfter, error: storageExceededErrorAfter } = await supabase
-      .rpc('is_storage_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(storageExceededErrorAfter).toBeFalsy()
-    expect(storageExceededAfter).toBe(false)
-  })
-
-  it('should correctly handle bandwidth reset', async () => {
-    const supabase = getSupabaseClient()
-
-    // First set bandwidth to exceeded
-    const { data: latestBandwidthData } = await supabase
-      .from('daily_bandwidth')
-      .select('*')
-      .eq('app_id', APPNAME)
-      .order('date', { ascending: false })
-      .limit(1)
-      .single()
-
-    // Solo plan bandwidth limit is 13958643712 (~13GB), so use 20GB
-    await supabase
-      .from('daily_bandwidth')
-      .update({ bandwidth: 20000000000 })
-      .eq('app_id', APPNAME)
-      .eq('date', latestBandwidthData?.date ?? '')
-
-    await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-
-    // Trigger cron to set bandwidth_exceeded
-    await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-
-    // Verify bandwidth is exceeded
-    const { data: bandwidthExceeded } = await supabase
-      .rpc('is_bandwidth_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(bandwidthExceeded).toBe(true)
-
-    // Now reset bandwidth to 0
-    await supabase
-      .from('daily_bandwidth')
-      .update({ bandwidth: 0 })
-      .eq('app_id', APPNAME)
-      .eq('date', latestBandwidthData?.date ?? '')
-
-    await supabase
-      .from('stripe_info')
-      .update({ is_good_plan: true })
-      .eq('customer_id', TEST_STRIPE_CUSTOMER_ID)
-
-    // Trigger cron again
-    const response = await fetchTestRequest(`${BASE_URL}/triggers/cron_stat_org`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ orgId: TEST_ORG_ID }),
-    })
-    expect(response.status).toBe(200)
-
-    // Verify bandwidth is no longer exceeded
-    const { data: bandwidthExceededAfter, error: bandwidthExceededErrorAfter } = await supabase
-      .rpc('is_bandwidth_exceeded_by_org', { org_id: TEST_ORG_ID })
-    expect(bandwidthExceededErrorAfter).toBeFalsy()
-    expect(bandwidthExceededAfter).toBe(false)
+    await setUsage(kind, 0)
+    await markGoodPlan()
+    expect((await runCronStatOrg()).status).toBe(200)
+    expect(await isExceeded(kind)).toBe(false)
   })
 })

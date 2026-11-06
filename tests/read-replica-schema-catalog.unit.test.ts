@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { REPLICA_TABLES, REPLICA_TYPES, readReplicaSchemaCatalog, replicaConfigPattern } from '../read_replicate/schema_catalog.ts'
+import { readReplicaSchemaCatalog, REPLICA_TABLES, REPLICA_TYPES, replicaConfigPattern } from '../read_replicate/schema_catalog.ts'
 
 describe('read-replica schema catalog', () => {
   it('keeps primary-only onboarding refresh state out of Cloud SQL replication', () => {
@@ -28,26 +28,8 @@ describe('read-replica schema catalog', () => {
       expect(queries[0]?.text).toContain(
         'fresh_catalog_read.checked_at IS NOT NULL',
       )
-      expect(queries[0]?.text).toContain(
-        'constraint_owner.conindid = ix.indexrelid',
-      )
-      expect(queries[0]?.text).toContain(
-        "constraint_owner.contype IN ('p', 'u', 'x')",
-      )
-      expect(queries[0]?.text).toContain('con.convalidated AS is_valid')
-      expect(queries[0]?.text).toContain('dep.deptype IN (\'a\', \'i\')')
-      expect(queries[0]?.text).toContain("'valid', is_valid")
-      expect(queries[0]?.text).toContain("'constraintOwned', constraint_owned")
-      expect(queries[0]?.text).toContain('WITH RECURSIVE')
-      expect(queries[0]?.text).toContain('referenced_types(type_oid)')
-      expect(queries[0]?.text).toContain(
-        'JOIN pg_type typ ON typ.oid = referenced.type_oid',
-      )
-      expect(queries[0]?.text).toContain('selected_sequence_oids(sequence_oid)')
-      expect(queries[0]?.text).toContain(
-        'JOIN selected_sequence_oids selected_sequence',
-      )
-      expect(queries[0]?.text).toContain('JOIN selected_type_names rt')
+      // Catalog content is exercised against real Postgres in
+      // read-replica-schema-catalog.test.ts and read-replica-manifest-exclusion.unit.test.ts.
     },
   )
 })

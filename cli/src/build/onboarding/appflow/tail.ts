@@ -76,7 +76,7 @@ export interface AppflowTailDepsOptions {
   /** Capgo API key flag (overrides the saved key, like the native drivers). */
   apikey?: string
   /** Gateway override threaded into the build request options. */
-  supaHost?: string
+  apiHost?: string
   /** Builder journey id threaded into the build request options. */
   journeyId?: string
   /** Build VIEWER sink — every requesting-build line streams here (fullscreen pane). */
@@ -133,7 +133,7 @@ export function toAppflowTailDeps(
     generateWorkflow,
     writeWorkflowFile,
     requestBuildInternal: (id, opts, silent, logger) =>
-      requestBuildInternal(id, { ...opts, supaHost: options.supaHost, builderJourneyId: options.journeyId }, silent, logger),
+      requestBuildInternal(id, { ...opts, apiHost: options.apiHost, builderJourneyId: options.journeyId }, silent, logger),
     getPackageScripts,
     findProjectType,
     findBuildCommandForProjectType,

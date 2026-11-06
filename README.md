@@ -496,9 +496,9 @@ functions from `scripts/supabase-cloud-functions.ts`:
   still called these via `supabase.functions.invoke` on `sb.capgo.app`; new
   CLI uses `api.capgo.app` / `files.capgo.app`)
 
-Console Capgo-cloud traffic uses Cloudflare (`VITE_API_HOST`); self-host / local
-consoles keep `supabase.functions.invoke`. Capgo cloud deploy also deletes
-functions outside the allowlist (`skip-list` / `delete-args`).
+The console only talks to the Capgo API (`VITE_API_HOST`): Cloudflare on Capgo
+cloud, the `private` Supabase function on self-host / local. Capgo cloud deploy
+also deletes functions outside the allowlist (`skip-list` / `delete-args`).
 
 ```bash
 bun run deploy:supabase:prod
@@ -524,9 +524,7 @@ All configuration keys from `configs.json` can be overridden by setting their up
 | Environment Variable | Description | Default (Prod) | Required for Self-Hosted |
 |---------------------|-------------|----------------|--------------------------|
 | `BASE_DOMAIN` | Console domain | `console.capgo.app` | ✅ Yes |
-| `SUPA_ANON` | Supabase anonymous key | Capgo production key | ✅ Yes |
-| `SUPA_URL` | Supabase URL | `https://sb.capgo.app` | ✅ Yes |
-| `API_DOMAIN` | API domain | `api.capgo.app` | ✅ Yes |
+| `API_DOMAIN` | API domain (the console only talks to this API) | `api.capgo.app` | ✅ Yes |
 | `CAPTCHA_KEY` | Turnstile captcha key | Capgo production key | ⚠️ Optional |
 
 #### Example Self-Hosted Configuration
@@ -534,8 +532,6 @@ All configuration keys from `configs.json` can be overridden by setting their up
 ```bash
 # .env file for self-hosted deployment
 BASE_DOMAIN=console.yourdomain.com
-SUPA_ANON=your-supabase-anon-key
-SUPA_URL=https://your-supabase-url.supabase.co
 API_DOMAIN=api.yourdomain.com
 CAPTCHA_KEY=your-turnstile-key
 ```
@@ -554,7 +550,7 @@ BENTO_SITE_UUID=your-bento-site-uuid
 #### How It Works
 
 The configuration system (`scripts/utils.mjs`) checks for environment variables first:
-1. If an uppercase environment variable exists (e.g., `SUPA_URL`), it uses that value
+1. If an uppercase environment variable exists (e.g., `API_DOMAIN`), it uses that value
 2. Otherwise, it falls back to the appropriate value from `configs.json` based on the branch (`prod`, `preprod`, `development`, or `local`)
 
 **Important:** Without setting these environment variables, your self-hosted instance will attempt to connect to Capgo's production infrastructure, which will fail.

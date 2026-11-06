@@ -59,64 +59,52 @@ afterAll(async () => {
 })
 
 describe('isValidAppId helper function', () => {
-  it('should accept valid reverse domain app IDs', () => {
-    expect(isValidAppId('com.example.app')).toBe(true)
-    expect(isValidAppId('ee.forgr.demoapp')).toBe(true)
-    expect(isValidAppId('com.company.product-name')).toBe(true)
-    expect(isValidAppId('com.company.product_name')).toBe(true)
-    expect(isValidAppId('io.ionic.starter')).toBe(true)
+  it.concurrent('accepts reverse domain app IDs', () => {
+    for (const appId of ['com.example.app', 'ee.forgr.demoapp', 'com.company.product-name', 'com.company.product_name', 'io.ionic.starter'])
+      expect(isValidAppId(appId), appId).toBe(true)
   })
 
-  it('should reject invalid app IDs', () => {
-    expect(isValidAppId('')).toBe(false)
-    expect(isValidAppId('app')).toBe(false)
-    expect(isValidAppId('app_name')).toBe(false)
-    expect(isValidAppId('.com.example')).toBe(false)
-    expect(isValidAppId('com.example.')).toBe(false)
-    expect(isValidAppId('com..example')).toBe(false)
-    expect(isValidAppId('com.example.app+')).toBe(false)
-    expect(isValidAppId('[appid]')).toBe(false)
-  })
-
-  it('should reject empty or null values', () => {
-    expect(isValidAppId('')).toBe(false)
-    expect(isValidAppId(null as any)).toBe(false)
-    expect(isValidAppId(undefined as any)).toBe(false)
+  it.concurrent('rejects malformed, empty or missing app IDs', () => {
+    for (const appId of ['', 'app', 'app_name', '.com.example', 'com.example.', 'com..example', 'com.example.app+', '[appid]', null, undefined])
+      expect(isValidAppId(appId as any), String(appId)).toBe(false)
   })
 })
 
-describe('[POST] /app - app_id validation', () => {
-  it('should reject app creation with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/app`, {
-      method: 'POST',
+describe('public API app_id validation', () => {
+  const appBody = (app_id: string) => () => ({ app_id, name: 'Test App', owner_org: testOrgId })
+  const bundleBody = (app_id: string) => () => ({ app_id, version: '1.0.0', external_url: 'https://example.com/bundle.zip', checksum: 'abc123' })
+  const channelBody = (app_id: string) => () => ({ app_id, channel: 'test-channel' })
+
+  it.concurrent.each([
+    ['POST', '/app', 'invalid-app-id', appBody('invalid-app-id')],
+    ['POST', '/app', 'justappname', appBody('justappname')],
+    ['POST', '/bundle', 'invalid-app', bundleBody('invalid-app')],
+    ['POST', '/bundle', '.com.example.app', bundleBody('.com.example.app')],
+    ['POST', '/channel', 'nodomainapp', channelBody('nodomainapp')],
+    ['POST', '/channel', 'com.example.app+special', channelBody('com.example.app+special')],
+    ['POST', '/device', 'badappid', () => ({ app_id: 'badappid', device_id: '00000000-0000-0000-0000-000000000000' })],
+    ['GET', '/app/invalid-app-id', ''],
+    ['GET', '/app/[appid]', ''],
+    ['PUT', '/app/no-domain', 'no-domain', () => ({ name: 'Updated Name' })],
+    ['DELETE', '/app/justname', ''],
+    ['GET', '/bundle?app_id=invalid', ''],
+    ['DELETE', '/bundle?app_id=badid&version=1.0.0', ''],
+    ['GET', '/channel?app_id=wrongformat', ''],
+    ['DELETE', '/channel?app_id=bad&channel=production', ''],
+    ['GET', '/device?app_id=wrongformat', ''],
+    ['DELETE', '/device?app_id=bad&device_id=00000000-0000-0000-0000-000000000000', ''],
+  ] as [string, string, string, (() => Record<string, unknown>)?][])('rejects %s %s %s with invalid_app_id', async (method, path, _appId, body) => {
+    const response = await fetch(`${BASE_URL}${path}`, {
+      method,
       headers,
-      body: JSON.stringify({
-        app_id: 'invalid-app-id',
-        name: 'Test App',
-        owner_org: testOrgId,
-      }),
+      ...(body ? { body: JSON.stringify(body()) } : {}),
     })
     expect(response.status).toBe(400)
     const data = await response.json() as { error: string }
     expect(data.error).toBe('invalid_app_id')
   })
 
-  it('should reject app creation with app_id without domain', async () => {
-    const response = await fetch(`${BASE_URL}/app`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'justappname',
-        name: 'Test App',
-        owner_org: testOrgId,
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-
-  it('should accept app creation with valid app_id', async () => {
+  it('accepts app creation with a valid app_id', async () => {
     const validAppId = `com.test.valid.${randomUUID()}`
     const response = await fetch(`${BASE_URL}/app`, {
       method: 'POST',
@@ -131,208 +119,6 @@ describe('[POST] /app - app_id validation', () => {
     const data = await response.json() as { app_id: string }
     expect(data.app_id).toBe(validAppId)
 
-    // Cleanup
     await getSupabaseClient().from('apps').delete().eq('app_id', validAppId)
-  })
-})
-
-describe('[POST] /bundle - app_id validation', () => {
-  it('should reject bundle creation with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/bundle`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'invalid-app',
-        version: '1.0.0',
-        external_url: 'https://example.com/bundle.zip',
-        checksum: 'abc123',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-
-  it('should reject bundle creation with app_id starting with dot', async () => {
-    const response = await fetch(`${BASE_URL}/bundle`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: '.com.example.app',
-        version: '1.0.0',
-        external_url: 'https://example.com/bundle.zip',
-        checksum: 'abc123',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[POST] /channel - app_id validation', () => {
-  it('should reject channel creation with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/channel`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'nodomainapp',
-        channel: 'test-channel',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-
-  it('should reject channel creation with special characters in app_id', async () => {
-    const response = await fetch(`${BASE_URL}/channel`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'com.example.app+special',
-        channel: 'test-channel',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[POST] /device - app_id validation', () => {
-  it('should reject device link with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/device`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        app_id: 'badappid',
-        device_id: '00000000-0000-0000-0000-000000000000',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[GET] /app/:id - app_id validation', () => {
-  it('should reject getting app with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/app/invalid-app-id`, {
-      method: 'GET',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-
-  it('should reject getting app with app_id containing brackets', async () => {
-    const response = await fetch(`${BASE_URL}/app/[appid]`, {
-      method: 'GET',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[PUT] /app/:id - app_id validation', () => {
-  it('should reject updating app with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/app/no-domain`, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify({
-        name: 'Updated Name',
-      }),
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[DELETE] /app/:id - app_id validation', () => {
-  it('should reject deleting app with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/app/justname`, {
-      method: 'DELETE',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[GET] /bundle - app_id validation', () => {
-  it('should reject getting bundles with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/bundle?app_id=invalid`, {
-      method: 'GET',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[DELETE] /bundle - app_id validation', () => {
-  it('should reject deleting bundle with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/bundle?app_id=badid&version=1.0.0`, {
-      method: 'DELETE',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[GET] /channel - app_id validation', () => {
-  it('should reject getting channels with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/channel?app_id=wrongformat`, {
-      method: 'GET',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[DELETE] /channel - app_id validation', () => {
-  it('should reject deleting channel with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/channel?app_id=bad&channel=production`, {
-      method: 'DELETE',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[GET] /device - app_id validation', () => {
-  it('should reject getting devices with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/device?app_id=wrongformat`, {
-      method: 'GET',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
-  })
-})
-
-describe('[DELETE] /device - app_id validation', () => {
-  it('should reject deleting device override with invalid app_id', async () => {
-    const response = await fetch(`${BASE_URL}/device?app_id=bad&device_id=00000000-0000-0000-0000-000000000000`, {
-      method: 'DELETE',
-      headers,
-    })
-    expect(response.status).toBe(400)
-    const data = await response.json() as { error: string }
-    expect(data.error).toBe('invalid_app_id')
   })
 })

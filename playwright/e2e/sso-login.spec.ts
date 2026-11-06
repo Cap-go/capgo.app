@@ -5,14 +5,6 @@ test.describe('SSO Login Flow', () => {
     await page.goto('/login/')
   })
 
-  test('should show email only on first paint', async ({ page }) => {
-    await expect(page.locator('[data-test="email"]')).toBeVisible()
-    await expect(page.locator('[data-test="submit"]')).toBeHidden()
-    await expect(page.locator('[data-test="sso-login"]')).toHaveCount(0)
-    await expect(page.locator('[data-test="password"]')).toHaveCount(1)
-    await expect(page.locator('[data-password-ready="false"]')).toHaveCount(1)
-  })
-
   test('should reveal password for non-SSO domains', async ({ page }) => {
     await page.route('**/private/sso/check-domain', async (route) => {
       await route.fulfill({

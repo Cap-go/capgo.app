@@ -9,6 +9,7 @@ import { applyDeviceDataCollectionToDevice, applyDeviceDataCollectionToLogDimens
 import { simpleError200 } from './hono.ts'
 import { cloudlog } from './logging.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
+import { isStaleSnippetEdgeReplay } from './snippetEdgeAnswer.ts'
 import { logSkippedSupabaseWrite, shouldSkipSupabaseStatsFallback } from './supabase_write_guard.ts'
 import { backgroundTask, isInternalVersionName } from './utils.ts'
 
@@ -28,6 +29,7 @@ export interface StatsLogDimensions {
   country_code?: string | null
   plugin_version?: string | null
   channel?: VersionUsageChannel | null
+  uncounted_failure?: boolean
 }
 
 export interface PluginStatsSupabaseFallbacks {
@@ -217,6 +219,9 @@ export function createStatsLogs(c: Context, app_id: string, device_id: string, a
 }
 
 export function createStatsDevices(c: Context, device: DeviceWithoutCreatedAt, collection: DeviceDataCollection = DEFAULT_DEVICE_DATA_COLLECTION) {
+  // A late replay would stamp an old device state as the newest one.
+  if (isStaleSnippetEdgeReplay(c))
+    return Promise.resolve()
   const requestCountry = collection.country ? c.req.raw?.cf?.country : undefined
   const countryCode = collection.country
     ? normalizeDeviceCountryCode(typeof requestCountry === 'string' ? requestCountry : undefined)
@@ -239,8 +244,9 @@ export function sendStatsAndDevice(c: Context, device: DeviceWithoutCreatedAt, s
   const storedDevice = applyDeviceDataCollectionToDevice(device, flags) as DeviceWithoutCreatedAt
   const dimensions = getStatsLogDimensions(c, storedDevice, flags)
   const jobs = []
-  statsActions.forEach(({ action, versionName, metadata, channel }) => {
-    jobs.push(createStatsLogs(c, storedDevice.app_id, storedDevice.device_id, action, versionName ?? storedDevice.version_name, metadata, channel ? { ...dimensions, channel } : dimensions))
+  statsActions.forEach(({ action, versionName, metadata, channel, uncountedFailure }) => {
+    const actionDimensions = channel || uncountedFailure ? { ...dimensions, ...(channel ? { channel } : {}), ...(uncountedFailure ? { uncounted_failure: true } : {}) } : dimensions
+    jobs.push(createStatsLogs(c, storedDevice.app_id, storedDevice.device_id, action, versionName ?? storedDevice.version_name, metadata, actionDimensions))
   })
 
   if (!isFailedStat)

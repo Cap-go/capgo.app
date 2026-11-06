@@ -2,10 +2,9 @@
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { NativeDailyPlatformActive } from '~/services/nativeDeviceStats'
 import { useDark } from '@vueuse/core'
-import { CategoryScale, Chart, Filler, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed } from 'vue'
-import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
+import { Line } from '~/components/dashboard/lazyCharts'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
 import { createTooltipConfig } from '~/services/chartTooltip'
 import { formatLocalDateShort } from '~/services/date'
@@ -30,8 +29,6 @@ const props = defineProps({
     default: false,
   },
 })
-
-Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Filler)
 
 const { t } = useI18n()
 const isDark = useDark()

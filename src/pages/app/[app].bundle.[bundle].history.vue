@@ -1,30 +1,32 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { BundleSummaryRow } from '~/services/bundleColumns'
 import { ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import { useSupabase } from '~/services/supabase'
+import EmptyState from '~/components/EmptyState.vue'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
+import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
 const route = useRoute('/app/[app].bundle.[bundle].history')
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
-const version = ref<Database['public']['Tables']['app_versions']['Row']>()
+const version = ref<BundleSummaryRow>()
 
 async function getVersion() {
   if (!id.value)
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('app_versions')
-      .select()
+      .select(BUNDLE_SUMMARY_COLUMNS)
       .eq('app_id', packageId.value)
       .eq('id', id.value)
       .single()
@@ -72,18 +74,19 @@ watchEffect(async () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('bundle-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('bundle-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
-        {{ t('back-to-bundles') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('bundle-not-found')"
+      :description="t('bundle-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
+          {{ t('back-to-bundles') }}
+        </button>
+      </template>
+    </EmptyState>
   </div>
 </template>
 

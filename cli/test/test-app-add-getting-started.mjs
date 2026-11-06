@@ -66,24 +66,21 @@ assert.equal(
 assert.equal(
   await withTempProject('custom-dashboard', {
     localWebHost: 'https://dashboard.example.com',
-    localSupa: 'https://supabase.example.com',
-    localSupaAnon: 'anon-key',
+    localApi: 'https://api.example.com',
   }, () => resolveAppGettingStartedMessage(appId)),
   `Continue setup at https://dashboard.example.com/app/${appId}/getting-started`,
 )
 
 assert.equal(
-  await withTempProject('custom-supabase-only', {
-    localSupa: 'https://supabase.example.com',
-    localSupaAnon: 'anon-key',
+  await withTempProject('custom-api-only', {
+    localApi: 'https://api.example.com',
   }, () => resolveAppGettingStartedMessage(appId)),
   null,
 )
 
 assert.equal(
-  await withTempProject('cli-supa-host', {}, () => resolveAppGettingStartedMessage(appId, {
-    supaHost: 'https://supabase.example.com',
-    supaAnon: 'anon-key',
+  await withTempProject('cli-api-host', {}, () => resolveAppGettingStartedMessage(appId, {
+    apiHost: 'https://api.example.com',
   })),
   null,
 )
@@ -91,8 +88,7 @@ assert.equal(
 assert.equal(
   await withTempProject('trailing-slash-default', {
     localWebHost: `${defaultHostWeb}/`,
-    localSupa: 'https://supabase.example.com',
-    localSupaAnon: 'anon-key',
+    localApi: 'https://api.example.com',
   }, () => resolveAppGettingStartedMessage(appId)),
   null,
 )

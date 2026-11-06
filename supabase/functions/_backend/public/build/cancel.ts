@@ -3,8 +3,10 @@ import type { Database } from '../../utils/supabase.types.ts'
 import { TERMINAL_BUILD_STATUSES } from '../../utils/build_timeout.ts'
 import { simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
+import type { PgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 
 export async function cancelBuild(
@@ -26,20 +28,25 @@ export async function cancelBuild(
   }
 
   // Bind jobId to its request owner before calling the builder.
-  const supabase = supabaseApikey(c, apikey.key)
-  const { data: buildRequest, error: buildRequestError } = await supabase
-    .from('build_requests')
-    .select('app_id')
-    .eq('builder_job_id', jobId)
-    .eq('app_id', appId)
-    .maybeSingle()
-
-  if (buildRequestError) {
+  const principal = apikeyPrincipal(c, apikey.key)
+  let buildRequest: { app_id: string } | null
+  try {
+    const rows = await withRlsContext(c, principal, client => queryJson<{ app_id: string }>(
+      client,
+      'SELECT app_id FROM public.build_requests WHERE builder_job_id = $1 AND app_id = $2 LIMIT 2',
+      [jobId, appId],
+    ))
+    // maybeSingle(): more than one row was an error under PostgREST
+    if (rows.length > 1)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    buildRequest = rows[0] ?? null
+  }
+  catch (buildRequestError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to fetch build_request for cancel build',
       job_id: jobId,
-      error: buildRequestError.message,
+      error: buildRequestError instanceof Error ? buildRequestError.message : String(buildRequestError),
     })
     throw simpleError('internal_error', 'Failed to fetch build request')
   }
@@ -97,23 +104,27 @@ export async function cancelBuild(
   // Use admin client: access was already verified above (RLS SELECT + checkPermission).
   // build_requests has no UPDATE policy for anon/authenticated, so the API-key client
   // would silently update 0 rows. Only non-terminal rows are moved to cancelled.
-  const { error: updateError } = await supabaseAdmin(c)
-    .from('build_requests')
-    .update({
-      status: 'cancelled',
-      updated_at: new Date().toISOString(),
-    })
-    .eq('builder_job_id', jobId)
-    .eq('app_id', appId)
-    .not('status', 'in', `(${[...TERMINAL_BUILD_STATUSES].join(',')})`)
-
-  if (updateError) {
+  let pg: PgClient | null = null
+  try {
+    pg = await getPgClient(c)
+    await pg.query(
+      `UPDATE public.build_requests
+      SET status = 'cancelled', updated_at = $3
+      WHERE builder_job_id = $1 AND app_id = $2 AND NOT (status = ANY($4::text[]))`,
+      [jobId, appId, new Date().toISOString(), [...TERMINAL_BUILD_STATUSES]],
+    )
+  }
+  catch (updateError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to update build_requests status to cancelled',
       job_id: jobId,
-      error: updateError.message,
+      error: updateError instanceof Error ? updateError.message : String(updateError),
     })
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
   }
 
   return c.json({

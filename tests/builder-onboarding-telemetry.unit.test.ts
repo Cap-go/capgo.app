@@ -9,6 +9,8 @@ vi.mock('../cli/src/utils.ts', () => ({
   sendEvent: sendEventMock,
 }))
 
+const base = { apikey: 'cap_test_key', platform: 'ios', appId: 'com.example.app', orgId: 'org-uuid-1' } as const
+
 describe('trackBuilderOnboardingStep', () => {
   beforeEach(() => {
     sendEventMock.mockReset()
@@ -17,11 +19,8 @@ describe('trackBuilderOnboardingStep', () => {
 
   it('builds the expected payload and calls sendEvent once', async () => {
     await trackBuilderOnboardingStep({
-      apikey: 'cap_test_key',
+      ...base,
       step: 'api-key-instructions',
-      platform: 'ios',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
       durationMs: 1234,
       durationStep: 'welcome',
     })
@@ -47,11 +46,8 @@ describe('trackBuilderOnboardingStep', () => {
 
   it('includes error_category only when an error is provided', async () => {
     await trackBuilderOnboardingStep({
-      apikey: 'cap_test_key',
+      ...base,
       step: 'error',
-      platform: 'ios',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
       error: Object.assign(new Error('Unauthorized'), { status: 401 }),
     })
 
@@ -61,11 +57,9 @@ describe('trackBuilderOnboardingStep', () => {
 
   it('uses the Android mapper when platform is android', async () => {
     await trackBuilderOnboardingStep({
-      apikey: 'cap_test_key',
+      ...base,
       step: 'error',
       platform: 'android',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
       error: Object.assign(new Error('Bad keystore'), { phase: 'keystore' }),
     })
 
@@ -76,21 +70,15 @@ describe('trackBuilderOnboardingStep', () => {
   it('swallows errors thrown by sendEvent', async () => {
     sendEventMock.mockRejectedValueOnce(new Error('network down'))
     await expect(trackBuilderOnboardingStep({
-      apikey: 'cap_test_key',
+      ...base,
       step: 'welcome',
-      platform: 'ios',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
     })).resolves.toBeUndefined()
   })
 
   it('does not include duration_ms when undefined', async () => {
     await trackBuilderOnboardingStep({
-      apikey: 'cap_test_key',
+      ...base,
       step: 'welcome',
-      platform: 'ios',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
     })
 
     const [, payload] = sendEventMock.mock.calls[0]
@@ -99,11 +87,8 @@ describe('trackBuilderOnboardingStep', () => {
 
   it('uses pre-computed errorCategory when provided (skipping the mapper)', async () => {
     await trackBuilderOnboardingStep({
-      apikey: 'cap_test_key',
+      ...base,
       step: 'error',
-      platform: 'ios',
-      appId: 'com.example.app',
-      orgId: 'org-uuid-1',
       errorCategory: 'profile_creation_failed',
       // error intentionally omitted
     })

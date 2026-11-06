@@ -214,6 +214,16 @@ export function buildBuilderBuildOutcomePatch(
   return Object.keys(builderSteps).length ? { builderSteps } : null
 }
 
+// Builder checklist writes apply only to the v4 Builder list that is not dismissed.
+export function isActiveBuilderChecklistSetup(setup: Record<string, unknown>) {
+  return setup.todo_list_version === 4
+    && setup.builder_todo_list_version === '1'
+    && Array.isArray(setup.paths)
+    && setup.paths.includes('builder')
+    && setup.outcome !== 'skipped'
+    && isRecord(setup.steps)
+}
+
 function buildBuilderChecklistPatch(
   onboarding: unknown,
   update: BuilderChecklistUpdate,
@@ -222,15 +232,9 @@ function buildBuilderChecklistPatch(
   if (!isRecord(onboarding) || !isRecord(onboarding.setup))
     return null
   const setup = onboarding.setup
-  if (setup.todo_list_version !== 4
-    || setup.builder_todo_list_version !== '1'
-    || !Array.isArray(setup.paths)
-    || !setup.paths.includes('builder')
-    || setup.outcome === 'skipped'
-    || !isRecord(setup.steps)) {
+  if (!isActiveBuilderChecklistSetup(setup))
     return null
-  }
-  const stepPaths = setup.steps
+  const stepPaths = setup.steps as Record<string, unknown>
   const builder = stepPaths.builder
   if (!isRecord(builder))
     return null

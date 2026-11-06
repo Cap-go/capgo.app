@@ -15,12 +15,18 @@ import { gsap } from 'gsap'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { getLocalConfig } from '~/services/console'
 import { pushEvent } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
 import { sanitizeHtml } from '~/utils/sanitize'
 
-const props = defineProps<{ open: boolean, appId?: string }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{
+  open: boolean
+  appId?: string
+  embedded?: boolean
+  startAction?: 'navigate' | 'emit' | 'none'
+  starting?: boolean
+}>()
+const emit = defineEmits<{ close: [], start: [] }>()
 
 const { t } = useI18n()
 const router = useRouter()
@@ -32,6 +38,7 @@ const cur = ref(0)
 const launched = ref(false)
 let animating = false
 let buildTimer: ReturnType<typeof setTimeout> | null = null
+let previousBodyOverflow: string | null = null
 
 const deckEl = ref<HTMLElement | null>(null)
 const termPlatform = ref<'ios' | 'android'>('ios')
@@ -56,7 +63,7 @@ function getSlides(): HTMLElement[] {
 }
 
 function track(event: string, props_: Record<string, string | number | boolean | null> = {}) {
-  pushEvent(event, config.supaHost, props_)
+  pushEvent(event, config.apiHost, { embedded: props.embedded, ...props_ })
 }
 
 function drawCheck(s: HTMLElement) {
@@ -368,7 +375,13 @@ function prev() {
 }
 
 function startBuild() {
+  if (props.startAction === 'none' || props.starting)
+    return
   track('builder_promo_cta_clicked', { slide: cur.value + 1 })
+  if (props.startAction === 'emit') {
+    emit('start')
+    return
+  }
   const dest = props.appId
     ? `/app/${encodeURIComponent(props.appId)}/builds?page=1&sort_created_at=desc`
     : '/apps'
@@ -390,11 +403,13 @@ function startBuild() {
 function onKey(e: KeyboardEvent) {
   if (!props.open)
     return
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft')
+    e.preventDefault()
   if (e.key === 'ArrowRight')
     next()
   else if (e.key === 'ArrowLeft')
     prev()
-  else if (e.key === 'Escape')
+  else if (e.key === 'Escape' && !props.embedded)
     close()
 }
 
@@ -419,38 +434,59 @@ function initDeck() {
   track('builder_promo_slide_viewed', { slide: 1 })
 }
 
-watch(() => props.open, async (open) => {
+function releaseModal() {
+  if (previousBodyOverflow !== null) {
+    document.body.style.overflow = previousBodyOverflow
+    previousBodyOverflow = null
+  }
+  window.removeEventListener('keydown', onKey)
+}
+
+watch([() => props.open, () => props.embedded], async ([open, embedded]) => {
+  releaseModal()
   if (open) {
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', onKey)
+    if (!embedded) {
+      previousBodyOverflow = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      window.addEventListener('keydown', onKey)
+    }
     track('builder_promo_opened')
     await nextTick()
-    initDeck()
+    if (props.open)
+      initDeck()
   }
   else {
-    document.body.style.overflow = ''
-    window.removeEventListener('keydown', onKey)
+    stopTerminal()
   }
-})
+}, { immediate: true })
 
 onUnmounted(() => {
+  stopTerminal()
   if (buildTimer)
     clearTimeout(buildTimer)
-  document.body.style.overflow = ''
-  window.removeEventListener('keydown', onKey)
+  releaseModal()
 })
 </script>
 
 <template>
   <Transition name="bp-fade">
-    <div v-if="open" class="fixed inset-0 z-50 flex items-center justify-center p-4 bp-overlay" role="dialog" aria-modal="true" @click.self="close">
-      <div class="bp-modal">
+    <div
+      v-if="open"
+      :class="embedded ? 'bp-embedded' : 'fixed inset-0 z-50 flex items-center justify-center p-4 bp-overlay'"
+      :role="embedded ? 'region' : 'dialog'"
+      :aria-modal="embedded ? undefined : true"
+      :aria-label="t('builder-intro-name')"
+      :tabindex="embedded ? 0 : undefined"
+      @click.self="!embedded && close()"
+      @keydown="embedded && onKey($event)"
+    >
+      <div class="bp-modal" :class="{ 'bp-modal--embedded': embedded }">
         <!-- top bar -->
         <div class="bp-top">
           <div class="bp-dots">
             <span v-for="i in SLIDE_COUNT" :key="i" class="bp-dot" :class="{ on: cur === i - 1 }" />
           </div>
-          <button type="button" class="bp-x" :aria-label="t('builder-promo-close')" @click="close">
+          <button v-if="!embedded" type="button" class="bp-x" :aria-label="t('builder-promo-close')" @click="close">
             ✕
           </button>
         </div>
@@ -683,7 +719,7 @@ onUnmounted(() => {
                   {{ t('builder-promo-s5-lead1') }} <b>{{ t('builder-promo-s5-lead2') }}</b>
                 </p>
                 <div>
-                  <button type="button" class="bp-cta" @click="startBuild">
+                  <button type="button" class="bp-cta" :disabled="starting || startAction === 'none'" :aria-busy="starting || undefined" @click="startBuild">
                     {{ t('builder-promo-s5-cta') }}
                     <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
                   </button>
@@ -698,10 +734,14 @@ onUnmounted(() => {
           <button type="button" class="bp-ghost" :disabled="isFirst" @click="prev">
             ← {{ t('builder-promo-back') }}
           </button>
-          <button v-if="!isLast" type="button" class="bp-next" @click="next">
-            {{ t('builder-promo-next') }} →
-          </button>
-          <span v-else />
+          <div class="bp-actions">
+            <button v-if="embedded && startAction === 'emit' && !isLast" type="button" class="bp-ghost bp-start" :disabled="starting" :aria-busy="starting || undefined" @click="startBuild">
+              {{ t('builder-intro-start-first-build') }}
+            </button>
+            <button v-if="!isLast" type="button" class="bp-next" @click="next">
+              {{ t('builder-promo-next') }} →
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -721,6 +761,14 @@ onUnmounted(() => {
 .bp-overlay {
   background: rgba(2, 8, 18, 0.72);
   backdrop-filter: blur(3px);
+}
+.bp-embedded {
+  width: 100%;
+}
+.bp-embedded:focus-visible {
+  outline: 2px solid #119eff;
+  outline-offset: 4px;
+  border-radius: 12px;
 }
 .bp-modal {
   /* theme tokens — light mode is the default; .dark overrides below */
@@ -795,6 +843,11 @@ onUnmounted(() => {
   border-radius: 20px;
   box-shadow: var(--bp-modal-shadow);
   overflow: hidden;
+}
+.bp-modal--embedded {
+  width: 100%;
+  border-radius: 12px;
+  box-shadow: none;
 }
 .dark .bp-modal {
   --bp-surface: #0b1424;
@@ -912,10 +965,24 @@ onUnmounted(() => {
 
 .bp-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 14px 18px;
   border-top: 1px solid var(--bp-border);
+}
+.bp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 100%;
+  margin-left: auto;
+}
+.bp-start {
+  max-width: 100%;
 }
 .bp-ghost {
   background: transparent;
@@ -1691,6 +1758,10 @@ onUnmounted(() => {
 }
 .bp-cta:active {
   transform: scale(0.97);
+}
+.bp-cta:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 .bp-cta svg {
   width: 16px;

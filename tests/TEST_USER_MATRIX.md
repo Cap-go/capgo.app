@@ -7,7 +7,7 @@ Legend: R = reads user records only (no direct auth/public users writes detected
 | tests/admin-credits.test.ts | USER_ID | R | Shared |
 | tests/apikeys-expiration.test.ts | USER_ID_APIKEY_EXPIRATION | R | Isolated |
 | tests/app-id-validation.test.ts | USER_ID | R | Shared |
-| tests/app-permissions.test.ts | USER_ID, USER_ID_2 | R | Shared |
+| tests/app-error-cases.test.ts | USER_ID, USER_ID_2 | R | Shared |
 | tests/app.test.ts | USER_ID | R | Shared |
 | tests/audit-logs.test.ts | USER_ID | R | Shared |
 | tests/build_time_tracking.test.ts | USER_ID | R | Shared |
@@ -15,7 +15,6 @@ Legend: R = reads user records only (no direct auth/public users writes detected
 | tests/bundle-error-cases.test.ts | USER_ID | R | Shared |
 | tests/bundle-semver-validation.test.ts | USER_ID | R | Shared |
 | tests/channel_devices/channel_deletion.test.ts | USER_ID | R | Shared |
-| tests/channel_devices/channel_self_delete.test.ts | USER_ID | R | Shared |
 | tests/cli-compat.test.ts | USER_ID | R | Shared |
 | tests/cli-channel.test.ts | USER_ID | R | Shared |
 | tests/cli-hashed-apikey.test.ts | USER_ID, USER_ID_RLS | R | Shared |

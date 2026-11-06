@@ -79,8 +79,8 @@ interface StartInitReplayOptions {
   replayUrl?: string
   rows?: number
   sessionPrefix?: string
-  supaAnon?: string
-  supaHost?: string
+  /** Custom Capgo API (--api-host): replays go to its /private/replay. */
+  apiHost?: string
   throttleMs?: number
   terminalPixelSize?: TerminalPixelSize
   transport?: InitReplayTransport
@@ -128,23 +128,6 @@ export function resolveCapgoReplayUrl(host = env.CAPGO_CLI_REPLAY_API_HOST?.trim
       return withoutTrailingSlash
 
     return new URL('private/replay', withoutTrailingSlash.endsWith('/') ? withoutTrailingSlash : `${withoutTrailingSlash}/`).toString()
-  }
-  catch {
-    return undefined
-  }
-}
-
-export function resolveSupabaseReplayUrl(supaHost?: string) {
-  const trimmedHost = supaHost?.trim()
-  if (!trimmedHost)
-    return undefined
-
-  try {
-    const withoutTrailingSlash = trimTrailingSlashes(trimmedHost)
-    if (withoutTrailingSlash.endsWith('/functions/v1/private/replay'))
-      return withoutTrailingSlash
-
-    return new URL('functions/v1/private/replay', `${withoutTrailingSlash}/`).toString()
   }
   catch {
     return undefined
@@ -733,12 +716,10 @@ class InitReplayRecorder implements InitReplayController {
 
 export function startInitReplay(options: StartInitReplayOptions = {}): InitReplayController | undefined {
   const apikey = options.apikey?.trim() || ''
-  const customSupabaseReplayRequested = Boolean(options.supaHost?.trim() || options.supaAnon?.trim())
-  const customSupabaseReplayUrl = options.supaHost?.trim() && options.supaAnon?.trim()
-    ? resolveSupabaseReplayUrl(options.supaHost)
-    : undefined
+  const customApiReplayRequested = Boolean(options.apiHost?.trim())
+  const customApiReplayUrl = customApiReplayRequested ? resolveCapgoReplayUrl(options.apiHost) : undefined
   const replayAnalyticsEnabled = options.analyticsEnabled !== false
-    && (!customSupabaseReplayRequested || Boolean(options.replayUrl || customSupabaseReplayUrl))
+    && (!customApiReplayRequested || Boolean(options.replayUrl || customApiReplayUrl))
   const shouldStart = shouldStartInitReplay({
     analyticsEnabled: replayAnalyticsEnabled,
     apikey,
@@ -755,8 +736,8 @@ export function startInitReplay(options: StartInitReplayOptions = {}): InitRepla
     let abortReplayUrlLookup: (() => void) | undefined
     const replayUrl = options.replayUrl
       ? Promise.resolve(resolveCapgoReplayUrl(options.replayUrl))
-      : customSupabaseReplayUrl
-        ? Promise.resolve(customSupabaseReplayUrl)
+      : customApiReplayUrl
+        ? Promise.resolve(customApiReplayUrl)
         : (() => {
             const controller = new AbortController()
             abortReplayUrlLookup = () => controller.abort()

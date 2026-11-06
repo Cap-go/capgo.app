@@ -1,54 +1,18 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { resolveConfiguredOrganizationUpdateApiHost, resolveOrganizationUpdateApiHost } from '../src/organization/set.ts'
-import { invokeCapgoCliApi, normalizeSupabaseHost } from '../src/utils.ts'
+import { resolveOrganizationUpdateApiHost } from '../src/organization/set.ts'
+import { invokeCapgoCliApi, normalizeCapgoApiHost } from '../src/utils.ts'
 
-assert.equal(normalizeSupabaseHost('http://localhost:54321/'), 'http://localhost:54321')
+assert.equal(normalizeCapgoApiHost('http://localhost:54321/'), 'http://localhost:54321')
 assert.throws(
-  () => normalizeSupabaseHost('http://self-hosted.example.com'),
-  /must use HTTPS/,
+  () => normalizeCapgoApiHost('http://self-hosted.example.com'),
+  /HTTPS/,
 )
+assert.throws(() => normalizeCapgoApiHost('https://example.com/api?env=dev'), /query parameters or fragments/)
 
 assert.equal(
-  await resolveOrganizationUpdateApiHost({
-    supaHost: 'https://self-hosted.example.com///',
-    supaAnon: 'anon-key',
-  }, true),
+  await resolveOrganizationUpdateApiHost({ apiHost: 'https://self-hosted.example.com/functions/v1///' }, true),
   'https://self-hosted.example.com/functions/v1',
-)
-
-assert.equal(
-  await resolveOrganizationUpdateApiHost({
-    supaHost: 'https://example.com/custom/supabase/',
-    supaAnon: 'anon-key',
-  }, true),
-  'https://example.com/custom/supabase/functions/v1',
-)
-
-await assert.rejects(
-  () => resolveOrganizationUpdateApiHost({
-    supaHost: 'https://example.com/supabase?env=dev',
-    supaAnon: 'anon-key',
-  }, true),
-  /query parameters or fragments/,
-)
-
-assert.equal(
-  resolveConfiguredOrganizationUpdateApiHost({
-    hostApi: 'https://api.capgo.app',
-    supaHost: 'https://configured.example.com/',
-    supaKey: 'anon-key',
-  }),
-  'https://configured.example.com/functions/v1',
-)
-
-assert.equal(
-  resolveConfiguredOrganizationUpdateApiHost({
-    hostApi: 'https://configured-api.example.com/functions/v1',
-    supaHost: 'https://configured.example.com/',
-    supaKey: 'anon-key',
-  }),
-  'https://configured-api.example.com/functions/v1',
 )
 
 const originalFetch = globalThis.fetch
@@ -61,12 +25,28 @@ try {
   const result = await invokeCapgoCliApi('app/com.example.app', {
     apikey: 'test-api-key',
     method: 'GET',
-    supaHost: 'https://self-hosted.example.com',
-    supaAnon: 'test-anon-key',
+    apiHost: 'https://self-hosted.example.com/functions/v1',
   })
   assert.equal(result.error, null)
   assert.equal(request.url, 'https://self-hosted.example.com/functions/v1/app/com.example.app')
-  assert.equal(request.init.redirect, 'error')
+  assert.equal(request.init.redirect, 'manual')
+  assert.equal(request.init.headers.Authorization, 'test-api-key', 'no Supabase anon key: the API key is the credential')
+  assert.equal(request.init.headers.capgo_api, '2025-10-01')
+
+  // Redirects are not followed: a 3xx comes back as an error, without a second request.
+  let calls = 0
+  globalThis.fetch = async () => {
+    calls++
+    return new Response(null, { status: 302, headers: { Location: 'https://elsewhere.example.com/' } })
+  }
+  const redirected = await invokeCapgoCliApi('app/com.example.app', {
+    apikey: 'test-api-key',
+    method: 'GET',
+    apiHost: 'https://self-hosted.example.com/functions/v1',
+  })
+  assert.equal(redirected.data, null)
+  assert.ok(redirected.error)
+  assert.equal(calls, 1)
 }
 finally {
   globalThis.fetch = originalFetch

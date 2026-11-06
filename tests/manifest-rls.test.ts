@@ -17,6 +17,7 @@ import {
   USER_ID_NONMEMBER,
   USER_PASSWORD,
   USER_PASSWORD_NONMEMBER,
+  insertManifestRows,
 } from './test-utils.ts'
 
 const id = randomUUID()
@@ -275,7 +276,7 @@ beforeAll(async () => {
   await createUserOrgBinding(READ_ONLY_ORG_ID, USER_ID_NONMEMBER, 'org_member')
   await createUserAppBinding(READ_ONLY_ORG_ID, USER_ID_NONMEMBER, APP_READ_ONLY, 'app_reader')
 
-  await supabase.from('manifest').insert([
+  await insertManifestRows([
     {
       app_version_id: ownVersionId,
       file_name: 'own-entry.js',
@@ -297,7 +298,7 @@ beforeAll(async () => {
       file_hash: 'read-only-visible-hash',
       file_size: 103,
     },
-  ]).throwOnError()
+  ])
 }, 120000)
 
 afterAll(async () => {
@@ -386,7 +387,8 @@ describe('manifest RLS', () => {
 
     expect(response.ok).toBe(false)
     expect([401, 403]).toContain(response.status)
-    expect(JSON.stringify(body).toLowerCase()).toContain('row-level security')
+    // public.manifest is a read-only view for users.
+    expect(JSON.stringify(body).toLowerCase()).toContain('permission denied')
   })
 
   it('prevents an app reader binding from inserting manifest entries', async () => {
@@ -399,82 +401,62 @@ describe('manifest RLS', () => {
 
     expect(response.ok).toBe(false)
     expect([401, 403]).toContain(response.status)
-    expect(JSON.stringify(body).toLowerCase()).toContain('row-level security')
+    expect(JSON.stringify(body).toLowerCase()).toContain('permission denied')
   })
 
   it('prevents an org owner from deleting manifest entries directly', async () => {
-    const { data: createdRow, error: createError } = await getSupabaseClient()
-      .from('manifest')
-      .insert({
-        app_version_id: ownVersionId,
-        file_name: 'owner-delete-guard.js',
-        s3_path: `orgs/${READ_ONLY_ORG_ID}/apps/${APP_OWN}/owner-delete-guard.js`,
-        file_hash: 'owner-delete-guard-hash',
-      })
-      .select('id')
-      .single()
-
-    expect(createError).toBeNull()
+    const [createdRow] = await insertManifestRows([{
+      app_version_id: ownVersionId,
+      file_name: 'owner-delete-guard.js',
+      s3_path: `orgs/${READ_ONLY_ORG_ID}/apps/${APP_OWN}/owner-delete-guard.js`,
+      file_hash: 'owner-delete-guard-hash',
+    }])
     expect(createdRow?.id).toBeTypeOf('number')
-
-    const createdRowId = createdRow!.id
+    const createdRowId = Number(createdRow!.id)
 
     const { response: blockedDeleteResponse, body: blockedDeleteBody } = await deleteManifestRow(authHeadersUser1, createdRowId)
 
-    expect(blockedDeleteResponse.status).toBe(200)
-    expect(blockedDeleteBody).toEqual([])
+    expect(blockedDeleteResponse.ok).toBe(false)
+    expect([401, 403]).toContain(blockedDeleteResponse.status)
+    expect(JSON.stringify(blockedDeleteBody).toLowerCase()).toContain('permission denied')
 
     const { data: stillPresent, error: stillPresentError } = await getSupabaseClient()
       .from('manifest')
       .select('id')
       .eq('id', createdRowId)
+      .eq('app_version_id', ownVersionId)
       .maybeSingle()
 
     expect(stillPresentError).toBeNull()
     expect(stillPresent?.id).toBe(createdRowId)
-
-    await getSupabaseClient()
-      .from('manifest')
-      .delete()
-      .eq('id', createdRowId)
-      .throwOnError()
   })
 
+
   it('prevents an app reader binding from deleting manifest entries', async () => {
-    const { data: createdRow, error: createError } = await getSupabaseClient()
-      .from('manifest')
-      .insert({
-        app_version_id: readOnlyVersionId,
-        file_name: 'readonly-delete-guard.js',
-        s3_path: `orgs/${READ_ONLY_ORG_ID}/apps/${APP_READ_ONLY}/readonly-delete-guard.js`,
-        file_hash: 'readonly-delete-guard-hash',
-      })
-      .select('id')
-      .single()
-
-    expect(createError).toBeNull()
+    const [createdRow] = await insertManifestRows([{
+      app_version_id: readOnlyVersionId,
+      file_name: 'readonly-delete-guard.js',
+      s3_path: `orgs/${READ_ONLY_ORG_ID}/apps/${APP_READ_ONLY}/readonly-delete-guard.js`,
+      file_hash: 'readonly-delete-guard-hash',
+    }])
     expect(createdRow?.id).toBeTypeOf('number')
-
-    const createdRowId = createdRow!.id
+    const createdRowId = Number(createdRow!.id)
 
     const { response: blockedDeleteResponse, body: blockedDeleteBody } = await deleteManifestRow(authHeadersNonMember, createdRowId)
 
-    expect(blockedDeleteResponse.status).toBe(200)
-    expect(blockedDeleteBody).toEqual([])
+    expect(blockedDeleteResponse.ok).toBe(false)
+    expect([401, 403]).toContain(blockedDeleteResponse.status)
+    expect(JSON.stringify(blockedDeleteBody).toLowerCase()).toContain('permission denied')
 
     const { data: stillPresent, error: stillPresentError } = await getSupabaseClient()
       .from('manifest')
       .select('id')
       .eq('id', createdRowId)
+      .eq('app_version_id', readOnlyVersionId)
       .maybeSingle()
 
     expect(stillPresentError).toBeNull()
     expect(stillPresent?.id).toBe(createdRowId)
-
-    await getSupabaseClient()
-      .from('manifest')
-      .delete()
-      .eq('id', createdRowId)
-      .throwOnError()
   })
+
 })

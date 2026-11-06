@@ -40,6 +40,28 @@ future logical row changes from crossing to Google; setup/reset scripts must
 not add it back. Existing subscriber rows and physical tables are deliberately
 left alone. This change does not reclaim their storage or eliminate primary WAL.
 
+## Repairing a gap without a reload
+
+When the subscription is streaming again but missed changes (for example
+`capgo_google_eu_2_slot` was invalidated with `wal_removed` and recreated at
+the current WAL position), repair the live tables instead of reloading them:
+
+```bash
+# Dry run: per table, how many rows differ
+bun run readreplicate:repair
+# Fix them
+bun run readreplicate:repair -- --apply
+```
+
+It compares every row by primary key and an md5 of its columns, then inserts,
+overwrites or deletes only the rows that differ, one transaction per table,
+while the subscription keeps streaming. Readers never see an empty table, and
+row-count matches do not hide updated rows. It only touches subscribed tables
+in state `r`, and skips `delta_files` and `version_files` by default (large,
+and copied fresh by `REFRESH PUBLICATION`); pass `--tables a,b` or `--skip`
+to change that. Rows that changed during the repair are reported; run it again
+to settle them.
+
 ## Release reconciliation
 
 The release job rebuilds the selected schema catalog from the checked-out local
@@ -55,6 +77,15 @@ then re-reads the catalog. The bucket grants the CI service account only
 bucket-scoped object access and the Cloud SQL service agent only read access.
 Any skipped, unsupported, or non-transactional change stops the release before
 it can mutate either database.
+
+New replicated tables are only created when they are listed in
+`ALLOWED_NEW_REPLICA_TABLES` (`schema_additive_sync.ts`), which pins their exact
+`CREATE TABLE` SQL and catalog shape; any other missing table stops the
+release. After primary migrations, the `read_replica_subscription` job lists
+the tables `capgo_google_eu_2_sub` streams and, when a replicated table is
+missing, runs `ALTER SUBSCRIPTION ... REFRESH PUBLICATION WITH (copy_data =
+true)` as a single Data API statement (it cannot run inside the import's
+transaction), then checks the table is streamed.
 
 This path has no direct PostgreSQL connection from GitHub Actions, no runner IP
 allowlist, no temporary Worker, and no database-side helper, database role,

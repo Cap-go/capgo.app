@@ -30,7 +30,7 @@ function goToPlans() {
     <button
       v-if="!hideExternalPurchaseFlows"
       type="button"
-      class="inline-flex gap-2 items-center px-6 py-3 text-white bg-amber-500 rounded-lg transition-colors cursor-pointer hover:bg-amber-600 focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:outline-none"
+      class="d-btn d-btn-warning"
       @click="goToPlans"
     >
       {{ t('plan-upgrade-v2') }}

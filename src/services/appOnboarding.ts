@@ -1,4 +1,5 @@
 export type {
+  AppOnboardingState,
   AppOnboardingStepId,
   AppOnboardingStepStatus,
 } from '../../supabase/functions/_backend/utils/appOnboarding.ts'
@@ -9,3 +10,5 @@ export {
   hasSupportedOtaTodoList,
   parseAppOnboarding,
 } from '../../supabase/functions/_backend/utils/appOnboarding.ts'
+
+export { isOpenOnboardingStepStatus } from '../../supabase/functions/_backend/utils/onboardingMissedSteps.ts'

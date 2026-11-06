@@ -117,7 +117,7 @@ bun test:front  # E2E tests in playwright/e2e/
 ### Code Quality Commands
 
 ```bash
-bun lint          # ESLint for frontend (src/**/*.{vue,ts,js})
+bun lint          # oxlint (+ oxlint-plugin-vize) and ESLint for .vue templates, frontend (src/**/*.{vue,ts,js})
 bun lint:fix      # Auto-fix linting issues
 bun lint:backend  # ESLint for backend (supabase/**/*.{ts,js})
 bun typecheck     # Vue + TypeScript type checking

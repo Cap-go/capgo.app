@@ -2,14 +2,25 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import {
+  capReleaseAs,
   matchesComponent,
   resolvePendingReleaseScope,
   resolveReleaseScope,
 } from '../scripts/release-scope.ts'
 
+function gitStub(responses: Record<string, string>, calls: string[][] = []) {
+  return (args: string[]) => {
+    calls.push(args)
+    const key = args.join(' ')
+    if (key in responses)
+      return responses[key]
+    throw new Error(`Unexpected git call: ${key}`)
+  }
+}
+
 describe('release scope matching', () => {
-  it.concurrent('does not publish packages for release infrastructure changes', () => {
-    const files = [
+  it.concurrent.each([
+    ['release infrastructure', [
       '.github/workflows/tests.yml',
       '.github/workflows/bump_version.yml',
       '.github/workflows/publish_cli.yml',
@@ -20,11 +31,18 @@ describe('release scope matching', () => {
       'scripts/sync-notifications-package-version.ts',
       'scripts/release-scope.ts',
       'tests/release-scope.test.ts',
-    ]
-
-    expect(matchesComponent('capgo', files)).toBe(false)
-    expect(matchesComponent('cli', files)).toBe(false)
-    expect(matchesComponent('notifications', files)).toBe(false)
+    ], null],
+    ['root package and test inputs', ['package.json', 'bun.lock', 'tsconfig.json', 'vitest.config.ts'], 'capgo'],
+    ['read-replica schema sync scripts', ['scripts/sync-read-replica-schema.ts', 'scripts/check-read-replica-hyperdrive-schema.sh'], 'capgo'],
+    ['capgo deploy workflow', ['.github/workflows/build_and_deploy.yml', 'scripts/deploy-scope.ts'], 'capgo'],
+    ['inventory queue provisioning', ['scripts/ensure-r2-inventory-queues.ts'], 'capgo'],
+    ['console runtime code', ['src/pages/index.vue'], 'capgo'],
+    ['CLI runtime code', ['cli/src/index.ts'], 'cli'],
+    ['notifications package', ['packages/capacitor-notifications/src/index.ts'], 'notifications'],
+    ['unrelated docs', ['README.md'], null],
+  ] as const)('scopes %s changes to %s only', (_name, files, component) => {
+    for (const candidate of ['capgo', 'cli', 'notifications'] as const)
+      expect(matchesComponent(candidate, [...files]), candidate).toBe(candidate === component)
   })
 
   it.concurrent('does not release the packages changed only by the release-scope fix', () => {
@@ -35,19 +53,10 @@ describe('release scope matching', () => {
       'tests/release-scope.test.ts',
     ]
 
-    const run = (args: string[]) => {
-      const key = args.join(' ')
-      const responses: Record<string, string> = {
-        'rev-list --reverse release-parent..release-fix': 'release-fix',
-        'show --format= --name-only release-fix': files.join('\n'),
-      }
-
-      if (key in responses) {
-        return responses[key]
-      }
-
-      throw new Error(`Unexpected git call: ${key}`)
-    }
+    const run = gitStub({
+      'rev-list --reverse release-parent..release-fix': 'release-fix',
+      'show --format= --name-only release-fix': files.join('\n'),
+    })
 
     for (const component of ['capgo', 'cli', 'notifications'] as const) {
       expect(resolveReleaseScope(component, 'release-parent', 'release-fix', run)).toEqual({
@@ -57,47 +66,16 @@ describe('release scope matching', () => {
     }
   })
 
-  it.concurrent('treats root package and test inputs as Capgo-only', () => {
-    const files = ['package.json', 'bun.lock', 'tsconfig.json', 'vitest.config.ts']
+  it.concurrent('keeps the notifications plugin major aligned with Capacitor', () => {
+    const packageJson = JSON.parse(
+      readFileSync('packages/capacitor-notifications/package.json', 'utf8'),
+    ) as { version: string, devDependencies: Record<string, string> }
+    const capacitorMajor = packageJson.devDependencies['@capacitor/ios'].replace(/^\D*/, '').split('.')[0]
 
-    expect(matchesComponent('capgo', files)).toBe(true)
-    expect(matchesComponent('cli', files)).toBe(false)
-    expect(matchesComponent('notifications', files)).toBe(false)
-  })
-
-  it.concurrent('treats read-replica schema sync scripts as Capgo releases', () => {
-    const files = [
-      'scripts/sync-read-replica-schema.ts',
-      'scripts/check-read-replica-hyperdrive-schema.sh',
-    ]
-
-    expect(matchesComponent('capgo', files)).toBe(true)
-    expect(matchesComponent('cli', files)).toBe(false)
-    expect(matchesComponent('notifications', files)).toBe(false)
-  })
-
-  it.concurrent('treats capgo deploy workflow changes as capgo-only releases', () => {
-    const files = ['.github/workflows/build_and_deploy.yml', 'scripts/deploy-scope.ts']
-
-    expect(matchesComponent('capgo', files)).toBe(true)
-    expect(matchesComponent('cli', files)).toBe(false)
-    expect(matchesComponent('notifications', files)).toBe(false)
-  })
-
-  it.concurrent('releases inventory queue provisioning changes as Capgo-only', () => {
-    const files = ['scripts/ensure-r2-inventory-queues.ts']
-
-    expect(matchesComponent('capgo', files)).toBe(true)
-    expect(matchesComponent('cli', files)).toBe(false)
-    expect(matchesComponent('notifications', files)).toBe(false)
-  })
-
-  it.concurrent('treats notifications package changes as notifications-only releases', () => {
-    const files = ['packages/capacitor-notifications/src/index.ts']
-
-    expect(matchesComponent('capgo', files)).toBe(false)
-    expect(matchesComponent('cli', files)).toBe(false)
-    expect(matchesComponent('notifications', files)).toBe(true)
+    expect(packageJson.version.split('.')[0]).toBe(capacitorMajor)
+    expect(capReleaseAs('notifications', 'major')).toBe('minor')
+    expect(capReleaseAs('notifications', 'patch')).toBe('patch')
+    expect(capReleaseAs('cli', 'major')).toBe('major')
   })
 
   it.concurrent('publishes notifications as a public npm package', () => {
@@ -127,74 +105,14 @@ describe('release scope matching', () => {
     expect(workflow).not.toContain('NPM_CONFIG_TOKEN')
   })
 
-  it.concurrent('builds package changelogs from the last successful component release', () => {
-    for (const [workflowPath, prefix] of [
-      ['.github/workflows/publish_cli.yml', 'cli-'],
-      ['.github/workflows/publish_notifications.yml', 'notifications-'],
-    ] as const) {
-      const workflow = readFileSync(workflowPath, 'utf8')
-      const changelogUrl = 'compare/$' + '{{ steps.changelog_base.outputs.from_tag }}...$' + '{{ github.ref_name }}'
-      const legacyChangelogUrl = 'compare/$' + '{{ steps.changelog.outputs.from_tag }}...$' + '{{ steps.changelog.outputs.to_tag }}'
-
-      expect(workflow).toContain('gh release list')
-      expect(workflow).toContain(`--arg prefix "${prefix}"`)
-      expect(workflow).toContain('FROM_TAG: $' + '{{ steps.changelog_base.outputs.from_tag }}')
-      expect(workflow).toContain(changelogUrl)
-      expect(workflow).not.toContain(legacyChangelogUrl)
-    }
-  })
-
-  it.concurrent('uses the released package in Discord release footers', () => {
-    const workflow = readFileSync('.github/workflows/github-releases-to-discord.yml', 'utf8')
-    const cliPackage = JSON.parse(readFileSync('cli/package.json', 'utf8')) as { name: string }
-    const notificationsPackage = JSON.parse(
-      readFileSync('packages/capacitor-notifications/package.json', 'utf8'),
-    ) as { name: string }
-
-    expect(workflow).toContain('id: release_metadata')
-    expect(workflow).toContain(`cli-[0-9]*) footer_title="Release $(node -p 'require("./cli/package.json").name')"`)
-    expect(workflow).toContain(
-      `notifications-[0-9]*) footer_title="Release $(node -p 'require("./packages/capacitor-notifications/package.json").name')"`,
-    )
-    expect(workflow).not.toContain('cli-*) footer_title=')
-    expect(workflow).toContain('footer_title: $' + '{{ steps.release_metadata.outputs.footer_title }}')
-    expect(cliPackage.name).toBe('@capgo/cli')
-    expect(notificationsPackage.name).toBe('@capgo/capacitor-notifications')
-  })
-
-  it.concurrent('keeps runtime code scoped to the matching component', () => {
-    expect(matchesComponent('capgo', ['src/pages/index.vue'])).toBe(true)
-    expect(matchesComponent('cli', ['src/pages/index.vue'])).toBe(false)
-    expect(matchesComponent('notifications', ['src/pages/index.vue'])).toBe(false)
-    expect(matchesComponent('capgo', ['cli/src/index.ts'])).toBe(false)
-    expect(matchesComponent('cli', ['cli/src/index.ts'])).toBe(true)
-    expect(matchesComponent('notifications', ['cli/src/index.ts'])).toBe(false)
-  })
-
-  it.concurrent('does not release on unrelated changes', () => {
-    const files = ['README.md']
-
-    expect(matchesComponent('capgo', files)).toBe(false)
-    expect(matchesComponent('cli', files)).toBe(false)
-    expect(matchesComponent('notifications', files)).toBe(false)
-  })
-
   it.concurrent('ignores an auto-sync commit when calculating pending release scope', () => {
-    const run = (args: string[]) => {
-      const key = args.join(' ')
-      const responses: Record<string, string> = {
-        'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
-        'rev-list --reverse capgo-12.0.0..auto-sync-head': 'auto-sync-head',
-        'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/supabase.types.ts',
-        'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',
-        'log -1 --format=%b auto-sync-head': '',
-      }
-
-      if (key in responses)
-        return responses[key]
-
-      throw new Error(`Unexpected git call: ${key}`)
-    }
+    const run = gitStub({
+      'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
+      'rev-list --reverse capgo-12.0.0..auto-sync-head': 'auto-sync-head',
+      'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/database.types.ts',
+      'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',
+      'log -1 --format=%b auto-sync-head': '',
+    })
 
     expect(resolvePendingReleaseScope('capgo', 'auto-sync-head', false, run)).toEqual({
       base: 'capgo-12.0.0',
@@ -204,24 +122,16 @@ describe('release scope matching', () => {
   })
 
   it.concurrent('lets an auto-sync run release earlier pending source changes', () => {
-    const run = (args: string[]) => {
-      const key = args.join(' ')
-      const responses: Record<string, string> = {
-        'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
-        'rev-list --reverse capgo-12.0.0..auto-sync-head': 'feature-head\nauto-sync-head',
-        'show --format= --name-only feature-head': 'src/pages/index.vue',
-        'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/supabase.types.ts',
-        'log -1 --format=%s feature-head': 'feat: pending console change',
-        'log -1 --format=%b feature-head': '',
-        'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',
-        'log -1 --format=%b auto-sync-head': '',
-      }
-
-      if (key in responses)
-        return responses[key]
-
-      throw new Error(`Unexpected git call: ${key}`)
-    }
+    const run = gitStub({
+      'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 auto-sync-head': 'capgo-12.0.0',
+      'rev-list --reverse capgo-12.0.0..auto-sync-head': 'feature-head\nauto-sync-head',
+      'show --format= --name-only feature-head': 'src/pages/index.vue',
+      'show --format= --name-only auto-sync-head': 'supabase/schemas/prod.sql\nsrc/types/database.types.ts',
+      'log -1 --format=%s feature-head': 'feat: pending console change',
+      'log -1 --format=%b feature-head': '',
+      'log -1 --format=%s auto-sync-head': 'chore(auto-sync): update supabase schema and generated types',
+      'log -1 --format=%b auto-sync-head': '',
+    })
 
     expect(resolvePendingReleaseScope('capgo', 'auto-sync-head', false, run)).toEqual({
       base: 'capgo-12.0.0',
@@ -231,23 +141,14 @@ describe('release scope matching', () => {
   })
 
   it.concurrent('keeps earlier failed component changes pending after a later merge', () => {
-    const run = (args: string[]) => {
-      const key = args.join(' ')
-      const responses: Record<string, string> = {
-        'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 head-cli-only': 'capgo-12.0.0',
-        'rev-list --reverse capgo-12.0.0..head-cli-only': 'capgo-change\ncli-change',
-        'show --format= --name-only capgo-change': 'src/pages/index.vue',
-        'show --format= --name-only cli-change': 'cli/src/index.ts',
-        'log -1 --format=%s capgo-change': 'feat: pending console change',
-        'log -1 --format=%b capgo-change': '',
-      }
-
-      if (key in responses) {
-        return responses[key]
-      }
-
-      throw new Error(`Unexpected git call: ${key}`)
-    }
+    const run = gitStub({
+      'describe --tags --match capgo-[0-9]* --exclude capgo-*-alpha.* --abbrev=0 head-cli-only': 'capgo-12.0.0',
+      'rev-list --reverse capgo-12.0.0..head-cli-only': 'capgo-change\ncli-change',
+      'show --format= --name-only capgo-change': 'src/pages/index.vue',
+      'show --format= --name-only cli-change': 'cli/src/index.ts',
+      'log -1 --format=%s capgo-change': 'feat: pending console change',
+      'log -1 --format=%b capgo-change': '',
+    })
 
     expect(resolvePendingReleaseScope('capgo', 'head-cli-only', false, run)).toEqual({
       base: 'capgo-12.0.0',
@@ -258,20 +159,10 @@ describe('release scope matching', () => {
 
   it.concurrent('uses the latest stable component tag as the production baseline', () => {
     const calls: string[][] = []
-    const run = (args: string[]) => {
-      calls.push(args)
-      const key = args.join(' ')
-      const responses: Record<string, string> = {
-        'describe --tags --match cli-[0-9]* --exclude cli-*-alpha.* --abbrev=0 head': 'cli-8.50.2',
-        'rev-list --reverse cli-8.50.2..head': '',
-      }
-
-      if (key in responses) {
-        return responses[key]
-      }
-
-      throw new Error(`Unexpected git call: ${key}`)
-    }
+    const run = gitStub({
+      'describe --tags --match cli-[0-9]* --exclude cli-*-alpha.* --abbrev=0 head': 'cli-8.50.2',
+      'rev-list --reverse cli-8.50.2..head': '',
+    }, calls)
 
     expect(resolvePendingReleaseScope('cli', 'head', false, run)).toEqual({
       base: 'cli-8.50.2',
@@ -292,20 +183,10 @@ describe('release scope matching', () => {
 
   it.concurrent('uses the latest alpha component tag as the development baseline', () => {
     const calls: string[][] = []
-    const run = (args: string[]) => {
-      calls.push(args)
-      const key = args.join(' ')
-      const responses: Record<string, string> = {
-        'describe --tags --match notifications-*-alpha.* --abbrev=0 head': 'notifications-0.2.0-alpha.3',
-        'rev-list --reverse notifications-0.2.0-alpha.3..head': '',
-      }
-
-      if (key in responses) {
-        return responses[key]
-      }
-
-      throw new Error(`Unexpected git call: ${key}`)
-    }
+    const run = gitStub({
+      'describe --tags --match notifications-*-alpha.* --abbrev=0 head': 'notifications-0.2.0-alpha.3',
+      'rev-list --reverse notifications-0.2.0-alpha.3..head': '',
+    }, calls)
 
     expect(resolvePendingReleaseScope('notifications', 'head', true, run)).toEqual({
       base: 'notifications-0.2.0-alpha.3',

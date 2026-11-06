@@ -1,0 +1,20 @@
+{
+  // Test origin of the snippet edge answer probe (scripts/snippet-edge-probe/run.ts).
+  // Not part of any deploy pipeline: created and deleted by run.ts.
+  "name": "capgo-snippet-edge-probe",
+  "main": "./origin-worker.ts",
+  "compatibility_date": "2026-04-21",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "snippet-edge-probe-origin.capgo.app",
+      "custom_domain": true
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PROBE_LOGS",
+      "bucket_name": "capgo-snippet-edge-probe"
+    }
+  ]
+}

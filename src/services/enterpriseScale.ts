@@ -1,6 +1,6 @@
 import type { CreditPricingStep } from '~/services/creditPricing'
+import { useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
-import { useSupabase } from '~/services/supabase'
 
 // Enterprise is the only plan that scales past its included MAU. Instead of a
 // separate "custom plan", the org buys extra MAU as a second item on the same
@@ -69,7 +69,7 @@ export function quoteEnterpriseScale(steps: CreditPricingStep[], includedMau: nu
 
 // MAU bought on top of the plan allowance, synced from the Stripe subscription.
 export async function getOrgExtraMau(orgId: string) {
-  const { data, error } = await useSupabase()
+  const { data, error } = await useConsole()
     .from('orgs')
     .select('stripe_info(extra_mau)')
     .eq('id', orgId)

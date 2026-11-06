@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { BASE_URL, getSupabaseClient, headers, resetAndSeedAppData, resetAppData, TEST_EMAIL, USER_ID } from './test-utils.ts'
@@ -161,8 +161,8 @@ describe('[POST] /bundle - Create Bundle with External URL', () => {
 
   it('should return 400 when version already exists', async () => {
     // First create a version
-    const supabase = getSupabaseClient()
-    await supabase
+    const capgo = getSupabaseClient()
+    await capgo
       .from('app_versions')
       .insert({
         checksum: 'a1b2c3d4e5f6789abcdef123456789abcdef123456789abcdef123456789abcd',

@@ -45,7 +45,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - Bundle version must be greater than `0.0.0` and unique.
   - Deleted versions cannot be reused.
   - External URL mode is useful for very large or privacy-sensitive bundles.
-  - Encryption is recommended for trustless distribution.
+  - Most apps can skip bundle encryption. Enable it for an explicit user request or a concrete requirement for end-to-end encrypted delivery of the code/assets. Handling sensitive runtime/API data alone is not a reason to enable it. Plan for private-key backup, CI key configuration, and a native rebuild to ship the public key.
   - Interactive prompts are disabled automatically in CI and other non-interactive sessions so uploads do not block automation.
   - Optional upload prompts can remember the user's answer on the current machine so future uploads can skip the same question.
   - `--channel` accepts a single channel or a comma-separated list such as `production,beta`.
@@ -130,7 +130,11 @@ Use this skill for OTA update workflows in Capgo Cloud.
 - Alias: `c`
 - Example: `npx @capgo/cli@latest bundle cleanup com.example.app --bundle=1.0 --keep=3`
 - Notes:
-  - Linked bundles are preserved unless `--ignore-channel` is used.
+  - Linked bundles are preserved unless `--ignore-channel` is used; with it, linked bundles are unlinked from their channels and deleted.
+  - The Capgo API selects and deletes the bundles server-side (`POST /bundle/cleanup`). Without `--force`, the CLI first shows a preview (dry run), asks for confirmation, then deletes only the bundles shown as removable, even if new bundles are uploaded meanwhile.
+  - With `--force`, selection and deletion happen in one request, with no preview.
+  - Self-hosted Capgo: `bundle cleanup` needs a backend that serves `POST /bundle/cleanup`; against an older backend it stops with "This Capgo API does not support server-side bundle cleanup". `bundle delete` uses the `capgo_api` `2026-10-22` contract of `DELETE /bundle`; an older backend still deletes, but reports a missing bundle as a generic delete error. Update the backend or use an older CLI.
+  - `bundle delete` sends one request to the Capgo API, which reports a missing bundle directly. If the bundle is still linked to a channel, the CLI offers to unlink it and then retries the delete.
 - Key options:
   - `-b, --bundle <bundle>`
   - `-k, --keep <keep>`
@@ -140,17 +144,30 @@ Use this skill for OTA update workflows in Capgo Cloud.
 ### `bundle zip [appId]`
 
 - Example: `npx @capgo/cli@latest bundle zip com.example.app --path ./dist`
+- Offline packer example (for signed-URL uploads through the Capgo MCP): `npx @capgo/cli@latest bundle zip com.example.app --for-upload --delta-pack ./delta.zip --json`
 - Notes:
   - Produces a checksum for encryption workflows.
-  - Use `--json` for machine-readable output.
+  - Use `--json` for machine-readable output (JSON on stdout, logs on stderr).
+  - Works offline: no API key, no calls to Capgo (no analytics either).
+  - `--for-upload` produces exactly what `bundle upload` would send: same zip, checksum algorithm, v2 encryption (`.capgo_key_v2` by default, `--key-v2`, `--key-data-v2`, `--no-key`), and adds `session_key`, `key_id`, `native_packages` to the JSON. Without it, the zip is never encrypted (keeps the `bundle zip` then `bundle encrypt` flow).
+  - `--delta-pack <file>` (implies `--for-upload`) also writes a STORE zip with `capgo-delta-manifest.json` (`protocol_version`, `file_hash_format`, `delta_encryption`, `entries[]` with `file_name`, `file_hash`, `compression` = `none` or `brotli`, `uploaded_bytes_sha256`, `uploaded_bytes_size`, `pack_path`) and the uploaded bytes under `files/<id>`.
+  - JSON keys: `bundle`, `filename`, `checksum`, `app_id`, `updater_version`, `checksum_algorithm`, `size_bytes`, `cli_version`; with `--for-upload`: `encryption_method`, `session_key`, `key_id`, `native_packages`; with `--delta-pack`: `delta_pack`, `delta_pack_entries`, `delta_file_hash_format`, `delta_encryption`.
 - Key options:
   - `-p, --path <path>`
   - `-b, --bundle <bundle>`
   - `-n, --name <name>`
   - `-j, --json`
   - `--no-code-check`
-  - `--key-v2`
+  - `--key-v2 [key]`
+  - `--key-data-v2 <keyDataV2>`
+  - `--no-key`
+  - `--for-upload`
+  - `--delta-pack <file>`
+  - `--encrypt-delta`
+  - `--disable-brotli`
+  - `--force-crc32-checksum`
   - `--package-json <packageJson>`
+  - `--node-modules <nodeModules>`
 
 ### `bundle encrypt [zipPath] [checksum]`
 

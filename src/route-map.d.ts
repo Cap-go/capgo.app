@@ -45,6 +45,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/agent/claim': RouteRecordInfo<
+      '/agent/claim',
+      '/agent/claim',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/ApiKeys': RouteRecordInfo<
       '/ApiKeys',
       '/apikeys',
@@ -262,6 +269,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/changelog': RouteRecordInfo<
+      '/changelog',
+      '/changelog',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/confirm-signup': RouteRecordInfo<
       '/confirm-signup',
       '/confirm-signup',
@@ -339,9 +353,23 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/mcp': RouteRecordInfo<
+      '/mcp',
+      '/mcp',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/oauth/authorize': RouteRecordInfo<
       '/oauth/authorize',
       '/oauth/authorize',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/onboarding/ai': RouteRecordInfo<
+      '/onboarding/ai',
+      '/onboarding/ai',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -360,6 +388,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/onboarding/name': RouteRecordInfo<
+      '/onboarding/name',
+      '/onboarding/name',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/onboarding/organization': RouteRecordInfo<
       '/onboarding/organization',
       '/onboarding/organization',
@@ -370,6 +405,13 @@ declare module 'vue-router/auto-routes' {
     '/onboarding/set_password': RouteRecordInfo<
       '/onboarding/set_password',
       '/onboarding/set_password',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/preview/builder': RouteRecordInfo<
+      '/preview/builder',
+      '/preview/builder',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -479,6 +521,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/settings/organization/Billing': RouteRecordInfo<
+      '/settings/organization/Billing',
+      '/settings/organization/Billing',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/settings/organization/Credits': RouteRecordInfo<
       '/settings/organization/Credits',
       '/settings/organization/Credits',
@@ -580,6 +629,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/accountDisabled.vue': {
       routes:
         | '/accountDisabled'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/agent/claim.vue': {
+      routes:
+        | '/agent/claim'
       views:
         | never
       pathParamNames:
@@ -846,6 +903,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/changelog.vue': {
+      routes:
+        | '/changelog'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/confirm-signup.vue': {
       routes:
         | '/confirm-signup'
@@ -934,9 +999,25 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/mcp.vue': {
+      routes:
+        | '/mcp'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/oauth/authorize.vue': {
       routes:
         | '/oauth/authorize'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/onboarding/ai.vue': {
+      routes:
+        | '/onboarding/ai'
       views:
         | never
       pathParamNames:
@@ -958,6 +1039,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/onboarding/name.vue': {
+      routes:
+        | '/onboarding/name'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/onboarding/organization.vue': {
       routes:
         | '/onboarding/organization'
@@ -969,6 +1058,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/onboarding/set_password.vue': {
       routes:
         | '/onboarding/set_password'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/preview/builder.vue': {
+      routes:
+        | '/preview/builder'
       views:
         | never
       pathParamNames:
@@ -1089,6 +1186,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/settings/organization/AuditLogs.vue': {
       routes:
         | '/settings/organization/AuditLogs'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/settings/organization/Billing.vue': {
+      routes:
+        | '/settings/organization/Billing'
       views:
         | never
       pathParamNames:

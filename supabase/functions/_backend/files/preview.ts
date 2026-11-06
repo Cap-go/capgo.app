@@ -8,10 +8,15 @@ import { buildChannelPreviewSubdomain, buildPreviewSubdomain, parsePreviewHostna
 import { CacheHelper } from '../utils/cache.ts'
 import { getBundleUrl } from '../utils/downloadUrl.ts'
 import { simpleError } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import { cloudlog } from '../utils/logging.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 import { backgroundTask, getEnv, isValidAppId } from '../utils/utils.ts'
+import { applyPreviewXRobotsTag } from './preview-host-headers.ts'
 import { DEFAULT_RETRY_PARAMS, RetryBucket } from './retry.ts'
+
+export { PREVIEW_X_ROBOTS_TAG } from './preview-host-headers.ts'
 // Cache settings
 const PREVIEW_AUTH_CACHE_PATH = '/.preview-auth'
 const PREVIEW_AUTH_CACHE_TTL_SECONDS = 60
@@ -135,6 +140,25 @@ const MIME_TYPES: Record<string, string> = {
 
 const BUNDLE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable'
 const CHANNEL_PREVIEW_CACHE_CONTROL = 'no-store, no-cache, must-revalidate, max-age=0'
+// Allow crawlers to fetch preview URLs so they see X-Robots-Tag: noindex on every response.
+const PREVIEW_ROBOTS_TXT_BODY = 'User-agent: *\nAllow: /\n'
+
+export function isPreviewRobotsTxtPath(pathname: string): boolean {
+  const normalizedPath = pathname.replace(/\/+$/, '') || '/'
+  return normalizedPath === '/robots.txt'
+}
+
+export function buildPreviewRobotsTxtResponse(): Response {
+  const headers = new Headers()
+  headers.set('Content-Type', 'text/plain; charset=utf-8')
+  headers.set('Cache-Control', CHANNEL_PREVIEW_CACHE_CONTROL)
+  headers.set('Pragma', 'no-cache')
+  headers.set('Expires', '0')
+  applyPreviewXRobotsTag(headers)
+  return new Response(PREVIEW_ROBOTS_TXT_BODY, { headers })
+}
+
+export { withPreviewHostHeaders } from './preview-host-headers.ts'
 
 function getContentType(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() || ''
@@ -145,6 +169,7 @@ export function buildPreviewResponseHeaders(contentType: string, options: { disa
   const headers = new Headers()
   headers.set('Content-Type', contentType)
   headers.set('X-Content-Type-Options', 'nosniff')
+  applyPreviewXRobotsTag(headers)
 
   if (options.disableCache) {
     headers.set('Cache-Control', CHANNEL_PREVIEW_CACHE_CONTROL)
@@ -167,7 +192,15 @@ function buildPreviewPayloadResponseHeaders(): Headers {
   headers.set('Pragma', 'no-cache')
   headers.set('Expires', '0')
   headers.set('Access-Control-Allow-Origin', '*')
+  applyPreviewXRobotsTag(headers)
   return headers
+}
+
+export async function handlePreviewSubdomain(c: Context<MiddlewareKeyVariables>): Promise<Response> {
+  if (isPreviewRobotsTxtPath(c.req.path))
+    return buildPreviewRobotsTxtResponse()
+
+  return handlePreviewRequest(c)
 }
 
 export async function buildPreviewDownloadPayload(c: Context, appId: string, bundle: PreviewDownloadBundle): Promise<PreviewDownloadPayload> {
@@ -226,16 +259,34 @@ function parsePreviewSubdomain(hostname: string): ParsedPreviewSubdomain | null 
   return parsed
 }
 
-async function getChannelPreviewVersionId(c: Context<MiddlewareKeyVariables>, appId: string, channelId: number): Promise<number> {
-  const supabase = supabaseAdmin(c)
-  const { data: channel, error } = await supabase
-    .from('channels')
-    .select('version')
-    .eq('app_id', appId)
-    .eq('id', channelId)
-    .single()
+// Preview is public once allow_preview is on, so these lookups run on the connection role.
+// Rows come back as PostgREST JSON (bigint ids as numbers). Errors yield null, like the
+// supabase-js `{ error }` branches they replace.
+async function adminRows<T>(c: Context, text: string, values: unknown[]): Promise<T[] | null> {
+  let pg: PgClient | null = null
+  try {
+    pg = await getPgClient(c)
+    return await queryJson<T>(pg, text, values)
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'preview lookup failed', error })
+    return null
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
+}
 
-  if (error || !channel) {
+/** supabase-js `.single()`: the row only when exactly one matched. */
+function exactlyOne<T>(rows: T[] | null): T | null {
+  return rows?.length === 1 ? rows[0] : null
+}
+
+async function getChannelPreviewVersionId(c: Context<MiddlewareKeyVariables>, appId: string, channelId: number): Promise<number> {
+  const channel = exactlyOne(await adminRows<{ version: number | null }>(c, 'SELECT version FROM public.channels WHERE app_id = $1 AND id = $2', [appId, channelId]))
+
+  if (!channel) {
     throw simpleError('channel_not_found', 'Channel not found', { channelId })
   }
 
@@ -289,20 +340,13 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     actualAppId = cachedAuth.actualAppId
   }
   else {
-    // Use admin client - preview is public when allow_preview is enabled
-    const supabase = supabaseAdmin(c)
-
     // Get app settings to check if preview is enabled.
     // Try exact match first (prevents wildcard collisions), then fallback to
     // case-insensitive match for preview URLs that were lowercased.
-    const exactLookup = await supabase
-      .from('apps')
-      .select('app_id, allow_preview')
-      .eq('app_id', appId)
-      .maybeSingle()
+    const exactLookup = await adminRows<{ app_id: string, allow_preview: boolean | null }>(c, 'SELECT app_id, allow_preview FROM public.apps WHERE app_id = $1', [appId])
 
-    let appData = exactLookup.data
-    let appError = exactLookup.error
+    let appData = exactLookup?.[0] ?? null
+    let appError = exactLookup === null
 
     if (!appData && !appError) {
       const escapedAppId = appId
@@ -311,15 +355,10 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
         .replace(/%/g, String.raw`\%`)
         .replace(/_/g, String.raw`\_`)
 
-      const fallbackLookup = await supabase
-        .from('apps')
-        .select('app_id, allow_preview')
-        .ilike('app_id', escapedAppId)
-        .limit(1)
-        .maybeSingle()
+      const fallbackLookup = await adminRows<{ app_id: string, allow_preview: boolean | null }>(c, 'SELECT app_id, allow_preview FROM public.apps WHERE app_id ILIKE $1 LIMIT 1', [escapedAppId])
 
-      appData = fallbackLookup.data
-      appError = fallbackLookup.error
+      appData = fallbackLookup?.[0] ?? null
+      appError = fallbackLookup === null
     }
 
     if (appError || !appData) {
@@ -350,25 +389,16 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
   let payloadBundle: PreviewDownloadBundle | null = null
 
   if (isPayloadRequest || !bundleInfo) {
-    const supabase = supabaseAdmin(c)
+    const columns = isPayloadRequest
+      ? 'id, name, checksum, session_key, manifest_count, r2_path, external_url'
+      : 'id, session_key, manifest_count'
+    const bundle = exactlyOne(await adminRows<Pick<PreviewDownloadBundle, 'id' | 'session_key' | 'manifest_count'>>(
+      c,
+      `SELECT ${columns} FROM public.app_versions WHERE app_id = $1 AND id = $2`,
+      [actualAppId, previewVersionId],
+    ))
 
-    const bundleLookup = isPayloadRequest
-      ? await supabase
-          .from('app_versions')
-          .select('id,name,checksum,session_key,manifest_count,r2_path,external_url')
-          .eq('app_id', actualAppId)
-          .eq('id', previewVersionId)
-          .single()
-      : await supabase
-          .from('app_versions')
-          .select('id,session_key,manifest_count')
-          .eq('app_id', actualAppId)
-          .eq('id', previewVersionId)
-          .single()
-
-    const { data: bundle, error: bundleError } = bundleLookup
-
-    if (bundleError || !bundle) {
+    if (!bundle) {
       throw simpleError('bundle_not_found', 'Bundle not found', { versionId: previewVersionId })
     }
 
@@ -431,7 +461,6 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
   // Look up file in manifest using a single query with OR conditions for all possible paths
   // This handles deep paths like /folder1/folder2/folder3/.../file.js
   // Also check for .br (brotli) compressed variants since bundles may store compressed files
-  const supabase = supabaseAdmin(c)
   const basePaths = [
     filePath,
     `www/${filePath}`,
@@ -444,19 +473,21 @@ export async function handlePreviewRequest(c: Context<MiddlewareKeyVariables>): 
     ...basePaths.map(p => `${p}.br`),
   ]
 
-  const { data: manifestEntries, error: manifestError } = await supabase
-    .from('manifest')
-    .select('s3_path, file_name')
-    .eq('app_version_id', previewVersionId)
-    .in('file_name', possiblePaths)
-    .limit(1)
+  const manifestEntries = await adminRows<{ s3_path: string | null, file_name: string | null }>(
+    c,
+    'SELECT s3_path, file_name FROM public.version_manifest WHERE app_version_id = $1 AND file_name = ANY($2::text[]) LIMIT 1',
+    [previewVersionId, possiblePaths],
+  )
 
-  if (manifestError || !manifestEntries || manifestEntries.length === 0) {
+  if (!manifestEntries || manifestEntries.length === 0) {
     cloudlog({ requestId: c.get('requestId'), message: 'file not found in manifest', filePath, versionId: previewVersionId, possiblePaths })
     throw simpleError('file_not_found', 'File not found in bundle', { filePath })
   }
 
-  const manifestEntry = manifestEntries[0]
+  const found = manifestEntries[0]
+  if (!found.file_name || !found.s3_path)
+    throw simpleError('file_not_found', 'File not found in bundle', { filePath })
+  const manifestEntry = { file_name: found.file_name, s3_path: found.s3_path }
   const isBrotli = manifestEntry.file_name.endsWith('.br')
   // For MIME type detection, use the original filename without .br extension
   const actualFileName = isBrotli ? manifestEntry.file_name.slice(0, -3) : manifestEntry.file_name

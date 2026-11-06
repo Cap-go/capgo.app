@@ -5,7 +5,7 @@ import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseClient } from '../../utils/supabase.ts'
+import { authPrincipal, queryJsonOne, withRlsContext } from '../../utils/pg_rls.ts'
 import { version } from '../../utils/version.ts'
 import { runPrelinkUsers } from './prelink-shared.ts'
 
@@ -37,14 +37,17 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
   }
 
   // Use authenticated client for DB read (RLS-enforced)
-  const supabase = supabaseClient(c, auth.jwt)
-  const { data: provider, error: providerError } = await (supabase as any)
-    .from('sso_providers')
-    .select('id, org_id, domain, provider_id, status')
-    .eq('id', provider_id)
-    .single()
+  let provider: { id: string, org_id: string, domain: string, provider_id: string | null, status: string } | null = null
+  try {
+    provider = await withRlsContext(c, authPrincipal(c, auth), client => queryJsonOne<{ id: string, org_id: string, domain: string, provider_id: string | null, status: string }>(
+      client,
+      'SELECT id, org_id, domain, provider_id, status FROM public.sso_providers WHERE id = $1',
+      [provider_id],
+    ))
+  }
+  catch {}
 
-  if (providerError || !provider) {
+  if (!provider) {
     return quickError(404, 'provider_not_found', 'SSO provider not found')
   }
 

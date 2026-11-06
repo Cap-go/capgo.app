@@ -6,11 +6,12 @@ import { useOrganizationStore } from '~/stores/organization'
 
 interface BuildCardProps {
   appId: string
+  orgId?: string
   useBillingPeriod: boolean
   reloadTrigger: number
 }
 
-// Shared data lifecycle for the build chart cards: resolves the app's org +
+// Shared data lifecycle for the build chart cards: resolves the target org +
 // billing window, guards overlapping requests, enforces a minimum spinner, and
 // re-fetches on app / mode / org / reload changes. The card supplies how to load
 // and what an empty result looks like.
@@ -35,7 +36,8 @@ export function useBuildCardStats<R>(
       if (!organizationStore.currentOrganization)
         await organizationStore.awaitInitialLoad()
 
-      const targetOrg = organizationStore.getOrgByAppId(props.appId) ?? organizationStore.currentOrganization
+      const targetOrg = (props.orgId ? organizationStore.organizations.find(org => org.gid === props.orgId) : organizationStore.getOrgByAppId(props.appId))
+        ?? organizationStore.currentOrganization
       const window = getBuildChartWindow(props.useBillingPeriod, targetOrg?.subscription_start)
       const loaded = await options.load(window)
 
@@ -59,6 +61,7 @@ export function useBuildCardStats<R>(
   }
 
   watch(() => props.appId, calculateStats)
+  watch(() => props.orgId, calculateStats)
   watch(() => props.useBillingPeriod, calculateStats)
   watch(() => organizationStore.currentOrganization?.gid, (newOrgId, oldOrgId) => {
     if (newOrgId && oldOrgId && newOrgId !== oldOrgId)

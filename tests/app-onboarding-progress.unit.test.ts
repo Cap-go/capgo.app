@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_ONBOARDING_OTA_V1_STEP_IDS } from '../src/services/appOnboarding.ts'
+import { APP_ONBOARDING_OTA_V1_STEP_IDS, parseAppOnboarding } from '../src/services/appOnboarding.ts'
 import { BUILDER_STEP_IDS } from '../src/services/builderOnboardingChecklist.ts'
 import {
   buildGettingStartedSteps,
@@ -16,8 +16,10 @@ import {
   shouldShowGettingStartedNav,
   shouldShowOnboardingNextStep,
   shouldSkipOnboardingResume,
+  usageProvenStepIds,
   withGettingStartedDismissed,
   withoutGettingStartedDismissed,
+  withUsageProvenSteps,
 } from '../src/utils/appOnboardingProgress.ts'
 import { storeReleaseValidatedKey } from '../src/utils/gettingStartedDismiss.ts'
 
@@ -206,7 +208,23 @@ describe('app onboarding progress ledger', () => {
     }, { storeReleaseValidated: true })).toBe(false)
   })
 
-  it.concurrent('uses v3 checklist steps for the nav even when features disagree', () => {
+  it.concurrent('marks steps proven by real usage as done', () => {
+    const pending = parseAppOnboarding({ setup: { todo_list_version: 4, ota_todo_list_version: '1', steps: { ota: { add_channel: { status: 'skipped' }, add_code: { status: 'skipped' } } } } })
+    expect(usageProvenStepIds({})).toEqual([])
+    expect(withUsageProvenSteps(pending, {})).toBe(pending)
+
+    const devicesOnly = withUsageProvenSteps(pending, { features: { cli_install: { succeeded_at: '2026-09-01T00:00:00.000Z' } } })
+    expect(devicesOnly.steps.add_updater?.status).toBe('done')
+    expect(devicesOnly.steps.run_device?.status).toBe('done')
+    expect(devicesOnly.steps.upload_bundle?.status).toBe('pending')
+
+    const live = withUsageProvenSteps(pending, { features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z' } } })
+    // Skipped steps stay skipped, except the required channel step.
+    expect(Object.entries(live.steps).filter(([, step]) => step?.status !== 'done').map(([id]) => id)).toEqual(['add_code'])
+    expect(live.steps.add_channel?.status).toBe('done')
+  })
+
+  it.concurrent('uses v3 checklist steps for the nav, completed by real usage', () => {
     const steps = Object.fromEntries([
       'login_cli_mcp',
       'add_channel',
@@ -220,7 +238,8 @@ describe('app onboarding progress ledger', () => {
       setup: { todo_list_version: 3, outcome: 'completed', steps: { ...steps, test_update: { status: 'pending' } } },
       features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z', stage: 'store_live' } },
     }
-    expect(shouldShowGettingStartedNav(onboarding)).toBe(true)
+    expect(shouldShowGettingStartedNav(onboarding)).toBe(false)
+    expect(shouldShowGettingStartedNav({ ...onboarding, features: { cli_install: { succeeded_at: '2026-09-01T00:00:00.000Z' } } })).toBe(true)
     expect(shouldShowGettingStartedNav({ setup: { todo_list_version: 3, steps } })).toBe(false)
     expect(shouldShowGettingStartedNav({ setup: { todo_list_version: 3, steps: { ...steps, test_update: { status: 'skipped' } } } })).toBe(false)
   })
@@ -303,13 +322,17 @@ describe('checklist-based onboarding redirects', () => {
     }
   }
 
-  it.concurrent.each([3, 4])('keeps pending v%i setup open after an OTA install', (version) => {
+  it.concurrent.each([3, 4])('closes v%i setup once a device installed an OTA bundle', (version) => {
     const onboarding = {
       setup: otaSetup(version, {}),
       features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z', stage: 'store_live' } },
     }
-    expect(shouldShowGettingStartedNav(onboarding)).toBe(true)
-    expect(shouldSkipOnboardingResume(onboarding)).toBe(false)
+    expect(shouldShowGettingStartedNav(onboarding)).toBe(false)
+    expect(shouldSkipOnboardingResume(onboarding)).toBe(true)
+
+    const devicesOnly = { ...onboarding, features: { cli_install: { succeeded_at: '2026-09-01T00:00:00.000Z' } } }
+    expect(shouldShowGettingStartedNav(devicesOnly)).toBe(true)
+    expect(shouldSkipOnboardingResume(devicesOnly)).toBe(false)
   })
 
   it.concurrent.each([3, 4])('keeps pending v%i steps open despite a terminal summary', (version) => {

@@ -2,7 +2,8 @@ import type { User } from '@supabase/supabase-js'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
-import { checkRegistrationEmail, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, provisionUserProfile } from '../utils/accountProvisioning.ts'
+import { checkRegistrationEmail, deleteUserProfile, getCaptchaSecret, isAuthRateLimitError, isCaptchaFailedError, isLeakedPasswordError, isWeakPasswordError, provisionUserProfile } from '../utils/accountProvisioning.ts'
+import { isDirectOfferMetadata, persistDirectOffer } from '../utils/direct_offer.ts'
 import { parseBody, simpleErrorWithStatus, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getPasswordPolicyValidationErrors } from '../utils/password_policy.ts'
@@ -19,8 +20,19 @@ const DEFAULT_PASSWORD_POLICY = {
 const registerSchema = z.object({
   email: z.string().trim().pipe(z.email().max(320)),
   password: z.string(),
-  first_name: z.string().trim().min(1),
-  last_name: z.string().trim().min(1),
+  first_name: z.string().trim().min(1).optional(),
+  last_name: z.string().trim().min(1).optional(),
+  ref: z.string().trim().min(1).optional(),
+  signup_source: z.string().trim().min(1).optional(),
+  signup_plugin: z.string().trim().min(1).optional(),
+  first_touch_type: z.string().trim().min(1).optional(),
+  first_touch_path: z.string().trim().min(1).optional(),
+  utm_source: z.string().trim().min(1).optional(),
+  utm_medium: z.string().trim().min(1).optional(),
+  utm_campaign: z.string().trim().min(1).optional(),
+  // Paid-ads signups send offer=direct (no free trial). Any other value is ignored.
+  offer: z.string().max(64).optional(),
+  opt_for_newsletters: z.boolean().default(false),
   captcha_token: z.string().min(1).optional(),
   registration_device_type: z.string().trim().min(1).optional(),
   registration_os: z.string().trim().min(1).optional(),
@@ -29,6 +41,7 @@ const registerSchema = z.object({
 
 const ACCOUNT_DELETED_MESSAGE = 'Account is in error, please contact support at support@capgo.app'
 const EMAIL_EXISTS_MESSAGE = 'User already registered'
+const LEAKED_PASSWORD_MESSAGE = 'This password appeared in a data breach. Choose a different one.'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
@@ -52,7 +65,7 @@ async function rollbackCreatedUser(c: Parameters<typeof supabaseAdmin>[0], userI
   const admin = supabaseAdmin(c)
   const requestId = c.get('requestId')
 
-  const { error: profileDeleteError } = await admin.from('users').delete().eq('id', userId)
+  const { error: profileDeleteError } = await deleteUserProfile(c, userId)
   if (profileDeleteError) {
     cloudlogErr({
       requestId,
@@ -114,9 +127,16 @@ app.post('/', async (c) => {
     return simpleErrorWithStatus(c, 403, 'account_deleted', ACCOUNT_DELETED_MESSAGE)
   }
 
-  const userMetadata: Record<string, string> = {
-    first_name: body.first_name,
-    last_name: body.last_name,
+  const userMetadata: Record<string, string> = {}
+  if (body.first_name)
+    userMetadata.first_name = body.first_name
+  if (body.last_name)
+    userMetadata.last_name = body.last_name
+  if (body.ref)
+    userMetadata.ref = body.ref
+  for (const key of ['signup_source', 'signup_plugin', 'first_touch_type', 'first_touch_path', 'utm_source', 'utm_medium', 'utm_campaign'] as const) {
+    if (body[key])
+      userMetadata[key] = body[key]
   }
   if (body.registration_device_type)
     userMetadata.registration_device_type = body.registration_device_type
@@ -154,6 +174,10 @@ app.post('/', async (c) => {
     if (isUserAlreadyRegisteredError(signupError)) {
       return simpleErrorWithStatus(c, 409, 'email_exists', EMAIL_EXISTS_MESSAGE)
     }
+    // A fixable input error: answering with a generic 500 left people retrying the same password.
+    if (isWeakPasswordError(signupError)) {
+      return simpleErrorWithStatus(c, 422, 'weak_password', isLeakedPasswordError(signupError) ? LEAKED_PASSWORD_MESSAGE : signupError.message)
+    }
     return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
   }
 
@@ -186,11 +210,30 @@ app.post('/', async (c) => {
     return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
   }
 
+  // Paid-ads signups get no free trial. Store the offer in server-only app
+  // metadata (users can edit user_metadata) before the profile insert creates
+  // their first org, so the org trigger reads it.
+  if (isDirectOfferMetadata({ offer: body.offer })) {
+    try {
+      await persistDirectOffer(supabaseAdmin(c), userId)
+    }
+    catch (error) {
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'auth register direct offer persist failed',
+        error: serializeError(error),
+      })
+      await rollbackCreatedUser(c, userId)
+      return simpleErrorWithStatus(c, 500, 'registration_failed', 'Registration failed')
+    }
+  }
+
   const { error: profileError } = await provisionUserProfile(c, {
     id: userId,
     email: normalizedEmail,
-    first_name: body.first_name,
-    last_name: body.last_name,
+    first_name: body.first_name ?? '',
+    last_name: body.last_name ?? '',
+    opt_for_newsletters: body.opt_for_newsletters,
   })
 
   if (profileError) {

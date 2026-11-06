@@ -144,12 +144,22 @@ while IFS=$'\t' read -r similarity _old_path new_path; do
   fi
 done < <(git diff --name-status -M100% --diff-filter=R "${base_ref}...HEAD" -- 'supabase/migrations/*.sql')
 
-# This migration failed before it was recorded in production: first a legacy
-# trigger referenced the removed column, then sequential DDL locks deadlocked
-# with live RLS traffic. Permit only the audited repair below; later edits stay
-# blocked by the exact blob hash.
-failed_migration_hotfix='supabase/migrations/20260713114104_harden_rbac_compat_cleanup_after_rls.sql'
-failed_migration_hotfix_blob='17dfb3f478bff6b52bc71a85f0016cce11f1d789'
+# Migrations that failed before they were recorded in production. Permit only
+# the audited repairs below; later edits stay blocked by the exact blob hash.
+# - 20260713114104: first a legacy trigger referenced the removed column, then
+#   sequential DDL locks deadlocked with live RLS traffic.
+# - 20261027220500: one multi-minute silent statement lost its pooler
+#   connection; the copy now runs in batches that report progress.
+is_failed_migration_hotfix() {
+  local file="$1"
+  local blob
+  blob="$(git hash-object "$file")"
+  case "${file}:${blob}" in
+    supabase/migrations/20260713114104_harden_rbac_compat_cleanup_after_rls.sql:17dfb3f478bff6b52bc71a85f0016cce11f1d789) return 0 ;;
+    supabase/migrations/20261027220500_delta_storage_backfill.sql:0bf94d5123ca6e72cca0b72dd3013857846f20c4) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # Prod-applied migrations restored from remote schema_migrations.statements.
 # Exact blob hashes keep this allowlist from accepting later edits.
@@ -189,8 +199,7 @@ if [[ -n "$modified_files" ]]; then
 
     fi
 
-    if [[ "$file" == "$failed_migration_hotfix" ]] \
-      && [[ "$(git hash-object "$file")" == "$failed_migration_hotfix_blob" ]]; then
+    if is_failed_migration_hotfix "$file"; then
       echo "⚠️  Allowing audited repair to failed unapplied migration: $file"
       continue
     fi

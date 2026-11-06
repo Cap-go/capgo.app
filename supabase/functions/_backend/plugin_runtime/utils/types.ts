@@ -183,6 +183,8 @@ export interface StatsActions {
   versionName?: string
   metadata?: StatsMetadata
   channel?: VersionUsageChannel | null
+  /** A failure log that was not counted as a version fail (see legacyDownloadFail.ts). */
+  uncountedFailure?: boolean
 }
 
 export const DEFAULT_LIMIT = 1000

@@ -1,4 +1,4 @@
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -70,9 +70,9 @@ describe('app transfer security', () => {
 
     await resetAndSeedAppData(appId)
 
-    const supabase = getSupabaseClient()
+    const capgo = getSupabaseClient()
 
-    await supabase.from('orgs').insert({
+    await capgo.from('orgs').insert({
       id: destinationOrgId,
       created_by: USER_ID,
       management_email: destinationOrgEmail,
@@ -80,7 +80,7 @@ describe('app transfer security', () => {
       updated_at: new Date().toISOString(),
     }).throwOnError()
 
-    await supabase.from('org_users').insert({
+    await capgo.from('org_users').insert({
       org_id: destinationOrgId,
       user_id: USER_ID,
       rbac_role_name: 'org_super_admin',
@@ -89,11 +89,11 @@ describe('app transfer security', () => {
   })
 
   afterAll(async () => {
-    const supabase = getSupabaseClient()
+    const capgo = getSupabaseClient()
 
     await resetAppData(appId)
-    await supabase.from('org_users').delete().eq('org_id', destinationOrgId).eq('user_id', USER_ID)
-    await supabase.from('orgs').delete().eq('id', destinationOrgId)
+    await capgo.from('org_users').delete().eq('org_id', destinationOrgId).eq('user_id', USER_ID)
+    await capgo.from('orgs').delete().eq('id', destinationOrgId)
   })
 
   it('rejects raw PostgREST owner_org updates on apps', async () => {
@@ -107,8 +107,8 @@ describe('app transfer security', () => {
     expect(updateAttempt.error).toBeTruthy()
     expect(updateAttempt.error?.message).toContain('owner_org must be changed through public.transfer_app()')
 
-    const supabase = getSupabaseClient()
-    const { data: appRow, error: appError } = await supabase
+    const capgo = getSupabaseClient()
+    const { data: appRow, error: appError } = await capgo
       .from('apps')
       .select('owner_org,transfer_history')
       .eq('app_id', appId)
@@ -117,7 +117,7 @@ describe('app transfer security', () => {
     if (appError)
       throw appError
 
-    const { data: versionRows, error: versionError } = await supabase
+    const { data: versionRows, error: versionError } = await capgo
       .from('app_versions')
       .select('owner_org')
       .eq('app_id', appId)
@@ -138,8 +138,8 @@ describe('app transfer security', () => {
 
     expect(transferResult.error).toBeNull()
 
-    const supabase = getSupabaseClient()
-    const { data: appRow, error: appError } = await supabase
+    const capgo = getSupabaseClient()
+    const { data: appRow, error: appError } = await capgo
       .from('apps')
       .select('owner_org,transfer_history')
       .eq('app_id', appId)
@@ -148,7 +148,7 @@ describe('app transfer security', () => {
     if (appError)
       throw appError
 
-    const { data: versionRows, error: versionError } = await supabase
+    const { data: versionRows, error: versionError } = await capgo
       .from('app_versions')
       .select('owner_org')
       .eq('app_id', appId)

@@ -33,14 +33,6 @@ describe('preview subdomain encoding', () => {
     // both became com__example__app and could share one public preview hostname.
     const legacyHostname = 'com__example__app-42.preview.capgo.app'
     expect(parsePreviewHostname(legacyHostname)).toBeNull()
-    expect(parsePreviewHostname(legacyHostname)).not.toEqual({
-      appId: 'com.example.app',
-      versionId: 42,
-    })
-    expect(parsePreviewHostname(legacyHostname)).not.toEqual({
-      appId: 'com.example__app',
-      versionId: 42,
-    })
     expect(buildPreviewSubdomain('com.example.app', 42)).not.toBe('com__example__app-42')
     expect(buildPreviewSubdomain('com.example__app', 42)).not.toBe('com__example__app-42')
   })

@@ -10,14 +10,16 @@ import { BRES, simpleError, simpleError200, simpleRateLimit } from '../utils/hon
 import { invalidIpInfo } from '../utils/invalids_ip.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { sendNotifOrgCached } from '../utils/notifications.ts'
-import { closeClient, createLazyPgClient, getAppOwnerPostgres, getAppVersionPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getLazyPgQueryCount, getPgClient } from '../utils/pg.ts'
+import { closeClient, createLazyPgClient, getAppOwnerPostgres, getAppVersionPostgres, getDrizzleClient, getEffectiveDeviceChannelNamePostgres, getLazyPgQueryCount, getPgClient, getReadReplicaBinding, queryAppOwnerPostgres } from '../utils/pg.ts'
 import { makeDevice, parsePluginBody } from '../utils/plugin_parser.ts'
 import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
+import { countsAsBundleFailure } from '../utils/legacyDownloadFail.ts'
 import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
-import { shouldUseUpdatesEdgeCache } from '../utils/updatesEdgeCache.ts'
+import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetStatsFill } from '../utils/snippetEdgeAnswer.ts'
+import { isUpdatesEdgeCacheEnabled, planValidUntilMs, shouldUseUpdatesEdgeCache } from '../utils/updatesEdgeCache.ts'
 import { backgroundTask, INVALID_STRING_APP_ID, isInternalVersionName, isLimited, MISSING_STRING_APP_ID, reverseDomainRegex } from '../utils/utils.ts'
 import { isRunningVersionAction } from './stats_actions.ts'
 
@@ -26,8 +28,54 @@ const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION = parse('7.17.0')
 const DOWNLOAD_FAIL_FIXED_PLUGIN_VERSION_V6 = parse('6.14.25')
 
 type AppStatusResult = Awaited<ReturnType<typeof getAppStatus>>
+type OwnerLookup = Awaited<ReturnType<typeof getAppOwnerWithEdgeCache>>
+
+const ownerLookups = new WeakMap<Request, Map<string, Promise<OwnerLookup>>>()
+
+/** Uncached owner read that reports a failure instead of reading as a missing (on-prem) app. */
+async function queryOwnerLookup(c: Context, appId: string, drizzleClient: ReturnType<typeof getDrizzleClient>, planActions: Array<'mau' | 'bandwidth'>): Promise<OwnerLookup> {
+  try {
+    return { value: await queryAppOwnerPostgres(c, appId, drizzleClient, planActions), hit: false }
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'stats replay owner lookup failed', app_id: appId, error })
+    return { value: null, hit: false, lookupFailed: true }
+  }
+}
+
+/**
+ * One owner lookup per request and app: a batch reuses its first event's
+ * lookup, so a lookup failure answers before any event of it is written (a
+ * replay retries the whole batch).
+ */
+function getRequestOwnerLookup(c: Context, appId: string, drizzleClient: ReturnType<typeof getDrizzleClient>, planActions: Array<'mau' | 'bandwidth'>, edgeCache: boolean) {
+  let lookups = ownerLookups.get(c.req.raw)
+  if (!lookups) {
+    lookups = new Map()
+    ownerLookups.set(c.req.raw, lookups)
+  }
+  let lookup = lookups.get(appId)
+  if (!lookup) {
+    lookup = edgeCache
+      ? getAppOwnerWithEdgeCache(c, appId, drizzleClient, planActions)
+      : queryOwnerLookup(c, appId, drizzleClient, planActions)
+    // The edge read rethrows connection errors; a batch would catch them per
+    // event and answer 200, which a replay never retries.
+    if (getSnippetEdgeReplay(c)) {
+      lookup = lookup.catch((error: unknown) => {
+        cloudlog({ requestId: c.get('requestId'), message: 'stats replay owner lookup failed', app_id: appId, error })
+        return { value: null, hit: false, lookupFailed: true }
+      })
+    }
+    lookups.set(appId, lookup)
+  }
+  return lookup
+}
 
 async function blockProviderInfrastructure(c: Context, shouldBlockProviderInfrastructure = true) {
+  // Replays too: the snippet answers /stats of apps it learned nothing about,
+  // so it cannot leave every provider network to the worker. The replay
+  // request carries the device IP from Logpush.
   if (!shouldBlockProviderInfrastructure)
     return null
 
@@ -56,6 +104,22 @@ export interface BatchStatsResult {
   moreInfo?: Record<string, unknown>
 }
 
+interface SnippetStatsFillInput {
+  blockProviderInfraRequests: boolean
+  planValidUntil: number | null
+}
+
+/** A batch fill holds for its strictest event; one event without a fill blocks it. */
+function mergeSnippetStatsFill(current: SnippetStatsFillInput | null, next: SnippetStatsFillInput | undefined): SnippetStatsFillInput | null {
+  if (!current || !next)
+    return null
+  const until = [current.planValidUntil, next.planValidUntil].filter((value): value is number => value !== null)
+  return {
+    blockProviderInfraRequests: current.blockProviderInfraRequests || next.blockProviderInfraRequests,
+    planValidUntil: until.length > 0 ? Math.min(...until) : null,
+  }
+}
+
 interface PostResult {
   success: boolean
   response?: Response
@@ -63,6 +127,8 @@ interface PostResult {
   message?: string
   isOnprem?: boolean
   moreInfo?: Record<string, unknown>
+  /** Cloud app with a valid plan: what the snippet fill of its /stats needs. */
+  snippetFill?: SnippetStatsFillInput
 }
 
 function normalizeStatsChannelName(channelName: string | null | undefined): string | null {
@@ -113,9 +179,16 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     return { success: false, error: 'need_plan_upgrade', message: PLAN_ERROR }
   }
   // Same plan actions as /updates, so both endpoints share the cached owner entry.
-  const appOwner = edgeCache
-    ? (await getAppOwnerWithEdgeCache(c, app_id, drizzleClient, planActions)).value
-    : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions)
+  // Replays read the owner with failure reporting, with or without the edge cache.
+  const ownerLookup = edgeCache || getSnippetEdgeReplay(c) ? await getRequestOwnerLookup(c, app_id, drizzleClient, planActions, edgeCache) : null
+  // A failed lookup is not an on-prem app: a replay answers 503 so the queue
+  // retries it, instead of dropping the stat and caching 'onprem'.
+  if (ownerLookup?.lookupFailed && getSnippetEdgeReplay(c))
+    return { success: false, response: c.json({ error: 'upstream_unavailable', message: 'App owner lookup failed' }, 503) }
+  const appOwner = ownerLookup
+    ? ownerLookup.value
+    // Snippet fills must not outlive a trial: they need its end date.
+    : await getAppOwnerPostgres(c, app_id, drizzleClient as ReturnType<typeof getDrizzleClient>, planActions, { includeTrialAt: getSnippetEdgeAnswerBps(c) > 0 })
   const allowDeviceCustomId = appOwner?.allow_device_custom_id
   const device = makeDevice(body, allowDeviceCustomId)
   const deviceDataCollection = parseDeviceDataCollection(appOwner?.device_data_collection ?? cachedAppStatus.device_data_collection)
@@ -152,13 +225,16 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
     statsActions.push({ action: 'customIdBlocked' })
   }
   const shouldRecordAction = shouldRecordStatsAction(action, plugin_version)
+  // A download_fail of an older plugin may be a failed update check against the
+  // running bundle: it stays in the logs, flagged, but is not a version fail.
+  const countsAsVersionFailure = countsAsBundleFailure(action, plugin_version)
 
   if (!shouldRecordAction) {
     // Legacy plugins can report download_fail for a non-existent target version
     // when there was no update to download, so skip version validation too.
     await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, mauPlatformForCollection(device.platform, deviceDataCollection), mauVersionBuildForCollection(device.version_build, deviceDataCollection)))
     await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action), deviceDataCollection)
-    return { success: true }
+    return { success: true, snippetFill: { blockProviderInfraRequests: Boolean(blockProviderInfraRequests), planValidUntil: planValidUntilMs(appOwner) } }
   }
 
   // Client body.channel is ignored for version_usage; only defaultChannel and
@@ -202,7 +278,7 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   }
   // File-level failures ("1.2.3:main.js") are followed by a bundle-level failure for
   // the same update; count only the latter so one failed update is one version fail.
-  else if (action.endsWith('_fail') && shouldRecordAction && colonIndex <= 0) {
+  else if (action.endsWith('_fail') && shouldRecordAction && colonIndex <= 0 && countsAsVersionFailure) {
     if (!device.is_emulator && device.is_prod) {
       // Keep version_usage fail and install cohorts aligned for rollout auto-pause.
       failureChannel = await getEffectiveStatsChannel()
@@ -215,12 +291,12 @@ async function post(c: Context, drizzleClient: ReturnType<typeof getDrizzleClien
   if (shouldRecordAction) {
     // The failure log carries the same channel as its version_usage fail row so
     // the live release view can break failure reasons down per channel.
-    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata, channel: failureChannel })
+    statsActions.push({ action: action as Database['public']['Enums']['stats_action'], metadata, channel: failureChannel, ...(countsAsVersionFailure ? {} : { uncountedFailure: true }) })
   }
 
   await backgroundTask(c, createStatsMau(c, device.device_id, app_id, appOwner.owner_org, mauPlatformForCollection(device.platform, deviceDataCollection), mauVersionBuildForCollection(device.version_build, deviceDataCollection)))
   await sendStatsAndDevice(c, device, statsActions, !isRunningVersionAction(action), deviceDataCollection)
-  return { success: true }
+  return { success: true, snippetFill: { blockProviderInfraRequests: Boolean(blockProviderInfraRequests), planValidUntil: planValidUntilMs(appOwner) } }
 }
 
 // Plugin endpoints are intentionally public device endpoints: their responses are
@@ -307,7 +383,10 @@ app.post('/', async (c) => {
   // One decision per request: a batch follows its first event's device. A
   // request without a device id keeps the live path (no per-device bucket).
   const firstDeviceId = (firstEvent as AppStats).device_id
-  if (typeof firstDeviceId === 'string' && firstDeviceId !== '' && shouldUseUpdatesEdgeCache(c, firstAppId, firstDeviceId))
+  // A replay has no device waiting on it: it always takes the cached reads,
+  // so most replayed events open no database connection.
+  if ((getSnippetEdgeReplay(c) && isUpdatesEdgeCacheEnabled(c))
+    || (typeof firstDeviceId === 'string' && firstDeviceId !== '' && shouldUseUpdatesEdgeCache(c, firstAppId, firstDeviceId)))
     return statsWithEdgeCache(c, events, isBatch, appStatus, appStatusByAppId, requestIp)
 
   // Plugin hot path must never hit primary. Device custom_id lives in Cloudflare
@@ -391,6 +470,8 @@ async function processStatsEvents(
       return onPremiseAppResponse(c)
     }
     if (result.success) {
+      if (result.snippetFill)
+        await setSnippetStatsFill(c, bodyParsed.app_id, { ...result.snippetFill, replicaSource: getReadReplicaBinding(c) })
       return c.json(BRES)
     }
     if (result.error === 'need_plan_upgrade') {
@@ -401,6 +482,7 @@ async function processStatsEvents(
 
   // For batch, collect results and handle errors per event
   const results: BatchStatsResult[] = []
+  let snippetFill: SnippetStatsFillInput | null = { blockProviderInfraRequests: false, planValidUntil: null }
 
   for (let i = 0; i < events.length; i++) {
     const event = events[i]
@@ -432,6 +514,7 @@ async function processStatsEvents(
         })
       }
       else if (result.success) {
+        snippetFill = mergeSnippetStatsFill(snippetFill, result.snippetFill)
         results.push({ status: 'ok', index: i })
       }
       else if (result.error === 'need_plan_upgrade') {
@@ -459,6 +542,12 @@ async function processStatsEvents(
   }
 
   // For batch, return array of results
+  const firstAppId = (events[0] as AppStats | undefined)?.app_id
+  if (firstAppId && results.length > 0 && snippetFill
+    && events.every(event => (event as AppStats | undefined)?.app_id === firstAppId)
+    && results.every(result => result.status === 'ok')) {
+    await setSnippetStatsFill(c, firstAppId, { ...snippetFill, replicaSource: getReadReplicaBinding(c) })
+  }
   return c.json({ status: 'ok', results })
 }
 

@@ -75,43 +75,18 @@ describe('getEmailOtpSendErrorMessage', () => {
 })
 
 describe('sendEmailOtpVerification', () => {
-  it('passes an account-deletion purpose in the same-site redirect URL', async () => {
+  it.each(['delete_account', 'setup_2fa'] as const)('passes the %s purpose in the same-site redirect URL', async (purpose) => {
     vi.stubGlobal('location', { origin: 'https://console.capgo.app' })
     const signInWithOtp = vi.fn().mockResolvedValue({ error: null })
 
     try {
-      await sendEmailOtpVerification({ auth: { signInWithOtp } } as never, 'user@example.com', 'captcha-token', 'delete_account')
+      await sendEmailOtpVerification({ auth: { signInWithOtp } } as never, 'user@example.com', 'captcha-token', purpose)
       expect(signInWithOtp).toHaveBeenCalledWith({
         email: 'user@example.com',
         options: {
           shouldCreateUser: false,
           captchaToken: 'captcha-token',
-          emailRedirectTo: 'https://console.capgo.app/?reason=delete_account',
-        },
-      })
-    }
-    finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('passes a 2FA setup purpose in the same-site redirect URL', async () => {
-    vi.stubGlobal('location', { origin: 'https://console.capgo.app' })
-    const signInWithOtp = vi.fn().mockResolvedValue({ error: null })
-
-    try {
-      await sendEmailOtpVerification(
-        { auth: { signInWithOtp } } as never,
-        'user@example.com',
-        'captcha-token',
-        'setup_2fa',
-      )
-      expect(signInWithOtp).toHaveBeenCalledWith({
-        email: 'user@example.com',
-        options: {
-          shouldCreateUser: false,
-          captchaToken: 'captcha-token',
-          emailRedirectTo: 'https://console.capgo.app/?reason=setup_2fa',
+          emailRedirectTo: `https://console.capgo.app/?reason=${purpose}`,
         },
       })
     }

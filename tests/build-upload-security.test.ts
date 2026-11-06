@@ -2,15 +2,19 @@ import { HTTPException } from 'hono/http-exception'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { tusProxy } from '../supabase/functions/_backend/public/build/upload.ts'
 
-const { mockSupabaseApikey, mockCheckPermission, mockGetEnv } = vi.hoisted(() => ({
-  mockSupabaseApikey: vi.fn(),
+const { mockRlsQuery, mockCheckPermission, mockGetEnv } = vi.hoisted(() => ({
+  mockRlsQuery: vi.fn(),
   mockCheckPermission: vi.fn(),
   mockGetEnv: vi.fn(),
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseApikey: mockSupabaseApikey,
-}))
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => unknown) => run({ query: mockRlsQuery }),
+  }
+})
 
 vi.mock('../supabase/functions/_backend/utils/rbac.ts', () => ({
   checkPermission: mockCheckPermission,
@@ -36,10 +40,9 @@ describe('build upload proxy security', () => {
     status: 'pending',
   })
 
+  // Each build_requests lookup under the API-key RLS context resolves the next `lookup` result.
   const createQueryBuilder = (data: Record<string, unknown> = createDefaultBuildRequest()) => ({
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({
+    lookup: vi.fn().mockResolvedValue({
       data,
       error: null,
     }),
@@ -68,10 +71,12 @@ describe('build upload proxy security', () => {
   beforeEach(() => {
     mockGetEnv.mockClear()
     mockCheckPermission.mockClear()
-    mockSupabaseApikey.mockClear()
+    mockRlsQuery.mockReset()
     queryBuilder = createQueryBuilder()
-    mockSupabaseApikey.mockReturnValue({
-      from: vi.fn().mockReturnValue(queryBuilder),
+    mockRlsQuery.mockImplementation(async (text: string) => {
+      expect(text).toContain('FROM public.build_requests WHERE builder_job_id = $1')
+      const { data } = await queryBuilder.lookup()
+      return { rows: data ? [{ row: data }] : [] }
     })
     mockGetEnv.mockImplementation((_, key: string) => {
       if (key === 'BUILDER_URL') {
@@ -267,9 +272,7 @@ describe('build upload proxy security', () => {
   it('rejects when upload window closes between initial validation and builder forward', async () => {
     const defaultRequest = createDefaultBuildRequest()
     queryBuilder = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn()
+      lookup: vi.fn()
         .mockResolvedValueOnce({ data: defaultRequest, error: null })
         .mockResolvedValueOnce({
           data: {
@@ -279,9 +282,6 @@ describe('build upload proxy security', () => {
           error: null,
         }),
     }
-    mockSupabaseApikey.mockReturnValue({
-      from: vi.fn().mockReturnValue(queryBuilder),
-    })
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
 
@@ -313,15 +313,13 @@ describe('build upload proxy security', () => {
       error: 'upload_not_allowed',
       message: 'Upload is not allowed for this build status',
     })
-    expect(queryBuilder.single).toHaveBeenCalledTimes(2)
+    expect(queryBuilder.lookup).toHaveBeenCalledTimes(2)
   })
 
   it('rejects when upload expires between initial validation and builder forward', async () => {
     const defaultRequest = createDefaultBuildRequest()
     queryBuilder = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn()
+      lookup: vi.fn()
         .mockResolvedValueOnce({ data: defaultRequest, error: null })
         .mockResolvedValueOnce({
           data: {
@@ -331,9 +329,6 @@ describe('build upload proxy security', () => {
           error: null,
         }),
     }
-    mockSupabaseApikey.mockReturnValue({
-      from: vi.fn().mockReturnValue(queryBuilder),
-    })
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
 
@@ -365,16 +360,13 @@ describe('build upload proxy security', () => {
       error: 'upload_expired',
       message: 'Upload window has expired',
     })
-    expect(queryBuilder.single).toHaveBeenCalledTimes(2)
+    expect(queryBuilder.lookup).toHaveBeenCalledTimes(2)
   })
 
   it('rejects expired upload_expires_at before forwarding', async () => {
     queryBuilder = createQueryBuilder({
       ...createDefaultBuildRequest(),
       upload_expires_at: new Date(Date.now() - 60 * 1000).toISOString(),
-    })
-    mockSupabaseApikey.mockReturnValue({
-      from: vi.fn().mockReturnValue(queryBuilder),
     })
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
@@ -413,9 +405,6 @@ describe('build upload proxy security', () => {
     queryBuilder = createQueryBuilder({
       ...createDefaultBuildRequest(),
       status: 'failed',
-    })
-    mockSupabaseApikey.mockReturnValue({
-      from: vi.fn().mockReturnValue(queryBuilder),
     })
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))

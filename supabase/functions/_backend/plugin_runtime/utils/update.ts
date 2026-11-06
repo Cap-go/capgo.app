@@ -16,11 +16,11 @@ import { getRuntimeKey } from 'hono/adapter'
 import { getAppStatus, setAppStatus } from './appStatus.ts'
 import { mauPlatformForCollection, mauVersionBuildForCollection, parseDeviceDataCollection } from './deviceDataCollection.ts'
 import { getBundleUrl, getManifestUrl } from './downloadUrl.ts'
-import { simpleError200 } from './hono.ts'
+import { BRES, simpleError200 } from './hono.ts'
 import { cloudlog } from './logging.ts'
 import { sendNotifOrgCached } from './notifications.ts'
 import { sendNotifToOrgMembersCached } from './org_email_notifications.ts'
-import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader, withReadOnlyPgTransientRetry } from './pg.ts'
+import { closeClient, createLazyPgClient, getAppBlockProviderInfraRequestsPostgres, getAppOwnerPostgres, getDatabaseURL, getDrizzleClient, getReadReplicaBinding, getLazyPgQueryCount, getPgClient, refreshReplicationLag, requestInfosChannelDevicePostgres, requestInfosChannelPostgres, requestInfosPostgres, requestManifestEntriesPostgres, setReplicationLagHeader, withReadOnlyPgTransientRetry } from './pg.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
@@ -28,11 +28,12 @@ import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
 import { getClientIP } from './rate_limit.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
 import { s3 } from './s3.ts'
+import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetUpdatesFill } from './snippetEdgeAnswer.ts'
 import { shouldQueuePluginNotifications } from './supabase_write_guard.ts'
 import { getUpdateResponseKind, resToVersion, updateResponseSupportsManifest } from './update_response.ts'
 import { isUpdateEnumerationLimited, recordUpdateEnumerationMiss, updateEnumerationLimitedResponse } from './updateOracleGuard.ts'
 import { canServeUpToDateFromCache, getUpdateReadCache, setUpdateReadCache } from './updateReadCache.ts'
-import { getCachedDefaultChannel, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
+import { getCachedDefaultChannel, planValidUntilMs, shouldUseUpdatesEdgeCache } from './updatesEdgeCache.ts'
 import { backgroundTask, BROTLI_MIN_UPDATER_VERSION_V7, fixSemver, isDeprecatedPluginVersion, isInternalVersionName, isVersionDeleted } from './utils.ts'
 
 export { getUpdateResponseKind, resToVersion, type UpdateResponseKind } from './update_response.ts'
@@ -199,6 +200,9 @@ function updateError200(c: Context, errorCode: string, message: string, moreInfo
 }
 
 async function getProviderInfrastructureInfo(c: Context) {
+  // The snippet answered only devices outside the provider networks.
+  if (getSnippetEdgeReplay(c))
+    return null
   const requestIp = getClientIP(c)
   if (requestIp === 'unknown')
     return null
@@ -365,7 +369,8 @@ export async function updateWithPG(
   const edgeCache = shouldUseUpdatesEdgeCache(c, app_id, device_id)
   const ownerPromise = edgeCache
     ? getAppOwnerFromEdgeCache(c, app_id, drizzleClient, pathTiming)
-    : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
+    // Snippet fills must not outlive a trial: they need its end date.
+    : getAppOwnerPostgres(c, app_id, drizzleClient, PLAN_LIMIT, { ...UPDATES_OWNER_PG_OPTIONS, includeTrialAt: getSnippetEdgeAnswerBps(c) > 0 })
   const channelPrefetchPromise = cachedStatus === 'cloud' && coerce
     ? (async () => {
         try {
@@ -604,7 +609,7 @@ export async function updateWithPG(
   }
 
   const version = channelOverride?.version ?? channelData.version
-  let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+  let manifestEntries = (channelOverride?.manifestEntries ?? channelData?.manifestEntries ?? []) as Partial<Database['public']['Views']['manifest']['Row']>[]
   const updatePackage = resolveChannelUpdatePackage(
     channelData.channels.update_package,
     isOnBuiltinVersion(version_name, version_build),
@@ -655,7 +660,7 @@ export async function updateWithPG(
 
   // Do not write while an override or rollout is already active.
   // A change created after this write shows up within the 60s TTL.
-  if (
+  const readCachePayload = (
     !channelOverride
     && !channelSelfOverride
     && !shouldUseRolloutPath
@@ -663,17 +668,21 @@ export async function updateWithPG(
     && (appOwner.channel_device_count ?? 0) === 0
     && version?.name
     && (isInternalVersionName(version.name) || !isVersionDeleted(version))
-  ) {
+  )
+    ? {
+        ownerOrg: appOwner.owner_org,
+        allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
+        versionName: version.name,
+        keyId: version.key_id ?? null,
+        planValidUntil: planValidUntilMs(appOwner),
+      }
+    : null
+  if (readCachePayload) {
     void setUpdateReadCache(c, {
       appId: app_id,
       platform,
       defaultChannel: defaultChannel ?? '',
-    }, {
-      ownerOrg: appOwner.owner_org,
-      allowDeviceCustomId: Boolean(appOwner.allow_device_custom_id),
-      versionName: version.name,
-      keyId: version.key_id ?? null,
-    })
+    }, readCachePayload)
   }
 
   // cloudlog(c.get('requestId'), 'signedURL', device_id, version_name, version.name)
@@ -691,6 +700,14 @@ export async function updateWithPG(
     }
     // TODO: check why this event is send with wrong version_name
     await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: version.name }])
+    // Same contract as the read cache: the answer holds for every device of
+    // this (app, platform, defaultChannel) already on this bundle.
+    if (readCachePayload) {
+      await setSnippetUpdatesFill(c, app_id, readCachePayload, {
+        blockProviderInfraRequests: Boolean(appOwner.block_provider_infra_requests),
+        legacyChannelSelfStore: hasChannelSelfStoreBinding(c),
+      })
+    }
     return updateError200(c, 'no_new_version_available', 'No new version available')
   }
 
@@ -899,7 +916,7 @@ export async function updateWithPG(
       deferredManifestPromise ?? Promise.resolve(null),
     ])
     if (needsDeferredManifest)
-      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Tables']['manifest']['Row']>[]
+      manifestEntries = (deferredEntries ?? []) as Partial<Database['public']['Views']['manifest']['Row']>[]
     if (url) {
       // only count the size of the bundle if it's not external and zip for now
       signedURL = url
@@ -990,7 +1007,40 @@ async function upToDateFromReadCache(c: Context, body: AppInfos, appStatus: Awai
   await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: cachedRead.versionName }], false, deviceDataCollection)
   if (shouldUseUpdatesEdgeCache(c, body.app_id, body.device_id))
     c.header('X-Updates-Cache', 'hit')
+  await setSnippetUpdatesFill(c, body.app_id, cachedRead, {
+    blockProviderInfraRequests: Boolean(appStatus.block_provider_infra_requests),
+    legacyChannelSelfStore: hasChannelSelfStoreBinding(c),
+    // No query ran: the read cache entry was filled from this region's replica.
+    replicaSource: getReadReplicaBinding(c),
+  })
   return updateError200(c, 'no_new_version_available', 'No new version available')
+}
+
+/**
+ * Stats of an up-to-date answer the Cloudflare Snippet served without a
+ * worker (snippetEdgeAnswer.ts), replayed from Logpush. Writes what
+ * upToDateFromReadCache writes for the same answer; the decision itself was
+ * made by the snippet and is not recomputed. The owner comes from the owner
+ * cache, not from the snippet header (the device can read that header).
+ */
+export async function recordSnippetUpToDate(c: Context, body: AppInfos, answer: { versionName: string }) {
+  const lazyClient = createLazyPgClient(c, true)
+  try {
+    const owner = await getAppOwnerWithEdgeCache(c, body.app_id, getDrizzleClient(lazyClient.client, { logger: false }), PLAN_LIMIT, UPDATES_OWNER_PG_OPTIONS)
+    // Deleted or no longer a cloud app: nothing to attribute the answer to.
+    if (!owner.value) {
+      if (owner.lookupFailed)
+        throw new Error('snippet edge replay owner lookup failed')
+      return c.json(BRES)
+    }
+    const device = makeDevice(body, owner.value.allow_device_custom_id)
+    await backgroundTask(c, createStatsMau(c, body.device_id, body.app_id, owner.value.owner_org, body.platform, body.version_build))
+    await sendStatsAndDevice(c, device, [{ action: 'noNew', versionName: answer.versionName }])
+    return c.json(BRES)
+  }
+  finally {
+    await lazyClient.close()
+  }
 }
 
 export async function update(c: Context, body: AppInfos) {

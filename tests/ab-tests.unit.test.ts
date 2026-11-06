@@ -2,6 +2,7 @@ import type { ABTestBranch, ABTestConfig } from '../supabase/functions/_backend/
 import { readFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import rawConfig from '../supabase/functions/_backend/utils/ab_tests.json'
+import { PROSPECTIVE_COHORT_FIXTURE } from './helpers/ab-test-prospective-cohort.ts'
 
 const {
   backgroundTaskMock,
@@ -171,7 +172,6 @@ describe('new-user A/B test assignment', () => {
   beforeEach(async () => {
     const module = await loadABTestsModule()
     module.AB_TESTS_CONFIG.new_emails = testConfig().new_emails
-    delete module.AB_TESTS_CONFIG.new_emails_v2
     vi.resetAllMocks()
     pgConnectMock.mockImplementation(async () => ({ query: pgQueryMock, release: pgReleaseMock }))
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock }))
@@ -187,7 +187,6 @@ describe('new-user A/B test assignment', () => {
     const module = await loadABTestsModule()
     const productionConfig = module.validateABTestsConfig(rawConfig)
     module.AB_TESTS_CONFIG.new_emails = productionConfig.new_emails
-    module.AB_TESTS_CONFIG.new_emails_v2 = productionConfig.new_emails_v2
     delete module.AB_TESTS_CONFIG[INTENT_TEST_NAME]
     delete module.AB_TESTS_CONFIG[BUILDER_INTENT_TEST_NAME]
     module.AB_TESTS_CONFIG[NEW_CHANNEL_TEST_NAME] = {
@@ -204,17 +203,6 @@ describe('new-user A/B test assignment', () => {
     const source = await readFile(new URL('../supabase/functions/_backend/utils/ab_tests.ts', import.meta.url), 'utf8')
 
     expect(source).toContain('from \'./ab_tests.json\' with { type: \'json\' }')
-  })
-
-  it('uses a replica fast path and a locked Drizzle transaction for missing assignments', async () => {
-    const source = await readFile(new URL('../supabase/functions/_backend/utils/ab_tests.ts', import.meta.url), 'utf8')
-
-    expect(source).toContain('getPgClient(c, true)')
-    expect(source).toContain('getPgClient(c, false)')
-    expect(source).toContain('drizzle.transaction(async (tx) =>')
-    expect(source).toContain('FOR UPDATE')
-    expect(source).toContain('SET LOCAL lock_timeout = \'2s\'')
-    expect(source).toContain('AbortSignal.timeout(BENTO_AB_TEST_SYNC_TIMEOUT_MS)')
   })
 
   it.each([
@@ -1136,6 +1124,32 @@ describe('new-user A/B test assignment', () => {
     }, expect.any(AbortSignal))
   })
 
+  it.each([false, true])('moves a stored old-email control to new emails and keeps retired v2 data (invited: %s)', async (invited) => {
+    const module = await loadABTestsModule()
+    module.AB_TESTS_CONFIG.new_emails = module.validateABTestsConfig(rawConfig).new_emails
+    const persisted = { new_emails_v2: intentAssignment(), new_emails: intentAssignment() }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    vi.useFakeTimers()
+    vi.setSystemTime(FIXED_DATE)
+    vi.spyOn(Math, 'random').mockReturnValue(0.99)
+    drizzleExecuteMock
+      .mockResolvedValueOnce({ rows: [{ abtests: { new_emails: intentAssignment('B'), new_emails_v2: intentAssignment() }, created_via_invite: invited, email: 'user@example.com', intent: 'ota' }] })
+      .mockResolvedValueOnce({ rows: [{ abtests: persisted }] })
+    const currentUser = { abtests: persisted, created_via_invite: invited, email: 'user@example.com', intent: 'ota' }
+    queueBentoSnapshot(currentUser)
+    queueBentoSnapshot(currentUser, true)
+
+    await expect(module.getOrCreateUserABTests(context, USER_ID)).resolves.toEqual({ new_emails: intentAssignment() })
+
+    const updateParameters = collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])
+    const assignmentsJson = updateParameters.find(value => typeof value === 'string' && value.startsWith('{'))
+    expect(JSON.parse(String(assignmentsJson))).toEqual(persisted)
+    const tagUpdate = syncBentoSubscriberTagsMock.mock.calls[0]?.[1]
+    expect(tagUpdate?.segments).toEqual(['ab:new_emails'])
+    expect(tagUpdate?.deleteSegments).toContain('ab:no_new_emails')
+    expect(tagUpdate?.deleteSegments).not.toContain('ab:new_emails')
+  })
+
   it('uses the primary database directly when an intent-gated test is configured', async () => {
     const { getOrCreateUserABTests } = await loadABTestsModule()
     const persisted = persistedAssignments({ channel: null, development: 'D', emails: 'B', publish: 'B' })
@@ -1208,6 +1222,17 @@ describe('new-user A/B test assignment', () => {
     expect(closeClientMock).toHaveBeenCalledOnce()
   })
 
+  it.each(['both', 'exploring'])('reconciles existing apps for persisted double-intent A / %s even without an assignment update', async (intent) => {
+    const { getOrCreateUserABTests } = await loadABTestsModule()
+    const abtests = { ...persistedAssignments({ channel: null }), todo_list_v4_double_intent: intentAssignment() }
+    const context = { get: vi.fn(() => 'request-id') } as never
+    drizzleExecuteMock.mockResolvedValueOnce({ rows: [{ abtests, intent, created_via_invite: false }] })
+
+    expect(await getOrCreateUserABTests(context, USER_ID)).toEqual(abtests)
+    expect(drizzleExecuteMock).toHaveBeenCalledTimes(2)
+    expect(collectSqlParameterValues(drizzleExecuteMock.mock.calls[1]?.[0])).toContain(USER_ID)
+  })
+
   it('rejects on-demand assignment when the authenticated profile is missing', async () => {
     const { getOrCreateUserABTests } = await loadABTestsModule()
     const context = { get: vi.fn(() => 'request-id') } as never
@@ -1228,7 +1253,10 @@ describe('new-user A/B test assignment', () => {
 describe('prospective email cohort persistence', () => {
   const context = { get: vi.fn(() => 'request-id') } as never
   const createdAt = '2026-10-18T00:00:00.000Z'
-  beforeEach(() => {
+  beforeEach(async () => {
+    const module = await loadABTestsModule()
+    module.AB_TESTS_CONFIG.new_emails_v2 = module.validateABTestsConfig({ ...rawConfig, ...PROSPECTIVE_COHORT_FIXTURE }).new_emails_v2
+    delete module.AB_TESTS_CONFIG.new_emails
     vi.resetAllMocks()
     getPgClientMock.mockImplementation(() => ({ connect: pgConnectMock }))
     getDrizzleClientMock.mockImplementation(() => ({ transaction: drizzleTransactionMock }))
@@ -1238,7 +1266,10 @@ describe('prospective email cohort persistence', () => {
     backgroundTaskMock.mockImplementation(async (_c, task) => await task)
     syncBentoSubscriberTagsMock.mockResolvedValue(true)
   })
-  afterEach(() => {
+  afterEach(async () => {
+    const module = await loadABTestsModule()
+    module.AB_TESTS_CONFIG.new_emails = module.validateABTestsConfig(rawConfig).new_emails
+    delete module.AB_TESTS_CONFIG.new_emails_v2
     vi.useRealTimers()
     vi.restoreAllMocks()
   })

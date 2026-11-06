@@ -1,4 +1,6 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import type { ImagePathScope } from '../utils/storage.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
@@ -6,9 +8,10 @@ import { z } from 'zod'
 import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlogErr } from '../utils/logging.ts'
 import { captureOrganizationInvitationPosthogEvent } from '../utils/organization_invitation_posthog.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJsonOne } from '../utils/pg_rls.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
 import { createSignedImageUrl } from '../utils/storage.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 
 const magicLookupSchema = z.object({
   magic_invite_string: z.string().min(1).max(512),
@@ -26,12 +29,25 @@ app.post('/magic-lookup', async (c) => {
     throw simpleError('invalid_json_body', 'Invalid request')
 
   const magicInviteString = validation.data.magic_invite_string
-  const adminClient = supabaseAdmin(c)
-  const { data: invitationData, error: invitationDataError } = await adminClient
-    .rpc('get_invite_by_magic_lookup', { lookup: magicInviteString })
-    .maybeSingle()
+  const pg = await getPgClient(c)
+  try {
+    return await magicLookup(c, pg, magicInviteString)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+})
 
-  if (invitationDataError) {
+async function magicLookup(c: Context<MiddlewareKeyVariables>, pg: PgClient, magicInviteString: string) {
+  let invitationData: MagicInvitationLookup | null = null
+  try {
+    invitationData = await queryJsonOne<MagicInvitationLookup>(
+      pg,
+      'SELECT * FROM public.get_invite_by_magic_lookup(lookup => $1) LIMIT 1',
+      [magicInviteString],
+    )
+  }
+  catch (invitationDataError) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'Failed to load magic-link invitation details',
@@ -42,7 +58,7 @@ app.post('/magic-lookup', async (c) => {
   if (!invitationData)
     return quickError(404, 'invitation_not_found', 'Invitation not found')
 
-  const invitation = invitationData as MagicInvitationLookup
+  const invitation = invitationData
   const invitationResponse = async (scope?: ImagePathScope) => {
     if (invitation.org_logo && URL.canParse(invitation.org_logo)) {
       return invitation
@@ -66,11 +82,18 @@ app.post('/magic-lookup', async (c) => {
       }
     }
   }
-  const { data: invitationIdentity, error: invitationIdentityError } = await adminClient
-    .from('tmp_users')
-    .select('future_uuid, email, org_id')
-    .eq('invite_magic_string', magicInviteString)
-    .maybeSingle()
+  let invitationIdentity: { future_uuid: string, email: string, org_id: string } | null = null
+  let invitationIdentityError: unknown = null
+  try {
+    const { rows } = await pg.query<{ future_uuid: string, email: string, org_id: string }>(
+      'SELECT future_uuid, email, org_id FROM public.tmp_users WHERE invite_magic_string = $1 LIMIT 1',
+      [magicInviteString],
+    )
+    invitationIdentity = rows[0] ?? null
+  }
+  catch (error) {
+    invitationIdentityError = error
+  }
 
   if (invitationIdentityError || !invitationIdentity) {
     cloudlogErr({
@@ -85,16 +108,8 @@ app.post('/magic-lookup', async (c) => {
     { data: existingUser, error: existingUserError },
     { data: invitationOrganization, error: invitationOrganizationError },
   ] = await Promise.all([
-    adminClient
-      .from('users')
-      .select('id')
-      .eq('email', invitationIdentity.email)
-      .maybeSingle(),
-    adminClient
-      .from('orgs')
-      .select('created_by')
-      .eq('id', invitationIdentity.org_id)
-      .maybeSingle(),
+    settle(pg.query<{ id: string }>('SELECT id FROM public.users WHERE email = $1 LIMIT 1', [invitationIdentity.email])),
+    settle(pg.query<{ created_by: string }>('SELECT created_by FROM public.orgs WHERE id = $1', [invitationIdentity.org_id])),
   ])
 
   if (invitationOrganizationError) {
@@ -132,4 +147,13 @@ app.post('/magic-lookup', async (c) => {
   }
 
   return c.json(responseData)
-})
+}
+
+async function settle<T>(query: Promise<{ rows: T[] }>): Promise<{ data: T | null, error: unknown }> {
+  try {
+    return { data: (await query).rows[0] ?? null, error: null }
+  }
+  catch (error) {
+    return { data: null, error }
+  }
+}

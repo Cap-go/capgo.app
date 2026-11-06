@@ -12,13 +12,18 @@ import { getChannelSelfOverride, isChannelSelfStoreEnabled } from './channelSelf
 import { getClientDbRegionSB } from './geolocation.ts'
 import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
-import { isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
+import { isDatabaseOriginError, isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
+import { configureTransactionAccessMode, readOnlyStartupOptions, setPgAccessMode } from './pg_transaction_mode.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
+import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
+import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplicaTooFarBehind, REPLICA_LAG_QUERY, REPLICATION_LAG_CACHE_TTL_SECONDS, replicationLagCacheRequest, setReplicationLagMemoryEntry } from './replicaFreshness.ts'
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
+import type { VersionManifestRow } from './version_manifest_sql.ts'
+import { completeVersionManifest, versionManifestJsonSql, versionManifestRowsSql } from './version_manifest_sql.ts'
 
 /**
  * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -32,11 +37,18 @@ export type PluginPgClient = Client | Pool
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
 
-const REPLICATION_LAG_THRESHOLD_SECONDS = 180
-const REPLICATION_LAG_CACHE_TTL_SECONDS = 60
-const REPLICATION_LAG_CACHE_TTL_MS = REPLICATION_LAG_CACHE_TTL_SECONDS * 1000
+/**
+ * Database source each client connected to. A request can open several clients
+ * whose route selection differs (EU fallback on one side of a lag figure's
+ * expiry), so a lag probe is keyed by its own client, not the request context.
+ */
+const pgClientSources = new WeakMap<object, string>()
 
-type ReplicationStatus = 'ok' | 'lagging' | 'unknown'
+function getClientReplicationLagCacheKey(c: Context, pool: PluginPgClient) {
+  return pgClientSources.get(pool) ?? getReplicationLagCacheKey(c)
+}
+
+const REPLICATION_LAG_THRESHOLD_SECONDS = 180
 export interface ChannelLookupResult { id: number, name: string, allow_device_self_set: boolean, public: boolean, owner_org: string }
 export type PlanAction = 'mau' | 'storage' | 'bandwidth'
 type ReadReplicaHyperdriveBinding
@@ -50,16 +62,6 @@ type ReadReplicaHyperdriveBinding
     | 'HYPERDRIVE_CAPGO_READ_AF'
     | 'HYPERDRIVE_CAPGO_READ_HK'
 
-interface ReplicationLagStatus {
-  status: ReplicationStatus
-  max_lag_seconds: number | null
-}
-
-interface ReplicationLagCacheEntry extends ReplicationLagStatus {
-  expiresAt: number
-}
-
-const replicationLagMemoryCache = new Map<string, ReplicationLagCacheEntry>()
 // Scoped per request: awaiting a lag probe started by another request can
 // hang once that request's I/O context ends.
 const replicationLagInflightByRequest = new WeakMap<Context, Map<string, Promise<ReplicationLagStatus>>>()
@@ -150,31 +152,6 @@ function fixSupabaseHost(host: string): string {
   return host
 }
 
-function getReplicationLagCacheKey(c: Context): string {
-  return String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown')
-}
-
-function getFreshReplicationLagMemoryEntry(cacheKey: string, now = Date.now()): ReplicationLagStatus | null {
-  const cached = replicationLagMemoryCache.get(cacheKey)
-  if (!cached)
-    return null
-  if (cached.expiresAt <= now) {
-    replicationLagMemoryCache.delete(cacheKey)
-    return null
-  }
-  return {
-    status: cached.status,
-    max_lag_seconds: cached.max_lag_seconds,
-  }
-}
-
-function setReplicationLagMemoryEntry(cacheKey: string, status: ReplicationLagStatus, expiresAt = Date.now() + REPLICATION_LAG_CACHE_TTL_MS) {
-  replicationLagMemoryCache.set(cacheKey, {
-    ...status,
-    expiresAt,
-  })
-}
-
 function toReplicationLagSeconds(value: unknown): number | null {
   if (value === null || value === undefined)
     return null
@@ -183,18 +160,12 @@ function toReplicationLagSeconds(value: unknown): number | null {
 }
 
 /**
- * Query replication lag from the REPLICA database using pg_stat_subscription.
+ * Query replication lag from the REPLICA database (see REPLICA_LAG_QUERY).
  * Uses the existing pool - no new connections.
  */
 async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
   try {
-    const query = `
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time))) AS lag_seconds
-      FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
-    `
-
-    const result = await pool.query(query)
+    const result = await pool.query(REPLICA_LAG_QUERY)
     const lagSeconds = toReplicationLagSeconds(result.rows[0]?.lag_seconds)
 
     let status: ReplicationStatus = 'unknown'
@@ -219,7 +190,7 @@ async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<Replic
 }
 
 async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<ReplicationLagStatus> {
-  const cacheKey = getReplicationLagCacheKey(c)
+  const cacheKey = getClientReplicationLagCacheKey(c, pool)
   const replicationLagInflight = getReplicationLagInflight(c)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry)
@@ -230,8 +201,8 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
     return existingQuery
 
   const cacheHelper = new CacheHelper(c)
-  const cacheRequest = cacheHelper.buildRequest('/cache/replication-lag', { source: cacheKey })
-  const cachedEntry = await cacheHelper.matchJson<ReplicationLagCacheEntry>(cacheRequest)
+  const cacheRequest = replicationLagCacheRequest(cacheHelper, cacheKey)
+  const cachedEntry = await cacheHelper.matchJson<ReplicationLagStatus & { expiresAt: number }>(cacheRequest)
 
   if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
     const cachedStatus = {
@@ -248,7 +219,7 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
 
   const query = queryReplicaLag(c, pool)
     .then(async (status) => {
-      const expiresAt = Date.now() + REPLICATION_LAG_CACHE_TTL_MS
+      const expiresAt = Date.now() + REPLICATION_LAG_CACHE_TTL_SECONDS * 1000
       setReplicationLagMemoryEntry(cacheKey, status, expiresAt)
       await cacheHelper.putJson(cacheRequest, { ...status, expiresAt }, REPLICATION_LAG_CACHE_TTL_SECONDS)
       return status
@@ -272,7 +243,7 @@ export function refreshReplicationLag(c: Context, pool: PluginPgClient) {
 export async function setReplicationLagHeader(c: Context, pool: PluginPgClient, options: { probeOnMiss?: boolean } = {}): Promise<void> {
   // Hot path: only use in-memory lag. Cold Cache API / DB probe runs in background
   // so a miss cannot add another Hyperdrive RTT to /updates P999.
-  const cacheKey = getReplicationLagCacheKey(c)
+  const cacheKey = getClientReplicationLagCacheKey(c, pool)
   const memoryEntry = getFreshReplicationLagMemoryEntry(cacheKey)
   if (memoryEntry) {
     safeSetResponseHeader(c, 'X-Replication-Lag', memoryEntry.status)
@@ -330,11 +301,44 @@ function setDatabaseSource(c: Context, source: string): void {
   safeSetResponseHeader(c, 'X-Database-Source', source)
 }
 
+const EU_READ_REPLICA_ROUTE = READ_REPLICA_ROUTES.find(route => route.region === 'EU')!
+
+function findRegionalReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+  return READ_REPLICA_ROUTES.find(route => route.region === dbRegion && c.env[route.binding])
+}
+
+/**
+ * Read replica for this region, or the EU replica while the regional one is
+ * measured more than READ_REPLICA_FALLBACK_LAG_SECONDS behind it.
+ */
+function findReadReplicaRoute(c: Context, dbRegion: string | undefined) {
+  const route = findRegionalReadReplicaRoute(c, dbRegion)
+  if (!route || route === EU_READ_REPLICA_ROUTE || !c.env[EU_READ_REPLICA_ROUTE.binding] || !isReplicaTooFarBehind(route.binding))
+    return route
+  return EU_READ_REPLICA_ROUTE
+}
+
+/**
+ * This region's own read replica, without selecting or connecting it. Labels
+ * answers filled from it (read cache entries): it ignores the EU fallback, so
+ * their edge cache TTL keeps the regional replica's lag cap.
+ */
+export function getReadReplicaBinding(c: Context): string | null {
+  const route = findRegionalReadReplicaRoute(c, getClientDbRegionSB(c))
+  if (route)
+    return route.binding
+  return isLocalWorkerEnv(c) && existInEnv(c, 'LOCAL_READ_REPLICA_SUPABASE_DB_URL')
+    ? 'local_read_replica'
+    : null
+}
+
 function getReadOnlyDatabaseURL(c: Context, dbRegion: string | undefined): string | null {
-  const selectedRoute = READ_REPLICA_ROUTES.find(route => route.region === dbRegion && c.env[route.binding])
+  const selectedRoute = findReadReplicaRoute(c, dbRegion)
   if (!selectedRoute)
     return null
 
+  if (selectedRoute.region !== dbRegion)
+    cloudlog({ requestId: c.get('requestId'), message: 'Regional read replica too far behind, reading from EU replica', dbRegion })
   setDatabaseSource(c, selectedRoute.binding)
   return c.env[selectedRoute.binding].connectionString
 }
@@ -419,8 +423,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
-  const isPooler = dbName.startsWith('sb_pooler')
-  const readOnlyOptions = readOnly && !isPooler ? '-c default_transaction_read_only=on' : undefined
+  const readOnlyOptions = readOnlyStartupOptions(dbName, readOnly)
   const isWorkerd = getRuntimeKey() === 'workerd'
   // Match on the actual connection string (not just databaseSource metadata) so the
   // Hyperdrive Client contract cannot silently become Pool+end() if c.set is missed.
@@ -439,7 +442,8 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     })
     await client.connect()
     skipEndClients.add(client)
-    return client
+    pgClientSources.set(client, dbName)
+    return setPgAccessMode(client, readOnly)
   }
 
   const pool = new Pool({
@@ -457,7 +461,23 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     cloudlogErr({ requestId, message: 'PG Pool Error', databaseSource: dbName, error: serializePostgresError(err) })
   })
 
-  return pool
+  // pg-pool drops its idle error listener while a client is checked out. Keep a
+  // permanent one so a server-side kill (e.g. idle_in_transaction_session_timeout)
+  // during a transaction rejects the next query instead of crashing the worker.
+  // Idle-client errors are already logged as 'PG Pool Error', so only log here
+  // while the client is checked out.
+  const checkedOut = new WeakSet<object>()
+  pool.on('acquire', client => checkedOut.add(client))
+  pool.on('release', (_err, client) => checkedOut.delete(client))
+  pool.on('connect', (client) => {
+    client.on('error', (err: Error) => {
+      if (checkedOut.has(client))
+        cloudlogErr({ requestId, message: 'PG Client Error', databaseSource: dbName, error: serializePostgresError(err) })
+    })
+  })
+
+  pgClientSources.set(pool, dbName)
+  return setPgAccessMode(pool, readOnly)
 }
 
 /**
@@ -472,6 +492,7 @@ export interface LazyPgClient {
 }
 
 const lazyPgQueryCounts = new WeakMap<object, number>()
+const lazyPgClients = new WeakMap<object, () => Promise<PluginPgClient>>()
 const LAZY_PG_CONNECT_ERROR = Symbol('lazy-pg-connect-error')
 
 function markLazyPgConnectError(error: unknown) {
@@ -502,7 +523,12 @@ export function getLazyPgQueryCount(c: Context) {
 export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
   let inner: Promise<PluginPgClient> | null = null
   const ensure = () => {
-    inner ??= getPgClient(c, readOnly).catch((error: unknown) => {
+    inner ??= getPgClient(c, readOnly).then((db) => {
+      const source = pgClientSources.get(db)
+      if (source)
+        pgClientSources.set(client, source)
+      return db
+    }, (error: unknown) => {
       throw markLazyPgConnectError(error)
     })
     return inner
@@ -516,6 +542,7 @@ export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
       return ensure().then(db => (db.query as (...queryArgs: unknown[]) => unknown)(...queryArgs))
     },
   } as unknown as PluginPgClient
+  lazyPgClients.set(client, ensure)
   return {
     client,
     isConnected: () => inner !== null,
@@ -532,7 +559,14 @@ export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
 export function getDrizzleClient(db: PluginPgClient, options?: { logger?: boolean }) {
   // Keep SQL logging on by default for API/trigger diagnostics.
   // Plugin hot paths pass `{ logger: false }` to avoid per-request log CPU/volume.
-  return drizzle({ client: db, logger: options?.logger ?? true })
+  const database = configureTransactionAccessMode(drizzle({ client: db, logger: options?.logger ?? true }), db)
+  const resolve = lazyPgClients.get(db)
+  if (resolve) {
+    // Resolve only when a transaction is requested, then use the real handle's
+    // access mode and Pool checkout. A lazy proxy has neither of those itself.
+    database.transaction = async (run, config) => getDrizzleClient(await resolve(), options).transaction(run, config)
+  }
+  return database
 }
 
 export interface ReadOnlyPgSession {
@@ -742,13 +776,7 @@ function getSchemaUpdatesAlias(includeMetadata = false) {
     rollout_cache_ttl_seconds: channelAlias.rollout_cache_ttl_seconds,
     paused_at: channelAlias.paused_at,
   }
-  const manifestSelect = sql<{ file_name: string, file_hash: string, s3_path: string }[]>`COALESCE(json_agg(
-        json_build_object(
-          'file_name', ${schema.manifest.file_name},
-          'file_hash', ${schema.manifest.file_hash},
-          's3_path', ${schema.manifest.s3_path}
-        )
-      ) FILTER (WHERE ${schema.manifest.file_name} IS NOT NULL), '[]'::json)`
+  const manifestSelect = versionManifestJsonSql(versionAlias.id)
   return { versionSelect, rolloutVersionSelect, channelDevicesAlias, channelAlias, channelSelect, manifestSelect, versionAlias, rolloutVersionAlias }
 }
 
@@ -796,9 +824,7 @@ export function requestInfosChannelDevicePostgres(
     .innerJoin(channelAlias, eq(channelDevicesAlias.channel_id, channelAlias.id))
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelDevice = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelDevice = baseQuery
     .where(and(
       eq(channelDevicesAlias.device_id, device_id),
       eq(channelDevicesAlias.app_id, app_id),
@@ -932,9 +958,7 @@ export function requestInfosChannelByIdPostgres(
     .from(channelAlias)
     .innerJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channel = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channel = baseQuery
     .where(and(
       eq(channelAlias.app_id, app_id),
       eq(channelAlias.id, channelId),
@@ -971,9 +995,7 @@ export function requestInfosChannelPostgres(
     .from(channelAlias)
     .leftJoin(versionAlias, activeChannelVersionJoin(channelAlias.version, versionAlias))
 
-  const channelQuery = (includeManifest
-    ? baseQuery.leftJoin(schema.manifest, eq(schema.manifest.app_version_id, versionAlias.id))
-    : baseQuery)
+  const channelQuery = baseQuery
     .where(and(
       defaultChannel
         ? and(
@@ -1049,15 +1071,10 @@ export async function requestManifestEntriesPostgres(
   if (cached)
     return cached
 
-  const rows = await retryOnRecoveryConflict(c, 'manifest_entries', () => drizzleClient
-    .select({
-      file_name: schema.manifest.file_name,
-      file_hash: schema.manifest.file_hash,
-      s3_path: schema.manifest.s3_path,
-    })
-    .from(schema.manifest)
-    .where(eq(schema.manifest.app_version_id, versionId))
-    .execute())
+  const rows = await retryOnRecoveryConflict(c, 'manifest_entries', async () => {
+    const result = await drizzleClient.execute<VersionManifestRow>(versionManifestRowsSql(sql`${versionId}::bigint`))
+    return completeVersionManifest(result.rows)
+  })
 
   // Cache API size limits may reject huge manifests; the put fails open.
   // With the /updates edge cache on, the rows also carry the app's purge tag.
@@ -1451,17 +1468,21 @@ export async function getAppOwnerPostgres(
   appId: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   actions: PlanAction[] = [],
-  options?: { rethrowReadOnlyConnectionErrors?: boolean },
+  options: { includeTrialAt?: boolean, rethrowReadOnlyConnectionErrors?: boolean } = {},
 ): Promise<AppOwnerPostgresResult | null> {
   try {
-    return await queryAppOwnerPostgres(c, appId, drizzleClient, actions)
+    return await queryAppOwnerPostgres(c, appId, drizzleClient, actions, options)
   }
   catch (e: unknown) {
     logPgError(c, 'getAppOwnerPostgres', e, {
       appId,
       planActions: actions,
     })
-    if (options?.rethrowReadOnlyConnectionErrors && isReadOnlyPgConnectionRetryError(e))
+    // A failed lookup is never "app missing": null makes callers answer a
+    // publicly cached on_premise_app 429 for an hour. Any database error
+    // (lost connection, no free connection slot, recovery conflict on a
+    // replica) is rethrown so the request fails as a retryable 503 instead.
+    if (isDatabaseOriginError(e) || (options?.rethrowReadOnlyConnectionErrors && isReadOnlyPgConnectionRetryError(e)))
       throw e
     return null
   }

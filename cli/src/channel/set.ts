@@ -1,15 +1,15 @@
 import type { OptionsSetChannel } from '../schemas/channel'
-import type { Database } from '../types/supabase.types'
+import type { ChannelInsert } from '../types/api'
 import type { Compatibility } from '../utils'
 import { intro, log, outro } from '@clack/prompts'
 import { check2FAComplianceForApp, checkAppExistsAndHasPermissionOrgErr } from '../api/app'
 import { findChannel } from '../api/channels'
-import { getActiveAppVersions, getVersionData } from '../api/versions'
+import { getLatestAppVersion, getVersionData, getVersionDataById } from '../api/versions'
 import { sendUpdateNotificationsForChannels } from '../notifications/send-update'
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
-import { formatTable } from '../terminal-table'
 import { CliUserError } from '../shared/cli-user-error'
-import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createSupabaseClient, findSavedKey, getAppId, getBundleVersion, getCapgoCliHttpStatus, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, readCapgoCliApiErrorPayload, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { formatTable } from '../terminal-table'
+import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createCapgoClient, findSavedKey, getAppId, getBundleVersion, getCapgoCliHttpStatus, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, readCapgoCliApiErrorPayload, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -148,9 +148,10 @@ export async function setChannelInternal(channel: string, appId: string, options
     throw new Error(message)
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await check2FAComplianceForApp(supabase, appId, silent)
-  const userId = await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  // The preflight already resolves the key's user and the app's org: no extra lookups.
+  const preflight = await check2FAComplianceForApp(client, appId, silent)
+  const userId = preflight?.userId ?? await resolveUserIdFromApiKey(client, options.apikey)
 
   const {
     bundle,
@@ -289,12 +290,13 @@ export async function setChannelInternal(channel: string, appId: string, options
     || hasRolloutTargetChange
     || hasRolloutConfiguration
   const hasBundlePromotion = hasStableBundlePromotion || hasRolloutTargetChange
-  const { data: existingChannel, error: channelError } = await findChannel(supabase, appId, channel)
+  const { data: existingChannel, error: channelError } = await findChannel(client, appId, channel)
   if (channelError || !existingChannel) {
     if (!silent)
       log.error(`Cannot find channel ${channel}`)
-    // PGRST116: `.single()` found no row, so the channel is missing or not readable with this key.
-    if (!channelError || channelError.code === 'PGRST116')
+    // No row, or the key cannot read the app: the channel is missing for this key.
+    const channelStatus = channelError ? getCapgoCliHttpStatus(channelError) : undefined
+    if (!channelError || channelStatus === 401 || channelStatus === 403 || channelStatus === 404)
       throw new CliUserError(`Cannot find channel ${channel}`, { appId, channel })
     throw new Error(`Cannot find channel ${channel}`, { cause: channelError })
   }
@@ -302,13 +304,13 @@ export async function setChannelInternal(channel: string, appId: string, options
   // Disable unlinks only when a rollout bundle is linked; match API promote gating.
   const disableUnlinksRollout = rolloutDisable === true && existingChannel.rollout_version != null
   if (hasSettingsUpdate)
-    await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.update_settings', silent, true, existingChannel.id)
+    await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'channel.update_settings', silent, true, existingChannel.id)
   if (hasBundlePromotion || disableUnlinksRollout)
-    await checkAppExistsAndHasPermissionOrgErr(supabase, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
+    await checkAppExistsAndHasPermissionOrgErr(client, options.apikey, appId, 'channel.promote_bundle', silent, true, existingChannel.id)
 
-  const orgId = await getOrganizationId(options.apikey!, appId, { supaHost: options.supaHost, supaAnon: options.supaAnon })
+  const orgId = preflight?.orgId ?? await getOrganizationId(options.apikey!, appId, { apiHost: options.apiHost })
 
-  const channelPayload: Database['public']['Tables']['channels']['Insert'] = {
+  const channelPayload: ChannelInsert = {
     created_by: userId,
     app_id: appId,
     name: channel,
@@ -320,8 +322,7 @@ export async function setChannelInternal(channel: string, appId: string, options
     return getVersionData(options.apikey!, appId, versionName, {
       silent,
       apikey: options.apikey!,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
   }
 
@@ -333,16 +334,16 @@ export async function setChannelInternal(channel: string, appId: string, options
     const data = await getVersionData(options.apikey!, appId, resolvedBundleVersion, {
       silent,
       apikey: options.apikey!,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { apiHost: options.apiHost },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -372,13 +373,10 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   if (latestRemote) {
-    const versions = await getActiveAppVersions(options.apikey!, appId, {
+    const data = await getLatestAppVersion(options.apikey!, appId, {
       silent,
-      apikey: options.apikey!,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
-    const data = versions[0]
     if (!data) {
       if (!silent)
         log.error('Cannot find latest remote version')
@@ -387,10 +385,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { apiHost: options.apiHost },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -417,10 +416,11 @@ export async function setChannelInternal(channel: string, appId: string, options
 
     if (!options.ignoreMetadataCheck) {
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { apiHost: options.apiHost },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -498,21 +498,19 @@ export async function setChannelInternal(channel: string, appId: string, options
       throw new Error('Cannot promote rollout without a rollout target')
 
     if (channelPayload.rollout_version == null && !options.ignoreMetadataCheck) {
-      const versions = await getActiveAppVersions(options.apikey!, appId, {
+      const data = await getVersionDataById(options.apikey!, appId, rolloutVersion, {
         silent,
-        apikey: options.apikey!,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
-      const data = versions.find(v => v.id === rolloutVersion)
       if (!data)
         throw new Error('Cannot find rollout version to promote')
 
       const { finalCompatibility, localDependencies } = await checkCompatibilityNativePackages(
-        supabase,
+        options.apikey!,
         appId,
         channel,
         (data.native_packages as any) ?? [],
+        { apiHost: options.apiHost },
       )
 
       const incompatiblePackages = finalCompatibility.filter(item => !isCompatible(item))
@@ -697,8 +695,7 @@ export async function setChannelInternal(channel: string, appId: string, options
         version_id: channelPayload.version,
         channel_id: existingChannel.id,
       },
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
     if (error)
       await throwChannelWriteError(error, silent)
@@ -712,13 +709,10 @@ export async function setChannelInternal(channel: string, appId: string, options
       channelBody.version = typeof channelPayload.version === 'number' ? undefined : channelPayload.version
     // POST channel expects version as version name string; resolve from id when needed
     if (typeof channelPayload.version === 'number') {
-      const versions = await getActiveAppVersions(options.apikey!, appId, {
+      const matched = await getVersionDataById(options.apikey!, appId, channelPayload.version, {
         silent: true,
-        apikey: options.apikey!,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       })
-      const matched = versions.find(v => v.id === channelPayload.version)
       if (!matched) {
         if (!silent)
           log.error('Cannot set channel because no bundle version could be resolved')
@@ -757,13 +751,10 @@ export async function setChannelInternal(channel: string, appId: string, options
       channelBody.allow_prod = channelPayload.allow_prod
     if (channelPayload.rollout_version !== undefined) {
       if (typeof channelPayload.rollout_version === 'number') {
-        const versions = await getActiveAppVersions(options.apikey!, appId, {
+        const matched = await getVersionDataById(options.apikey!, appId, channelPayload.rollout_version, {
           silent: true,
-          apikey: options.apikey!,
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
+          apiHost: options.apiHost,
         })
-        const matched = versions.find(v => v.id === channelPayload.rollout_version)
         if (!matched) {
           if (!silent)
             log.error('Cannot set channel because no rollout bundle version could be resolved')
@@ -806,8 +797,7 @@ export async function setChannelInternal(channel: string, appId: string, options
       apikey: options.apikey!,
       method: 'POST',
       body: channelBody,
-      supaHost: options.supaHost,
-      supaAnon: options.supaAnon,
+      apiHost: options.apiHost,
     })
     if (dbError)
       await throwChannelWriteError(dbError, silent)
@@ -826,7 +816,7 @@ export async function setChannelInternal(channel: string, appId: string, options
   }
 
   if (options.qrPreview && !silent) {
-    const previewHttp = { apikey: options.apikey!, supaHost: options.supaHost, supaAnon: options.supaAnon }
+    const previewHttp = { apikey: options.apikey!, apiHost: options.apiHost }
     const previewTarget = await resolveChannelPreviewTarget(previewHttp, appId, channel)
     if (!previewTarget)
       throw new Error(`Channel ${channel} not found for app ${appId}`)

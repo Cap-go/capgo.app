@@ -232,6 +232,12 @@ const CREDENTIAL_KNOWLEDGE: Record<string, FieldKnowledge> = {
     category: 'configuration',
     explain: 'How long the BUILD_OUTPUT_UPLOAD download link stays valid. Range: 1h (3600) to 7d (604800). Stored as seconds. The CLI accepts shorthand like 6h, 2d on save.',
   },
+  BUILD_SYMBOLS_UPLOAD_ENABLED: {
+    scope: 'shared',
+    type: 'boolean',
+    category: 'configuration',
+    explain: 'When true, the build worker keeps the debug symbols (iOS dSYMs zip, Android R8/ProGuard mapping.txt) in Capgo storage and prints a time-limited download link for crash reporters (Crashlytics, Sentry). Set BUILD_OUTPUT_UPLOAD_ENABLED to false to avoid keeping the IPA/APK/AAB. When output upload is enabled, it includes debug symbols even if this setting is false. Uses BUILD_OUTPUT_RETENTION_SECONDS. Off by default: nothing is kept unless you opt in.',
+  },
   SKIP_BUILD_NUMBER_BUMP: {
     scope: 'shared',
     type: 'boolean',

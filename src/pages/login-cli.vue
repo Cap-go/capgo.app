@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { CliAiPromptOrganization } from '~/services/cliAiPrompt'
+import type { RealtimeChannel } from '~/services/consoleClient'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -23,8 +23,8 @@ import {
   isValidCliLoginSession,
   prepareCliLoginKey,
 } from '~/services/cliLogin'
+import { useConsole } from '~/services/console'
 import { formatLocalDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 
@@ -34,7 +34,7 @@ const hiddenKey = 'capgo_xxxxxxxxxxxxxxxxxxxx'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const state = ref<PageState>('preparing')
@@ -74,14 +74,14 @@ function clearSecret(): void {
 
 function clearChannels(): void {
   for (const channel of channels.splice(0))
-    void supabase.removeChannel(channel)
+    void capgo.removeChannel(channel)
 }
 
 async function resolveDestination(): Promise<string> {
   const accepted = organizationStore.organizations.filter(org => !isPendingOrganizationInvite(org))
   if (accepted.length !== 1 || accepted[0].app_count !== 1)
     return '/dashboard'
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('apps')
     .select('app_id, need_onboarding')
     .eq('owner_org', accepted[0].gid)
@@ -101,22 +101,30 @@ async function complete(): Promise<void> {
 function subscribe(orgIds: string[], session: string): Promise<boolean[]> {
   return Promise.all(orgIds.map(orgId => new Promise<boolean>((resolve) => {
     let settled = false
+    // The event stream may hang before reporting a status; never leave the page preparing forever.
+    let timer: ReturnType<typeof setTimeout> | undefined
     const finish = (connected: boolean) => {
       if (settled)
         return
       settled = true
+      clearTimeout(timer)
       resolve(connected)
     }
-    const channel = supabase.channel(`cli-events:org:${orgId}`)
+    timer = setTimeout(() => finish(false), 15_000)
+    const channel = capgo.channel(`cli-events:org:${orgId}`)
       .on('broadcast', { event: 'cli-activity' }, (message) => {
         if (isMatchingCliLoginEvent(message.payload, session))
           void complete()
       })
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED')
+        if (status === 'SUBSCRIBED') {
+          // A late subscribe after the fallback timeout must clear the banner.
+          realtimeUnavailable.value = false
           finish(true)
-        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED')
+        }
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           finish(false)
+        }
       })
     channels.push(channel)
   })))
@@ -140,7 +148,7 @@ async function prepare(): Promise<void> {
       throw new Error('Missing authenticated user')
     const result = await prepareCliLoginKey(
       organizationStore.organizations,
-      createCliLoginKeyDependencies(supabase, userId),
+      createCliLoginKeyDependencies(capgo, userId),
     )
     skippedOrganizations.value = result.skippedOrganizations
     if (result.status === 'empty') {

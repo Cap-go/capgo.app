@@ -17,6 +17,10 @@ const FILE_READ_PATH_PREFIXES = [
 /** Fail-open quickly on primary blips; full zip download must not wait on 10s pool connect. */
 const DELETED_LOOKUP_TIMEOUT_MS = 2000
 const DELETED_LOOKUP_STATEMENT_TIMEOUT = `${DELETED_LOOKUP_TIMEOUT_MS}ms`
+// Open the transaction and bound it in one round trip. If the deadline abandons
+// the lookup after BEGIN (the request can end before COMMIT runs), PostgreSQL
+// ends the idle transaction instead of pinning the Hyperdrive origin connection.
+const DELETED_LOOKUP_BEGIN = `BEGIN READ ONLY; SET LOCAL statement_timeout = '${DELETED_LOOKUP_STATEMENT_TIMEOUT}'; SET LOCAL idle_in_transaction_session_timeout = '${DELETED_LOOKUP_STATEMENT_TIMEOUT}'`
 const DELETED_LOOKUP_TIMEOUT_ERROR = 'deleted lookup timeout'
 
 export function isVersionDeleted(row: { deleted?: boolean | null, deleted_at?: string | Date | null } | null | undefined): boolean {
@@ -205,12 +209,9 @@ async function lookupAttachmentVersionDeletedFromPrimary(c: Context, fileId: str
   try {
     pgClient = await raceWithDeadline(deadlineMs, clientPromise)
     const result = await raceWithDeadline(deadlineMs, (async () => {
-      await pgClient!.query('BEGIN')
       try {
-        await pgClient!.query(
-          `SELECT pg_catalog.set_config('statement_timeout', $1, true)`,
-          [DELETED_LOOKUP_STATEMENT_TIMEOUT],
-        )
+        // Inside try: if the batch fails after BEGIN ran, the catch still rolls it back.
+        await pgClient!.query(DELETED_LOOKUP_BEGIN)
         const queryResult = await pgClient!.query<{ deleted: boolean | null, deleted_at: string | null }>(
           `
           SELECT deleted, deleted_at
@@ -277,4 +278,5 @@ export const fileReadCacheTestUtils = {
   getAttachmentFileIdFromReadPath,
   isVersionDeleted,
   DELETED_LOOKUP_TIMEOUT_MS,
+  DELETED_LOOKUP_BEGIN,
 }

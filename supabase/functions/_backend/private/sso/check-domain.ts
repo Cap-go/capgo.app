@@ -4,8 +4,8 @@ import { safeParseSchema } from '../../utils/schema_validation.ts'
 import { CacheHelper } from '../../utils/cache.ts'
 import { createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
+import { queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { getClientIP } from '../../utils/rate_limit.ts'
-import { emptySupabase } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 
 // Rate limiting: 10 requests per minute per IP
@@ -40,6 +40,16 @@ async function checkDomainRateLimit(c: Context): Promise<boolean> {
   return false
 }
 
+// supabase-js style result, so both lookups can run concurrently and report their own error.
+async function callAsAnon<T>(c: Context, text: string, domain: string): Promise<{ data: T[] | null, error: Error | null }> {
+  try {
+    return { data: await withRlsContext(c, { kind: 'anon' }, client => queryJson<T>(client, text, [domain])), error: null }
+  }
+  catch (error) {
+    return { data: null, error: error instanceof Error ? error : new Error(String(error)) }
+  }
+}
+
 const bodySchema = z.object({
   email: z.email(),
 })
@@ -69,7 +79,6 @@ app.post('/', async (c) => {
     return quickError(400, 'invalid_email', 'Email must contain a domain')
   }
 
-  const supabase = emptySupabase(c)
   const requestId = c.get('requestId')
 
   try {
@@ -77,8 +86,8 @@ app.post('/', async (c) => {
       { data: enforcementData, error: enforcementError },
       { data: legacyData, error: legacyError },
     ] = await Promise.all([
-      (supabase.rpc as any)('get_sso_enforcement_by_domain', { p_domain: domain }),
-      (supabase.rpc as any)('check_domain_sso', { p_domain: domain }),
+      callAsAnon<{ org_id: string, enforce_sso: boolean }>(c, 'SELECT * FROM public.get_sso_enforcement_by_domain(p_domain => $1)', domain),
+      callAsAnon<{ has_sso: boolean, provider_id: string, org_id: string }>(c, 'SELECT * FROM public.check_domain_sso(p_domain => $1)', domain),
     ])
 
     if (enforcementError || legacyError) {
@@ -92,8 +101,8 @@ app.post('/', async (c) => {
       return quickError(500, 'query_error', 'Failed to check domain')
     }
 
-    const enforcementRow = Array.isArray(enforcementData) ? enforcementData[0] : enforcementData
-    const legacyRow = Array.isArray(legacyData) ? legacyData[0] : legacyData
+    const enforcementRow = enforcementData?.[0]
+    const legacyRow = legacyData?.[0]
 
     if (!enforcementRow && !legacyRow) {
       cloudlog({ requestId, context: 'check_domain - no SSO provider found', domain })

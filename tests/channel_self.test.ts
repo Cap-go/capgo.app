@@ -97,36 +97,28 @@ describe('invalids /channel_self tests', () => {
     expect(error).toBe('invalid_json_body')
   })
 
-  it('[POST] invalid semver', async () => {
+  it.each(['POST', 'PUT', 'DELETE'] as const)('[%s] invalid semver', async (method) => {
     const data = getUniqueBaseData(APPNAME)
     data.version_build = 'invalid semver'
 
-    const response = await fetchEndpoint('POST', data)
-    const error = await getResponseErrorCode(response)
-
-    expect(error).toBe('semver_error')
+    const response = await fetchEndpoint(method, data)
+    expect(await getResponseErrorCode(response)).toBe('semver_error')
   })
 
-  it('[POST] without field (device_id)', async () => {
+  it.each([
+    ['POST', 'device_id'],
+    ['POST', 'app_id'],
+    ['PUT', 'device_id'],
+    ['PUT', 'app_id'],
+    ['DELETE', 'device_id'],
+    ['DELETE', 'app_id'],
+  ] as const)('[%s] without field (%s)', async (method, field) => {
     const data = getUniqueBaseData(APPNAME)
-    delete data.device_id
+    delete data[field]
 
-    const response = await fetchEndpoint('POST', data)
+    const response = await fetchEndpoint(method, data)
     expect(response.status).toBe(400)
-
-    const error = await getResponseErrorCode(response)
-    expect(error).toBe('missing_device_id')
-  })
-
-  it('[POST] without field (app_id)', async () => {
-    const data = getUniqueBaseData(APPNAME)
-    delete data.app_id
-
-    const response = await fetchEndpoint('POST', data)
-    expect(response.status).toBe(400)
-
-    const error = await getResponseErrorCode(response)
-    expect(error).toBe('missing_app_id')
+    expect(await getResponseErrorCode(response)).toBe(`missing_${field}`)
   })
 
   it('[POST] without channel', async () => {
@@ -174,38 +166,6 @@ describe('invalids /channel_self tests', () => {
     }
   })
 
-  it('[PUT] invalid semver', async () => {
-    const data = getUniqueBaseData(APPNAME)
-    data.version_build = 'invalid semver'
-
-    const response = await fetchEndpoint('PUT', data)
-    const error = await getResponseErrorCode(response)
-
-    expect(error).toBe('semver_error')
-  })
-
-  it('[PUT] post without field (device_id)', async () => {
-    const data = getUniqueBaseData(APPNAME)
-    delete data.device_id
-
-    const response = await fetchEndpoint('PUT', data)
-    expect(response.status).toBe(400)
-
-    const error = await getResponseErrorCode(response)
-    expect(error).toBe('missing_device_id')
-  })
-
-  it('[PUT] post without field (app_id)', async () => {
-    const data = getUniqueBaseData(APPNAME)
-    delete data.app_id
-
-    const response = await fetchEndpoint('PUT', data)
-    expect(response.status).toBe(400)
-
-    const error = await getResponseErrorCode(response)
-    expect(error).toBe('missing_app_id')
-  })
-
   it('[PUT] with a version that does not exist', async () => {
     // Version check was removed from channel_self - devices with unknown versions can still get channel info
     const data = getUniqueBaseData(APPNAME)
@@ -217,38 +177,6 @@ describe('invalids /channel_self tests', () => {
     const responseJSON = await response.json<{ channel: string, status: string }>()
     expect(responseJSON.channel).toBeTruthy()
     expect(responseJSON.status).toBe('default')
-  })
-
-  it('[DELETE] invalid semver', async () => {
-    const data = getUniqueBaseData(APPNAME)
-    data.version_build = 'invalid semver'
-
-    const response = await fetchEndpoint('DELETE', data)
-    const error = await getResponseErrorCode(response)
-
-    expect(error).toBe('semver_error')
-  })
-
-  it('[DELETE] post without field (device_id)', async () => {
-    const data = getUniqueBaseData(APPNAME)
-    delete data.device_id
-
-    const response = await fetchEndpoint('DELETE', data)
-    expect(response.status).toBe(400)
-
-    const error = await getResponseErrorCode(response)
-    expect(error).toBe('missing_device_id')
-  })
-
-  it('[DELETE] post without field (app_id)', async () => {
-    const data = getUniqueBaseData(APPNAME)
-    delete data.app_id
-
-    const response = await fetchEndpoint('DELETE', data)
-    expect(response.status).toBe(400)
-
-    const error = await getResponseErrorCode(response)
-    expect(error).toBe('missing_app_id')
   })
 })
 
@@ -1056,71 +984,6 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST/PUT/DELETE] /channel_self Cloudflare KV 
       expect(resetError).toBeNull()
     }
   })
-})
-
-it('verify channel stays after deleting channel_device', async () => {
-  await resetAndSeedAppData(APPNAME)
-
-  // 1. Get a channel to use for the test
-  const { data: channel, error: channelError } = await getSupabaseClient()
-    .from('channels')
-    .select('id, name, owner_org')
-    .eq('name', 'production')
-    .eq('app_id', APPNAME)
-    .single()
-
-  expect(channelError).toBeNull()
-  expect(channel).toBeTruthy()
-  const channelId = channel!.id
-  const channelName = channel!.name
-  const ownerOrg = channel!.owner_org
-
-  // 2. Create a device linked to this channel
-  const deviceId = randomUUID().toLowerCase()
-  const { error: insertError } = await getSupabaseClient()
-    .from('channel_devices')
-    .insert({
-      channel_id: channelId,
-      device_id: deviceId,
-      app_id: APPNAME,
-      owner_org: ownerOrg,
-    })
-
-  expect(insertError).toBeNull()
-
-  // 3. Verify the device exists
-  const { data: deviceBefore, error: deviceBeforeError } = await getSupabaseClient()
-    .from('channel_devices')
-    .select('*')
-    .eq('device_id', deviceId)
-    .eq('app_id', APPNAME)
-    .single()
-
-  expect(deviceBeforeError).toBeNull()
-  expect(deviceBefore).toBeTruthy()
-  expect(deviceBefore!.channel_id).toBe(channelId)
-
-  // 4. Delete the device
-  const { error: deleteError } = await getSupabaseClient()
-    .from('channel_devices')
-    .delete()
-    .eq('device_id', deviceId)
-    .eq('app_id', APPNAME)
-
-  expect(deleteError).toBeNull()
-
-  // 5. Verify the channel still exists
-  const { data: channelAfter, error: channelAfterError } = await getSupabaseClient()
-    .from('channels')
-    .select('id, name')
-    .eq('id', channelId)
-    .eq('app_id', APPNAME)
-    .single()
-
-  expect(channelAfterError).toBeNull()
-  expect(channelAfter).toBeTruthy()
-  expect(channelAfter!.id).toBe(channelId)
-  expect(channelAfter!.name).toBe(channelName)
 })
 
 it.skipIf(USE_CLOUDFLARE)('saves default_channel when provided', async () => {

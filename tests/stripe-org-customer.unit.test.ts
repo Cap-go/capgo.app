@@ -26,6 +26,47 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: supabaseAdminMock,
 }))
 
+// stripe_org now runs SQL directly; replay each statement against the supabase-js style mock
+// below so the cases keep describing the same reads and writes.
+function unwrap({ data, error }: { data?: unknown, error?: unknown }) {
+  if (error)
+    throw error
+  return data
+}
+
+async function replayOnSupabaseMock(text: string, values: unknown[] = []) {
+  const admin = supabaseAdminMock()
+  if (text.includes('UPDATE public.orgs SET customer_id')) {
+    const [orgId, customerId, observedCustomerId] = values
+    const query = admin.from('orgs').update({ customer_id: customerId }).eq('id', orgId)
+    const filtered = observedCustomerId == null ? query.is('customer_id', null) : query.eq('customer_id', observedCustomerId)
+    const row = unwrap(await filtered.select('customer_id').maybeSingle())
+    return { rows: row ? [row] : [] }
+  }
+  if (text.includes('FROM public.orgs'))
+    return { rows: [unwrap(await admin.from('orgs').select('*').eq('id', values[0]).single())] }
+  if (text.includes('INSERT INTO public.stripe_info')) {
+    const [product_id, customer_id, trial_at, billing_account] = values
+    unwrap(await admin.from('stripe_info').insert({ product_id, customer_id, trial_at, billing_account }))
+    return { rows: [] }
+  }
+  if (text.includes('DELETE FROM public.stripe_info')) {
+    unwrap(await admin.from('stripe_info').delete().eq('customer_id', values[0]))
+    return { rows: [] }
+  }
+  if (text.includes('FROM public.plans')) {
+    const row = unwrap(await admin.from('plans').select('*').or(`stripe_id.eq.${values[0]},stripe_id_us.eq.${values[0]}`).maybeSingle())
+    return { rows: row ? [row] : [] }
+  }
+  throw new Error(`unexpected query ${text}`)
+}
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  servicePrincipal: { kind: 'service' },
+  withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => Promise<unknown>) => run({ query: replayOnSupabaseMock }),
+  queryJson: async (client: { query: typeof replayOnSupabaseMock }, text: string, values?: unknown[]) => (await client.query(text, values)).rows,
+}))
+
 const {
   createStripeCustomer,
   finalizePendingStripeCustomer,
@@ -91,6 +132,8 @@ function mockSupabase(options: {
   insertError?: { code?: string, message?: string } | null
   updateError?: { message?: string } | null
   deleteError?: { message?: string } | null
+  appMetadata?: Record<string, unknown>
+  userLookupError?: Error
 }) {
   const orgState = { customer_id: options.orgCustomerId }
   const stripeInfoInsert = vi.fn(async () => ({ error: options.insertError ?? null }))
@@ -105,6 +148,13 @@ function mockSupabase(options: {
   })
 
   supabaseAdminMock.mockImplementation(() => ({
+    auth: {
+      admin: {
+        getUserById: async () => options.userLookupError
+          ? { data: { user: null }, error: options.userLookupError }
+          : { data: { user: { app_metadata: options.appMetadata ?? {} } }, error: null },
+      },
+    },
     from: (table: string) => {
       if (table === 'orgs') {
         return {
@@ -189,6 +239,44 @@ describe('createStripeCustomer', () => {
 
     expect(planName).toBe('Solo')
     expect(createCustomerMock).not.toHaveBeenCalled()
+  })
+
+  it('gives direct-offer creators a zero-length trial', async () => {
+    const { stripeInfoInsert } = mockSupabase({ orgCustomerId: LOCAL_ID, appMetadata: { offer: 'direct' } })
+    const before = Date.now()
+
+    await createStripeCustomer(createContext(), createOrg(LOCAL_ID))
+
+    const inserted = (stripeInfoInsert.mock.calls[0] as unknown as [{ trial_at: string }])[0]
+    const trialAt = Date.parse(inserted.trial_at)
+    expect(trialAt).toBeGreaterThanOrEqual(before)
+    expect(trialAt).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('fails before creating a Stripe customer when the direct-offer lookup fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { stripeInfoInsert } = mockSupabase({ orgCustomerId: LOCAL_ID, userLookupError: new Error('auth unavailable') })
+
+      await expect(createStripeCustomer(createContext(), createOrg(LOCAL_ID))).rejects.toThrow('auth unavailable')
+
+      expect(createCustomerMock).not.toHaveBeenCalled()
+      expect(stripeInfoInsert).not.toHaveBeenCalled()
+    }
+    finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('keeps the 15-day trial for creators without the direct offer', async () => {
+    const { stripeInfoInsert } = mockSupabase({ orgCustomerId: LOCAL_ID, appMetadata: { offer: 'other' } })
+
+    await createStripeCustomer(createContext(), createOrg(LOCAL_ID))
+
+    const inserted = (stripeInfoInsert.mock.calls[0] as unknown as [{ trial_at: string }])[0]
+    const days = (Date.parse(inserted.trial_at) - Date.now()) / (24 * 60 * 60 * 1000)
+    expect(days).toBeGreaterThan(14.9)
+    expect(days).toBeLessThan(15.1)
   })
 
   it('creates a real customer when the org only has a local fake id', async () => {
@@ -370,6 +458,7 @@ describe('createStripeCustomer', () => {
     })
 
     supabaseAdminMock.mockImplementation(() => ({
+      auth: { admin: { getUserById: async () => ({ data: { user: { app_metadata: {} } }, error: null }) } },
       from: (table: string) => {
         if (table === 'orgs') {
           return {

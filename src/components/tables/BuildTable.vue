@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconEye from '~icons/heroicons/eye'
+import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
+import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
+import { invokeCapgoApi } from '~/services/capgoApi'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
-import { useSupabase } from '~/services/supabase'
+import { rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -27,7 +31,7 @@ type Platform = 'ios' | 'android'
 
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const isMobile = Capacitor.isNativePlatform()
 const dialogStore = useDialogV2Store()
 const offset = 20
@@ -36,13 +40,29 @@ const showSteps = ref(false)
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const elements = ref<Element[]>([])
 const buildDurations = ref<Record<string, number>>({})
+const savedOutputs = ref<Record<string, { url: string, kind: string, expires_at: string }>>({})
+const savedBuildNow = ref(Date.now())
+let savedBuildClock: ReturnType<typeof setInterval> | undefined
+const openingJobs = ref<string[]>([])
 const isLoading = ref(true)
 const currentPage = ref(1)
 const total = ref(0)
 const totalAllBuilds = ref<number | null>(null)
+const canEnableBuilder = ref(false)
+const builderAccessReady = ref(false)
+const buildCountsReady = ref(false)
+let reloadSequence = 0
+let dataSequence = 0
 const platformBuildCounts = ref<Record<Platform, number>>({ ios: 0, android: 0 })
-const showSetupFlow = computed(() => showSteps.value || totalAllBuilds.value === 0)
 const organizationStore = useOrganizationStore()
+const hasBuilderChecklist = computed(() => hasSupportedBuilderTodoList(organizationStore.getAppByAppId(props.appId)?.onboarding))
+const showSetupFlow = computed(() => showSteps.value || (totalAllBuilds.value === 0 && (hasBuilderChecklist.value || builderAccessReady.value)))
+const isTableLoading = computed(() => isLoading.value || (elements.value.length === 0 && !buildCountsReady.value) || (totalAllBuilds.value === 0 && !builderAccessReady.value))
+const AppOnboardingFlow = defineAsyncComponent(() => import('~/components/dashboard/AppOnboardingFlow.vue'))
+const builderEntitlement = computed(() => {
+  const org = organizationStore.getOrgByAppId(props.appId)
+  return org?.paying ? 'plan' as const : (org?.trial_left ?? 0) > 0 ? 'trial' as const : null
+})
 const filters = ref({})
 
 const currentBuildsNumber = computed(() => {
@@ -67,7 +87,7 @@ async function countBuildRequests(platform?: Platform): Promise<number | null> {
   if (!orgId || !props.appId)
     return null
 
-  let query = supabase
+  let query = capgo
     .from('build_requests')
     .select('id', { count: 'exact', head: true })
     .eq('owner_org', orgId)
@@ -85,19 +105,33 @@ async function countBuildRequests(platform?: Platform): Promise<number | null> {
 }
 
 async function updateOverallBuildsCount(): Promise<void> {
-  const [allBuilds, iosBuilds, androidBuilds] = await Promise.all([
-    countBuildRequests(),
-    countBuildRequests('ios'),
-    countBuildRequests('android'),
-  ])
+  const sequence = reloadSequence
+  const appId = props.appId
+  try {
+    const [allBuilds, iosBuilds, androidBuilds] = await Promise.all([
+      countBuildRequests(),
+      countBuildRequests('ios'),
+      countBuildRequests('android'),
+    ])
+    if (!isCurrentLoad(sequence, appId))
+      return
 
-  if (allBuilds !== null)
-    totalAllBuilds.value = allBuilds
+    if (allBuilds !== null)
+      totalAllBuilds.value = allBuilds
 
-  platformBuildCounts.value = {
-    ios: iosBuilds ?? platformBuildCounts.value.ios,
-    android: androidBuilds ?? platformBuildCounts.value.android,
+    platformBuildCounts.value = {
+      ios: iosBuilds ?? platformBuildCounts.value.ios,
+      android: androidBuilds ?? platformBuildCounts.value.android,
+    }
   }
+  finally {
+    if (isCurrentLoad(sequence, appId))
+      buildCountsReady.value = true
+  }
+}
+
+function isCurrentLoad(sequence: number, appId: string) {
+  return sequence === reloadSequence && appId === props.appId
 }
 
 async function getData() {
@@ -106,13 +140,17 @@ async function getData() {
     return
   }
   const orgId = organizationStore.currentOrganization.gid
+  const appId = props.appId
+  const sequence = reloadSequence
+  const request = ++dataSequence
+  const isCurrent = () => request === dataSequence && isCurrentLoad(sequence, appId)
 
   isLoading.value = true
   try {
-    let query = supabase
+    let query = capgo
       .from('build_requests')
       .select('*', { count: 'exact' })
-      .eq('app_id', props.appId)
+      .eq('app_id', appId)
       .order('created_at', { ascending: false })
       .range(currentBuildsNumber.value, currentBuildsNumber.value + offset - 1)
 
@@ -121,6 +159,8 @@ async function getData() {
     }
 
     const { data, error, count } = await query
+    if (!isCurrent())
+      return
 
     if (error) {
       console.error('Error fetching build requests:', error)
@@ -129,33 +169,41 @@ async function getData() {
     }
 
     const builds = data || []
-    await loadBuildDurations(builds, orgId)
+    const durations = await loadBuildDurations(builds, orgId)
+    if (!isCurrent())
+      return
+    buildDurations.value = durations ?? {}
+    if (durations === null)
+      toast.error(t('error-fetching-build-durations'))
     elements.value = builds
     total.value = count || 0
+    if (isCurrent())
+      await loadSavedOutputs(builds, isCurrent)
   }
   catch (error) {
+    if (!isCurrent())
+      return
     console.error(error)
     toast.error(t('error-fetching-builds'))
   }
   finally {
-    isLoading.value = false
+    if (isCurrent())
+      isLoading.value = false
   }
 }
 
-async function loadBuildDurations(builds: Element[], orgId: string) {
+async function loadBuildDurations(builds: Element[], orgId: string): Promise<Record<string, number> | null> {
   const jobIds = builds
     .map(build => build.builder_job_id)
     .filter((id): id is string => !!id)
 
-  if (jobIds.length === 0) {
-    buildDurations.value = {}
-    return
-  }
+  if (jobIds.length === 0)
+    return {}
 
   // Scope to the current org: build_logs.build_id is only unique per
   // (build_id, org_id), so an unscoped lookup could pick up a colliding
   // row from another org the user can read.
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('build_logs')
     .select('build_id, build_time_unit')
     .eq('org_id', orgId)
@@ -163,9 +211,7 @@ async function loadBuildDurations(builds: Element[], orgId: string) {
 
   if (error) {
     console.error('Error fetching build durations:', error)
-    buildDurations.value = {}
-    toast.error(t('error-fetching-build-durations'))
-    return
+    return null
   }
 
   const durations: Record<string, number> = {}
@@ -173,7 +219,7 @@ async function loadBuildDurations(builds: Element[], orgId: string) {
     if (log.build_id != null && log.build_time_unit != null)
       durations[log.build_id] = log.build_time_unit
   }
-  buildDurations.value = durations
+  return durations
 }
 
 async function reload() {
@@ -184,8 +230,29 @@ async function reload() {
 
   currentPage.value = 1
   elements.value = []
+  total.value = 0
+  buildDurations.value = {}
+  platformBuildCounts.value = { ios: 0, android: 0 }
+  canEnableBuilder.value = false
+  builderAccessReady.value = false
+  buildCountsReady.value = false
+  isLoading.value = true
+  totalAllBuilds.value = null
+  const sequence = ++reloadSequence
+  const appId = props.appId
   try {
-    await Promise.all([getData(), updateOverallBuildsCount()])
+    const loadAccess = async () => {
+      try {
+        const { data, error } = await invokeCapgoApi<{ canEnable: boolean }>(`app/${encodeURIComponent(appId)}/onboarding/builder`, { method: 'GET' })
+        if (isCurrentLoad(sequence, appId))
+          canEnableBuilder.value = !error && data?.canEnable === true
+      }
+      finally {
+        if (isCurrentLoad(sequence, appId))
+          builderAccessReady.value = true
+      }
+    }
+    await Promise.all([getData(), updateOverallBuildsCount(), loadAccess()])
   }
   catch (error) {
     console.error(error)
@@ -258,6 +325,111 @@ function getStatusColor(status: string): string {
   }
 }
 
+async function loadSavedOutputs(builds: Element[], current: () => boolean) {
+  const jobIds = builds.filter(build => build.status === 'succeeded' && build.builder_job_id).map(build => build.builder_job_id as string)
+  if (jobIds.length === 0) {
+    savedOutputs.value = {}
+    return
+  }
+  try {
+    const { data } = await capgo.auth.getSession()
+    const token = data.session?.access_token
+    if (!token)
+      return
+    const response = await fetch(`${defaultApiHost}/private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobIds.join(','))}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!response.ok)
+      return
+    const body = await response.json() as { outputs?: Record<string, { url: string, kind: string, expires_at: string }> }
+    if (current())
+      savedOutputs.value = body.outputs ?? {}
+  }
+  catch {
+    if (current())
+      savedOutputs.value = {}
+  }
+}
+
+function savedBuildIsCurrent(output: { expires_at?: string } | undefined) {
+  if (!output?.expires_at)
+    return false
+  return Date.parse(output.expires_at) > savedBuildNow.value
+}
+
+async function openSavedBuild(jobId: string) {
+  if (openingJobs.value.includes(jobId))
+    return
+  const appId = props.appId
+  const epoch = simulatorEpoch()
+  const output = savedOutputs.value[jobId]
+  const tab = window.open('', '_blank')
+  if (!output?.expires_at || Date.parse(output.expires_at) <= Date.now()) {
+    tab?.close()
+    toast.error(t('saved-build-expired'))
+    return
+  }
+  openingJobs.value = [...openingJobs.value, jobId]
+  try {
+    const { data } = await capgo.auth.getSession()
+    const token = data.session?.access_token
+    if (!token)
+      throw new Error(t('simulator-sign-in'))
+    const response = await fetch(`${defaultApiHost}/private/simulator/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
+      body: JSON.stringify({ app_id: appId, platform: 'ios', build_job_id: jobId }),
+    })
+    const payload = await response.json() as { message?: string, error?: string, data?: { id?: string, url?: string, install_error?: string | null } }
+    if (!response.ok)
+      throw new Error(payload.message || payload.error || t('simulator-did-not-start'))
+    const url = payload.data?.url || ''
+    if (payload.data?.id && epoch === simulatorEpoch())
+      rememberSimulator(appId, { id: payload.data.id, url })
+    if (url && tab)
+      tab.location.replace(url)
+    else
+      tab?.close()
+    if (payload.data?.install_error)
+      toast.error(payload.data.install_error)
+  }
+  catch (error) {
+    tab?.close()
+    toast.error(error instanceof Error ? error.message : t('simulator-did-not-start'))
+  }
+  finally {
+    openingJobs.value = openingJobs.value.filter(id => id !== jobId)
+  }
+}
+
+function savedBuildCell(elem: Element) {
+  const output = elem.builder_job_id ? savedOutputs.value[elem.builder_job_id] : undefined
+  if (!savedBuildIsCurrent(output))
+    return h('span', { class: 'text-gray-400 dark:text-gray-600' }, '-')
+  const jobId = elem.builder_job_id as string
+  const opening = openingJobs.value.includes(jobId)
+  const children = [
+    h('a', {
+      href: output?.url,
+      target: '_blank',
+      rel: 'noopener',
+      class: 'text-sm font-semibold text-blue-600 dark:text-blue-400',
+    }, t('download-saved-build')),
+  ]
+  if (output?.kind === 'ios_ipa') {
+    children.push(h('button', {
+      type: 'button',
+      class: 'px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0',
+      disabled: opening,
+      onClick: (event: Event) => {
+        event.stopPropagation()
+        void openSavedBuild(jobId)
+      },
+    }, opening ? t('simulator-starting') : t('open-in-simulator')))
+  }
+  return h('div', { class: 'flex items-center gap-2' }, children)
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(seconds ?? 0))
   if (safeSeconds < 60)
@@ -322,6 +494,13 @@ columns.value = [
     },
   },
   {
+    label: t('saved-build'),
+    key: 'artifact',
+    mobile: true,
+    class: 'max-w-48',
+    renderFunction: savedBuildCell,
+  },
+  {
     label: t('updated-at'),
     key: 'updated_at',
     class: 'truncate max-w-32',
@@ -338,8 +517,16 @@ watch(props, async () => {
 // renders when the org has no builds yet. watch(props, ...) doesn't fire
 // for the initial value, and DataTable's @reload hook only calls getData().
 onMounted(async () => {
+  savedBuildClock = setInterval(() => {
+    savedBuildNow.value = Date.now()
+  }, 30_000)
   await organizationStore.awaitInitialLoad()
   await reload()
+})
+
+onUnmounted(() => {
+  if (savedBuildClock)
+    clearInterval(savedBuildClock)
 })
 
 watch(showSetupFlow, (newValue) => {
@@ -349,8 +536,23 @@ watch(showSetupFlow, (newValue) => {
 
 <template>
   <div>
+    <AppOnboardingFlow
+      v-if="totalAllBuilds === 0 && hasBuilderChecklist"
+      :key="props.appId"
+      :setup-app-id="props.appId"
+      initial-checklist-path="builder"
+      hide-footer
+      show-checklist
+      onboarding
+    />
+    <BuilderIntroduction
+      v-else-if="totalAllBuilds === 0 && canEnableBuilder"
+      :key="props.appId"
+      :app-id="props.appId"
+      :entitlement="builderEntitlement"
+    />
     <StepsBuild
-      v-if="showSetupFlow"
+      v-else-if="showSetupFlow"
       :onboarding="(totalAllBuilds ?? 0) === 0"
       :app-id="props.appId"
       :platform-build-counts="platformBuildCounts"
@@ -365,7 +567,7 @@ watch(showSetupFlow, (newValue) => {
         v-model:current-page="currentPage"
         :columns="columns"
         :element-list="elements"
-        :is-loading="isLoading"
+        :is-loading="isTableLoading"
         :search-function="(e: Element, s: string) => e.platform.toLowerCase().includes(s.toLowerCase()) || e.status.toLowerCase().includes(s.toLowerCase())"
         :search-placeholder="t('search-builds')"
         :show-add="!isMobile"
@@ -391,6 +593,7 @@ watch(showSetupFlow, (newValue) => {
             <button
               type="button"
               class="p-1 text-gray-500 rounded-md cursor-pointer shrink-0 dark:text-gray-400 hover:text-gray-600 hover:bg-gray-200 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              :aria-label="t('build-error-details')"
               @click.stop="showErrorDetails(element.last_error)"
             >
               <IconEye class="w-4 h-4" />

@@ -9,13 +9,13 @@ import IconCheck from '~icons/lucide/check'
 import IconLoader from '~icons/lucide/loader-2'
 import IconUserPlus from '~icons/lucide/user-plus'
 import IconX from '~icons/lucide/x'
+import { useConsole } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import {
   captureOrganizationInvitationEvent,
   runTrackedOrganizationInvitationMutation,
   sanitizeOrganizationInvitationClientFailureReason,
 } from '~/services/organizationInvitationTelemetry'
-import { useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
@@ -25,7 +25,7 @@ import { validateRedirectPath } from '~/utils/safeRedirect'
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
@@ -117,25 +117,9 @@ async function loadPendingInvitations() {
   }
 }
 
-async function acceptInvitation(invitation: Organization): Promise<string> {
-  const userId = getCurrentUserId()
-  if (!userId)
-    throw new Error('missing_user')
-
-  const { data: pendingMembership, error: pendingMembershipError } = await supabase
-    .from('org_users')
-    .select('id')
-    .eq('org_id', invitation.gid)
-    .eq('user_id', userId)
-    .eq('is_invite', true)
-    .maybeSingle()
-
-  if (pendingMembershipError)
-    throw pendingMembershipError
-  if (!pendingMembership)
-    throw new Error('NO_INVITE')
-
-  const { data, error } = await supabase.rpc('accept_invitation_to_org', {
+async function acceptInvitation(invitation: Organization): Promise<void> {
+  // The RPC is the source of truth for accepting an invitation.
+  const { data, error } = await capgo.rpc('accept_invitation_to_org', {
     org_id: invitation.gid,
   })
 
@@ -143,8 +127,6 @@ async function acceptInvitation(invitation: Organization): Promise<string> {
     throw error
   if (data !== 'OK')
     throw new Error(typeof data === 'string' ? data : 'FAILED_TO_ACCEPT_INVITATION')
-
-  return String(pendingMembership.id)
 }
 
 async function declineInvitation(invitation: Organization): Promise<string> {
@@ -152,7 +134,7 @@ async function declineInvitation(invitation: Organization): Promise<string> {
   if (!userId)
     throw new Error('missing_user')
 
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('org_users')
     .delete()
     .eq('org_id', invitation.gid)
@@ -230,7 +212,7 @@ async function declineAllInvitations() {
 
     const inviteOrgIds = invitations.value.map(invitation => invitation.gid)
     for (let offset = 0; offset < inviteOrgIds.length; offset += 100) {
-      const { data, error } = await supabase
+      const { data, error } = await capgo
         .from('org_users')
         .delete()
         .eq('user_id', userId)
@@ -381,7 +363,7 @@ onMounted(async () => {
 
                         <button
                           type="button"
-                          class="d-btn min-h-11 border-primary-500 bg-primary-500 text-white hover:border-primary-500 hover:bg-primary-500/90 disabled:border-white/15 disabled:bg-slate-800 disabled:text-slate-500"
+                          class="d-btn min-h-11 d-btn-primary disabled:border-white/15 disabled:bg-slate-800 disabled:text-slate-500"
                           :disabled="isResolvingInvitation"
                           data-test="pending-invite-join"
                           @click="resolveInvitation(invitation, 'accept')"

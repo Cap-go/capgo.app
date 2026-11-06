@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { FunctionsHttpError } from '@supabase/supabase-js'
+import { FunctionsHttpError } from '../src/services/consoleClient'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, defineComponent, h, nextTick, ref } from 'vue'
 import { APP_ONBOARDING_OTA_V1_STEP_IDS } from '../src/services/appOnboarding'
@@ -53,6 +53,17 @@ describe('useAppOnboardingCliProgress polling', () => {
     expect(invokeCapgoApiMock).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(20_000)
+    expect(invokeCapgoApiMock).toHaveBeenCalledTimes(1)
+    app.unmount()
+  })
+
+  it('stops polling once an OTA install proves the setup, even without a current channel', async () => {
+    const onboarding = { setup: { todo_list_version: 3, steps: {} }, features: { ota: { succeeded_at: '2026-09-01T00:00:00.000Z' } } }
+    invokeCapgoApiMock.mockResolvedValue({ data: { onboarding, hasChannel: false, checkErrors: [] }, error: null })
+
+    const app = await mountProgress(onboarding)
+    await vi.advanceTimersByTimeAsync(10_000)
+
     expect(invokeCapgoApiMock).toHaveBeenCalledTimes(1)
     app.unmount()
   })

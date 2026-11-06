@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { stdin, stdout } from 'node:process'
 import { applyCommandAnalyticsOptOut, applyRawCommandAnalyticsOptOut } from '../src/analytics/opt-out.ts'
-import { buildInitReplayBody, createTerminalInteractionEvents, createTerminalSnapshot, createTerminalSnapshotNode, getReplayViewportSize, renderRedactedTerminalFrame, renderRedactedTerminalText, resolveCapgoReplayUrl, resolveReplayUrlForFlush, resolveSupabaseReplayUrl, shouldStartInitReplay, startInitReplay } from '../src/init/replay.ts'
+import { buildInitReplayBody, createTerminalInteractionEvents, createTerminalSnapshot, createTerminalSnapshotNode, getReplayViewportSize, renderRedactedTerminalFrame, renderRedactedTerminalText, resolveCapgoReplayUrl, resolveReplayUrlForFlush, shouldStartInitReplay, startInitReplay } from '../src/init/replay.ts'
 
 console.log('🧪 Testing init replay telemetry...\n')
 
@@ -26,9 +26,7 @@ assert.equal(shouldStartInitReplay({ ...baseGate, telemetryDisabled: true }), fa
 assert.equal(resolveCapgoReplayUrl('https://api.capgo.app'), 'https://api.capgo.app/private/replay')
 assert.equal(resolveCapgoReplayUrl('https://api.capgo.app/private/replay'), 'https://api.capgo.app/private/replay')
 assert.equal(resolveCapgoReplayUrl('not a url'), undefined)
-assert.equal(resolveSupabaseReplayUrl('https://self.supabase.co'), 'https://self.supabase.co/functions/v1/private/replay')
-assert.equal(resolveSupabaseReplayUrl('https://self.supabase.co/functions/v1/private/replay'), 'https://self.supabase.co/functions/v1/private/replay')
-assert.equal(resolveSupabaseReplayUrl('not a url'), undefined)
+assert.equal(resolveCapgoReplayUrl('https://self.supabase.co/functions/v1'), 'https://self.supabase.co/functions/v1/private/replay')
 assert.deepEqual(getReplayViewportSize(20, 5), { height: 480, width: 800 }, 'replay viewport has readable minimum dimensions')
 const resolvedReplayUrl = 'https://api.capgo.app/private/replay'
 let abortedReplayLookup = false

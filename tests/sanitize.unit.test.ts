@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isLocalDevHost, isSafeImageFetchUrl, sanitizeHttpUrl } from '../src/utils/sanitize.ts'
+import { isLocalDevHost, isSafeImageFetchUrl, sanitizeHtml, sanitizeHttpUrl } from '../src/utils/sanitize.ts'
 
 describe('isLocalDevHost', () => {
   it.concurrent('recognizes localhost and loopback hostnames', () => {
@@ -49,5 +49,24 @@ describe('isSafeImageFetchUrl', () => {
     expect(isSafeImageFetchUrl('https://[fc00::1]/icon.png')).toBe(false)
     expect(isSafeImageFetchUrl('https://[fe80::1]/icon.png')).toBe(false)
     expect(isSafeImageFetchUrl('https://[::ffff:127.0.0.1]/icon.png')).toBe(false)
+  })
+})
+
+describe('sanitizeHtml node fallback', () => {
+  // Not concurrent: temporarily removes the global window.
+  it('escapes HTML when DOM APIs are unavailable', () => {
+    const originalWindow = globalThis.window
+    // @ts-expect-error test override
+    delete globalThis.window
+
+    try {
+      expect(sanitizeHtml('<p>Hello<script>alert(1)</script></p>'))
+        .toBe('&lt;p&gt;Hello&lt;script&gt;alert(1)&lt;/script&gt;&lt;/p&gt;')
+      expect(sanitizeHtml('<<script>alert(1)//'))
+        .toBe('&lt;&lt;script&gt;alert(1)//')
+    }
+    finally {
+      globalThis.window = originalWindow
+    }
   })
 })

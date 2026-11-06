@@ -2,11 +2,11 @@
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { NativeReleasePlatform, NativeReleasePlatformFilter, NativeReleaseSeriesInput } from '~/services/nativeReleaseStats'
 import { useDark } from '@vueuse/core'
-import { BarElement, CategoryScale, Chart, Legend, LinearScale, Tooltip } from 'chart.js'
 import { computed, ref } from 'vue'
-import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import { Bar } from '~/components/dashboard/lazyCharts'
+import PageHeader from '~/components/PageHeader.vue'
 import Spinner from '~/components/Spinner.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
 import { createChartScales, createLegendConfig } from '~/services/chartConfig'
@@ -35,8 +35,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   retry: []
 }>()
-
-Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend)
 
 const { t } = useI18n()
 const isDark = useDark()
@@ -178,48 +176,42 @@ function formatDay(value: string | null) {
 
 <template>
   <section class="flex flex-col gap-4" data-testid="native-release-stats">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
-            {{ t('native-release-stats-title') }}
-          </h2>
-          <span
-            v-if="forceDemo"
-            class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
-          >
-            {{ t('demo') }}
-          </span>
-        </div>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ t('native-release-stats-help') }}
-        </p>
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {{ periodLabel }} · {{ periodRangeLabel }}
-        </p>
-      </div>
-      <fieldset
-        class="flex items-center w-fit p-1 space-x-1 shrink-0 bg-gray-200 rounded-lg dark:bg-gray-800"
-        data-testid="native-release-platform-selector"
-      >
-        <legend class="sr-only">
-          {{ t('platform') }}
-        </legend>
-        <button
-          v-for="option in platformOptions"
-          :key="option.value"
-          type="button"
-          :aria-pressed="platform === option.value"
-          class="flex justify-center items-center h-9 min-h-9 min-w-[2.75rem] px-2.5 sm:px-3 py-1.5 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors duration-150 cursor-pointer"
-          :class="platform === option.value
-            ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
-          @click="platform = option.value"
+    <PageHeader :title="t('native-release-stats-title')" :description="t('native-release-stats-help')">
+      <template #badges>
+        <span
+          v-if="forceDemo"
+          class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
         >
-          {{ option.value === 'all' ? t(option.label) : option.label }}
-        </button>
-      </fieldset>
-    </div>
+          {{ t('demo') }}
+        </span>
+      </template>
+      <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        {{ periodLabel }} · {{ periodRangeLabel }}
+      </p>
+      <template #actions>
+        <fieldset
+          class="flex items-center w-fit p-1 space-x-1 shrink-0 bg-gray-200 rounded-lg dark:bg-gray-800"
+          data-testid="native-release-platform-selector"
+        >
+          <legend class="sr-only">
+            {{ t('platform') }}
+          </legend>
+          <button
+            v-for="option in platformOptions"
+            :key="option.value"
+            type="button"
+            :aria-pressed="platform === option.value"
+            class="flex justify-center items-center h-9 min-h-9 min-w-[2.75rem] px-2.5 sm:px-3 py-1.5 text-xs font-medium text-center whitespace-nowrap rounded-md transition-colors duration-150 cursor-pointer"
+            :class="platform === option.value
+              ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+              : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'"
+            @click="platform = option.value"
+          >
+            {{ option.value === 'all' ? t(option.label) : option.label }}
+          </button>
+        </fieldset>
+      </template>
+    </PageHeader>
 
     <div v-if="props.isLoading && !forceDemo" class="flex items-center justify-center h-48 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <Spinner size="w-10 h-10" />

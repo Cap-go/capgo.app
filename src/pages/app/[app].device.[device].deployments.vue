@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
+import EmptyState from '~/components/EmptyState.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { useAppDetailStore } from '~/stores/appDetail'
 import { useDisplayStore } from '~/stores/display'
 
@@ -12,7 +13,7 @@ const displayStore = useDisplayStore()
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute('/app/[app].device.[device].deployments')
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<string>()
 const isLoading = ref(true)
@@ -37,7 +38,7 @@ async function getDevice() {
   }
 
   try {
-    const { data: currentSession } = await supabase.auth.getSession()!
+    const { data: currentSession } = await capgo.auth.getSession()!
     if (!currentSession.session)
       return
     const currentJwt = currentSession.session.access_token
@@ -113,18 +114,19 @@ watchEffect(async () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('device-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('device-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
-        {{ t('back-to-devices') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('device-not-found')"
+      :description="t('device-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/devices`)">
+          {{ t('back-to-devices') }}
+        </button>
+      </template>
+    </EmptyState>
   </div>
 </template>
 

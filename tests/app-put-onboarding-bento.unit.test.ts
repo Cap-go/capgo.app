@@ -28,54 +28,47 @@ vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   trackBentoEvent: mocks.trackBentoEvent,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseWithAuth: vi.fn(() => ({
-    from: () => {
-      let updated = false
-      return {
-        update() {
-          updated = true
-          return this
-        },
-        select() { return this },
-        eq() { return this },
-        single: async () => ({
-          data: {
-            app_id: 'com.example.pending',
-            owner_org: 'org-id',
-            name: 'Example app',
-            need_onboarding: !updated,
-            icon_url: '',
-            onboarding: {},
-          },
-          error: null,
-        }),
-      }
-    },
-  })),
-  supabaseAdmin: vi.fn(() => ({
-    from: () => ({
-      select(columns: string) {
-        mocks.orgSelect(columns)
-        return this
-      },
-      eq() { return this },
-      single: async () => ({
-        data: Object.fromEntries(
-          ['management_email', 'name', 'website', 'onboarding']
-            .filter(key => mocks.orgSelect.mock.lastCall?.[0].split(', ').includes(key))
-            .map(key => [key, {
-              management_email: 'owner@example.com',
-              name: 'Example org',
-              website: 'https://example.com',
-              onboarding: mocks.org.onboarding,
-            }[key as 'management_email' | 'name' | 'website' | 'onboarding']]),
-        ),
-        error: null,
+// Caller RLS context: the pending app is loaded, then the update completes onboarding.
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>()
+  return {
+    ...actual,
+    withRlsContext: vi.fn(async (_c: unknown, _principal: unknown, run: (client: unknown, drizzle: unknown) => Promise<unknown>) => run({
+      query: async (text: string) => ({
+        rows: [{ row: {
+          app_id: 'com.example.pending',
+          owner_org: 'org-id',
+          name: 'Example app',
+          need_onboarding: !text.includes('UPDATE public.apps'),
+          icon_url: '',
+          onboarding: {},
+        } }],
       }),
-    }),
-  })),
-}))
+    }, {})),
+  }
+})
+
+// Service connection for the org lookup: return only the selected columns.
+vi.mock('../supabase/functions/_backend/utils/pg.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/pg.ts')>()
+  return {
+    ...actual,
+    closeClient: vi.fn(),
+    getPgClient: vi.fn(async () => ({
+      query: async (text: string) => {
+        mocks.orgSelect(text)
+        const org = {
+          management_email: 'owner@example.com',
+          name: 'Example org',
+          website: 'https://example.com',
+          onboarding: mocks.org.onboarding,
+        }
+        const columns = /SELECT (.+) FROM public\.orgs/.exec(text)?.[1].split(', ') ?? []
+        return { rows: [Object.fromEntries(columns.map(key => [key, org[key as keyof typeof org]]))] }
+      },
+    })),
+  }
+})
 
 describe('pending onboarding Bento event', () => {
   beforeEach(() => {
@@ -86,7 +79,7 @@ describe('pending onboarding Bento event', () => {
     mocks.org.onboarding = { intent }
     const context = {
       env: { WEBAPP_URL: 'https://console.example' },
-      get: (key: string) => key === 'auth' ? { authType: 'jwt', userId: 'user-id' } : undefined,
+      get: (key: string) => key === 'auth' ? { authType: 'jwt', userId: 'user-id', jwt: 'user-jwt' } : undefined,
       json: (data: unknown) => Response.json(data),
     } as any
 

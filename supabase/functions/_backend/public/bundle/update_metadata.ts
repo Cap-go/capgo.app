@@ -1,7 +1,7 @@
 import { BRES, getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
+import { apikeyPrincipal, withRlsContext } from '../../utils/pg_rls.ts'
 import { isValidAppId } from '../../utils/utils.ts'
 
 export const app = honoFactory.createApp()
@@ -29,18 +29,7 @@ app.post('/', middlewareKey(), async (c) => {
     throw simpleError('cannot_update_bundle_metadata', 'You can\'t update metadata for this app', { app_id: body.app_id })
   }
 
-  const { data: version, error: versionError } = await supabaseApikey(c, apikey.key)
-    .from('app_versions')
-    .select('*')
-    .eq('app_id', body.app_id)
-    .eq('id', body.version_id)
-    .single()
-
-  if (versionError || !version) {
-    throw simpleError('cannot_find_version', 'Cannot find version', { supabaseError: versionError })
-  }
-
-  const updateData: any = {}
+  const updateData: { link?: string, comment?: string } = {}
 
   if (body.link !== undefined) {
     updateData.link = body.link
@@ -50,19 +39,34 @@ app.post('/', middlewareKey(), async (c) => {
     updateData.comment = body.comment
   }
 
-  if (Object.keys(updateData).length === 0) {
-    throw simpleError('no_fields_to_update', 'No fields to update')
-  }
+  await withRlsContext(c, apikeyPrincipal(c, apikey.key), async (client) => {
+    let versionFound = false
+    try {
+      const result = await client.query('SELECT id FROM public.app_versions WHERE app_id = $1 AND id = $2', [body.app_id, body.version_id])
+      versionFound = result.rows.length === 1
+    }
+    catch (versionError) {
+      throw simpleError('cannot_find_version', 'Cannot find version', { supabaseError: versionError })
+    }
+    if (!versionFound) {
+      throw simpleError('cannot_find_version', 'Cannot find version', { supabaseError: null })
+    }
 
-  const { error: updateError } = await supabaseApikey(c, apikey.key)
-    .from('app_versions')
-    .update(updateData)
-    .eq('app_id', body.app_id)
-    .eq('id', body.version_id)
+    const columns = Object.keys(updateData) as (keyof typeof updateData)[]
+    if (columns.length === 0) {
+      throw simpleError('no_fields_to_update', 'No fields to update')
+    }
 
-  if (updateError) {
-    throw simpleError('cannot_update_version_metadata', 'Cannot update version metadata', { supabaseError: updateError })
-  }
+    try {
+      await client.query(
+        `UPDATE public.app_versions SET ${columns.map((column, i) => `${column} = $${i + 3}`).join(', ')} WHERE app_id = $1 AND id = $2`,
+        [body.app_id, body.version_id, ...columns.map(column => updateData[column])],
+      )
+    }
+    catch (updateError) {
+      throw simpleError('cannot_update_version_metadata', 'Cannot update version metadata', { supabaseError: updateError })
+    }
+  })
 
   return c.json(BRES)
 })

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Tab, TableColumn } from '~/components/comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
@@ -8,14 +8,14 @@ import { toast } from 'vue-sonner'
 import IconChartBar from '~icons/heroicons/chart-bar'
 import IconCode from '~icons/heroicons/code-bracket'
 import IconMegaphone from '~icons/heroicons/megaphone'
-import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconCheckCircle from '~icons/lucide/check-circle-2'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import IconSearch from '~icons/lucide/search'
 import IconSend from '~icons/lucide/send'
 import IconZap from '~icons/lucide/zap'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatNumber, formatNumberValue } from '~/services/formatLocale'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 interface NotificationProviderConfig {
@@ -74,7 +74,7 @@ type NotificationTab = 'dashboard' | 'broadcasts' | 'api'
 
 const { t } = useI18n()
 const route = useRoute()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 
 const id = ref('')
@@ -280,7 +280,7 @@ const campaignColumns = ref<TableColumn[]>([
 let activeRefreshId = 0
 
 async function authHeaders() {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await capgo.auth.getSession()
   const token = data.session?.access_token
   if (!token)
     throw new Error(t('not-authenticated'))
@@ -341,7 +341,7 @@ function shortKey(value: string) {
 }
 
 async function loadAppInfo(appId: string) {
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('apps')
     .select()
     .eq('app_id', appId)
@@ -678,6 +678,7 @@ watch(activeNotificationTab, () => {
               :class="activeNotificationTab === tab.key
                 ? 'text-blue-600 dark:text-blue-400 bg-white dark:bg-slate-800 border border-blue-200/70 dark:border-blue-800 shadow-sm hover:ring-1 hover:ring-blue-200 dark:hover:ring-blue-700 hover:bg-blue-50 dark:hover:bg-slate-900 transition-colors'
                 : 'border border-transparent text-slate-500/75 dark:text-slate-400/75 hover:bg-white dark:hover:bg-slate-900 hover:text-slate-700 dark:hover:text-slate-200 transition-colors'"
+              :aria-label="t(tab.label)"
               :aria-current="activeNotificationTab === tab.key ? 'page' : undefined"
               @click="setNotificationTab(tab)"
             >
@@ -1167,18 +1168,7 @@ watch(activeNotificationTab, () => {
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push('/apps')">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
   </div>
 </template>
 

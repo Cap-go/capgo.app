@@ -47,8 +47,6 @@
         "playwright/e2e/**/*.ts!",
         "playwright/support/**/*.ts!",
         "playwright/visual-diff.config.ts!",
-        "formkit.config.ts!",
-        "formkit.theme.ts!",
         "playwright/visual-diff.config.ts!"
       ],
       "project": [

@@ -10,27 +10,56 @@ import {
   TUS_EXTENSIONS,
   TUS_VERSION,
 } from '../../files/util.ts'
-import { getBodyOrQuery, honoFactory } from '../../utils/hono.ts'
+import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { apikeyPrincipal } from '../../utils/pg_rls.ts'
 import { aiAnalyzeDeprecated } from './ai_analyze.ts'
 import { aiAnalyzeStreamBuild } from './ai_analyze_stream.ts'
 import { cancelBuild } from './cancel.ts'
 import { reportBuilderCapacity } from './capacity.ts'
+import {
+  createBuildCredentialsUploadUrl,
+  deleteBuildCredentials,
+  getBuildCredentialsStatus,
+  putBuildCredentials,
+  uploadBuildCredentialsWithToken,
+} from './credentials.ts'
 import { streamBuildLogs } from './logs.ts'
 import { requestBuild } from './request.ts'
+import { readSimulator, startSimulator, stopSimulator, type SimulatorBody } from './simulator.ts'
 import { startBuild } from './start.ts'
 import { getBuildStatus } from './status.ts'
 import { uploadSupportLogs } from './support_logs.ts'
 import { tusProxy } from './upload.ts'
+import { getBuildUploadUrl } from './upload_url.ts'
 
 export const app = honoFactory.createApp()
 
-// POST /build/capacity - Builder reports worker pool size (+/− events). Auth: BUILDER_API_KEY.
+// POST /build/capacity - Builder pool-size report, acknowledged only (history lives in the admin dashboard). Auth: BUILDER_API_KEY.
 app.post('/capacity', async (c) => {
   return reportBuilderCapacity(c)
 })
 
 const uploadWriteMiddleware = middlewareKey(['all', 'write'])
+
+// POST /build/simulator - Start a simulator. It uses one builder slot and build minutes.
+app.post('/simulator', middlewareKey(['all', 'write']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return startSimulator(c, body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
+
+app.get('/simulator/:id', middlewareKey(['all', 'read']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return readSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
+
+app.post('/simulator/:id/stop', middlewareKey(['all', 'write']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return stopSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
 
 // POST /build/request - Request a new native build
 app.post('/request', middlewareKey(['all', 'write']), async (c) => {
@@ -77,6 +106,47 @@ app.post('/cancel/:jobId', middlewareKey(['all', 'write']), async (c) => {
   }
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return cancelBuild(c, jobId, body.app_id, apikey)
+})
+
+// POST /build/upload_url/:jobId - Signed single-PUT URL for the project archive (TUS-free clients, hosted MCP)
+app.post('/upload_url/:jobId', middlewareKey(['all', 'write']), async (c) => {
+  const jobId = c.req.param('jobId')
+  const body = await getBodyOrQuery<{ app_id: string }>(c)
+  if (!body.app_id) {
+    throw simpleError('missing_parameter', 'app_id is required in request body')
+  }
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return getBuildUploadUrl(c, jobId, body.app_id, apikey)
+})
+
+// Stored native build credentials (encrypted per app/platform). See credentials.ts.
+// GET /build/credentials?app_id= - Non-secret summary per platform (app.build_native)
+app.get('/credentials', middlewareKey(['all', 'write', 'read']), async (c) => {
+  return getBuildCredentialsStatus(c)
+})
+
+// PUT /build/credentials - Validate, encrypt and save credentials (app.update_settings)
+app.put('/credentials', middlewareKey(['all', 'write']), async (c) => {
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return putBuildCredentials(c, apikey)
+})
+
+// DELETE /build/credentials - Delete one platform's stored credentials (app.update_settings)
+app.delete('/credentials', middlewareKey(['all', 'write']), async (c) => {
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return deleteBuildCredentials(c, apikey)
+})
+
+// POST /build/credentials/upload-url - 10 minute signed upload capability (app.update_settings)
+app.post('/credentials/upload-url', middlewareKey(['all', 'write']), async (c) => {
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return createBuildCredentialsUploadUrl(c, apikey)
+})
+
+// PUT /build/credentials/upload/:token - Raw credentials JSON. Auth: the signed token only;
+// the minting API key's permission is re-checked at upload time.
+app.put('/credentials/upload/:token', async (c) => {
+  return uploadBuildCredentialsWithToken(c, c.req.param('token'))
 })
 
 // POST /build/ai_analyze - DEPRECATED (pre-streaming CLIs). Always 426 + upgrade message.

@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { parseSchema } from '../supabase/functions/_backend/utils/schema_validation.ts'
 
-import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint } from './test-utils.ts'
+import { APP_NAME, createAppVersions, getBaseData, getEndpointUrl, getSupabaseClient, getVersionFromAction, headers, ORG_ID, postUpdate, resetAndSeedAppData, resetAppData, resetAppDataStats, USER_ID, warmEdgeEndpoint,   deleteVersionManifests,   insertManifestRows, } from './test-utils.ts'
 
 const id = randomUUID()
 const APP_NAME_UPDATE = `${APP_NAME}.${id}`
@@ -270,7 +270,10 @@ describe('[POST] /updates', () => {
     expect(channelAfterDelete.version).toBeNull()
   })
 
-  it('does not return a download URL for a soft-deleted channel bundle', async () => {
+  it.each([
+    ['deleted=true', { deleted: true }],
+    ['only deleted_at', { deleted_at: new Date().toISOString() }],
+  ] as const)('does not return a download URL for a soft-deleted channel bundle (%s)', async (_label, deletion) => {
     const supabase = getSupabaseClient()
     const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`
     const channelName = `deleted-no-url-${randomUUID().slice(0, 8)}`
@@ -313,61 +316,7 @@ describe('[POST] /updates', () => {
 
     await supabase
       .from('app_versions')
-      .update({ deleted: true })
-      .eq('id', version.id)
-      .throwOnError()
-
-    const response = await postUpdate(baseData)
-    expect(response.status).toBe(200)
-
-    const json = await response.json<UpdateRes>()
-    expect(json.url).toBeUndefined()
-    expect(json.version).not.toBe(versionName)
-  })
-
-  it('does not return a download URL when only deleted_at is set', async () => {
-    const supabase = getSupabaseClient()
-    const versionName = `1.0.${Math.floor(Math.random() * 100000) + 1000}`
-    const channelName = `deleted-at-only-${randomUUID().slice(0, 8)}`
-
-    const version = await createAppVersions(versionName, APP_NAME_UPDATE, {
-      external_url: `https://example.com/${channelName}.zip`,
-    })
-
-    await supabase
-      .from('channels')
-      .insert({
-        name: channelName,
-        app_id: APP_NAME_UPDATE,
-        version: version.id,
-        owner_org: ORG_ID,
-        created_by: USER_ID,
-        public: false,
-        disable_auto_update_under_native: false,
-        disable_auto_update: 'none',
-        allow_device_self_set: true,
-        allow_emulator: false,
-        allow_device: true,
-        allow_dev: false,
-        allow_prod: true,
-        ios: true,
-        android: true,
-      })
-      .throwOnError()
-
-    const baseData = getBaseData(APP_NAME_UPDATE)
-    baseData.defaultChannel = channelName
-    baseData.version_build = '0.0.0'
-    baseData.version_name = '0.0.0'
-
-    const beforeDeleteResponse = await postUpdate(baseData)
-    expect(beforeDeleteResponse.status).toBe(200)
-    const beforeDeleteJson = await beforeDeleteResponse.json<UpdateRes>()
-    expect(beforeDeleteJson.url).toBeTruthy()
-
-    await supabase
-      .from('app_versions')
-      .update({ deleted_at: new Date().toISOString() })
+      .update(deletion)
       .eq('id', version.id)
       .throwOnError()
 
@@ -760,7 +709,7 @@ describe('manifest bundle count gating', () => {
 
   afterEach(async () => {
     if (insertedManifestIds.length > 0) {
-      await supabase.from('manifest').delete().in('id', insertedManifestIds)
+      await deleteVersionManifests([baseVersionId])
       insertedManifestIds.length = 0
     }
     await supabase.from('apps').update({ manifest_bundle_count: 0 }).eq('app_id', APP_NAME_UPDATE)
@@ -769,18 +718,14 @@ describe('manifest bundle count gating', () => {
   async function seedManifestEntry() {
     const suffix = randomUUID().slice(0, 8)
     const fileName = `manifest-test-${suffix}.js`
-    const { data, error } = await supabase
-      .from('manifest')
-      .insert({
-        app_version_id: baseVersionId,
-        file_name: fileName,
-        s3_path: `tests/${fileName}`,
-        file_hash: `hash-${suffix}`,
-      })
-      .select('id')
-      .single()
-    if (error || !data)
-      throw error ?? new Error('Failed to seed manifest entry')
+    const [data] = await insertManifestRows([{
+      app_version_id: baseVersionId,
+      file_name: fileName,
+      s3_path: `tests/${fileName}`,
+      file_hash: `hash-${suffix}`,
+    }])
+    if (!data)
+      throw new Error('Failed to seed manifest entry')
     insertedManifestIds.push(data.id)
     return fileName
   }

@@ -343,11 +343,12 @@ export function fallbackUsersOnboardingProgressForLegacyConstraint(
   }
 }
 
-export function isUsersOnboardingCheckConstraintError(error: { code?: string, message?: string } | null | undefined): boolean {
-  if (!error)
+export function isUsersOnboardingCheckConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== 'object')
     return false
-  return error.code === '23514'
-    || (typeof error.message === 'string' && error.message.includes('users_onboarding_valid'))
+  const { code, message } = error as { code?: unknown, message?: unknown }
+  return code === '23514'
+    || (typeof message === 'string' && message.includes('users_onboarding_valid'))
 }
 
 export function shouldPromptOnboardingResume(

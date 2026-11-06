@@ -1,2 +1,10 @@
 [install.scopes]
 "@jsr" = "https://npm.jsr.io"
+
+[install]
+# TypeScript 7 layout: `typescript` is aliased to `@typescript/typescript6` (the
+# classic JS API for vue-tsc, typescript-eslint, perfectionist, ...) while the
+# native 7.x `tsc` lives under `@typescript/native`. The isolated linker's shared
+# `node_modules/.bun/node_modules` fallback would expose the 7.x package as
+# `typescript` to tools that load it without declaring it, so use hoisted.
+linker = "hoisted"

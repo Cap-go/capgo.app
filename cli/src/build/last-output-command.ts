@@ -19,6 +19,7 @@ const PRINTABLE_FIELDS = new Set([
   'buildMode',
   'status',
   'outputUrl',
+  'symbolsUrl',
   'qrCodeAscii',
   'qrCodePngPath',
   'finishedAt',

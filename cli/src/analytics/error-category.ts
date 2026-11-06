@@ -112,7 +112,7 @@ export function categorizeCliError(error: unknown): CliErrorCategory {
 }
 
 /**
- * Maps a non-2xx HTTP status to the same closed enum, for Supabase responses
+ * Maps a non-2xx HTTP status to the same closed enum, for API responses
  * where we have a status code but no thrown Error. Never leaks response bodies.
  */
 export function categorizeHttpStatus(status: number): CliErrorCategory {

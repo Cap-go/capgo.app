@@ -4,13 +4,14 @@ import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
+import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { parseStatsDurationMs, readDevicePlatformChannelByIdsCF, readNativeObservePluginVersionsCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
-import { checkPermission } from '../utils/rbac.ts'
+import { checkPermission, getDeniedChannelIdsForPermission } from '../utils/rbac.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 
 dayjs.extend(utc)
@@ -291,6 +292,7 @@ INNER JOIN public.channels ON channels.id = deploy_history.channel_id
 WHERE deploy_history.app_id = $1
   AND deploy_history.deployed_at >= $2::timestamptz
   AND deploy_history.deployed_at < $3::timestamptz
+  AND NOT (deploy_history.channel_id = ANY($4::bigint[]))
 ORDER BY deploy_history.deployed_at DESC
 LIMIT 20`
 
@@ -772,12 +774,13 @@ async function readReleaseMarkers(
   appId: string,
   start: Dayjs,
   endExclusive: Dayjs,
+  deniedHistoryChannelIds: number[],
 ) {
   const db = await getPgClient(c, true)
   try {
     const result = await db.query<NativeObserveReleaseMarker>(
       releaseMarkersQuery,
-      [appId, start.toISOString(), endExclusive.toISOString()],
+      [appId, start.toISOString(), endExclusive.toISOString(), deniedHistoryChannelIds],
     )
     return result.rows
   }
@@ -875,13 +878,15 @@ interface ReadNativeObserveStatsParams {
   endExclusive: Dayjs
   endInclusive: Dayjs
   versionGroup: NativeObserveVersionGroup
+  // Channels whose deploy history the caller may not read (channel.read_history).
+  deniedHistoryChannelIds: number[]
 }
 
 async function readNativeObserveStatsSB(
   c: Context<MiddlewareKeyVariables>,
   input: ReadNativeObserveStatsParams,
 ) {
-  const { appId, days, labels, start, endExclusive, endInclusive, versionGroup } = input
+  const { appId, days, labels, start, endExclusive, endInclusive, versionGroup, deniedHistoryChannelIds } = input
   const params = [appId, start.toISOString(), endExclusive.toISOString(), nativeObserveActions]
   const paramsWithIssues = [...params, issueActions]
   const db = await getPgClient(c, true)
@@ -894,7 +899,7 @@ async function readNativeObserveStatsSB(
       buildVersionStatsQuery(versionGroup),
       paramsWithIssues,
     )
-    const releaseMarkersResult = await db.query<NativeObserveReleaseMarker>(releaseMarkersQuery, params.slice(0, 3))
+    const releaseMarkersResult = await db.query<NativeObserveReleaseMarker>(releaseMarkersQuery, [...params.slice(0, 3), deniedHistoryChannelIds])
 
     return buildNativeObserveResponse({
       labels,
@@ -922,11 +927,11 @@ async function readNativeObserveStatsCF(
   c: Context<MiddlewareKeyVariables>,
   input: ReadNativeObserveStatsParams,
 ) {
-  const { appId, days, labels, start, endExclusive, endInclusive, versionGroup } = input
+  const { appId, days, labels, start, endExclusive, endInclusive, versionGroup, deniedHistoryChannelIds } = input
   const state = createNativeObserveAggregateState(versionGroup)
   await foldNativeObserveTimingEventsCFChunked(c, appId, start, endExclusive, state)
   const aggregates = finalizeNativeObserveAggregate(state)
-  const releaseMarkers = await readReleaseMarkers(c, appId, start, endExclusive)
+  const releaseMarkers = await readReleaseMarkers(c, appId, start, endExclusive, deniedHistoryChannelIds)
 
   return buildNativeObserveResponse({
     labels,
@@ -953,6 +958,7 @@ export async function readNativeObserveStats(
   const endExclusive = dayjs(period.endExclusive)
   const endInclusive = dayjs(period.endInclusive)
   const labels = period.labels
+  const deniedHistoryChannelIds = await getDeniedChannelIdsForPermission(c, 'channel.read_history', appId)
   const input: ReadNativeObserveStatsParams = {
     appId,
     days,
@@ -961,6 +967,7 @@ export async function readNativeObserveStats(
     endExclusive,
     endInclusive,
     versionGroup,
+    deniedHistoryChannelIds: [...deniedHistoryChannelIds],
   }
 
   // Cloudflare timing events need APP_LOG; platform/channel grouping also needs DEVICE_INFO.
@@ -1041,6 +1048,8 @@ app.post('/', middlewareAuth, async (c) => {
     ))
   }
   catch (error) {
+    if (error instanceof HTTPException)
+      throw error
     cloudlog({ requestId: c.get('requestId'), message: 'Error fetching native observe stats', error })
     throw simpleError('fetch_error', 'Failed to fetch native observe statistics', { error: String(error) })
   }

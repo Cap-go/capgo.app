@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PoolClient } from 'pg'
-import type { Database } from '../src/types/supabase.types'
+import type { Database } from '../src/types/database.types'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import process, { env } from 'node:process'
@@ -475,7 +475,7 @@ async function signInAndBuildAuthHeaders(email: string, password: string): Promi
     throw new Error('SUPABASE_URL or SUPABASE_ANON_KEY is missing for auth headers')
   }
 
-  const supabase = createClient<Database>(supabaseBaseUrl, supabaseAnonKey, {
+  const capgo = createClient<Database>(supabaseBaseUrl, supabaseAnonKey, {
     auth: {
       persistSession: false,
     },
@@ -485,7 +485,7 @@ async function signInAndBuildAuthHeaders(email: string, password: string): Promi
   // miss under shard load, not a credential failure. Retry like fetchTestRequest.
   let lastError: unknown = new Error('Unable to obtain JWT for tests')
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await capgo.auth.signInWithPassword({
       email,
       password,
     })
@@ -817,7 +817,7 @@ export async function resetAndSeedAppData(appId: string, options?: SeedAppOption
 
   const seedPromise = (async () => {
     try {
-      const supabase = getSupabaseClient()
+      const capgo = getSupabaseClient()
       const rpcParams: Record<string, unknown> = { p_app_id: appId }
       if (options?.orgId)
         rpcParams.p_org_id = options.orgId
@@ -830,7 +830,7 @@ export async function resetAndSeedAppData(appId: string, options?: SeedAppOption
       if (options?.planProductId)
         rpcParams.p_plan_product_id = options.planProductId
 
-      const { error } = await supabase.rpc('reset_and_seed_app_data' as any, rpcParams)
+      const { error } = await capgo.rpc('reset_and_seed_app_data' as any, rpcParams)
       if (error)
         throw error
 
@@ -906,14 +906,14 @@ export async function batchResetAndSeedApps(appIds: string[]): Promise<void> {
   }
 }
 
-export async function seedTestData(supabase: SupabaseClient, appId: string) {
-  const { error } = await supabase.rpc('seed_test_data', { p_app_id: appId })
+export async function seedTestData(capgo: SupabaseClient, appId: string) {
+  const { error } = await capgo.rpc('seed_test_data', { p_app_id: appId })
   if (error)
     throw error
 }
 
-export async function createDemoApp(supabase: SupabaseClient, appId: string) {
-  const { error } = await supabase.from('apps').insert({ id: appId })
+export async function createDemoApp(capgo: SupabaseClient, appId: string) {
+  const { error } = await capgo.from('apps').insert({ id: appId })
   if (error)
     throw error
 }
@@ -922,8 +922,8 @@ export function generateUniqueAppId(testName: string): string {
   return `com.demo.${testName.toLowerCase().replace(/\s/g, '_')}_${Date.now()}`
 }
 
-export async function cleanupDemoApp(supabase: SupabaseClient, appId: string) {
-  const { error } = await supabase.from('apps').delete().eq('id', appId)
+export async function cleanupDemoApp(capgo: SupabaseClient, appId: string) {
+  const { error } = await capgo.from('apps').delete().eq('id', appId)
   if (error)
     throw error
 }
@@ -1027,6 +1027,33 @@ export async function executeSQL<T = any>(query: string, params?: any[]): Promis
   const client = await getPostgresClient()
   const result = await retryTransientSqlError(() => client.query(query, params || []))
   return result.rows as T[]
+}
+
+interface ManifestSeedRow {
+  app_version_id: number
+  file_name: string
+  s3_path: string
+  file_hash: string
+  file_size?: number
+}
+
+// public.manifest is a compatibility view: inserts go through its INSTEAD OF
+// trigger into delta_files/version_files. Returns the delta_files ids.
+export async function insertManifestRows(rows: ManifestSeedRow[]) {
+  const inserted = await executeSQL<{ id: string, app_version_id: string }>(
+    `INSERT INTO public.manifest (app_version_id, file_name, s3_path, file_hash, file_size)
+     SELECT r.app_version_id, r.file_name, r.s3_path, r.file_hash, r.file_size
+     FROM jsonb_to_recordset($1::jsonb) AS r(app_version_id bigint, file_name text, s3_path text, file_hash text, file_size bigint)
+     RETURNING id, app_version_id`,
+    [JSON.stringify(rows)],
+  )
+  return inserted.map(row => ({ id: Number(row.id), app_version_id: Number(row.app_version_id) }))
+}
+
+// Deletes through the view are no-ops (GC owns file removal); tests drop the
+// versions' file lists directly.
+export async function deleteVersionManifests(versionIds: number[]) {
+  await executeSQL('DELETE FROM public.version_files WHERE app_version_id = ANY($1::bigint[])', [versionIds])
 }
 
 export async function getCronPlanQueueCount(): Promise<number> {

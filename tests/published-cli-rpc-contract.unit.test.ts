@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   comparePublishedCliTags,
+  extractPublishedCliRpcCalls,
   extractPublishedCliRpcCallsFromSource,
   normalizePublishedCliNpmVersions,
   resolveLatestPublishedCliTag,
   resolvePublishedCliNpmInstallVersion,
+  resolvePublishedCliRpcContract,
   resolvePublishedCliRpcSourceTag,
   rpcCallMatchesOverload,
 } from '../scripts/published-cli-contract.ts'
@@ -35,6 +37,40 @@ describe('published CLI contract helpers', () => {
     })
 
     expect(sourceTag).toBe('cli-8.42.3')
+  })
+
+  it.concurrent('treats a git grep with no matches as no rpc calls', () => {
+    const calls = extractPublishedCliRpcCalls('cli-8.90.1', (args) => {
+      if (args[0] === 'grep')
+        throw Object.assign(new Error('Command failed: git grep'), { status: 1 })
+      throw new Error(`Unexpected git call: ${args.join(' ')}`)
+    })
+
+    expect(calls).toEqual([])
+  })
+
+  it.concurrent('still fails on real git grep errors', () => {
+    expect(() => extractPublishedCliRpcCalls('cli-8.90.1', () => {
+      throw Object.assign(new Error('fatal: bad revision'), { status: 128 })
+    })).toThrow('bad revision')
+  })
+
+  it.concurrent('falls back to the newest published CLI that still calls RPCs', () => {
+    const contract = resolvePublishedCliRpcContract('cli-8.90.1', (args) => {
+      if (args[0] === 'tag')
+        return 'cli-8.89.0\ncli-8.90.1\ncli-8.91.0\ncli-8.90.0'
+      if (args[0] === 'grep') {
+        if (args.includes('cli-8.89.0'))
+          return 'cli-8.89.0:cli/src/api.ts'
+        throw Object.assign(new Error('no match'), { status: 1 })
+      }
+      if (args[0] === 'show')
+        return `supabase.rpc('get_user_id', { apikey })`
+      throw new Error(`Unexpected git call: ${args.join(' ')}`)
+    })
+
+    expect(contract.rpcSourceTag).toBe('cli-8.89.0')
+    expect(contract.rpcCalls.map(call => call.name)).toEqual(['get_user_id'])
   })
 
   it.concurrent('ignores cli-helper tags when resolving the latest published CLI tag', () => {

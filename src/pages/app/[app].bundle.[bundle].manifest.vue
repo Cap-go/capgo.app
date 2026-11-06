@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/comp_def'
-import type { Database } from '~/types/supabase.types'
+import type { BundleSummaryRow } from '~/services/bundleColumns'
+import type { Database } from '~/types/database.types'
 import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import EmptyState from '~/components/EmptyState.vue'
+import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatBytes } from '~/services/conversion'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
-type ManifestEntry = Database['public']['Tables']['manifest']['Row']
+type ManifestViewRow = Database['public']['Views']['version_manifest']['Row']
+// View columns are typed nullable; every row the view returns is complete.
+type ManifestEntry = { [K in keyof ManifestViewRow]: K extends 'file_size' ? ManifestViewRow[K] : NonNullable<ManifestViewRow[K]> }
 
 type VersionRow = Pick<Database['public']['Tables']['app_versions']['Row'], 'id' | 'name' | 'created_at' | 'manifest_count' | 'app_id'>
 
@@ -30,12 +35,12 @@ const route = useRoute('/app/[app].bundle.[bundle].manifest')
 const router = useRouter()
 const displayStore = useDisplayStore()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const packageId = ref<string>('')
 const id = ref<number>(0)
 const loading = ref(true)
 const tableLoading = ref(false)
-const version = ref<Database['public']['Tables']['app_versions']['Row']>()
+const version = ref<BundleSummaryRow>()
 const manifestEntries = ref<ManifestEntry[]>([])
 const selectedCompareVersion = ref<VersionRow | null>(null)
 const compareManifestEntries = ref<ManifestEntry[]>([])
@@ -78,6 +83,7 @@ const columns = ref<TableColumn[]>([
     key: 'file_name',
     mobile: true,
     head: true,
+    sortable: true,
     class: 'max-w-[20rem]',
     renderFunction: (item: ManifestEntry) => h('span', {
       class: 'block truncate text-slate-800 dark:text-white',
@@ -88,6 +94,7 @@ const columns = ref<TableColumn[]>([
     label: t('size'),
     key: 'file_size',
     mobile: false,
+    sortable: true,
     displayFunction: (item: ManifestEntry) => {
       if (typeof item.file_size === 'number' && item.file_size > 0)
         return formatBytes(item.file_size)
@@ -98,6 +105,7 @@ const columns = ref<TableColumn[]>([
     label: t('checksum'),
     key: 'file_hash',
     mobile: false,
+    sortable: true,
     class: 'max-w-[16rem]',
     renderFunction: (item: ManifestEntry) => h('span', {
       class: 'block truncate font-mono text-xs text-slate-600 dark:text-slate-300',
@@ -129,7 +137,20 @@ const displayEntries = computed(() => {
   return summaryEntries.value.filter(entry => entry.file_name.toLowerCase().includes(searchLower.value) || entry.file_hash.toLowerCase().includes(searchLower.value))
 })
 
-const total = computed(() => displayEntries.value.length)
+const sortedEntries = computed(() => {
+  const sortColumn = columns.value.find(col => col.sortable === 'asc' || col.sortable === 'desc')
+  if (!sortColumn)
+    return displayEntries.value
+  const direction = sortColumn.sortable === 'asc' ? 1 : -1
+  const key = sortColumn.key as 'file_name' | 'file_size' | 'file_hash'
+  return [...displayEntries.value].sort((a, b) => {
+    if (key === 'file_size')
+      return ((a.file_size ?? 0) - (b.file_size ?? 0)) * direction
+    return a[key].localeCompare(b[key]) * direction
+  })
+})
+
+const total = computed(() => sortedEntries.value.length)
 
 function formatSizeLabel(entries: ManifestEntry[]): string {
   if (entries.length === 0)
@@ -192,8 +213,8 @@ async function fetchManifestEntries(versionId: number) {
   const allEntries: ManifestEntry[] = []
   let offset = 0
   while (true) {
-    const { data, error } = await supabase
-      .from('manifest')
+    const { data, error } = await capgo
+      .from('version_manifest')
       .select('id, file_name, file_hash, file_size, s3_path, app_version_id')
       .eq('app_version_id', versionId)
       .order('file_name', { ascending: true })
@@ -204,7 +225,7 @@ async function fetchManifestEntries(versionId: number) {
       return []
     }
 
-    const batch = data ?? []
+    const batch = (data ?? []) as ManifestEntry[]
     allEntries.push(...batch)
 
     if (batch.length < MANIFEST_PAGE_SIZE)
@@ -267,9 +288,9 @@ async function getVersion() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('app_versions')
-      .select()
+      .select(BUNDLE_SUMMARY_COLUMNS)
       .eq('app_id', packageId.value)
       .eq('id', id.value)
       .single()
@@ -279,11 +300,11 @@ async function getVersion() {
       return
     }
 
-    version.value = data
+    version.value = data as BundleSummaryRow
 
-    if (version.value?.name)
+    if (version.value.name)
       displayStore.setBundleName(String(version.value.id), version.value.name)
-    displayStore.NavTitle = version.value?.name ?? t('bundle')
+    displayStore.NavTitle = version.value.name ?? t('bundle')
   }
   catch (error) {
     console.error(error)
@@ -392,9 +413,7 @@ watch(
     if (requestId !== pageLoadRequestId.value)
       return
     loading.value = false
-    const loadedVersion = version.value as Database['public']['Tables']['app_versions']['Row'] | undefined
-    if (!loadedVersion?.name)
-      displayStore.NavTitle = t('bundle')
+    // getVersion already sets NavTitle from the summary row (or 'bundle' on miss).
     displayStore.defaultBack = `/app/${packageId.value}/bundles`
   },
   { immediate: true },
@@ -531,8 +550,9 @@ watch(
             <div class="px-2 pb-2 relative">
               <DataTable
                 v-model:search="search" v-model:current-page="currentPage" v-model:columns="columns"
-                :total="total" :element-list="displayEntries"
+                :total="total" :element-list="sortedEntries"
                 :is-loading="tableLoading"
+                :auto-reload="false"
                 :search-placeholder="t('search-by-name')"
                 @reload="reloadManifest"
                 @reset="reloadManifest"
@@ -548,18 +568,19 @@ watch(
         </div>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('bundle-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('bundle-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
-        {{ t('back-to-bundles') }}
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="IconAlertCircle"
+      icon-class="text-red-500"
+      :title="t('bundle-not-found')"
+      :description="t('bundle-not-found-description')"
+    >
+      <template #action>
+        <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="router.push(`/app/${packageId}/bundles`)">
+          {{ t('back-to-bundles') }}
+        </button>
+      </template>
+    </EmptyState>
   </div>
 </template>
 

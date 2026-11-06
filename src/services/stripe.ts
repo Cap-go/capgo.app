@@ -1,126 +1,49 @@
-import type { ComposerTranslation } from 'vue-i18n'
-import { Capacitor } from '@capacitor/core'
+import type { Stripe } from '@stripe/stripe-js'
+import { loadStripe } from '@stripe/stripe-js'
 import { toast } from 'vue-sonner'
 import { i18n } from '~/modules/i18n'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useDialogV2Store } from '~/stores/dialogv2'
-import { useSupabase } from './supabase'
+import { getFormatLocale } from '~/services/formatLocale'
+import { stripeAmountToMajorUnits } from '../../supabase/functions/shared/stripe-amount.ts'
 
-async function presentActionSheetOpen(url: string) {
-  const { t } = i18n.global
-  const dialogStore = useDialogV2Store()
-
-  dialogStore.openDialog({
-    title: t('open-in-new-tab'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('continue'),
-        role: 'primary',
-        id: 'continue-button',
-        handler: async () => {
-          window.open(url, '_blank')
-        },
-      },
-    ],
-  })
-  return dialogStore.onDialogDismiss()
-}
-async function presentBlockedPopupFallback(url: string) {
-  const { t } = i18n.global
-  const dialogStore = useDialogV2Store()
-
-  dialogStore.openDialog({
-    title: t('open-in-new-tab'),
-    description: t('popup-blocked-open-manually'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('button-confirm'),
-        id: 'confirm-button',
-        role: 'primary',
-        href: url,
-        target: '_blank',
-        rel: 'noopener noreferrer',
-      },
-    ],
-  })
-  return !(await dialogStore.onDialogDismiss())
+interface CheckoutSessionResponse {
+  url?: string | null
+  clientSecret?: string | null
+  publishableKey?: string
+  sessionId?: string
 }
 
-export async function openBlank(link: string) {
-  console.log('openBlank', link)
-  if (Capacitor.getPlatform() === 'ios') {
-    // presentActionSheetOpen resolves true when dismissed/canceled
-    return !(await presentActionSheetOpen(link))
-  }
-  const opened = globalThis.open(link, '_blank')
-  if (opened) {
-    opened.opener = null
-    return true
-  }
-  // Async callers often lose the user-gesture; offer a confirm link fallback.
-  return presentBlockedPopupFallback(link)
+// Embedded sessions mount in Capgo; hosted is only returned by the local Stripe emulator.
+export type CheckoutSession
+  = | { kind: 'embedded', clientSecret: string, publishableKey: string, sessionId: string }
+    | { kind: 'hosted', url: string }
+
+function toCheckoutSession(data: CheckoutSessionResponse): CheckoutSession | null {
+  if (data.clientSecret && data.publishableKey && data.sessionId)
+    return { kind: 'embedded', clientSecret: data.clientSecret, publishableKey: data.publishableKey, sessionId: data.sessionId }
+  if (data.url)
+    return { kind: 'hosted', url: data.url }
+  return null
 }
 
-const PORTAL_URL_CACHE_TTL_MS = 3 * 60 * 1000
-const portalUrlCache = new Map<string, { url: string, callbackUrl: string, createdAt: number }>()
+const stripeInstances = new Map<string, Promise<Stripe | null>>()
 
-export type PortalFlow = 'cancel_subscription'
-
-export async function openPortal(orgId: string, t: ComposerTranslation, flow?: PortalFlow) {
-  const dialogStore = useDialogV2Store()
-  const now = Date.now()
-  for (const [cachedOrgId, entry] of portalUrlCache) {
-    if (now - entry.createdAt >= PORTAL_URL_CACHE_TTL_MS)
-      portalUrlCache.delete(cachedOrgId)
+// One Stripe.js instance per account key (EE and US orgs use different accounts).
+export function getStripeJs(publishableKey: string) {
+  let instance = stripeInstances.get(publishableKey)
+  if (!instance) {
+    // Forget failed loads (network error, blocker) so a retry can try again.
+    instance = loadStripe(publishableKey).then((stripe) => {
+      if (!stripe)
+        stripeInstances.delete(publishableKey)
+      return stripe
+    }, (error) => {
+      stripeInstances.delete(publishableKey)
+      throw error
+    })
+    stripeInstances.set(publishableKey, instance)
   }
-  const callbackUrl = globalThis.location.href
-  const cacheKey = flow ? `${orgId}:${flow}` : orgId
-  const cachedEntry = portalUrlCache.get(cacheKey)
-  const cachedUrl = cachedEntry?.callbackUrl === callbackUrl
-    ? cachedEntry.url
-    : ''
-  const portalUrl = cachedUrl
-    ? Promise.resolve(cachedUrl)
-    : invokeCapgoApi('private/stripe_portal', {
-        body: JSON.stringify({ callbackUrl, orgId, flow }),
-      }).then(({ data }) => {
-        const url = data?.url || ''
-        if (url)
-          portalUrlCache.set(cacheKey, { url, callbackUrl, createdAt: Date.now() })
-        return url
-      }, () => '')
-
-  dialogStore.openDialog({
-    title: t(flow === 'cancel_subscription' ? 'cancel-plan' : 'open-your-portal'),
-    description: t(flow === 'cancel_subscription' ? 'cancel-plan-portal-desc' : 'stripe-billing-portal-will-be-opened-in-a-new-tab'),
-    buttons: [
-      {
-        text: t('button-cancel'),
-        role: 'cancel',
-      },
-      {
-        text: t('button-confirm'),
-        id: 'confirm-button',
-        role: 'primary',
-        handler: async () => {
-          const url = await portalUrl
-          if (url)
-            await openBlank(url)
-          else
-            toast.error('Cannot open your portal')
-        },
-      },
-    ],
-  })
-  return dialogStore.onDialogDismiss()
+  return instance
 }
 
 async function getCookieValue(name: string) {
@@ -153,65 +76,66 @@ export async function getAffonsoReferral() {
   }
 }
 
-export async function openCheckout(priceId: string, successUrl: string, cancelUrl: string, isYear: boolean, orgId: string) {
-  //   console.log('openCheckout')
-  const supabase = useSupabase()
-  const session = await supabase.auth.getSession()
-  if (!session)
-    return false
-  const datafastAttribution = await getDatafastAttribution()
-  const affonsoReferral = await getAffonsoReferral()
-  try {
-    const resp = await invokeCapgoApi('private/stripe_checkout', {
-      body: JSON.stringify({
-        priceId,
-        successUrl,
-        cancelUrl,
-        recurrence: isYear ? 'year' : 'month',
-        orgId,
-        attributionId: datafastAttribution.visitorId,
-        datafastVisitorId: datafastAttribution.visitorId,
-        datafastSessionId: datafastAttribution.sessionId,
-        affonsoReferral,
-      }),
-    })
-    if (!resp.error && resp.data?.url)
-      return openBlank(resp.data.url)
-    return false
-  }
-  catch (error) {
-    console.error(error)
-    toast.error('Cannot get your checkout')
-    return false
-  }
+export interface SubscriptionCheckoutRequest {
+  priceId: string
+  successUrl: string
+  cancelUrl: string
+  isYear: boolean
+  orgId: string
+  extraMau?: number
+  // One of the currencies returned by private/plan_prices.
+  currency?: string
+  // Buy the full price instead of the regional discount.
+  standardPrice?: boolean
 }
 
-export async function startCreditTopUp(orgId: string, quantity = 100) {
-  if (!orgId)
-    return
+export async function startSubscriptionCheckout(request: SubscriptionCheckoutRequest): Promise<CheckoutSession | null> {
   const datafastAttribution = await getDatafastAttribution()
   const affonsoReferral = await getAffonsoReferral()
-  try {
-    const { data, error } = await invokeCapgoApi('private/credits/start-top-up', {
-      body: JSON.stringify({
-        orgId,
-        quantity,
-        datafastVisitorId: datafastAttribution.visitorId,
-        datafastSessionId: datafastAttribution.sessionId,
-        affonsoReferral,
-      }),
-    })
-    if (error || !data?.url) {
-      console.error('Failed to start credit top-up', error ?? data)
-      throw error ?? new Error('Missing checkout URL')
-    }
-    globalThis.location.href = data.url
+  const { data, error } = await invokeCapgoApi<CheckoutSessionResponse>('private/stripe_checkout', {
+    body: JSON.stringify({
+      priceId: request.priceId,
+      successUrl: request.successUrl,
+      cancelUrl: request.cancelUrl,
+      recurrence: request.isYear ? 'year' : 'month',
+      orgId: request.orgId,
+      attributionId: datafastAttribution.visitorId,
+      datafastVisitorId: datafastAttribution.visitorId,
+      datafastSessionId: datafastAttribution.sessionId,
+      affonsoReferral,
+      embedded: true,
+      ...(request.extraMau ? { extraMau: request.extraMau } : {}),
+      ...(request.currency ? { currency: request.currency } : {}),
+      ...(request.standardPrice ? { standardPrice: true } : {}),
+    }),
+  })
+  if (error || !data) {
+    console.error('Cannot start subscription checkout', error)
+    return null
   }
-  catch (error) {
-    console.error('Cannot start credit top-up checkout', error)
-    toast.error('Cannot start credit checkout')
-    throw error
+  return toCheckoutSession(data)
+}
+
+export async function startCreditTopUp(orgId: string, quantity = 100): Promise<CheckoutSession> {
+  const datafastAttribution = await getDatafastAttribution()
+  const affonsoReferral = await getAffonsoReferral()
+  const { data, error } = await invokeCapgoApi<CheckoutSessionResponse>('private/credits/start-top-up', {
+    body: JSON.stringify({
+      orgId,
+      quantity,
+      datafastVisitorId: datafastAttribution.visitorId,
+      datafastSessionId: datafastAttribution.sessionId,
+      affonsoReferral,
+      embedded: true,
+    }),
+  })
+  const session = !error && data ? toCheckoutSession(data) : null
+  if (!session) {
+    console.error('Cannot start credit top-up checkout', error ?? data)
+    toast.error(i18n.global.t('billing-checkout-error'))
+    throw error ?? new Error('Missing checkout session')
   }
+  return session
 }
 
 export async function completeCreditTopUp(orgId: string, sessionId?: string | null) {
@@ -300,4 +224,202 @@ export async function getPastDueStatus(orgId: string): Promise<PastDueStatus | n
   if (error || !data)
     return null
   return data
+}
+
+export interface BillingCard {
+  id: string
+  brand: string
+  last4: string
+  expMonth: number
+  expYear: number
+}
+
+export interface BillingSubscription {
+  status: string
+  cancelAtPeriodEnd: boolean
+  cancelAt: string | null
+  currentPeriodEnd: string | null
+}
+
+export interface BillingInvoice {
+  id: string
+  number: string | null
+  created: string
+  total: number
+  amountDue: number
+  currency: string
+  status: 'draft' | 'open' | 'paid' | 'uncollectible' | 'void' | null
+  pdfUrl: string | null
+}
+
+// The onboarding plan that starts (and is first charged) when the free trial ends.
+export interface TrialPlan {
+  planName: string
+  productId: string
+  amount: number
+  currency: string
+  interval: 'month'
+  startsAt: string
+  scheduled: boolean
+}
+
+// Solo / Maker / Team choices shown when saving a card to auto-start a plan.
+export interface TrialPlanOption {
+  productId: string
+  planName: string
+  amount: number
+  currency: string
+  // Full price when a regional discount applies (it needs a card and billing address from that region).
+  regularAmount?: number
+}
+
+export interface BillingOverview {
+  publishableKey: string
+  card: BillingCard | null
+  // Charged automatically when the default card fails a renewal.
+  backupCard: BillingCard | null
+  subscription: BillingSubscription | null
+  invoices: BillingInvoice[]
+  openInvoice: { id: string, amountDue: number, currency: string } | null
+  trialPlan: TrialPlan | null
+}
+
+export const CANCEL_REASONS = [
+  'too_expensive',
+  'missing_features',
+  'switched_service',
+  'unused',
+  'too_complex',
+  'low_quality',
+  'customer_service',
+  'other',
+] as const
+
+export type CancelReason = typeof CANCEL_REASONS[number]
+
+export interface IntentSecret {
+  clientSecret: string
+  publishableKey: string
+}
+
+type PayInvoiceResponse
+  = | { status: 'paid' }
+    | { status: 'requires_action', clientSecret: string, publishableKey: string }
+    | { status: 'requires_payment_method', message: string }
+
+export type PayInvoiceResult = Exclude<PayInvoiceResponse, { status: 'requires_action' }>
+
+async function callBilling<T>(path: string, body: Record<string, unknown>) {
+  const { data, error } = await invokeCapgoApi<T>(`private/stripe_billing/${path}`, {
+    body: JSON.stringify(body),
+  })
+  if (error || !data)
+    throw error ?? new Error(`Empty billing response for ${path}`)
+  return data
+}
+
+export function getBillingOverview(orgId: string) {
+  return callBilling<BillingOverview>('overview', { orgId })
+}
+
+export function getTrialPlan(orgId: string) {
+  return callBilling<{ card: BillingCard | null, plan: TrialPlan | null, plans: TrialPlanOption[] }>('trial-plan', { orgId })
+}
+
+export async function scheduleTrialPlan(orgId: string, productId?: string) {
+  const datafastAttribution = await getDatafastAttribution()
+  const affonsoReferral = await getAffonsoReferral()
+  return callBilling<{ plan: TrialPlan }>('trial-plan/schedule', {
+    orgId,
+    ...(productId ? { productId } : {}),
+    affonsoReferral,
+    datafastVisitorId: datafastAttribution.visitorId,
+    datafastSessionId: datafastAttribution.sessionId,
+  })
+}
+
+// Starts the trial plan today: charges the saved card now and restarts the billing cycle.
+export async function startTrialPlanNow(orgId: string, productId?: string) {
+  const datafastAttribution = await getDatafastAttribution()
+  const affonsoReferral = await getAffonsoReferral()
+  return callBilling<{ plan: TrialPlan, subscriptionId: string }>('trial-plan/start-now', {
+    orgId,
+    ...(productId ? { productId } : {}),
+    affonsoReferral,
+    datafastVisitorId: datafastAttribution.visitorId,
+    datafastSessionId: datafastAttribution.sessionId,
+  })
+}
+
+export function cancelTrialPlan(orgId: string) {
+  return callBilling<{ plan: TrialPlan | null }>('trial-plan/cancel', { orgId })
+}
+
+export function createCardSetupIntent(orgId: string) {
+  return callBilling<IntentSecret>('setup-intent', { orgId })
+}
+
+export function getInvoicePaymentIntent(orgId: string) {
+  return callBilling<IntentSecret>('invoice-payment-intent', { orgId })
+}
+
+// intentId is the confirmed SetupIntent (new card) or PaymentIntent (invoice paid with a new card).
+export function savePaymentMethod(orgId: string, intentId: string, role: 'default' | 'backup' = 'default') {
+  return callBilling<{ card: BillingCard | null }>('payment-method', { orgId, intentId, role })
+}
+
+export function removeBackupCard(orgId: string, paymentMethodId: string) {
+  return callBilling<{ card: BillingCard | null, backupCard: BillingCard | null }>('remove-backup-card', { orgId, paymentMethodId })
+}
+
+// Discount offered to stay instead of canceling a monthly plan.
+export interface CancelSaveOffer {
+  id: string
+  percentOff: number
+  durationMonths: number
+  // Minor units, like every Stripe amount.
+  monthlyAmount: number
+  discountedAmount: number
+  currency: string
+}
+
+export function getCancelSaveOffer(orgId: string, reason: CancelReason) {
+  return callBilling<{ offer: CancelSaveOffer | null }>('cancel-offer', { orgId, reason })
+}
+
+export function acceptCancelSaveOffer(orgId: string, offerId: string) {
+  return callBilling<{ discountEnd: string, subscription: BillingSubscription | null }>('cancel-offer/accept', { orgId, offerId })
+}
+
+// offerId: the save offer the customer turned down before canceling.
+export function cancelSubscriptionWithReason(orgId: string, reason: CancelReason, comment: string, offerId?: string) {
+  return callBilling<{ subscription: BillingSubscription | null }>('cancel', { orgId, reason, comment, ...(offerId ? { offerId } : {}) })
+}
+
+export function resumeSubscription(orgId: string) {
+  return callBilling<{ subscription: BillingSubscription | null }>('resume', { orgId })
+}
+
+// Pays the open renewal invoice with the saved card and finishes 3DS in place when asked.
+export async function payOpenInvoice(orgId: string): Promise<PayInvoiceResult> {
+  const result = await callBilling<PayInvoiceResponse>('pay-invoice', { orgId })
+  if (result.status !== 'requires_action')
+    return result
+  const stripe = await getStripeJs(result.publishableKey)
+  if (!stripe)
+    return { status: 'requires_payment_method', message: i18n.global.t('billing-stripe-load-error') }
+  const { error, paymentIntent } = await stripe.handleNextAction({ clientSecret: result.clientSecret })
+  if (error || paymentIntent?.status !== 'succeeded')
+    return { status: 'requires_payment_method', message: error?.message ?? i18n.global.t('billing-payment-failed') }
+  return { status: 'paid' }
+}
+
+export function formatStripeAmount(amount: number, currency: string) {
+  const value = stripeAmountToMajorUnits(amount, currency)
+  try {
+    return new Intl.NumberFormat(getFormatLocale(), { style: 'currency', currency: currency.toUpperCase() }).format(value)
+  }
+  catch {
+    return `${value} ${currency.toUpperCase()}`
+  }
 }

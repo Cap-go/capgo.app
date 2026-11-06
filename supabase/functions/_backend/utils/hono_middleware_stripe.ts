@@ -35,7 +35,7 @@ export function middlewareStripeWebhook(billingAccount: BillingAccount = 'ee') {
     const stripeEvent = await parseStripeEvent(c, body, signature, billingAccount)
     const stripeDataEvent = extractDataEvent(c, stripeEvent)
     const stripeData = stripeDataEvent.data
-    // Refunds are recorded for stats even when the charge has no Stripe customer.
+    // Accept refunds without a customer; the admin dashboard owns refund history.
     if (stripeData.customer_id === '' && stripeEvent.type !== 'charge.refunded') {
       cloudlog({ requestId: c.get('requestId'), message: 'Webhook Error: no customer found', billingAccount })
       throw simpleError('webhook_error_no_customer', 'Webhook Error: no customer found')

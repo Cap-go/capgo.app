@@ -2,16 +2,13 @@
 // Tests for the caller-handled AI flow used by the Ink onboarding wizard:
 //   - runCapgoAiAnalysis (reads /tmp log, delegates to postAnalyzeStreamRequest)
 //   - releaseCapturedLogs (best-effort cleanup wrapper)
-// Plus a regression check that decideAnalyzeBehavior still returns the same
-// matrix when the new aiAnalysisMode lives elsewhere — direct CLI invocation
-// must not change behavior.
+// (The decideAnalyzeBehavior matrix lives in test-ai-analyze-flow.mjs.)
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  decideAnalyzeBehavior,
   HARD_LOG_SIZE_LIMIT,
   releaseCapturedLogs,
   runCapgoAiAnalysis,
@@ -30,43 +27,6 @@ function test(name, fn) {
 const TEST_DIR = join(tmpdir(), `capgo-ai-onboarding-test-${Date.now()}`)
 await mkdir(TEST_DIR, { recursive: true })
 process.env.CAPGO_AI_LOG_BASE_DIR = TEST_DIR
-
-// ---- decideAnalyzeBehavior: direct CLI invocation behavior ----
-// An explicit --ai-analytics/--send-logs opt-in runs the action(s) directly
-// without prompting, in ANY terminal (this is the build-failure fix). No flags:
-// interactive asks-then-menus, non-interactive stays silent.
-await test('decideAnalyzeBehavior: interactive + ai-analytics → auto_upload', () => {
-  if (decideAnalyzeBehavior({ isTTY: true, aiAnalyticsFlag: true, sendLogsFlag: false }) !== 'auto_upload')
-    throw new Error('regression')
-})
-await test('decideAnalyzeBehavior: interactive + send-logs → auto_upload', () => {
-  if (decideAnalyzeBehavior({ isTTY: true, aiAnalyticsFlag: false, sendLogsFlag: true }) !== 'auto_upload')
-    throw new Error('regression')
-})
-await test('decideAnalyzeBehavior: interactive + no flags → ask_then_menu', () => {
-  if (decideAnalyzeBehavior({ isTTY: true, aiAnalyticsFlag: false, sendLogsFlag: false }) !== 'ask_then_menu')
-    throw new Error('regression')
-})
-await test('decideAnalyzeBehavior: CI + ai-analytics → auto_upload', () => {
-  if (decideAnalyzeBehavior({ isTTY: false, aiAnalyticsFlag: true, sendLogsFlag: false }) !== 'auto_upload')
-    throw new Error('regression')
-})
-await test('decideAnalyzeBehavior: CI + no flags → skip', () => {
-  if (decideAnalyzeBehavior({ isTTY: false, aiAnalyticsFlag: false, sendLogsFlag: false }) !== 'skip')
-    throw new Error('regression')
-})
-await test('decideAnalyzeBehavior: interactive + both flags → auto_upload', () => {
-  if (decideAnalyzeBehavior({ isTTY: true, aiAnalyticsFlag: true, sendLogsFlag: true }) !== 'auto_upload')
-    throw new Error('regression')
-})
-await test('decideAnalyzeBehavior: CI + send-logs → auto_upload', () => {
-  if (decideAnalyzeBehavior({ isTTY: false, aiAnalyticsFlag: false, sendLogsFlag: true }) !== 'auto_upload')
-    throw new Error('regression')
-})
-await test('decideAnalyzeBehavior: CI + both flags → auto_upload', () => {
-  if (decideAnalyzeBehavior({ isTTY: false, aiAnalyticsFlag: true, sendLogsFlag: true }) !== 'auto_upload')
-    throw new Error('regression')
-})
 
 // ---- runCapgoAiAnalysis ----
 function sseResponse(frames, status = 200) {

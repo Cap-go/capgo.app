@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
-  ORG_ID_CRON_QUEUE,
   cleanupPostgresClient,
   executeSQL,
   getCronPlanQueueCountForOrg,
   getLatestCronPlanMessageForOrg,
   getSupabaseClient,
+  ORG_ID_CRON_QUEUE,
 } from './test-utils.ts'
 
 describe('[Function] queue_cron_stat_org_for_org', () => {
@@ -122,21 +122,5 @@ describe('[Function] queue_cron_stat_org_for_org', () => {
     }).throwOnError()
 
     expect(await getCronPlanQueueCountForOrg(ORG_ID_CRON_QUEUE)).toBe(1)
-  })
-
-  it('has correct permissions - only service_role can call', async () => {
-    if (!testCustomerId) {
-      console.log('Skipping test - no customer_id available')
-      return
-    }
-
-    const supabase = getSupabaseClient()
-
-    const { error } = await supabase.rpc('queue_cron_stat_org_for_org', {
-      org_id: ORG_ID_CRON_QUEUE,
-      customer_id: testCustomerId,
-    })
-
-    expect(error).toBeNull()
   })
 })

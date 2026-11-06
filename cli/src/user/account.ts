@@ -1,7 +1,7 @@
 import type { Options } from '../api/app'
 import { intro, log, outro } from '@clack/prompts'
 import { trackEvent } from '../analytics/track'
-import { createSupabaseClient, findSavedKey, formatError, resolveUserIdFromApiKey } from '../utils'
+import { createCapgoClient, findSavedKey, formatError, resolveUserIdFromApiKey } from '../utils'
 
 export async function getUserIdInternal(options: Options, silent = false) {
   if (!silent)
@@ -19,12 +19,11 @@ export async function getUserIdInternal(options: Options, silent = false) {
   }
 
   try {
-    const supabase = await createSupabaseClient(
+    const client = await createCapgoClient(
       enrichedOptions.apikey,
-      enrichedOptions.supaHost,
-      enrichedOptions.supaAnon,
+      enrichedOptions.apiHost,
     )
-    const userId = await resolveUserIdFromApiKey(supabase, enrichedOptions.apikey)
+    const userId = await resolveUserIdFromApiKey(client, enrichedOptions.apikey)
 
     void trackEvent({ channel: 'account', event: 'Account Id Viewed', tags: {} })
 

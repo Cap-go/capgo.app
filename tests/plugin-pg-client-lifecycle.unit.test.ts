@@ -67,6 +67,7 @@ vi.mock('../supabase/functions/_backend/plugin_runtime/utils/utils.ts', async (i
 })
 
 function createContext(env: Record<string, any> = {}) {
+  const variables = new Map<string, unknown>()
   return {
     env: {
       HYPERDRIVE_CAPGO_READ_EU: { connectionString: 'postgres://hyperdrive-eu' },
@@ -85,9 +86,9 @@ function createContext(env: Record<string, any> = {}) {
         return true
       if (key === 'skipChannelSelfPostgresFallback')
         return true
-      return undefined
+      return variables.get(key)
     },
-    set: vi.fn(),
+    set: (key: string, value: unknown) => variables.set(key, value),
     req: {
       raw: {
         cf: { continent: 'EU' },

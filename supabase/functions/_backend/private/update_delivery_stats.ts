@@ -13,7 +13,6 @@ import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 
 dayjs.extend(utc)
 
@@ -438,29 +437,23 @@ function buildUpdateDeliveryResponse(input: {
 }
 
 async function listOrgAppIds(c: Context<MiddlewareKeyVariables>, orgId: string): Promise<string[]> {
-  const limit = 1000
-  let page = 0
+  // No max_rows cap on direct Postgres, so one read replaces the PostgREST pages.
+  let rows: { app_id: string | null }[]
+  const pg = await getPgClient(c)
+  try {
+    rows = (await pg.query<{ app_id: string | null }>('SELECT app_id FROM public.apps WHERE owner_org = $1', [orgId])).rows
+  }
+  catch (error) {
+    cloudlog({ requestId: c.get('requestId'), message: 'list_org_app_ids_error', error })
+    throw simpleError('fetch_error', 'Failed to fetch organization apps', { error: String(error) })
+  }
+  finally {
+    closeClient(c, pg)
+  }
   const appIds: string[] = []
-  while (true) {
-    const { data, error } = await supabaseAdmin(c)
-      .from('apps')
-      .select('app_id')
-      .eq('owner_org', orgId)
-      .range(page * limit, (page + 1) * limit - 1)
-    if (error) {
-      cloudlog({ requestId: c.get('requestId'), message: 'list_org_app_ids_error', error })
-      throw simpleError('fetch_error', 'Failed to fetch organization apps', { error: String(error) })
-    }
-    const rows = data ?? []
-    if (rows.length === 0)
-      break
-    for (const row of rows) {
-      if (typeof row.app_id === 'string' && row.app_id.length > 0)
-        appIds.push(row.app_id)
-    }
-    if (rows.length < limit)
-      break
-    page += 1
+  for (const row of rows) {
+    if (typeof row.app_id === 'string' && row.app_id.length > 0)
+      appIds.push(row.app_id)
   }
   return appIds
 }

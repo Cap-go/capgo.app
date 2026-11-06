@@ -8,7 +8,10 @@ import {
 } from '@std/semver'
 import { env, getRuntimeKey } from 'hono/adapter'
 
-declare const EdgeRuntime: { waitUntil?: (promise: Promise<any>) => void } | undefined
+function edgeRuntimeWaitUntil(): ((promise: Promise<unknown>) => void) | undefined {
+  const edgeRuntime = (globalThis as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime
+  return edgeRuntime?.waitUntil
+}
 
 export const fetchLimit = 50
 export const WAIT_FOR_COMPLETION_HEADER = 'x-capgo-wait-for-completion'
@@ -196,6 +199,15 @@ function getLimitedAppsById(limits: string): Map<string, LimitedApp> {
   return limitedAppsById
 }
 
+/** Deterministic: true when LIMITED_APPS throttles this app at all (any `ignore` above 0). */
+export function isListedLimitedApp(c: Context, id: string) {
+  const limits = getEnv(c, 'LIMITED_APPS')
+  if (!limits)
+    return false
+  const app = getLimitedAppsById(limits).get(id)
+  return Boolean(app && app.ignore !== 0)
+}
+
 export function isLimited(c: Context, id: string) {
   const limits = getEnv(c, 'LIMITED_APPS')
   if (!limits)
@@ -221,8 +233,9 @@ export function backgroundTask(c: Context, p: any) {
     c.executionCtx.waitUntil(p)
     return Promise.resolve(null)
   }
-  if (EdgeRuntime?.waitUntil) {
-    EdgeRuntime.waitUntil(p)
+  const waitUntil = edgeRuntimeWaitUntil()
+  if (waitUntil) {
+    waitUntil(p)
     return Promise.resolve(null)
   }
   return p

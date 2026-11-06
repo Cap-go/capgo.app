@@ -11,7 +11,7 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 // --- Worker logic imports ---
 import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.ts'
 import { backgroundTask, getEnv, WAIT_FOR_COMPLETION_HEADER } from '../utils/utils.ts'
-import { updateManifestSize } from './on_manifest_create.ts'
+import { skipLegacyManifestSize, updateDeltaFileSize } from './on_manifest_create.ts'
 
 // Define constants
 const DEFAULT_BATCH_SIZE = 950 // Default batch size for queue reads limit of CF is 1000 fetches so we take a safe margin
@@ -364,13 +364,19 @@ function httpExceptionToQueueResponse(error: unknown): Response | null {
   )
 }
 
-function getManifestRecordFromQueueBody(body: Record<string, unknown>): Database['public']['Tables']['manifest']['Row'] {
+type ManifestQueueRecord
+  = | { table: 'manifest', record: { id?: number | null } }
+    | { table: 'delta_files', record: Database['public']['Tables']['delta_files']['Row'] }
+
+function getManifestRecordFromQueueBody(body: Record<string, unknown>): ManifestQueueRecord {
   const record = body.record
-  if (body.type !== 'INSERT' || body.table !== 'manifest' || !record || typeof record !== 'object') {
+  if (body.type !== 'INSERT' || (body.table !== 'manifest' && body.table !== 'delta_files') || !record || typeof record !== 'object') {
     throw simpleError('invalid_manifest_queue_payload', 'Invalid manifest queue payload', { body })
   }
 
-  return record as Database['public']['Tables']['manifest']['Row']
+  return body.table === 'delta_files'
+    ? { table: 'delta_files', record: record as Database['public']['Tables']['delta_files']['Row'] }
+    : { table: 'manifest', record: record as { id?: number | null } }
 }
 
 async function dispatchQueueMessage(
@@ -384,13 +390,16 @@ async function dispatchQueueMessage(
   waitForCompletion = false,
 ): Promise<{ response: Response, targetUrl: string }> {
   if (function_name === 'on_manifest_create') {
-    const record = getManifestRecordFromQueueBody(body)
-    const response = await updateManifestSize(c, record, {
+    const { table, record } = getManifestRecordFromQueueBody(body)
+    const queue = {
       cfId,
       queueMsgId: String(metadata.msgId),
       queueName: metadata.queueName,
       queueReadCount: String(metadata.readCount),
-    })
+    }
+    const response = table === 'delta_files'
+      ? await updateDeltaFileSize(c, record, queue)
+      : skipLegacyManifestSize(c, record, queue)
     return { response, targetUrl }
   }
 
@@ -842,13 +851,15 @@ async function processQueue(c: Context, db: Awaited<ReturnType<typeof getPgClien
   }
 
   const results = await processQueueMessageChunks(c, db, queueName, messagesToProcess, processConcurrency, waitForCompletion)
-  await persistQueueCfIds(c, db, queueName, results)
 
   // Batch remove all messages that have succeeded.
   const [successMessages, messagesFailed] = results.reduce((acc, result) => {
     acc[isSuccessfulQueueResult(result) ? 0 : 1].push(result)
     return acc
   }, [[], []] as [typeof results, typeof results])
+
+  // Successful messages are deleted below, so only failed ones keep a CF ID trail.
+  await persistQueueCfIds(c, db, queueName, messagesFailed)
 
   await deleteUncheckpointedSuccessMessages(c, db, queueName, successMessages)
   const actionableFailureCount = await reportQueueFailures(c, queueName, messagesFailed)
@@ -1196,6 +1207,7 @@ export const __queueConsumerTestUtils__ = {
   extractMessageBody,
   getQueueMessageTrace,
   getActionableQueueFailures,
+  getManifestRecordFromQueueBody,
   getQueueBatchSize,
   getQueueAckChunkSize,
   getQueueHttpConcurrency,

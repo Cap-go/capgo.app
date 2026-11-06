@@ -1,20 +1,8 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions, Plugin } from 'chart.js'
-import {
-  BarController,
-  BarElement,
-  CategoryScale,
-  Chart,
-  Filler,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from 'chart.js'
 import { computed } from 'vue'
-import { Bar, Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
+import { Bar, Line } from '~/components/dashboard/lazyCharts'
 import { useBuildChartConfig } from '~/composables/useBuildChartConfig'
 import { BUILD_SERIES_KEYS, transformSeries } from '~/services/buildCharts'
 import { todayLinePlugin, verticalLinePlugin } from '~/services/chartTooltip'
@@ -28,18 +16,6 @@ const props = defineProps({
 })
 
 const { t } = useI18n()
-
-Chart.register(
-  Tooltip,
-  BarController,
-  BarElement,
-  LineController,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-  Filler,
-)
 
 const { monthdays, todayLimit, chartOptions } = useBuildChartConfig(props, { stacked: true, hasLegend: true })
 

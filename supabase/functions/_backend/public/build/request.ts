@@ -1,14 +1,21 @@
 import type { Context } from 'hono'
+import type { BuildPlatform } from '../../utils/build_credentials_validation.ts'
 import type { Database, Json } from '../../utils/supabase.types.ts'
+import { BuildCredentialsValidationError, mergeStoredCredentialsForBuild, parseCredentialRecord } from '../../utils/build_credentials_validation.ts'
 import { notifyCocoaPodsDeprecation } from '../../utils/cocoapods_deprecation.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../../utils/logging.ts'
+import type { PgClient } from '../../utils/pg.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { backgroundTask, getEnv } from '../../utils/utils.ts'
 import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
+import { loadStoredBuildCredentials } from './credentials.ts'
 import { resolveOrgNativeBuildQueuePriority } from './queue_priority.ts'
+import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
 export interface RequestBuildBody {
   app_id: string
@@ -25,6 +32,14 @@ export interface RequestBuildBody {
   cache_key?: string
   /** iOS dependency manager detected by the CLI. Stored for build analytics only. */
   ios_dependency_manager?: IosDependencyManager
+  /**
+   * When true, merge the app's stored credentials (PUT /build/credentials) under
+   * build_credentials / build_options and validate the result server-side.
+   * Default false: legacy behaviour, request credentials forwarded unvalidated.
+   */
+  use_stored_credentials?: boolean
+  /** With use_stored_credentials: false drops PLAY_CONFIG_JSON (CLI --no-playstore-upload). */
+  playstore_upload?: boolean
 }
 
 type IosDependencyManager = 'cocoapods' | 'spm'
@@ -69,6 +84,8 @@ interface ValidBuildRequestBody {
   cache_enabled?: boolean
   cache_key?: string
   ios_dependency_manager: IosDependencyManager | null
+  use_stored_credentials: boolean
+  playstore_upload?: boolean
 }
 
 function throwBuilderUnavailable(message: string, moreInfo: Record<string, unknown> = {}, cause?: unknown): never {
@@ -139,6 +156,8 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     cache_enabled,
     cache_key,
     ios_dependency_manager,
+    use_stored_credentials,
+    playstore_upload,
   } = body
 
   cloudlog({
@@ -201,6 +220,21 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     }
   }
 
+  if (use_stored_credentials !== undefined && typeof use_stored_credentials !== 'boolean') {
+    throw simpleError('invalid_parameter', 'use_stored_credentials must be a boolean')
+  }
+
+  if (playstore_upload !== undefined && typeof playstore_upload !== 'boolean') {
+    throw simpleError('invalid_parameter', 'playstore_upload must be a boolean')
+  }
+
+  if (use_stored_credentials === true) {
+    if (!build_options || typeof build_options !== 'object' || Array.isArray(build_options))
+      throw simpleError('invalid_parameter', 'build_options must be an object')
+    if (!build_credentials || typeof build_credentials !== 'object' || Array.isArray(build_credentials))
+      throw simpleError('invalid_parameter', 'build_credentials must be an object')
+  }
+
   return {
     app_id,
     platform: platform as 'ios' | 'android',
@@ -211,10 +245,56 @@ function validateBuildRequestBody(c: Context, body: RequestBuildBody, userId: st
     cache_enabled,
     cache_key: cache_key?.trim(),
     ios_dependency_manager: normalizeIosDependencyManager(platform, ios_dependency_manager),
+    use_stored_credentials: use_stored_credentials === true,
+    playstore_upload,
   }
 }
 
-async function ensureBuildPermission(c: Context, appId: string, userId: string) {
+/**
+ * use_stored_credentials: stored (lowest) < request build_credentials < request build_options,
+ * validated with the CLI matrix. Only called on the opt-in path so published CLIs are unaffected.
+ */
+async function resolveStoredBuildCredentials(c: Context, input: {
+  appId: string
+  platform: BuildPlatform
+  buildOptions: Record<string, unknown>
+  buildCredentials: Record<string, string>
+  playstoreUpload?: boolean
+}): Promise<{ buildOptions: Record<string, unknown>, buildCredentials: Record<string, string> }> {
+  const stored = await loadStoredBuildCredentials(c, input.appId, input.platform)
+  if (!stored) {
+    throw quickError(400, 'build_credentials_not_found', `No stored ${input.platform} build credentials for this app. Save them first: npx @capgo/cli@latest build credentials push --platform ${input.platform}`, {
+      app_id: input.appId,
+      platform: input.platform,
+    }, undefined, { alert: false })
+  }
+  try {
+    const result = mergeStoredCredentialsForBuild({
+      platform: input.platform,
+      stored,
+      requestCredentials: parseCredentialRecord(input.buildCredentials, 'build_credentials'),
+      requestBuildOptions: input.buildOptions,
+      playstoreUpload: input.playstoreUpload,
+    })
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'Using stored build credentials',
+      app_id: input.appId,
+      platform: input.platform,
+      stored_key_count: Object.keys(stored).length,
+      request_key_count: Object.keys(input.buildCredentials).length,
+    })
+    return result
+  }
+  catch (error) {
+    if (error instanceof BuildCredentialsValidationError) {
+      throw quickError(400, 'invalid_build_credentials', error.message, { app_id: input.appId, platform: input.platform }, undefined, { alert: false })
+    }
+    throw error
+  }
+}
+
+export async function ensureBuildPermission(c: Context, appId: string, userId: string) {
   // Check if the user has permission to request builds (auth context set by middlewareKey)
   if (!(await checkPermission(c, 'app.build_native', { appId }))) {
     cloudlogErr({
@@ -227,13 +307,20 @@ async function ensureBuildPermission(c: Context, appId: string, userId: string) 
   }
 }
 
-async function getBuildOwnerOrg(c: Context, supabase: ReturnType<typeof supabaseApikey>, appId: string): Promise<string> {
+export async function getBuildOwnerOrg(c: Context, principal: RlsPrincipal, appId: string): Promise<string> {
   // Get org_id for the app to use as anonymized user ID
-  const { data: app, error: appError } = await supabase
-    .from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .single()
+  let app: { owner_org: string } | null = null
+  let appError: unknown = null
+  try {
+    const rows = await withRlsContext(c, principal, async client => (await client.query<{ owner_org: string }>(
+      'SELECT owner_org FROM public.apps WHERE app_id = $1',
+      [appId],
+    )).rows)
+    app = rows[0] ?? null
+  }
+  catch (error) {
+    appError = error
+  }
 
   if (appError || !app) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'App not found', app_id: appId, error: appError })
@@ -243,10 +330,19 @@ async function getBuildOwnerOrg(c: Context, supabase: ReturnType<typeof supabase
   return app.owner_org
 }
 
-async function ensureBuildTimePlanAllowed(c: Context, supabase: ReturnType<typeof supabaseApikey>, orgId: string, appId: string) {
+export async function ensureBuildTimePlanAllowed(c: Context, principal: RlsPrincipal, orgId: string, appId: string) {
   // Native builds consume build-time credits; check that metric before creating a builder job.
-  const buildTimePlanArgs = { orgid: orgId, actions: ['build_time'], appid: appId } as never
-  const { data: buildTimeAllowed, error: buildTimePlanError } = await supabase.rpc('is_allowed_action_org_action', buildTimePlanArgs)
+  let buildTimeAllowed: boolean | null = null
+  let buildTimePlanError: unknown = null
+  try {
+    buildTimeAllowed = await withRlsContext(c, principal, async client => (await client.query<{ allowed: boolean | null }>(
+      `SELECT public.is_allowed_action_org_action(orgid => $1, actions => $2::public.action_type[], appid => $3) AS allowed`,
+      [orgId, ['build_time'], appId],
+    )).rows[0]?.allowed ?? null)
+  }
+  catch (error) {
+    buildTimePlanError = error
+  }
   if (buildTimePlanError) {
     cloudlogErr({
       requestId: c.get('requestId'),
@@ -443,6 +539,7 @@ async function persistBuildRequest(c: Context, input: {
   upload_path: string
   upload_url: string
   upload_expires_at: Date
+  uses_stored_credentials: boolean
   queue_priority: number
 }) {
   const {
@@ -458,29 +555,48 @@ async function persistBuildRequest(c: Context, input: {
     upload_path,
     upload_url,
     upload_expires_at,
+    uses_stored_credentials,
+    queue_priority,
   } = input
 
-  const supabaseAdminClient = supabaseAdmin(c)
-  const { data: buildRequestRow, error: insertError } = await supabaseAdminClient
-    .from('build_requests')
-    .insert({
-      app_id,
-      owner_org: org_id,
-      requested_by,
-      platform,
-      build_mode,
-      build_config,
-      ios_dependency_manager,
-      status: 'pending',
-      builder_job_id,
-      upload_session_key,
-      upload_path,
-      upload_url,
-      upload_expires_at: upload_expires_at.toISOString(),
-      queue_priority: input.queue_priority,
-    })
-    .select('*')
-    .single()
+  let buildRequestRow: Database['public']['Tables']['build_requests']['Row'] | null = null
+  let insertError: unknown = null
+  let pg: PgClient | null = null
+  try {
+    pg = await getPgClient(c)
+    const rows = await queryJson<Database['public']['Tables']['build_requests']['Row']>(
+      pg,
+      `INSERT INTO public.build_requests (
+        app_id, owner_org, requested_by, platform, build_mode, build_config, ios_dependency_manager,
+        status, builder_job_id, upload_session_key, upload_path, upload_url, upload_expires_at, uses_stored_credentials, queue_priority
+      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'pending', $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *`,
+      [
+        app_id,
+        org_id,
+        requested_by,
+        platform,
+        build_mode,
+        build_config === null ? null : JSON.stringify(build_config),
+        ios_dependency_manager,
+        builder_job_id,
+        upload_session_key,
+        upload_path,
+        upload_url,
+        upload_expires_at.toISOString(),
+        uses_stored_credentials,
+        queue_priority,
+      ],
+    )
+    buildRequestRow = rows[0] ?? null
+  }
+  catch (error) {
+    insertError = error
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
 
   if (insertError || !buildRequestRow) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to persist build request', error: insertError })
@@ -533,19 +649,34 @@ export async function requestBuild(
     platform,
     build_mode,
     build_config,
-    build_options,
-    build_credentials,
+    build_options: requested_build_options,
+    build_credentials: requested_build_credentials,
     cache_enabled,
     cache_key,
     ios_dependency_manager,
+    use_stored_credentials,
+    playstore_upload,
   } = validateBuildRequestBody(c, body, apikey.user_id)
 
   await ensureBuildPermission(c, app_id, apikey.user_id)
+  if (use_stored_credentials)
+    await ensureStoredCredentialsPermission(c, app_id, apikey.user_id)
+
+  // Opt-in only: merge + validate the app's stored credentials before any builder/plan side effect.
+  const { buildOptions: build_options, buildCredentials: build_credentials } = use_stored_credentials
+    ? await resolveStoredBuildCredentials(c, {
+        appId: app_id,
+        platform,
+        buildOptions: requested_build_options,
+        buildCredentials: requested_build_credentials,
+        playstoreUpload: playstore_upload,
+      })
+    : { buildOptions: requested_build_options, buildCredentials: requested_build_credentials }
 
   // Use authenticated client for data queries - RLS will enforce access
-  const supabase = supabaseApikey(c, apikey.key)
-  const org_id = await getBuildOwnerOrg(c, supabase, app_id)
-  await ensureBuildTimePlanAllowed(c, supabase, org_id, app_id)
+  const principal = apikeyPrincipal(c, apikey.key)
+  const org_id = await getBuildOwnerOrg(c, principal, app_id)
+  await ensureBuildTimePlanAllowed(c, principal, org_id, app_id)
   // Fail before creating a builder job / upload session when the org is already
   // at its plan concurrency. /build/start still enforces transactionally.
   await assertNativeBuildConcurrencyAvailable(c, {
@@ -609,6 +740,7 @@ export async function requestBuild(
     upload_url,
     upload_expires_at,
     queue_priority: queuePriority.priority,
+    uses_stored_credentials: use_stored_credentials === true,
   })
 
   cloudlog({

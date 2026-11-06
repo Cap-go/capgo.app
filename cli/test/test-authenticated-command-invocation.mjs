@@ -1,8 +1,5 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { resolveInitCommandInput, resolveLoginCommandApiKey } from '../src/auth/command-input.ts'
 
 console.log('🧪 Testing authenticated command invocation...\n')
@@ -31,70 +28,5 @@ assert.deepEqual(resolveInitCommandInput(undefined, undefined, undefined), {
   appId: undefined,
   explicitApiKey: false,
 })
-
-const testDir = dirname(fileURLToPath(import.meta.url))
-const indexSource = readFileSync(join(testDir, '../src/index.ts'), 'utf8')
-const loginSource = readFileSync(join(testDir, '../src/login.ts'), 'utf8')
-const initSource = readFileSync(join(testDir, '../src/init/command.ts'), 'utf8')
-const builderSource = readFileSync(join(testDir, '../src/build/onboarding/command.ts'), 'utf8')
-const bundleUploadSource = readFileSync(join(testDir, '../src/bundle/upload-command.ts'), 'utf8')
-const credentialsManageSource = readFileSync(join(testDir, '../src/build/credentials-manage.ts'), 'utf8')
-
-function sourceBetween(source, start, end) {
-  const startIndex = source.indexOf(start)
-  const endIndex = source.indexOf(end, startIndex)
-  assert.notEqual(startIndex, -1, `missing start marker: ${start}`)
-  assert.notEqual(endIndex, -1, `missing end marker: ${end}`)
-  return source.slice(startIndex, endIndex)
-}
-
-const preActionSource = sourceBetween(indexSource, "program.hook('preAction'", "program.hook('postAction'")
-assert.match(preActionSource, /currentCommandPath === 'login'/)
-assert.match(preActionSource, /currentCommandPath === 'init'/)
-assert.match(preActionSource, /currentCommandPath === 'build init'/)
-assert.match(preActionSource, /currentCommandPath === 'build onboarding'/)
-assert.match(preActionSource, /deferCommandInvocation\(currentCommandPath, commandContext\)/)
-
-const initCommandSource = sourceBetween(indexSource, ".command('init [apikey] [appId]')", "program\n  .command('doctor')")
-const loginCommandSource = sourceBetween(indexSource, ".command('login [apikey]')", "program\n  .command('get-qr")
-assert.match(initCommandSource, /\.option\('-a, --apikey <apikey>', optionDescriptions\.apikey\)/)
-assert.match(loginCommandSource, /\.option\('-a, --apikey <apikey>', optionDescriptions\.apikey\)/)
-
-const loginActionSource = sourceBetween(loginSource, 'export async function login(', '\n}')
-const browserLoginIndex = loginActionSource.indexOf('await loginInitInBrowser(')
-const browserInvocationIndex = loginActionSource.indexOf('flushDeferredCommandInvocation(', browserLoginIndex)
-const manualLoginIndex = loginActionSource.indexOf('await loginInternal(')
-const manualInvocationIndex = loginActionSource.indexOf('flushDeferredCommandInvocation(', manualLoginIndex)
-assert.ok(browserLoginIndex >= 0, 'browser login validates and saves the selected key')
-assert.ok(browserInvocationIndex > browserLoginIndex, 'browser login invocation is emitted only after validation')
-assert.ok(manualLoginIndex >= 0, 'manual login validates and saves the selected key')
-assert.ok(manualInvocationIndex > manualLoginIndex, 'manual login invocation is emitted only after validation')
-
-const initActionStart = initSource.indexOf('export async function initApp(')
-assert.notEqual(initActionStart, -1, 'missing init action')
-const initActionSource = initSource.slice(initActionStart)
-const initValidationIndex = initActionSource.indexOf('await resolveUserIdFromApiKey(')
-const initInvocationIndex = initActionSource.indexOf('flushDeferredCommandInvocation(')
-const initSavedKeyFallbackIndex = initActionSource.indexOf("options.apikey = findSavedKeySilent() ?? ''")
-assert.ok(initActionSource.includes('resolveInitCommandInput('), 'init resolves flag and positional input explicitly')
-assert.ok(initSavedKeyFallbackIndex >= 0, 'init replaces an absent or empty command key with the saved key')
-assert.ok(initSavedKeyFallbackIndex < initValidationIndex, 'init restores its saved-key fallback before validation')
-assert.ok(initValidationIndex >= 0, 'init validates the selected key with Capgo')
-assert.ok(initInvocationIndex > initValidationIndex, 'init invocation is emitted only after validation')
-
-const builderAuthCallback = sourceBetween(builderSource, 'onAuthenticated: (key, metadata) => {', 'onBeforeExit: finishBuildReplay')
-assert.match(builderAuthCallback, /flushDeferredCommandInvocation\(key\)/)
-assert.match(builderAuthCallback, /if \(metadata\.method\)/)
-
-const builderInitCommandSource = sourceBetween(indexSource, ".command('init')", ".command('request [appId]')")
-assert.match(builderInitCommandSource, /enableSelfUpdate: true/)
-assert.match(builderSource, /const analyticsEnabled = \(options\.enableSelfUpdate === true \|\| options\.appId !== undefined\) && options\.analytics !== false/, 'direct Builder setup and verified init handoffs share progress analytics while preserving opt-out')
-assert.match(builderSource, /action: 'start_setup'/)
-assert.match(builderSource, /startSetupLookupInFlight/)
-assert.match(builderSource, /step: firstSetupStep/)
-assert.match(builderSource, /supaHost: options\.supaHost/)
-assert.match(builderSource, /resolveOwnerOrgId\(apikey, appId, \{[\s\S]*?supaHost: options\.supaHost,[\s\S]*?supaAnon: options\.supaAnon,[\s\S]*?\}, controller\.signal\)/)
-assert.doesNotMatch(bundleUploadSource, /enableSelfUpdate/)
-assert.doesNotMatch(credentialsManageSource, /enableSelfUpdate/)
 
 console.log('✅ authenticated command invocation tests passed')

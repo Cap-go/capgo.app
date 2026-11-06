@@ -36,77 +36,30 @@ describe('get /private/config/builder', () => {
     })
   })
 
-  it('returns enabled:false with no other fields when neither required env var is set', async () => {
-    const response = await get({})
+  it.each([
+    ['neither required env var is set', {}],
+    ['only GOOGLE_OAUTH_CLIENT_ID is set', { GOOGLE_OAUTH_CLIENT_ID: '1234.apps.googleusercontent.com' }],
+    ['only GOOGLE_OAUTH_CLIENT_SECRET is set', { GOOGLE_OAUTH_CLIENT_SECRET: 'GOCSPX-abc' }],
+    ['both env vars are whitespace-only', { GOOGLE_OAUTH_CLIENT_ID: '   ', GOOGLE_OAUTH_CLIENT_SECRET: '\t\n' }],
+  ])('returns only enabled:false when %s', async (_label, env) => {
+    const response = await get(env)
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ enabled: false })
   })
 
-  it('returns enabled:false when only GOOGLE_OAUTH_CLIENT_ID is set', async () => {
-    const response = await get({
-      GOOGLE_OAUTH_CLIENT_ID: '1234.apps.googleusercontent.com',
-    })
+  it.each([
+    ['uses a custom single scope', 'https://www.googleapis.com/auth/cloud-platform', ['https://www.googleapis.com/auth/cloud-platform']],
+    [
+      'parses comma-separated scopes and trims each entry',
+      ' https://www.googleapis.com/auth/androidpublisher , https://www.googleapis.com/auth/cloud-platform ',
+      ['https://www.googleapis.com/auth/androidpublisher', 'https://www.googleapis.com/auth/cloud-platform'],
+    ],
+    ['falls back to the default scope when GOOGLE_OAUTH_SCOPES has no non-empty entries', ' , , ', ['https://www.googleapis.com/auth/androidpublisher']],
+  ])('%s', async (_label, scopes, expected) => {
+    const response = await get({ GOOGLE_OAUTH_CLIENT_ID: 'cid', GOOGLE_OAUTH_CLIENT_SECRET: 'csec', GOOGLE_OAUTH_SCOPES: scopes })
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ enabled: false })
-  })
-
-  it('returns enabled:false when only GOOGLE_OAUTH_CLIENT_SECRET is set', async () => {
-    const response = await get({
-      GOOGLE_OAUTH_CLIENT_SECRET: 'GOCSPX-abc',
-    })
-
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ enabled: false })
-  })
-
-  it('treats whitespace-only env vars the same as missing (returns enabled:false)', async () => {
-    const response = await get({
-      GOOGLE_OAUTH_CLIENT_ID: '   ',
-      GOOGLE_OAUTH_CLIENT_SECRET: '\t\n',
-    })
-
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ enabled: false })
-  })
-
-  it('returns a custom single scope when GOOGLE_OAUTH_SCOPES is set to one value', async () => {
-    const response = await get({
-      GOOGLE_OAUTH_CLIENT_ID: 'cid',
-      GOOGLE_OAUTH_CLIENT_SECRET: 'csec',
-      GOOGLE_OAUTH_SCOPES: 'https://www.googleapis.com/auth/cloud-platform',
-    })
-
-    expect(response.status).toBe(200)
-    const body = await response.json() as { scopes: string[] }
-    expect(body.scopes).toEqual(['https://www.googleapis.com/auth/cloud-platform'])
-  })
-
-  it('parses comma-separated scopes and trims whitespace around each entry', async () => {
-    const response = await get({
-      GOOGLE_OAUTH_CLIENT_ID: 'cid',
-      GOOGLE_OAUTH_CLIENT_SECRET: 'csec',
-      GOOGLE_OAUTH_SCOPES: ' https://www.googleapis.com/auth/androidpublisher , https://www.googleapis.com/auth/cloud-platform ',
-    })
-
-    expect(response.status).toBe(200)
-    const body = await response.json() as { scopes: string[] }
-    expect(body.scopes).toEqual([
-      'https://www.googleapis.com/auth/androidpublisher',
-      'https://www.googleapis.com/auth/cloud-platform',
-    ])
-  })
-
-  it('falls back to the default scope when GOOGLE_OAUTH_SCOPES is set but yields zero non-empty entries', async () => {
-    const response = await get({
-      GOOGLE_OAUTH_CLIENT_ID: 'cid',
-      GOOGLE_OAUTH_CLIENT_SECRET: 'csec',
-      GOOGLE_OAUTH_SCOPES: ' , , ',
-    })
-
-    expect(response.status).toBe(200)
-    const body = await response.json() as { scopes: string[] }
-    expect(body.scopes).toEqual(['https://www.googleapis.com/auth/androidpublisher'])
+    expect((await response.json() as { scopes: string[] }).scopes).toEqual(expected)
   })
 })

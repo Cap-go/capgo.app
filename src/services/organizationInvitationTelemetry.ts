@@ -1,5 +1,5 @@
+import { getLocalConfig } from '~/services/console'
 import { pushEventForUser } from '~/services/posthog'
-import { getLocalConfig } from '~/services/supabase'
 
 type OrganizationInvitationSuccessEvent
   = 'organization_membership_invitation_accepted'
@@ -67,7 +67,7 @@ export function captureOrganizationInvitationEvent(input: OrganizationInvitation
     pushEventForUser(
       input.event,
       input.userId,
-      getLocalConfig().supaHost,
+      getLocalConfig().apiHost,
       {
         ...(input.invitationId && (input.event === 'organization_membership_invitation_accepted' || input.event === 'organization_membership_invitation_declined')
           ? { $insert_id: invitationInsertId(input.event, input.userId, input.invitationId) }
@@ -87,9 +87,9 @@ export function captureOrganizationInvitationEvent(input: OrganizationInvitation
 
 export async function runTrackedOrganizationInvitationMutation(
   input: TrackedOrganizationInvitationMutationInput,
-  mutation: () => Promise<string>,
+  mutation: () => Promise<string | void>,
 ): Promise<void> {
-  let invitationId: string
+  let invitationId: string | void
   try {
     invitationId = await mutation()
   }
@@ -105,7 +105,7 @@ export async function runTrackedOrganizationInvitationMutation(
 
   captureOrganizationInvitationEvent({
     event: input.successEvent,
-    invitationId,
+    invitationId: invitationId ?? undefined,
     pendingInvitationCount: input.pendingInvitationCount,
     userId: input.userId,
   })

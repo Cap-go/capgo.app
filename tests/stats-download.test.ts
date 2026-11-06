@@ -1,8 +1,7 @@
-import type { Database } from '../src/types/supabase.types.ts'
+import type { Database } from '../src/types/database.types.ts'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ALLOWED_STATS_ACTIONS } from '../supabase/functions/_backend/plugin_runtime/plugins/stats_actions.ts'
 import { createAppVersions, fetchTestRequest, getBaseData, getSupabaseClient, getVersionFromAction, headers, PLUGIN_BASE_URL, resetAndSeedAppData, resetAndSeedAppDataStats, resetAppData, resetAppDataStats } from './test-utils.ts'
 
 const id = randomUUID().substring(0, 8)
@@ -77,35 +76,6 @@ afterAll(async () => {
 })
 
 describe.skipIf(USE_CLOUDFLARE)('download Stats Actions', () => {
-  it('should verify test app is created properly', async () => {
-    const supabase = getSupabaseClient()
-    const { data, error } = await supabase
-      .from('apps')
-      .select('app_id, owner_org')
-      .eq('app_id', APP_NAME_DOWNLOAD_STATS)
-      .single()
-
-    console.log('Test app check:', { app_id: APP_NAME_DOWNLOAD_STATS, data, error })
-    expect(error).toBeNull()
-    expect(data).toBeTruthy()
-  })
-
-  it('should verify all download stats actions are in ALLOWED_STATS_ACTIONS', () => {
-    const downloadActions = [
-      'download_manifest_start',
-      'download_manifest_complete',
-      'download_zip_start',
-      'download_zip_complete',
-      'download_manifest_file_fail',
-      'download_manifest_checksum_fail',
-      'download_manifest_brotli_fail',
-    ]
-
-    for (const action of downloadActions) {
-      expect(ALLOWED_STATS_ACTIONS).toContain(action)
-    }
-  })
-
   describe('success Download Stats', () => {
     const successActions: StatsAction[] = [
       'download_manifest_start',

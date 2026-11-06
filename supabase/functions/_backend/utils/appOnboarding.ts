@@ -145,6 +145,19 @@ export function hasSupportedOtaTodoList(onboarding: Pick<AppOnboardingState, 'to
     || (onboarding.todo_list_version === 4 && onboarding.ota_todo_list_version === APP_ONBOARDING_OTA_V1_VERSION)
 }
 
+// A delivered update proves the app called notifyAppReady(), so add_code is done too.
+export function shouldInferAddCode(current: AppOnboardingState, hasTestUpdateEvidence = false): boolean {
+  return current.outcome !== 'completed'
+    && current.outcome !== 'skipped'
+    && hasSupportedOtaTodoList(current)
+    && current.steps.add_code?.status !== 'done'
+    && (current.steps.test_update?.status === 'done' || hasTestUpdateEvidence)
+}
+
+export function inferredAddCodeStep(at?: string): AppOnboardingStepState {
+  return { status: 'done', at, annotation: APP_ONBOARDING_ADD_CODE_INFERRED_ANNOTATION, annotationType: 'note' }
+}
+
 export function isAppOnboardingSource(value: unknown): value is AppOnboardingSource {
   return typeof value === 'string' && SOURCE_SET.has(value)
 }
@@ -296,10 +309,17 @@ export function deriveAppOnboardingOutcome(
   const allPresent = statuses.every(status => status === 'done' || status === 'skipped')
   const anySkipped = statuses.includes('skipped')
 
-  if (allPresent)
-    return anySkipped ? 'skipped' : 'completed'
+  // Explicit dismissal (hide onboarding) wins over an all-tasks-present
+  // completion. v3/v4 task skips are otherwise choices that still complete the
+  // checklist. Keep the historical skipped outcome for v1/v2. Mirrors
+  // public.merge_app_onboarding_setup.
+  if (patch === 'skipped')
+    return 'skipped'
 
-  if ((patch === 'completed' && todoListVersion !== 3 && todoListVersion !== 4) || patch === 'skipped')
+  if (allPresent)
+    return anySkipped && todoListVersion !== 3 && todoListVersion !== 4 ? 'skipped' : 'completed'
+
+  if (patch === 'completed' && todoListVersion !== 3 && todoListVersion !== 4)
     return patch
 
   if (patch === 'switched_to_manual' || current === 'switched_to_manual')

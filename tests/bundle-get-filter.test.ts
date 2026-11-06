@@ -117,4 +117,32 @@ describe('[GET] /bundle version and id filters', () => {
     expect(response.status).toBe(200)
     expect(data).toEqual([])
   })
+
+  it.concurrent('fields=summary leaves out manifest and native_packages', async () => {
+    const { response, data } = await getBundles({ app_id: APP_A, version: VERSION_NAME, fields: 'summary' })
+    expect(response.status).toBe(200)
+    const row = (data as Record<string, unknown>[])[0]
+    expect(row.id).toBe(versionIdOnA)
+    expect(row).toHaveProperty('checksum')
+    expect(row).not.toHaveProperty('native_packages')
+    expect(row).not.toHaveProperty('manifest')
+  })
+
+  it.concurrent('limit returns larger list pages', async () => {
+    const [{ response: small, data: smallPage }, { response: large, data: largePage }] = await Promise.all([
+      getBundles({ app_id: APP_A, limit: '1', fields: 'summary' }),
+      getBundles({ app_id: APP_A, limit: '1000', fields: 'summary' }),
+    ])
+    expect(small.status).toBe(200)
+    expect(large.status).toBe(200)
+    expect(smallPage).toHaveLength(1)
+    expect((largePage as unknown[]).length).toBeGreaterThan(1)
+    expect((largePage as { id: number }[]).map(row => row.id)).toContain(versionIdOnA)
+  })
+
+  it.concurrent('rejects limits above the PostgREST page cap', async () => {
+    const { response, data } = await getBundles({ app_id: APP_A, limit: '1001' })
+    expect(response.status).toBe(400)
+    expect((data as { error: string }).error).toBe('invalid_query')
+  })
 })

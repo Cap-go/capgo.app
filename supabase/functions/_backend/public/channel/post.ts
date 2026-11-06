@@ -3,12 +3,16 @@ import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { PgQueryClient, SetChannelBody } from '../bundle/set_channel.ts'
 import { HTTPException } from 'hono/http-exception'
+import type { ExistingChannel } from '../../utils/channel_insert.ts'
+import { buildChannelInsertOrExistingSql, ChannelAlreadyExistsError, resolveChannelInsert } from '../../utils/channel_insert.ts'
 import { throwIfChannelUpdatePackageMismatch } from '../../utils/channel_update_package.ts'
 import { BRES, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
-import { checkoutPgClient, closeClient, getDrizzleClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
+import type { PgClient } from '../../utils/pg.ts'
+import { beginWriteTransaction, checkoutPgClient, closeClient, getDrizzleClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
+import { queryJson, queryJsonOne, setRequestApikeyHeader } from '../../utils/pg_rls.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
-import { supabaseAdmin, updateOrCreateChannel } from '../../utils/supabase.ts'
+import { updateOrCreateChannel } from '../../utils/supabase.ts'
 import { isInternalVersionName, isValidAppId } from '../../utils/utils.ts'
 import { assertCanPromoteChannelInTransaction, setChannelInTransaction } from '../bundle/set_channel.ts'
 
@@ -115,42 +119,47 @@ function validateConfidence(value: number | undefined) {
   }
 }
 
-async function findVersion(c: Context, appID: string, version: string, ownerOrg: string) {
-  const { data, error: vError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id')
-    .eq('app_id', appID)
-    .eq('name', version)
-    .eq('owner_org', ownerOrg)
-    .eq('deleted', false)
-    .single()
-  if (vError || !data) {
+async function findActiveVersionId(pg: PgClient, appID: string, ownerOrg: string, filter: { name: string } | { id: number }) {
+  const rows = await queryJson<{ id: number }>(
+    pg,
+    `SELECT id
+     FROM public.app_versions
+     WHERE app_id = $1
+       AND ${'name' in filter ? 'name = $3' : 'id = $3'}
+       AND owner_org = $2::uuid
+       AND deleted = false
+     LIMIT 2`,
+    [appID, ownerOrg, 'name' in filter ? filter.name : filter.id],
+  )
+  if (rows.length !== 1)
+    throw new Error('Cannot find version')
+  return rows[0].id
+}
+
+async function findVersion(c: Context, pg: PgClient, appID: string, version: string, ownerOrg: string) {
+  try {
+    return await findActiveVersionId(pg, appID, ownerOrg, { name: version })
+  }
+  catch (vError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot find version', data: { appID, version, ownerOrg, vError } })
-    return Promise.reject(new Error(vError?.message ?? 'Cannot find version'))
+    throw new Error((vError as Error)?.message ?? 'Cannot find version')
   }
-  return data.id
 }
 
-async function findVersionId(c: Context, appID: string, versionId: number, ownerOrg: string) {
-  const { data, error: vError } = await supabaseAdmin(c)
-    .from('app_versions')
-    .select('id')
-    .eq('id', versionId)
-    .eq('app_id', appID)
-    .eq('owner_org', ownerOrg)
-    .eq('deleted', false)
-    .single()
-  if (vError || !data) {
+async function findVersionId(c: Context, pg: PgClient, appID: string, versionId: number, ownerOrg: string) {
+  try {
+    return await findActiveVersionId(pg, appID, ownerOrg, { id: versionId })
+  }
+  catch (vError) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Cannot find version by id', data: { appID, versionId, ownerOrg, vError } })
-    return Promise.reject(new Error(vError?.message ?? 'Cannot find version'))
+    throw new Error((vError as Error)?.message ?? 'Cannot find version')
   }
-  return data.id
 }
 
-function resolveVersion(c: Context, appID: string, version: string | number, ownerOrg: string) {
+function resolveVersion(c: Context, pg: PgClient, appID: string, version: string | number, ownerOrg: string) {
   return typeof version === 'number'
-    ? findVersionId(c, appID, version, ownerOrg)
-    : findVersion(c, appID, version, ownerOrg)
+    ? findVersionId(c, pg, appID, version, ownerOrg)
+    : findVersion(c, pg, appID, version, ownerOrg)
 }
 
 type DrizzleClient = ReturnType<typeof getDrizzleClient>
@@ -197,6 +206,7 @@ interface CreatedChannel {
   public: boolean
 }
 
+/** Inserts the channel in the caller's transaction; throws ChannelAlreadyExistsError when it already exists. */
 async function insertChannelInTransaction(
   dbClient: PgQueryClient,
   channel: Database['public']['Tables']['channels']['Insert'],
@@ -237,18 +247,15 @@ async function insertChannelInTransaction(
   }
   // Column names are from the closed list above; request data is always a value.
   const columns = channelInsertColumns.filter(column => channelValues[column] !== undefined)
-  const result = await dbClient.query<{ id: string | number, public: boolean }>(
-    `INSERT INTO public.channels (${columns.join(', ')})
-     VALUES (${columns.map((_, index) => `$${index + 1}`).join(', ')})
-     RETURNING id, public`,
+  const insert = buildChannelInsertOrExistingSql(
+    columns,
     columns.map(column => channelValues[column]),
+    channel.app_id,
+    channel.name,
   )
-  const createdChannel = result.rows[0]
-  const channelId = Number(createdChannel?.id)
-  if ((result.rowCount ?? 0) !== 1 || !Number.isSafeInteger(channelId) || typeof createdChannel?.public !== 'boolean') {
-    throw new Error('Channel insert returned no row')
-  }
-  return { id: channelId, public: createdChannel.public }
+  const result = await dbClient.query(insert.text, insert.values)
+  const createdChannel = resolveChannelInsert(result.rows as Parameters<typeof resolveChannelInsert>[0])
+  return { id: createdChannel.id, public: createdChannel.public }
 }
 
 async function findVersionInTransaction(dbClient: PgQueryClient, appId: string, version: string, ownerOrg: string) {
@@ -267,6 +274,7 @@ async function findVersionInTransaction(dbClient: PgQueryClient, appId: string, 
   return result.rows[0].id
 }
 
+/** Creates a channel and promotes `versionName` to it in one transaction, rolling back on any failure. */
 async function createAndPromoteChannelInTransaction(
   c: Context<MiddlewareKeyVariables>,
   channel: Database['public']['Tables']['channels']['Insert'],
@@ -283,12 +291,9 @@ async function createAndPromoteChannelInTransaction(
   let transactionStarted = false
   try {
     dbClient = await checkoutPgClient(pgClient)
-    await dbClient.query('BEGIN')
+    await beginWriteTransaction(dbClient)
     transactionStarted = true
-    await dbClient.query(
-      'SELECT set_config(\'request.headers\', $1, true)',
-      [JSON.stringify({ capgkey: effectiveApikey })],
-    )
+    await setRequestApikeyHeader(dbClient, effectiveApikey)
 
     const drizzle = getDrizzleClient(dbClient as unknown as Awaited<ReturnType<typeof getPgClient>>) as DrizzleClient
     const canCreateChannel = await checkPermissionPg(
@@ -324,7 +329,7 @@ async function createAndPromoteChannelInTransaction(
         // Preserve the original database error when rollback itself fails.
       }
     }
-    if (error instanceof HTTPException)
+    if (error instanceof HTTPException || error instanceof ChannelAlreadyExistsError || isChannelCreationConflict(error))
       throw error
     throwIfChannelUpdatePackageMismatch(error)
     logPgError(c, 'create_and_promote_channel', error)
@@ -336,6 +341,13 @@ async function createAndPromoteChannelInTransaction(
   }
 }
 
+function isChannelCreationConflict(error: unknown): boolean {
+  return error instanceof Error
+    && 'code' in error && error.code === '23505'
+    && 'constraint' in error && error.constraint === 'unique_name_app_id'
+}
+
+/** POST /channel: creates or updates a channel, retrying once as an update when the channel turns out to exist. */
 export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   body = normalizeChannelSet(body)
   if (!body.app_id) {
@@ -344,12 +356,44 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   if (!isValidAppId(body.app_id)) {
     throw simpleError('invalid_app_id', 'App ID must be a reverse domain string', { app_id: body.app_id })
   }
-  const { data: existingChannel } = await supabaseAdmin(c)
-    .from('channels')
-    .select('id, version, rollout_version, public, paused_at')
-    .eq('app_id', body.app_id)
-    .eq('name', body.channel)
-    .maybeSingle()
+  const pg = await getPgClient(c)
+  try {
+    try {
+      return await upsertChannel(c, pg, body, apikey)
+    }
+    catch (error) {
+      // The lookup read a cached or stale "missing" (Hyperdrive caches reads), and the
+      // insert returned the real row instead of failing. Authorize and update that row.
+      if (error instanceof ChannelAlreadyExistsError)
+        return await upsertChannel(c, pg, body, apikey, error.existing)
+      if (!isChannelCreationConflict(error))
+        throw error
+      // A concurrent creator won. Re-read and authorize the existing channel
+      // before applying settings; creation permission alone cannot authorize updates.
+      return await upsertChannel(c, pg, body, apikey)
+    }
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
+/** Authorizes and applies a channel create or update; `knownChannel` skips the lookup when the insert already returned the row. */
+async function upsertChannel(
+  c: Context<MiddlewareKeyVariables>,
+  pg: PgClient,
+  body: ChannelSet,
+  apikey: Database['public']['Tables']['apikeys']['Row'],
+  knownChannel?: ExistingChannel,
+): Promise<Response> {
+  const existingChannel = knownChannel ?? await queryJson<ExistingChannel>(
+    pg,
+    'SELECT id, version, rollout_version, public, paused_at FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+    [body.app_id, body.channel],
+  ).then(rows => rows.length === 1 ? rows[0] : null).catch((error: unknown) => {
+    logPgError(c, 'channel_post_existing_channel', error)
+    throw error
+  })
 
   if (existingChannel) {
     const canUpdateChannel = await checkPermission(c, 'channel.update_settings', { appId: body.app_id, channelId: existingChannel.id })
@@ -368,8 +412,8 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   if (isPublicizing && !(await checkPermission(c, 'app.update_settings', { appId: body.app_id }))) {
     throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel: body.channel })
   }
-  const { data: org, error } = await supabaseAdmin(c).from('apps').select('owner_org').eq('app_id', body.app_id).single()
-  if (error || !org) {
+  const org = await queryJsonOne<{ owner_org: string }>(pg, 'SELECT owner_org FROM public.apps WHERE app_id = $1', [body.app_id]).catch(() => null)
+  if (!org) {
     throw simpleError('invalid_app_id', 'You can\'t access this app', { app_id: body.app_id })
   }
 
@@ -387,7 +431,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
         throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel: body.channel })
       }
       requestedVersionId = requestedVersion
-        ? await findVersion(c, body.app_id, requestedVersion, org.owner_org)
+        ? await findVersion(c, pg, body.app_id, requestedVersion, org.owner_org)
         : null
     }
     else {
@@ -498,7 +542,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   }
 
   if (body.rolloutVersion !== undefined) {
-    channel.rollout_version = body.rolloutVersion ? await resolveVersion(c, body.app_id, body.rolloutVersion, org.owner_org) : null
+    channel.rollout_version = body.rolloutVersion ? await resolveVersion(c, pg, body.app_id, body.rolloutVersion, org.owner_org) : null
   }
 
   if (body.rollback) {

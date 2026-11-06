@@ -2,12 +2,12 @@
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { UpdateDeliveryScope, UpdateDeliveryStatsResponse } from '~/composables/useUpdateDeliveryStats'
 import type { PluginVersionRow } from '~/services/pluginVersionRecommendation'
-import { CategoryScale, Chart, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js'
 import { computed, ref, watch } from 'vue'
-import { Line } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import IconTimer from '~icons/lucide/timer'
+import { Line } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
+import PageHeader from '~/components/PageHeader.vue'
 import Spinner from '~/components/Spinner.vue'
 import { useNativeObserveStats } from '~/composables/useNativeObserveStats'
 import { buildDemoUpdateDeliveryStats, useUpdateDeliveryStats } from '~/composables/useUpdateDeliveryStats'
@@ -36,8 +36,6 @@ const props = withDefaults(defineProps<{
   hidePeriodSelector: false,
   dense: false,
 })
-
-Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend)
 
 const { t } = useI18n()
 const localDays = ref<PeriodDayOption>(7)
@@ -229,30 +227,24 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4" data-testid="update-delivery-latency">
-    <div v-if="!dense" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
-            {{ t('update-delivery-latency') }}
-          </h2>
-          <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
-          <span
-            v-if="forceDemo"
-            class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
-          >
-            {{ t('demo') }}
-          </span>
-        </div>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ t('update-delivery-latency-help') }}
-        </p>
-      </div>
-      <PeriodDaySelector
-        v-if="!hidePeriodSelector && props.days === undefined"
-        :model-value="localDays"
-        @update:model-value="selectPeriod"
-      />
-    </div>
+    <PageHeader v-if="!dense" :title="t('update-delivery-latency')" :description="t('update-delivery-latency-help')">
+      <template #badges>
+        <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
+        <span
+          v-if="forceDemo"
+          class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+        >
+          {{ t('demo') }}
+        </span>
+      </template>
+      <template #actions>
+        <PeriodDaySelector
+          v-if="!hidePeriodSelector && props.days === undefined"
+          :model-value="localDays"
+          @update:model-value="selectPeriod"
+        />
+      </template>
+    </PageHeader>
 
     <div
       v-if="statsLoading && !forceDemo && !stats && !statsError"

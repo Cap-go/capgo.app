@@ -1,11 +1,8 @@
 import type { Context } from 'hono'
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { MiddlewareKeyVariables } from './hono.ts'
-import type { Database } from './supabase.types.ts'
 import { parse } from '@std/semver'
 import { getRuntimeKey } from 'hono/adapter'
 import { CacheHelper } from './cache.ts'
-import { quickError } from './hono.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
 import { isDeprecatedPluginVersion } from './utils.ts'
 
@@ -43,8 +40,6 @@ interface ChannelSelfOverridePayload {
 }
 
 type ChannelSelfContext = Context<MiddlewareKeyVariables>
-type ChannelSelfDeviceClient = SupabaseClient<Database>
-type ChannelSelfOverrideSyncInput = Omit<ChannelSelfOverrideWrite, 'plugin_version'>
 
 function getChannelSelfStore(c: ChannelSelfContext) {
   return c.env?.CHANNEL_SELF_STORE ?? null
@@ -123,34 +118,6 @@ function shouldDeleteChannelSelfOverrideForPluginVersion(pluginVersion: string |
   catch {
     return true
   }
-}
-
-async function getChannelSelfOverridePluginVersion(c: ChannelSelfContext, supabase: ChannelSelfDeviceClient, appId: string, deviceId: string) {
-  const { data, error } = await supabase
-    .from('devices')
-    .select('plugin_version')
-    .eq('app_id', appId)
-    .eq('device_id', deviceId.toLowerCase())
-    .maybeSingle()
-
-  if (error) {
-    quickError(500, 'device_error', 'Error reading device plugin version', { error, app_id: appId, device_id: deviceId })
-  }
-
-  return data?.plugin_version ?? null
-}
-
-export async function syncLegacyChannelSelfOverrideForDevice(c: ChannelSelfContext, supabase: ChannelSelfDeviceClient, override: ChannelSelfOverrideSyncInput) {
-  const pluginVersion = await getChannelSelfOverridePluginVersion(c, supabase, override.app_id, override.device_id)
-  return syncChannelSelfOverride(c, {
-    ...override,
-    plugin_version: pluginVersion,
-  })
-}
-
-export async function syncLegacyChannelSelfOverrideDeleteForDevice(c: ChannelSelfContext, supabase: ChannelSelfDeviceClient, appId: string, deviceId: string) {
-  const pluginVersion = await getChannelSelfOverridePluginVersion(c, supabase, appId, deviceId)
-  return syncChannelSelfOverrideDelete(c, appId, deviceId, pluginVersion)
 }
 
 export async function syncChannelSelfOverride(c: ChannelSelfContext, override: ChannelSelfOverrideWrite) {

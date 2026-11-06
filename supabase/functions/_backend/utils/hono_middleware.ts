@@ -11,9 +11,9 @@ import { throwDatabaseUnavailable } from './pg_auth_lookup.ts'
 import { waitAuthPgRetryJitter } from './pg_auth_retry.ts'
 import { isFreshPgClientRetryError } from './pg_errors.ts'
 import * as schema from './postgres_schema.ts'
-import { isAPIKeyRateLimited, isIPRateLimited, recordAPIKeyUsage, recordFailedAuth } from './rate_limit.ts'
+import { isAPIKeyRateLimited, isIPRateLimited, recordAPIKeyUsage, recordFailedAuth, setAPIKeyRateLimitHeaders, setFailedAuthRateLimitPolicyHeader } from './rate_limit.ts'
 import { buildRateLimitInfo } from './rateLimitInfo.ts'
-import { checkKey, checkKeyById, supabaseAdmin } from './supabase.ts'
+import { checkKey, checkKeyById } from './supabase.ts'
 
 // TODO: make universal middleware who
 //  Accept authorization header (JWT)
@@ -623,8 +623,20 @@ async function applyValidatedSubkeyContext(
   return null
 }
 
+/**
+ * API keys are UUIDs. OAuth clients send them as `Authorization: Bearer <key>` (the MCP OAuth
+ * access token is a Capgo API key), so accept that form wherever a raw key is accepted.
+ */
+function readAuthorizationHeader(c: Context) {
+  const value = c.req.header('authorization')
+  if (!value)
+    return value
+  const bearer = /^Bearer\s+(\S+)$/i.exec(value)
+  return bearer && isUUID(bearer[1]) ? bearer[1] : value
+}
+
 function resolveAuthHeaders(c: Context) {
-  let jwt = c.req.header('authorization')
+  let jwt = readAuthorizationHeader(c)
   let capgkey = c.req.header('capgkey') ?? c.req.header('x-api-key')
 
   if (jwt && isUUID(jwt)) {
@@ -637,8 +649,8 @@ function resolveAuthHeaders(c: Context) {
 }
 
 function resolveKeyHeaders(c: Context) {
-  const capgkeyString = c.req.header('capgkey')
-  const apikeyString = c.req.header('authorization')
+  const capgkeyString = c.req.header('capgkey') ?? c.req.header('x-api-key')
+  const apikeyString = readAuthorizationHeader(c)
   const key = capgkeyString ?? apikeyString
   return { capgkeyString, apikeyString, key }
 }
@@ -650,7 +662,7 @@ async function resolveApiKey(
   readOnly = true,
 ): Promise<PgAuthLookupResult<ApikeyRow>> {
   if (!usePostgres) {
-    const row = await checkKey(c, key, supabaseAdmin(c))
+    const row = await checkKey(c, key)
     if (!row)
       return { kind: 'not_found' }
     return { kind: 'ok', value: row }
@@ -710,7 +722,7 @@ async function resolveSubkey(
   readOnly = true,
 ): Promise<PgAuthLookupResult<ApikeyRow>> {
   if (!usePostgres) {
-    const row = await checkKeyById(c, subkeyId, supabaseAdmin(c), expectedUserId)
+    const row = await checkKeyById(c, subkeyId, expectedUserId)
     if (!row)
       return { kind: 'not_found' }
     return { kind: 'ok', value: row }
@@ -786,7 +798,8 @@ async function foundAPIKey(c: Context, capgkeyString: string) {
   }
 
   // Record API usage first, then check if rate limited
-  await recordAPIKeyUsage(c, apikey.id)
+  const usage = await recordAPIKeyUsage(c, apikey.id)
+  setAPIKeyRateLimitHeaders(c, 'default', usage)
 
   // Check if API key is rate limited after recording usage
   const apiKeyRateLimited = await isAPIKeyRateLimited(c, apikey.id)
@@ -841,6 +854,7 @@ async function foundJWT(c: Context, jwt: string) {
 export function middlewareAuth(options: { preferApiKey?: boolean } = {}) {
   return honoFactory.createMiddleware(async (c, next) => {
     // Check if IP is rate limited due to failed auth attempts
+    setFailedAuthRateLimitPolicyHeader(c)
     const ipRateLimited = await isIPRateLimited(c)
     if (ipRateLimited.limited) {
       return simpleRateLimit({ reason: 'too_many_failed_auth_attempts', ...buildRateLimitInfo(ipRateLimited.resetAt) })
@@ -852,6 +866,8 @@ export function middlewareAuth(options: { preferApiKey?: boolean } = {}) {
       if (res) {
         return res
       }
+      // JWT sessions are not covered by the failed-auth or API key quotas advertised for keys.
+      c.header('RateLimit-Policy', undefined)
     }
     else if (capgkey) {
       const res = await foundAPIKey(c, capgkey)
@@ -926,6 +942,7 @@ export function middlewareKey(
   )
   const subMiddlewareKey = honoFactory.createMiddleware(async (c, next) => {
     // Check if IP is rate limited due to failed auth attempts
+    setFailedAuthRateLimitPolicyHeader(c)
     const ipRateLimited = await isIPRateLimited(c)
     if (ipRateLimited.limited) {
       return simpleRateLimit({ reason: 'too_many_failed_auth_attempts', ...buildRateLimitInfo(ipRateLimited.resetAt) })
@@ -961,7 +978,8 @@ export function middlewareKey(
     }
 
     // Record API usage first, then check if rate limited
-    await recordAPIKeyUsage(c, apikey.id, rateLimitScope)
+    const usage = await recordAPIKeyUsage(c, apikey.id, rateLimitScope)
+    setAPIKeyRateLimitHeaders(c, rateLimitScope, usage)
 
     // Check if API key is rate limited after recording usage
     const apiKeyRateLimited = await isAPIKeyRateLimited(c, apikey.id, rateLimitScope)

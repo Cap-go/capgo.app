@@ -5,7 +5,6 @@ import type { Organization } from '../utils'
 import type { SupportedPackageManager } from './command-execution'
 import type { InitCodeDiff, InitEncryptionPhase, InitEncryptionSummary } from './runtime'
 import type { PackageInstallState } from './updater'
-import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path, { dirname, join } from 'node:path'
 import { chdir, cwd, env, exit, platform, stderr, stdin, stdout } from 'node:process'
@@ -33,17 +32,21 @@ import { doLoginExists, LOGIN_METHOD_OPTIONS, loginInternal } from '../login'
 import { writeOnboardingSupportBundle, writeSupportBundleFiles } from '../onboarding-support'
 import { showReplicationProgress } from '../replicationProgress'
 import { formatRunnerCommand, splitRunnerCommand } from '../runner-command'
+import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from '../run/ios-compatibility'
+import { CliUserError } from '../shared/cli-user-error'
 import { copyToClipboard, revealInFinder } from '../support/clipboard'
 import { contactSupport } from '../support/contact-support'
 import { appendInternalLog, getInternalLogPath, startInternalLog } from '../support/internal-log'
 import { uploadSupportLogs } from '../support/support-upload'
-import { canPromptInteractively, consoleWebUrl, createSupabaseClient, defaultApiHost, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, hasCliPermission, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
+import { canPromptInteractively, consoleWebUrl, createCapgoClient, defaultApiHost, fetchOrganizations, findBuildCommandForProjectType, findMainFile, findMainFileForProjectType, findProjectRoot, findProjectType, findRoot, findSavedKeySilent, formatError, getAllPackagesDependencies, getAppId, getBundleVersion, getConfig, getConfigForWrite, getLocalConfig, getNativeProjectResetAdvice, getOrganizationListWithPermission, getPackageScripts, getPMAndCommand, PACKNAME, projectIsMonorepo, resolveUserIdFromApiKey, setPMAndCommand, updateConfigbyKey, updateConfigUpdater, validateIosUpdaterSync } from '../utils'
 import { buildAppIdConflictSuggestions, isAppAlreadyExistsError } from './app-conflict'
 import { readBuilderOnlyInitAssignment, tryBuilderOnlyInit } from './builder-setup'
 import { loginInitInBrowser, shouldStartInitBrowserLogin } from './browser-login'
 import { selectOnboardingChannel } from './channel-selection'
-import { createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, waitForCommandResult } from './command-execution'
+import { assertNoWindowsCommandLineBreaks, createMissingExecutableError, getAvailablePackageManagers, getMissingPackageManagerExecutable, getPackageManagerInfo, preparePackageManagerCommandEnvironment, probeExecutable, probePackageManagerCommand, resolveExecutableProbeError, spawnCommand as spawn, spawnCommandSync as spawnSync, waitForCommandResult } from './command-execution'
+import { printInitCompletionNotice } from './completion-notice'
 import { reportInitOnboardingStep } from './onboarding-report'
+import { enableInitOtaChecklist } from './ota-checklist'
 import { cancel as pCancel, confirm as pConfirm, intro as pIntro, isCancel as pIsCancel, log as pLog, outro as pOutro, select as pSelect, spinner as pSpinner, text as pText } from './prompts'
 import { finishActiveCliReplay, getActiveCliReplaySessionId, isCliTelemetryDisabled, startInitReplay } from './replay'
 import { appendInitStreamingLine, clearInitStreamingOutput, INIT_CANCEL, pushInitLog, setInitCodeDiff, setInitEncryptionSummary, setInitVersionWarning, startInitStreamingOutput, stopInitInkSession, updateInitStreamingStatus, waitForInitLogSkip, waitForInitStreamingContinue } from './runtime'
@@ -164,7 +167,7 @@ let globalPlatform: 'ios' | 'android' = 'ios'
 let globalDelta = false
 let globalCurrentVersion: string | undefined
 let globalAppId: string | undefined
-let globalSupaHost: string | undefined
+let globalApiHost: string | undefined
 
 export function resolveInitTargetPath(value: string | undefined, label: string, initialCwd = cwd()): string | undefined {
   if (!value)
@@ -718,7 +721,7 @@ async function runInitContactSupport(failureText: string, supportPlatform?: Plat
         return null
       const spinner = pSpinner()
       spinner.start('Uploading your logs to Capgo support…')
-      const r = await uploadSupportLogs({ apiHost: globalSupaHost ?? defaultApiHost, apikey: key, appId: globalAppId, platform: supportPlatform, gzPath })
+      const r = await uploadSupportLogs({ apiHost: globalApiHost ?? defaultApiHost, apikey: key, appId: globalAppId, platform: supportPlatform, gzPath })
       spinner.stop(r ? 'Logs uploaded.' : 'Logs upload unavailable — falling back to attaching the file.')
       return r
     },
@@ -1164,7 +1167,7 @@ async function maybeRunCapacitorInit(projectDir: string, projectType: string, in
     }
 
     spinner.message(`Running: ${pm.runner} cap init "${appName}" "${capacitorAppId}" --web-dir ${webDir}`)
-    const initResult = spawnSync(pm.runner, ['cap', 'init', appName, capacitorAppId, '--web-dir', webDir], { stdio: 'pipe', cwd: projectDir })
+    const initResult = runPackageRunnerSync(pm.runner, ['cap', 'init', appName, capacitorAppId, '--web-dir', webDir], { stdio: 'pipe', cwd: projectDir })
     if (initResult.error)
       throw initResult.error
     if (initResult.status !== 0) {
@@ -1305,7 +1308,7 @@ async function ensureWorkspaceReadyForInit(initialAppId?: string): Promise<strin
 let globalOrgId: string | undefined
 let globalOrgName: string | undefined
 let activeInitTelemetry: ReturnType<typeof createInitTelemetry> | undefined
-let globalReportContext: { apikey: string, supaHost?: string, supaAnon?: string } | undefined
+let globalReportContext: { apikey: string, apiHost?: string } | undefined
 
 function markStepDone(step: number, pathToPackageJson?: string, channelName?: string, status: 'done' | 'skipped' = 'done') {
   try {
@@ -1338,8 +1341,7 @@ function markStepDone(step: number, pathToPackageJson?: string, channelName?: st
     if (globalReportContext?.apikey && globalAppId) {
       const isLastStep = step >= initOnboardingSteps.length
       void reportInitOnboardingStep(globalReportContext.apikey, globalAppId, step, status, {
-        supaHost: globalReportContext.supaHost,
-        supaAnon: globalReportContext.supaAnon,
+        apiHost: globalReportContext.apiHost,
         outcome: isLastStep ? (status === 'skipped' ? 'skipped' : 'completed') : 'in_progress',
       }).catch((error) => {
         pLog.warn(`Cannot report onboarding progress:\n${formatError(error)}`)
@@ -1382,19 +1384,20 @@ export function getResumedOnboardingAccessError(
 }
 
 async function validateResumedOnboardingAccess(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  client: Awaited<ReturnType<typeof createCapgoClient>>,
   apikey: string,
   resume: ResumeResult,
-  hostOptions?: { supaHost?: string, supaAnon?: string },
+  hostOptions?: { apiHost?: string },
 ): Promise<string | undefined> {
   try {
-    const { error: orgError, data: organizations } = await supabase.rpc('get_orgs_v7')
-    if (orgError || !organizations)
+    const httpOptions = { apiHost: hostOptions?.apiHost }
+    const organizations = await fetchOrganizations(apikey, httpOptions, 'org.create_app').catch(() => null)
+    if (!organizations)
       return 'Could not verify whether the saved onboarding organization is still available. Starting fresh.'
 
     const organization = organizations.find(org => org.gid === resume.orgId)
     const hasCreateAppPermission = organization && !resume.appId
-      ? await hasCliPermission(supabase, apikey, 'org.create_app', { orgId: organization.gid })
+      ? organization.allowed === true
       : false
     const hasAppAccess = !organization || !resume.appId
       ? true
@@ -1414,8 +1417,8 @@ async function tryResumeOnboarding(
   apikey: string,
   initialTargets: InitTargetPaths,
   initialCwd: string,
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
-  hostOptions?: { supaHost?: string, supaAnon?: string },
+  client: Awaited<ReturnType<typeof createCapgoClient>>,
+  hostOptions?: { apiHost?: string },
 ): Promise<ResumeResult | undefined> {
   try {
     const rawData = readFileSync(getTmpObjectPath(), 'utf-8')
@@ -1449,7 +1452,7 @@ async function tryResumeOnboarding(
     }
 
     const resume: ResumeResult = { stepDone: step_done, orgId, orgName, appId: savedAppId }
-    const accessError = await validateResumedOnboardingAccess(supabase, apikey, resume, hostOptions)
+    const accessError = await validateResumedOnboardingAccess(client, apikey, resume, hostOptions)
     if (accessError) {
       pLog.warn(accessError)
       cleanupStepsDone()
@@ -1767,8 +1770,8 @@ async function promptForMonorepoRootUploadPaths(
   const packageJson = await askForExistingPackageJsonPath(
     orgId,
     apikey,
-    'Monorepo root package.json path:',
-    join(rootDir, PACKNAME),
+    'Capacitor app package.json path:',
+    currentPackageJson ?? join(findProjectRoot(), PACKNAME),
   )
   const nodeModules = await askForExistingDirectoryPath(
     orgId,
@@ -2130,7 +2133,7 @@ async function ensureCapacitorProjectReady(
       const spinner = pSpinner()
       spinner.start(`Running: ${pm.runner} cap init "${appName}" "${appId}"`)
       try {
-        const initResult = spawnSync(pm.runner, ['cap', 'init', appName, appId], { stdio: 'pipe' as const })
+        const initResult = runPackageRunnerSync(pm.runner, ['cap', 'init', appName, appId], { stdio: 'pipe' as const })
         if (initResult.error)
           throw initResult.error
         if (initResult.status !== 0) {
@@ -2200,8 +2203,8 @@ async function maybeReusePendingOnboardingApp(
   organization: Organization,
   apikey: string,
   appId: string | undefined,
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
-  options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
+  client: Awaited<ReturnType<typeof createCapgoClient>>,
+  options?: Pick<SuperOptions, 'apiHost'>,
 ) {
   const pendingApps = await listPendingOnboardingApps(apikey, organization.gid, options)
   const selectedApp = await selectPendingOnboardingApp(organization.gid, apikey, appId, pendingApps)
@@ -2227,9 +2230,8 @@ async function maybeReusePendingOnboardingApp(
   const cleanupSpinner = pSpinner()
   cleanupSpinner.start(`Preparing ${selectedAppId} for real onboarding`)
   try {
-    await completePendingOnboardingApp(supabase, organization.gid, selectedAppId, apikey, {
-      supaHost: options?.supaHost,
-      supaAnon: options?.supaAnon,
+    await completePendingOnboardingApp(client, organization.gid, selectedAppId, apikey, {
+      apiHost: options?.apiHost,
     })
     cleanupSpinner.stop('Pending onboarding app prepared ✅')
   }
@@ -2248,10 +2250,11 @@ async function maybeReusePendingOnboardingApp(
 }
 
 async function selectOrganizationForInit(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  client: Awaited<ReturnType<typeof createCapgoClient>>,
   apikey: string,
+  httpOptions: { apiHost?: string } = {},
 ): Promise<Organization> {
-  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(supabase, apikey, 'org.create_app')
+  const { allOrganizations, allowedOrganizations } = await getOrganizationListWithPermission(client, apikey, 'org.create_app', httpOptions)
 
   const organizationUidRaw = allowedOrganizations.length > 1
     ? await pSelect({
@@ -2406,18 +2409,17 @@ async function checkPrerequisitesStep(
 type ExistingAppConflictResolution = 'use-existing' | 'recreate' | 'choose-different' | 'not-owned'
 
 async function completeExistingAppPendingOnboarding(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  client: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   appId: string,
   apikey: string,
-  options?: Pick<SuperOptions, 'supaHost' | 'supaAnon'>,
+  options?: Pick<SuperOptions, 'apiHost'>,
 ) {
   const s = pSpinner()
   s.start(`Preparing existing app ${appId}`)
   try {
-    await completePendingOnboardingApp(supabase, organization.gid, appId, apikey, {
-      supaHost: options?.supaHost,
-      supaAnon: options?.supaAnon,
+    await completePendingOnboardingApp(client, organization.gid, appId, apikey, {
+      apiHost: options?.apiHost,
     })
     s.stop('Existing app prepared ✅')
   }
@@ -2428,15 +2430,14 @@ async function completeExistingAppPendingOnboarding(
 }
 
 async function resolveExistingAppConflict(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  client: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   apikey: string,
   appId: string,
   options: SuperOptions,
 ): Promise<ExistingAppConflictResolution> {
   const existingApp: ExistingOrganizationApp | null = await findAppInOrganization(apikey, organization.gid, appId, {
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   if (!existingApp)
     return 'not-owned'
@@ -2453,7 +2454,7 @@ async function resolveExistingAppConflict(
 
   if (useExistingApp === true) {
     if (existingApp.need_onboarding)
-      await completeExistingAppPendingOnboarding(supabase, organization, appId, apikey, options)
+      await completeExistingAppPendingOnboarding(client, organization, appId, apikey, options)
 
     await saveAppIdToCapacitorConfig(appId)
     return 'use-existing'
@@ -2485,11 +2486,11 @@ async function resolveExistingAppConflict(
 }
 
 async function askForReplacementAppId(
-  supabase: Awaited<ReturnType<typeof createSupabaseClient>>,
+  client: Awaited<ReturnType<typeof createCapgoClient>>,
   organization: Organization,
   apikey: string,
   baseAppId: string,
-  hostOptions?: { supaHost?: string, supaAnon?: string },
+  hostOptions?: { apiHost?: string },
 ): Promise<string> {
   const rawSuggestions = buildAppIdConflictSuggestions(baseAppId)
   const existingResults = await checkAppIdsExist(apikey, rawSuggestions, hostOptions)
@@ -2574,9 +2575,9 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
     }
     catch (error) {
       if (isAppAlreadyExistsError(error)) {
-        const supabase = await createSupabaseClient(options.apikey ?? apikey, options.supaHost, options.supaAnon)
+        const client = await createCapgoClient(options.apikey ?? apikey, options.apiHost)
 
-        const conflictResolution = await resolveExistingAppConflict(supabase, organization, apikey, currentAppId, options)
+        const conflictResolution = await resolveExistingAppConflict(client, organization, apikey, currentAppId, options)
         if (conflictResolution === 'use-existing') {
           await markStep(organization.gid, apikey, 'add-app', currentAppId)
           return currentAppId
@@ -2590,9 +2591,8 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
         if (conflictResolution === 'not-owned')
           pLog.error(`❌ App ID "${currentAppId}" is already taken`)
 
-        currentAppId = await askForReplacementAppId(supabase, organization, apikey, currentAppId, {
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
+        currentAppId = await askForReplacementAppId(client, organization, apikey, currentAppId, {
+          apiHost: options.apiHost,
         })
         confirmedAppId = undefined
         pLog.info(`🔄 Trying with new app ID: ${currentAppId}`)
@@ -2605,7 +2605,7 @@ async function addAppStep(organization: Organization, apikey: string, appId: str
   }
 }
 
-async function addChannelStep(orgId: string, apikey: string, appId: string, supabase: Awaited<ReturnType<typeof createSupabaseClient>>, options: SuperOptions) {
+async function addChannelStep(orgId: string, apikey: string, appId: string, client: Awaited<ReturnType<typeof createCapgoClient>>, options: SuperOptions) {
   const pm = getPMAndCommand()
   pLog.success(`✅ App ${appId} added — accessible to all members of your organization`)
   pLog.info(`💡 Keep in mind: Capgo cannot deliver updates to app versions that don’t include Capacitor Updater.`)
@@ -2613,7 +2613,7 @@ async function addChannelStep(orgId: string, apikey: string, appId: string, supa
   pLog.info(`A channel is a release track that controls which users get which updates.`)
   pLog.info(`Most apps only need one: "production". You can add more later.`)
   pLog.info(`Learn more: https://capgo.app/docs/live-updates/channels/`)
-  const channelName = await selectOnboardingChannel(supabase, appId, globalChannelName, {
+  const channelName = await selectOnboardingChannel(client, appId, globalChannelName, {
     reuseChannel: async (name) => {
       const choice = await pSelect({
         message: `A channel named "${name}" already exists, do you want to use it or do you want to create a new channel?`,
@@ -2657,8 +2657,7 @@ async function addChannelStep(orgId: string, apikey: string, appId: string, supa
         await addChannelInternal(name, appId, {
           default: true,
           apikey,
-          supaHost: options.supaHost,
-          supaAnon: options.supaAnon,
+          apiHost: options.apiHost,
         }, true)
         s.stop(`Channel add done ✅`)
       }
@@ -2760,8 +2759,8 @@ async function resolvePackageJsonPath(): Promise<string | null> {
 }
 
 async function getAssistedDependencies() {
-  // here we will assume that getAllPackagesDependencies uses 'findRoot(cwd())' for the first argument
-  const root = join(findRoot(cwd()), PACKNAME)
+
+  const root = join(findProjectRoot(), PACKNAME)
   let packageJsonPath = globalPathToPackageJson ?? root
   let dependencies = await getAllPackagesDependencies(undefined, packageJsonPath)
   if (dependencies.size === 0 || !dependencies.has('@capacitor/core')) {
@@ -3013,7 +3012,7 @@ async function ensureSplashScreenForDirectUpdate(
 }
 
 async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
   let pkgVersion = '1.0.0'
@@ -3099,7 +3098,7 @@ async function addUpdaterStep(orgId: string, apikey: string, appId: string) {
 }
 
 async function addCodeStep(orgId: string, apikey: string, appId: string) {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const resolveProjectFilePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : join(projectDir, filePath)
   const projectType = await findProjectType({ quiet: true, packageJsonPath })
@@ -3265,7 +3264,7 @@ async function addEncryptionStep(orgId: string, apikey: string, appId: string) {
   if (globalCodeDiff) {
     setInitCodeDiff(globalCodeDiff)
   }
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const dependencies = await getAllPackagesDependencies(undefined, packageJsonPath)
   const coreVersion = dependencies.get('@capacitor/core')
@@ -3531,9 +3530,8 @@ async function streamCommandInInitPanel(params: {
   // rendered by Ink rather than surfacing as a bare terminal error.
   startInitStreamingOutput({ title: params.title, command: displayCommand })
 
-  // `pm.runner` can contain a space ("yarn dlx", "pnpm exec"). `spawn`
-  // without `shell:true` can't handle that, and `shell:true` brings
-  // quoting risk, so we split the runner into its own head + tail args.
+  // Split multi-word runners so cross-spawn can escape each argument when
+  // invoking Windows command shims ("yarn dlx", "pnpm exec").
   let runnerCommand: { command: string, args: string[] }
   try {
     runnerCommand = params.command
@@ -3626,7 +3624,7 @@ function promoteEncryptionSummaryToEnabled(): void {
 type PackageManagerInfo = ReturnType<typeof getPMAndCommand>
 export type PlatformChoice = 'ios' | 'android'
 type BuildProjectStepOutcome = 'completed' | 'skipped'
-export type RunDeviceStepOutcome = { args: string[], command: string } | { args: undefined, command: string }
+export type RunDeviceStepOutcome = { args: string[], command: string } | { args: undefined, command: string, manualInstructions?: string }
 
 async function selectAvailablePackageManager(
   detectedPackageManager: PackageManagerInfo,
@@ -3761,6 +3759,25 @@ async function handleMissingBuildScript(buildCommand: string, appId: string, pla
 
   pOutro(`Bye 👋\n💡 Add a "${buildCommand}" script to package.json and run the command again`)
   return await exitAfterFinishingReplay('cancelled', 0)
+}
+
+/**
+ * Updater release that matches the project's Capacitor major, or the reason Capgo cannot be
+ * installed (Capacitor below 5, an unparsable version, an unknown package manager). Used by the
+ * MCP live-update flow, which must stop instead of installing an incompatible @latest.
+ */
+export async function resolveCompatibleUpdaterInstall(packageJsonPath: string, pm: PackageManagerInfo): Promise<{ ok: true, version: string } | { ok: false, error: string }> {
+  try {
+    const dependencies = await getAllPackagesDependencies(undefined, packageJsonPath)
+    const blocker = getUpdaterInstallBlocker(dependencies, pm)
+    if (blocker)
+      return { ok: false, error: blocker }
+    const coreVersion = normalizeConcreteVersion(dependencies.get('@capacitor/core'))!
+    return { ok: true, version: getUpdaterVersionToInstall(coreVersion, false).versionToInstall }
+  }
+  catch (error) {
+    return { ok: false, error: `Cannot read the project's dependencies: ${formatError(error)}` }
+  }
 }
 
 async function getCompatibleUpdaterVersionForPackage(packageJsonPath: string, pm: PackageManagerInfo): Promise<string> {
@@ -3909,7 +3926,7 @@ async function runBuildAndSyncLoop(
   }
 }
 async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, orgId: string, apikey: string, pm: PackageManagerInfo): Promise<BuildProjectStepOutcome> {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const projectType = await findProjectType({ packageJsonPath })
   const buildCommand = await findBuildCommandForProjectType(projectType)
@@ -3924,7 +3941,7 @@ async function runProjectBuildAndSync(appId: string, platform: PlatformChoice, o
 }
 
 async function buildProjectStep(orgId: string, apikey: string, appId: string, platform: 'ios' | 'android', config?: CapacitorConfigSnapshot): Promise<'completed' | 'skipped'> {
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
   const pm = await selectAvailablePackageManager(getPMAndCommand(), projectDir, orgId, apikey)
   await ensureNativePlatformForBuild(platform, config, pm.runner, projectDir)
@@ -3962,6 +3979,7 @@ interface InheritedCommandOptions {
 }
 
 export async function runInheritedCommand(command: string, args: string[], options: InheritedCommandOptions = {}): Promise<InheritedCommandResult> {
+  assertNoWindowsCommandLineBreaks(command, args)
   if (options.forcePty || (stdin.isTTY && stdout.isTTY))
     return runPtyInheritedCommand(command, args, options)
   return runPipedInheritedCommand(command, args, options)
@@ -4396,6 +4414,15 @@ async function handleMissingSimulatorIosRunTargets(cancelHandler: RunDeviceCance
 }
 
 async function selectSimulatorIosRunTarget(cancelHandler: RunDeviceCancelHandler, pm: PackageManagerInfo, initialTargets?: CapacitorRunTarget[], projectDir = cwd()): Promise<RunDeviceStepOutcome> {
+  const compatibility = checkIosSimulatorCompatibility(projectDir)
+  if (compatibility.kind === 'unsupported') {
+    return {
+      args: undefined,
+      command: formatRunnerCommand(pm.runner, ['cap', 'open', 'ios']),
+      manualInstructions: formatIosSimulatorGuidance(compatibility),
+    }
+  }
+
   let knownTargets = initialTargets
 
   while (true) {
@@ -4613,6 +4640,16 @@ async function runDeviceStep(orgId: string, apikey: string, appId: string, platf
 
   const runCommand = await resolveRunDeviceCommand(() => exitCanceledInitOnboarding(orgId, apikey), pm, platform, projectDir)
   if (!runCommand.args) {
+    if (runCommand.manualInstructions) {
+      pLog.warn(runCommand.manualInstructions)
+      pLog.info(`From ${projectDir}, open Xcode with: ${runCommand.command}`)
+      const running = await pConfirm({ message: 'Have you run the baseline app from Xcode and confirmed it opens?' })
+      await cancelCommand(running, orgId, apikey)
+      if (!running)
+        throw new CliUserError('Run the baseline app from Xcode, then resume onboarding before testing OTA updates.')
+      await markStep(orgId, apikey, 'run-device', appId)
+      return 'completed'
+    }
     pLog.info(`Skipped device launch. You can run it manually in ${projectDir} with: ${runCommand.command}`)
     await markStep(orgId, apikey, 'run-device', appId)
     return 'skipped'
@@ -4704,7 +4741,7 @@ async function addCodeChangeStep(orgId: string, apikey: string, appId: string, p
   pLog.info(`🎯 Now let's test Capgo by making a visible change and deploying an update!`)
   // Keep any restored auto-test change metadata on resume so step 12 can
   // still offer cleanup after an interrupted step-9 flow.
-  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  const packageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   const projectDir = dirname(packageJsonPath)
 
   const modificationType = await pSelect({
@@ -5035,18 +5072,7 @@ async function uploadStep(orgId: string, apikey: string, appId: string, newVersi
       s.start(`Running: ${pm.runner} @capgo/cli@latest bundle upload ${delta ? '--delta-only' : ''}`)
       if (isMonorepo && !warnedMonorepo) {
         warnedMonorepo = true
-        pLog.warn('This project looks like a monorepo. Bundle upload needs the monorepo root package.json and the hoisted root node_modules folder.')
         pLog.info(MONOREPO_ROOT_PATHS_NOTE)
-        pLog.warn(`Example: ${pm.runner} @capgo/cli@latest bundle upload --package-json ./package.json --node-modules ./node_modules ${delta ? '--delta-only' : ''}`)
-        nodeModulesPath ||= join(findRoot(cwd()), 'node_modules')
-        pLog.warn(`Using monorepo root node_modules path: ${nodeModulesPath}`)
-        const firstNodeModulesPath = nodeModulesPath.split(',')[0]?.trim()
-        if (firstNodeModulesPath && !existsSync(firstNodeModulesPath)) {
-          s.stop('Upload blocked ❌')
-          pLog.error('Monorepo root node_modules path does not exist')
-          nodeModulesPath = await askForExistingDirectoryPath(orgId, apikey, 'Monorepo root node_modules path:', nodeModulesPath)
-          continue
-        }
       }
 
       globalNodeModulesPath = nodeModulesPath
@@ -5238,7 +5264,7 @@ async function maybeInstallCapgoSkills() {
   spinner.start(`Running: ${installCommand}`)
 
   try {
-    const result = spawnSync(pm.runner, ['skills', 'add', capgoSkillsRepository, '-g', '-y'], {
+    const result = runPackageRunnerSync(pm.runner, ['skills', 'add', capgoSkillsRepository, '-g', '-y'], {
       stdio: 'pipe',
       encoding: 'utf8',
     })
@@ -5250,7 +5276,7 @@ async function maybeInstallCapgoSkills() {
 
     spinner.stop('Capgo skills install failed ❌')
     const commandError = [result.stderr, result.stdout]
-      .find(value => typeof value === 'string' && value.trim().length > 0)
+      .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
       ?.trim()
     pLog.warn(`Could not install Capgo skills automatically: ${commandError || 'Unknown error'}`)
     pLog.info(`Run it yourself with: "${installCommand}"`)
@@ -5370,7 +5396,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   globalConfigLoadDir = initialTargets.configLoadDir
   globalMainFilePath = initialTargets.mainFilePath
   setConfigWriteTarget(initialTargets.capacitorConfigPath)
-  globalSupaHost = options.supaHost // honor --supa-host for the support-logs upload
+  globalApiHost = options.apiHost // honor --api-host for the support-logs upload
   const pm = getPMAndCommand()
   const commandInput = resolveInitCommandInput(apikeyCommand, appId, options.apikey)
   options.apikey = commandInput.apikey ?? ''
@@ -5378,8 +5404,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   startInitReplay({
     analyticsEnabled,
     apikey: options.apikey?.trim() || findSavedKeySilent(),
-    supaAnon: options.supaAnon,
-    supaHost: options.supaHost,
+    apiHost: options.apiHost,
   })
   // Start the verbose internal log early so it captures the whole run (incl.
   // raw provider/API errors) and survives crashes for the support bundle.
@@ -5391,7 +5416,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   if (!options.apikey)
     options.apikey = findSavedKeySilent() ?? ''
 
-  const supportsBrowserLogin = !options.local && !options.supaHost && !options.supaAnon
+  const supportsBrowserLogin = !options.local && !options.apiHost
   let authenticatedViaLoginPrompt = false
   if (shouldStartInitBrowserLogin(options.apikey, supportsBrowserLogin && canPromptInteractively({ silent: options.silent }))) {
     const loginMethod = await pSelect<LoginMethod>({
@@ -5415,8 +5440,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     if (loginMethod === 'browser') {
       options.apikey = await loginInitInBrowser({
         local: options.local,
-        supaHost: options.supaHost,
-        supaAnon: options.supaAnon,
+        apiHost: options.apiHost,
       }, {
         promptForKey: promptForInitApiKey,
         writeUrl: message => pLog.info(message),
@@ -5447,12 +5471,13 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
 
-  const supabase = await createSupabaseClient(options.apikey, options.supaHost, options.supaAnon)
-  await resolveUserIdFromApiKey(supabase, options.apikey)
+  const client = await createCapgoClient(options.apikey, options.apiHost)
+  await resolveUserIdFromApiKey(client, options.apikey)
   flushDeferredCommandInvocation(options.apikey)
   activeInitTelemetry?.setAuth('', options.apikey)
 
-  const handoffBuilderOnlySetup = (targetAppId: string | undefined, projectDir = initialCwd) => tryBuilderOnlyInit(targetAppId, options, {
+  const handoffBuilderOnlySetup = (targetAppId: string | undefined, projectDir = initialCwd, knownBuilderOnly = false) => tryBuilderOnlyInit(targetAppId, options, {
+    knownBuilderOnly,
     warn: pLog.warn,
     beforeLaunch: async () => {
       await finishActiveCliReplay()
@@ -5469,9 +5494,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   if (await handoffBuilderOnlySetup(assignmentAppId, initialProjectDir))
     return
 
-  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, supabase, {
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+  let resumed = await tryResumeOnboarding(options.apikey, initialTargets, initialCwd, client, {
+    apiHost: options.apiHost,
   })
   // A saved OTA checkpoint can target a different app from the local config.
   // Recheck its authoritative assignment before resuming any OTA work.
@@ -5484,7 +5508,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   const initialAppId = await ensureWorkspaceReadyForInit(appId) ?? appId
   appId = initialAppId
-  let selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  let selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   let selectedProjectDir = dirname(selectedPackageJsonPath)
   const versionStatus = await checkVersionStatus()
   if (versionStatus.isOutdated) {
@@ -5493,9 +5517,13 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
 
   let extConfig: Awaited<ReturnType<typeof getConfig>> | undefined
   const reloadSelectedProjectConfig = async () => {
-    selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+    selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
     selectedProjectDir = dirname(selectedPackageJsonPath)
-    if (!options.supaAnon || !options.supaHost) {
+    // Custom Capgo backend (--api-host): remember it in capacitor config so later
+    // commands use it too. Updater endpoints (updateUrl, statsUrl, channelUrl) stay
+    // the user's choice: the API host does not have to serve them.
+    const customApi = options.apiHost
+    if (!customApi) {
       try {
         extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => getConfig())
       }
@@ -5505,13 +5533,8 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
     else {
       extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => updateConfigUpdater({
-        statsUrl: `${options.supaHost}/functions/v1/stats`,
-        channelUrl: `${options.supaHost}/functions/v1/channel_self`,
-        updateUrl: `${options.supaHost}/functions/v1/updates`,
-        localApiFiles: `${options.supaHost}/functions/v1`,
-        localS3: true,
-        localSupa: options.supaHost,
-        localSupaAnon: options.supaAnon,
+        localApi: customApi,
+        localApiFiles: options.filesHost || customApi,
       }))
     }
   }
@@ -5639,45 +5662,51 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   }
 
   let organization: Organization
+  const httpOptions = { apiHost: options.apiHost }
   if (resumed) {
     const resumedSnapshot = resumed
     // Fetch orgs to validate the saved one still exists and is accessible
-    const { error: orgError, data: allOrganizations } = await supabase.rpc('get_orgs_v7')
-    if (orgError || !allOrganizations) {
-      pLog.error(`Cannot verify organization access: ${orgError ? JSON.stringify(orgError) : 'no data returned'}`)
+    let allOrganizations: Array<Organization & { allowed?: boolean }> | null = null
+    try {
+      allOrganizations = await fetchOrganizations(options.apikey, httpOptions, 'org.create_app')
+    }
+    catch (orgError) {
+      pLog.error(`Cannot verify organization access: ${orgError instanceof Error ? orgError.message : String(orgError)}`)
+    }
+    if (!allOrganizations) {
       pLog.warn('Falling back to organization selection.')
-      organization = await selectOrganizationForInit(supabase, options.apikey)
+      organization = await selectOrganizationForInit(client, options.apikey, httpOptions)
       await discardResumedState()
     }
     else {
       const savedOrg = allOrganizations.find(org => org.gid === resumedSnapshot.orgId)
       const blocked2fa = savedOrg?.enforcing_2fa && !savedOrg['2fa_has_access']
       const hasCreateAppPermission = savedOrg && !resumedSnapshot.appId
-        ? await hasCliPermission(supabase, options.apikey, 'org.create_app', { orgId: savedOrg.gid })
+        ? savedOrg.allowed === true
         : false
       const hasAppAccess = !savedOrg || !resumedSnapshot.appId
         ? true
-        : Boolean(await findAppInOrganization(options.apikey, savedOrg.gid, resumedSnapshot.appId, { supaHost: options.supaHost, supaAnon: options.supaAnon }).catch(() => null))
+        : Boolean(await findAppInOrganization(options.apikey, savedOrg.gid, resumedSnapshot.appId, { apiHost: options.apiHost }).catch(() => null))
 
       if (!savedOrg) {
         pLog.warn(`Previously used organization "${resumedSnapshot.orgName}" is no longer available. Please select a new one.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(client, options.apikey, httpOptions)
         await discardResumedState()
       }
       else if (blocked2fa) {
         pLog.warn(`Organization "${savedOrg.name}" now requires 2FA. Enable it at ${consoleWebUrl('/settings/account')}`)
         pLog.warn('Please select a different organization or enable 2FA and try again.')
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(client, options.apikey, httpOptions)
         await discardResumedState()
       }
       else if (!hasAppAccess) {
         pLog.warn(`Previously used app "${resumedSnapshot.appId}" is no longer available. Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(client, options.apikey, httpOptions)
         await discardResumedState()
       }
       else if (!hasCreateAppPermission && !resumedSnapshot.appId) {
         pLog.warn(`You no longer have permission to create an app in "${savedOrg.name}". Please select a different organization.`)
-        organization = await selectOrganizationForInit(supabase, options.apikey)
+        organization = await selectOrganizationForInit(client, options.apikey, httpOptions)
         await discardResumedState()
       }
       else {
@@ -5687,7 +5716,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     }
   }
   else {
-    organization = await selectOrganizationForInit(supabase, options.apikey)
+    organization = await selectOrganizationForInit(client, options.apikey, httpOptions)
   }
 
   const orgId = organization.gid
@@ -5696,8 +5725,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   globalOrgName = organization.name
   globalReportContext = {
     apikey: options.apikey,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   }
 
   if (resumed?.appId) {
@@ -5706,15 +5734,15 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
     activeInitTelemetry?.setScope(appId)
   }
 
-  const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, supabase, options)
+  const pendingOnboardingSelection = await maybeReusePendingOnboardingApp(organization, options.apikey, appId, client, options)
   appId = pendingOnboardingSelection.appId ?? appId
   if (appId)
     globalAppId = appId
   activeInitTelemetry?.setScope(appId)
-  if (pendingOnboardingSelection.builderOnly && await handoffBuilderOnlySetup(appId, selectedProjectDir))
+  if (pendingOnboardingSelection.builderOnly && await handoffBuilderOnlySetup(appId, selectedProjectDir, true))
     return
   await ensureCapacitorProjectReady(orgId, options.apikey, appId, pendingOnboardingSelection.pendingApp)
-  selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+  selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
   selectedProjectDir = dirname(selectedPackageJsonPath)
 
   if (pendingOnboardingSelection.reusedPendingApp) {
@@ -5748,12 +5776,17 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       activeInitTelemetry?.setScope(appId)
       if (await handoffBuilderOnlySetup(appId, selectedProjectDir))
         return
-      markStepDone(1)
     }
+
+    // Match the OTA flow actually entered, including the existing fallback when
+    // optional assignment detection fails. Positive Builder handoffs return above.
+    await enableInitOtaChecklist(appId, options, undefined, pLog.warn)
+    if (stepToSkip < 1)
+      markStepDone(1)
 
     if (stepToSkip < 2) {
       renderCurrentStep(2)
-      channelName = await addChannelStep(orgId, options.apikey, appId, supabase, options)
+      channelName = await addChannelStep(orgId, options.apikey, appId, client, options)
       globalChannelName = channelName
       markStepDone(2, undefined, channelName)
     }
@@ -5766,7 +5799,7 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
       delta = res.delta
       globalCurrentVersion = currentVersion
       globalDelta = delta
-      selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findRoot(cwd()), PACKNAME))
+      selectedPackageJsonPath = path.resolve(globalPathToPackageJson ?? join(findProjectRoot(), PACKNAME))
       selectedProjectDir = dirname(selectedPackageJsonPath)
       try {
         extConfig = await withTemporaryCwd(getInitConfigLoadDir(selectedProjectDir), () => getConfig())
@@ -5889,5 +5922,6 @@ export async function initApp(apikeyCommand: string, appId: string, options: Sup
   const didChooseSkills = await maybeInstallCapgoSkills()
   await maybeStarCapgoRepo(didChooseSkills).catch(error => pLog.warn(`Cannot offer GitHub support actions: ${formatError(error)}`))
   pOutro(`Bye 👋`)
+  await printInitCompletionNotice(appId, client, localConfig.hostWeb, options)
   return await exitAfterFinishingReplay('completed', 0)
 }

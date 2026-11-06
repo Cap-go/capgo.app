@@ -7,6 +7,7 @@ import {
   isCliAiQuery,
   isCliLoginPath,
   isMatchingCliLoginEvent,
+  isAgentClaimPath,
   isMcpAuthorizePath,
   isValidCliLoginSession,
   mcpOAuthKeyExpiresAt,
@@ -358,5 +359,7 @@ describe('mCP OAuth key model', () => {
     expect(mcpOAuthKeyName('  ')).toBe('MCP · client')
     expect(isMcpAuthorizePath('/oauth/authorize/')).toBe(true)
     expect(isMcpAuthorizePath('/oauth')).toBe(false)
+    expect(isAgentClaimPath('/agent/claim/')).toBe(true)
+    expect(isAgentClaimPath('/agent')).toBe(false)
   })
 })

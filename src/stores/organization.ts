@@ -1,11 +1,12 @@
-import type { AuthChangeEvent } from '@supabase/supabase-js'
 import type { ComputedRef, Ref } from 'vue'
-import type { Database } from '~/types/supabase.types'
+import type { AuthChangeEvent } from '~/services/consoleClient'
+import type { Database } from '~/types/database.types'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { stripeEnabled, useConsole } from '~/services/console'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { clearSimulatorSessions } from '~/services/simulatorSessions'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
-import { stripeEnabled, useSupabase } from '~/services/supabase'
 import { clearWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 import { useDashboardAppsStore } from './dashboardApps'
@@ -134,7 +135,7 @@ function isSelectableOrganization(org: Pick<Organization, 'is_invite' | 'role'>)
   return !isPendingOrganizationInvite(org)
 }
 
-const supabase = useSupabase()
+const capgo = useConsole()
 
 export const useOrganizationStore = defineStore('organization', () => {
   const main = useMainStore()
@@ -300,17 +301,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     if (!app)
       return
 
-    const nextApp = { ...app, ...patch }
-    const nextAppsByAppId = new Map(_appsByAppId.value)
-    nextAppsByAppId.set(appId, nextApp)
-
-    const nextAppsByOrgId = new Map(_appsByOrgId.value)
-    const orgApps = nextAppsByOrgId.get(nextApp.owner_org)
-    if (orgApps)
-      nextAppsByOrgId.set(nextApp.owner_org, orgApps.map(orgApp => orgApp.app_id === appId ? nextApp : orgApp))
-
-    _appsByAppId.value = nextAppsByAppId
-    _appsByOrgId.value = nextAppsByOrgId
+    Object.assign(app, patch)
   }
 
   const loadOrganizationAppIcon = async (app: OrganizationApp, run: number) => {
@@ -374,6 +365,7 @@ export const useOrganizationStore = defineStore('organization', () => {
   watch([currentOrganization, stripeEnabled], async ([currentOrganizationRaw, stripeEnabledValue], [previousOrganization]) => {
     if (!currentOrganizationRaw) {
       currentRole.value = null
+      useDashboardAppsStore().reset()
       localStorage.removeItem(STORAGE_KEY)
       return
     }
@@ -395,11 +387,8 @@ export const useOrganizationStore = defineStore('organization', () => {
       const displayStore = useDisplayStore()
       displayStore.clearCachesForOrg(currentOrganizationRaw.gid)
 
-      // Reset and refetch dashboard apps for the new org
       const dashboardAppsStore = useDashboardAppsStore()
-      dashboardAppsStore.reset()
-      // Fetch apps for the new org - don't await to avoid blocking other operations
-      dashboardAppsStore.fetchApps(true)
+      dashboardAppsStore.fetchApps()
     }
 
     // Always fetch last 30 UTC days of data and filter client-side for billing period
@@ -427,7 +416,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
 
     const appIconLoadRun = ++organizationAppIconLoadRun
-    const { error, data: allAppsByOwner } = await supabase
+    const { error, data: allAppsByOwner } = await capgo
       .from('apps')
       .select('app_id, name, owner_org, need_onboarding, icon_url, onboarding')
       .in('owner_org', orgIds)
@@ -560,7 +549,7 @@ export const useOrganizationStore = defineStore('organization', () => {
 
     const refreshGen = ++appsOnboardingRefreshGen
     const writeGenSnapshot = new Map(appOnboardingWriteGen)
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('apps')
       .select('app_id, onboarding, need_onboarding')
       .in('owner_org', orgIds)
@@ -625,7 +614,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     if (!currentOrgId)
       return []
 
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .rpc('get_org_members', {
         guild_id: currentOrgId,
       })
@@ -662,11 +651,17 @@ export const useOrganizationStore = defineStore('organization', () => {
       return
 
     main.invalidatePlatformAdminStatus()
+    // Independent of the organization list: request it alongside get_orgs_v7, not after it.
+    main.resolvePlatformAdminStatus()
+      .catch((error) => {
+        console.error('Failed to resolve platform admin status:', error)
+      })
 
     if (!_initialized.value) {
-      const listener = supabase.auth.onAuthStateChange((event: AuthChangeEvent) => {
+      const listener = capgo.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
           listener.data.subscription.unsubscribe()
+          clearSimulatorSessions()
           clearWebsitePaidUserCookie()
           // Remove all from orgs
           _organizations.value = new Map()
@@ -683,7 +678,7 @@ export const useOrganizationStore = defineStore('organization', () => {
 
     // We have RLS that ensure that we only select rows where we are member or owner
     // Using get_orgs_v7 which includes 2FA and password policy fields
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .rpc('get_orgs_v7')
 
     if (error) {
@@ -706,10 +701,6 @@ export const useOrganizationStore = defineStore('organization', () => {
     })
 
     syncWebsitePaidUserCookieFromOrganizations(mappedData)
-    main.resolvePlatformAdminStatus()
-      .catch((error) => {
-        console.error('Failed to resolve platform admin status:', error)
-      })
     _organizations.value = new Map(mappedData.map(item => [item.gid, item as Organization]))
     if (loadImages)
       void loadOrganizationLogos(mappedData, logoLoadRun)
@@ -831,7 +822,7 @@ export const useOrganizationStore = defineStore('organization', () => {
 
   // Check password policy compliance for all org members in org admin previews.
   const checkPasswordPolicyImpact = async (orgId: string) => {
-    const { data, error } = await supabase.rpc('check_org_members_password_policy', {
+    const { data, error } = await capgo.rpc('check_org_members_password_policy', {
       org_id: orgId,
     })
 
@@ -870,7 +861,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       return { data: null, error: new Error('Insufficient permissions') }
     }
 
-    const { data, error } = await supabase.from('orgs')
+    const { data, error } = await capgo.from('orgs')
       .delete()
       .eq('id', orgId)
 

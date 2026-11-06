@@ -34,9 +34,39 @@ vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
   supabaseAdmin: mockedSupabaseAdmin,
 }))
 
-function createContext() {
+// stripe.ts / stripe_billing.ts now query Postgres directly; replay those reads on the
+// supabase-js style mockedSupabaseAdmin so each case keeps its fixture.
+async function replayOnSupabaseAdmin(text: string, values: unknown[] = []) {
+  const admin = mockedSupabaseAdmin()
+  const unwrap = ({ data, error }: { data: unknown, error: unknown }) => {
+    if (error)
+      throw error
+    return data ? [data] : []
+  }
+  if (text.includes('FROM public.stripe_info'))
+    return unwrap(await admin.from('stripe_info').select('billing_account').eq('customer_id', values[0]).maybeSingle())
+  if (text.includes('SELECT * FROM public.plans'))
+    return unwrap(await admin.from('plans').select('*').or(`stripe_id.eq.${values[0]},stripe_id_us.eq.${values[0]}`).maybeSingle())
+  if (text.includes('FROM public.plans'))
+    return unwrap(await admin.from('plans').select('price_m_id').or(`stripe_id.eq.${values[0]},stripe_id_us.eq.${values[0]}`).single())
+  throw new Error(`unexpected query ${text}`)
+}
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/pg_rls.ts')>(),
+  withRlsContext: async (_c: unknown, _principal: unknown, run: (client: unknown) => Promise<unknown>) => run({
+    // queryJson wraps the statement in `WITH q AS (...)` and reads `row`.
+    query: async (text: string, values?: unknown[]) => {
+      const rows = await replayOnSupabaseAdmin(text, values)
+      return { rows: text.startsWith('WITH q AS') ? rows.map(row => ({ row })) : rows }
+    },
+  }),
+}))
+
+function createContext(country = 'FR') {
   return {
     get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
+    req: { raw: { cf: { country } }, header: () => undefined },
   } as any
 }
 
@@ -52,6 +82,14 @@ function createPriceList(recurringInterval = 'month', type = 'recurring') {
       type,
     },
   ]
+}
+
+// createCheckout reads the plan price currencies and the customer's pinned currency.
+function subscriptionCheckoutMocks(customerCurrency: string | null = null, currencyOptions: Record<string, { unit_amount: number }> = { usd: { unit_amount: 1400 } }) {
+  return {
+    retrievePrice: vi.fn().mockResolvedValue({ id: 'price_1', currency: 'usd', unit_amount: 1400, currency_options: currencyOptions }),
+    customers: { retrieve: vi.fn().mockResolvedValue({ id: 'cus_123', currency: customerCurrency }) },
+  }
 }
 
 function mockBillingAccountLookup(billingAccount = 'ee') {
@@ -77,6 +115,7 @@ function mockBillingAccountLookup(billingAccount = 'ee') {
 
 afterEach(() => {
   delete mockedEnv.STRIPE_API_BASE_URL
+  delete mockedEnv.STRIPE_PUBLISHABLE_KEY
   mockedEnv.ENV = 'local'
   mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
   mockedSupabaseAdmin.mockReset()
@@ -178,10 +217,13 @@ describe('stripe redirect URL allowlist', () => {
 
   it('allows same-origin success and cancel URLs for checkout', async () => {
     const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/pay' })
+    const mocks = subscriptionCheckoutMocks()
     const stripeClient = {
       prices: {
         list: vi.fn().mockResolvedValue({ data: createPriceList() }),
+        retrieve: mocks.retrievePrice,
       },
+      customers: mocks.customers,
       checkout: {
         sessions: {
           create: createSession,
@@ -201,13 +243,15 @@ describe('stripe redirect URL allowlist', () => {
       'prod_test',
       '/app/success',
       '/app/cancel',
-      'org_123',
-      'legacy_visitor_123',
       {
-        visitorId: 'visitor_123',
-        sessionId: 'session_123',
+        clientReferenceId: 'org_123',
+        attributionId: 'legacy_visitor_123',
+        datafastAttribution: {
+          visitorId: 'visitor_123',
+          sessionId: 'session_123',
+        },
+        affonsoReferral: 'affonso_ref_123',
       },
-      'affonso_ref_123',
     )
 
     expect(result.url).toBe('https://pay.capgo.test/p/pay')
@@ -228,12 +272,108 @@ describe('stripe redirect URL allowlist', () => {
     }))
   })
 
+  it('creates an embedded checkout session when a publishable key is configured', async () => {
+    mockedEnv.STRIPE_PUBLISHABLE_KEY = 'pk_test_123'
+    const createSession = vi.fn().mockResolvedValue({ id: 'cs_test_123', url: null, client_secret: 'cs_test_123_secret' })
+    vi.mocked(Stripe).mockImplementation(function () {
+      const mocks = subscriptionCheckoutMocks()
+      return {
+        prices: { list: vi.fn().mockResolvedValue({ data: createPriceList() }), retrieve: mocks.retrievePrice },
+        customers: mocks.customers,
+        checkout: { sessions: { create: createSession } },
+      }
+    } as any)
+
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const result = await createCheckout(createContext(), 'cus_123', 'month', 'prod_test', '/app/success', '/app/cancel', { embedded: true })
+
+    expect(result).toEqual({ url: null, clientSecret: 'cs_test_123_secret', publishableKey: 'pk_test_123', sessionId: 'cs_test_123' })
+    const params = createSession.mock.calls[0][0]
+    expect(params).toMatchObject({
+      ui_mode: 'embedded_page',
+      redirect_on_completion: 'if_required',
+      return_url: 'https://capgo.test/app/success?success=true&session_id={CHECKOUT_SESSION_ID}',
+    })
+    expect(params).not.toHaveProperty('success_url')
+    expect(params).not.toHaveProperty('cancel_url')
+  })
+
+  it('checks out in the selected Stripe currency, and keeps a billed customer on theirs', async () => {
+    const createSession = vi.fn().mockResolvedValue({ id: 'cs_test_123', url: 'https://pay.capgo.test/p/pay' })
+    let customerCurrency: string | null = null
+    vi.mocked(Stripe).mockImplementation(function () {
+      const mocks = subscriptionCheckoutMocks(customerCurrency, { usd: { unit_amount: 1400 }, eur: { unit_amount: 1400 } })
+      return {
+        prices: { list: vi.fn().mockResolvedValue({ data: createPriceList() }), retrieve: mocks.retrievePrice },
+        customers: mocks.customers,
+        checkout: { sessions: { create: createSession } },
+      }
+    } as any)
+
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const checkout = (currency?: string, country = 'FR') => createCheckout(createContext(country), 'cus_123', 'month', 'prod_test', '/app/success', '/app/cancel', { currency })
+
+    await checkout('EUR')
+    expect(createSession.mock.calls.at(-1)?.[0]).toMatchObject({ currency: 'eur' })
+    await checkout('usd')
+    expect(createSession.mock.calls.at(-1)?.[0]).toMatchObject({ currency: 'usd' })
+    await checkout()
+    expect(createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('currency')
+    await expect(checkout('gbp', 'GB')).rejects.toMatchObject({ cause: { error: 'invalid_currency' } })
+    // Any currency the price is sold in, wherever the visitor is.
+    await checkout('eur', 'IN')
+    expect(createSession.mock.calls.at(-1)?.[0]).toMatchObject({ currency: 'eur' })
+
+    customerCurrency = 'usd'
+    await checkout()
+    expect(createSession.mock.calls.at(-1)?.[0]).toMatchObject({ currency: 'usd' })
+    await expect(checkout('eur')).rejects.toMatchObject({ cause: { error: 'currency_locked' } })
+  })
+
+  it('keeps hosted checkout when embedded is requested without a publishable key', async () => {
+    const createSession = vi.fn().mockResolvedValue({ id: 'cs_test_123', url: 'https://pay.capgo.test/p/pay' })
+    vi.mocked(Stripe).mockImplementation(function () {
+      const mocks = subscriptionCheckoutMocks()
+      return {
+        prices: { list: vi.fn().mockResolvedValue({ data: createPriceList() }), retrieve: mocks.retrievePrice },
+        customers: mocks.customers,
+        checkout: { sessions: { create: createSession } },
+      }
+    } as any)
+
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const result = await createCheckout(createContext(), 'cus_123', 'month', 'prod_test', '/app/success', '/app/cancel', { embedded: true })
+
+    expect(result).toEqual({ url: 'https://pay.capgo.test/p/pay' })
+    expect(createSession.mock.calls[0][0]).not.toHaveProperty('ui_mode')
+  })
+
+  it('keeps the credit session placeholder on embedded one-time checkout', async () => {
+    mockedEnv.STRIPE_PUBLISHABLE_KEY = 'pk_test_123'
+    const createSession = vi.fn().mockResolvedValue({ id: 'cs_test_456', url: null, client_secret: 'cs_test_456_secret' })
+    vi.mocked(Stripe).mockImplementation(function () {
+      return {
+        prices: { list: vi.fn().mockResolvedValue({ data: createPriceList('month', 'one_time') }) },
+        checkout: { sessions: { create: createSession } },
+      }
+    } as any)
+
+    const { createOneTimeCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    const result = await createOneTimeCheckout(createContext(), 'cus_123', 'prod_credit', 50, '/settings/organization/credits?creditCheckout=success&session_id={CHECKOUT_SESSION_ID}', '/settings/organization/credits', 'org_123', undefined, undefined, true)
+
+    expect(result.clientSecret).toBe('cs_test_456_secret')
+    expect(createSession.mock.calls[0][0].return_url).toBe('https://capgo.test/settings/organization/credits?creditCheckout=success&session_id={CHECKOUT_SESSION_ID}&success=true')
+  })
+
   it('rejects external success URLs for checkout', async () => {
     const createSession = vi.fn()
+    const mocks = subscriptionCheckoutMocks()
     const stripeClient = {
       prices: {
         list: vi.fn().mockResolvedValue({ data: createPriceList() }),
+        retrieve: mocks.retrievePrice,
       },
+      customers: mocks.customers,
       checkout: {
         sessions: {
           create: createSession,
@@ -293,75 +433,33 @@ describe('stripe redirect URL allowlist', () => {
     expect(createSession).not.toHaveBeenCalled()
   })
 
-  it('uses a custom Stripe API base URL when configured', async () => {
-    mockedEnv.STRIPE_API_BASE_URL = 'http://127.0.0.1:4510'
-
-    const stripeClient = {
-      checkout: {
-        sessions: {},
-      },
-    } as any
-
+  it.each([
+    ['a custom loopback base URL', 'http://127.0.0.1:4510', 'sk_test_123', '127.0.0.1', 4510],
+    ['host.docker.internal for the Playwright emulator', 'http://host.docker.internal:4520', 'sk_test_emulator', 'host.docker.internal', 4520],
+  ])('uses %s as the Stripe API base URL', async (_label, baseUrl, secretKey, host, port) => {
+    mockedEnv.STRIPE_API_BASE_URL = baseUrl
+    mockedEnv.STRIPE_SECRET_KEY = secretKey
     vi.mocked(Stripe).mockImplementation(function () {
-      return stripeClient
+      return { checkout: { sessions: {} } }
     } as any)
 
     const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
     getStripe(createContext())
 
-    expect(Stripe).toHaveBeenCalledWith('sk_test_123', expect.objectContaining({
-      host: '127.0.0.1',
-      port: 4510,
-      protocol: 'http',
-    }))
+    expect(Stripe).toHaveBeenCalledWith(secretKey, expect.objectContaining({ host, port, protocol: 'http' }))
   })
 
-  it('allows host.docker.internal for Playwright Stripe emulator base URL', async () => {
-    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
-    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_emulator'
-
-    const stripeClient = {
-      checkout: {
-        sessions: {},
-      },
-    } as any
-
-    vi.mocked(Stripe).mockImplementation(function () {
-      return stripeClient
-    } as any)
+  it.each([
+    ['live credentials', 'http://host.docker.internal:4520', 'sk_live_123', 'local', 'STRIPE_API_BASE_URL must use https when using live Stripe credentials'],
+    ['host.docker.internal outside local emulator config', 'http://host.docker.internal:4520', 'sk_test_123', 'production', 'STRIPE_API_BASE_URL host.docker.internal is only allowed for local emulator config'],
+    ['non-loopback hosts', 'http://stripe.example.com', 'sk_test_123', 'local', 'STRIPE_API_BASE_URL must use https for non-loopback hosts'],
+  ])('rejects an http Stripe API base URL for %s', async (_label, baseUrl, secretKey, envName, message) => {
+    mockedEnv.STRIPE_API_BASE_URL = baseUrl
+    mockedEnv.STRIPE_SECRET_KEY = secretKey
+    mockedEnv.ENV = envName
 
     const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
-    getStripe(createContext())
-
-    expect(Stripe).toHaveBeenCalledWith('sk_test_emulator', expect.objectContaining({
-      host: 'host.docker.internal',
-      port: 4520,
-      protocol: 'http',
-    }))
-  })
-
-  it('rejects http Stripe API base URL when using live credentials', async () => {
-    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
-    mockedEnv.STRIPE_SECRET_KEY = 'sk_live_123'
-
-    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
-    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL must use https when using live Stripe credentials')
-  })
-
-  it('rejects host.docker.internal http base URL outside local emulator config', async () => {
-    mockedEnv.STRIPE_API_BASE_URL = 'http://host.docker.internal:4520'
-    mockedEnv.STRIPE_SECRET_KEY = 'sk_test_123'
-    mockedEnv.ENV = 'production'
-
-    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
-    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL host.docker.internal is only allowed for local emulator config')
-  })
-
-  it('rejects non-local http Stripe API base URLs', async () => {
-    mockedEnv.STRIPE_API_BASE_URL = 'http://stripe.example.com'
-
-    const { getStripe } = await import('../supabase/functions/_backend/utils/stripe.ts')
-    expect(() => getStripe(createContext())).toThrow('STRIPE_API_BASE_URL must use https for non-loopback hosts')
+    expect(() => getStripe(createContext())).toThrow(message)
   })
 
   it('falls back to checkout metadata for credit top-ups when line items are unavailable in emulator mode', async () => {
@@ -506,8 +604,11 @@ describe('stripe redirect URL allowlist', () => {
     })
 
     const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/subscription' })
+    const mocks = subscriptionCheckoutMocks()
     const stripeClient = {
+      customers: mocks.customers,
       prices: {
+        retrieve: mocks.retrievePrice,
         list: vi.fn().mockResolvedValue({
           data: [
             {
@@ -547,6 +648,57 @@ describe('stripe redirect URL allowlist', () => {
           quantity: 1,
         }),
       ],
+    }))
+  })
+
+  it.each([
+    ['FR', 'eur', {}, 'price_monthly_p70'],
+    ['ES', 'eur', {}, 'price_monthly_from_plan'],
+    ['US', 'usd', {}, 'price_monthly_from_plan'],
+    // A regional price is only sold in its region's currency.
+    ['FR', 'usd', {}, 'price_monthly_from_plan'],
+    // The buyer turned the regional discount down.
+    ['FR', 'eur', { standardPrice: true }, 'price_monthly_from_plan'],
+    // A currency only the full price lists falls back to it instead of failing on the regional price.
+    ['FR', 'gbp', {}, 'price_monthly_from_plan'],
+  ])('sells the regional price of the visitor country (%s in %s %o)', async (country, currency, options, expectedPrice) => {
+    const plan = {
+      stripe_id: 'prod_test',
+      price_m_id: 'price_monthly_from_plan',
+      price_y_id: 'price_yearly_from_plan',
+      // Spain (p60) has no price of its own here, so it must fall back to the full price, never a cheaper tier.
+      regional_price_ids: { p70: { price_m_id: 'price_monthly_p70', price_y_id: 'price_yearly_p70' }, p50: { price_m_id: 'price_monthly_p50' } },
+    }
+    mockedSupabaseAdmin.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({ data: { billing_account: 'ee' }, error: null }),
+          }),
+          or: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: plan, error: null }),
+            maybeSingle: vi.fn().mockResolvedValue({ data: plan, error: null }),
+          }),
+        }),
+      }),
+    })
+
+    const createSession = vi.fn().mockResolvedValue({ url: 'https://pay.capgo.test/p/subscription' })
+    const mocks = subscriptionCheckoutMocks()
+    // Regional prices carry their tier in Stripe metadata.
+    mocks.retrievePrice.mockImplementation(async (id: string) => ({ id, currency: 'usd', unit_amount: 1400, currency_options: { usd: { unit_amount: 1400 }, eur: { unit_amount: 1300 }, ...(id.endsWith('_p70') ? {} : { gbp: { unit_amount: 1100 } }) }, metadata: id.endsWith('_p70') ? { capgo_tier: 'p70' } : {} }))
+    vi.mocked(Stripe).mockImplementation(function () {
+      return { customers: mocks.customers, prices: { retrieve: mocks.retrievePrice, list: vi.fn() }, checkout: { sessions: { create: createSession } } }
+    } as any)
+
+    const { createCheckout } = await import('../supabase/functions/_backend/utils/stripe.ts')
+    await createCheckout(createContext(country), 'cus_123', 'month', 'prod_test', '/app/success', '/app/cancel', { currency, ...options })
+
+    expect(mocks.retrievePrice).toHaveBeenCalledWith(expectedPrice, expect.anything())
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      line_items: [expect.objectContaining({ price: expectedPrice, quantity: 1 })],
+      // A regional discount needs a billing address, checked by the webhook with the card.
+      billing_address_collection: expectedPrice === 'price_monthly_p70' ? 'required' : 'auto',
     }))
   })
 

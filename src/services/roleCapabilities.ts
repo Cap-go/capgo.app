@@ -1,7 +1,8 @@
 /**
  * Human-readable role capability copy for UI pickers.
  * Keys resolve through vue-i18n (`role-cap-<role>-summary|can|cannot`).
- * `can` / `cannot` values are pipe-separated bullet lists.
+ * `can` / `cannot` values are semicolon-separated bullet lists. `|` cannot be
+ * used: vue-i18n treats it as a plural separator and would keep only one item.
  */
 
 export interface RoleCapabilityKeys {
@@ -46,7 +47,9 @@ export function splitCapabilityList(value: string | null | undefined): string[] 
     return []
 
   return value
-    .split('|')
+    // Also split on full-width (CJK) and Arabic semicolons that translations may use,
+    // and on "|" used by catalogs translated before the separator changed.
+    .split(/[;；؛|]/)
     .map(item => item.trim())
     .filter(Boolean)
 }

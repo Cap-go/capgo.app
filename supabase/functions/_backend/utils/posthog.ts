@@ -3,6 +3,7 @@ import type { PostHogCapturePayload, PostHogDeliveryResult } from './posthog_del
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { drizzleErrorFingerprintSegment, readPgErrorCauseMessage, readPgErrorCode } from './pg_errors.ts'
 import { captureProperties, deliverPosthogCapture, getPostHogCaptureUrl, stripPostHogEndpoint } from './posthog_delivery.ts'
+import { redactSensitiveUrl } from './sensitive_url.ts'
 import { existInEnv, getEnv, trimTrailingSlashes } from './utils.ts'
 
 const POSTHOG_CAPTURE_URL = 'https://eu.i.posthog.com/capture/'
@@ -214,7 +215,7 @@ function stripCloudflareInternalErrorReference(message: string | undefined): str
 
 function getRequestPath(url: string) {
   try {
-    return new URL(url).pathname || '/'
+    return redactSensitiveUrl(new URL(url).pathname) || '/'
   }
   catch {
     return '/'

@@ -3,6 +3,7 @@ import type { Tab } from './comp_def'
 import { useElementSize, useScroll } from '@vueuse/core'
 import { computed, nextTick, onMounted, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { nativeNavbarSegmentsSupported, useNativeNavbarSegments } from '~/composables/useNativeChrome'
 
 const props = defineProps<{
   tabs: Tab[]
@@ -17,6 +18,31 @@ const props = defineProps<{
 const emit = defineEmits(['update:activeTab', 'update:secondaryActiveTab', 'update:tertiaryActiveTab'])
 
 const { t } = useI18n()
+
+// In the Capacitor app the rows render as native segments under the native navbar.
+function segmentItems(tabs: Tab[] | undefined) {
+  return (tabs ?? []).map((tab) => {
+    const label = t(tab.label)
+    return { id: tab.key, title: label.charAt(0).toUpperCase() + label.slice(1) }
+  })
+}
+
+useNativeNavbarSegments({
+  groups: () => [
+    { id: 'primary', items: segmentItems(props.tabs), selectedId: props.activeTab },
+    { id: 'secondary', style: 'scroll' as const, items: segmentItems(props.secondaryTabs), selectedId: props.secondaryActiveTab },
+    { id: 'tertiary', style: 'scroll' as const, items: segmentItems(props.tertiaryTabs), selectedId: props.tertiaryActiveTab },
+  ].filter(group => group.items.length > 0),
+  select: (groupId, id) => {
+    if (groupId === 'primary')
+      emit('update:activeTab', id)
+    else if (groupId === 'secondary')
+      emit('update:secondaryActiveTab', id)
+    else
+      emit('update:tertiaryActiveTab', id)
+  },
+})
+
 const primaryList = useTemplateRef<HTMLUListElement>('primaryList')
 
 // Scrollable tab rows hide tabs off-screen on mobile; keep the active one visible.
@@ -97,7 +123,7 @@ const labelClass = 'md:block text-xs md:text-sm font-medium whitespace-nowrap tr
 </script>
 
 <template>
-  <div class="w-full min-w-0 shrink-0">
+  <div v-if="!nativeNavbarSegmentsSupported" class="w-full min-w-0 shrink-0">
     <div class="min-w-0 pb-0">
       <ul ref="primaryList" :class="[ulPrimaryClass, noWrap ? noWrapClass : 'flex-wrap', primaryOverflowClass]">
         <li v-for="(tab, i) in tabs" :key="i" class="relative flex items-end mr-1 md:mr-2" :class="{ 'z-20': activeTab === tab.key }" :data-tab-group="tab.group">

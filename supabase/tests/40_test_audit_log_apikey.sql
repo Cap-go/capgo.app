@@ -427,30 +427,40 @@ SELECT throws_ok(
 
 
 -- Test 18: background counter updates must not create audit or webhook work.
-SELECT set_config('request.headers', NULL, true);
-SELECT set_config('request.jwt.claim.sub', NULL, true);
-SELECT set_config('request.jwt.claims', NULL, true);
-
 DO $$
 DECLARE
     v_before_audit_id bigint;
+    v_app_id constant text := 'com.test.audit-counter.app';
 BEGIN
-    PERFORM set_config('request.headers', NULL, true);
-    PERFORM set_config('request.jwt.claim.sub', NULL, true);
-    PERFORM set_config('request.jwt.claims', NULL, true);
+    PERFORM set_config('request.headers', '{}', true);
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.jwt.claims', '{}', true);
+
+    INSERT INTO public.apps (app_id, name, icon_url, owner_org, user_id)
+    VALUES (
+        v_app_id,
+        'Audit counter test',
+        '',
+        '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid,
+        '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid
+    );
 
     SELECT COALESCE(MAX(id), 0) INTO v_before_audit_id
-    FROM public.audit_logs;
+    FROM public.audit_logs
+    WHERE table_name = 'apps' AND record_id = v_app_id;
 
     UPDATE public.apps
     SET channel_device_count = channel_device_count + 1,
         updated_at = now()
-    WHERE app_id = 'com.demo.app';
+    WHERE app_id = v_app_id;
 
+    -- The scheduler can audit unrelated records while this transaction runs.
     IF EXISTS (
         SELECT 1
         FROM public.audit_logs
         WHERE id > v_before_audit_id
+            AND table_name = 'apps'
+            AND record_id = v_app_id
     ) THEN
         RAISE EXCEPTION 'background counter update created an audit log';
     END IF;

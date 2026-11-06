@@ -12,6 +12,11 @@ function makeBundleRow(index: number) {
   }
 }
 
+// What a backend without `fields=summary` support returns: full rows.
+function makeLegacyBundleRow(index: number) {
+  return { ...makeBundleRow(index), native_packages: null, manifest: null }
+}
+
 function makeBundleApiError(payload: { error: string, message: string }, status: number) {
   const response = new Response(JSON.stringify(payload), { status })
   return Object.assign(new Error('Edge Function returned a non-2xx status code'), { context: response })
@@ -38,9 +43,46 @@ describe('fetchBundlePages pagination', () => {
     expect(versions).toEqual([])
   })
 
-  it('stops paging when a page returns fewer than 50 bundles', async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
-    const secondPage = [makeBundleRow(50)]
+  it('asks for 1000-row summary pages and stops after a short page', async () => {
+    const paths: string[] = []
+    const versions = await getActiveAppVersions('test-key', 'com.test.app', {
+      invoke: (async (path: string) => {
+        paths.push(path)
+        return { data: Array.from({ length: 690 }, (_, index) => makeBundleRow(index)), error: null }
+      }) as any,
+    })
+    expect(versions).toHaveLength(690)
+    expect(paths).toHaveLength(1)
+    const url = new URL(paths[0], 'https://example.test/')
+    expect(url.searchParams.get('limit')).toBe('1000')
+    expect(url.searchParams.get('fields')).toBe('summary')
+  })
+
+  it('keeps paging while the server returns full 1000-row pages', async () => {
+    const versions = await getActiveAppVersions('test-key', 'com.test.app', {
+      invoke: createInvokeStub({
+        0: async () => ({ data: Array.from({ length: 1000 }, (_, index) => makeBundleRow(index)), error: null }),
+        1: async () => ({ data: [makeBundleRow(1000)], error: null }),
+      }),
+    })
+    expect(versions).toHaveLength(1001)
+  })
+
+  it('makes a single request when a modern backend returns exactly 50 summary rows', async () => {
+    let requests = 0
+    const versions = await getActiveAppVersions('test-key', 'com.test.app', {
+      invoke: (async () => {
+        requests += 1
+        return { data: Array.from({ length: 50 }, (_, index) => makeBundleRow(index)), error: null }
+      }) as any,
+    })
+    expect(versions).toHaveLength(50)
+    expect(requests).toBe(1)
+  })
+
+  it('stops paging when a page returns fewer than 50 bundles (backend without limit support)', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => makeLegacyBundleRow(index))
+    const secondPage = [makeLegacyBundleRow(50)]
     const versions = await getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),
@@ -51,7 +93,7 @@ describe('fetchBundlePages pagination', () => {
   })
 
   it('throws a permission message when cannot_get_bundle means access denied', async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
+    const firstPage = Array.from({ length: 50 }, (_, index) => makeLegacyBundleRow(index))
     await expect(getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),
@@ -64,7 +106,7 @@ describe('fetchBundlePages pagination', () => {
   })
 
   it('throws when the API returns 500 for a database failure', async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => makeBundleRow(index))
+    const firstPage = Array.from({ length: 50 }, (_, index) => makeLegacyBundleRow(index))
     await expect(getActiveAppVersions('test-key', 'com.test.app', {
       invoke: createInvokeStub({
         0: async () => ({ data: firstPage, error: null }),

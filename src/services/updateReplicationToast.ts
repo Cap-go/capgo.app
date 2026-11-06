@@ -74,7 +74,7 @@ function getClosestRegionFromTimeZone(): string | null {
     return 'gcp:asia-east2'
   }
 
-  if (/^Pacific\//.test(tz) || /^Australia\//.test(tz))
+  if (tz.startsWith('Pacific/') || tz.startsWith('Australia/'))
     return 'aws:ap-southeast-2'
 
   if (typeof navigator !== 'undefined') {

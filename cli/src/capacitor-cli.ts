@@ -4,7 +4,7 @@
 // `dist/util/monorepotools`. These were previously typed via an ambient
 // `declare module` file, but an ambient declaration is only honored when the
 // module does not otherwise resolve — which is environment dependent (it
-// passes locally but fails under CI's `tsgo`, where the package is installed
+// passes locally but fails under CI's TypeScript 7 `tsc`, where the package is installed
 // and resolves to the untyped `.js`, yielding TS7016 on every PR touching
 // `cli/`). Centralizing the untyped imports here keeps the rest of the CLI
 // fully typed while the bundler still resolves the real package at runtime.

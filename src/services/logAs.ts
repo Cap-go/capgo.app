@@ -1,8 +1,8 @@
 import type { Router } from 'vue-router'
-import { FunctionsHttpError } from '@supabase/supabase-js'
 import { toast } from 'vue-sonner'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { getSpoofedAdminJwt, isSpoofed, saveSpoof, useSupabase } from './supabase'
+import { FunctionsHttpError } from '~/services/consoleClient'
+import { getSpoofedAdminJwt, isSpoofed, saveSpoof, useConsole } from './console'
 
 async function getErrorMessage(error: unknown) {
   if (error instanceof FunctionsHttpError && error.context instanceof Response) {
@@ -41,7 +41,7 @@ export async function logAsUser(identifier: string, router: Router) {
     if (wasSpoofed && !spoofedAdminJwt)
       throw new Error('Cannot restore admin session, please sign in again')
 
-    const supabase = useSupabase()
+    const capgo = useConsole()
     const invokeOptions: { body: { identifier: string }, headers?: Record<string, string> } = {
       body: { identifier },
     }
@@ -60,7 +60,7 @@ export async function logAsUser(identifier: string, router: Router) {
 
     let adminSession: { jwt: string, refreshToken: string } | null = null
     if (!wasSpoofed) {
-      const { data: currentSession, error: sessionError } = await supabase.auth.getSession()
+      const { data: currentSession, error: sessionError } = await capgo.auth.getSession()
       if (sessionError || !currentSession?.session)
         throw new Error('No current session')
 
@@ -68,7 +68,7 @@ export async function logAsUser(identifier: string, router: Router) {
       adminSession = { jwt: currentJwt, refreshToken: currentRefreshToken }
     }
 
-    const { error: authError } = await supabase.auth.setSession({ access_token: newJwt, refresh_token: newRefreshToken })
+    const { error: authError } = await capgo.auth.setSession({ access_token: newJwt, refresh_token: newRefreshToken })
     if (authError)
       throw authError
 

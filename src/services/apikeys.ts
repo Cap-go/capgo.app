@@ -1,13 +1,17 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TableColumn } from '~/components/comp_def'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { DialogV2Button, DialogV2Options } from '~/stores/dialogv2'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { invokeCapgoApi } from '~/services/capgoApi'
 
 interface ApiKeyLoadScope {
   userId: string
   orgId?: string | null
   appId?: string | null
+  /** Distinguishes loads of a specific named key (AI onboarding) from any usable key. */
+  name?: string | null
+  /** Distinguishes loads restricted to keys with these app roles. */
+  appRoles?: readonly string[]
 }
 
 const inFlightApiKeyLoads = new Map<string, Promise<string | null>>()
@@ -16,7 +20,7 @@ export function shareInFlightApiKeyLoad(
   scope: ApiKeyLoadScope,
   load: () => Promise<string | null>,
 ): Promise<string | null> {
-  const scopeKey = JSON.stringify([scope.userId, scope.orgId ?? null, scope.appId ?? null])
+  const scopeKey = JSON.stringify([scope.userId, scope.orgId ?? null, scope.appId ?? null, scope.name ?? null, scope.appRoles ?? null])
   const existingLoad = inFlightApiKeyLoads.get(scopeKey)
   if (existingLoad)
     return existingLoad
@@ -30,11 +34,13 @@ export function shareInFlightApiKeyLoad(
 }
 
 export async function createDefaultApiKey(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   name: string,
   options: {
     orgId?: string | null
     appId?: string | null
+    /** App-scoped keys only: the app role to bind (default `app_admin`). */
+    appRole?: string
     hashed?: boolean
   } = {},
 ) {
@@ -42,7 +48,7 @@ export async function createDefaultApiKey(
   let appUuid: string | null = null
 
   if (options.appId) {
-    const { data: app, error } = await supabase
+    const { data: app, error } = await capgo
       .from('apps')
       .select('id, owner_org')
       .eq('app_id', options.appId)
@@ -76,7 +82,7 @@ export async function createDefaultApiKey(
           org_id: orgId,
         },
         {
-          role_name: 'app_admin',
+          role_name: options.appRole ?? 'app_admin',
           scope_type: 'app',
           org_id: orgId,
           app_id: appUuid,
@@ -91,7 +97,7 @@ export async function createDefaultApiKey(
       ]
 
   return invokeCapgoApi('apikey', {
-    client: supabase,
+    client: capgo,
     method: 'POST',
     body: {
       name,
@@ -102,7 +108,7 @@ export async function createDefaultApiKey(
 }
 
 export async function createAiApiKey(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   name: string,
   options: {
     /** Organizations used for admin bindings or to validate each selected app's owner. */
@@ -148,7 +154,7 @@ export async function createAiApiKey(
   const globalPermissions = role === 'admin' && options.allowOrgCreate ? ['org.create'] : undefined
 
   return invokeCapgoApi('apikey', {
-    client: supabase,
+    client: capgo,
     method: 'POST',
     body: {
       name,
@@ -160,20 +166,27 @@ export async function createAiApiKey(
 }
 
 export async function findUsablePlainApiKey(
-  supabase: SupabaseClient<Database>,
+  capgo: ConsoleClient<Database>,
   userId: string,
   orgId?: string | null,
   appId?: string | null,
+  /**
+   * `appRoles`: only reuse an app-level binding with one of these roles (org admin keys still
+   * qualify). Without it, any app-level binding on the app counts, even a read-only one.
+   */
+  options: { name?: string, appRoles?: readonly string[] } = {},
 ): Promise<string | null> {
   const isLiveKey = (expiresAt: string | null) => !expiresAt || new Date(expiresAt).getTime() > Date.now()
   let appUuid: string | null = null
 
-  const { data: keys, error } = await supabase
+  let query = capgo
     .from('apikeys')
     .select('key, expires_at, rbac_id, created_at')
     .eq('user_id', userId)
     .not('key', 'is', null)
-    .order('created_at', { ascending: false })
+  if (options.name)
+    query = query.eq('name', options.name)
+  const { data: keys, error } = await query.order('created_at', { ascending: false })
 
   if (error || !keys?.length)
     return null
@@ -186,7 +199,7 @@ export async function findUsablePlainApiKey(
     return liveKeys[0].key ?? null
 
   if (appId) {
-    const { data: app, error: appError } = await supabase
+    const { data: app, error: appError } = await capgo
       .from('apps')
       .select('id, owner_org')
       .eq('app_id', appId)
@@ -205,7 +218,7 @@ export async function findUsablePlainApiKey(
   if (!rbacIds.length)
     return null
 
-  const { data: bindings, error: bindingsError } = await supabase
+  const { data: bindings, error: bindingsError } = await capgo
     .from('role_bindings')
     .select('principal_id, scope_type, app_id, roles(name)')
     .eq('principal_type', 'apikey')
@@ -230,7 +243,9 @@ export async function findUsablePlainApiKey(
         return false
       if (binding.scope_type === 'org' && orgAdminRoles.has(roleName))
         return true
-      return !!appUuid && binding.scope_type === 'app' && binding.app_id === appUuid
+      if (!appUuid || binding.scope_type !== 'app' || binding.app_id !== appUuid)
+        return false
+      return !options.appRoles || options.appRoles.includes(roleName)
     })
     .map(binding => binding.principal_id)
     .filter((principalId): principalId is string => typeof principalId === 'string'))
@@ -362,7 +377,7 @@ export async function confirmApiKeyDeletion(
 ): Promise<boolean> {
   dialogStore.openDialog({
     title: t('alert-confirm-delete'),
-    description: `${t('alert-not-reverse-message')} ${t('alert-delete-message')}?`,
+    description: t('alert-delete-api-key-confirm'),
     buttons: [
       createDialogButton(t('button-cancel'), 'cancel'),
       createDialogButton(t('button-delete'), 'danger'),
@@ -379,7 +394,7 @@ export async function confirmApiKeyRegeneration(
 ): Promise<boolean> {
   dialogStore.openDialog({
     title: t('alert-confirm-regenerate'),
-    description: `${t('alert-not-reverse-message')}. ${t('alert-regenerate-key')}?`,
+    description: t('alert-regenerate-key-confirm'),
     buttons: [
       createDialogButton(t('button-cancel'), 'cancel'),
       createDialogButton(t('button-regenerate'), 'primary'),

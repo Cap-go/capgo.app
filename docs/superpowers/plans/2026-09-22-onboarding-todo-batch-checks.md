@@ -116,7 +116,7 @@ return c.json(BRES)
 ```
 
 - [ ] Run `bun lint:backend`, `bunx vitest run tests/app-onboarding-todo-evidence.unit.test.ts tests/app-onboarding-refresh.unit.test.ts tests/onboarding-progress-endpoint.unit.test.ts`, `bunx vitest run tests/cron-onboarding-refresh.test.ts tests/cron-onboarding-todo-refresh.test.ts` against local Supabase, and `bun typecheck`. Run `bun test:unit` and the relevant backend integration suite before PR creation. Expect all required checks to pass; inspect Supabase service logs before retrying any failing DB test.
-- [ ] Inspect `git diff --check`, the feature/step paths in the final diff, and `graphify-out/` exclusion. Commit the endpoint wiring and tests as `feat(onboarding): refresh pending todo steps in cron batches`.
+- [ ] Inspect `git diff --check` and the feature/step paths in the final diff. Commit the endpoint wiring and tests as `feat(onboarding): refresh pending todo steps in cron batches`.
 
 ### Task 5: Open and prove the pull request
 

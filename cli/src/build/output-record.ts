@@ -13,6 +13,8 @@ export interface BuildOutputRecord {
   buildMode: 'debug' | 'release'
   status: string
   outputUrl: string | null
+  /** Debug symbols for crash reporters: iOS dSYMs zip or Android R8/ProGuard mapping.txt. */
+  symbolsUrl: string | null
   qrCodeAscii: string | null
   qrCodePngPath: string | null
   finishedAt: string
@@ -25,6 +27,15 @@ export interface WriteBuildOutputRecordInput {
   buildMode: 'debug' | 'release'
   status: string
   outputUrl: string | null
+  symbolsUrl?: string | null
+}
+
+// Line the builder prints once the debug symbols are uploaded (with --output-upload or --symbols-upload).
+const DEBUG_SYMBOLS_LINE = /Debug symbols for crash reporting \([^)]*\): (https?:\/\/\S+)/
+
+/** Download URL of the debug symbols from a build log line, or null. */
+export function parseDebugSymbolsUrl(line: string): string | null {
+  return DEBUG_SYMBOLS_LINE.exec(line)?.[1] ?? null
 }
 
 /**
@@ -101,6 +112,7 @@ export async function writeBuildOutputRecord(
     buildMode: input.buildMode,
     status: input.status,
     outputUrl: input.outputUrl ?? null,
+    symbolsUrl: input.symbolsUrl ?? null,
     qrCodeAscii,
     qrCodePngPath,
     finishedAt: new Date().toISOString(),

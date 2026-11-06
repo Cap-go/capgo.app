@@ -1,10 +1,13 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { McpContext } from './oauth_shared.ts'
 import { Hono } from 'hono/tiny'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { closeClient, getPgClient, withPgTransaction } from '../utils/pg.ts'
-import { getClientIP, isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
+import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
+import { agentAuthMetadata, app as agentIdentityApp, handleAgentClaimGrant } from './agent_identity.ts'
+import { AGENT_AUTH_CLAIM_GRANT } from './agent_identity_utils.ts'
+import { getApiOrigin, getClientIpHash, getIssuer, getRequestOrigin, getResourceUrl, insertWithIpLimit, MCP_OAUTH_PATH, MCP_PATH, oauthError, readParams, withPg } from './oauth_shared.ts'
 import {
   buildRedirectUrl,
   decryptWithCode,
@@ -21,7 +24,7 @@ import {
   verifyPkceS256,
 } from './oauth_utils.ts'
 
-type McpContext = Context<MiddlewareKeyVariables>
+export { getApiOrigin, getIssuer, getResourceUrl, MCP_OAUTH_PATH, MCP_PATH }
 
 export interface McpOAuthClient {
   client_id: string
@@ -31,47 +34,32 @@ export interface McpOAuthClient {
   redirect_uris: string[]
 }
 
-export const MCP_PATH = '/mcp'
-export const MCP_OAUTH_PATH = '/mcp/oauth'
 export const CONSENT_PAGE_PATH = '/oauth/authorize'
 
-/** Public origin of this API (issuer + resource). Uses the request origin so local workers work too. */
-export function getIssuer(c: Context): string {
-  return new URL(c.req.url).origin
-}
-
-export function getResourceUrl(c: Context): string {
-  return `${getIssuer(c)}${MCP_PATH}`
-}
-
 export function getProtectedResourceMetadataUrl(c: Context): string {
-  return `${getIssuer(c)}/.well-known/oauth-protected-resource${MCP_PATH}`
-}
-
-/** RFC 6749 §5.2 / RFC 7591 §3.2.2 error body. These shapes are mandated by the OAuth specs. */
-function oauthError(c: McpContext, status: 400 | 401 | 403 | 404 | 429 | 500 | 503, error: string, description: string) {
-  c.header('Cache-Control', 'no-store')
-  return c.json({ error, error_description: description }, status)
+  return `${getApiOrigin(c)}/.well-known/oauth-protected-resource${MCP_PATH}`
 }
 
 function authorizationServerMetadata(c: Context) {
-  const issuer = getIssuer(c)
+  const apiOrigin = getApiOrigin(c)
   return {
-    issuer,
-    authorization_endpoint: `${issuer}${MCP_OAUTH_PATH}/authorize`,
-    token_endpoint: `${issuer}${MCP_OAUTH_PATH}/token`,
-    registration_endpoint: `${issuer}${MCP_OAUTH_PATH}/register`,
-    revocation_endpoint: `${issuer}${MCP_OAUTH_PATH}/revoke`,
+    issuer: getIssuer(c),
+    authorization_endpoint: `${apiOrigin}${MCP_OAUTH_PATH}/authorize`,
+    token_endpoint: `${apiOrigin}${MCP_OAUTH_PATH}/token`,
+    registration_endpoint: `${apiOrigin}${MCP_OAUTH_PATH}/register`,
+    revocation_endpoint: `${apiOrigin}${MCP_OAUTH_PATH}/revoke`,
     scopes_supported: [MCP_OAUTH_SCOPE],
     response_types_supported: ['code'],
     response_modes_supported: ['query'],
-    grant_types_supported: ['authorization_code'],
+    grant_types_supported: ['authorization_code', AGENT_AUTH_CLAIM_GRANT],
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
     code_challenge_methods_supported: ['S256'],
     client_id_metadata_document_supported: true,
     authorization_response_iss_parameter_supported: true,
     service_documentation: 'https://capgo.app/docs/ai/mcp/',
+    // auth.md agent registration (https://capgo.app/auth.md).
+    agent_auth: agentAuthMetadata(c),
   }
 }
 
@@ -86,66 +74,10 @@ function protectedResourceMetadata(c: Context) {
   }
 }
 
-async function readParams(c: McpContext): Promise<Record<string, string>> {
-  const contentType = c.req.header('content-type') ?? ''
-  if (contentType.includes('application/json')) {
-    const body = await c.req.json().catch(() => null)
-    if (!body || typeof body !== 'object' || Array.isArray(body))
-      return {}
-    return Object.fromEntries(Object.entries(body).filter(([, value]) => typeof value === 'string')) as Record<string, string>
-  }
-  const form = await c.req.parseBody().catch(() => ({}))
-  return Object.fromEntries(Object.entries(form).filter(([, value]) => typeof value === 'string')) as Record<string, string>
-}
-
-async function withPg<T>(c: McpContext, fn: (pg: Awaited<ReturnType<typeof getPgClient>>) => Promise<T>): Promise<T> {
-  const pg = await getPgClient(c)
-  try {
-    return await fn(pg)
-  }
-  finally {
-    await closeClient(c, pg)
-  }
-}
-
 const METADATA_DOCUMENT_MAX_BYTES = 64 * 1024
 // Unauthenticated endpoints that insert rows: generous for real clients, tight enough to stop floods.
 const REGISTER_RATE_LIMIT = { limit: 20, windowSeconds: 60 * 60 }
 const AUTHORIZE_RATE_LIMIT = { limit: 60, windowSeconds: 60 * 10 }
-
-type PgTransactionClient = Parameters<Parameters<typeof withPgTransaction>[1]>[0]
-
-/** SHA-256 of the caller IP (never store raw IPs); null when the IP is unknown (fail open like other limiters). */
-async function getClientIpHash(c: McpContext): Promise<string | null> {
-  const ip = getClientIP(c)
-  return ip === 'unknown' ? null : sha256Hex(`mcp-oauth-ip:${ip}`)
-}
-
-/**
- * Atomic per-IP limit for unauthenticated inserts: a transaction-scoped advisory lock on the IP
- * hash serializes concurrent requests from one IP, so the count check and the insert cannot race.
- * Returns null when the IP is over the limit.
- */
-async function insertWithIpLimit<T>(
-  c: McpContext,
-  table: 'mcp_oauth_clients' | 'mcp_oauth_requests',
-  ipHash: string | null,
-  limit: { limit: number, windowSeconds: number },
-  insert: (client: PgTransactionClient) => Promise<T>,
-): Promise<T | null> {
-  return withPg(c, pg => withPgTransaction(pg, async (client) => {
-    if (ipHash) {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${table}:${ipHash}`])
-      const { rows } = await client.query<{ count: string }>(
-        `SELECT count(*) FROM public.${table} WHERE ip_hash = $1 AND created_at > now() - make_interval(secs => $2)`,
-        [ipHash, limit.windowSeconds],
-      )
-      if (Number(rows[0]?.count ?? 0) >= limit.limit)
-        return null
-    }
-    return insert(client)
-  }))
-}
 
 /** Read a response body but stop (and fail) as soon as it exceeds maxBytes. */
 async function readBoundedText(response: Response, maxBytes: number): Promise<string | null> {
@@ -237,14 +169,28 @@ async function resolveClient(c: McpContext, clientId: string): Promise<McpOAuthC
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
+app.route('/', agentIdentityApp)
+
 // ---------------------------------------------------------------------------
 // Discovery (RFC 9728 protected resource metadata + RFC 8414 authorization server metadata).
 // Clients probe both the path-suffixed and root variants, so serve all of them.
 // ---------------------------------------------------------------------------
 app.get('/.well-known/oauth-protected-resource', c => c.json(protectedResourceMetadata(c)))
 app.get(`/.well-known/oauth-protected-resource${MCP_PATH}`, c => c.json(protectedResourceMetadata(c)))
-app.get('/.well-known/oauth-authorization-server', c => c.json(authorizationServerMetadata(c)))
-app.get(`/.well-known/oauth-authorization-server${MCP_PATH}`, c => c.json(authorizationServerMetadata(c)))
+
+/**
+ * RFC 8414 §3.3: metadata is only valid at the issuer's own well-known URL. When the issuer is another origin
+ * (production: https://capgo.app), that origin serves it and this API answers 404 here.
+ */
+function wellKnownAuthorizationServerMetadata(c: McpContext) {
+  if (getIssuer(c) !== getRequestOrigin(c))
+    return oauthError(c, 404, 'not_found', `Authorization server metadata is published by the issuer: ${getIssuer(c)}/.well-known/oauth-authorization-server`)
+  return c.json(authorizationServerMetadata(c))
+}
+app.get('/.well-known/oauth-authorization-server', wellKnownAuthorizationServerMetadata)
+app.get(`/.well-known/oauth-authorization-server${MCP_PATH}`, wellKnownAuthorizationServerMetadata)
+// Source the issuer origin (capgo.app) serves at its own /.well-known/oauth-authorization-server.
+app.get(`${MCP_OAUTH_PATH}/metadata`, c => c.json(authorizationServerMetadata(c)))
 
 // OpenAI plugin domain verification: the dashboard issues a token that must be served verbatim
 // (plain text, no JSON) from the MCP hostname before the server can be connected.
@@ -377,8 +323,10 @@ app.post(`${MCP_OAUTH_PATH}/token`, async (c) => {
     return oauthError(c, 429, 'slow_down', 'Too many failed attempts')
 
   const params = await readParams(c)
+  if (params.grant_type === AGENT_AUTH_CLAIM_GRANT)
+    return handleAgentClaimGrant(c, params)
   if (params.grant_type !== 'authorization_code')
-    return oauthError(c, 400, 'unsupported_grant_type', 'Only authorization_code is supported')
+    return oauthError(c, 400, 'unsupported_grant_type', `Supported grant types: authorization_code, ${AGENT_AUTH_CLAIM_GRANT}`)
   const code = params.code ?? ''
   const verifier = params.code_verifier ?? ''
   if (!code || !verifier)
@@ -442,7 +390,7 @@ app.post(`${MCP_OAUTH_PATH}/token`, async (c) => {
 })
 
 // ---------------------------------------------------------------------------
-// RFC 7009 revocation: deletes the API key, but only keys that were minted through MCP OAuth.
+// RFC 7009 revocation: deletes the API key, but only keys minted through MCP OAuth or auth.md agent registration.
 // Per the RFC, unknown tokens still get a 200.
 // ---------------------------------------------------------------------------
 app.post(`${MCP_OAUTH_PATH}/revoke`, async (c) => {
@@ -456,7 +404,8 @@ app.post(`${MCP_OAUTH_PATH}/revoke`, async (c) => {
     await pg.query(
       `DELETE FROM public.apikeys a
        WHERE (a.key = $1 OR a.key_hash = $2)
-         AND EXISTS (SELECT 1 FROM public.mcp_oauth_requests r WHERE r.apikey_id = a.id)`,
+         AND (EXISTS (SELECT 1 FROM public.mcp_oauth_requests r WHERE r.apikey_id = a.id)
+           OR EXISTS (SELECT 1 FROM public.agent_identity_registrations g WHERE g.apikey_id = a.id))`,
       [token, tokenHash],
     )
   }).catch((error) => {

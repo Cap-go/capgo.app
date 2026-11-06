@@ -1,21 +1,44 @@
 import type { OptionsBase } from '../schemas/base'
-import { env, stdin, stdout } from 'node:process'
+import type { AgentTrial } from '../shared/agent-notices'
+import { env, stdout } from 'node:process'
 import { intro, log, outro, spinner } from '@clack/prompts'
 import { check2FAComplianceForApp } from '../api/app'
-import { formatBuilderOnlyChecklist, getBuilderOnlyChecklist } from './builder-checklist'
 import { getPendingOnboardingChecks } from '../onboarding/background-workers'
+import { getAgentTrial } from '../onboarding/setup-notices'
+import { formatAgentTodoTrialItem, isAgentInvocation, printAgentText } from '../shared/agent-notices'
 import { CliUserError } from '../shared/cli-user-error'
-import { createSupabaseClient, findSavedKey, formatCapgoCliInvokeError, getAppId, getCapgoCliHttpStatus, getConfig, invokeCapgoCliApi } from '../utils'
+import { canPromptInteractively, createCapgoClient, findSavedKey, formatCapgoCliInvokeError, getAppId, getCapgoCliHttpStatus, getConfig, getRemoteConfig, invokeCapgoCliApi } from '../utils'
+import { formatBuilderOnlyChecklist, getBuilderChecklist, getBuilderOnlyChecklist } from './builder-checklist'
+
+export type AppTodoList = 'builder' | 'ota'
+
+interface AppTodoOptions extends Partial<OptionsBase> {
+  list?: string
+}
 
 const V2_STEP_IDS = [
-  'login_cli_mcp', 'add_channel', 'add_updater', 'add_code', 'add_encryption',
-  'select_platform', 'build_project', 'run_device', 'add_code_change',
-  'upload_bundle', 'test_update', 'completion',
+  'login_cli_mcp',
+  'add_channel',
+  'add_updater',
+  'add_code',
+  'add_encryption',
+  'select_platform',
+  'build_project',
+  'run_device',
+  'add_code_change',
+  'upload_bundle',
+  'test_update',
+  'completion',
 ] as const
 
 const V3_STEP_IDS = [
-  'login_cli_mcp', 'add_channel', 'add_updater', 'add_code',
-  'run_device', 'upload_bundle', 'test_update',
+  'login_cli_mcp',
+  'add_channel',
+  'add_updater',
+  'add_code',
+  'run_device',
+  'upload_bundle',
+  'test_update',
 ] as const
 
 const STEP_TITLES = {
@@ -79,6 +102,7 @@ export interface AppTodoProgress {
   onboarding: unknown
   hasChannel?: boolean
   checkErrors?: string[]
+  billing?: unknown
 }
 
 export const TODO_BACKGROUND_WAIT_MS = 10_000
@@ -111,7 +135,7 @@ export async function waitForTodoBackgroundChecks(
       Promise.allSettled(checks).then(() => true),
       new Promise<false>((resolve) => {
         // Keep the process alive while the background workers remain unreferenced.
-        timer = setTimeout(() => resolve(false), timeoutMs)
+        timer = setTimeout(resolve, timeoutMs, false)
       }),
     ])
   }
@@ -129,8 +153,42 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
-export function getAppTodoSteps(progress: AppTodoProgress) {
-  const builder = getBuilderOnlyChecklist(progress.onboarding)
+export function getAvailableAppTodoLists(progress: AppTodoProgress): AppTodoList[] {
+  if (getBuilderOnlyChecklist(progress.onboarding))
+    return ['builder']
+  const raw = asRecord(progress.onboarding)
+  const setup = Object.hasOwn(raw, 'setup') ? asRecord(raw.setup) : raw
+  if (setup.ota_todo_list_version === '1' && Array.isArray(setup.paths)
+    && setup.paths.includes('ota') && getBuilderChecklist(progress.onboarding)) {
+    return ['ota', 'builder']
+  }
+  return ['ota']
+}
+
+export function resolveAppTodoView(progress: AppTodoProgress, options: { list?: string, interactive: boolean }): { list: AppTodoList, tabs: boolean } {
+  const available = getAvailableAppTodoLists(progress)
+  if (options.list !== undefined) {
+    if (options.list !== 'builder' && options.list !== 'ota')
+      throw new CliUserError('Unknown todo list. Choose --list builder or --list ota.')
+    if (!available.includes(options.list))
+      throw new CliUserError(`${options.list === 'builder' ? 'Builder' : 'OTA'} todo list is not available for this app. Use --list ${available[0]}.`)
+    return { list: options.list, tabs: false }
+  }
+  if (available.length === 1)
+    return { list: available[0], tabs: false }
+  if (!options.interactive)
+    throw new CliUserError('This app has both Builder and OTA todo lists. In non-interactive mode, choose one with --list builder or --list ota.')
+  const raw = asRecord(progress.onboarding)
+  const setup = Object.hasOwn(raw, 'setup') ? asRecord(raw.setup) : raw
+  return { list: setup.selected_path === 'builder' ? 'builder' : 'ota', tabs: true }
+}
+
+export function getAppTodoSteps(progress: AppTodoProgress, list?: AppTodoList) {
+  if (list)
+    resolveAppTodoView(progress, { list, interactive: false })
+  const builder = list === 'builder'
+    ? getBuilderChecklist(progress.onboarding)
+    : list === 'ota' ? null : getBuilderOnlyChecklist(progress.onboarding)
   if (builder)
     return builder
   const raw = asRecord(progress.onboarding)
@@ -158,8 +216,8 @@ export function getAppTodoSteps(progress: AppTodoProgress) {
   return { version, steps, path: 'ota' as const, selectedPlatform: undefined }
 }
 
-export function formatAppTodoList(appId: string, progress: AppTodoProgress, options: { color?: boolean } = {}): string {
-  const checklist = getAppTodoSteps(progress)
+export function formatAppTodoList(appId: string, progress: AppTodoProgress, options: { color?: boolean, list?: AppTodoList, trial?: AgentTrial } = {}): string {
+  const checklist = getAppTodoSteps(progress, options.list)
   if (checklist.path === 'builder')
     return formatBuilderOnlyChecklist(appId, checklist, options)
   const { version, steps } = checklist
@@ -170,34 +228,45 @@ export function formatAppTodoList(appId: string, progress: AppTodoProgress, opti
   const markers = { done: '[x] Done', skipped: '[-] Skipped', pending: '[ ] Pending' }
   const colors = { done: '32', skipped: '2', pending: '33' }
   const colorize = (value: string, code: string) => options.color ? `\u001B[${code}m${value}\u001B[0m` : value
-  const next = version === 3 || version === 4 ? steps.find(step => step.status === 'pending') : undefined
-  const help = next ? V3_NEXT_STEP_HELP[next.id as typeof V3_STEP_IDS[number]] : undefined
+  const next = getAppTodoNextStep(progress, options.list)
   return [
-    colorize(`App: ${appId} — Todo list v${version}`, '1'),
+    colorize(`App: ${appId} — Todo list v${version}${options.list === 'ota' ? ' — OTA checklist' : ''}`, '1'),
     `${done + skipped}/${steps.length} completed (${done} done, ${skipped} skipped, ${steps.length - done - skipped} pending)`,
     '',
     ...steps.map(step => `${colorize(markers[step.status], colors[step.status])}: ${step.title}`),
-    ...(next && help ? [
-      '',
-      colorize(`Next step: ${next.title}`, '1;36'),
-      `  ${help.action}`,
-      `  Done when: ${help.doneWhen}`,
-      '  Run this command again to recheck progress.',
-    ] : []),
+    ...(options.trial ? [formatAgentTodoTrialItem(options.trial)] : []),
+    ...(next
+      ? [
+          '',
+          colorize(`Next step: ${next.title}`, '1;36'),
+          `  ${next.action}`,
+          `  Done when: ${next.doneWhen}`,
+          '  Run this command again to recheck progress.',
+        ]
+      : []),
   ].join('\n')
+}
+
+export function getAppTodoNextStep(progress: AppTodoProgress, list?: AppTodoList) {
+  const { version, path, steps } = getAppTodoSteps(progress, list)
+  if (path !== 'ota' || (version !== 3 && version !== 4))
+    return
+  const next = steps.find(step => step.status === 'pending')
+  return next ? { ...next, ...V3_NEXT_STEP_HELP[next.id as typeof V3_STEP_IDS[number]] } : undefined
 }
 
 export async function readAppTodoProgress(appId: string, options: OptionsBase): Promise<AppTodoProgress> {
   const { data, error } = await invokeCapgoCliApi<AppTodoProgress>('private/onboarding_progress', {
     ...options,
-    body: { appId, N: 0, initial: true },
+    body: { appId, N: 0, initial: true, ...(isAgentInvocation() ? { includeBilling: true } : {}) },
     signal: AbortSignal.timeout(15_000),
   })
   if (error) {
     const status = getCapgoCliHttpStatus(error)
     if (status === 401 || status === 403) {
       throw new CliUserError('Cannot access app todo list. Check that your API key is valid and has app.read permission for this app.', {
-        appId, requiredPermissionKey: 'app.read',
+        appId,
+        requiredPermissionKey: 'app.read',
       })
     }
     if (status === 404)
@@ -209,7 +278,7 @@ export async function readAppTodoProgress(appId: string, options: OptionsBase): 
   return data
 }
 
-export async function appTodo(appId: string | undefined, options: Partial<OptionsBase>) {
+export async function appTodo(appId: string | undefined, options: AppTodoOptions) {
   // Snapshot before the first API read so a check finishing during that read still triggers a refresh.
   const backgroundChecks = [...getPendingOnboardingChecks().values()].map(check => check.completion)
   intro('App todo list')
@@ -227,8 +296,9 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
     throw new CliUserError(message)
   }
 
-  const supabase = await createSupabaseClient(apikey, options.supaHost, options.supaAnon)
-  const loading = stdin.isTTY && stdout.isTTY ? spinner() : null
+  const client = await createCapgoClient(apikey, options.apiHost)
+  const interactive = canPromptInteractively()
+  const loading = interactive ? spinner() : null
   if (loading)
     loading.start('Loading the todo list')
   else
@@ -236,7 +306,7 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
 
   let progress: AppTodoProgress
   try {
-    await check2FAComplianceForApp(supabase, appId)
+    await check2FAComplianceForApp(client, appId)
     progress = await readAppTodoProgress(appId, { ...options, apikey })
     loading?.stop('Todo list loaded')
   }
@@ -246,18 +316,30 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
       log.error(error.message)
     throw error
   }
-  const { version, steps, path } = getAppTodoSteps(progress)
-  const checks = path !== 'builder' && (version === 3 || (version === 4 && steps.length > 0)) ? backgroundChecks : []
+  const resolveView = () => {
+    try {
+      return resolveAppTodoView(progress, { list: options.list, interactive })
+    }
+    catch (error) {
+      if (error instanceof CliUserError)
+        log.error(error.message)
+      throw error
+    }
+  }
+  let view = resolveView()
+  const { version, steps } = getAppTodoSteps(progress, view.list)
+  const checks = (view.tabs || view.list === 'ota') && (version === 3 || (version === 4 && steps.length > 0)) ? backgroundChecks : []
   if (checks.length) {
-    const waiting = stdin.isTTY && stdout.isTTY ? spinner() : null
+    const waiting = interactive ? spinner() : null
     const waitMessage = (seconds: number) => `Waiting ${seconds} seconds for background TODO list checks to finish`
     if (!waiting)
       log.info(waitMessage(10))
     let started = false
     const finished = await waitForTodoBackgroundChecks(checks, waiting
       ? (seconds) => {
-          if (started)
+          if (started) {
             waiting.message(waitMessage(seconds))
+          }
           else {
             waiting.start(waitMessage(seconds))
             started = true
@@ -266,7 +348,7 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
       : undefined)
     waiting?.stop(finished ? 'Background TODO list checks finished' : 'Finished waiting for background TODO list checks')
 
-    const refreshing = stdin.isTTY && stdout.isTTY ? spinner() : null
+    const refreshing = interactive ? spinner() : null
     if (refreshing)
       refreshing.start('Refreshing the todo list')
     else
@@ -284,6 +366,28 @@ export async function appTodo(appId: string | undefined, options: Partial<Option
   }
   if (progress.checkErrors?.length)
     log.warn('Some live progress checks failed. Showing saved progress for those tasks; try again to refresh them.')
-  log.info(formatAppTodoList(appId, progress, { color: !!stdout.isTTY && env.NO_COLOR === undefined }))
+  view = resolveView()
+  const color = !!stdout.isTTY && env.NO_COLOR === undefined
+  let selectedList = view.list
+  if (view.tabs) {
+    const { showAppTodoTabs } = await import('./todo-tabs')
+    selectedList = await showAppTodoTabs({
+      initialList: view.list,
+      color,
+      lists: getAvailableAppTodoLists(progress).map((list) => {
+        const { steps } = getAppTodoSteps(progress, list)
+        return {
+          id: list,
+          completed: steps.filter(step => step.status === 'done' || step.status === 'skipped').length,
+          total: steps.length,
+          content: formatAppTodoList(appId, progress, { list, color }),
+        }
+      }),
+    })
+  }
+  if (isAgentInvocation())
+    printAgentText(formatAppTodoList(appId, progress, { list: selectedList, trial: getAgentTrial(progress, (await getRemoteConfig(true)).hostWeb) }))
+  else
+    log.info(formatAppTodoList(appId, progress, { list: selectedList, color }))
   outro('Done ✅')
 }

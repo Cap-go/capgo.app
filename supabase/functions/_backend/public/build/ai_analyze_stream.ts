@@ -3,8 +3,9 @@ import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr, serializeError } from '../../utils/logging.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin, supabaseApikey } from '../../utils/supabase.ts'
 import { sendEventToTracking } from '../../utils/tracking.ts'
 import { getEnv } from '../../utils/utils.ts'
 import { emitAiAnalysisResult } from './ai_analyze_telemetry.ts'
@@ -48,16 +49,21 @@ export async function aiAnalyzeStreamBuild(
 
   // 2. Ownership + state check (user context). Idempotency is NOT checked here —
   // the atomic claim below is the only gate, so there is no SELECT-then-flip race.
-  const supabase = supabaseApikey(c, apikey.key)
-  const { data: row, error: selectErr } = await supabase
-    .from('build_requests')
-    .select('app_id, status, owner_org')
-    .eq('builder_job_id', jobId)
-    .eq('app_id', appId)
-    .maybeSingle()
-
-  if (selectErr) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch build_request for AI analyze (stream)', job_id: jobId, error: selectErr.message })
+  const principal = apikeyPrincipal(c, apikey.key)
+  let row: { app_id: string, status: string, owner_org: string } | null
+  try {
+    const rows = await withRlsContext(c, principal, client => queryJson<{ app_id: string, status: string, owner_org: string }>(
+      client,
+      'SELECT app_id, status, owner_org FROM public.build_requests WHERE builder_job_id = $1 AND app_id = $2 LIMIT 2',
+      [jobId, appId],
+    ))
+    // maybeSingle(): more than one row was an error under PostgREST
+    if (rows.length > 1)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    row = rows[0] ?? null
+  }
+  catch (selectErr) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to fetch build_request for AI analyze (stream)', job_id: jobId, error: selectErr instanceof Error ? selectErr.message : String(selectErr) })
     await emitAiAnalysisResult(c, { appId, jobId, result: 'builder_error', userId: apikey.user_id, logsBytes })
     throw simpleError('internal_error', 'Failed to fetch build request')
   }
@@ -84,21 +90,32 @@ export async function aiAnalyzeStreamBuild(
   // service role only; user-context UPDATE would silently match 0 rows). Claiming
   // BEFORE the builder call is the abuse barrier: Workers AI bills input tokens at
   // prompt submission, so the flag must flip when cost commits, not on delivery.
-  const admin = supabaseAdmin(c)
-  const { data: claimed, error: claimErr } = await admin
-    .from('build_requests')
-    .update({ ai_analyzed: true })
-    .eq('builder_job_id', jobId)
-    .eq('app_id', appId)
-    .eq('ai_analyzed', false)
-    .select('builder_job_id')
+  const setAiAnalyzed = async (value: boolean, onlyIfUnclaimed: boolean): Promise<number> => {
+    const pg = await getPgClient(c)
+    try {
+      const result = await pg.query(
+        `UPDATE public.build_requests SET ai_analyzed = $3
+        WHERE builder_job_id = $1 AND app_id = $2${onlyIfUnclaimed ? ' AND ai_analyzed = false' : ''}
+        RETURNING builder_job_id`,
+        [jobId, appId, value],
+      )
+      return result.rowCount ?? 0
+    }
+    finally {
+      closeClient(c, pg)
+    }
+  }
 
-  if (claimErr) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'AI analyze claim failed', job_id: jobId, error: claimErr.message })
+  let claimedCount: number
+  try {
+    claimedCount = await setAiAnalyzed(true, true)
+  }
+  catch (claimErr) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'AI analyze claim failed', job_id: jobId, error: claimErr instanceof Error ? claimErr.message : String(claimErr) })
     await emitAiAnalysisResult(c, { appId, jobId, result: 'builder_error', ownerOrg, userId: apikey.user_id, logsBytes })
     throw simpleError('internal_error', 'Failed to claim analysis slot')
   }
-  if (!claimed || claimed.length === 0) {
+  if (claimedCount === 0) {
     await emitAiAnalysisResult(c, { appId, jobId, result: 'already_analyzed', ownerOrg, userId: apikey.user_id, logsBytes })
     // 409 — the CLI branches on res.status === 409 for this case
     throw quickError(409, 'already_analyzed', 'AI analysis already requested for this job')
@@ -106,15 +123,12 @@ export async function aiAnalyzeStreamBuild(
 
   // Refund — ONLY for provably-pre-AI failures. Never on disconnects/timeouts.
   const refund = async (reason: string): Promise<void> => {
-    const { error: refundErr } = await admin
-      .from('build_requests')
-      .update({ ai_analyzed: false })
-      .eq('builder_job_id', jobId)
-      .eq('app_id', appId)
-      .select('builder_job_id')
-    if (refundErr) {
+    try {
+      await setAiAnalyzed(false, false)
+    }
+    catch (refundErr) {
       // Fail closed: slot stays consumed. Log loudly — this should be rare.
-      cloudlogErr({ requestId: c.get('requestId'), message: 'AI analyze refund failed — slot stays consumed', job_id: jobId, reason, error: refundErr.message })
+      cloudlogErr({ requestId: c.get('requestId'), message: 'AI analyze refund failed — slot stays consumed', job_id: jobId, reason, error: refundErr instanceof Error ? refundErr.message : String(refundErr) })
     }
   }
 

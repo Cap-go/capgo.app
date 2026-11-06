@@ -3,10 +3,10 @@ import { addBackfillRunTags, buildCheckpointResumeFilter, getBackfillProgressSco
 import { buildCreditUsagePosthogEventInput } from '../supabase/functions/_backend/utils/credit_usage_posthog.ts'
 
 const {
-  supabaseAdminMock,
+  queryJsonOneMock,
   trackPosthogEventMock,
 } = vi.hoisted(() => ({
-  supabaseAdminMock: vi.fn(),
+  queryJsonOneMock: vi.fn(),
   trackPosthogEventMock: vi.fn(),
 }))
 
@@ -29,8 +29,13 @@ vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({
   trackPosthogEvent: trackPosthogEventMock,
 }))
 
-vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({
-  supabaseAdmin: supabaseAdminMock,
+vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({
+  closeClient: vi.fn(),
+  getPgClient: vi.fn(async () => ({})),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  queryJsonOne: queryJsonOneMock,
 }))
 
 const transaction = {
@@ -59,16 +64,6 @@ const overageEvent = {
   overage_amount: 3600,
 }
 
-function queryResponse(data: unknown, error: unknown = null) {
-  return {
-    select: vi.fn(() => ({
-      eq: vi.fn(() => ({
-        maybeSingle: vi.fn(async () => ({ data, error })),
-      })),
-    })),
-  }
-}
-
 function post(body: unknown) {
   return app.request(new Request('http://local/', {
     body: JSON.stringify(body),
@@ -81,20 +76,18 @@ const { app } = await import('../supabase/functions/_backend/triggers/credit_usa
 
 beforeEach(() => {
   trackPosthogEventMock.mockResolvedValue(true)
-  supabaseAdminMock.mockImplementation(() => ({
-    from: (table: string) => {
-      if (table === 'usage_credit_transactions')
-        return queryResponse(transaction)
-      if (table === 'usage_overage_events')
-        return queryResponse(overageEvent)
-      throw new Error(`Unexpected table ${table}`)
-    },
-  }))
+  queryJsonOneMock.mockImplementation(async (_client: unknown, text: string) => {
+    if (text.includes('public.usage_credit_transactions'))
+      return transaction
+    if (text.includes('public.usage_overage_events'))
+      return overageEvent
+    throw new Error(`Unexpected query ${text}`)
+  })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
-  supabaseAdminMock.mockReset()
+  queryJsonOneMock.mockReset()
   trackPosthogEventMock.mockReset()
 })
 

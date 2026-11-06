@@ -8,7 +8,7 @@ export async function reportInitOnboardingStep(
   appId: string | undefined,
   stepNumber: number,
   status: 'done' | 'skipped' = 'done',
-  options?: { supaHost?: string, supaAnon?: string, outcome?: 'completed' | 'skipped' | 'in_progress' },
+  options?: { apiHost?: string, outcome?: 'completed' | 'skipped' | 'in_progress' },
 ): Promise<void> {
   const step = initOnboardingSteps[stepNumber - 1]
   if (!appId || !step)
@@ -23,7 +23,7 @@ export async function reportInitOnboarding(
   apikey: string,
   appId: string,
   steps: Partial<Record<InitOnboardingStepId, { status: 'done' | 'skipped' }>>,
-  options?: { supaHost?: string, supaAnon?: string, outcome?: 'completed' | 'skipped' | 'in_progress' | 'switched_to_manual' },
+  options?: { apiHost?: string, outcome?: 'completed' | 'skipped' | 'in_progress' | 'switched_to_manual' },
 ): Promise<void> {
   try {
     await reportAppOnboardingProgress(apikey, appId, {

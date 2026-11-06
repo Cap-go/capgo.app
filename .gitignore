@@ -48,7 +48,7 @@ cloudflare_workers_deno/.denoflare
 
 .dev.vars
 .vars
-src/types/supabase.types.ts
+src/types/database.types.ts
 supabase/functions/_backend/utils/supabase.types.ts
 .env.alpha
 # AI agent directories
@@ -87,6 +87,7 @@ scripts/*.txt
 scripts/*.csv
 test-runner-profile
 .wrangler-shared
+.wrangler-shared-*
 internal/capgo-394818-68ad1517d330.json
 internal/Certificates_p12.p12
 internal/AuthKey_8P7Y3V99PJ.p8
@@ -96,18 +97,8 @@ internal/Certificates.p12
 .superpowers/
 .playwright-mcp/
 
-# Graphify local cache and optional exports. Keep graph.json, cost.json, and
-# GRAPH_REPORT.md committed.
-graphify-out/.*
-graphify-out/cache/
-graphify-out/manifest.json
-graphify-out/obsidian/
-graphify-out/wiki/
-graphify-out/memory/
-graphify-out/*.html
-graphify-out/*.svg
-graphify-out/*.graphml
-graphify-out/cypher.txt
+# Local codedb index snapshot
+codedb.snapshot
 
 # Capgo CLI keychain helper — locally built bundles
 cli-helper/dist/

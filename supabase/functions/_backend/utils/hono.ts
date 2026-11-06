@@ -11,8 +11,9 @@ import { logger } from 'hono/logger'
 import { requestId } from 'hono/request-id'
 import { Hono } from 'hono/tiny'
 import { timingSafeEqual } from 'hono/utils/buffer'
-import { cloudlog } from './logging.ts'
+import { accessLog, cloudlog } from './logging.ts'
 import { onError } from './on_error.ts'
+import { redactSensitiveUrl } from './sensitive_url.ts'
 import { getEnv } from './utils.ts'
 
 import { version as CapgoVersion } from './version.ts'
@@ -170,28 +171,54 @@ export function getAllowedCorsOrigin(origin: string, c: Context) {
 
 export const useCors = cors({
   origin: getAllowedCorsOrigin,
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Capgo-Spoof-Admin-Authorization', 'capgkey', 'capgo_api', 'x-api-key', 'x-limited-key-id', 'apisecret', 'apikey', 'x-client-info', 'x-cli-version', 'x-cli-command', 'x-cli-node', 'x-cli-os'],
+  // x-image-* ride on the console image upload. A preflight that omits them
+  // makes the browser drop the POST before it reaches storage.
+  allowHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-chatgpt-token',
+    'X-Capgo-Spoof-Admin-Authorization',
+    'capgkey',
+    'capgo_api',
+    'x-api-key',
+    'x-limited-key-id',
+    'apisecret',
+    'apikey',
+    'x-client-info',
+    'x-cli-version',
+    'x-cli-command',
+    'x-cli-node',
+    'x-cli-os',
+    'x-image-path',
+    'x-image-upsert',
+  ],
   allowMethods: ['POST', 'GET', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  exposeHeaders: ['RateLimit', 'RateLimit-Policy', 'Retry-After'],
 })
 
 export const honoFactory = createFactory<MiddlewareKeyVariables>()
 
 type TriggerOperation = 'DELETE' | 'INSERT' | 'UPDATE'
 
+// Views are accepted for messages queued before a table became a view.
+type TriggerRelation = keyof Database['public']['Tables'] | keyof Database['public']['Views']
+
 export function triggerValidator(
-  table: keyof Database['public']['Tables'],
+  table: TriggerRelation | readonly TriggerRelation[],
   type: TriggerOperation | readonly TriggerOperation[],
 ) {
+  const allowedTables: readonly string[] = typeof table === 'string' ? [table] : table
+  const tableLabel = allowedTables.join(' or ')
   return honoFactory.createMiddleware(async (c, next) => {
     const rawBody = await parseBody<unknown>(c)
     if (rawBody === null || typeof rawBody !== 'object' || Array.isArray(rawBody))
       throw simpleError('invalid_payload', 'Expected a JSON object', { body: rawBody })
 
-    const body = rawBody as DeletePayload<typeof table> | InsertPayload<typeof table> | UpdatePayload<typeof table>
+    const body = rawBody as DeletePayload<keyof Database['public']['Tables']> | InsertPayload<keyof Database['public']['Tables']> | UpdatePayload<keyof Database['public']['Tables']>
     const allowedTypes: readonly TriggerOperation[] = typeof type === 'string' ? [type] : type
 
-    if (body.table !== String(table)) {
-      cloudlog({ requestId: c.get('requestId'), message: `Not ${String(table)}` })
+    if (!allowedTables.includes(String(body.table))) {
+      cloudlog({ requestId: c.get('requestId'), message: `Not ${tableLabel}` })
       throw simpleError('table_not_match', 'Not table', { body })
     }
 
@@ -320,7 +347,7 @@ export function createHono(functionName: string, _version: string) {
   // Skip hono's access logger on plugin hot paths — it serializes every request
   // on millions of device calls/day.
   if (!pluginHotPath)
-    appGlobal.use('*', logger())
+    appGlobal.use('*', logger(accessLog))
   // Use platform-specific request IDs, fallback to generated UUID.
   // Do not cloudlog inside the generator: it runs on every request (incl. cf-ray).
   appGlobal.use('*', requestId({
@@ -356,7 +383,7 @@ export function createHono(functionName: string, _version: string) {
 
 export function createAllCatch(appGlobal: Hono<MiddlewareKeyVariables>, functionName: string) {
   appGlobal.all('*', useCors, (c) => {
-    cloudlog({ requestId: c.get('requestId'), functionName, message: 'Not found', url: c.req.url })
+    cloudlog({ requestId: c.get('requestId'), functionName, message: 'Not found', url: redactSensitiveUrl(c.req.url) })
     return c.json({ error: 'not_found', message: 'Not found' }, 404)
   })
   appGlobal.onError(onError(functionName))

@@ -1,46 +1,50 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
+import type { ConsoleClient } from '~/services/consoleClient'
 import type { UserModule } from '~/types'
 import { ADMIN_DASHBOARD_URL } from '~/constants/adminDashboard'
-import { clearChartDataCache } from '~/services/chartDataService'
-import { isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
+import { clearChartDataCache } from '~/services/chartDataCache'
+import { isAgentClaimPath, isCliLoginPath, isMcpAuthorizePath } from '~/services/cliLogin'
+import { getLocalConfig, useConsole } from '~/services/console'
 import { hideLoader } from '~/services/loader'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { setUser } from '~/services/posthog'
 import { applySignupAttributionToPostHog } from '~/services/signupAttribution'
 import { isSsoUser, provisionSsoUser } from '~/services/ssoProvisioning'
 import { createSignedImageUrl, getImmediateImageUrl } from '~/services/storage'
-import { getLocalConfig, useSupabase } from '~/services/supabase'
 import { sendEvent } from '~/services/tracking'
 import { clearWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { shouldSkipOnboardingResume } from '~/utils/appOnboardingProgress'
-import { getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
+import { needsInitialOnboardingName } from '~/utils/onboardingProfile'
+import { canExploreOnboardingDashboard, getOnboardingResumeRedirect, isNewOnboardingUser } from '~/utils/onboardingRedirect'
+import { AI_ONBOARDING_PATH, shouldRedirectToAiOnboarding } from '~/utils/onboardingSetupMode'
 import { hasPendingInviteSkip } from '~/utils/pendingInviteSkip'
 import { validateRedirectPath } from '~/utils/safeRedirect'
-import { getPlans } from './../services/supabase'
+import { getPlans } from './../services/console'
 
 async function updateUser(
   main: ReturnType<typeof useMainStore>,
-  supabase: SupabaseClient,
+  capgo: ConsoleClient,
 ) {
   const config = getLocalConfig()
   // console.log('set auth', auth)
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('users')
       .select()
-      .eq('id', main.auth?.id)
+      .eq('id', main.auth?.id ?? '')
       .maybeSingle()
 
     let userRecord = data ?? null
 
-    if (error && error.code !== 'PGRST116')
+    if (error && error.code !== 'PGRST116') {
       console.error('Failed to fetch public user profile', error)
+      return
+    }
 
     if (!userRecord && main.auth) {
-      const { data: inserted, error: insertError } = await supabase
+      const { data: inserted, error: insertError } = await capgo
         .from('users')
         .insert({
           id: main.auth.id,
@@ -66,10 +70,10 @@ async function updateUser(
       return
 
     if (main.auth?.email && userRecord.email !== main.auth?.email) {
-      const { error: updateError } = await supabase
+      const { error: updateError } = await capgo
         .from('users')
         .update({ email: main.auth?.email })
-        .eq('id', main.auth?.id)
+        .eq('id', main.auth?.id ?? '')
       if (updateError)
         console.error('update error', updateError)
       userRecord.email = main.auth?.email
@@ -89,9 +93,9 @@ async function updateUser(
           nickname: [userRecord.first_name, userRecord.last_name].filter(Boolean).join(' ') || undefined,
           avatar: avatar ?? undefined,
         },
-        config.supaHost,
+        config.apiHost,
       )
-      applySignupAttributionToPostHog(authUser, config.supaHost)
+      applySignupAttributionToPostHog(authUser, config.apiHost)
     }
 
     main.user = userRecord
@@ -121,8 +125,8 @@ async function updateUser(
 }
 
 async function maybeProvisionSsoMembership(
-  supabase: SupabaseClient,
-  session: Awaited<ReturnType<SupabaseClient['auth']['getSession']>>['data']['session'] | null,
+  capgo: ConsoleClient,
+  session: Awaited<ReturnType<ConsoleClient['auth']['getSession']>>['data']['session'] | null,
 ): Promise<'continue' | 'redirect_login' | 'abort_navigation'> {
   if (!session || !isSsoUser(session.user))
     return 'continue'
@@ -130,7 +134,7 @@ async function maybeProvisionSsoMembership(
   const result = await provisionSsoUser(session)
 
   if (result.merged) {
-    const { error: signOutError } = await supabase.auth.signOut()
+    const { error: signOutError } = await capgo.auth.signOut()
     if (signOutError) {
       console.error('Failed to sign out merged SSO session during auth guard:', signOutError)
       return 'abort_navigation'
@@ -147,24 +151,40 @@ async function maybeProvisionSsoMembership(
   return 'continue'
 }
 
-async function isDisabledAccount(supabase: SupabaseClient, userId: string | null | undefined) {
+// Reuse a recent "account is active" answer instead of paying an API round trip before every
+// dashboard navigation. A disabled answer is never reused, so restoring the account is seen at once.
+const ACTIVE_ACCOUNT_CHECK_TTL_MS = 60_000
+let activeAccountCheck: { userId: string, checkedAt: number } | null = null
+
+async function isDisabledAccount(capgo: ConsoleClient, userId: string | null | undefined, { fresh = false } = {}) {
   if (!userId)
     return false
 
+  if (!fresh && activeAccountCheck?.userId === userId && Date.now() - activeAccountCheck.checkedAt < ACTIVE_ACCOUNT_CHECK_TTL_MS)
+    return false
+
+  const disabled = await fetchDisabledAccount(capgo, userId)
+  // Only an explicit "active" answer is reused; a failed check (null) asks again next time.
+  activeAccountCheck = disabled === false ? { userId, checkedAt: Date.now() } : null
+  return disabled === true
+}
+
+/** true or false from the API, null when the check failed. */
+async function fetchDisabledAccount(capgo: ConsoleClient, userId: string): Promise<boolean | null> {
   try {
-    const { data: isDisabled, error } = await supabase
+    const { data: isDisabled, error } = await capgo
       .rpc('is_account_disabled', { user_id: userId })
 
     if (error) {
       console.error('Error checking account status:', error)
-      return false
+      return null
     }
 
     return !!isDisabled
   }
   catch (error) {
     console.error('Error checking if account is disabled:', error)
-    return false
+    return null
   }
 }
 
@@ -187,18 +207,18 @@ async function guard(
   to: RouteLocationNormalized,
   from: RouteLocationNormalized,
 ) {
-  const supabase = useSupabase()
+  const capgo = useConsole()
   const main = useMainStore()
   const organizationStore = useOrganizationStore()
-  const { data: claimsData } = await supabase.auth.getClaims()
-  const { data: sessionData } = await supabase.auth.getSession()
+  const { data: claimsData } = await capgo.auth.getClaims()
+  const { data: sessionData } = await capgo.auth.getSession()
   const sessionUser = sessionData?.session?.user ?? null
   const hasAuth = !!claimsData?.claims?.sub && !!sessionUser
   const hadAuth = !!main.auth
   const inviteOrgId = typeof to.query.invite_org === 'string' && to.query.invite_org.length > 0
     ? to.query.invite_org
     : null
-  const isCliLoginRoute = isCliLoginPath(to.path) || isMcpAuthorizePath(to.path)
+  const isCliLoginRoute = isCliLoginPath(to.path) || isMcpAuthorizePath(to.path) || isAgentClaimPath(to.path)
   const organizationFetchOptions = { loadImages: !isCliLoginRoute }
 
   async function tryLoadOrganizations(fetcher: () => Promise<void>) {
@@ -229,8 +249,27 @@ async function guard(
     }
   }
 
+  function requiredNameRedirect(organizationsLoaded: boolean) {
+    // CLI and MCP authorization must finish before any onboarding detour.
+    if (isCliLoginRoute)
+      return null
+    // An unknown profile cannot establish whether names are required. Offer a
+    // retry without letting the user bypass required names or stranding navigation.
+    if (!main.user)
+      return { path: '/login', query: { profile_unavailable: '1', to: to.fullPath } }
+    // Scope is unknown after an org fetch failure. Never force an established
+    // member into initial onboarding; the onboarding wizard re-checks names.
+    if (!organizationsLoaded || !needsInitialOnboardingName(main.user))
+      return null
+    if (to.path === '/onboarding/name' || organizationStore.hasOrganizations)
+      return null
+    return { path: '/onboarding/name', query: { to: to.fullPath } }
+  }
+
   function shouldRedirectToOrgOnboarding() {
     if (isCliLoginRoute)
+      return false
+    if (to.path === '/onboarding/name')
       return false
     if (to.path.startsWith('/onboarding/app'))
       return false
@@ -250,7 +289,7 @@ async function guard(
       return false
     if (isNativeAppStoreContext())
       return false
-    if (to.path.startsWith('/onboarding/invitation'))
+    if (to.path === '/onboarding/name' || to.path.startsWith('/onboarding/invitation'))
       return false
     if (hasPendingInviteSkip(sessionUser?.id ?? main.auth?.id))
       return false
@@ -258,6 +297,8 @@ async function guard(
   }
 
   async function getPendingOnboardingRedirect(organizationsLoaded: boolean) {
+    if (to.path === '/onboarding/name')
+      return null
     if (isCliLoginRoute)
       return null
     // Creating another organization must not bounce back to pending setup.
@@ -272,7 +313,7 @@ async function guard(
     if (selectableOrganizations.length !== 1)
       return null
 
-    const { data: apps, error } = await supabase
+    const { data: apps, error } = await capgo
       .from('apps')
       .select('app_id, need_onboarding, onboarding')
       .eq('owner_org', selectableOrganizations[0].gid)
@@ -281,6 +322,16 @@ async function guard(
     if (error) {
       console.error('Cannot resolve onboarding redirect', error)
       return null
+    }
+
+    if (shouldRedirectToAiOnboarding({
+      onboarding: main.user?.onboarding,
+      appCount: apps?.length ?? 0,
+      organizationCount: selectableOrganizations.length,
+      path: to.path,
+      canExploreDashboard: canExploreOnboardingDashboard(sessionUser?.id),
+    })) {
+      return { path: AI_ONBOARDING_PATH }
     }
 
     const app = apps?.[0]
@@ -301,26 +352,13 @@ async function guard(
     if (!main.auth || main.auth.id !== sessionUser.id || authConfirmedAt !== sessionUser.email_confirmed_at) {
       main.auth = sessionUser
     }
-    applySignupAttributionToPostHog(sessionUser, getLocalConfig().supaHost)
+    applySignupAttributionToPostHog(sessionUser, getLocalConfig().apiHost)
   }
-
-  // TOTP means the user was force logged using the "email" tactic
-  // In practice this means the user is being spoofed by an admin
-  const isAdminForced
-    = !!sessionUser?.factors?.find(f => f.factor_type === 'totp') || false
 
   const { data: mfaData, error: mfaError }
-    = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    = await capgo.auth.mfa.getAuthenticatorAssuranceLevel()
   if (mfaError) {
     console.error('Cannot guard auth', mfaError)
-    return
-  }
-
-  if (
-    mfaData.currentLevel === 'aal1'
-    && mfaData.nextLevel === 'aal2'
-    && !isAdminForced
-  ) {
     return next({
       path: '/login',
       query: {
@@ -329,8 +367,33 @@ async function guard(
     })
   }
 
+  if (mfaData.currentLevel === 'aal1' && mfaData.nextLevel === 'aal2') {
+    // Only the backend may waive MFA: verify_mfa passes an aal1 session solely
+    // when platform-admin log_as registered its session_id as an impersonation.
+    const { data: hasMfaAssurance, error: verifyMfaError } = await capgo.rpc('verify_mfa')
+    if (verifyMfaError)
+      console.error('Cannot verify MFA assurance', verifyMfaError)
+    if (verifyMfaError || hasMfaAssurance !== true) {
+      return next({
+        path: '/login',
+        query: {
+          to: to.fullPath,
+        },
+      })
+    }
+  }
+
   if (hasAuth && sessionUser && !hadAuth) {
-    const isDisabled = await isDisabledAccount(supabase, sessionUser.id)
+    // Start the reads that do not depend on each other at once: on a slow network each
+    // sequential request adds a full round trip before the first screen renders.
+    // SSO users must be provisioned into their organization before it is listed.
+    const disabledRequest = isDisabledAccount(capgo, sessionUser.id, { fresh: true })
+    const userRequest = main.user ? Promise.resolve() : updateUser(main, capgo)
+    const plansRequest = loadPlansIfNeeded()
+    const organizationsRequest = isSsoUser(sessionUser)
+      ? null
+      : tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
+    const isDisabled = await disabledRequest
     if (to.path === '/accountDisabled') {
       hideLoader()
       return isDisabled ? next() : next(getPostRestorePath(to))
@@ -340,18 +403,17 @@ async function guard(
       return next(getAccountDisabledRedirect(to))
     }
 
-    const provisioningResult = await maybeProvisionSsoMembership(supabase, sessionData?.session ?? null)
+    const provisioningResult = await maybeProvisionSsoMembership(capgo, sessionData?.session ?? null)
     if (provisioningResult === 'redirect_login') {
       return next('/login?message=sso_account_linked')
     }
     if (provisioningResult === 'abort_navigation') {
-      hideLoader()
-      return next(false)
+      await hideLoader()
+      next(false)
+      return
     }
 
-    if (!main.user) {
-      await updateUser(main, supabase)
-    }
+    await userRequest
 
     sendEvent({
       channel: 'user-login',
@@ -359,9 +421,14 @@ async function guard(
       user_id: main.auth?.id,
     }).catch()
 
-    await loadPlansIfNeeded()
+    await plansRequest
 
-    const organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
+    const organizationsLoaded = await (organizationsRequest ?? tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions)))
+    const nameRedirect = requiredNameRedirect(organizationsLoaded)
+    if (nameRedirect) {
+      await hideLoader()
+      return next(nameRedirect)
+    }
     if (shouldRedirectToPendingInviteOnboarding(organizationsLoaded)) {
       return next({
         path: '/onboarding/invitation',
@@ -399,7 +466,7 @@ async function guard(
     })
   }
   else if (hasAuth && main.auth) {
-    const isDisabled = await isDisabledAccount(supabase, sessionUser?.id ?? main.auth.id)
+    const isDisabled = await isDisabledAccount(capgo, sessionUser?.id ?? main.auth.id, { fresh: to.path === '/accountDisabled' })
     if (isDisabled && to.path !== '/accountDisabled') {
       hideLoader()
       return next(getAccountDisabledRedirect(to))
@@ -409,6 +476,8 @@ async function guard(
       return next(getPostRestorePath(to))
     }
 
+    if (!main.user)
+      await updateUser(main, capgo)
     await loadPlansIfNeeded()
 
     let organizationsLoaded = await tryLoadOrganizations(() => organizationStore.dedupFetchOrganizations(organizationFetchOptions))
@@ -422,7 +491,7 @@ async function guard(
     }
 
     if (organizationsLoaded && !organizationStore.hasOrganizations && isSsoUser(sessionUser)) {
-      const didProvisionSsoMembership = await maybeProvisionSsoMembership(supabase, sessionData?.session ?? null)
+      const didProvisionSsoMembership = await maybeProvisionSsoMembership(capgo, sessionData?.session ?? null)
       if (didProvisionSsoMembership === 'redirect_login') {
         return next('/login?message=sso_account_linked')
       }
@@ -432,6 +501,13 @@ async function guard(
       }
 
       organizationsLoaded = await tryLoadOrganizations(() => organizationStore.fetchOrganizations(organizationFetchOptions))
+    }
+
+    // Check names after SSO provisioning so enterprise members are not sent to self-signup onboarding.
+    const nameRedirect = requiredNameRedirect(organizationsLoaded)
+    if (nameRedirect) {
+      await hideLoader()
+      return next(nameRedirect)
     }
 
     await resolvePlatformAdminStatus()
@@ -449,26 +525,26 @@ async function guard(
     if (onboardingRedirect)
       return next(onboardingRedirect)
 
-    hideLoader()
-    next()
+    await hideLoader()
+    void next()
   }
   else {
-    hideLoader()
-    next()
+    await hideLoader()
+    void next()
   }
 }
 
 export const install: UserModule = ({ router }) => {
-  const supabase = useSupabase()
-  supabase.auth.getSession()
+  const capgo = useConsole()
+  capgo.auth.getSession()
     .then(({ data }) => {
       if (!data.session)
         clearWebsitePaidUserCookie()
     })
     .catch(error => console.error('Failed to clear website paid user cookie', error))
 
-  if (typeof supabase.auth.onAuthStateChange === 'function') {
-    supabase.auth.onAuthStateChange((_event, session) => {
+  if (typeof capgo.auth.onAuthStateChange === 'function') {
+    capgo.auth.onAuthStateChange((_event, session) => {
       if (!session) {
         clearWebsitePaidUserCookie()
         clearChartDataCache()

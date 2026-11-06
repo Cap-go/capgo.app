@@ -4,7 +4,9 @@ import { DrizzleError, entityKind, TransactionRollbackError } from 'drizzle-orm'
 import { sendDiscordAlert500 } from './discord.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { isTransientDatabaseError, readPgErrorCode, readQuickErrorOriginalCause } from './pg_errors.ts'
+import { applyPreviewXRobotsTag, isPreviewCapgoHost } from '../files/preview-host-headers.ts'
 import { capturePosthogException } from './posthog.ts'
+import { isSecretBodyRoute, redactSensitiveUrl } from './sensitive_url.ts'
 import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
@@ -32,7 +34,18 @@ const sensitiveRequestBodyKeys = new Set([
   'full_name',
   'givenName',
   'familyName',
+  // Native build signing secrets (/build/request, /build/credentials).
+  'credentials',
+  'build_credentials',
 ])
+
+// Generic secret-looking key names (build env style P12_PASSWORD, APPLE_KEY_CONTENT,
+// ANDROID_KEYSTORE_FILE, BUILD_PROVISION_PROFILE_BASE64, apikey, ...).
+const sensitiveRequestBodyKeyPattern = /PASSWORD|SECRET|KEY|TOKEN|CERTIFICATE|KEYSTORE|PLAY_CONFIG_JSON|PROVISION/i
+
+function isSensitiveRequestBodyKey(key: string): boolean {
+  return sensitiveRequestBodyKeys.has(key) || sensitiveRequestBodyKeyPattern.test(key)
+}
 
 function redactSensitiveRequestBody(value: unknown): unknown {
   if (Array.isArray(value))
@@ -43,9 +56,11 @@ function redactSensitiveRequestBody(value: unknown): unknown {
 
   return Object.fromEntries(Object.entries(value).map(([key, entryValue]) => [
     key,
-    sensitiveRequestBodyKeys.has(key) ? '[redacted]' : redactSensitiveRequestBody(entryValue),
+    isSensitiveRequestBodyKey(key) ? '[redacted]' : redactSensitiveRequestBody(entryValue),
   ]))
 }
+
+export const SECRET_ROUTE_BODY_PLACEHOLDER = '[redacted: secret request body]'
 
 function isFilesDurableObjectTransientError(functionName: string, error: unknown): boolean {
   if (!filesUploadFunctionNames.has(functionName) || !error || typeof error !== 'object' || !('message' in error))
@@ -70,6 +85,16 @@ function readRequestHeader(c: Context, name: string): string | undefined {
   if (fromHono)
     return fromHono
   return c.req.raw.headers.get(name) ?? undefined
+}
+
+async function withPreviewHostErrorHeaders(c: Context, response: Response | Promise<Response>): Promise<Response> {
+  const resolved = await response
+  const hostname = readRequestHeader(c, 'host') || new URL(c.req.url).hostname
+  if (!isPreviewCapgoHost(hostname))
+    return resolved
+
+  applyPreviewXRobotsTag(resolved.headers)
+  return resolved
 }
 
 function parsePositiveInteger(value: string | undefined): number | null {
@@ -117,7 +142,7 @@ function logTransientPgError(c: Context, functionName: string, e: unknown, kind:
     functionName,
     kind,
     method: c.req.method,
-    url: c.req.url,
+    url: redactSensitiveUrl(c.req.url),
     errorMessage: (e as Error)?.message ?? 'Unknown error',
     stack: serializeError(e)?.stack ?? 'N/A',
     transient: true,
@@ -131,7 +156,11 @@ export function onError(functionName: string) {
     const rawReq = c.req.raw
     const method = c.req.method.toUpperCase()
     const shouldReadBody = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
-    if (shouldReadBody) {
+    // Signing secrets and assistant conversations must never be read here.
+    if (shouldReadBody && isSecretBodyRoute(c.req.url)) {
+      body = SECRET_ROUTE_BODY_PLACEHOLDER
+    }
+    else if (shouldReadBody) {
       try {
         if (rawReq?.bodyUsed) {
           body = 'Body already consumed'
@@ -175,7 +204,7 @@ export function onError(functionName: string) {
       const originalCause = readQuickErrorOriginalCause(e)
       if (originalCause !== undefined && isTransientDatabaseError(originalCause)) {
         logTransientPgError(c, functionName, originalCause, isDrizzleErrorObject(originalCause) ? 'drizzle_error' : 'transient_pg_error')
-        return c.json(upstreamUnavailableResponse, 503)
+        return await withPreviewHostErrorHeaders(c, c.json(upstreamUnavailableResponse, 503))
       }
     }
 
@@ -213,7 +242,7 @@ export function onError(functionName: string) {
         functionName,
         kind: 'http_exception',
         method: c.req.method,
-        url: c.req.url,
+        url: redactSensitiveUrl(c.req.url),
         status: e.status,
         errorCode: res.error,
         errorMessage: res.message,
@@ -253,11 +282,11 @@ export function onError(functionName: string) {
           status: e.status,
         }))
       }
-      return c.json(res, e.status)
+      return await withPreviewHostErrorHeaders(c, c.json(res, e.status))
     }
     if (isTransientDatabaseError(e)) {
       logTransientPgError(c, functionName, e, isDrizzleError ? 'drizzle_error' : 'transient_pg_error')
-      return c.json(upstreamUnavailableResponse, 503)
+      return await withPreviewHostErrorHeaders(c, c.json(upstreamUnavailableResponse, 503))
     }
     if (isDrizzleError) {
       cloudlogErr({
@@ -265,7 +294,7 @@ export function onError(functionName: string) {
         functionName,
         kind: 'drizzle_error',
         method: c.req.method,
-        url: c.req.url,
+        url: redactSensitiveUrl(c.req.url),
         errorMessage: e?.message ?? 'Unknown error',
         stack: serializeError(e)?.stack ?? 'N/A',
         moreInfo: {
@@ -279,7 +308,7 @@ export function onError(functionName: string) {
         kind: 'drizzle_error',
         status: 500,
       }))
-      return c.json(defaultResponse, 500)
+      return await withPreviewHostErrorHeaders(c, c.json(defaultResponse, 500))
     }
     // Non-HTTP errors: log with stack and return 500
     const suppressQueueRetryAlert = shouldSuppressQueueRetryAlert(c)
@@ -289,7 +318,7 @@ export function onError(functionName: string) {
       functionName,
       kind: 'unhandled_error',
       method: c.req.method,
-      url: c.req.url,
+      url: redactSensitiveUrl(c.req.url),
       errorMessage: e?.message ?? 'Unknown error',
       stack: serializeError(e)?.stack ?? 'N/A',
     })
@@ -304,6 +333,6 @@ export function onError(functionName: string) {
         status: 500,
       }))
     }
-    return c.json(defaultResponse, 500)
+    return await withPreviewHostErrorHeaders(c, c.json(defaultResponse, 500))
   }
 }

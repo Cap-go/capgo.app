@@ -331,27 +331,29 @@ describe('ios/entitlements-aps-environment-vs-mode', () => {
     expect(f.some(x => x.severity === 'error')).toBe(false)
   })
 
-  it('errors on development+app_store when a mapped profile grants production push (real mismatch)', async () => {
-    // A mapped profile granting aps-environment=production is independent evidence the
-    // app genuinely uses push, so a development app entitlement IS a real signing mismatch.
+  it('does not error on development+app_store when a mapped profile grants production push', async () => {
+    // Xcode's App Store export takes aps-environment from the distribution profile,
+    // so development in App.entitlements + production profile is the normal setup.
     const ctx = ctxWithEntitlements('<key>aps-environment</key><string>development</string>', {
       distributionMode: 'app_store',
       credentials: { CAPGO_IOS_PROVISIONING_MAP: mapWith(profileXml('<key>aps-environment</key><string>production</string>')) },
     })
     const f = await apsEnvironmentVsMode.run(ctx)
     expect(f).toHaveLength(1)
-    expect(f[0]?.severity).toBe('error')
+    expect(f[0]?.severity).toBe('warning')
   })
 
-  it('errors on development+app_store when UIBackgroundModes declares remote-notification', async () => {
-    // remote-notification background mode is independent evidence the app uses push.
+  it('warns (does NOT error) on development+app_store when UIBackgroundModes declares remote-notification', async () => {
+    // The App Store export rewrites aps-environment from the distribution profile,
+    // so even a push app with the default development value must not hard-block.
     const dir = makeProject({
       'ios/App/App/App.entitlements': entitlementsFile('<key>aps-environment</key><string>development</string>'),
       'ios/App/App/Info.plist': `${PLIST_HEAD}\n<dict><key>UIBackgroundModes</key><array><string>remote-notification</string></array></dict>\n</plist>`,
     })
     const ctx = makeCtx({ projectDir: dir, platform: 'ios', distributionMode: 'app_store' })
     const f = await apsEnvironmentVsMode.run(ctx)
-    expect(f.some(x => x.severity === 'error')).toBe(true)
+    expect(f[0]?.severity).toBe('warning')
+    expect(f.some(x => x.severity === 'error')).toBe(false)
   })
 
   it('warns when aps-environment=production but mode is ad_hoc', async () => {

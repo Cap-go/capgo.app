@@ -1,79 +1,90 @@
 <script setup lang="ts">
-import { setErrors } from '@formkit/core'
-import { FormKit, FormKitMessages } from '@formkit/vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import VueTurnstile from 'vue-turnstile'
-import iconEmail from '~icons/oui/email?raw'
-import iconPassword from '~icons/ph/key?raw'
-import iconName from '~icons/ph/user?raw'
+import IconEmail from '~icons/oui/email'
+import IconPassword from '~icons/ph/key'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
-import { hashEmail, useSupabase } from '~/services/supabase'
+import FormField from '~/components/forms/FormField.vue'
+import VueTurnstile from '~/components/VueTurnstile.vue'
+import { getCapgoApiErrorCode } from '~/services/capgoApi'
+import { useConsole } from '~/services/console'
+import { FunctionsHttpError } from '~/services/consoleClient'
+import { registerAccount } from '~/services/registration'
 import { openSupport } from '~/services/support'
+import { rules, validateField } from '~/utils/formValidation'
 
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const { t } = useI18n()
 const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const isLoading = ref(false)
+const email = ref('')
+const password = ref('')
+const submitted = ref(false)
+const formErrors = ref<string[]>([])
+const emailErrors = computed(() => validateField(email.value, [rules.required(t('email'), { trim: true }), rules.email()]))
+const passwordErrors = computed(() => validateField(password.value, [
+  rules.required(t('password')),
+  rules.length(t('password'), 6),
+  rules.containsAlpha(t('password')),
+  rules.containsUppercase(t('password')),
+  rules.containsLowercase(t('password')),
+  rules.containsNumeric(t('password')),
+  rules.containsSymbol(t('password')),
+]))
 
 if (window.location.host === 'console.capgo.app') {
   // do not allow to register on webapp on production
   window.location.href = 'https://capgo.app/register/'
 }
 
-async function submit(form: { first_name: string, last_name: string, password: string, email: string }) {
+async function submit(form: { password: string, email: string }) {
   if (isLoading.value)
     return
 
-  const hashedEmail = await hashEmail(form.email)
-  const { data: deleted, error: errorDeleted } = await supabase
-    .rpc('is_not_deleted', { email_check: hashedEmail })
-  if (errorDeleted)
-    console.error(errorDeleted)
-  if (!deleted) {
-    setErrors('register-account', [t('used-to-create')], {})
-    return
-  }
-
   isLoading.value = true
-  const { data: user, error } = await supabase.auth.signUp(
-    {
-      email: form.email,
-      password: form.password,
-      options: {
-        captchaToken: turnstileToken.value,
-      },
-    },
-    // supabase auth config
-    // http://localhost:5173/login,http://localhost:5173/forgot_password?step=2,https://capgo.app/login,https://capgo.app/forgot_password?step=2,https://capgo.app/onboarding/first_password,https://development.capgo.app/login,https://development.capgo.app/forgot_password?step=2
-  )
-  isLoading.value = false
-  if (error || !user) {
-    setErrors('register-account', [error?.message || 'user not found'], {})
+  try {
+    const registered = await registerAccount(form.email, form.password, turnstileToken.value)
+    const { error } = await capgo.auth.setSession(registered.session)
+    if (error)
+      throw error
+  }
+  catch (error) {
+    const code = await getCapgoApiErrorCode(error)
+    let message = t('account-error')
+    if (error instanceof FunctionsHttpError && error.context instanceof Response) {
+      const body = await error.context.clone().json().catch(() => null)
+      if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string')
+        message = body.message
+    }
+    formErrors.value = [code === 'account_deleted' ? t('used-to-create') : message]
+    // Re-enable only after the error is shown, so a quick second click cannot start another signup.
+    isLoading.value = false
     return
   }
 
-  const newUser = user.user
-  if (newUser) {
-    const { error: profileError } = await supabase
-      .from('users')
-      .upsert({
-        id: newUser.id,
-        email: newUser.email ?? form.email,
-        first_name: form.first_name,
-        last_name: form.last_name,
-        enable_notifications: true,
-        opt_for_newsletters: true,
-      }, { onConflict: 'id' })
-
-    if (profileError)
-      console.error('Failed to seed user profile after signup', profileError)
+  // The account exists and the user is signed in from here on: a navigation problem is not a
+  // signup failure. Keep the spinner until onboarding has loaded, and fall back to a full page
+  // load if the in-app navigation fails.
+  try {
+    const failure = await router.push('/dashboard')
+    if (failure)
+      isLoading.value = false
   }
+  catch (navigationError) {
+    console.error('Navigation after registration failed', navigationError)
+    window.location.assign('/dashboard')
+  }
+}
 
-  router.push('/dashboard')
+function onSubmit() {
+  submitted.value = true
+  formErrors.value = []
+  if (emailErrors.value.length || passwordErrors.value.length)
+    return
+  return submit({ email: email.value, password: password.value })
 }
 </script>
 
@@ -83,74 +94,49 @@ async function submit(form: { first_name: string, last_name: string, password: s
     :card-kicker="t('register-heading')"
     :card-title="t('create-a-free-account')"
   >
-    <FormKit id="register-account" type="form" :actions="false" @submit="submit">
+    <form id="register-account" novalidate @submit.prevent="onSubmit">
       <div class="grid gap-4 text-slate-500 dark:text-slate-300 md:grid-cols-2">
         <div class="md:col-span-2">
-          <FormKitMessages data-test="form-error" />
+          <ul v-if="formErrors.length" role="alert" data-test="form-error" class="mb-1.5">
+            <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
+              {{ error }}
+            </li>
+          </ul>
         </div>
 
         <div class="md:col-span-2">
-          <FormKit
+          <FormField
+            v-model="email"
             type="email"
             name="email"
-            :prefix-icon="iconEmail"
+            :prefix-icon="IconEmail"
+            autofocus
             autocomplete="email"
             inputmode="email"
             enterkeyhint="next"
-            validation="required:trim|email"
+            :errors="emailErrors"
+            :submitted="submitted"
             :label="t('email')"
             data-test="email"
-            :classes="{
-              outer: 'mb-0!',
-            }"
+            outer-class="mb-0!"
           />
         </div>
 
-        <FormKit
-          type="text"
-          name="first_name"
-          :disabled="isLoading"
-          :prefix-icon="iconName"
-          :label="t('first-name')"
-          autocomplete="given-name"
-          validation="required:trim"
-          enterkeyhint="next"
-          data-test="first_name"
-          autofocus
-        />
-        <FormKit
-          type="text"
-          name="last_name"
-          :label="t('last-name')"
-          autocomplete="family-name"
-          :prefix-icon="iconName"
-          :disabled="isLoading"
-          validation="required:trim"
-          enterkeyhint="next"
-          data-test="last_name"
-        />
-
-        <FormKit
-          type="password"
-          name="password"
-          :prefix-icon="iconPassword"
-          autocomplete="new-password"
-          :label="t('password')"
-          data-test="password"
-          validation="required|length:6|contains_alpha|contains_uppercase|contains_lowercase|contains_symbol"
-          validation-visibility="dirty"
-        />
-        <FormKit
-          type="password"
-          name="password_confirm"
-          :prefix-icon="iconPassword"
-          :label="t('confirm-password')"
-          autocomplete="new-password"
-          data-test="confirm-password"
-          validation="required|confirm"
-          validation-visibility="dirty"
-          :validation-label="t('password-confirmatio')"
-        />
+        <div class="md:col-span-2">
+          <FormField
+            v-model="password"
+            type="password"
+            name="password"
+            :prefix-icon="IconPassword"
+            autocomplete="new-password"
+            :label="t('password')"
+            data-test="password"
+            :errors="passwordErrors"
+            validation-visibility="dirty"
+            :submitted="submitted"
+            outer-class="mb-0!"
+          />
+        </div>
 
         <div v-if="captchaKey" class="md:col-span-2 overflow-hidden">
           <VueTurnstile v-model="turnstileToken" size="flexible" :site-key="captchaKey" />
@@ -183,7 +169,7 @@ async function submit(form: { first_name: string, last_name: string, password: s
           </router-link>
         </div>
       </div>
-    </FormKit>
+    </form>
 
     <template #footer>
       <section class="mt-6 flex flex-col items-center">

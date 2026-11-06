@@ -8,7 +8,7 @@ import { verifyCaptchaToken } from '../utils/captcha.ts'
 import { BRES, createHono, parseBody, simpleErrorWithStatus, simpleRateLimit, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 import { syncUserPreferenceTags } from '../utils/user_preferences.ts'
 import { getEnv } from '../utils/utils.ts'
 import { version } from '../utils/version.ts'
@@ -69,6 +69,14 @@ function normalizeEmail(email: string) {
 }
 
 /** Escape `%` / `_` so PostgREST `ilike` cannot be used as a wildcard probe. */
+interface PreferenceUserRow {
+  id: string
+  email: string
+  enable_notifications: boolean
+  opt_for_newsletters: boolean
+  email_preferences: Json | null
+}
+
 export function escapeIlikeExact(value: string) {
   return value.replace(/\\/g, String.raw`\\`).replace(/%/g, String.raw`\%`).replace(/_/g, String.raw`\_`)
 }
@@ -239,13 +247,24 @@ app.post('/', async (c) => {
 
   const resolvedEmail = email
 
+  let pg: Awaited<ReturnType<typeof getPgClient>> | undefined
   try {
-    const admin = supabaseAdmin(c)
-    const { data: user, error } = await admin
-      .from('users')
-      .select('id, email, enable_notifications, opt_for_newsletters, email_preferences')
-      .ilike('email', escapeIlikeExact(resolvedEmail))
-      .maybeSingle()
+    pg = await getPgClient(c)
+    let user: PreferenceUserRow | null = null
+    let error: unknown = null
+    try {
+      const { rows } = await pg.query<PreferenceUserRow>(
+        'SELECT id, email, enable_notifications, opt_for_newsletters, email_preferences FROM public.users WHERE email ILIKE $1 LIMIT 2',
+        [escapeIlikeExact(resolvedEmail)],
+      )
+      if (rows.length > 1)
+        error = { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }
+      else
+        user = rows[0] ?? null
+    }
+    catch (lookupError) {
+      error = lookupError
+    }
 
     if (error) {
       cloudlogErr({
@@ -279,12 +298,21 @@ app.post('/', async (c) => {
           : previous.opt_for_newsletters,
       }
 
-      const { data: updated, error: updateError } = await admin
-        .from('users')
-        .update(update)
-        .eq('id', user.id)
-        .select('id, email, enable_notifications, opt_for_newsletters, email_preferences')
-        .maybeSingle()
+      let updated: PreferenceUserRow | null = null
+      let updateError: unknown = null
+      try {
+        const { rows } = await pg.query<PreferenceUserRow>(
+          `UPDATE public.users
+          SET email_preferences = $1::jsonb, enable_notifications = $2, opt_for_newsletters = $3
+          WHERE id = $4
+          RETURNING id, email, enable_notifications, opt_for_newsletters, email_preferences`,
+          [JSON.stringify(update.email_preferences), update.enable_notifications, update.opt_for_newsletters, user.id],
+        )
+        updated = rows[0] ?? null
+      }
+      catch (error) {
+        updateError = error
+      }
 
       if (updateError) {
         cloudlogErr({
@@ -328,5 +356,9 @@ app.post('/', async (c) => {
       error: serializeError(error),
     })
     return simpleErrorWithStatus(c, 503, 'email_preferences_unavailable', 'Could not save email preferences')
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
   }
 })

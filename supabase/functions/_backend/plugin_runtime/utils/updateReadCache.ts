@@ -18,6 +18,8 @@ export interface UpdateReadCachePayload {
   allowDeviceCustomId: boolean
   versionName: string
   keyId: string | null
+  /** Unix ms when the trial behind plan_valid ends (no purge then), null when no date bounds it. */
+  planValidUntil: number | null
 }
 
 export interface UpdateReadCacheKey {
@@ -41,15 +43,22 @@ function buildUpdateReadRequest(c: Context, key: UpdateReadCacheKey) {
 export async function getUpdateReadCache(c: Context, key: UpdateReadCacheKey): Promise<UpdateReadCachePayload | null> {
   const cacheEntry = buildUpdateReadRequest(c, key)
   const payload = await cacheEntry.helper.matchJson<UpdateReadCachePayload>(cacheEntry.request)
-  if (!payload?.ownerOrg || !payload.versionName || !('keyId' in payload))
+  if (!payload?.ownerOrg || !payload.versionName || !('keyId' in payload) || !('planValidUntil' in payload))
+    return null
+  if (payload.planValidUntil !== null && payload.planValidUntil <= Date.now())
     return null
   return payload
 }
 
 export function setUpdateReadCache(c: Context, key: UpdateReadCacheKey, payload: UpdateReadCachePayload) {
   return backgroundTask(c, (async () => {
+    const ttl = payload.planValidUntil === null
+      ? UPDATE_READ_CACHE_TTL_SECONDS
+      : Math.min(UPDATE_READ_CACHE_TTL_SECONDS, Math.floor((payload.planValidUntil - Date.now()) / 1000))
+    if (ttl < 1)
+      return
     const cacheEntry = buildUpdateReadRequest(c, key)
-    await cacheEntry.helper.putJson(cacheEntry.request, payload, UPDATE_READ_CACHE_TTL_SECONDS, { timeoutMs: 20, tags: updatesCacheTags(c, key.appId) })
+    await cacheEntry.helper.putJson(cacheEntry.request, payload, ttl, { timeoutMs: 20, tags: updatesCacheTags(c, key.appId) })
   })())
 }
 

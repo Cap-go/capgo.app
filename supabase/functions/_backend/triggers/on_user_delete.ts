@@ -1,17 +1,21 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import type { Database } from '../utils/supabase.types.ts'
 import { Hono } from 'hono/tiny'
 import { unsubscribeBento } from '../utils/bento.ts'
 import { normalizeBentoEmail, suppressAndUnsubscribeDeletedUserRecovery } from '../utils/bento_first_org.ts'
 import { BRES, middlewareAPISecret, quickError, triggerValidator } from '../utils/hono.ts'
+import { removeImageFolder } from '../utils/image_storage.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 import { cancelSubscription } from '../utils/stripe.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
 
 const BENTO_USER_DELETE_TIMEOUT_MS = 5_000
+const SUPER_ADMIN_ROLES = ['org_super_admin']
 
 interface RbacBinding {
   org_id?: string | null
@@ -43,67 +47,64 @@ function isBindingActive(binding: RbacBinding, now: Date) {
 
 async function fetchDirectRbacBindings(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
+  pg: PgClient,
   userId: string,
 ) {
-  const { data, error } = await supabase
-    .from('role_bindings')
-    .select('org_id, expires_at, roles!inner(name)')
-    .eq('principal_type', 'user')
-    .eq('principal_id', userId)
-    .eq('scope_type', 'org')
-    .in('roles.name', ['org_super_admin'])
-
-  if (error) {
+  try {
+    return await queryJson<RbacBinding>(
+      pg,
+      `SELECT rb.org_id, rb.expires_at
+      FROM public.role_bindings rb
+      JOIN public.roles r ON r.id = rb.role_id
+      WHERE rb.principal_type = 'user' AND rb.principal_id = $1 AND rb.scope_type = 'org' AND r.name = ANY($2)`,
+      [userId, SUPER_ADMIN_ROLES],
+    )
+  }
+  catch (error) {
     logFailure(c, 'direct RBAC super admin lookup failed', error)
     return null
   }
-
-  return (data ?? []) as RbacBinding[]
 }
 
 async function fetchUserGroupIds(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
+  pg: PgClient,
   userId: string,
 ) {
-  const { data, error } = await supabase
-    .from('group_members')
-    .select('group_id')
-    .eq('user_id', userId)
-
-  if (error) {
+  try {
+    const { rows } = await pg.query<{ group_id: string | null }>('SELECT group_id FROM public.group_members WHERE user_id = $1', [userId])
+    return rows
+      .map(group => group.group_id)
+      .filter((groupId): groupId is string => Boolean(groupId))
+  }
+  catch (error) {
     logFailure(c, 'user group lookup failed', error)
     return null
   }
-
-  return (data ?? [])
-    .map(group => group.group_id)
-    .filter((groupId): groupId is string => Boolean(groupId))
 }
 
 async function fetchGroupRbacBindings(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
+  pg: PgClient,
   groupIds: string[],
 ) {
   if (groupIds.length === 0)
     return [] as RbacBinding[]
 
-  const { data, error } = await supabase
-    .from('role_bindings')
-    .select('org_id, principal_id, expires_at, roles!inner(name)')
-    .eq('principal_type', 'group')
-    .eq('scope_type', 'org')
-    .in('principal_id', groupIds)
-    .in('roles.name', ['org_super_admin'])
-
-  if (error) {
+  try {
+    return await queryJson<RbacBinding>(
+      pg,
+      `SELECT rb.org_id, rb.principal_id, rb.expires_at
+      FROM public.role_bindings rb
+      JOIN public.roles r ON r.id = rb.role_id
+      WHERE rb.principal_type = 'group' AND rb.scope_type = 'org' AND rb.principal_id = ANY($1::uuid[]) AND r.name = ANY($2)`,
+      [groupIds, SUPER_ADMIN_ROLES],
+    )
+  }
+  catch (error) {
     logFailure(c, 'group RBAC super admin lookup failed', error)
     return null
   }
-
-  return (data ?? []) as RbacBinding[]
 }
 
 function collectCandidateOrgIds(
@@ -134,65 +135,62 @@ function collectCandidateOrgIds(
 
 async function fetchRbacUserAdmins(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
+  pg: PgClient,
   orgIds: string[],
 ) {
-  const { data, error } = await supabase
-    .from('role_bindings')
-    .select('org_id, principal_id, expires_at, roles!inner(name)')
-    .eq('principal_type', 'user')
-    .eq('scope_type', 'org')
-    .in('org_id', orgIds)
-    .in('roles.name', ['org_super_admin'])
-
-  if (error) {
+  try {
+    return await queryJson<RbacBinding>(
+      pg,
+      `SELECT rb.org_id, rb.principal_id, rb.expires_at
+      FROM public.role_bindings rb
+      JOIN public.roles r ON r.id = rb.role_id
+      WHERE rb.principal_type = 'user' AND rb.scope_type = 'org' AND rb.org_id = ANY($1::uuid[]) AND r.name = ANY($2)`,
+      [orgIds, SUPER_ADMIN_ROLES],
+    )
+  }
+  catch (error) {
     logFailure(c, 'RBAC user admin count failed', error)
     return null
   }
-
-  return (data ?? []) as RbacBinding[]
 }
 
 async function fetchRbacGroupAdmins(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
+  pg: PgClient,
   orgIds: string[],
 ) {
-  const { data, error } = await supabase
-    .from('role_bindings')
-    .select('org_id, principal_id, expires_at, roles!inner(name)')
-    .eq('principal_type', 'group')
-    .eq('scope_type', 'org')
-    .in('org_id', orgIds)
-    .in('roles.name', ['org_super_admin'])
-
-  if (error) {
+  try {
+    return await queryJson<RbacBinding>(
+      pg,
+      `SELECT rb.org_id, rb.principal_id, rb.expires_at
+      FROM public.role_bindings rb
+      JOIN public.roles r ON r.id = rb.role_id
+      WHERE rb.principal_type = 'group' AND rb.scope_type = 'org' AND rb.org_id = ANY($1::uuid[]) AND r.name = ANY($2)`,
+      [orgIds, SUPER_ADMIN_ROLES],
+    )
+  }
+  catch (error) {
     logFailure(c, 'RBAC group admin count failed', error)
     return null
   }
-
-  return (data ?? []) as RbacBinding[]
 }
 
 async function fetchGroupMembers(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
+  pg: PgClient,
   groupIds: string[],
 ) {
   if (groupIds.length === 0)
     return [] as GroupMember[]
 
-  const { data, error } = await supabase
-    .from('group_members')
-    .select('group_id, user_id')
-    .in('group_id', groupIds)
-
-  if (error) {
+  try {
+    const { rows } = await pg.query<GroupMember>('SELECT group_id, user_id FROM public.group_members WHERE group_id = ANY($1::uuid[])', [groupIds])
+    return rows
+  }
+  catch (error) {
     logFailure(c, 'RBAC group members count failed', error)
     return null
   }
-
-  return (data ?? []) as GroupMember[]
 }
 
 function buildGroupMembersByGroup(groupMembers: GroupMember[]) {
@@ -320,55 +318,52 @@ function finishDeleteUserResponse(c: Context, bentoCleanupSucceeded: boolean, re
 
 async function deleteUserImages(
   c: Context,
-  supabase: ReturnType<typeof supabaseAdmin>,
   userId: string,
 ) {
   try {
-    const { data: files, error: listError } = await supabase
-      .storage
-      .from('images')
-      .list(userId)
-    if (listError) {
-      logFailure(c, 'user image listing failed', listError)
-      return false
-    }
-
-    if (files && files.length > 0) {
-      const filePaths = files.map(file => `${userId}/${file.name}`)
-      const { error: removeError } = await supabase
-        .storage
-        .from('images')
-        .remove(filePaths)
-      if (removeError) {
-        logFailure(c, 'user image deletion failed', removeError)
-        return false
-      }
-      cloudlog({ requestId: c.get('requestId'), message: 'deleted user images', count: files.length, user_id: userId })
-    }
+    const deleted = await removeImageFolder(c, userId)
+    if (deleted > 0)
+      cloudlog({ requestId: c.get('requestId'), message: 'deleted user images', count: deleted, user_id: userId })
     return true
   }
   catch (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'error deleting user images', error, user_id: userId })
+    logFailure(c, 'user image deletion failed', error)
     return false
   }
 }
 
 async function cleanupDeletedUserResources(c: Context, record: Database['public']['Tables']['users']['Row']) {
+  let pg: PgClient
+  try {
+    pg = await getPgClient(c)
+  }
+  catch (error) {
+    logFailure(c, 'user cleanup database connection failed', error)
+    return false
+  }
+  try {
+    return await cleanupDeletedUserResourcesWithClient(c, pg, record)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
+async function cleanupDeletedUserResourcesWithClient(c: Context, pg: PgClient, record: Database['public']['Tables']['users']['Row']) {
   // Process user deletion with timeout protection
   const startTime = Date.now()
-  const supabase = supabaseAdmin(c)
   const now = new Date()
 
   // 1. Find organizations where this user is the only RBAC super admin
-  const directRbacBindings = await fetchDirectRbacBindings(c, supabase, record.id)
+  const directRbacBindings = await fetchDirectRbacBindings(c, pg, record.id)
   if (!directRbacBindings)
     return false
 
-  const groupIds = await fetchUserGroupIds(c, supabase, record.id)
+  const groupIds = await fetchUserGroupIds(c, pg, record.id)
   if (!groupIds)
     return false
 
-  const groupRbacBindings = await fetchGroupRbacBindings(c, supabase, groupIds)
+  const groupRbacBindings = await fetchGroupRbacBindings(c, pg, groupIds)
   if (!groupRbacBindings)
     return false
 
@@ -377,11 +372,11 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
     return true
 
   // For each org where user is super admin, check if they are the only one
-  const rbacUserAdmins = await fetchRbacUserAdmins(c, supabase, orgIds)
+  const rbacUserAdmins = await fetchRbacUserAdmins(c, pg, orgIds)
   if (!rbacUserAdmins)
     return false
 
-  const rbacGroupAdmins = await fetchRbacGroupAdmins(c, supabase, orgIds)
+  const rbacGroupAdmins = await fetchRbacGroupAdmins(c, pg, orgIds)
   if (!rbacGroupAdmins)
     return false
 
@@ -390,7 +385,7 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
     .map(binding => getBindingPrincipalId(binding))
     .filter((groupId): groupId is string => Boolean(groupId))
 
-  const groupMembers = await fetchGroupMembers(c, supabase, rbacGroupIds)
+  const groupMembers = await fetchGroupMembers(c, pg, rbacGroupIds)
   if (!groupMembers)
     return false
 
@@ -407,17 +402,20 @@ async function cleanupDeletedUserResources(c: Context, record: Database['public'
   if (singleSuperAdminOrgs.length === 0)
     return true
 
-  const { data: orgs, error: orgLookupError } = await supabaseAdmin(c)
-    .from('orgs')
-    .select('id, customer_id, management_email')
-    .in('id', singleSuperAdminOrgs)
-  if (orgLookupError) {
+  let orgs: Array<{ id: string, customer_id: string | null, management_email: string | null }>
+  try {
+    orgs = (await pg.query<{ id: string, customer_id: string | null, management_email: string | null }>(
+      'SELECT id, customer_id, management_email FROM public.orgs WHERE id = ANY($1::uuid[])',
+      [singleSuperAdminOrgs],
+    )).rows
+  }
+  catch (orgLookupError) {
     logFailure(c, 'organization cleanup lookup failed', orgLookupError)
     return false
   }
 
-  const promises = buildCleanupPromises(c, orgs ?? null)
-  promises.push(deleteUserImages(c, supabase, record.id))
+  const promises = buildCleanupPromises(c, orgs)
+  promises.push(deleteUserImages(c, record.id))
 
   let cleanupResults: unknown[]
   try {

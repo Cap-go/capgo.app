@@ -119,10 +119,13 @@ testing against Cloudflare Workers.
 
 ### Code Quality
 
-- `bun lint` - Lint Vue, TypeScript, and JavaScript files
+- `bun lint` - Lint Vue, TypeScript, and JavaScript files in `src`: oxlint
+  (`.oxlintrc.frontend.json`, the @antfu/eslint-config rule set plus
+  `oxlint-plugin-vize` for templates), then ESLint on `.vue` files only for the
+  template rules oxlint cannot cover yet (allowlist in `eslint.config.js`)
 - `bun lint:fix` - Auto-fix linting issues
 - `bun lint:backend` - Lint Supabase backend files
-- `bun typecheck` - Run TypeScript type checking with vue-tsc
+- `bun typecheck` - Type-check the CLI and backend with TypeScript 7 `tsc`, and the frontend with vue-tsc
 - `bun types` - Generate TypeScript types from Supabase
 
 ### Database and Backend
@@ -230,6 +233,16 @@ backfill code, design for this scale:
   do not burn queue reads as a fake progress budget. `/queue_health` treats
   `read_ct > 5` as unhealthy (`stuck_high_read_ct`); `cleanup_queue_messages`
   deletes those poison rows.
+- **Queue wakeups (pg_net vs Durable Object):** pgmq stays the queue
+  everywhere. `process_function_queue` and `wake_updates_cache_purge` send
+  their HTTP wakeups through `public.http_dispatch_post`: by default (self-host,
+  local, CI) that is `net.http_post`. Targets listed in
+  `public.http_dispatch_targets` (a queue name, or `*`) go to the unlogged
+  `public.http_dispatch_outbox` instead, which the prod-only `QueueDispatcher`
+  Durable Object (`cloudflare_workers/api/queue_dispatcher.ts`) claims every
+  second via `POST /triggers/http_dispatch/claim` and sends. Roll a target
+  back by deleting its row. The dispatcher only sends to origins in
+  `SUPABASE_URL` / `HTTP_DISPATCH_ALLOWED_ORIGINS`.
 - Do not assume a `202` HTTP response means queue work finished. If the handler
   uses background work, prove the work can finish inside the runtime limits and
   that successful queue messages are deleted before visibility timeout expires.
@@ -240,6 +253,19 @@ backfill code, design for this scale:
 - For data repair scripts, use indexed pagination over the owning table's key
   path, keep DB writes batched, make work resumable, and write failed records to
   a report file for later inspection.
+- **HARD RULE — never bypass the Hyperdrive query cache to fix stale reads:**
+  Hyperdrive caches reads (default `max_age` 60s) and that cache is what keeps
+  the database alive. Never make a request-path read uncacheable (an unused
+  `now()` CTE, a volatile function call, a unique comment or parameter, moving
+  it into a transaction, etc.) because a value can be up to 60s old. Make the
+  write path tolerate the stale read instead: let the write fail safely and
+  return the real row from the write itself. For example, an insert that may
+  race with an existing row uses `INSERT ... ON CONFLICT DO NOTHING` in a
+  data-modifying statement (writes are never cached) that returns either the
+  inserted row or the existing one. Only edge cache refills, which would
+  otherwise store a stale row for the whole edge TTL, may skip the cache
+  (`plugin_runtime/utils/hyperdriveFreshRead.ts`); do not extend that helper to
+  other paths.
 - GUESS IS NOT AN OPTION for production scale failures. Find the exact
   production evidence in database state, queue/archive tables, provider logs, or
   HTTP/runtime logs. If the current logs cannot identify the cause, first add
@@ -294,6 +320,30 @@ Do:
   small service-role helper that is already a single clear `supabaseAdmin(c)`
   call may stay on `supabaseAdmin` when that keeps the code smaller and equally
   correct.
+
+### AI model freshness (HARD RULE)
+
+Applies to every AI feature in this repo (backend, workers, CLI, scripts, CI) and
+to repos it calls (for example the builder's AI log analysis).
+
+- Never ship or keep a model whose release is more than **5 months** old.
+- Treat a model more than **3 months** old as already old: when you touch an AI
+  feature, move it to the newest good model.
+- Check the age and planned deprecation against the provider's **live catalog**,
+  never from memory. For Workers AI:
+  - `GET https://api.cloudflare.com/client/v4/accounts/<account>/ai/models/search?task=Text%20Generation&per_page=200`
+    (use `created_at` and `properties.planned_deprecation_date`).
+  - `GET https://api.cloudflare.com/client/v4/accounts/<account>/ai/models/schema?model=<id>`
+    for the inputs the model supports (`reasoning_effort`, `chat_template_kwargs`,
+    `response_format`, ...).
+- Never pick a model that has a planned deprecation date.
+- Reasoning models used for short structured output must turn thinking off
+  (`chat_template_kwargs: { enable_thinking: false }` or `reasoning_effort: 'none'`,
+  whichever the model schema supports), or they burn the token budget and return
+  empty content. Confirm with one real call that thinking is actually off: some
+  models ignore the flag (GLM-5.3 still reasoned with `enable_thinking: false`).
+- Keep the model overridable by env var (for example `BUMP_LEVEL_MODEL`,
+  `TRANSLATION_MODEL`), and note the catalog `created_at` next to the default.
 
 ### HTTP Response Conventions
 
@@ -466,6 +516,14 @@ Then in your test file, use ONLY these dedicated resources for modifications.
 - Path aliases: `~/` maps to `src/`
 - Auto-generated types for Vue components and routes
 - Supabase types auto-generated via CLI
+- TypeScript 7 layout (official dual install): `@typescript/native` is
+  `npm:typescript@7.x` and provides `tsc`; `typescript` is aliased to
+  `@typescript/typescript6` so tools that need the classic JS API (vue-tsc,
+  typescript-eslint, eslint-plugin-perfectionist) keep working. Do not point
+  `typescript` at 7.x until those tools support it. `bunfig.toml` uses the
+  hoisted linker so undeclared `typescript` imports resolve to the 6 API.
+- `cli` keeps a real `typescript@6` runtime dependency: the published CLI uses
+  its compiler API to load users' `capacitor.config.ts`.
 
 ### Comments
 
@@ -854,6 +912,14 @@ Key points:
   and composition-friendly patterns rather than bespoke CSS.
 - Use DaisyUI (`d-` prefixed classes) for buttons, inputs, and other interactive
   primitives to keep behavior and spacing consistent.
+- Buttons: the primary action is always `d-btn d-btn-primary` (size with
+  `d-btn-sm`/`d-btn-xs`); secondary actions use `d-btn-outline` or `d-btn-ghost`,
+  destructive ones `d-btn-error`, warning or billing CTAs (past-due, payment
+  required) `d-btn-warning`. Never hand-roll a button with `bg-blue-*`,
+  `bg-azure-*`, `bg-primary-*` + `text-white`. The theme owns the colors (slate in
+  light mode, azure with dark text in dark mode via `--btn-primary-*` in
+  `src/styles/style.css`). Icon-only buttons, tabs and menu items may stay
+  custom but need an accessible name.
 - Konsta components are reserved for the safe area helpers. Avoid importing
   `konsta` anywhere else in the app.
 - Capgo's look centers on deep slate bases with the "Extract" azure highlight
@@ -892,13 +958,76 @@ Also applies to dialog/Teleport content, admin filters, and hidden utility input
 (e.g. file pickers): they still need `aria-label` or an associated label.
 
 
+## Console Data Access
+
+- **Never call Supabase from the console or the CLI.** Only the backend
+  (`supabase/functions/_backend`, `cloudflare_workers`) holds a Supabase URL or
+  key. The console and the CLI talk to the Capgo API only. No `@supabase/*`
+  import, `sb.capgo.app`/`*.supabase.co` host, anon key, or `/rest/v1`,
+  `/auth/v1`, `/storage/v1` URL may appear under `src/`; the word "Supabase"
+  must not appear there either. `tests/console-no-supabase.unit.test.ts` and
+  the `console-api-only` Vite build plugin enforce this (the only allowed
+  exception is `src/utils/safeRedirect.ts`, which names the legacy
+  `/auth/v1/verify` path to rewrite email links onto the API relay).
+- `useConsole()` (`src/services/console.ts`) returns the console client
+  (`src/services/consoleClient.ts`). Its `from`/`rpc`, storage, realtime and
+  `functions.invoke` calls go to `/private/console/*`
+  (`supabase/functions/_backend/private/console_data.ts`). Table and RPC calls
+  are compiled to SQL and run through Drizzle on the primary database as the
+  caller's Postgres role with `row_security` on, so RLS still applies.
+  Authenticated queries set the verified JWT claims. The pre-login
+  `is_not_deleted` probe runs as `anon` with no claims.
+  Storage still uses the Supabase storage API. Do not point these queries at a
+  read replica: RLS helpers such as `auth.uid()` are not replicated.
+- Auth goes through `/private/console/auth/*`
+  (`supabase/functions/_backend/private/console_auth_proxy.ts`), a relay to
+  the auth provider's user-facing endpoints only (never admin). The console auth
+  client (`src/services/consoleAuth.ts`) keeps the session in localStorage under
+  `capgo.console.auth` and mirrors the previous SDK surface (`getSession`,
+  `signInWithPassword`, `mfa.*`, `onAuthStateChange`, ...).
+- The relay forwards the browser address in `X-Forwarded-For` and
+  `Sb-Forwarded-For`, so the auth provider's per-IP rate limits, CAPTCHA checks
+  and audit log keep working. Do not drop those headers.
+- Any new table or RPC used from `src/` must be added to
+  `supabase/functions/_backend/utils/console_query_allowlist.ts`;
+  `tests/console-query-allowlist.unit.test.ts` enforces this.
+- Generated database types live in `src/types/database.types.ts` (copied to
+  the backend by `scripts/getTypes.mjs`).
+
+## Console Query Performance
+
+Every console query now pays a round trip through the Capgo API, and every row
+it returns is serialized twice. Keep each one bounded and cheap:
+
+- **Bound every list.** Use `.range()` or `.limit()`; a read that returns a
+  table's history (audit logs, deploys, ledger, devices) must page in the
+  database, not in the browser. PostgREST also truncates silently at
+  `max_rows` (1000), so an unbounded read is wrong as well as slow.
+- **Scope and filter in the database.** Filter by app, channel or bundle (JSON
+  paths like `.eq('old_record->>version', ...)` work) instead of loading rows to
+  filter client-side.
+- **Aggregate in the database.** Charts and counters get a `SECURITY INVOKER`
+  SQL function returning buckets (see `get_bundle_upload_daily_counts`), not
+  raw rows bucketed in the browser.
+- **`count: 'estimated'` and `count: 'planned'` are exact** on this console path.
+  They run `count(*)` on the primary, the same as `count: 'exact'`, so they do
+  not make an unbounded table cheaper. Page audit logs, deploy history, and the
+  ledger, or skip the count. Exact counts stay fine for per-app sets.
+- **Resolve id lists on the server.** Never download ids only to post them back
+  (see the device `overrides`/`overrideChannelId` filters).
+- **Wrap function calls in RLS policies** in a scalar subquery,
+  `(SELECT public.fn())`, so Postgres evaluates them once per statement instead
+  of once per row. `supabase/tests/88_test_console_query_performance.sql`
+  guards `verify_mfa()`.
+- **No sequential awaits in loops** for independent queries; use `Promise.all`.
+
 ## Auth Redirect Guardrails
 
 - We intentionally route auth email links through `/confirm-signup` to avoid
   mailbox link prefetchers triggering Supabase verification/recovery links.
-- `confirm-signup.vue` only allows redirects to the console host and the
-  Supabase host; if you change `VITE_APP_URL` or `VITE_SUPABASE_URL`, update
-  both allow-lists accordingly.
+- `confirm-signup.vue` rewrites `/auth/v1/verify` links onto the Capgo API
+  relay (`/private/console/auth/verify`) and otherwise only allows redirects to
+  the console host and the API host (`VITE_APP_URL`, `VITE_API_HOST`).
 
 ## Frontend Testing
 
@@ -957,18 +1086,27 @@ introduces a new screen that should be part of the visual diff set.
 
 ## Database Replication
 
-Our main database is hosted on Supabase. We use custom replica hosted in
-Planetscale.
+Our main database is hosted on Supabase. Read replicas are hosted on Google
+Cloud SQL (not PlanetScale). PlanetScale only hosts the standalone R2 inventory
+database (`capgo/capgo-r2-inventory`, see `docs/r2-inventory-operations.md`),
+which is not a read replica of the main database.
 
-We have 5 read replicas for our main database to ensure high availability and
-low latency for read operations. These replicas are synchronized with the
-primary database using logical replication. We have one replica by continent:
+Supabase logically replicates to a single Google Cloud SQL subscriber (`eu-2`,
+managed by the scripts in `read_replicate/`). Google Cloud SQL then replicates
+that subscriber to the regional read replicas, so replica reconciliation always
+targets only the subscriber. The plugin workers bind one Hyperdrive per
+regional replica (`HYPERDRIVE_CAPGO_READ_*` in
+`cloudflare_workers/plugin/wrangler.jsonc`):
 
-- North America (Ohio)
-- Europe (Frankfurt)
-- Asia (Seoul)
-- Australia (Sydney)
-- South America (Sao Paulo)
+- North America (`NA`)
+- Europe (`EU`)
+- South America (`SA`)
+- Oceania (`OC`)
+- Asia - Japan (`AS_JAPAN`, Tokyo)
+- Asia - India (`AS_INDIA`, Mumbai)
+- Hong Kong (`HK`, asia-east2)
+- Africa (`AF`, africa-south1)
+- Middle East (`ME`, me-central1)
 
 Applications are configured to read from the nearest replica based on the user's
 location. This repartition is done by Cloudflare snippets at
@@ -979,7 +1117,7 @@ location. This repartition is done by Cloudflare snippets at
 When backend code uses the plugin read-path (`/updates`, `/stats`, `/channel_self`), it must only query what exists in the read replicas.
 
 - Logical replication replicates **table data**, not derived objects like **views** and **SQL functions**.
-- Treat the read replica (what you see in PlanetScale) as the source of truth for what is queryable from plugin endpoints.
+- Treat the read replica (what you see in Google Cloud SQL) as the source of truth for what is queryable from plugin endpoints.
 - Do **not** query credits ledger tables/views from the replica (e.g. `usage_credit_*` / `usage_credit_balances`). If plugin logic needs a “has credits” signal, **materialize it into a replicated column/table** (example: an org-level boolean flag that is refreshed by primary-side jobs).
 - `/updates`, `/stats`, and `/channel_self` are extremely hot paths and can be called hundreds of times per second.
 - Those endpoints must not call the primary Supabase/Postgres database in-request or through `backgroundTask()` side effects unless there is no other practical option.
@@ -1015,7 +1153,7 @@ Only after **all** of these are true:
 
 …then mark the PR **Ready for review** in GitHub (undraft).
 
-Marking Ready is **not** “ready for a human.” It means: **ready for automatic AI review** (CodeRabbit / cubic / whatever the repo runs on ready PRs).
+Marking Ready is **not** “ready for a human.” It means: **ready for automatic AI review** (cubic).
 
 #### 3. Wait for automatic review
 
@@ -1255,27 +1393,6 @@ can read them), and app transfers count MAU for each org. These are intentional
 anti-fraud behaviors documented in
 [docs/billing-usage-retention.md](docs/billing-usage-retention.md). Do not
 change them without a product decision.
-
-## Graphify
-
-The project-scoped Graphify skill lives at `.agents/skills/graphify/SKILL.md`.
-Use it for questions about architecture, file relationships, dead code, used
-code, and where code is used.
-
-Rules:
-- When the user types `/graphify`, follow the project skill before doing
-  anything else.
-- `graphify-out/graph.json` is committed and refreshed by a
-  `chore(auto-sync)` commit after each release. Prefer `graphify query "<question>"`, `graphify affected "<node>"`,
-  `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` before broad
-  source searches.
-- Use `bun run graphify:generate` to refresh the committed code graph. The
-  generator is deterministic AST/code extraction and does not require LLM API
-  keys.
-- For deterministic unused export checks, keep using `bun run lint:deadcode`
-  alongside Graphify's graph queries.
-- After code changes that should update the repository graph, run
-  `bun run graphify:generate` and commit the resulting `graphify-out/` changes.
 
 ## Cursor Cloud specific instructions
 

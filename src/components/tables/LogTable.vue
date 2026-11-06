@@ -7,12 +7,12 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import LogMetadataPopover from '~/components/tables/LogMetadataPopover.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { getDateRangeForPreset, getTimeWindowPageRange, TABLE_DATE_RANGE_DEFAULT } from '~/services/dateRange'
 import { getLogDocUrl } from '~/services/logDocLinks'
 import { extractLogOriginalMessage, logRowDisplayMetadata, parseLogVersionName } from '~/services/logTableDisplay'
 import { actionToFilter, createActionFilterState, failureActionFilterKeys, filterToAction, observeActionFilterKeys, updateActionFilterKeys } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 const props = defineProps<{
   deviceId?: string
@@ -41,7 +41,7 @@ const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const search = ref('')
 const elements = ref<Element[]>([])
 const isLoading = ref(false)
@@ -133,7 +133,7 @@ async function getData(options: { append?: boolean } = {}) {
   const requestId = ++latestDataRequest
   isLoading.value = true
   try {
-    const { data: currentSession } = await supabase.auth.getSession()!
+    const { data: currentSession } = await capgo.auth.getSession()!
     if (!currentSession.session)
       return
     const currentJwt = currentSession.session.access_token
@@ -201,7 +201,7 @@ async function exportCsv() {
   isExporting.value = true
   const loadingToastId = toast.loading(t('exporting-logs'))
   try {
-    const { data: currentSession } = await supabase.auth.getSession()!
+    const { data: currentSession } = await capgo.auth.getSession()!
     if (!currentSession.session) {
       toast.dismiss(loadingToastId)
       toast.error(t('not-logged-in'))
@@ -370,7 +370,7 @@ async function openOneVersion(one: Element) {
     const parsed = parseLogVersionName(one.version_name)
     const versionName = parsed.version
 
-    const { data: versionRecord, error } = await supabase
+    const { data: versionRecord, error } = await capgo
       .from('app_versions')
       .select('id')
       .eq('app_id', props.appId)

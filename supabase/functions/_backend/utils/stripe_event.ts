@@ -81,6 +81,11 @@ function subscriptionUpdated(c: Context, event: Stripe.CustomerSubscriptionCreat
   else if (subscription.status === 'past_due') {
     data.status = 'past_due'
   }
+  else if (isTerminalSubscriptionFailureStatus(subscription.status)) {
+    // Stripe gave up on the subscription (failed bank debit, abandoned checkout):
+    // it grants no access, unlike an active subscription.
+    data.status = 'canceled'
+  }
   else if (event.type === 'customer.subscription.created') {
     data.status = 'created'
   }
@@ -98,6 +103,21 @@ function subscriptionUpdated(c: Context, event: Stripe.CustomerSubscriptionCreat
     isUpgrade = true
   }
   return { data, isUpgrade, previousPriceId, previousProductId }
+}
+
+/**
+ * Subscription statuses Stripe reaches when it stops collecting payment: the
+ * subscription grants no access, even if its period has not ended.
+ */
+export function isTerminalSubscriptionFailureStatus(status: Stripe.Subscription.Status) {
+  return status === 'canceled' || status === 'unpaid' || status === 'incomplete_expired'
+}
+
+export function getInvoiceSubscriptionId(invoice: Pick<Stripe.Invoice, 'parent'>): string | undefined {
+  const subscription = invoice.parent?.subscription_details?.subscription
+  if (!subscription)
+    return undefined
+  return typeof subscription === 'string' ? subscription : subscription.id
 }
 
 function invoiceUpcoming(event: Stripe.InvoiceUpcomingEvent, data: StripeData['data']) {
@@ -255,6 +275,13 @@ export function extractDataEvent(c: Context, event: Stripe.Event): StripeData {
   }
   else if (event.type === 'invoice.created' || event.type === 'invoice.updated') {
     data = invoiceCreatedOrUpdated(event, data)
+  }
+  else if (event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded') {
+    // Payment confirmation only: plan fields come from subscription events.
+    const invoice = event.data.object
+    data.customer_id = getStripeCustomerId(invoice.customer)
+    data.subscription_id = getInvoiceSubscriptionId(invoice)
+    data.status = invoice.status === 'paid' ? 'succeeded' : 'updated'
   }
   else if (event.type === 'invoice.payment_action_required') {
     // 3DS / e-mandate confirmation needed: notify only, never touch stripe_info.

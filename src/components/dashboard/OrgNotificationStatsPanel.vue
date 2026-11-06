@@ -5,9 +5,10 @@ import { toast } from 'vue-sonner'
 import IconBell from '~icons/heroicons/bell'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
+import PageHeader from '~/components/PageHeader.vue'
 import Spinner from '~/components/Spinner.vue'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatNumberValue } from '~/services/formatLocale'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 
 type PeriodDayOption = 1 | 3 | 7 | 30
 
@@ -35,7 +36,7 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const supabase = useSupabase()
+const capgo = useConsole()
 const localDays = ref<PeriodDayOption>(7)
 const stats = ref<NotificationStat[]>([])
 const overview = ref<OrgNotificationStatsResponse['overview']>({
@@ -99,7 +100,7 @@ async function fetchStats() {
   loading.value = true
   error.value = false
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     const token = sessionData.session?.access_token
     if (!token) {
       if (requestId === latestRequest) {
@@ -162,42 +163,36 @@ watch(
 
 <template>
   <section class="flex flex-col gap-4" data-testid="org-notification-stats">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
-            {{ t('org-notification-stats-title') }}
-          </h2>
-          <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
-          <span
-            v-if="forceDemo"
-            class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
-          >
-            {{ t('demo') }}
-          </span>
-        </div>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ t('org-notification-stats-help') }}
-        </p>
-      </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <PeriodDaySelector
-          :model-value="localDays"
-          @update:model-value="selectPeriod"
-        />
-        <button
-          type="button"
-          class="d-btn d-btn-sm d-btn-outline"
-          :disabled="loading || forceDemo"
-          :aria-label="t('refresh')"
-          @click="fetchStats"
+    <PageHeader :title="t('org-notification-stats-title')" :description="t('org-notification-stats-help')">
+      <template #badges>
+        <span class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-azure-500/40 bg-azure-500/10 text-azure-700 dark:text-azure-200">{{ t('beta') }}</span>
+        <span
+          v-if="forceDemo"
+          class="px-2 py-0.5 text-[10px] font-semibold uppercase rounded border border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
         >
-          <span v-if="loading" class="d-loading d-loading-spinner d-loading-xs" />
-          <IconRefresh v-else class="w-4 h-4" aria-hidden="true" />
-          {{ t('refresh') }}
-        </button>
-      </div>
-    </div>
+          {{ t('demo') }}
+        </span>
+      </template>
+      <template #actions>
+        <div class="flex flex-wrap items-center gap-2">
+          <PeriodDaySelector
+            :model-value="localDays"
+            @update:model-value="selectPeriod"
+          />
+          <button
+            type="button"
+            class="d-btn d-btn-sm d-btn-outline"
+            :disabled="loading || forceDemo"
+            :aria-label="t('refresh')"
+            @click="fetchStats"
+          >
+            <span v-if="loading" class="d-loading d-loading-spinner d-loading-xs" />
+            <IconRefresh v-else class="w-4 h-4" aria-hidden="true" />
+            {{ t('refresh') }}
+          </button>
+        </div>
+      </template>
+    </PageHeader>
 
     <div v-if="loading && !forceDemo && !error && !hasStats" class="flex items-center justify-center h-64 bg-white border rounded-xl shadow-sm dark:bg-slate-800/60 border-slate-200 dark:border-white/10">
       <Spinner size="w-10 h-10" />

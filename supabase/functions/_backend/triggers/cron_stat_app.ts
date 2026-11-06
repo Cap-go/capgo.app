@@ -1,11 +1,14 @@
+import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { PgClient } from '../utils/pg.ts'
 import { Hono } from 'hono/tiny'
 import { middlewareAPISecret, parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
+import { isTransientDatabaseError } from '../utils/pg_errors.ts'
+import { queryJson } from '../utils/pg_rls.ts'
 import { getRetryablePostgrestStatus, isRetryablePostgrestError, isRetryablePostgrestResult, isRetryablePostgrestStatus, retryWithBackoff } from '../utils/retry.ts'
 import { readStatsBandwidth, readStatsMau, readStatsStorage, readStatsVersion } from '../utils/stats.ts'
-import { supabaseAdmin } from '../utils/supabase.ts'
 
 interface DataToGet {
   appId?: string
@@ -234,7 +237,7 @@ export function calculateStorageHourlyRows(
 }
 
 async function runSupabaseResultWithRetry<T>(
-  c: Parameters<typeof supabaseAdmin>[0],
+  c: Context,
   label: string,
   operation: () => Promise<SupabaseRetryResult<T>>,
 ): Promise<SupabaseRetryResult<T>> {
@@ -251,7 +254,7 @@ async function runSupabaseResultWithRetry<T>(
   }, {
     attempts: SUPABASE_RETRY_ATTEMPTS,
     baseDelayMs: SUPABASE_RETRY_DELAY_MS,
-    shouldRetry: result => isRetryablePostgrestResult(result),
+    shouldRetry: result => isRetryablePostgrestResult(result) || isTransientDatabaseError(result?.error),
   })
 
   if (!result) {
@@ -279,29 +282,45 @@ async function runSupabaseResultWithRetry<T>(
   return result
 }
 
-async function readVersionMetaStorageRows(c: Parameters<typeof supabaseAdmin>[0], appId: string, calculationEnd: string) {
-  const pgClient = await getPgClient(c, false)
-  try {
-    const { rows } = await pgClient.query<VersionMetaStorageRow>(
-      `
-        SELECT timestamp, version_id, size
-        FROM public.version_meta
-        WHERE app_id = $1
-          AND timestamp < $2::timestamp
-        ORDER BY version_id, timestamp
-      `,
-      [appId, calculationEnd],
-    )
-    return rows
-  }
-  finally {
-    closeClient(c, pgClient)
-  }
+async function readVersionMetaStorageRows(pg: PgClient, appId: string, calculationEnd: string) {
+  const { rows } = await pg.query<VersionMetaStorageRow>(
+    `
+      SELECT timestamp, version_id, size
+      FROM public.version_meta
+      WHERE app_id = $1
+        AND timestamp < $2::timestamp
+      ORDER BY version_id, timestamp
+    `,
+    [appId, calculationEnd],
+  )
+  return rows
+}
+
+// Same as a PostgREST bulk upsert: missing keys become NULL and only the listed
+// columns are written. Table, column and conflict names are fixed by callers.
+async function upsertRows(
+  pg: PgClient,
+  table: string,
+  columns: Record<string, string>,
+  conflictColumns: string[],
+  rows: object[],
+) {
+  if (rows.length === 0)
+    return
+  const names = Object.keys(columns)
+  const recordset = names.map(name => `"${name}" ${columns[name]}`).join(', ')
+  const updates = names.filter(name => !conflictColumns.includes(name)).map(name => `"${name}" = EXCLUDED."${name}"`).join(', ')
+  await pg.query(
+    `INSERT INTO public.${table} (${names.map(name => `"${name}"`).join(', ')})
+    SELECT ${names.map(name => `r."${name}"`).join(', ')} FROM pg_catalog.jsonb_to_recordset($1::jsonb) AS r(${recordset})
+    ON CONFLICT (${conflictColumns.map(name => `"${name}"`).join(', ')}) DO UPDATE SET ${updates}`,
+    [JSON.stringify(rows)],
+  )
 }
 
 async function refreshStorageHourly(
-  c: Parameters<typeof supabaseAdmin>[0],
-  supabase: ReturnType<typeof supabaseAdmin>,
+  c: Context,
+  pg: PgClient,
   appId: string,
   ownerOrg: string,
   cycleInfo: CycleInfo,
@@ -311,7 +330,7 @@ async function refreshStorageHourly(
     throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { cycleInfo })
 
   const calculationEnd = currentHour ?? new Date().toISOString()
-  const events = await readVersionMetaStorageRows(c, appId, calculationEnd)
+  const events = await readVersionMetaStorageRows(pg, appId, calculationEnd)
   const calculation = calculateStorageHourlyRows(events, {
     appId,
     ownerOrg,
@@ -331,32 +350,43 @@ async function refreshStorageHourly(
   }
 
   const deleteRange = getStorageDailyDeleteRange(cycleInfo.subscription_anchor_start, cycleInfo.subscription_anchor_end)
-  await runSupabaseResultWithRetry(c, 'delete_daily_storage_hourly', async () => await (supabase as any)
-    .from('daily_storage_hourly')
-    .delete()
-    .eq('app_id', appId)
-    .gte('date', deleteRange.startDay)
-    .lt('date', deleteRange.endExclusiveDay))
+  await runSupabaseResultWithRetry(c, 'delete_daily_storage_hourly', async () => {
+    await pg.query(
+      'DELETE FROM public.daily_storage_hourly WHERE app_id = $1 AND date >= $2::date AND date < $3::date',
+      [appId, deleteRange.startDay, deleteRange.endExclusiveDay],
+    )
+    return { data: null, error: null }
+  })
 
   if (calculation.rows.length === 0)
     return calculation
 
-  await runSupabaseResultWithRetry(c, 'upsert_daily_storage_hourly', async () => await (supabase as any)
-    .from('daily_storage_hourly')
-    .upsert(calculation.rows, { onConflict: 'app_id,date' })
-    .eq('app_id', appId))
+  await runSupabaseResultWithRetry(c, 'upsert_daily_storage_hourly', async () => {
+    await upsertRows(pg, 'daily_storage_hourly', {
+      app_id: 'varchar',
+      owner_org: 'uuid',
+      date: 'date',
+      storage_byte_hours: 'double precision',
+      updated_at: 'timestamptz',
+    }, ['app_id', 'date'], calculation.rows)
+    return { data: null, error: null }
+  })
 
   return calculation
 }
 
 async function syncAppStatsRefresh(
-  c: Parameters<typeof supabaseAdmin>[0],
-  supabase: ReturnType<typeof supabaseAdmin>,
+  c: Context,
+  pg: PgClient,
   appId: string,
 ): Promise<string> {
-  const { data } = await runSupabaseResultWithRetry<string | null>(c, 'sync_app_stats_refresh', async () => await supabase.rpc('mark_app_stats_refreshed', {
-    p_app_id: appId,
-  }))
+  const { data } = await runSupabaseResultWithRetry<string | null>(c, 'sync_app_stats_refresh', async () => {
+    const result = await pg.query<{ refreshed_at: string | null }>(
+      'SELECT pg_catalog.to_json(public.mark_app_stats_refreshed(p_app_id => $1)) AS refreshed_at',
+      [appId],
+    )
+    return { data: result.rows[0]?.refreshed_at ?? null, error: null }
+  })
 
   if (!data) {
     throw new Error('sync_app_stats_refresh returned no timestamp')
@@ -377,12 +407,22 @@ app.post('/', middlewareAPISecret, async (c) => {
   const appId = body.appId
   const orgId = body.orgId
 
-  const supabase = supabaseAdmin(c)
+  const pg = await getPgClient(c)
+  try {
+    return await saveAppStats(c, pg, body, appId, orgId)
+  }
+  finally {
+    closeClient(c, pg)
+  }
+})
 
-  const appResult = await runSupabaseResultWithRetry<AppOwnerOrgRow>(c, 'load_app', async () => await supabase.from('apps')
-    .select('owner_org')
-    .eq('app_id', appId)
-    .maybeSingle())
+async function saveAppStats(c: Context, pg: PgClient, body: DataToGet, appId: string, orgId: string) {
+  const appResult = await runSupabaseResultWithRetry<AppOwnerOrgRow>(c, 'load_app', async () => {
+    const result = await pg.query<AppOwnerOrgRow>('SELECT owner_org FROM public.apps WHERE app_id = $1 LIMIT 2', [appId])
+    if (result.rows.length > 1)
+      return { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
+    return { data: result.rows[0] ?? null, error: null }
+  })
   if (!appResult.data) {
     cloudlog({ requestId: c.get('requestId'), message: 'cron_stat_app skipping missing app', body })
     return c.json({ status: 'skipped', reason: 'app_not_found' })
@@ -398,7 +438,12 @@ app.post('/', middlewareAPISecret, async (c) => {
   }
 
   // get the period of the billing of the organization
-  const cycleInfoResult = await runSupabaseResultWithRetry<CycleInfo>(c, 'get_cycle_info_org', async () => await supabase.rpc('get_cycle_info_org', { orgid: orgId }).single())
+  const cycleInfoResult = await runSupabaseResultWithRetry<CycleInfo>(c, 'get_cycle_info_org', async () => {
+    const rows = await queryJson<CycleInfo>(pg, 'SELECT * FROM public.get_cycle_info_org(orgid => $1)', [orgId])
+    if (rows.length !== 1)
+      return { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
+    return { data: rows[0], error: null }
+  })
   const cycleInfo = cycleInfoResult.data
   if (!cycleInfo?.subscription_anchor_start || !cycleInfo?.subscription_anchor_end)
     throw simpleError('cannot_get_cycle_info', 'Cannot get cycle info', { cycleInfoResult })
@@ -408,12 +453,12 @@ app.post('/', middlewareAPISecret, async (c) => {
   const endDate = cycleInfo.subscription_anchor_end
 
   // get mau
-  let mau = await readStatsMau(c, body.appId, startDate, endDate)
+  let mau = await readStatsMau(c, appId, startDate, endDate)
   // get bandwidth
-  let bandwidth = await readStatsBandwidth(c, body.appId, startDate, endDate)
+  let bandwidth = await readStatsBandwidth(c, appId, startDate, endDate)
   // get storage
-  let storage = await readStatsStorage(c, body.appId, startDate, endDate)
-  let versionUsage = await readStatsVersion(c, body.appId, startDate, endDate)
+  let storage = await readStatsStorage(c, appId, startDate, endDate)
+  let versionUsage = await readStatsVersion(c, appId, startDate, endDate)
 
   if (body.todayOnly) {
     // take only the last day
@@ -435,18 +480,15 @@ app.post('/', middlewareAPISecret, async (c) => {
   if (versionNamesToResolve.length > 0) {
     // Only resolve ids of this app's bundles, and never rewrite a value that is also
     // a real bundle name of this app (bundles can be named "123").
-    const appId = body.appId
     const [{ data: versions }, { data: numericNamedVersions }] = await Promise.all([
-      runSupabaseResultWithRetry<VersionNameRow[]>(c, 'resolve_version_names', async () => await supabase
-        .from('app_versions')
-        .select('id, name')
-        .eq('app_id', appId)
-        .in('id', versionNamesToResolve)),
-      runSupabaseResultWithRetry<VersionNameRow[]>(c, 'resolve_numeric_version_names', async () => await supabase
-        .from('app_versions')
-        .select('id, name')
-        .eq('app_id', appId)
-        .in('name', versionNamesToResolve.map(String))),
+      runSupabaseResultWithRetry<VersionNameRow[]>(c, 'resolve_version_names', async () => ({
+        data: await queryJson<VersionNameRow>(pg, 'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND id = ANY($2::bigint[])', [appId, versionNamesToResolve]),
+        error: null,
+      })),
+      runSupabaseResultWithRetry<VersionNameRow[]>(c, 'resolve_numeric_version_names', async () => ({
+        data: await queryJson<VersionNameRow>(pg, 'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND name = ANY($2::varchar[])', [appId, versionNamesToResolve.map(String)]),
+        error: null,
+      })),
     ])
     const realNumericNames = new Set((numericNamedVersions ?? []).map(v => v.name))
     if (versions) {
@@ -496,23 +538,35 @@ app.post('/', middlewareAPISecret, async (c) => {
   // Note: daily_version upsert uses type cast because auto-generated types are stale
   // (migration adds version_name column but types haven't been regenerated)
   await Promise.all([
-    runSupabaseResultWithRetry(c, 'upsert_daily_mau', async () => await supabase.from('daily_mau')
-      .upsert(mau, { onConflict: 'app_id,date' })
-      .eq('app_id', appId)),
-    runSupabaseResultWithRetry(c, 'upsert_daily_bandwidth', async () => await supabase.from('daily_bandwidth')
-      .upsert(bandwidth, { onConflict: 'app_id,date' })
-      .eq('app_id', appId)),
-    runSupabaseResultWithRetry(c, 'upsert_daily_storage', async () => await supabase.from('daily_storage')
-      .upsert(storage, { onConflict: 'app_id,date' })
-      .eq('app_id', appId)),
-    runSupabaseResultWithRetry(c, 'upsert_daily_version', async () => await supabase.from('daily_version')
-      .upsert(resolvedVersionUsage, { onConflict: 'app_id,date,version_name' })
-      .eq('app_id', appId)),
+    runSupabaseResultWithRetry(c, 'upsert_daily_mau', async () => {
+      await upsertRows(pg, 'daily_mau', { app_id: 'varchar', date: 'date', mau: 'bigint' }, ['app_id', 'date'], mau)
+      return { data: null, error: null }
+    }),
+    runSupabaseResultWithRetry(c, 'upsert_daily_bandwidth', async () => {
+      await upsertRows(pg, 'daily_bandwidth', { app_id: 'varchar', date: 'date', bandwidth: 'bigint' }, ['app_id', 'date'], bandwidth)
+      return { data: null, error: null }
+    }),
+    runSupabaseResultWithRetry(c, 'upsert_daily_storage', async () => {
+      await upsertRows(pg, 'daily_storage', { app_id: 'varchar', date: 'date', storage: 'bigint' }, ['app_id', 'date'], storage)
+      return { data: null, error: null }
+    }),
+    runSupabaseResultWithRetry(c, 'upsert_daily_version', async () => {
+      await upsertRows(pg, 'daily_version', {
+        app_id: 'varchar',
+        date: 'date',
+        version_name: 'varchar',
+        get: 'bigint',
+        fail: 'bigint',
+        install: 'bigint',
+        uninstall: 'bigint',
+      }, ['app_id', 'date', 'version_name'], resolvedVersionUsage)
+      return { data: null, error: null }
+    }),
   ])
 
   let storageHourly: StorageHourlyCalculationResult
   try {
-    storageHourly = await refreshStorageHourly(c, supabase, appId, orgId, cycleInfo, body.currentHour)
+    storageHourly = await refreshStorageHourly(c, pg, appId, orgId, cycleInfo, body.currentHour)
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Failed to refresh shadow hourly storage', appId, orgId, error })
@@ -525,10 +579,10 @@ app.post('/', middlewareAPISecret, async (c) => {
   }
 
   cloudlog({ requestId: c.get('requestId'), message: 'stats saved', mauLength: mau.length, bandwidthLength: bandwidth.length, storageLength: storage.length, versionUsageLength: versionUsage.length })
-  await syncAppStatsRefresh(c, supabase, body.appId)
+  await syncAppStatsRefresh(c, pg, appId)
 
   return c.json({ status: 'Stats saved', mau, bandwidth, storage, storageHourly, versionUsage })
-})
+}
 
 export const cronStatAppTestUtils = {
   isRetryablePostgrestError,

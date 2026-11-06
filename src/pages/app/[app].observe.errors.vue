@@ -1,29 +1,28 @@
 <script setup lang="ts">
 import type { ChartData, ChartOptions } from 'chart.js'
 import type { UpdaterFailureCategory } from '~/services/statsActions'
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import type { PeriodDayOption } from '~/utils/periodDays'
 import { useDark } from '@vueuse/core'
 import { computed, ref, useId, watch, watchEffect } from 'vue'
-import { Bar } from 'vue-chartjs'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconActivity from '~icons/lucide/activity'
-import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconAlertTriangle from '~icons/lucide/alert-triangle'
 import IconDownload from '~icons/lucide/download'
 import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconSmartphone from '~icons/lucide/smartphone'
+import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
+import { Bar } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { usePeriodDaysQuery } from '~/composables/usePeriodDaysQuery'
-import { registerDashboardCharts } from '~/services/dashboardChartRegister'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatLocalDateShort, formatLocalDateTime } from '~/services/date'
 import { formatNumberValue } from '~/services/formatLocale'
 import { actionToFilter, updaterFailureCategory, updaterFailureHelpKey, updaterInsightActions } from '~/services/statsActions'
-import { defaultApiHost, useSupabase } from '~/services/supabase'
 import { useDisplayStore } from '~/stores/display'
 
 interface LogInsightSummary {
@@ -81,10 +80,9 @@ interface LogInsightsResponse {
 
 const { t } = useI18n()
 const isDark = useDark()
-registerDashboardCharts()
 const route = useRoute('/app/[app].observe.errors')
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const displayStore = useDisplayStore()
 
 const id = ref('')
@@ -254,7 +252,7 @@ async function loadBundleNames() {
     return
 
   const appId = id.value
-  const { data, error } = await supabase
+  const { data, error } = await capgo
     .from('app_versions')
     .select('name')
     .eq('app_id', appId)
@@ -276,7 +274,7 @@ async function loadBundleNames() {
 
 async function loadAppInfo() {
   try {
-    const { data: dataApp } = await supabase
+    const { data: dataApp } = await capgo
       .from('apps')
       .select()
       .eq('app_id', id.value)
@@ -295,7 +293,7 @@ async function fetchInsights() {
   const requestId = ++latestInsightsRequest
   insightsLoading.value = true
   try {
-    const { data: sessionData } = await supabase.auth.getSession()
+    const { data: sessionData } = await capgo.auth.getSession()
     if (!sessionData.session) {
       if (requestId === latestInsightsRequest)
         toast.error(t('not-authenticated'))
@@ -691,18 +689,7 @@ watch(() => [
         </template>
       </div>
     </div>
-    <div v-else class="flex flex-col justify-center items-center min-h-[50vh]">
-      <IconAlertCircle class="w-16 h-16 mb-4 text-destructive" />
-      <h2 class="text-xl font-semibold text-foreground">
-        {{ t('app-not-found') }}
-      </h2>
-      <p class="mt-2 text-muted-foreground">
-        {{ t('app-not-found-description') }}
-      </p>
-      <button type="button" class="mt-4 text-white d-btn d-btn-primary" @click="$router.push(`/apps`)">
-        {{ t('back-to-apps') }}
-      </button>
-    </div>
+    <AppPageNotFound v-else />
   </div>
 </template>
 

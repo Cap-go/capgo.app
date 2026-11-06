@@ -17,6 +17,8 @@
  */
 import type { Database } from '../supabase/functions/_backend/utils/supabase.types.ts'
 import { mkdir } from 'node:fs/promises'
+import type { ImageStore } from './admin_image_storage.ts'
+import { createImageStore } from './admin_image_storage.ts'
 import { asyncPool, createSupabaseServiceClient, DEFAULT_ENV_FILE, getArgValue, loadEnv, parsePositiveInteger } from './admin_stripe_backfill_utils.ts'
 
 const DEFAULT_CONCURRENCY = 4
@@ -39,6 +41,8 @@ const GOOGLE_IMAGE_HOSTS = new Set([
 ])
 
 type SupabaseClient = ReturnType<typeof createSupabaseServiceClient>
+// Icons are stored in R2 (S3_* env vars), not Supabase Storage.
+let images: ImageStore
 type AppIconRow = Pick<
   Database['public']['Tables']['apps']['Row'],
   'android_store_url' | 'app_id' | 'icon_url' | 'ios_store_url' | 'name' | 'owner_org'
@@ -391,18 +395,7 @@ async function storageObjectExists(supabase: SupabaseClient, rawPath: string | n
   if (!path || isDefaultIcon(path))
     return false
 
-  const lastSlashIndex = path.lastIndexOf('/')
-  const folder = lastSlashIndex >= 0 ? path.slice(0, lastSlashIndex) : ''
-  const name = lastSlashIndex >= 0 ? path.slice(lastSlashIndex + 1) : path
-
-  const { data, error } = await supabase.storage
-    .from('images')
-    .list(folder, { limit: 1, search: name })
-
-  if (error)
-    throw error
-
-  return data?.some(item => item.name === name) ?? false
+  return images.exists(path)
 }
 
 async function fetchApps(supabase: SupabaseClient, filters: { appId: string | null, orgId: string | null }) {
@@ -482,16 +475,10 @@ async function applyIcon(supabase: SupabaseClient, app: AppIconRow, candidate: S
     return null
 
   const storagePath = getAppIconStoragePath(app.owner_org, app.app_id)
-  const blob = new Blob([icon.bytes], { type: icon.contentType })
-  const { error: uploadError } = await supabase.storage
-    .from('images')
-    .upload(storagePath, blob, {
-      contentType: icon.contentType,
-      upsert: true,
-    })
-
-  if (uploadError)
-    throw uploadError
+  await images.upload(storagePath, icon.bytes, {
+    contentType: icon.contentType,
+    upsert: true,
+  })
 
   const { data, error: updateError } = await supabase
     .from('apps')
@@ -562,6 +549,7 @@ async function main() {
     ...Bun.env,
   }
   const supabase = createSupabaseServiceClient(env)
+  images = createImageStore(env)
   const apps = await fetchApps(supabase, { appId, orgId })
   const missingApps = await getMissingIconApps(supabase, apps, verifyStorage, concurrency)
   const targetApps = parsedLimit === null ? missingApps : missingApps.slice(0, parsedLimit)

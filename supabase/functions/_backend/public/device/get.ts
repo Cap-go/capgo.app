@@ -2,10 +2,12 @@ import type { Context } from 'hono'
 import type { Database } from '../../utils/supabase.types.ts'
 import type { DeviceRes } from '../../utils/types.ts'
 import { quickError, simpleError } from '../../utils/hono.ts'
+import type { RlsPrincipal } from '../../utils/pg_rls.ts'
 import { cloudlog } from '../../utils/logging.ts'
+import { closeClient, getPgClient } from '../../utils/pg.ts'
+import { apikeyPrincipal, queryJson, withRlsTransaction } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { readDevices } from '../../utils/stats.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 import { fetchLimit, isValidAppId } from '../../utils/utils.ts'
 
 interface GetDevice {
@@ -108,6 +110,28 @@ export function parseCustomIdFilter(customId: string | null | undefined): string
   return trimmed
 }
 
+type CallerRead = <T>(text: string, values: unknown[]) => Promise<T[] | null>
+
+// Each read is its own RLS transaction on one connection (like one PostgREST request each), so a
+// failed lookup is ignored on its own instead of aborting the next one.
+async function withCallerReads<T>(c: Context, principal: RlsPrincipal, run: (read: CallerRead) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await run(async <R>(text: string, values: unknown[]) => {
+      try {
+        return await withRlsTransaction(pg, principal, client => queryJson<R>(client, text, values))
+      }
+      catch (error) {
+        cloudlog({ requestId: c.get('requestId'), message: 'device lookup failed', error })
+        return null
+      }
+    })
+  }
+  finally {
+    closeClient(c, pg)
+  }
+}
+
 export function filterDeviceKeys(devices: DeviceRes[]) {
   return devices.map((device) => {
     const { updated_at, device_id, custom_id, is_prod, is_emulator, install_source, version_name, version, app_id, platform, plugin_version, os_version, version_build, key_id, country_code } = device
@@ -157,33 +181,30 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
       throw quickError(404, 'device_not_found', 'Cannot find device', { device_id: body.device_id })
     }
     const dataDevice = filterDeviceKeys(res.data)[0] as publicDevice
-    if (dataDevice.version_name && !res.data[0].version) {
-      const { data: dataVersion, error: dbErrorVersion } = await supabaseApikey(c, apikey.key)
-        .from('app_versions')
-        .select('id, name')
-        .eq('app_id', body.app_id)
-        .eq('name', dataDevice.version_name)
-        .maybeSingle()
-      if (!dbErrorVersion && dataVersion)
-        dataDevice.version = dataVersion.id
-    }
-
-    // Check for channel override
-    const { data: channelOverride } = await supabaseApikey(c, apikey.key)
-      .from('channel_devices')
-      .select(`
-        channel_id,
-        channels (
-          name
+    const deviceId = body.device_id.toLowerCase()
+    await withCallerReads(c, apikeyPrincipal(c, apikey.key), async (read) => {
+      if (dataDevice.version_name && !res.data[0].version) {
+        const dataVersion = await read<{ id: number, name: string }>(
+          'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND name = $2 LIMIT 2',
+          [body.app_id, dataDevice.version_name],
         )
-      `)
-      .eq('device_id', body.device_id.toLowerCase())
-      .eq('app_id', body.app_id)
-      .single()
+        if (dataVersion?.length === 1)
+          dataDevice.version = dataVersion[0].id
+      }
 
-    if (channelOverride?.channels) {
-      dataDevice.channel = channelOverride.channels.name
-    }
+      // Check for channel override
+      const channelOverride = await read<{ channel_id: number, channels: { name: string } | null }>(
+        `SELECT cd.channel_id, (SELECT pg_catalog.json_build_object('name', ch.name) FROM public.channels ch WHERE ch.id = cd.channel_id) AS channels
+         FROM public.channel_devices cd
+         WHERE cd.device_id = $1 AND cd.app_id = $2
+         LIMIT 2`,
+        [deviceId, body.app_id],
+      )
+
+      if (channelOverride?.length === 1 && channelOverride[0].channels) {
+        dataDevice.channel = channelOverride[0].channels.name
+      }
+    })
 
     return c.json(dataDevice)
   }
@@ -212,64 +233,59 @@ export async function get(c: Context, body: GetDevice, apikey: Database['public'
     // get versions from all devices
     const versionNames = [...new Set(dataDevices.map(device => device.version_name).filter(Boolean).filter(v => v !== null && v !== undefined))]
     const versionIds = [...new Set(dataDevices.map(device => device.version).filter(Boolean).filter(v => v !== null && v !== undefined))] as number[]
-    let versionMap: Record<string, { id: number, name: string }> = {}
-    if (versionNames.length) {
-      const { data: dataVersions } = await supabaseApikey(c, apikey.key)
-        .from('app_versions')
-        .select('id, name')
-        .eq('app_id', body.app_id)
-        .in('name', versionNames)
-      if (dataVersions?.length) {
-        versionMap = dataVersions.reduce((acc, version) => {
-          acc[version.name] = version as any
-          return acc
-        }, {} as Record<string, { id: number, name: string }>)
-      }
-    }
-    const missingVersionIds = versionIds.filter(id => !Object.values(versionMap).some(v => v.id === id))
-    if (missingVersionIds.length) {
-      const { data: dataVersions } = await supabaseApikey(c, apikey.key)
-        .from('app_versions')
-        .select('id, name')
-        .eq('app_id', body.app_id)
-        .in('id', missingVersionIds)
-      if (dataVersions?.length) {
-        versionMap = dataVersions.reduce((acc, version) => {
-          acc[version.name] = version as any
-          return acc
-        }, versionMap)
-      }
-    }
-    dataDevices.forEach((device) => {
-      const versionName = device.version_name
-      const version = versionName ? versionMap[versionName] : undefined
-      if (version)
-        device.version = version.id
-    })
-
-    // Get channel overrides for all devices
-    const deviceIds = dataDevices.map(device => device.device_id.toLowerCase())
-    const { data: channelOverrides } = await supabaseApikey(c, apikey.key)
-      .from('channel_devices')
-      .select(`
-        device_id,
-        channel_id,
-        channels (
-          name
+    await withCallerReads(c, apikeyPrincipal(c, apikey.key), async (read) => {
+      let versionMap: Record<string, { id: number, name: string }> = {}
+      if (versionNames.length) {
+        const dataVersions = await read<{ id: number, name: string }>(
+          'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND name = ANY($2::text[])',
+          [body.app_id, versionNames],
         )
-      `)
-      .in('device_id', deviceIds)
-      .eq('app_id', body.app_id)
-
-    // Add channel override to each device that has one
-    if (channelOverrides?.length) {
-      dataDevices.forEach((device) => {
-        const override = channelOverrides.find(o => o.device_id === device.device_id.toLowerCase())
-        if (override?.channels) {
-          (device as any).channel = override.channels.name
+        if (dataVersions?.length) {
+          versionMap = dataVersions.reduce((acc, version) => {
+            acc[version.name] = version
+            return acc
+          }, {} as Record<string, { id: number, name: string }>)
         }
+      }
+      const missingVersionIds = versionIds.filter(id => !Object.values(versionMap).some(v => v.id === id))
+      if (missingVersionIds.length) {
+        const dataVersions = await read<{ id: number, name: string }>(
+          'SELECT id, name FROM public.app_versions WHERE app_id = $1 AND id = ANY($2::bigint[])',
+          [body.app_id, missingVersionIds],
+        )
+        if (dataVersions?.length) {
+          versionMap = dataVersions.reduce((acc, version) => {
+            acc[version.name] = version
+            return acc
+          }, versionMap)
+        }
+      }
+      dataDevices.forEach((device) => {
+        const versionName = device.version_name
+        const version = versionName ? versionMap[versionName] : undefined
+        if (version)
+          device.version = version.id
       })
-    }
+
+      // Get channel overrides for all devices
+      const deviceIds = dataDevices.map(device => device.device_id.toLowerCase())
+      const channelOverrides = await read<{ device_id: string, channel_id: number, channels: { name: string } | null }>(
+        `SELECT cd.device_id, cd.channel_id, (SELECT pg_catalog.json_build_object('name', ch.name) FROM public.channels ch WHERE ch.id = cd.channel_id) AS channels
+         FROM public.channel_devices cd
+         WHERE cd.device_id = ANY($1::text[]) AND cd.app_id = $2`,
+        [deviceIds, body.app_id],
+      )
+
+      // Add channel override to each device that has one
+      if (channelOverrides?.length) {
+        dataDevices.forEach((device) => {
+          const override = channelOverrides.find(o => o.device_id === device.device_id.toLowerCase())
+          if (override?.channels) {
+            (device as any).channel = override.channels.name
+          }
+        })
+      }
+    })
 
     return c.json({
       data: dataDevices,

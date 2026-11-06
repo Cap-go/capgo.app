@@ -1,5 +1,5 @@
 import type { PluginListenerHandle } from '@capacitor/core'
-import type { NativeNavigationTab } from '@capgo/capacitor-native-navigation'
+import type { NativeNavigationNavbarSegmentGroup, NativeNavigationTab } from '@capgo/capacitor-native-navigation'
 import type { Tab } from '~/components/comp_def'
 import { ActionSheet, ActionSheetButtonStyle } from '@capacitor/action-sheet'
 import { App } from '@capacitor/app'
@@ -8,7 +8,7 @@ import { StatusBar, Style } from '@capacitor/status-bar'
 import { NativeNavigation } from '@capgo/capacitor-native-navigation'
 import { NavigationBar } from '@capgo/capacitor-navigation-bar'
 import { useMediaQuery } from '@vueuse/core'
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { isNavigationPathActive, useAppNavigation } from '~/composables/useAppNavigation'
@@ -60,6 +60,68 @@ export const isNativeChromeEnabled = Capacitor.isNativePlatform()
 // The floating tabbar replaces the Android system navigation bar while the dashboard shell is shown.
 const hideSystemNavigationBar = Capacitor.getPlatform() === 'android'
 
+interface NavbarSegmentSource {
+  groups: () => NativeNavigationNavbarSegmentGroup[]
+  select: (groupId: string, id: string) => void
+}
+
+// Tab rows registered by mounted pages, drawn as native segment rows under the navbar.
+// Setup order keeps outer layouts above nested pages.
+const segmentSources = shallowRef<{ prefix: string, source: NavbarSegmentSource }[]>([])
+let segmentSourceCount = 0
+
+/**
+ * Whether the installed native binary draws navbar segments (plugin 8.13.0+).
+ * Live updates can ship this web code to binaries built with an older plugin that
+ * ignores `segments`; tab rows stay in the web page until a probe confirms support.
+ */
+export const nativeNavbarSegmentsSupported = shallowRef(false)
+let segmentsProbed = false
+
+// An older plugin ignores `segments`, so the navbar keeps the same height with a row.
+async function probeNavbarSegments() {
+  if (segmentsProbed)
+    return
+  segmentsProbed = true
+  try {
+    const probe = [{ id: 'probe', items: [{ id: 'probe', title: ' ' }] }]
+    const withRow = await NativeNavigation.setNavbar({ hidden: false, segments: probe })
+    const withoutRow = await NativeNavigation.setNavbar({ hidden: false, segments: [] })
+    nativeNavbarSegmentsSupported.value = withRow.insets.navbarHeight > withoutRow.insets.navbarHeight
+  }
+  catch {
+    nativeNavbarSegmentsSupported.value = false
+  }
+}
+
+/**
+ * Moves a web tab row into the native navbar while the component is mounted.
+ * Group ids only need to be unique within one source.
+ */
+export function useNativeNavbarSegments(source: NavbarSegmentSource) {
+  if (!isNativeChromeEnabled)
+    return
+  const entry = { prefix: `s${segmentSourceCount++}:`, source }
+  segmentSources.value = [...segmentSources.value, entry]
+  onBeforeUnmount(() => {
+    segmentSources.value = segmentSources.value.filter(item => item !== entry)
+  })
+}
+
+// Resolves once the router finishes the next navigation, or after a short delay when none starts.
+function nextNavigation(router: ReturnType<typeof useRouter>) {
+  return new Promise<void>((resolve) => {
+    const stop = router.afterEach(() => {
+      stop()
+      resolve()
+    })
+    window.setTimeout(() => {
+      stop()
+      resolve()
+    }, 600)
+  })
+}
+
 /**
  * Drives the native Capacitor navbar and tabbar from the router so the
  * dashboard shell uses platform chrome instead of the web header/sidebar.
@@ -108,6 +170,21 @@ export function useNativeChrome() {
     return name.length > 18 ? `${name.slice(0, 17)}…` : name
   })
 
+  const segments = computed(() => segmentSources.value.flatMap(({ prefix, source }) =>
+    source.groups().map(group => ({ ...group, id: `${prefix}${group.id}` })),
+  ))
+
+  async function selectSegment(groupId: string, id: string) {
+    const entry = segmentSources.value.find(item => groupId.startsWith(item.prefix))
+    if (!entry)
+      return
+    const navigated = nextNavigation(router)
+    entry.source.select(groupId.slice(entry.prefix.length), id)
+    await navigated
+    // A tap that does not navigate (e.g. a permission modal) keeps the real selection.
+    await renderNavbar()
+  }
+
   const moreTabs = computed<Tab[]>(() => [
     { label: 'settings', key: '/settings/account' },
     ...tabs.value.filter(tab => !Object.values(PRIMARY_TABS).some(primary => primary.key === tab.key)),
@@ -126,6 +203,7 @@ export function useNativeChrome() {
       title: title.value,
       backButton: { visible: showBack.value },
       rightItems: organizationLabel.value ? [{ id: 'organization', title: organizationLabel.value }] : [],
+      segments: nativeNavbarSegmentsSupported.value ? segments.value : [],
       colors: { ...colors, tint: BRAND_TINT },
       animated: true,
     })
@@ -209,16 +287,7 @@ export function useNativeChrome() {
   async function goBack() {
     if (!router.options.history.state.back)
       return
-    const navigated = new Promise<void>((resolve) => {
-      const stop = router.afterEach(() => {
-        stop()
-        resolve()
-      })
-      window.setTimeout(() => {
-        stop()
-        resolve()
-      }, 600)
-    })
+    const navigated = nextNavigation(router)
     router.back()
     await navigated
   }
@@ -238,6 +307,9 @@ export function useNativeChrome() {
     await NativeNavigation.configure({ enabled: true, contentInsetMode: 'css' })
     if (!active)
       return
+    await probeNavbarSegments()
+    if (!active)
+      return
     await Promise.all([
       register(NativeNavigation.addListener('tabSelect', ({ id }) => {
         if (id === 'more') {
@@ -251,6 +323,9 @@ export function useNativeChrome() {
       register(NativeNavigation.addListener('navbarBack', () => {
         void goBack()
       })),
+      register(NativeNavigation.addListener('navbarSegmentSelect', ({ groupId, id }) => {
+        void selectSegment(groupId, id)
+      })),
       register(NativeNavigation.addListener('navbarItemTap', ({ id }) => {
         if (id === 'organization')
           void chooseOrganization()
@@ -261,7 +336,7 @@ export function useNativeChrome() {
     await Promise.all([renderNavbar(), renderTabbar(), renderStatusBar(), hideNavigationBar()])
   })
 
-  watch([title, showBack, organizationLabel, isDark], () => {
+  watch([title, showBack, organizationLabel, isDark, segments, nativeNavbarSegmentsSupported], () => {
     void renderNavbar()
   })
   watch([selectedTabId, isDark, () => t('more-menu')], () => {

@@ -7,7 +7,6 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getDrizzleClient, getPgClient } from '../../utils/pg.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseAdmin } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
 
 // Proxy for the CLI's "Email Capgo support" logs upload — forwards gzipped text
@@ -144,18 +143,20 @@ export async function hasSupportLogUploadPermission(
 }
 
 async function getSupportUploadEmail(c: Context, userId: string): Promise<string | undefined> {
-  const { data, error } = await supabaseAdmin(c)
-    .from('users')
-    .select('email')
-    .eq('id', userId)
-    .maybeSingle()
-
-  if (error) {
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const result = await pgClient.query<{ email: string | null }>('SELECT email FROM public.users WHERE id = $1', [userId])
+    return result.rows[0]?.email?.trim() || undefined
+  }
+  catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'support-logs user email lookup failed', userId, error })
     return undefined
   }
-
-  return data?.email?.trim() || undefined
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
 }
 
 async function getSupportUploadPlatform(c: Context, body: SupportLogsBody, userId: string): Promise<SupportLogPlatform | undefined> {
@@ -165,18 +166,21 @@ async function getSupportUploadPlatform(c: Context, body: SupportLogsBody, userI
   if (!body.jobId)
     return undefined
 
-  const buildRequestQuery = supabaseAdmin(c)
-    .from('build_requests')
-    .select('platform')
-    .eq('builder_job_id', body.jobId)
-    .eq('requested_by', userId)
-
-  if (body.appId)
-    buildRequestQuery.eq('app_id', body.appId)
-
-  const { data, error } = await buildRequestQuery.maybeSingle()
-
-  if (error) {
+  let pgClient
+  try {
+    pgClient = await getPgClient(c)
+    const result = await pgClient.query<{ platform: string }>(
+      `SELECT platform FROM public.build_requests
+      WHERE builder_job_id = $1 AND requested_by = $2 AND ($3::text IS NULL OR app_id = $3)
+      LIMIT 2`,
+      [body.jobId, userId, body.appId || null],
+    )
+    // maybeSingle(): more than one row was an error under PostgREST
+    if (result.rows.length > 1)
+      throw new Error('JSON object requested, multiple (or no) rows returned')
+    return parseSupportLogPlatform(result.rows[0]?.platform)
+  }
+  catch (error) {
     cloudlogErr({
       requestId: c.get('requestId'),
       message: 'support-logs platform lookup failed',
@@ -187,8 +191,10 @@ async function getSupportUploadPlatform(c: Context, body: SupportLogsBody, userI
     })
     return undefined
   }
-
-  return parseSupportLogPlatform(data?.platform)
+  finally {
+    if (pgClient)
+      closeClient(c, pgClient)
+  }
 }
 
 export async function uploadSupportLogs(

@@ -1,4 +1,5 @@
 // Declaration file for Deno runtime APIs
+// Harmless deploy-scope touch: workerDependencyMatchers redeploys api, files, plugin, and translation workers on release.
 // This is a simplified version, add more types as needed
 
 declare namespace Deno {

@@ -6,37 +6,20 @@ import { createTestSDK, uploadBundleSDK } from './cli-sdk-utils'
 import { BASE_PACKAGE_JSON, cleanupCli, getSemver, prepareCli, tempFileFolder } from './cli-utils'
 import { createIsolatedSeedAppOptions, resetAndSeedAppData, resetAppData, resetAppDataStats } from './test-utils'
 
-async function assertCompatibilityTableColumns(appId: string, column1: string, column2: string, column3: string, column4: string, customPackageJsonPath?: string) {
-  // Use custom package.json if provided, otherwise use temp app's package.json
+async function assertCompatibilityTableColumns(appId: string, packageName: string, localVersion: string, remoteVersion: string, customPackageJsonPath?: string) {
   const packageJsonPath = customPackageJsonPath || join(process.cwd(), 'temp_cli_test', appId, 'package.json')
-  const nodeModulesPath = join(process.cwd(), 'node_modules')
-
   const result = await createTestSDK().checkBundleCompatibility({
     appId,
     channel: 'production',
     packageJson: packageJsonPath,
-    nodeModules: nodeModulesPath,
+    nodeModules: join(process.cwd(), 'node_modules'),
   })
 
   expect(result.success).toBe(true)
-  expect(result.data).toBeDefined()
-
-  // Find the package in the compatibility data
-  const packageEntry = result.data!.find((entry: any) => entry.name === column1)
+  const packageEntry = result.data?.find((entry: any) => entry.name === packageName)
   expect(packageEntry).toBeDefined()
-  expect(packageEntry!.localVersion).toContain(column2)
-  expect(packageEntry!.remoteVersion).toContain(column3)
-  // Note: SDK compatibility field structure may differ from CLI output
-  // The ✅/❌ symbols are in the CLI's text rendering, SDK returns the data
-  // We'll check if versions match for compatibility
-  if (column4 === '✅') {
-    // Compatible - versions should match (considering semver resolution)
-    expect(packageEntry!.remoteVersion).toBeDefined()
-  }
-  else {
-    // Incompatible - just verify the entry exists
-    expect(packageEntry!.localVersion).toBeDefined()
-  }
+  expect(packageEntry!.localVersion).toContain(localVersion)
+  expect(packageEntry!.remoteVersion).toContain(remoteVersion)
 }
 
 async function writeBundleContent(appId: string, marker: string) {
@@ -114,72 +97,30 @@ describe('tests CLI metadata', () => {
 
     // Now compatibility check should show remote versions from the uploaded bundle
     // The SDK reports the currently installed dependency version from node_modules.
-    await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '✅')
+    await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion)
   })
 
-  // All tests now run concurrently, each with its own package.json file
-  // They all reference the same uploaded baseline for compatibility comparison
-  // NOTE: localVersion comes from actual node_modules, not from test package.json.
-  describe.concurrent('version compatibility tests', () => {
-    it.concurrent('should handle matching versions', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'matching', { '@capacitor/android': installedAndroidVersion })
-      // With matching versions, should be compatible
-      // localVersion is from node_modules, remoteVersion is from the uploaded bundle baseline.
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '✅', customPkgPath)
-    })
+  // Each case writes its own package.json and compares against the uploaded baseline.
+  // localVersion always comes from node_modules, not from the declared dependency.
+  it.concurrent.each([
+    ['matching versions', () => installedAndroidVersion],
+    ['semver caret ranges', () => '^8.0.0'],
+    ['semver tilde ranges', () => '~8.0.0'],
+    ['major version mismatches', () => '7.0.0'],
+    ['registry prefixes', () => 'npm:@capacitor/android@8.0.0'],
+    ['file references', () => 'file:../capacitor-android'],
+    ['git references', () => 'github:capacitorjs/capacitor#main'],
+  ])('should resolve %s against the installed dependency', async (testName, declaredVersion) => {
+    const customPkgPath = await createCustomPackageJson(APPNAME, testName.replaceAll(' ', '-'), { '@capacitor/android': declaredVersion() })
+    await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, customPkgPath)
+  })
 
-    it.concurrent('should handle semver caret ranges', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'caret', { '@capacitor/android': '^8.0.0' })
-      // SDK resolves semver ranges against the installed dependency.
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '✅', customPkgPath)
+  it.concurrent('should handle additional local plugins', async () => {
+    const customPkgPath = await createCustomPackageJson(APPNAME, 'plugins', {
+      '@capacitor/android': installedAndroidVersion,
+      '@capgo/capacitor-updater': installedUpdaterVersion,
     })
-
-    it.concurrent('should handle semver tilde ranges', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'tilde', { '@capacitor/android': '~8.0.0' })
-      // SDK resolves semver ranges against the installed dependency.
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '✅', customPkgPath)
-    })
-
-    it.concurrent('should handle version mismatches as incompatible', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'mismatch', { '@capacitor/android': '7.0.0' })
-      // Different major version should be incompatible
-      // localVersion still reflects the installed dependency, not the declared mismatch.
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '❌', customPkgPath)
-    })
-
-    it.concurrent('should handle registry prefixes as incompatible', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'registry', {
-        '@capacitor/android': 'npm:@capacitor/android@8.0.0',
-      })
-      // Non-standard version formats still resolve to the installed dependency.
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '❌', customPkgPath)
-    })
-
-    it.concurrent('should handle file references as incompatible', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'file', {
-        '@capacitor/android': 'file:../capacitor-android',
-      })
-      // File references still resolve to the installed dependency version.
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '❌', customPkgPath)
-    })
-
-    it.concurrent('should handle git references as incompatible', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'git', {
-        '@capacitor/android': 'github:capacitorjs/capacitor#main',
-      })
-      // Git references still resolve to the installed dependency version.
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '❌', customPkgPath)
-    })
-
-    it.concurrent('should handle additional local plugins', async () => {
-      const customPkgPath = await createCustomPackageJson(APPNAME, 'plugins', {
-        '@capacitor/android': installedAndroidVersion,
-        '@capgo/capacitor-updater': installedUpdaterVersion,
-      })
-      // Check that both dependencies show up in the compatibility table with remote versions
-      // localVersion comes from node_modules for both packages
-      await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, '✅', customPkgPath)
-      await assertCompatibilityTableColumns(APPNAME, '@capgo/capacitor-updater', installedUpdaterVersion, installedUpdaterVersion, '✅', customPkgPath)
-    })
+    await assertCompatibilityTableColumns(APPNAME, '@capacitor/android', installedAndroidVersion, installedAndroidVersion, customPkgPath)
+    await assertCompatibilityTableColumns(APPNAME, '@capgo/capacitor-updater', installedUpdaterVersion, installedUpdaterVersion, customPkgPath)
   })
 })

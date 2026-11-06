@@ -19,19 +19,39 @@ const updaterWorkerUrl = new URL('../dist/updater-installed-worker.js', import.m
 const combinedWorkerUrl = new URL('../dist/onboarding-worker.js', import.meta.url)
 const call = "import { CapacitorUpdater } from '@capgo/capacitor-updater'; CapacitorUpdater.notifyAppReady()"
 
-async function workerHarness(worker = workerUrl) {
+async function workerHarness(worker = workerUrl, standalone = false) {
   const requests = []
+  const channel = worker.href === updaterWorkerUrl.href ? 'updater-installed' : 'notify-app-ready'
+  const step = worker.href === updaterWorkerUrl.href ? 'add_updater' : 'add_code'
   const behavior = { events: 'ok', putStatus: 200, putError: false, putDelayMs: 0 }
+  const heldEvents = []
   const server = createServer(async (request, response) => {
     let body = ''
     for await (const chunk of request)
       body += chunk
-    requests.push({ path: request.url, headers: request.headers, body: JSON.parse(body), method: request.method })
-    if (request.method === 'POST')
-      behavior.onEvent?.(requests.at(-1).body)
+    const entry = { path: request.url, headers: request.headers, body: JSON.parse(body), method: request.method }
+    // Transport assertions now exercise the coordinator, scoped to the selected check.
+    if (standalone || worker.href === combinedWorkerUrl.href || entry.body.channel === channel || entry.body.onboarding?.steps?.[step]) {
+      requests.push(entry)
+      if (request.method === 'POST')
+        behavior.onEvent?.(entry.body)
+    }
     if (request.method === 'PUT' && behavior.putError) {
       request.socket.destroy()
       return
+    }
+    if (behavior.events === 'until_puts') {
+      const puts = requests.filter(entry => entry.method === 'PUT').length
+      if (request.method === 'POST' && puts < 2) {
+        heldEvents.push(response)
+        return
+      }
+      if (puts === 2) {
+        for (const eventResponse of heldEvents.splice(0)) {
+          if (!eventResponse.destroyed)
+            eventResponse.writeHead(200, { 'Content-Type': 'application/json' }).end('{}')
+        }
+      }
     }
     if (behavior.redirectLocation && (request.method === 'POST' ? behavior.events === 'redirect' : behavior.putRedirect)) {
       response.writeHead(307, { Location: behavior.redirectLocation }).end()
@@ -53,25 +73,31 @@ async function workerHarness(worker = workerUrl) {
     api, project, requests, behavior,
     async run(extra = {}, environment = {}) {
       requests.length = 0
-      const workerData = worker.href === combinedWorkerUrl.href
-        ? { cwd: project.dir, command: 'app list', apikey: 'fake-api-key', ...extra }
-        : { project: { dir: project.dir, workspaceRoot: project.workspaceRoot, appId: project.appId, webDir: project.webDir }, apiHost: api, command: 'app list', apikey: 'fake-api-key', attemptId: randomUUID(), ...extra }
+      const workerData = standalone
+        ? { project: { dir: project.dir, workspaceRoot: project.workspaceRoot, appId: project.appId, webDir: project.webDir }, apiHost: api, command: 'app list', apikey: 'fake-api-key', attemptId: randomUUID(), ...extra }
+        : { cwd: project.dir, command: 'app list', apikey: 'fake-api-key', ...extra }
       const child = spawn('node', ['--input-type=module', '-e', `
         import { Worker } from 'node:worker_threads'
-        const worker = new Worker(new URL(${JSON.stringify(worker.href)}), {
+        const worker = new Worker(new URL(${JSON.stringify((standalone ? worker : combinedWorkerUrl).href)}), {
           workerData: ${JSON.stringify(workerData)}, stdout: true, stderr: true, execArgv: []
         })
-        worker.on('error', () => process.exit(1))
-        worker.on('exit', code => process.exit(code))
+        worker.on('message', message => console.log(JSON.stringify(message)))
+        worker.on('error', () => { process.exitCode = 1 })
+        worker.on('exit', code => { process.exitCode = code })
       `], {
-        stdio: 'ignore',
+        stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '', CAPGO_DISABLE_POSTHOG: '', CAPGO_TRUSTED_API_ORIGINS: api, ...environment },
       })
+      let output = ''
+      let errors = ''
+      child.stdout.on('data', chunk => { output += chunk })
+      child.stderr.on('data', chunk => { errors += chunk })
       const timeout = setTimeout(() => child.kill(), 10_000)
       try {
-        const [code, signal] = await once(child, 'exit')
+        const [code, signal] = await once(child, 'close')
         assert.equal(signal, null, 'worker did not finish its bounded reporting')
-        assert.equal(code, 0)
+        assert.equal(code, 0, errors)
+        return output.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
       }
       finally {
         clearTimeout(timeout)
@@ -85,7 +111,7 @@ async function workerHarness(worker = workerUrl) {
 }
 
 function scanEvents(requests, result, reportStatus, channel = 'notify-app-ready') {
-  const events = requests.filter(request => request.method === 'POST')
+  const events = requests.filter(request => request.method === 'POST').sort((a, b) => b.body.event.localeCompare(a.body.event))
   assert.deepEqual(events.map(request => request.body.event), ['scan_started', 'scan_ended'])
   const [started, ended] = events.map(request => request.body)
   assert.match(started.nonPersonTags.attempt_id, /^[0-9a-f-]{36}$/)
@@ -275,7 +301,7 @@ test('incomplete scans and invalid Capacitor configs cannot mark integration com
   assert.equal(resolved.webDir, join(project.dir, 'www'))
 })
 
-test.concurrent('packaged worker pairs scan events and sends only the add_code patch with CLI auth and destination context', async () => {
+test.concurrent('coordinator pairs notify-app-ready events while its worker sends the add_code patch with CLI auth and destination context', async () => {
   const harness = await workerHarness()
   const { api, requests } = harness
   try {
@@ -283,18 +309,18 @@ test.concurrent('packaged worker pairs scan events and sends only the add_code p
     await harness.run({ attemptId: parentAttempt })
     const firstAttempt = scanEvents(requests, 'found', 'success')
     assert.equal(firstAttempt, parentAttempt)
-    assert.deepEqual(requests.map(request => request.body.event ?? request.method), ['scan_started', 'PUT', 'scan_ended'])
+    assert.equal(requests.filter(request => request.method === 'PUT').length, 1)
     const patch = requests.find(request => request.method === 'PUT')
     assert.deepEqual(patch.body, { onboarding: { steps: { add_code: { status: 'done' } } } })
     assert.equal(patch.path, '/app/com.example.ready')
     assert.equal(patch.headers.capgkey, 'fake-api-key')
     assert.equal(patch.headers.authorization, 'fake-api-key')
     assert.equal(patch.headers['x-cli-command'], 'app list')
-    assert.equal(requests.at(-1).body.nonPersonTags.todo_report_http_status, 200)
-    await harness.run({ apiHost: `${api}/functions/v1`, anonKey: 'fake-anon-key' })
+    assert.equal(requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags.todo_report_http_status, 200)
+    await harness.run({ apiHost: `${api}/functions/v1` })
     assert.notEqual(scanEvents(requests, 'found', 'success'), firstAttempt)
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
-    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'Bearer fake-anon-key')
+    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'fake-api-key', 'self-host uses the API key, no anon key')
   }
   finally {
     harness.close()
@@ -311,17 +337,17 @@ test.concurrent('scan-ended records negative, unknown, rejected, and failed todo
       await harness.run()
       attempts.add(scanEvents(requests, result, 'not_attempted'))
       assert.equal(requests.length, 2)
-      assert.equal('todo_report_http_status' in requests.at(-1).body.nonPersonTags, false)
+      assert.equal('todo_report_http_status' in requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags, false)
     }
     write(join(project.dir, 'src/main.ts'), call)
     behavior.putStatus = 403
     await harness.run()
     attempts.add(scanEvents(requests, 'found', 'rejected'))
-    assert.equal(requests.at(-1).body.nonPersonTags.todo_report_http_status, 403)
+    assert.equal(requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags.todo_report_http_status, 403)
     behavior.putError = true
     await harness.run()
     attempts.add(scanEvents(requests, 'found', 'failed'))
-    assert.equal('todo_report_http_status' in requests.at(-1).body.nonPersonTags, false)
+    assert.equal('todo_report_http_status' in requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags, false)
     assert.equal(attempts.size, 4)
   }
   finally {
@@ -366,7 +392,7 @@ test.concurrent('both workers allow successful todo reports to take longer than 
   }
 }, 20_000)
 
-test.concurrent('foreground exits while the real worker is waiting on scan-started telemetry', async () => {
+test.concurrent('foreground exits while the coordinator is waiting on scan-started telemetry', async () => {
   const harness = await workerHarness()
   harness.behavior.events = 'hang'
   let started
@@ -410,7 +436,7 @@ test.concurrent('foreground exits while the real worker is waiting on scan-start
     assert.equal(code, 0)
     assert.equal(output.trim(), 'foreground-finished')
     assert.equal(errors, '')
-    assert.deepEqual(harness.requests.map(request => request.body.event), ['scan_started'])
+    assert.equal(harness.requests.some(request => request.body.event === 'scan_started'), true)
   }
   finally {
     clearTimeout(timeout)
@@ -511,10 +537,10 @@ test.concurrent('installed-updater worker pairs scan events and only completes a
     assert.equal(patch.path, '/app/com.example.ready')
     assert.equal(patch.headers.authorization, 'fake-api-key')
     assert.equal(patch.headers['x-cli-command'], 'app list')
-    await harness.run({ apiHost: `${api}/functions/v1`, anonKey: 'fake-anon-key' })
+    await harness.run({ apiHost: `${api}/functions/v1` })
     assert.notEqual(scanEvents(requests, 'found', 'success', 'updater-installed'), firstAttempt)
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
-    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'Bearer fake-anon-key')
+    assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'fake-api-key', 'self-host uses the API key, no anon key')
   }
   finally {
     harness.close()
@@ -532,7 +558,7 @@ test.concurrent('installed-updater worker skips missing packages and handles rej
     behavior.putStatus = 403
     await harness.run()
     scanEvents(requests, 'found', 'rejected', 'updater-installed')
-    assert.equal(requests.at(-1).body.nonPersonTags.todo_report_http_status, 403)
+    assert.equal(requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags.todo_report_http_status, 403)
     behavior.putStatus = 200
     for (const setting of ['CAPGO_DISABLE_TELEMETRY', 'CAPGO_DISABLE_POSTHOG']) {
       await harness.run({}, { [setting]: 'true' })
@@ -573,6 +599,48 @@ test.concurrent('coordinator loads the project once and reports both checks inde
     harness.close()
   }
 }, 20_000)
+
+test.concurrent('both scans update todos before the coordinator receives scan-started analytics responses', async () => {
+  const harness = await workerHarness(combinedWorkerUrl)
+  installUpdater(harness.project)
+  harness.behavior.events = 'until_puts'
+  try {
+    await harness.run()
+    assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2)
+    for (const channel of ['notify-app-ready', 'updater-installed']) {
+      const events = harness.requests.filter(request => request.body.channel === channel).sort((a, b) => b.body.event.localeCompare(a.body.event))
+      scanEvents(events, 'found', 'success', channel)
+      const [started, ended] = events.map(request => request.body)
+      assert.equal(Date.parse(ended.timestamp) - Date.parse(started.timestamp), ended.nonPersonTags.duration_ms,
+        'local scanning must start at scan_started, without waiting for analytics to respond or time out')
+    }
+  }
+  finally {
+    harness.close()
+  }
+}, 10_000)
+
+test.concurrent('scan workers report analytics over IPC and only send their own todo HTTP update', async () => {
+  for (const [worker, channel, step] of [[workerUrl, 'notify-app-ready', 'add_code'], [updaterWorkerUrl, 'updater-installed', 'add_updater']]) {
+    const harness = await workerHarness(worker, true)
+    installUpdater(harness.project)
+    try {
+      const messages = await harness.run()
+      assert.deepEqual(harness.requests.map(request => request.method), ['PUT'])
+      assert.deepEqual(harness.requests[0].body, { onboarding: { steps: { [step]: { status: 'done' } } } })
+      const events = messages.filter(message => message.type === 'onboarding-analytics').map(message => message.payload)
+      assert.deepEqual(events.map(event => event.event), ['scan_started', 'scan_ended'])
+      assert.equal(events.every(event => event.channel === channel && event.tags.app_id === harness.project.appId), true)
+      assert.equal(events[0].nonPersonTags.attempt_id, events[1].nonPersonTags.attempt_id)
+      assert.equal(events[1].nonPersonTags.todo_report_status, 'success')
+      assert.equal(events[1].nonPersonTags.todo_report_http_status, 200)
+      assert.equal(messages.some(message => message.type === 'onboarding-step' && message.step === step), true)
+    }
+    finally {
+      harness.close()
+    }
+  }
+}, 10_000)
 
 test.concurrent('coordinator skips both checks when the project or credentials cannot be resolved', async () => {
   const harness = await workerHarness(combinedWorkerUrl)
@@ -686,9 +754,9 @@ test('background API requests require both explicit destination trust and safe t
   assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, []), false)
   assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/api', {}, ['https://self-host.example.com']), true)
   assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com', {}, ['http://self-host.example.com']), false)
-  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com/functions/v1', { supaHost: 'http://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
-  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/functions/v1', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), true)
-  assert.equal(isTrustedOnboardingApiHost('https://other.example.com', { supaHost: 'https://self-host.example.com', supaAnon: 'fake-anon' }, []), false)
+  assert.equal(isTrustedOnboardingApiHost('http://self-host.example.com/functions/v1', { apiHost: 'http://self-host.example.com/functions/v1' }, []), false)
+  assert.equal(isTrustedOnboardingApiHost('https://self-host.example.com/functions/v1', { apiHost: 'https://self-host.example.com/functions/v1' }, []), true)
+  assert.equal(isTrustedOnboardingApiHost('https://other.example.com', { apiHost: 'https://self-host.example.com/functions/v1' }, []), false)
   for (const host of ['localhost', '127.0.0.1', '[::1]']) {
     const origin = `http://${host}:12345`
     assert.equal(isTrustedOnboardingApiHost(origin, {}, []), false)
@@ -705,7 +773,7 @@ test.concurrent('coordinator sends no credentials to project-selected untrusted 
   try {
     await harness.run({}, { CAPGO_TRUSTED_API_ORIGINS: '' })
     assert.deepEqual(harness.requests, [], 'untrusted project config must not receive the API key')
-    await harness.run({ supaHost: harness.api, supaAnon: 'fake-anon-key' }, { CAPGO_TRUSTED_API_ORIGINS: '' })
+    await harness.run({ apiHost: `${harness.api}/functions/v1` }, { CAPGO_TRUSTED_API_ORIGINS: '' })
     assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2, 'explicit CLI self-host selection should still work')
   }
   finally {
@@ -733,7 +801,8 @@ test.concurrent('neither telemetry nor onboarding redirects can forward worker c
         harness.behavior.events = 'ok'
         harness.behavior.putRedirect = true
         await harness.run()
-        assert.equal(harness.requests.at(-1).body.nonPersonTags.todo_report_status, 'failed')
+        // The 3xx is returned unfollowed (redirect: 'manual'), so the report counts as rejected.
+        assert.equal(harness.requests.at(-1).body.nonPersonTags.todo_report_status, 'rejected')
         assert.deepEqual(forwarded, [], 'custom capgkey headers must never follow a redirect')
       }
       finally {

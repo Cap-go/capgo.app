@@ -2,8 +2,9 @@
 import { Capacitor } from '@capacitor/core'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 
-import { stripeEnabled } from '~/services/supabase'
+import { stripeEnabled } from '~/services/console'
 import { useOrganizationStore } from '~/stores/organization'
 import { orgBillingStatusLabelKey, resolveOrgBillingStatus } from '~/utils/organizationBilling'
 
@@ -27,6 +28,11 @@ const status = computed(() => resolveOrgBillingStatus(organizationStore.currentO
   lacksSecurityAccess: lacksSecurityAccess.value,
   organizationFailed: !!organizationStore.currentOrganizationFailed,
 }))
+// Only look up trial history once the trial is over: direct-offer orgs never
+// had a trial, so they see "Choose a plan" instead of "Trial over".
+const trialOverOrgId = computed(() => status.value.kind === 'trial_over' ? organizationStore.currentOrganization?.gid : undefined)
+const { trialSkipped } = useBillingPaidAt(trialOverOrgId, isMobile)
+const showNoTrialStatus = computed(() => status.value.kind === 'trial_over' && trialSkipped.value)
 const billingCtaHref = computed(() => {
   if (isMobile)
     return '/settings/organization/usage'
@@ -46,11 +52,15 @@ const showBanner = computed(() => status.value.kind !== 'hidden')
 const showCta = computed(() => status.value.cta !== 'none')
 
 const statusLabel = computed(() => {
+  if (showNoTrialStatus.value)
+    return t('choose-a-plan')
   const key = orgBillingStatusLabelKey(status.value.kind)
   return key ? t(key) : ''
 })
 
 const statusDetail = computed(() => {
+  if (showNoTrialStatus.value)
+    return t('no-trial-money-back-guarantee-description')
   if (status.value.kind !== 'trial')
     return null
   if (status.value.trialDaysLeft === 1)
@@ -64,10 +74,11 @@ const statusAriaLabel = computed(() => {
   return statusLabel.value
 })
 
+// Trials use the warning style for their whole length: conversion during the
+// trial was highest while the navbar showed a yellow status and Upgrade button.
 const badgeClass = computed(() => {
   switch (status.value.tone) {
     case 'trial':
-      return 'border-none bg-azure-500 text-white'
     case 'warning':
       return 'd-badge-warning text-black'
     case 'success':
@@ -78,7 +89,7 @@ const badgeClass = computed(() => {
 })
 
 const bannerColor = computed(() => {
-  if (status.value.tone === 'warning' || (status.value.kind === 'trial' && status.value.trialDaysLeft <= 7))
+  if (status.value.tone === 'warning' || status.value.kind === 'trial')
     return 'd-btn-warning text-black'
   if (status.value.cta === 'none')
     return ''
@@ -112,8 +123,7 @@ const bannerColor = computed(() => {
       </span>
       <span
         v-if="statusDetail"
-        class="text-xs font-semibold truncate min-w-0 sm:text-sm"
-        :class="status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200'"
+        class="text-xs font-semibold truncate min-w-0 sm:text-sm text-amber-700 dark:text-amber-300"
         data-test="org-billing-detail"
         :title="statusDetail"
       >
@@ -156,8 +166,7 @@ const bannerColor = computed(() => {
       </span>
       <span
         v-if="statusDetail"
-        class="text-xs font-medium truncate min-w-0 sm:text-base"
-        :class="status.trialDaysLeft <= 7 ? 'text-amber-700 dark:text-amber-300' : 'text-black dark:text-white'"
+        class="text-xs font-medium truncate min-w-0 sm:text-base text-amber-700 dark:text-amber-300"
         data-test="org-billing-detail"
         :title="statusDetail"
       >

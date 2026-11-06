@@ -7,7 +7,7 @@ import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { safeParseSchema } from '../utils/schema_validation.ts'
-import { checkKey, supabaseAdmin } from '../utils/supabase.ts'
+import { checkKey } from '../utils/supabase.ts'
 
 /**
  * Console-side half of the hosted MCP OAuth flow (see mcp/oauth.ts).
@@ -36,7 +36,7 @@ interface PendingRequestRow {
   expires_at: string
 }
 
-function requireUserSession(c: Context<MiddlewareKeyVariables>): AuthInfo {
+export function requireUserSession(c: Context<MiddlewareKeyVariables>): AuthInfo {
   const auth = c.get('auth') as AuthInfo | undefined
   if (!auth?.userId || auth.authType !== 'jwt')
     throw quickError(401, 'not_authorized', 'MCP authorization requires a signed-in console session')
@@ -51,6 +51,20 @@ async function withPg<T>(c: Context<MiddlewareKeyVariables>, fn: (pg: Awaited<Re
   finally {
     await closeClient(c, pg)
   }
+}
+
+/**
+ * The key handed to a third-party client must belong to the signed-in user and expire within 90 days
+ * (the consent pages create it just before approving). Shared with auth.md agent registration.
+ */
+export async function requireDelegatableApiKey(c: Context<MiddlewareKeyVariables>, userId: string, key: string) {
+  const apikey = await checkKey(c, key)
+  if (!apikey || apikey.user_id !== userId)
+    throw quickError(403, 'invalid_apikey', 'The API key does not belong to the signed-in user')
+  const expiresAt = apikey.expires_at ? new Date(apikey.expires_at).getTime() : Number.NaN
+  if (!Number.isFinite(expiresAt) || expiresAt > Date.now() + MCP_OAUTH_KEY_MAX_LIFETIME_MS)
+    throw quickError(400, 'apikey_expiration_required', `MCP API keys must expire within ${MCP_OAUTH_KEY_MAX_DAYS} days`)
+  return apikey
 }
 
 app.get('/', middlewareAuth(), async (c) => {
@@ -91,14 +105,7 @@ app.post('/approve', middlewareAuth(), async (c) => {
   if (!parsed.success)
     throw simpleError('invalid_request', 'Invalid approve body')
 
-  // The key must be one the signed-in user just created: never hand out someone else's key.
-  const apikey = await checkKey(c, parsed.data.apikey, supabaseAdmin(c))
-  if (!apikey || apikey.user_id !== auth.userId)
-    throw quickError(403, 'invalid_apikey', 'The API key does not belong to the signed-in user')
-  // Tokens handed to third-party clients must expire: the consent page sets at most 90 days.
-  const expiresAt = apikey.expires_at ? new Date(apikey.expires_at).getTime() : Number.NaN
-  if (!Number.isFinite(expiresAt) || expiresAt > Date.now() + MCP_OAUTH_KEY_MAX_LIFETIME_MS)
-    throw quickError(400, 'apikey_expiration_required', `MCP API keys must expire within ${MCP_OAUTH_KEY_MAX_DAYS} days`)
+  const apikey = await requireDelegatableApiKey(c, auth.userId, parsed.data.apikey)
 
   const code = randomToken(32)
   const codeHash = await sha256Hex(code)

@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { CacheHelper } from './cache.ts'
 import { withFreshReads } from './hyperdriveFreshRead.ts'
+import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
 
@@ -65,7 +66,12 @@ export function hasUpdatesPurgeTarget(c: Context) {
 export function getUpdatesEdgeCacheBps(c: Context) {
   if (!hasUpdatesPurgeTarget(c))
     return 0
-  const raw = getEnv(c, 'UPDATES_EDGE_CACHE').replace(/\s+/g, '').toLowerCase()
+  return parseEdgeShareBps(getEnv(c, 'UPDATES_EDGE_CACHE'))
+}
+
+/** `off` | `on` | a percentage such as `1%`, `0.5` or `25`, in basis points. */
+export function parseEdgeShareBps(value: string) {
+  const raw = value.replace(/\s+/g, '').toLowerCase()
   if (raw === 'on')
     return 10_000
   // Whole value only: a malformed setting (e.g. "1abc") stays off.
@@ -129,6 +135,8 @@ export function updatesCacheTags(c: Context, appId: string) {
 export interface EdgeCacheLookup<T> {
   value: T | null
   hit: boolean
+  /** Set when the loader failed; distinct from a cached or loaded missing app. */
+  lookupFailed?: boolean
 }
 
 async function cachedLookup<T>(
@@ -155,10 +163,11 @@ async function cachedLookup<T>(
   const cap = ttlCapSeconds?.(value)
   if (cap !== undefined)
     ttl = Math.max(1, Math.min(ttl, cap))
-  await backgroundTask(c, helper.putJson(request, { v: value } satisfies CachedValue<T>, ttl, {
+  // A replica measured behind after the last re-purge must not pin its answer.
+  await backgroundTask(c, edgeCacheTtlForReplicaLag(c, ttl).then(replicaTtl => helper.putJson(request, { v: value } satisfies CachedValue<T>, replicaTtl, {
     tags,
     timeoutMs: UPDATES_EDGE_CACHE_PUT_TIMEOUT_MS,
-  }))
+  })))
   return { value, hit: false }
 }
 
@@ -168,15 +177,19 @@ async function cachedLookup<T>(
  * date. No write happens then, so the owner entry must not outlive it.
  */
 export function planValidityTtlCapSeconds(owner: { plan_valid?: boolean, plan_trial_at?: string | null } | null, nowMs = Date.now()) {
+  const until = planValidUntilMs(owner, nowMs)
+  return until === null ? undefined : Math.ceil((until - nowMs) / 1000)
+}
+
+/** Unix ms when a trial-based `plan_valid` flips on its own, or null when no date bounds it. */
+export function planValidUntilMs(owner: { plan_valid?: boolean, plan_trial_at?: string | null } | null, nowMs = Date.now()) {
   if (!owner?.plan_valid || !owner.plan_trial_at)
-    return undefined
+    return null
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(owner.plan_trial_at)
   if (!match)
-    return undefined
+    return null
   const trialEnd = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-  if (trialEnd <= nowMs)
-    return undefined
-  return Math.ceil((trialEnd - nowMs) / 1000)
+  return trialEnd > nowMs ? trialEnd : null
 }
 
 export function getCachedAppOwner<T extends { plan_valid?: boolean, plan_trial_at?: string | null }>(c: Context, appId: string, planKey: string, load: () => Promise<T | null>) {

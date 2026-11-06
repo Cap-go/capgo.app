@@ -167,6 +167,7 @@ describe.runIf(process.env.USE_CLOUDFLARE_WORKERS === 'true')('[POST] /private/e
         tags: {
           'app-id': APPNAME_EVENT,
           'size_mb': 42,
+          'recommended_size_mb': 20,
         },
       }),
     })
@@ -290,14 +291,6 @@ describe.runIf(process.env.USE_CLOUDFLARE_WORKERS === 'true')('[POST] /private/e
     const data = await response.json() as { status: string }
     expect(response.status).toBe(200)
     expect(data.status).toBe('ok')
-  })
-
-  // Skip JWT test as it requires auth infrastructure that may not be reliably available
-  // The important test is that API key auth works, which is covered above
-  it.skip('track event with authorization jwt', async () => {
-    // This test is skipped because it requires auth service to generate magic links
-    // which can be flaky in local/CI environments. The API key test above covers
-    // the main authentication path.
   })
 
   it('rejects jwt attempts to broadcast events to a foreign org', async () => {

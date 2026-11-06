@@ -1,21 +1,23 @@
 import type { Context } from 'hono'
 import type { UpdateDeliveryTimingEventCF } from '../utils/cloudflare.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { BundleLegacyCheckFailures, LegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import type { VersionUsage, VersionUsageChannel } from '../utils/types.ts'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 import { HTTPException } from 'hono/http-exception'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
-import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
-import { parseBody, simpleError, useCors } from '../utils/hono.ts'
+import { MAX_ANALYTICS_QUERY_LIMIT, parseStatsDurationMs, readLegacyCheckFailuresCF, readUpdateDeliveryTimingEventsCF, resolveUpdateDeliveryTimingDurationMs } from '../utils/cloudflare.ts'
+import { parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
+import { mergeLegacyCheckFailures } from '../utils/legacyDownloadFail.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient, logPgError } from '../utils/pg.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { readStatsVersion } from '../utils/stats.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
-import { supabaseWithAuth } from '../utils/supabase.ts'
+import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from '../utils/pg_rls.ts'
 
 dayjs.extend(utc)
 
@@ -94,6 +96,12 @@ export interface BundleInstallStatsResponse {
     fail: number
     success_rate: number | null
   }
+  // download_fail from plugins that also send it for a failed update check:
+  // never counted above, shown so users know why and update the plugin.
+  legacy_check_failures: LegacyCheckFailures | null
+  // Per bundle, including bundles without install or failure rows in the
+  // period, so a single-bundle view keeps its own count and plugin versions.
+  legacy_check_failures_by_bundle: BundleLegacyCheckFailures[]
 }
 
 interface InstallTimingSample {
@@ -293,6 +301,7 @@ function buildBundleInstallResponse(input: {
   successRows: BundleSuccessRow[]
   timingRows: Map<string, BundleTimingRow>
   versionFilter?: Set<string>
+  legacyCheckFailures?: BundleLegacyCheckFailures[]
 }): BundleInstallStatsResponse {
   const versionNames = new Set<string>()
   for (const row of input.successRows) {
@@ -335,6 +344,7 @@ function buildBundleInstallResponse(input: {
 
   const totalInstall = bundles.reduce((sum, bundle) => sum + bundle.install, 0)
   const totalFail = bundles.reduce((sum, bundle) => sum + bundle.fail, 0)
+  const legacyByBundle = (input.legacyCheckFailures ?? []).filter(bundle => !input.versionFilter || input.versionFilter.has(bundle.version_name))
 
   const endDate = dayjs(input.end).utc().startOf('day')
   const startDate = dayjs(input.start).utc().startOf('day')
@@ -353,6 +363,8 @@ function buildBundleInstallResponse(input: {
       fail: totalFail,
       success_rate: computeSuccessRate(totalInstall, totalFail),
     },
+    legacy_check_failures: mergeLegacyCheckFailures(legacyByBundle),
+    legacy_check_failures_by_bundle: legacyByBundle,
   }
 }
 
@@ -450,6 +462,7 @@ function filterResponseByVersionName(
   const bundles = response.bundles.filter(bundle => bundle.version_name === versionName)
   const totalInstall = bundles.reduce((sum, bundle) => sum + bundle.install, 0)
   const totalFail = bundles.reduce((sum, bundle) => sum + bundle.fail, 0)
+  const legacyByBundle = (response.legacy_check_failures_by_bundle ?? []).filter(bundle => bundle.version_name === versionName)
   return {
     ...response,
     bundles,
@@ -458,6 +471,8 @@ function filterResponseByVersionName(
       fail: totalFail,
       success_rate: computeSuccessRate(totalInstall, totalFail),
     },
+    legacy_check_failures: mergeLegacyCheckFailures(legacyByBundle),
+    legacy_check_failures_by_bundle: legacyByBundle,
   }
 }
 
@@ -470,31 +485,40 @@ async function resolveChannelVersionFilter(
   if (!auth)
     throw simpleError('not_authenticated', 'Authentication required')
 
-  const supabase = supabaseWithAuth(c, auth)
-  const { data, error } = await supabase
-    .from('deploy_history')
-    .select('app_versions(name)')
-    .eq('channel_id', channelId)
-    .eq('app_id', appId)
+  const { data, channelData } = await withRlsContext(c, authPrincipal(c, auth), async (client) => {
+    let data: { app_versions: { name: string } | null }[]
+    try {
+      // PostgREST capped this read at max_rows (1000).
+      data = await queryJson<{ app_versions: { name: string } | null }>(
+        client,
+        `SELECT (SELECT pg_catalog.json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = dh.version_id) AS app_versions
+        FROM public.deploy_history dh
+        WHERE dh.channel_id = $1 AND dh.app_id = $2
+        LIMIT 1000`,
+        [channelId, appId],
+      )
+    }
+    catch (error) {
+      cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats deploy_history error', error })
+      throw simpleError('fetch_error', 'Failed to fetch channel deployment history')
+    }
 
-  if (error) {
-    cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats deploy_history error', error })
-    throw simpleError('fetch_error', 'Failed to fetch channel deployment history')
-  }
+    const channelData = await queryJsonOne<{ name: string, version: { name: string } | null }>(
+      client,
+      `SELECT ch.name, (SELECT pg_catalog.json_build_object('name', av.name) FROM public.app_versions av WHERE av.id = ch.version) AS version
+      FROM public.channels ch
+      WHERE ch.id = $1 AND ch.app_id = $2`,
+      [channelId, appId],
+    ).catch(() => null)
+    return { data, channelData }
+  })
 
   const versionNames = new Set<string>()
-  for (const row of data ?? []) {
-    const name = (row.app_versions as { name?: string } | null)?.name
+  for (const row of data) {
+    const name = row.app_versions?.name
     if (name)
       versionNames.add(name)
   }
-
-  const { data: channelData } = await supabase
-    .from('channels')
-    .select('name, version:app_versions(name)')
-    .eq('id', channelId)
-    .eq('app_id', appId)
-    .single()
 
   const currentName = (channelData?.version as { name?: string } | null)?.name
   if (currentName)
@@ -617,6 +641,13 @@ async function readBundleInstallStatsCF(
   // version names only.
   const queryStart = start.subtract(2, 'hour')
   const versionNames = versionFilter ? [...versionFilter] : undefined
+  const legacyCheckFailuresPromise = readLegacyCheckFailuresCF(c, {
+    appId,
+    start: start.toDate(),
+    end: endExclusive.toDate(),
+    channel,
+    versionNames,
+  })
   const events = await readInstallTimingEventsCFChunked(c, {
     appId,
     queryStart,
@@ -639,28 +670,28 @@ async function readBundleInstallStatsCF(
     if (!auth)
       throw simpleError('not_authenticated', 'Authentication required')
 
-    const supabase = supabaseWithAuth(c, auth)
     const startDate = start.format('YYYY-MM-DD')
     const endDate = endInclusive.format('YYYY-MM-DD')
 
-    let dailyQuery = supabase
-      .from('daily_version')
-      .select('version_name, install, fail')
-      .eq('app_id', appId)
-      .gte('date', startDate)
-      .lte('date', endDate)
-    if (versionNames?.length)
-      dailyQuery = dailyQuery.in('version_name', versionNames)
-
-    const { data: dailyRows, error } = await dailyQuery
-
-    if (error) {
+    let dailyRows: { version_name: string | null, install: number | null, fail: number | null }[]
+    try {
+      // PostgREST capped this read at max_rows (1000).
+      dailyRows = await withRlsContext(c, authPrincipal(c, auth), client => queryJson<{ version_name: string | null, install: number | null, fail: number | null }>(
+        client,
+        `SELECT version_name, install, fail FROM public.daily_version
+        WHERE app_id = $1 AND date >= $2 AND date <= $3
+          AND ($4::text[] IS NULL OR version_name = ANY($4::text[]))
+        LIMIT 1000`,
+        [appId, startDate, endDate, versionNames?.length ? versionNames : null],
+      ))
+    }
+    catch (error) {
       cloudlog({ requestId: c.get('requestId'), message: 'bundle_install_stats daily_version error', error })
       throw simpleError('fetch_error', 'Failed to fetch bundle success rates')
     }
 
     const successByVersion = new Map<string, { install: number, fail: number }>()
-    for (const row of dailyRows ?? []) {
+    for (const row of dailyRows) {
       if (!row.version_name)
         continue
       const current = successByVersion.get(row.version_name) ?? { install: 0, fail: 0 }
@@ -692,6 +723,7 @@ async function readBundleInstallStatsCF(
     successRows,
     timingRows,
     versionFilter,
+    legacyCheckFailures: await legacyCheckFailuresPromise,
   })
 }
 
@@ -797,6 +829,13 @@ app.post('/', middlewareAuth, async (c) => {
   const channelId = typeof body.channel_id === 'number' && Number.isFinite(body.channel_id)
     ? body.channel_id
     : undefined
+
+  // A channel filter is derived from that channel's deploy history, and the
+  // cached response is shared per app + channel, so check the channel-scoped
+  // history permission before any cache lookup.
+  if (channelId !== undefined && !(await checkPermission(c, 'channel.read_history', { appId, channelId }))) {
+    throw quickError(403, 'channel_access_denied', 'You can\'t access this channel history', { app_id: appId, channel_id: channelId })
+  }
 
   try {
     return c.json(await readBundleInstallStats(c, appId, days, channelId, versionName))

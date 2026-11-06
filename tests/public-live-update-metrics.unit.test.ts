@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getPublicLiveUpdateMetricsCF } from '../supabase/functions/_backend/utils/cloudflare.ts'
+import { getPublicLiveUpdateMetricsCF } from '../supabase/functions/_backend/utils/public_live_update_metrics.ts'
 
 interface AnalyticsColumn { name: string, type: string }
 
@@ -59,17 +59,6 @@ describe('public live update metrics', () => {
         )
       }
 
-      if (query.includes('first_day_successes')) {
-        return analyticsResponse(
-          [
-            { name: 'first_day_successes', type: 'UInt64' },
-            { name: 'first_day_failures', type: 'UInt64' },
-            { name: 'total_successes', type: 'UInt64' },
-          ],
-          [{ first_day_successes: '36', first_day_failures: '4', total_successes: '90' }],
-        )
-      }
-
       if (query.includes('has_reset')) {
         return analyticsResponse(
           [
@@ -113,6 +102,23 @@ describe('public live update metrics', () => {
             { platform: '1', devices: '30' },
             { platform: '2', devices: '10' },
           ],
+        )
+      }
+
+      if (query.startsWith('SELECT date, platform AS key')) {
+        return analyticsResponse(
+          [
+            { name: 'date', type: 'String' },
+            { name: 'key', type: 'String' },
+            { name: 'successes', type: 'UInt64' },
+            { name: 'failures', type: 'UInt64' },
+          ],
+          query.includes(`'%Y-%m-%d %H:00'`)
+            ? [{ date: '2026-06-30 23:00', key: 'ios', successes: '9', failures: '1' }]
+            : [
+                { date: '2026-06-30', key: 'ios', successes: '45', failures: '5' },
+                { date: '2026-06-30', key: 'android', successes: '30', failures: '10' },
+              ],
         )
       }
 
@@ -238,8 +244,16 @@ describe('public live update metrics', () => {
       { date: '2026-06-29', success_rate: 40 },
       { date: '2026-06-30', success_rate: 90 },
     ])
-    expect(metrics.first_day_rate).toBe(40)
-    expect(metrics.first_day_success_rate).toBe(90)
+    expect(metrics.first_day_rate).toBeNull()
+    expect(metrics.first_day_success_rate).toBeNull()
+    expect(metrics.period_days).toBe(30)
+    expect(metrics.daily_window_days).toBe(90)
+    expect(metrics.updated_at).toBe('2026-07-01T00:00:00.000Z')
+    expect(metrics.daily_platforms).toHaveLength(90)
+    expect(metrics.daily_platforms[0]).toEqual({ date: '2026-04-02', ios: null, android: null })
+    expect(metrics.daily_platforms.at(-1)).toEqual({ date: '2026-06-30', ios: 90, android: 75 })
+    expect(metrics.daily_platforms_sparkline).toEqual(metrics.daily_platforms.slice(-30))
+    expect(metrics.hourly_platforms).toEqual([{ date: '2026-06-30 23:00', ios: 90, android: null }])
     expect(metrics.rollback_rate).toBe(3)
     expect(metrics.zip_success_rate).toBe(80)
     expect(metrics.delta_success_rate).toBe(94.1)
@@ -255,16 +269,18 @@ describe('public live update metrics', () => {
     expect(metrics.countries.find(row => row.key === 'IQ')?.success_rate).toBe(33.3)
     expect(metrics.updater_versions[0]).toMatchObject({ key: '8.1.0', share: 60 })
     expect(metrics.updater_versions.find(row => row.key === '8.1.0')?.success_rate).toBe(93.3)
-    expect(queries.length).toBe(14)
+    expect(queries.length).toBe(15)
     expect(queries.join('\n')).toContain('GROUP BY date, app_id, device_id')
     expect(queries.join('\n')).not.toContain('FROM version_usage')
     expect(queries.join('\n')).toContain('blob6')
     expect(queries.join('\n')).toContain('blob7')
     expect(queries.join('\n')).toContain('blob10')
-    const firstDayQuery = queries.find(query => query.includes('first_day_successes'))
-    expect(firstDayQuery).toContain('argMin(successes, date)')
-    expect(firstDayQuery).toContain('argMin(failures, date)')
-    expect(firstDayQuery).toContain('sum(successes)')
-    expect(firstDayQuery).toContain('GROUP BY app_id, version_name')
+    // Analytics Engine rejects a second level of subquery.
+    for (const query of queries)
+      expect(query.split('FROM (').length).toBeLessThanOrEqual(2)
+    const failuresQuery = queries.find(query => query.startsWith('SELECT action, count() AS devices'))
+    expect(failuresQuery).toContain(`NOT (blob2 = 'download_fail' AND (blob7 LIKE '0.%'`)
+    const outcomesQuery = queries.find(query => query.startsWith('SELECT date, sum(succeeded) AS successes'))
+    expect(outcomesQuery).toContain('download_failed = 1 AND offered = 1')
   })
 })

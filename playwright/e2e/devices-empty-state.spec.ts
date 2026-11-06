@@ -76,7 +76,7 @@ test.describe('Devices empty state', () => {
     await page.keyboard.press('Escape')
     await expect(changeTimeRange).toBeFocused()
 
-    const search = page.getByPlaceholder('Search by device ID or Custom ID')
+    const search = page.getByPlaceholder('Search by device ID or custom ID')
     await search.fill('missing-device')
     await expect.poll(() => requests.at(-1)?.search).toBe('missing-device')
     await expectRequestCountToStabilize(requests)
@@ -97,7 +97,7 @@ test.describe('Devices empty state', () => {
     await mockEmptyDevices(page, requests)
     await page.goto(`/app/${APP_ID}/devices`)
 
-    const search = page.getByPlaceholder('Search by device ID or Custom ID')
+    const search = page.getByPlaceholder('Search by device ID or custom ID')
     await search.fill('missing-device')
     await page.locator('[data-test="data-table-filters-open"]').click()
     await page.locator('[data-test="device-platform-ios"]').click()

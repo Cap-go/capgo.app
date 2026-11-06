@@ -2,8 +2,8 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../../utils/hono.ts'
 import type { Database } from '../../utils/supabase.types.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
+import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.ts'
 import { checkPermission } from '../../utils/rbac.ts'
-import { supabaseApikey } from '../../utils/supabase.ts'
 
 interface DeleteOrganizationParams {
   orgId?: string
@@ -22,14 +22,17 @@ export async function deleteOrg(c: Context<MiddlewareKeyVariables>, body: Delete
     throw quickError(403, 'invalid_org_id', 'You can\'t delete this organization', { org_id: orgId })
   }
 
-  const { data: deletedOrg, error } = await supabaseApikey(c, apikey.key)
-    .from('orgs')
-    .delete()
-    .select('id')
-    .eq('id', orgId)
-    .maybeSingle()
-
-  if (error) {
+  const principal = apikeyPrincipal(c, apikey.key)
+  let deletedOrg: { id: string } | null = null
+  try {
+    const deletedOrgs = await withRlsContext(c, principal, client => queryJson<{ id: string }>(
+      client,
+      'DELETE FROM public.orgs WHERE id = $1 RETURNING id',
+      [orgId],
+    ))
+    deletedOrg = deletedOrgs[0] ?? null
+  }
+  catch (error) {
     throw simpleError('cannot_delete_organization', 'Cannot delete organization', { error })
   }
 

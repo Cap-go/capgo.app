@@ -1,7 +1,7 @@
 -- org.customer_id is service-managed: user/capgkey roles cannot write it.
 BEGIN;
 
-SELECT plan(7);
+SELECT plan(16);
 
 SELECT tests.authenticate_as_service_role();
 SELECT tests.create_supabase_user('org_billing_guard_admin', 'org_billing_guard_admin@test.local');
@@ -101,6 +101,52 @@ SELECT lives_ok(
   'org_admin can still update org settings columns'
 );
 
+SELECT throws_ok(
+  $$
+    UPDATE public.orgs
+    SET auto_top_up_enabled = true,
+        auto_top_up_threshold = 5000,
+        auto_top_up_monthly_limit = 0
+    WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
+  $$,
+  '42501',
+  'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+  'org_admin cannot mutate auto top-up settings'
+);
+
+SELECT throws_ok(
+  $$
+    UPDATE public.orgs
+    SET auto_top_up_last_attempt_at = NOW() - INTERVAL '1 day'
+    WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
+  $$,
+  '42501',
+  'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+  'org_admin cannot mutate auto top-up cooldown'
+);
+
+SELECT throws_ok(
+  $$
+    UPDATE public.orgs
+    SET has_usage_credits = true
+    WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
+  $$,
+  '42501',
+  'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+  'org_admin cannot mutate has_usage_credits'
+);
+
+SELECT lives_ok(
+  $$
+    UPDATE public.orgs
+    SET name = 'Org billing column guard noop',
+        auto_top_up_enabled = false,
+        has_usage_credits = false
+    WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
+  $$,
+  'org_admin can resend unchanged billing columns'
+);
+
 SELECT tests.authenticate_as('org_billing_guard_super');
 
 SELECT throws_ok(
@@ -114,6 +160,17 @@ SELECT throws_ok(
   'org_super_admin cannot mutate customer_id'
 );
 
+SELECT throws_ok(
+  $$
+    UPDATE public.orgs
+    SET auto_top_up_threshold = 5000
+    WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
+  $$,
+  '42501',
+  'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+  'org_super_admin cannot mutate auto top-up settings directly'
+);
+
 SELECT tests.authenticate_as_service_role();
 SET LOCAL ROLE service_role;
 SET LOCAL "request.jwt.claim.role" = 'service_role';
@@ -125,6 +182,17 @@ SELECT lives_ok(
     WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
   $$,
   'service_role can update org customer_id'
+);
+
+SELECT lives_ok(
+  $$
+    UPDATE public.orgs
+    SET auto_top_up_enabled = true,
+        auto_top_up_threshold = 25,
+        auto_top_up_monthly_limit = 100
+    WHERE id = '73000000-0000-4000-8000-000000000073'::uuid
+  $$,
+  'service_role can update auto top-up settings'
 );
 
 SELECT tests.authenticate_as('org_billing_guard_super');
@@ -143,6 +211,24 @@ SELECT throws_ok(
   '42501',
   'PERMISSION_DENIED_ORG_CUSTOMER_ID',
   'user cannot insert org with customer_id'
+);
+
+SELECT throws_ok(
+  $$
+    INSERT INTO public.orgs (
+      id, created_by, name, management_email, auto_top_up_enabled
+    )
+    VALUES (
+      '73000000-0000-4000-8000-000000000076'::uuid,
+      tests.get_supabase_uid('org_billing_guard_super'),
+      'Org auto top-up insert blocked',
+      'org-auto-top-up-insert-blocked@test.local',
+      true
+    )
+  $$,
+  '42501',
+  'PERMISSION_DENIED_ORG_BILLING_COLUMNS',
+  'user cannot insert org with auto top-up enabled'
 );
 
 SELECT tests.authenticate_as_service_role();
@@ -167,6 +253,25 @@ SELECT is(
   (SELECT customer_id FROM public.orgs WHERE id = '73000000-0000-4000-8000-000000000074'::uuid),
   'pending_73000000-0000-4000-8000-000000000074',
   'org create bootstrap assigns pending customer_id'
+);
+
+-- The has_usage_credits sync trigger may run under a user request role
+-- (SECURITY DEFINER caller); grant-derived values must still be accepted.
+RESET ROLE;
+SET LOCAL "request.jwt.claim.role" = 'authenticated';
+
+SELECT lives_ok(
+  $$
+    INSERT INTO public.usage_credit_grants (org_id, credits_total, source)
+    VALUES ('73000000-0000-4000-8000-000000000073'::uuid, 50, 'manual')
+  $$,
+  'grant sync can set has_usage_credits under a user request role'
+);
+
+SELECT is(
+  (SELECT has_usage_credits FROM public.orgs WHERE id = '73000000-0000-4000-8000-000000000073'::uuid),
+  true,
+  'has_usage_credits follows usage_credit_grants'
 );
 
 SELECT tests.clear_authentication();

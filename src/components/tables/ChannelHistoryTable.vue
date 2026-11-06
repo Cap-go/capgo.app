@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import type { TableColumn, TableSort } from '~/components/comp_def'
-
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { channelUpdatePackageErrorKey } from '~/services/channelUpdatePackageError'
+import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { checkPermissions } from '~/services/permissions'
-import { useSupabase } from '~/services/supabase'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -39,7 +38,7 @@ const props = defineProps<{
 const members = ref([] as ExtendedOrganizationMembers)
 const { t } = useI18n()
 const router = useRouter()
-const supabase = useSupabase()
+const capgo = useConsole()
 const organizationStore = useOrganizationStore()
 const dialogStore = useDialogV2Store()
 
@@ -51,6 +50,12 @@ const sort = ref<TableSort>({
 const search = ref('')
 const page = ref(1)
 const pageSize = ref(10)
+
+// Audit rows that produce at least one history entry: creations, and updates that
+// change something besides updated_at.
+const MEANINGFUL_CHANNEL_AUDIT_ROWS = 'operation.eq.INSERT,and(operation.eq.UPDATE,changed_fields.not.cd.{updated_at})'
+// Newest audit rows scanned when searching derived text.
+const SEARCH_WINDOW_ROWS = 1000
 const total = ref(0)
 const currentVersionId = ref<number | null>(null)
 
@@ -109,7 +114,7 @@ async function fetchCurrentVersion() {
     return
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await capgo
       .from('channels')
       .select('version')
       .eq('id', props.channelId)
@@ -222,13 +227,21 @@ async function fetchHistory() {
     await fetchCurrentVersion()
     members.value = await organizationStore.getMembers()
 
-    // Fetch ALL audit log entries for this channel
-    const { data: auditData, error: auditError } = await supabase
+    // Without a search, page audit rows in the database: each meaningful row maps to
+    // one or two entries. Searching matches derived text (bundle names, labels,
+    // emails), so it scans a bounded window of the newest rows instead.
+    const serverPaged = !search.value
+    const ascending = serverPaged && Object.values(sort.value)[0] === 'asc'
+    const auditQuery = capgo
       .from('audit_logs')
-      .select('*')
+      .select('id, operation, changed_fields, old_record, new_record, user_id, created_at', serverPaged ? { count: 'exact' } : undefined)
       .eq('table_name', 'channels')
       .eq('record_id', String(props.channelId))
-      .order('created_at', { ascending: false })
+      .or(MEANINGFUL_CHANNEL_AUDIT_ROWS)
+      .order('created_at', { ascending })
+    const { data: auditData, error: auditError, count: auditCount } = serverPaged
+      ? await auditQuery.range((page.value - 1) * pageSize.value, page.value * pageSize.value - 1)
+      : await auditQuery.limit(SEARCH_WINDOW_ROWS)
 
     if (auditError) {
       console.error('Error fetching audit logs:', auditError)
@@ -249,7 +262,7 @@ async function fetchHistory() {
     // Fetch version names
     const versionMap = new Map<number, { id: number, name: string, deleted?: boolean }>()
     if (versionIds.size > 0) {
-      const { data: versionsData } = await supabase
+      const { data: versionsData } = await capgo
         .from('app_versions')
         .select('id, name, deleted')
         .in('id', Array.from(versionIds))
@@ -352,7 +365,12 @@ async function fetchHistory() {
       return sortDir === 'asc' ? aDate - bDate : bDate - aDate
     })
 
-    // Apply pagination
+    if (serverPaged) {
+      total.value = auditCount ?? filteredEntries.length
+      historyEntries.value = filteredEntries
+      return
+    }
+    // Search results are paged locally within the window.
     total.value = filteredEntries.length
     const startIdx = (page.value - 1) * pageSize.value
     const endIdx = startIdx + pageSize.value
@@ -394,7 +412,7 @@ async function handleRollback(item: HistoryEntry) {
         role: 'primary',
         handler: async () => {
           try {
-            const { error } = await supabase
+            const { error } = await capgo
               .from('channels')
               .update({ version: item.bundle!.id })
               .eq('id', props.channelId)

@@ -36,7 +36,7 @@ teams that want Capgo controlled from CI.
 
 ## Features
 
-- ☁️ Cloud / Self hosted Support: Use [Capgo Cloud](https://capgo.app/) or your own Supabase backend.
+- ☁️ Cloud / Self hosted Support: Use [Capgo Cloud](https://capgo.app/) or your own Capgo backend.
 - 🚀 Guided Setup: Initialize a Capacitor app and verify live updates end to end.
 - 📦 Bundle Management: Upload, list, delete, encrypt, decrypt, and clean bundles.
 - 📺 Channel Support: Assign bundles to release channels and manage rollout tracks.
@@ -53,7 +53,7 @@ teams that want Capgo controlled from CI.
 You have 3 ways possible:
 
 - Use [capgo.app](https://capgo.app) for a full featured live-update system with setup, upload, channels, rollback, stats, and cloud builds.
-- Use your own self-hosted backend with `--supa-host` and `--supa-anon` on supported commands.
+- Use your own self-hosted backend with `--api-host` on supported commands (or `localApi` in capacitor config).
 - Use the CLI programmatically through the SDK or MCP server for custom release automation.
 
 ## Quick Start
@@ -185,6 +185,7 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Needed](#build-needed)
   - [Init](#build-init)
   - [Request](#build-request)
+  - [Zip](#build-zip)
   - [Sync-ios-version](#build-sync-ios-version)
   - [Prescan](#build-prescan)
   - [Last-output](#build-last-output)
@@ -198,6 +199,9 @@ Capgo continues to load the root config while writing only the selected source. 
     - [Manage](#build-credentials-manage)
     - [Export](#build-credentials-export)
     - [Migrate](#build-credentials-migrate)
+    - [Push](#build-credentials-push)
+    - [Remote-status](#build-credentials-remote-status)
+    - [Remote-delete](#build-credentials-remote-delete)
 - 🔹 [Notifications](#notifications)
   - [Setup](#notifications-setup)
 - 🔹 [Probe](#probe)
@@ -210,6 +214,10 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Routes](#observe-routes)
 - 🔹 [Generate-docs](#generate-docs)
 - 🔹 [Mcp](#mcp)
+- 🔹 [Simulator](#simulator)
+  - [Start](#simulator-start)
+  - [Get](#simulator-get)
+  - [Stop](#simulator-stop)
 
 ## <a id="init"></a> 🚀 **Init**
 
@@ -223,6 +231,7 @@ npx @capgo/cli@latest init
 This includes adding code for updates, building, uploading your app, and verifying update functionality.
 Capgo bundles are web assets and can be fetched by anyone who knows the URL. Use encryption for banking, regulated, or other high-security apps.
 During the iOS run-on-device step, choose a physical iPhone/iPad or simulator. If you choose a physical device, the CLI lets you connect, unlock, and check again before it launches the app.
+If the selected Xcode uses Device Hub and Capacitor's native-run cannot open it, onboarding gives you a manual launch path. Run npx cap open ios, select the simulator in Xcode, choose Product > Run, and confirm that the baseline app opens before continuing. MCP live-update onboarding gives the same instructions and waits for deviceRunConfirmed: true. Run npx @capgo/cli@latest doctor for the upstream fix status and upgrade guidance.
 
 **Example:**
 
@@ -237,8 +246,8 @@ npx @capgo/cli@latest init YOUR_API_KEY com.example.app
 | **-a** | <code>string</code> | API key to link to your account |
 | **-n** | <code>string</code> | App name for display in Capgo Cloud |
 | **-i** | <code>string</code> | App icon path for display in Capgo Cloud |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--package-json** | <code>string</code> | Package JSON for the Capacitor app to onboard (useful in monorepos) |
 | **--main-file** | <code>string</code> | Application entry file to update (useful in monorepos) |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
@@ -260,6 +269,7 @@ If you omit the platform in an interactive terminal, the command asks whether to
 The command lists available devices and simulators, lets you reload the list, and runs with your selection.
 For iOS, this asks whether to use a physical iPhone/iPad or simulator before showing devices.
 Use --no-launch to print the resolved command without starting the app.
+When the selected Xcode uses Device Hub and Capacitor's native-run lacks support, simulator selection prints instructions to run the app from Xcode with npx cap open ios and Product > Run. It does not attempt the incompatible simulator command. Physical-device selection remains available in interactive mode. Run npx @capgo/cli@latest doctor for the upstream fix status and upgrade guidance.
 
 **Example:**
 
@@ -310,6 +320,9 @@ npx @capgo/cli@latest doctor
 
 👨‍⚕️ Check if your Capgo app installation is up-to-date and gather information useful for bug reports.
 This command helps diagnose issues with your setup.
+For local iOS projects on macOS, doctor also checks whether the selected Xcode uses Device Hub and whether the native-run resolved by your app's @capacitor/cli supports it. An incompatible version fails diagnostics with manual launch instructions. Installing a separate top-level native-run does not necessarily update the copy used by Capacitor.
+Xcode 27 removed Simulator.app. As of October 29, 2026, the Device Hub fix is merged but unreleased, and the latest published native-run is 2.0.3. There is no released minimum Capacitor version for this fix yet, including with Capacitor CLI 8.6.0. See the upstream issue and temporary package-manager patch: https://github.com/ionic-team/capacitor/issues/8620
+Until the fixed dependency is available, use npx cap open ios, select the simulator in Xcode, and choose Product > Run. You can also use a physical device or select an older installed Xcode that includes Simulator.app. After the fix ships, update the dependency used by @capacitor/cli and your lockfile, then run doctor again. Keep the Capacitor packages on the same major version; a major upgrade is not required just to change simulator launching.
 
 **Example:**
 
@@ -347,8 +360,8 @@ npx @capgo/cli@latest login YOUR_API_KEY
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--local** | <code>boolean</code> | Only save in local folder, git ignored for security. |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="get-qr"></a> 🔹 **Get-qr**
@@ -377,8 +390,8 @@ Examples:
 | **--url** | <code>boolean</code> | Print preview URLs only (web and deep link), without a terminal QR code |
 | **--web-url** | <code>boolean</code> | Encode the web preview URL in the QR code and PNG instead of the capgo:// deep link |
 | **--preview-env** | <code>string</code> | Preview web URL environment |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="bundle"></a> 📦 **Bundle**
@@ -470,8 +483,8 @@ npx @capgo/cli@latest bundle upload com.example.app --path ./dist --channel prod
 | **--self-assign** | <code>boolean</code> | Allow devices to auto-join this channel (updates channel setting) |
 | **--qr-preview** | <code>boolean</code> | Print a terminal QR code for this bundle preview after upload |
 | **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating linked channel bundles |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 
 ### <a id="bundle-compatibility"></a> 🧪 **Compatibility**
@@ -497,8 +510,8 @@ npx @capgo/cli@latest bundle compatibility com.example.app --channel production
 | **--text** | <code>boolean</code> | Output text instead of emojis |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="bundle-releaseType"></a> 🔹 **ReleaseType**
 
@@ -522,8 +535,8 @@ npx @capgo/cli@latest bundle releaseType com.example.app --channel production
 | **-c** | <code>string</code> | Channel to compare against |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="bundle-delete"></a> 🗑️ **Delete**
 
@@ -546,8 +559,8 @@ npx @capgo/cli@latest bundle delete BUNDLE_ID com.example.app
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="bundle-list"></a> 📋 **List**
 
@@ -570,8 +583,8 @@ npx @capgo/cli@latest bundle list com.example.app
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="bundle-cleanup"></a> 🧹 **Cleanup**
 
@@ -599,8 +612,8 @@ npx @capgo/cli@latest bundle cleanup com.example.app --bundle=1.0 --keep=3
 | **-k** | <code>string</code> | Number of versions to keep |
 | **-f** | <code>boolean</code> | Force removal |
 | **--ignore-channel** | <code>boolean</code> | Delete bundles even if linked to channels (WARNING: deletes channels too) |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="bundle-encrypt"></a> 🔒 **Encrypt**
 
@@ -658,6 +671,9 @@ npx @capgo/cli@latest bundle zip
 
 🗜️ Create a zip file of your app bundle.
 Returns checksum for use with encryption. Use --json for machine-readable output.
+Works offline: no API key and no calls to Capgo.
+--for-upload produces exactly what 'bundle upload' would send (same checksum, v2 encryption, native packages metadata)
+so the zip can be uploaded through a signed URL. --delta-pack also writes the delta (manifest) files.
 
 **Example:**
 
@@ -675,8 +691,17 @@ npx @capgo/cli@latest bundle zip com.example.app --path ./dist
 | **-j** | <code>boolean</code> | Output in JSON |
 | **--no-code-check** | <code>boolean</code> | Ignore checking if notifyAppReady() is called in source code and index present in root folder |
 | **--ignore-notify-app-ready** | <code>boolean</code> | Skip notifyAppReady() check (not recommended — updates may roll back) |
-| **--key-v2** | <code>boolean</code> | Use encryption v2 |
+| **--key-v2** | <code>string</code> | Use encryption v2. With --for-upload: custom path for private signing key (v2 system), defaults to .capgo_key_v2 |
+| **--key-data-v2** | <code>string</code> | Private signing key (v2 system), used with --for-upload |
+| **--no-key** | <code>boolean</code> | Ignore signing key and produce a clear bundle (with --for-upload) |
+| **--for-upload** | <code>boolean</code> | Produce the exact artifact and metadata 'bundle upload' would send (encryption, checksum, native packages) |
+| **--delta-pack** | <code>string</code> | Also write a delta pack zip (manifest + per-file upload bytes) for delta uploads. Implies --for-upload |
+| **--encrypt-delta** | <code>boolean</code> | Encrypt delta update files (auto-enabled for updater >= 6.14.4) |
+| **--encrypt-partial** | <code>boolean</code> | [DEPRECATED] Use --encrypt-delta instead. Encrypt delta update files |
+| **--disable-brotli** | <code>boolean</code> | Completely disable brotli compression even if updater version supports it |
+| **--force-crc32-checksum** | <code>boolean</code> | Force CRC32 checksum for upload (override auto-detection) |
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
+| **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
 
 
 ## <a id="app"></a> 📱 **App**
@@ -707,8 +732,8 @@ npx @capgo/cli@latest app add com.example.app --name "My App" --icon ./icon.png
 | **-n** | <code>string</code> | App name for display in Capgo Cloud |
 | **-i** | <code>string</code> | App icon path for display in Capgo Cloud |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="app-delete"></a> 🗑️ **Delete**
 
@@ -729,8 +754,8 @@ npx @capgo/cli@latest app delete com.example.app
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="app-list"></a> 📋 **List**
 
@@ -757,8 +782,8 @@ npx @capgo/cli@latest app list
 | **--show-org** | <code>boolean</code> | Show the organization name for each app |
 | **--show-org-id** | <code>boolean</code> | Show the organization ID for each app |
 | **--output-text** | <code>boolean</code> | Print plain text with a CSV app table and no interactive formatting |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="app-todo"></a> 🔹 **Todo**
 
@@ -770,6 +795,7 @@ npx @capgo/cli@latest app todo
 
 📋 Show your app's onboarding todo list with done, skipped, and pending tasks.
 Uses the same live progress checks as the Capgo dashboard. The app ID can be inferred from your Capacitor project.
+Apps with both Builder and OTA checklists show interactive tabs. For scripts and AI agents, choose --list builder or --list ota to print one list and exit.
 
 **Example:**
 
@@ -781,9 +807,10 @@ npx @capgo/cli@latest app todo com.example.app
 
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
+| **--list** | <code>string</code> | Show one todo list and exit; required for dual checklists in non-interactive mode |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="app-debug"></a> 🐞 **Debug**
 
@@ -806,8 +833,8 @@ npx @capgo/cli@latest app debug com.example.app --device DEVICE_ID
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **-d** | <code>string</code> | The specific device ID to debug |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="app-setting"></a> ⚙️ **Setting**
 
@@ -886,8 +913,8 @@ npx @capgo/cli@latest app set com.example.app --name "Updated App" --retention 3
 | **--default-upload-channel** | <code>string</code> | Default upload channel name for this app |
 | **--default-download-channel** | <code>string</code> | Default download channel name for this app (sets channel public=true) |
 | **--disable-download-channels** | <code>boolean</code> | Disable Capgo download channels for this app (sets all channels public=false) |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="channel"></a> 📢 **Channel**
@@ -917,8 +944,8 @@ npx @capgo/cli@latest channel add production com.example.app --default
 | **-d** | <code>boolean</code> | Set the channel as default |
 | **--self-assign** | <code>boolean</code> | Allow device to self-assign to this channel |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="channel-delete"></a> 🗑️ **Delete**
 
@@ -943,8 +970,8 @@ npx @capgo/cli@latest channel delete production com.example.app
 | **-a** | <code>string</code> | API key to link to your account |
 | **--delete-bundle** | <code>boolean</code> | Delete the bundle associated with the channel |
 | **--success-if-not-found** | <code>boolean</code> | Success if the channel is not found |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="channel-list"></a> 📋 **List**
 
@@ -967,8 +994,8 @@ npx @capgo/cli@latest channel list com.example.app
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="channel-currentBundle"></a> 📦 **CurrentBundle**
 
@@ -991,8 +1018,8 @@ npx @capgo/cli@latest channel currentBundle production com.example.app
 | **-c** | <code>string</code> | Channel to get the current bundle from |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--quiet** | <code>boolean</code> | Only print the bundle version |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="channel-promote"></a> 🚀 **Promote**
 
@@ -1017,8 +1044,8 @@ npx @capgo/cli@latest channel promote staging production com.example.app
 | **--send-update-notification** | <code>boolean</code> | Send a native update-check notification to devices after updating the linked channel bundle |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignore checking node_modules compatibility if present in the bundle |
 | **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="channel-set"></a> ⚙️ **Set**
 
@@ -1092,8 +1119,8 @@ npx @capgo/cli@latest channel set production com.example.app --bundle 1.0.0 --st
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--ignore-metadata-check** | <code>boolean</code> | Ignore checking node_modules compatibility if present in the bundle |
 | **--accept-incompatible** | <code>boolean</code> | Accept native-package incompatibility as handled (still checks and warns, sets the channel instead of failing). Use this when your app already guards missing plugins at runtime. Cannot be combined with --ignore-metadata-check. |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="key"></a> 🔐 **Key**
@@ -1217,8 +1244,8 @@ npx @capgo/cli@latest account get
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="account-set"></a> ⚙️ **Set**
 
@@ -1252,8 +1279,8 @@ npx @capgo/cli@latest account set --first-name Ada --last-name Lovelace
 | **--no-newsletter** | <code>boolean</code> | Unsubscribe from the newsletter |
 | **--email-preference** | <code>string</code> | Email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, onboarding, builder_onboarding, bundle_incompatible, cli_realtime_feed |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="organization"></a> 🔹 **Organization**
@@ -1281,8 +1308,8 @@ npx @capgo/cli@latest organization list
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-add"></a> ➕ **Add**
 
@@ -1307,8 +1334,8 @@ npx @capgo/cli@latest organization add --name "My Company" --email admin@mycompa
 | **-n** | <code>string</code> | Organization name |
 | **-e** | <code>string</code> | Management email for the organization |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members"></a> 🔹 **Members**
 
@@ -1335,8 +1362,8 @@ npx @capgo/cli@latest organization members ORG_ID
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members-invite"></a> 🔹 **Members-invite**
 
@@ -1359,8 +1386,8 @@ npx @capgo/cli@latest organization members-invite ORG_ID --email teammate@exampl
 | **-e** | <code>string</code> | Email of the user to invite |
 | **-r** | <code>string</code> | Role: org_member, org_billing_admin, org_admin or org_super_admin |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members-role"></a> 🔹 **Members-role**
 
@@ -1383,8 +1410,8 @@ npx @capgo/cli@latest organization members-role ORG_ID --email teammate@example.
 | **-e** | <code>string</code> | Email of the member |
 | **-r** | <code>string</code> | Role: org_member, org_billing_admin, org_admin or org_super_admin |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-members-remove"></a> 🔹 **Members-remove**
 
@@ -1406,8 +1433,8 @@ npx @capgo/cli@latest organization members-remove ORG_ID --email teammate@exampl
 | -------------- | ------------- | -------------------- |
 | **-e** | <code>string</code> | Email of the member to remove |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-set"></a> ⚙️ **Set**
 
@@ -1454,8 +1481,8 @@ npx @capgo/cli@latest organization set ORG_ID --name "New Name"
 | **--required-encryption-key** | <code>string</code> | Only accept bundles encrypted with this public key fingerprint (null to clear) |
 | **--email-preference** | <code>string</code> | Organization email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, onboarding, builder_onboarding |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organization-delete"></a> 🗑️ **Delete**
 
@@ -1479,8 +1506,8 @@ npx @capgo/cli@latest organization delete ORG_ID
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="organisation"></a> 🔹 **Organisation**
@@ -1502,8 +1529,8 @@ npx @capgo/cli@latest organisation list
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organisation-add"></a> ➕ **Add**
 
@@ -1522,8 +1549,8 @@ npx @capgo/cli@latest organisation add
 | **-n** | <code>string</code> | Organization name |
 | **-e** | <code>string</code> | Management email for the organization |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organisation-set"></a> ⚙️ **Set**
 
@@ -1563,8 +1590,8 @@ npx @capgo/cli@latest organisation set
 | **--required-encryption-key** | <code>string</code> | Only accept bundles encrypted with this public key fingerprint (null to clear) |
 | **--email-preference** | <code>string</code> | Organization email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, onboarding, builder_onboarding |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="organisation-delete"></a> 🗑️ **Delete**
 
@@ -1581,8 +1608,8 @@ npx @capgo/cli@latest organisation delete
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="build"></a> 🔹 **Build**
@@ -1618,8 +1645,8 @@ Example:
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="build-init"></a> 🚀 **Init**
 
@@ -1637,8 +1664,8 @@ Set up build credentials interactively (iOS: certificates + profiles automated; 
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **-p** | <code>string</code> | Platform to onboard (ios or android). If omitted, uses the saved platform for Builder-only checklists, then auto-detects a single native folder or prompts. |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 | **--no-analytics** | <code>boolean</code> | Disable build onboarding analytics and terminal replay for this run |
 
 ### <a id="build-request"></a> 🔹 **Request**
@@ -1690,6 +1717,7 @@ Examples:
 | **--ios-target** | <code>string</code> | iOS: Xcode target for reading build settings (default: same as scheme) |
 | **--xcode-version** | <code>string</code> | iOS: build on a machine with this Xcode version (e.g. 26, 26.0.1, 27). A major version accepts any minor. Default: any machine. Precedence: CLI > env (CAPGO_IOS_XCODE_VERSION) > saved credentials |
 | **--ios-distribution** | <code>string</code> | iOS: Distribution mode. app_store (default) uploads to TestFlight/App Store; ad_hoc skips store upload and builds an Ad Hoc IPA for device install. Use ad_hoc with --output-upload when the App Store app does not exist yet or you only need an IPA download. |
+| **--use-stored-credentials** | <code>boolean</code> | Use the signing credentials stored on Capgo for this app (see "build credentials push"). Requires app admin rights (app settings permission) on the app. Credentials given by flags, env or a local saved file still take precedence; Capgo validates the merged set. |
 | **--ios-provisioning-profile** | <code>string</code> | iOS: Provisioning profile path or bundleId=path mapping (repeatable) |
 | **--no-cache** | <code>boolean</code> | Disable Xcode compilation cache for this build (default: cache enabled) |
 | **--cache-key** | <code>string</code> | Custom compilation cache key for this build (e.g. rc, prod, feature-branch). Use to share or isolate cache between environments. Precedence over the default appId-only key; ignored when --no-cache is set. |
@@ -1710,10 +1738,13 @@ Examples:
 | **--ios-testflight-groups** | <code>string</code> | iOS: optional comma-separated TestFlight external group names or IDs for external beta distribution. |
 | **--ios-automatic-release** | <code>boolean</code> | iOS: automatically release the App Store version after Apple approval. Default is manual release. |
 | **--no-ios-automatic-release** | <code>boolean</code> | iOS: keep the App Store version waiting for manual release after Apple approval. |
-| **--output-upload** | <code>boolean</code> | Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR). Use with --no-playstore-upload (Android) or --ios-distribution ad_hoc (iOS) when you only need the artifact and are not publishing to the store yet. Precedence: CLI > env > saved credentials |
+| **--output-upload** | <code>boolean</code> | Upload the finished IPA/APK/AAB to Capgo storage and print a time-limited download link (and QR), plus a link to the debug symbols (iOS dSYMs, Android mapping.txt) for crash reporters. Use with --no-playstore-upload (Android) or --ios-distribution ad_hoc (iOS) when you only need the artifact and are not publishing to the store yet. Precedence: CLI > env > saved credentials |
 | **--no-output-upload** | <code>boolean</code> | Do not upload the finished IPA/APK/AAB to Capgo storage (no download link). Store upload still happens when Play/TestFlight credentials are configured. Precedence: CLI > env > saved credentials |
 | **--output-retention** | <code>string</code> | Override output link TTL for this build only (1h to 7d). Examples: 1h, 6h, 2d. Precedence: CLI > env > saved credentials |
-| **--output-record** | <code>string</code> | After a successful build, write a JSON record (jobId, status, outputUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`. |
+| **--symbols-upload** | <code>boolean</code> | Keep the debug symbols (iOS dSYMs zip, Android mapping.txt) in Capgo storage and print a time-limited download link for crash reporters (Crashlytics, Sentry). If output upload is enabled, also pass --no-output-upload to avoid keeping the IPA/APK/AAB. Use with store builds. Link TTL follows --output-retention. Precedence: CLI > env > saved credentials |
+| **--no-symbols-upload** | <code>boolean</code> | Do not keep debug symbols unless output upload is enabled. --output-upload still includes debug symbols. Precedence: CLI > env > saved credentials |
+| **--build-env** | <code>string</code> | Pass an env var to the cloud build (repeatable). KEY alone takes the value from your environment, so CI secrets stay off the command line. Sent like other build credentials, never logged; Gradle and Xcode build phases see it (e.g. SENTRY_AUTH_TOKEN for the Sentry Gradle plugin). Also read from CAPGO_BUILD_ENV (comma-separated names). |
+| **--output-record** | <code>string</code> | After a successful build, write a JSON record (jobId, status, outputUrl, symbolsUrl, qrCodeAscii, qrCodePngPath, finishedAt) to <path>. symbolsUrl is the iOS dSYMs zip or Android mapping.txt download link (with --output-upload or --symbols-upload) for crash reporters like Sentry. A PNG QR code is also written next to it as <path>.qr.png. Read fields back with `build last-output`. |
 | **--skip-build-number-bump** | <code>boolean</code> | Skip automatic build number/version code incrementing. Uses whatever version is already in the project files. |
 | **--no-skip-build-number-bump** | <code>boolean</code> | Override saved credentials to re-enable automatic build number incrementing for this build only. |
 | **--skip-marketing-version-bump** | <code>boolean</code> | Skip automatic marketing version (CFBundleShortVersionString / versionName) bump when the app is already released. |
@@ -1730,8 +1761,37 @@ Examples:
 | **--send-logs** | <code>boolean</code> | Deprecated alias for --send-logs-to-support |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
+
+### <a id="build-zip"></a> 🔹 **Zip**
+
+```bash
+npx @capgo/cli@latest build zip
+```
+
+Zip the native project exactly like 'build request' does, without uploading it.
+Works offline: no API key and no calls to Capgo. Use it when an agent uploads the archive
+through a signed URL (Capgo MCP). With --json, prints the archive path, size, sha256 and the
+non-secret build options derived from the project.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest build zip com.example.app --platform ios --json
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Target platform: ios or android (required) |
+| **--path** | <code>string</code> | Path to the project directory to build (default: current directory) |
+| **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
+| **--sync-ios-version** | <code>boolean</code> | iOS: sync the app version from package.json before uploading the project. Updates MARKETING_VERSION or CFBundleShortVersionString based on the Xcode Info.plist configuration. |
+| **--sync-android-version** | <code>boolean</code> | Android: sync versionName in android/app/build.gradle from package.json before uploading the project. Fails unless versionName is a standalone quoted string literal. |
+| **--output** | <code>string</code> | Path of the zip file to write (default: <appId>_<platform>_native.zip) |
+| **-j** | <code>boolean</code> | Output in JSON |
 
 ### <a id="build-sync-ios-version"></a> 🔹 **Sync-ios-version**
 
@@ -1788,8 +1848,8 @@ Example:
 | **--skip** | <code>string</code> | Skip specific check(s) by id (repeatable or comma-separated). Alias of --prescan-skip on build request. |
 | **--warn** | <code>string</code> | Downgrade specific check(s) to warning by id (repeatable or comma-separated). Alias of --prescan-warn on build request. |
 | **--verbose** | <code>boolean</code> | Enable verbose output with detailed logging |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="build-last-output"></a> 🔹 **Last-output**
 
@@ -1804,6 +1864,7 @@ to a PR or issue.
 Examples:
   npx @capgo/cli@latest build last-output --path /tmp/build.json
   npx @capgo/cli@latest build last-output --path /tmp/build.json --field outputUrl
+  npx @capgo/cli@latest build last-output --path /tmp/build.json --field symbolsUrl
   npx @capgo/cli@latest build last-output --path /tmp/build.json --qr
 
 **Options:**
@@ -1811,7 +1872,7 @@ Examples:
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **--path** | <code>string</code> | Path to the JSON record written by --output-record (required) |
-| **--field** | <code>string</code> | Print a single field (one of: jobId, appId, platform, buildMode, status, outputUrl, qrCodeAscii, qrCodePngPath, finishedAt, schemaVersion) |
+| **--field** | <code>string</code> | Print a single field (one of: jobId, appId, platform, buildMode, status, outputUrl, symbolsUrl, qrCodeAscii, qrCodePngPath, finishedAt, schemaVersion) |
 | **--qr** | <code>boolean</code> | Print the rendered ASCII QR code (shortcut for --field qrCodeAscii) |
 
 ### <a id="build-credentials"></a> 🔹 **Credentials**
@@ -1935,6 +1996,8 @@ Examples:
 | **--output-upload** | <code>boolean</code> | Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links |
 | **--no-output-upload** | <code>boolean</code> | Do not upload build outputs (IPA/APK/AAB) to Capgo storage |
 | **--output-retention** | <code>string</code> | Output link TTL: 1h to 7d (default: 1h). Examples: 1h, 6h, 2d |
+| **--symbols-upload** | <code>boolean</code> | Keep debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link. Also pass --no-output-upload to avoid keeping the IPA/APK/AAB when output upload is enabled |
+| **--no-symbols-upload** | <code>boolean</code> | Do not keep debug symbols on future builds unless output upload is enabled. --output-upload still includes debug symbols |
 | **--skip-build-number-bump** | <code>boolean</code> | Skip automatic build number/version code incrementing on future builds |
 | **--no-skip-build-number-bump** | <code>boolean</code> | Re-enable automatic build number incrementing (default behavior) |
 | **--skip-marketing-version-bump** | <code>boolean</code> | Skip automatic marketing version bump on future builds when the app is already released |
@@ -2024,6 +2087,8 @@ Examples:
 | **--output-upload** | <code>boolean</code> | Upload build outputs (IPA/APK/AAB) to Capgo storage and print download links |
 | **--no-output-upload** | <code>boolean</code> | Do not upload build outputs (IPA/APK/AAB) to Capgo storage |
 | **--output-retention** | <code>string</code> | Output link TTL: 1h to 7d. Examples: 1h, 6h, 2d |
+| **--symbols-upload** | <code>boolean</code> | Keep debug symbols (iOS dSYMs, Android mapping.txt) in Capgo storage on future builds and print a download link. Also pass --no-output-upload to avoid keeping the IPA/APK/AAB when output upload is enabled |
+| **--no-symbols-upload** | <code>boolean</code> | Do not keep debug symbols on future builds unless output upload is enabled. --output-upload still includes debug symbols |
 | **--skip-build-number-bump** | <code>boolean</code> | Skip automatic build number/version code incrementing on future builds |
 | **--no-skip-build-number-bump** | <code>boolean</code> | Re-enable automatic build number incrementing (default behavior) |
 | **--skip-marketing-version-bump** | <code>boolean</code> | Skip automatic marketing version bump on future builds when the app is already released |
@@ -2107,6 +2172,80 @@ Example:
 | **--appId** | <code>string</code> | App ID (auto-detected from capacitor.config if omitted) |
 | **--platform** | <code>string</code> | Platform (only ios is supported) |
 | **--local** | <code>boolean</code> | Migrate from local .capgo-credentials.json instead of global |
+
+#### <a id="build-credentials-push"></a> 🔹 **Push**
+
+```bash
+npx @capgo/cli@latest build credentials push
+```
+
+Store this machine's saved build credentials for one platform on Capgo, encrypted.
+Builds can then use them without sending secrets (build request --use-stored-credentials,
+or the hosted Capgo MCP). Requires app settings permission (app admin) on the app, and so
+do builds that use the stored credentials. Custom env names that load code into every
+build (NODE_OPTIONS, JAVA_TOOL_OPTIONS, GRADLE_OPTS, LD_PRELOAD, PATH, ...) cannot be stored.
+Only key names are printed; values never are.
+Examples:
+  npx @capgo/cli@latest build credentials push com.example.app --platform ios
+  npx @capgo/cli@latest build credentials push --platform android --mode merge
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Platform to store: ios or android (required) |
+| **--mode** | <code>string</code> | replace: overwrite stored keys (default). merge: keep stored keys not in the local set |
+| **--local** | <code>boolean</code> | Read from local .capgo-credentials.json only |
+| **--global** | <code>boolean</code> | Read from ~/.capgo-credentials/credentials.json only |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+#### <a id="build-credentials-remote-status"></a> 🔹 **Remote-status**
+
+```bash
+npx @capgo/cli@latest build credentials remote-status
+```
+
+Show which build credentials are stored on Capgo for an app (key names and
+non-secret facts only) and what is still missing to build.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest build credentials remote-status com.example.app
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Only show ios or android |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+#### <a id="build-credentials-remote-delete"></a> 🗑️ **Remote-delete**
+
+```bash
+npx @capgo/cli@latest build credentials remote-delete
+```
+
+Delete the build credentials stored on Capgo for one platform. Local saved
+credentials are not touched.
+
+**Example:**
+
+```bash
+npx @capgo/cli@latest build credentials remote-delete com.example.app --platform ios --yes
+```
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--platform** | <code>string</code> | Platform to delete: ios or android (required) |
+| **-y** | <code>boolean</code> | Do not ask for confirmation |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 
 
 ## <a id="notifications"></a> 🔹 **Notifications**
@@ -2195,8 +2334,8 @@ npx @capgo/cli@latest observe summary
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
 | **--json** | <code>boolean</code> | Output as JSON |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="observe-metrics"></a> 📊 **Metrics**
 
@@ -2224,8 +2363,8 @@ npx @capgo/cli@latest observe metrics --action app_launch_ready --sort slowest -
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
 | **--json** | <code>boolean</code> | Output as JSON |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="observe-events"></a> 📊 **Events**
 
@@ -2252,8 +2391,8 @@ npx @capgo/cli@latest observe events --action app_crash_native
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
 | **--json** | <code>boolean</code> | Output as JSON |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="observe-device"></a> 📱 **Device**
 
@@ -2282,8 +2421,8 @@ npx @capgo/cli@latest observe device DEVICE_ID --json
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
 | **--json** | <code>boolean</code> | Output as JSON |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="observe-versions"></a> 📊 **Versions**
 
@@ -2310,8 +2449,8 @@ npx @capgo/cli@latest observe versions
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
 | **--json** | <code>boolean</code> | Output as JSON |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 ### <a id="observe-routes"></a> 📊 **Routes**
 
@@ -2339,8 +2478,8 @@ npx @capgo/cli@latest observe routes --json
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
 | **--json** | <code>boolean</code> | Output as JSON |
-| **--supa-host** | <code>string</code> | Custom Supabase host URL (for self-hosting or Capgo development) |
-| **--supa-anon** | <code>string</code> | Custom Supabase anon key (for self-hosting) |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
 
 
 ## <a id="mcp"></a> 🔹 **Mcp**
@@ -2363,7 +2502,12 @@ Selected tools exposed via MCP:
   - capgo_star_all_repositories
   - capgo_get_account_id, capgo_get_account, capgo_update_account, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_generate_encryption_keys
-  - capgo_search_docs
+  - capgo_search_docs, capgo_set_project_dir
+The project directory follows the client's MCP roots (the agent's workspace), so a global
+install works from any folder. Clients without roots can call capgo_set_project_dir.
+Workspace roots with exactly one Capacitor app automatically select that app, including
+when the server starts there without client roots. Multiple apps require an explicit app path.
+If @capacitor/core appears missing, select the absolute app folder before installing anything.
 Example usage with Claude Desktop:
   Add to claude_desktop_config.json:
   {
@@ -2386,6 +2530,61 @@ npx @capgo/cli@latest mcp
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
+
+
+## <a id="simulator"></a> 🔹 **Simulator**
+
+Start a cloud simulator. A running simulator uses one builder slot and build minutes.
+
+### <a id="simulator-start"></a> 🔹 **Start**
+
+```bash
+npx @capgo/cli@latest simulator start
+```
+
+Start an iOS or Android simulator and print its session URL.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-p** | <code>string</code> | ios or android |
+| **-n** | <code>string</code> | Session name |
+| **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+### <a id="simulator-get"></a> 🔹 **Get**
+
+```bash
+npx @capgo/cli@latest simulator get
+```
+
+Read one simulator session.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+### <a id="simulator-stop"></a> 🔹 **Stop**
+
+```bash
+npx @capgo/cli@latest simulator stop
+```
+
+Stop a simulator session and record its build minutes.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 
 
 

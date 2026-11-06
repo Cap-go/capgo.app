@@ -1,4 +1,5 @@
 import type { BentoTrackingPayload } from './tracking.ts'
+import { ALERT_UPLOAD_SIZE_BYTES } from '../files/util.ts'
 
 /**
  * CLI `bundle upload` emits this when the zipped bundle is over the alert
@@ -9,6 +10,8 @@ import type { BentoTrackingPayload } from './tracking.ts'
  */
 export const APP_TOO_LARGE_EVENT = 'App Too Large'
 export const APP_TOO_LARGE_BENTO_EVENT = 'app_too_large'
+/** Fallback for CLIs that do not send `recommended_size_mb` (same 20 MB alert threshold). */
+export const APP_TOO_LARGE_RECOMMENDED_SIZE_MB = Math.floor(ALERT_UPLOAD_SIZE_BYTES / 1024 / 1024)
 
 export interface AppTooLargeBentoInput {
   event: string
@@ -19,8 +22,8 @@ export interface AppTooLargeBentoInput {
   tags?: Record<string, string | number | boolean>
 }
 
-function toSizeMb(tags: Record<string, string | number | boolean> | undefined): number | undefined {
-  const raw = tags?.size_mb
+function toSizeMb(tags: Record<string, string | number | boolean> | undefined, key: string): number | undefined {
+  const raw = tags?.[key]
   if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0)
     return raw
   if (typeof raw === 'string') {
@@ -44,7 +47,8 @@ export function buildAppTooLargeBentoEvent(input: AppTooLargeBentoInput): BentoT
   if (!input.orgId || !input.appId)
     return undefined
 
-  const sizeMb = toSizeMb(input.tags)
+  const sizeMb = toSizeMb(input.tags, 'size_mb')
+  const recommendedSizeMb = toSizeMb(input.tags, 'recommended_size_mb') || APP_TOO_LARGE_RECOMMENDED_SIZE_MB
 
   return {
     cron: '* * * * *',
@@ -56,7 +60,14 @@ export function buildAppTooLargeBentoEvent(input: AppTooLargeBentoInput): BentoT
       org_name: input.orgName ?? '',
       app_id: input.appId,
       app_name: input.appName ?? '',
-      ...(sizeMb === undefined ? {} : { size_mb: sizeMb }),
+      recommended_size_mb: recommendedSizeMb,
+      ...(sizeMb === undefined
+        ? {}
+        : {
+            size_mb: sizeMb,
+            size_over_recommended_mb: Math.max(0, sizeMb - recommendedSizeMb),
+            size_ratio: Math.round((sizeMb / recommendedSizeMb) * 10) / 10,
+          }),
     },
   }
 }

@@ -10,6 +10,7 @@ const { getRuntimeKeyMock, PoolMock, ClientMock, poolOnMock, clientOnMock, clien
   ) {
     this.on = poolOnMock
     this.end = vi.fn(async () => undefined)
+    ;(this as any).connect = vi.fn(async () => ({ release: vi.fn() }))
     return this
   })
   const ClientMock = vi.fn(function ClientMock(
@@ -70,17 +71,14 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', async (importOriginal) 
 })
 
 function createContext(env: Record<string, any> = {}) {
+  const variables = new Map<string, unknown>([['requestId', 'request-id']])
   return {
     env: {
       HYPERDRIVE_CAPGO_READ_EU: { connectionString: 'postgres://hyperdrive-eu' },
       ...env,
     },
-    get: (key: string) => {
-      if (key === 'requestId')
-        return 'request-id'
-      return undefined
-    },
-    set: vi.fn(),
+    get: (key: string) => variables.get(key),
+    set: (key: string, value: unknown) => variables.set(key, value),
     req: {
       raw: {
         cf: { continent: 'EU' },
@@ -123,7 +121,7 @@ describe('main pg.ts Hyperdrive pg Client lifecycle', () => {
     expect(first.end).not.toHaveBeenCalled()
   })
 
-  it('uses Pool + end() outside workerd (non-Hyperdrive contract)', async () => {
+  it('shares one Pool per request outside workerd and ends it after the last close', async () => {
     getRuntimeKeyMock.mockReturnValue('node')
     const { getPgClient, closeClient } = await import('../supabase/functions/_backend/utils/pg.ts')
     const c = createContext()
@@ -131,13 +129,22 @@ describe('main pg.ts Hyperdrive pg Client lifecycle', () => {
     const first = await getPgClient(c, true)
     const second = await getPgClient(c, true)
 
-    expect(first).not.toBe(second)
-    expect(PoolMock).toHaveBeenCalledTimes(2)
+    expect(first).toBe(second)
+    expect(PoolMock).toHaveBeenCalledTimes(1)
     expect(ClientMock).not.toHaveBeenCalled()
     expect(PoolMock.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ max: 4 }))
 
     await closeClient(c, first)
+    expect(first.end).not.toHaveBeenCalled()
+    await closeClient(c, second)
     expect(first.end).toHaveBeenCalledTimes(1)
+
+    // Once ended, the next call opens a fresh Pool; other requests never share it.
+    const third = await getPgClient(c, true)
+    const otherRequest = await getPgClient(createContext(), true)
+    expect(third).not.toBe(first)
+    expect(otherRequest).not.toBe(third)
+    expect(PoolMock).toHaveBeenCalledTimes(3)
   })
 
   it('ends non-Hyperdrive workerd Pools and logs end failures without throwing', async () => {
@@ -167,5 +174,146 @@ describe('main pg.ts Hyperdrive pg Client lifecycle', () => {
     expect(cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({
       message: 'PG client end failed',
     }))
+  })
+
+  it('keeps Hyperdrive primary readers free of pinned transactions and never ends them', async () => {
+    const query = vi.fn().mockResolvedValue({})
+    ClientMock.mockImplementation(function (this: any) {
+      this.on = clientOnMock
+      this.connect = clientConnectMock
+      this.query = query
+      this.end = vi.fn()
+      return this
+    })
+    const { getPgClient, closeClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+    const c = createContext({
+      HYPERDRIVE_CAPGO_READ_EU: undefined,
+      HYPERDRIVE_CAPGO_DIRECT_EU: { connectionString: 'postgres://hyperdrive-primary' },
+    })
+    const reader = await getPgClient(c, true)
+    expect(closeClient(c, reader)).toBeUndefined()
+    expect(query).not.toHaveBeenCalled()
+    expect(reader.end).not.toHaveBeenCalled()
+  })
+
+  it('retries a direct Pool checkout refused with 53300, for promise and callback callers', async () => {
+    getRuntimeKeyMock.mockReturnValue('node')
+    const client = { release: vi.fn() }
+    const tooMany = Object.assign(new Error('sorry, too many clients already'), { code: '53300' })
+    const rawConnect = vi.fn()
+      .mockRejectedValueOnce(tooMany)
+      .mockRejectedValueOnce(tooMany)
+      .mockResolvedValue(client)
+    PoolMock.mockImplementationOnce(function (this: any) {
+      this.on = poolOnMock
+      this.end = vi.fn(async () => undefined)
+      this.connect = rawConnect
+      return this
+    })
+    const { getPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+    const pool = await getPgClient(createContext({ HYPERDRIVE_CAPGO_READ_EU: undefined }), false) as any
+
+    await expect(pool.connect()).resolves.toBe(client)
+    expect(rawConnect).toHaveBeenCalledTimes(3)
+
+    const other = Object.assign(new Error('password authentication failed'), { code: '28P01' })
+    rawConnect.mockRejectedValueOnce(other)
+    const callback = vi.fn()
+    pool.connect(callback)
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledWith(other))
+    expect(rawConnect).toHaveBeenCalledTimes(4)
+  })
+
+  describe('per-request Hyperdrive Client reuse', () => {
+    function useFakeHyperdriveClients() {
+      const instances: any[] = []
+      ClientMock.mockImplementation(function (this: any) {
+        this.on = clientOnMock
+        this.connect = clientConnectMock
+        this.end = vi.fn()
+        this.txStatus = 'I'
+        this.readyForQuery = true
+        this.getTransactionStatus = () => this.txStatus
+        this.isFakeClient = true
+        // Like pg.Client#query, which reads its own state through `this` (the Client or its handle).
+        this.query = vi.fn(async function (this: { isFakeClient?: boolean } | undefined) {
+          if (this?.isFakeClient !== true)
+            throw new TypeError('query called without its Client as this')
+          return { rows: [] }
+        })
+        instances.push(this)
+        return this
+      })
+      return instances
+    }
+
+    it('reuses a closed idle Client for the next call in the same request only', async () => {
+      const instances = useFakeHyperdriveClients()
+      const { getPgClient, closeClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+      const c = createContext()
+
+      const first = await getPgClient(c, true)
+      await closeClient(c, first)
+      const second = await getPgClient(c, true)
+      expect(instances).toHaveLength(1)
+      expect(second).not.toBe(first)
+
+      // Another request never gets this request's Client.
+      await getPgClient(createContext(), true)
+      expect(instances).toHaveLength(2)
+    })
+
+    it('never hands one Client to two open holders', async () => {
+      const instances = useFakeHyperdriveClients()
+      const { getPgClient, closeClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+      const c = createContext()
+
+      const a = await getPgClient(c, true)
+      const b = await getPgClient(c, true)
+      expect(instances).toHaveLength(2)
+
+      // A double close must not put the Client on the idle list twice.
+      await closeClient(c, a)
+      await closeClient(c, a)
+      await getPgClient(c, true)
+      await getPgClient(c, true)
+      expect(instances).toHaveLength(3)
+      await closeClient(c, b)
+    })
+
+    it('does not reuse a Client closed inside a transaction, mid-query or after a failed release', async () => {
+      const instances = useFakeHyperdriveClients()
+      const { getPgClient, closeClient, releasePgClient, checkoutPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+      const c = createContext()
+
+      const inTx = await getPgClient(c, true)
+      instances[0].txStatus = 'T'
+      await closeClient(c, inTx)
+      const busy = await getPgClient(c, true)
+      instances[1].readyForQuery = false
+      await closeClient(c, busy)
+      const locked = await getPgClient(c, true)
+      releasePgClient(locked, await checkoutPgClient(locked), new Error('unlock failed'))
+      await closeClient(c, locked)
+      await getPgClient(c, true)
+      expect(instances).toHaveLength(4)
+    })
+
+    it('sends queries made after close to a dedicated Client, not the reused one', async () => {
+      const instances = useFakeHyperdriveClients()
+      const { getPgClient, closeClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+      const c = createContext()
+
+      const first = await getPgClient(c, true)
+      await closeClient(c, first)
+      const second = await getPgClient(c, true)
+      await second.query('SELECT 2')
+      await first.query('SELECT 1')
+
+      expect(instances).toHaveLength(2)
+      expect(instances[0].query).toHaveBeenCalledWith('SELECT 2')
+      expect(instances[0].query).not.toHaveBeenCalledWith('SELECT 1')
+      expect(instances[1].query).toHaveBeenCalledWith('SELECT 1')
+    })
   })
 })

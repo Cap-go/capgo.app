@@ -1,4 +1,4 @@
-import type { Database } from '~/types/supabase.types'
+import type { Database } from '~/types/database.types'
 import { randomUUID } from 'node:crypto'
 import { env } from 'node:process'
 import { createClient } from '@supabase/supabase-js'

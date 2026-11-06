@@ -5,7 +5,6 @@ import {
   getBundleUploadFailureRecoveryOptions,
   joinUniqueUploadPaths,
   mergeMonorepoRootUploadPaths,
-  MONOREPO_ROOT_PATHS_NOTE,
   MONOREPO_UPLOAD_RETRY_HINT,
   resolveUploadPaths,
   withMonorepoUploadRetryHint,
@@ -15,15 +14,11 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-assert.match(MONOREPO_ROOT_PATHS_NOTE, /monorepo\/workspace root/)
-assert.match(MONOREPO_ROOT_PATHS_NOTE, /not the app package/)
-assert.match(MONOREPO_UPLOAD_RETRY_HINT, /monorepo root package\.json/)
-assert.match(MONOREPO_UPLOAD_RETRY_HINT, /monorepo root node_modules/)
 
 const options = getBundleUploadFailureRecoveryOptions()
 assert.deepEqual(options.map(option => option.value), ['retry', 'retry-with-monorepo-paths'])
-assert.match(options[1].label, /monorepo root package\.json and node_modules/)
-assert.match(options[1].hint ?? '', /Workspace root/)
+assert.match(options[1].label, /app package\.json and dependency paths/)
+assert.match(options[1].hint ?? '', /App manifest/)
 
 assert.equal(joinUniqueUploadPaths(), undefined)
 assert.equal(joinUniqueUploadPaths(''), undefined)

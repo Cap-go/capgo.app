@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url'
 console.log('🧪 Testing onboarding waitLog query + skip...\n')
 
 const {
-  WAIT_LOG_LOOKBACK_MS,
   buildWaitLogQuery,
   isWaitLogContinueKey,
 } = await import('../src/app/wait-log-query.ts')
@@ -31,7 +30,6 @@ await test('does not filter stats by device id unless one was provided', () => {
   assert.equal(query.appId, 'com.dogg.foodd.app')
   assert.equal(query.devicesId, undefined)
   assert.equal(query.rangeStart, '2026-08-13T11:55:00.000Z')
-  assert.equal(WAIT_LOG_LOOKBACK_MS, 5 * 60 * 1000)
 })
 
 await test('only uses a real device id when filtering stats', () => {

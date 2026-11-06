@@ -31,8 +31,7 @@ export async function getAccountInternal(options: OptionsBase, silent = false): 
   const { data, error } = await invokeCapgoCliApi<AccountProfile>('user', {
     apikey,
     method: 'GET',
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   if (error || !data) {
     const message = error ? await formatCapgoCliInvokeError(error) : 'Empty response'
@@ -105,8 +104,7 @@ export async function setAccountInternal(options: AccountSetOptions, silent = fa
     apikey,
     method: 'PUT',
     body,
-    supaHost: options.supaHost,
-    supaAnon: options.supaAnon,
+    apiHost: options.apiHost,
   })
   if (error || !data) {
     const message = error ? await formatCapgoCliInvokeError(error) : 'Empty response'

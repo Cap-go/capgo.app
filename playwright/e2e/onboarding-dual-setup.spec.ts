@@ -1,6 +1,14 @@
+import type { Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
 const fixture = '/playwright/fixtures/onboarding-setup.html?view=flow&assignment=both-builder&resume=com.example.onboarding-preview&step=setup'
+
+async function openBuilderTask(page: Page, id: string) {
+  const toggle = page.locator('[data-test="builder-checklist-toggle"]')
+  if (await toggle.getAttribute('aria-expanded') === 'false')
+    await toggle.click()
+  await page.locator(`[data-test="builder-step-${id}"] button`).click()
+}
 
 test('chooses a goal, switches plain tabs, preserves instructions and places dismissal at the bottom', async ({ page }) => {
   await page.goto(fixture)
@@ -11,12 +19,13 @@ test('chooses a goal, switches plain tabs, preserves instructions and places dis
   await page.getByRole('button', { name: /Live Updates/ }).click()
   await expect(page.getByRole('tab')).toHaveText(['Live Updates', 'Builder'])
   await expect(page.locator('[data-test="app-onboarding-command-copy"]')).toContainText('@capgo/cli@latest i ')
+  await expect(page.locator('[data-test="setup-checklist-toggle"]')).toHaveAttribute('aria-expanded', 'true')
   await page.locator('[data-test="app-onboarding-cli-step-add_updater"] button').click()
   await page.getByRole('tab', { name: 'Builder', exact: true }).click()
   await page.locator('[data-test="builder-platform-android"]').click()
   await expect(page.locator('[data-test="builder-checklist-command"]')).toContainText('build init -a ')
   await expect(page.locator('[data-test="builder-checklist-command"]')).toContainText('--platform android')
-  await page.locator('[data-test="builder-step-prepare_keystore"] button').click()
+  await openBuilderTask(page, 'prepare_keystore')
   await page.getByRole('tab', { name: 'Live Updates', exact: true }).click()
   await expect(page.locator('[data-test="setup-checklist-instructions"] h2')).toHaveText('Install Capgo Updater')
   await page.getByRole('tab', { name: 'Builder', exact: true }).focus()
@@ -92,7 +101,7 @@ test('returns from Explore dashboard to saved progress in the existing setup rou
 test('preserves inspected tasks across Builder platforms and continues the unfinished platform', async ({ page }) => {
   await page.clock.install()
   await page.goto(`${fixture}&otaComplete=1&builderProgress=ios&builderComplete=android`)
-  await page.locator('[data-test="builder-step-start_setup"] button').click()
+  await openBuilderTask(page, 'start_setup')
   await page.locator('[data-test="builder-platform-android"]').click()
   await expect(page.getByRole('button', { name: 'Continue Builder', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Continue Builder', exact: true }).click()
@@ -107,13 +116,13 @@ test('preserves inspected tasks across Builder platforms and continues the unfin
   })
   await page.clock.runFor(5000)
   await expect(page.locator('[data-test="builder-step-prepare_certificate"]')).toContainText('Current task')
-  await page.locator('[data-test="builder-step-start_setup"] button').click()
+  await openBuilderTask(page, 'start_setup')
   await page.locator('[data-test="builder-platform-android"]').click()
   await page.locator('[data-test="builder-platform-ios"]').click()
   await expect(page.locator('[data-test="builder-checklist-instructions"] h2')).toHaveText('Start guided Builder setup')
 })
 
-test('copies commands and OTA AI instructions for the active tab rather than signup intent', async ({ page }) => {
+test('keeps AI setup available for later tasks and copies the active checklist prompt', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', { value: {
       writeText: async (text: string) => {
@@ -129,10 +138,24 @@ test('copies commands and OTA AI instructions for the active tab rather than sig
   await page.getByRole('tab', { name: 'Live Updates', exact: true }).click()
   await page.locator('[data-test="app-onboarding-command-copy"]').click()
   await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toContain('@capgo/cli@latest i ')
+  await expect(page.locator('[data-test="setup-checklist-toggle"]')).toHaveAttribute('aria-expanded', 'true')
+  await page.locator('[data-test="app-onboarding-cli-step-add_updater"] button').click()
   await page.locator('[data-test="setup-checklist-copy-ai"]').click()
   await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toContain('OTA todo list progress checks')
   const prompt = await page.evaluate(() => (window as any).copiedSetupText as string)
   expect(prompt).not.toContain('start_capgo_builder_onboarding')
+
+  await page.getByRole('tab', { name: 'Builder', exact: true }).click()
+  await openBuilderTask(page, 'prepare_keystore')
+  const taskActions = page.locator('[data-test="builder-checklist-task-actions"]')
+  await expect(taskActions.locator('button, a')).toHaveCount(2)
+  await expect(page.locator('[data-test="builder-checklist-ai-setup"]')).toBeVisible()
+  await expect(page.locator('[data-test="builder-checklist-ai-setup"] [data-test="builder-checklist-copy-ai"]')).toBeVisible()
+  const actionPositions = await taskActions.locator('button, a').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().top))
+  expect(Math.max(...actionPositions) - Math.min(...actionPositions)).toBeLessThan(1)
+  await page.locator('[data-test="builder-checklist-copy-ai"]').click()
+  await expect.poll(() => page.evaluate(() => (window as any).copiedSetupText)).toContain('start_capgo_builder_onboarding')
+  expect(await page.evaluate(() => (window as any).copiedSetupText)).not.toContain('OTA todo list progress checks')
 })
 
 test('uses newly saved Builder progress when opening that tab for the first time', async ({ page }) => {
@@ -195,7 +218,7 @@ test('persists the displayed platform while preserving inspection during the fir
   })
   await page.getByRole('tab', { name: 'Builder', exact: true }).click()
   await expect(page.locator('[data-test="builder-platform-android"]')).toHaveAttribute('aria-pressed', 'true')
-  await page.locator('[data-test="builder-step-successful_cloud_build"] button').click()
+  await openBuilderTask(page, 'successful_cloud_build')
   await page.evaluate(() => {
     const state = (window as any).onboardingSetupPreview.state
     state.builderSteps.ios.start_setup.status = 'done'
