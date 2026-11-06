@@ -172,7 +172,9 @@ describe('translation queue helpers', () => {
     const batch: [string, string, string][] = [['save', 'Save', '']]
     expect(__translationWorkerTestUtils__.translationRequest('@cf/deepseek-ai/deepseek-v4.1-flash-1017', 'fr', batch))
       .toMatchObject({ chat_template_kwargs: { enable_thinking: false }, temperature: 0 })
-    expect(__translationWorkerTestUtils__.translationRequest('@cf/meta/llama-3.1-8b-instruct-fast', 'fr', batch))
+    expect(__translationWorkerTestUtils__.translationRequest('@cf/qwen/qwen3.8-27b', 'fr', batch))
+      .toMatchObject({ chat_template_kwargs: { enable_thinking: false } })
+    expect(__translationWorkerTestUtils__.translationRequest('@cf/custom/non-reasoning-model', 'fr', batch))
       .not.toHaveProperty('chat_template_kwargs')
   })
 

@@ -17,6 +17,7 @@ import IconTrash from '~icons/heroicons/trash'
 import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconPencil from '~icons/lucide/pencil'
+import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
 import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
@@ -973,7 +974,14 @@ async function deleteBundle() {
                 <InfoRow
                   v-if="version.cli_version" :label="t('cli-version')"
                 >
-                  {{ version.cli_version }}
+                  <span class="inline-flex flex-wrap items-center justify-end gap-2">
+                    {{ version.cli_version }}
+                    <ChangelogUpdateBadge
+                      product="cli"
+                      :current="version.cli_version"
+                      :features="[version.session_key ? 'encryption' : '', hasManifest ? 'delta' : ''].filter(Boolean)"
+                    />
+                  </span>
                 </InfoRow>
                 <!-- version.external_url -->
                 <InfoRow
