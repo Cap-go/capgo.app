@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
 import { defaultApiHost, useConsole } from '../../services/console'
-import { forgetSimulator, rememberSimulator, runningSimulators } from '../../services/simulatorSessions'
+import { forgetSimulator, rememberSimulator, runningSimulators, simulatorEpoch } from '../../services/simulatorSessions'
 
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
@@ -22,6 +22,7 @@ async function sessionToken() {
 }
 
 async function start(platform: 'ios' | 'android') {
+  const epoch = simulatorEpoch()
   error.value = ''
   pending.value = platform
   try {
@@ -38,7 +39,7 @@ async function start(platform: 'ios' | 'android') {
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
     const id = payload?.data?.id
     if (id)
-      rememberSimulator(props.appId, { id, url: payload.data?.url || '' })
+      rememberSimulator(props.appId, { id, url: payload.data?.url || '' }, epoch)
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : t('simulator-did-not-start')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clearSimulatorSessions, forgetSimulator, rememberSimulator, runningSimulators } from '../src/services/simulatorSessions'
+import { clearSimulatorSessions, forgetSimulator, rememberSimulator, runningSimulators, simulatorEpoch } from '../src/services/simulatorSessions'
 
 describe('running simulator sessions', () => {
   it('keeps a session started outside the card so it can be stopped', () => {
@@ -21,5 +21,12 @@ describe('running simulator sessions', () => {
     expect(runningSimulators('app-b')).toHaveLength(1)
     clearSimulatorSessions()
     expect(runningSimulators('app-b')).toHaveLength(0)
+  })
+
+  it('drops a start that finishes after sign-out', () => {
+    const epoch = simulatorEpoch()
+    clearSimulatorSessions()
+    rememberSimulator('app-a', { id: '6a0d9c2e-1b4f-4e8a-9c33-0b7e5d2a11c4', url: 'https://ios-emulator.capgo.app/s/a/' }, epoch)
+    expect(runningSimulators('app-a')).toHaveLength(0)
   })
 })

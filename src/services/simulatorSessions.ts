@@ -24,7 +24,9 @@ export function runningSimulators(appId: string) {
   return sessionsByApp[appId]
 }
 
-export function rememberSimulator(appId: string, session: RunningSimulator) {
+export function rememberSimulator(appId: string, session: RunningSimulator, epoch = sessionEpoch) {
+  if (epoch !== sessionEpoch)
+    return
   const sessions = runningSimulators(appId)
   if (sessions.some(item => item.id === session.id))
     return
