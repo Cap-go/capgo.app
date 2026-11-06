@@ -107,10 +107,15 @@ function canReplayUploadRequest(request: Request): boolean {
 }
 
 function buildDurableObjectRequest(request: Request): Request {
+  const timeoutSignal = AbortSignal.timeout(DO_CALL_TIMEOUT)
+  const clientSignal = request.signal
+  const combinedSignal = typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([timeoutSignal, clientSignal])
+    : timeoutSignal
   const requestInit: RequestInit & { duplex?: 'half' } = {
     headers: request.headers,
     method: request.method,
-    signal: AbortSignal.timeout(DO_CALL_TIMEOUT),
+    signal: combinedSignal,
   }
 
   const uploadBody = getForwardedUploadBody(request)

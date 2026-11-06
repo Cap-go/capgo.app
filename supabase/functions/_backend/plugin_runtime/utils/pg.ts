@@ -39,17 +39,27 @@ function pgAbortRace<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
     return Promise.reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
 
   return new Promise<T>((resolve, reject) => {
+    let settled = false
     const onAbort = () => {
+      if (settled)
+        return
+      settled = true
       signal.removeEventListener('abort', onAbort)
       reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
     }
     signal.addEventListener('abort', onAbort, { once: true })
     promise.then(
       (value) => {
+        if (settled)
+          return
+        settled = true
         signal.removeEventListener('abort', onAbort)
         resolve(value)
       },
       (error) => {
+        if (settled)
+          return
+        settled = true
         signal.removeEventListener('abort', onAbort)
         reject(error)
       },
@@ -65,7 +75,7 @@ function pgAbortRace<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
 /** Hyperdrive read clients only. Used by tests to validate abort racing without bootstrapping Hyperdrive. */
 export function wrapPluginReadOnlyClientForRequestSignal(db: PluginPgClient, signal: AbortSignal): PluginPgClient {
   const orig = db.query.bind(db) as (...args: unknown[]) => Promise<unknown>
-  return new Proxy(db, {
+  const wrapped = new Proxy(db, {
     get(target, prop, receiver) {
       if (prop === 'query') {
         return (...args: unknown[]) => pgAbortRace(signal, orig(...args) as Promise<unknown>)
@@ -73,6 +83,11 @@ export function wrapPluginReadOnlyClientForRequestSignal(db: PluginPgClient, sig
       return Reflect.get(target, prop, receiver)
     },
   }) as PluginPgClient
+  skipEndClients.add(wrapped)
+  const source = pgClientSources.get(db)
+  if (source !== undefined)
+    pgClientSources.set(wrapped, source)
+  return wrapped
 }
 
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
@@ -222,6 +237,8 @@ async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<Replic
     }
   }
   catch (error) {
+    if (error instanceof Error && error.name === 'AbortError')
+      throw error
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error querying replica lag', error })
     return {
       status: 'unknown',
@@ -265,12 +282,36 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
       await cacheHelper.putJson(cacheRequest, { ...status, expiresAt }, REPLICATION_LAG_CACHE_TTL_SECONDS)
       return status
     })
+    .catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'AbortError') {
+        const mem = getFreshReplicationLagMemoryEntry(cacheKey)
+        if (mem)
+          return mem
+        if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+          const fromDisk: ReplicationLagStatus = {
+            status: cachedEntry.status,
+            max_lag_seconds: cachedEntry.max_lag_seconds,
+          }
+          setReplicationLagMemoryEntry(cacheKey, fromDisk, cachedEntry.expiresAt)
+          return fromDisk
+        }
+      }
+      return {
+        status: 'unknown' as ReplicationStatus,
+        max_lag_seconds: null,
+      }
+    })
     .finally(() => {
       replicationLagInflight.delete(cacheKey)
     })
 
   replicationLagInflight.set(cacheKey, query)
   return query
+}
+
+/** For tests: wrapped read clients must skip `.end()` like the underlying Hyperdrive handle. */
+export function pluginReadClientSkipsEnd(db: PluginPgClient): boolean {
+  return skipEndClients.has(db)
 }
 
 /** Refresh the cached replica lag status (memory + Cache API) with one probe at most. */

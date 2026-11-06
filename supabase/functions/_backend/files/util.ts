@@ -342,6 +342,8 @@ export async function* generateParts(c: Context, body: ReadableStream<Uint8Array
     yield { kind: 'final', bytes: mem.view() }
   }
   catch (e) {
+    if (e instanceof TusClientDisconnectedError)
+      throw e
     const abortedByRead = e instanceof DOMException && e.name === 'AbortError'
       || (e instanceof Error && e.name === 'AbortError')
     if (abortedByRead) {

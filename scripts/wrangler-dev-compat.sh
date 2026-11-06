@@ -3,5 +3,12 @@
 # still in the future (today is measured in UTC). Deploy still uses the date in
 # wrangler.jsonc. Override here so local dev and CI can run before that day.
 set -euo pipefail
+for arg in "$@"; do
+  case "$arg" in
+    --compatibility-date|--compatibility-date=*)
+      exec bunx wrangler dev "$@"
+      ;;
+  esac
+done
 compat="${WRANGLER_DEV_COMPATIBILITY_DATE:-$(date -u +%Y-%m-%d)}"
 exec bunx wrangler dev --compatibility-date "${compat}" "$@"
