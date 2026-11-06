@@ -3,7 +3,7 @@ import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -384,6 +384,33 @@ async function openSavedBuild(jobId: string) {
   }
 }
 
+function savedBuildCell(elem: Element) {
+  const output = elem.builder_job_id ? savedOutputs.value[elem.builder_job_id] : undefined
+  if (!output)
+    return h('span', { class: 'text-gray-400 dark:text-gray-600' }, '-')
+  const jobId = elem.builder_job_id as string
+  const children = [
+    h('a', {
+      href: output.url,
+      target: '_blank',
+      rel: 'noopener',
+      class: 'text-sm font-semibold text-blue-600 dark:text-blue-400',
+    }, t('download-saved-build')),
+  ]
+  if (output.kind === 'ios_ipa') {
+    children.push(h('button', {
+      type: 'button',
+      class: 'px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0',
+      disabled: openingJob.value === jobId,
+      onClick: (event: Event) => {
+        event.stopPropagation()
+        void openSavedBuild(jobId)
+      },
+    }, openingJob.value === jobId ? t('simulator-starting') : t('open-in-simulator')))
+  }
+  return h('div', { class: 'flex items-center gap-2' }, children)
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(seconds ?? 0))
   if (safeSeconds < 60)
@@ -452,7 +479,7 @@ columns.value = [
     key: 'artifact',
     mobile: true,
     class: 'max-w-48',
-    displayFunction: () => '',
+    renderFunction: savedBuildCell,
   },
   {
     label: t('updated-at'),
@@ -523,28 +550,6 @@ watch(showSetupFlow, (newValue) => {
         @reset="reload()"
         @reload="getData()"
       >
-        <template #artifact="{ element }">
-          <div v-if="element.builder_job_id && savedOutputs[element.builder_job_id]" class="flex items-center gap-2">
-            <a
-              :href="savedOutputs[element.builder_job_id].url"
-              target="_blank"
-              rel="noopener"
-              class="text-sm font-semibold text-blue-600 dark:text-blue-400"
-            >
-              {{ t('download-saved-build') }}
-            </a>
-            <button
-              v-if="savedOutputs[element.builder_job_id].kind === 'ios_ipa'"
-              type="button"
-              class="px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0"
-              :disabled="openingJob === element.builder_job_id"
-              @click.stop="openSavedBuild(element.builder_job_id)"
-            >
-              {{ openingJob === element.builder_job_id ? t('simulator-starting') : t('open-in-simulator') }}
-            </button>
-          </div>
-          <span v-else class="text-gray-400 dark:text-gray-600">-</span>
-        </template>
         <template #status="{ element }">
           <span
             class="font-semibold"
