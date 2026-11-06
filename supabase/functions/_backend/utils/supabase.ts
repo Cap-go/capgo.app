@@ -432,6 +432,10 @@ export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<s
   return Array.from(new Set(apps))
 }
 
+/**
+ * Updates channel `existingChannelId`, or inserts a new channel when it is null.
+ * Throws ChannelAlreadyExistsError when the insert finds the channel already exists.
+ */
 export async function updateOrCreateChannel(
   c: Context,
   update: Database['public']['Tables']['channels']['Insert'],

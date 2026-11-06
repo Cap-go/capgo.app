@@ -206,6 +206,7 @@ interface CreatedChannel {
   public: boolean
 }
 
+/** Inserts the channel in the caller's transaction; throws ChannelAlreadyExistsError when it already exists. */
 async function insertChannelInTransaction(
   dbClient: PgQueryClient,
   channel: Database['public']['Tables']['channels']['Insert'],
@@ -273,6 +274,7 @@ async function findVersionInTransaction(dbClient: PgQueryClient, appId: string, 
   return result.rows[0].id
 }
 
+/** Creates a channel and promotes `versionName` to it in one transaction, rolling back on any failure. */
 async function createAndPromoteChannelInTransaction(
   c: Context<MiddlewareKeyVariables>,
   channel: Database['public']['Tables']['channels']['Insert'],
@@ -345,6 +347,7 @@ function isChannelCreationConflict(error: unknown): boolean {
     && 'constraint' in error && error.constraint === 'unique_name_app_id'
 }
 
+/** POST /channel: creates or updates a channel, retrying once as an update when the channel turns out to exist. */
 export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
   body = normalizeChannelSet(body)
   if (!body.app_id) {
@@ -375,6 +378,7 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
   }
 }
 
+/** Authorizes and applies a channel create or update; `knownChannel` skips the lookup when the insert already returned the row. */
 async function upsertChannel(
   c: Context<MiddlewareKeyVariables>,
   pg: PgClient,
