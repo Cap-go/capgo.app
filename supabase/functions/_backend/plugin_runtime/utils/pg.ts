@@ -2,7 +2,6 @@ import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
 import { and, eq, isNotNull, isNull, or, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
-import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
 import { Client, Pool } from 'pg'
@@ -16,6 +15,9 @@ import { isDatabaseOriginError, isReadOnlyPgConnectionRetryError } from './pg_er
 import { configureTransactionAccessMode, readOnlyStartupOptions, setPgAccessMode } from './pg_transaction_mode.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
+import { isPluginStateMiss, PluginStateMiss, pluginStateQueriesFor } from './pluginStateRegistry.ts'
+import { isPluginStateServed, isPluginStateStrict } from './pluginStateSwitch.ts'
+import { activeChannelVersionJoin, getAlias, getAppOwnerSelect, getOwnerOrgAlias, getSchemaUpdatesAlias } from './pluginStateSelects.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
 import { resolveRolloutDecision } from './rollout.ts'
 import type { ReplicationLagStatus, ReplicationStatus } from './replicaFreshness.ts'
@@ -23,7 +25,7 @@ import { getFreshReplicationLagMemoryEntry, getReplicationLagCacheKey, isReplica
 import { shouldRequireReadReplica, shouldSkipDirectHyperdriveFallback } from './supabase_write_guard.ts'
 import { getCachedChannelLookup, updatesCacheTags } from './updatesEdgeCache.ts'
 import type { VersionManifestRow } from './version_manifest_sql.ts'
-import { completeVersionManifest, versionManifestJsonSql, versionManifestRowsSql } from './version_manifest_sql.ts'
+import { completeVersionManifest, versionManifestRowsSql } from './version_manifest_sql.ts'
 
 /**
  * Plugin PG client handle. On Hyperdrive (workerd) this is a per-request `Client`;
@@ -419,6 +421,13 @@ function isHyperdriveConnectionString(c: Context, dbUrl: string): boolean {
  * Non-Hyperdrive (local/direct/pooler): `Pool` + explicit `closeClient`/`end()`.
  */
 export async function getPgClient(c: Context, readOnly = false): Promise<PluginPgClient> {
+  if (isPluginStateServed(c)) {
+    // A request answered from the KV plugin state reached Postgres: a query
+    // the state does not cover. Strict mode (tests) fails it.
+    if (isPluginStateStrict(c))
+      throw new PluginStateMiss('strict mode: database connection requested by a request served from KV')
+    cloudlog({ requestId: c.get('requestId'), message: 'plugin state request opened a database connection', path: c.req.path })
+  }
   const dbUrl = getDatabaseURL(c, readOnly)
   const requestId = c.get('requestId')
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
@@ -520,9 +529,21 @@ export function getLazyPgQueryCount(c: Context) {
   return lazyPgQueryCounts.get(c.req.raw) ?? 0
 }
 
-export function createLazyPgClient(c: Context, readOnly = false): LazyPgClient {
+export interface LazyPgClientOptions {
+  /** Refuse to connect with this message (plugin state strict mode). */
+  forbidConnect?: string
+  /** Called once when the connection is first requested. */
+  onConnect?: () => void
+}
+
+export function createLazyPgClient(c: Context, readOnly = false, options: LazyPgClientOptions = {}): LazyPgClient {
   let inner: Promise<PluginPgClient> | null = null
   const ensure = () => {
+    if (!inner) {
+      if (options.forbidConnect)
+        return Promise.reject(new PluginStateMiss(options.forbidConnect))
+      options.onConnect?.()
+    }
     inner ??= getPgClient(c, readOnly).then((db) => {
       const source = pgClientSources.get(db)
       if (source)
@@ -708,97 +729,6 @@ export function closeClient(c: Context, db: PluginPgClient) {
   }))
 }
 
-export function getAlias() {
-  const versionAlias = alias(schema.app_versions, 'version')
-  const rolloutVersionAlias = alias(schema.app_versions, 'rollout_version')
-  const channelDevicesAlias = alias(schema.channel_devices, 'channel_devices')
-  const channelAlias = alias(schema.channels, 'channels')
-  return { versionAlias, rolloutVersionAlias, channelDevicesAlias, channelAlias }
-}
-
-function getVersionSelect(
-  versionAlias: any,
-  prefix: string,
-  includeMetadata = false,
-  channelVersionColumn?: any,
-) {
-  const versionSelect: any = {
-    id: sql<number | null>`${versionAlias.id}`.as(`${prefix}id`),
-    name: channelVersionColumn
-      ? sql<string>`CASE WHEN ${channelVersionColumn} IS NULL THEN 'builtin' ELSE ${versionAlias.name} END`.as(`${prefix}name`)
-      : sql<string>`${versionAlias.name}`.as(`${prefix}name`),
-    checksum: sql<string | null>`${versionAlias.checksum}`.as(`${prefix}checksum`),
-    session_key: sql<string | null>`${versionAlias.session_key}`.as(`${prefix}session_key`),
-    key_id: sql<string | null>`${versionAlias.key_id}`.as(`${prefix}key_id`),
-    storage_provider: sql<string>`COALESCE(${versionAlias.storage_provider}, 'r2')`.as(`${prefix}storage_provider`),
-    external_url: sql<string | null>`${versionAlias.external_url}`.as(`${prefix}external_url`),
-    min_update_version: sql<string | null>`${versionAlias.min_update_version}`.as(`${prefix}minUpdateVersion`),
-    manifest_count: sql<number>`${versionAlias.manifest_count}`.as(`${prefix}manifest_count`),
-    r2_path: sql`${versionAlias.r2_path}`.mapWith(versionAlias.r2_path).as(`${prefix}r2_path`),
-    deleted: sql<boolean>`COALESCE(${versionAlias.deleted}, false)`.as(`${prefix}deleted`),
-    deleted_at: sql<string | null>`${versionAlias.deleted_at}`.as(`${prefix}deleted_at`),
-  }
-
-  if (includeMetadata) {
-    versionSelect.link = sql<string | null>`${versionAlias.link}`.as(`${prefix}link`)
-    versionSelect.comment = sql<string | null>`${versionAlias.comment}`.as(`${prefix}comment`)
-  }
-
-  return versionSelect
-}
-
-function getSchemaUpdatesAlias(includeMetadata = false) {
-  const { versionAlias, rolloutVersionAlias, channelDevicesAlias, channelAlias } = getAlias()
-  const versionSelect = getVersionSelect(versionAlias, 'v', includeMetadata, channelAlias.version)
-  const rolloutVersionSelect = getVersionSelect(rolloutVersionAlias, 'rv', includeMetadata)
-  const channelSelect = {
-    id: channelAlias.id,
-    name: channelAlias.name,
-    app_id: channelAlias.app_id,
-    allow_dev: channelAlias.allow_dev,
-    allow_prod: channelAlias.allow_prod,
-    allow_emulator: channelAlias.allow_emulator,
-    allow_device: channelAlias.allow_device,
-    disable_auto_update_under_native: channelAlias.disable_auto_update_under_native,
-    disable_auto_update: channelAlias.disable_auto_update,
-    update_package: channelAlias.update_package,
-    ios: channelAlias.ios,
-    android: channelAlias.android,
-    electron: channelAlias.electron,
-    allow_device_self_set: channelAlias.allow_device_self_set,
-    public: channelAlias.public,
-    rollout_version: channelAlias.rollout_version,
-    rollout_percentage_bps: channelAlias.rollout_percentage_bps,
-    rollout_enabled: channelAlias.rollout_enabled,
-    rollout_id: channelAlias.rollout_id,
-    rollout_paused_at: channelAlias.rollout_paused_at,
-    rollout_pause_reason: channelAlias.rollout_pause_reason,
-    rollout_cache_ttl_seconds: channelAlias.rollout_cache_ttl_seconds,
-    paused_at: channelAlias.paused_at,
-  }
-  const manifestSelect = versionManifestJsonSql(versionAlias.id)
-  return { versionSelect, rolloutVersionSelect, channelDevicesAlias, channelAlias, channelSelect, manifestSelect, versionAlias, rolloutVersionAlias }
-}
-
-function activeChannelVersionJoin(
-  channelVersionColumn: any,
-  versionAlias: any,
-  channelAppIdColumn?: any,
-) {
-  const conditions = [
-    eq(channelVersionColumn, versionAlias.id),
-    or(
-      and(eq(versionAlias.deleted, false), isNull(versionAlias.deleted_at)),
-      eq(versionAlias.name, 'builtin'),
-    ),
-  ]
-
-  if (channelAppIdColumn)
-    conditions.push(eq(versionAlias.app_id, channelAppIdColumn))
-
-  return and(...conditions)
-}
-
 export function requestInfosChannelDevicePostgres(
   c: Context,
   app_id: string,
@@ -807,6 +737,9 @@ export function requestInfosChannelDevicePostgres(
   includeManifest: boolean,
   includeMetadata = false,
 ) {
+  const state = pluginStateQueriesFor(drizzleClient, app_id)
+  if (state)
+    return state.channelDevice(device_id, includeManifest, includeMetadata)
   const { versionSelect, channelDevicesAlias, channelAlias, channelSelect, manifestSelect, versionAlias } = getSchemaUpdatesAlias(includeMetadata)
   const baseSelect = {
     channel_devices: {
@@ -849,6 +782,7 @@ export async function getEffectiveDeviceChannelNamePostgres(
   const fallback = typeof fallbackChannelName === 'string' && fallbackChannelName.trim() !== ''
     ? fallbackChannelName.trim()
     : null
+  const state = pluginStateQueriesFor(drizzleClient, app_id)
   const { channelDevicesAlias, channelAlias } = getAlias()
   const platformQuery = platform === 'android' ? channelAlias.android : platform === 'electron' ? channelAlias.electron : channelAlias.ios
   // App-level lookups (channel by id / name, public default) can come from
@@ -858,6 +792,10 @@ export async function getEffectiveDeviceChannelNamePostgres(
     : load()
 
   const loadChannelById = async (channelId: number) => {
+    if (state) {
+      const channel = await state.effectiveChannelById(channelId, platform)
+      return channel?.name ? channel : null
+    }
     const channelQuery = drizzleClient
       .select({ id: channelAlias.id, name: channelAlias.name })
       .from(channelAlias)
@@ -887,18 +825,26 @@ export async function getEffectiveDeviceChannelNamePostgres(
   }
 
   if (hasChannelDeviceOverrides) {
-    const channelQuery = drizzleClient
-      .select({ id: channelAlias.id, name: channelAlias.name })
-      .from(channelDevicesAlias)
-      .innerJoin(channelAlias, and(eq(channelDevicesAlias.channel_id, channelAlias.id), eq(channelAlias.app_id, app_id)))
-      .where(and(eq(channelDevicesAlias.device_id, device_id), eq(channelDevicesAlias.app_id, app_id)))
-      .limit(1)
+    const channelQuery = state
+      ? null
+      : drizzleClient
+          .select({ id: channelAlias.id, name: channelAlias.name })
+          .from(channelDevicesAlias)
+          .innerJoin(channelAlias, and(eq(channelDevicesAlias.channel_id, channelAlias.id), eq(channelAlias.app_id, app_id)))
+          .where(and(eq(channelDevicesAlias.device_id, device_id), eq(channelDevicesAlias.app_id, app_id)))
+          .limit(1)
 
-    const channel = await channelQuery.then(data => data.at(0))
+    const channel = state
+      ? await state.effectiveOverrideChannel(device_id)
+      : await channelQuery!.then(data => data.at(0))
     if (channel?.name)
       return channel
   }
   const loadChannelByName = async (channelName: string | null) => {
+    if (state) {
+      const channel = await state.effectiveChannelByName(channelName, platform)
+      return channel?.name ? channel : null
+    }
     const channelQuery = drizzleClient
       .select({ id: channelAlias.id, name: channelAlias.name })
       .from(channelAlias)
@@ -946,6 +892,9 @@ export function requestInfosChannelByIdPostgres(
   includeManifest: boolean,
   includeMetadata = false,
 ) {
+  const state = pluginStateQueriesFor(drizzleClient, app_id)
+  if (state)
+    return state.channelById(channelId, includeManifest, includeMetadata)
   const { versionSelect, channelAlias, channelSelect, manifestSelect, versionAlias } = getSchemaUpdatesAlias(includeMetadata)
   const baseSelect = {
     version: versionSelect,
@@ -978,6 +927,9 @@ export function requestInfosChannelPostgres(
   includeManifest: boolean,
   includeMetadata = false,
 ) {
+  const state = pluginStateQueriesFor(drizzleClient, app_id)
+  if (state)
+    return state.defaultChannel(platform, defaultChannel, includeManifest, includeMetadata)
   const { versionSelect, channelAlias, channelSelect, manifestSelect, versionAlias } = getSchemaUpdatesAlias(includeMetadata)
   let platformQuery = channelAlias.ios
   if (platform === 'android')
@@ -1064,6 +1016,9 @@ export async function requestManifestEntriesPostgres(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   appId?: string,
 ): Promise<ManifestRow[]> {
+  const state = pluginStateQueriesFor(drizzleClient, appId)
+  if (state)
+    return state.manifestEntries(versionId)
   // Cache raw rows by version id (not final download URLs — those embed device_id).
   const helper = new CacheHelper(c)
   const cacheKey = helper.buildRequest(MANIFEST_ROWS_CACHE_PATH, { version_id: String(versionId) })
@@ -1092,6 +1047,9 @@ export function requestInfosChannelByIdPostgresRollout(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   includeMetadata = false,
 ) {
+  const state = pluginStateQueriesFor(drizzleClient, app_id)
+  if (state)
+    return state.channelByIdRollout(channelId, includeMetadata)
   const { versionSelect, rolloutVersionSelect, channelAlias, channelSelect, versionAlias, rolloutVersionAlias } = getSchemaUpdatesAlias(includeMetadata)
   const channel = drizzleClient
     .select({
@@ -1119,6 +1077,9 @@ export function requestInfosChannelDevicePostgresRollout(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   includeMetadata = false,
 ) {
+  const state = pluginStateQueriesFor(drizzleClient, app_id)
+  if (state)
+    return state.channelDeviceRollout(device_id, includeMetadata)
   const { versionSelect, rolloutVersionSelect, channelDevicesAlias, channelAlias, channelSelect, versionAlias, rolloutVersionAlias } = getSchemaUpdatesAlias(includeMetadata)
   const channelDevice = drizzleClient
     .select({
@@ -1148,6 +1109,9 @@ export function requestInfosChannelPostgresRollout(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   includeMetadata = false,
 ) {
+  const state = pluginStateQueriesFor(drizzleClient, app_id)
+  if (state)
+    return state.defaultChannelRollout(platform, defaultChannel, includeMetadata)
   const { versionSelect, rolloutVersionSelect, channelAlias, channelSelect, versionAlias, rolloutVersionAlias } = getSchemaUpdatesAlias(includeMetadata)
   const platformQuery = platform === 'android' ? channelAlias.android : platform === 'electron' ? channelAlias.electron : channelAlias.ios
 
@@ -1312,7 +1276,8 @@ export function requestInfosPostgres(options: RequestInfosPostgresOptions) {
         // Single pg.Client serializes queries; use a second Hyperdrive client when
         // both override + default channel are needed so the two RTTs overlap.
         const needsParallelClients = shouldQueryChannelOverride || typeof channelSelfOverrideChannelId === 'number'
-        if (needsParallelClients && getRuntimeKey() === 'workerd') {
+        // Answered by the KV plugin state: no second connection to open.
+        if (needsParallelClients && getRuntimeKey() === 'workerd' && !pluginStateQueriesFor(drizzleClient, app_id)) {
           try {
             if (loadDefaultChannel) {
               // Lazy: a default channel served from the edge cache never connects.
@@ -1402,7 +1367,11 @@ export async function queryAppOwnerPostgres(
 ): Promise<AppOwnerPostgresResult | null> {
   if (actions.length === 0)
     return null
-  const orgAlias = alias(schema.orgs, 'orgs')
+  const state = pluginStateQueriesFor(drizzleClient, appId)
+  if (state)
+    return finishAppOwnerRow(c, appId, await state.appOwner(actions, options.includeTrialAt === true))
+  const orgAlias = getOwnerOrgAlias()
+  const { owner_org: ownerOrgColumn, ...ownerColumns } = getAppOwnerSelect(orgAlias)
   const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
   // Only the edge cache needs it (a constant NULL keeps the plain query shape).
   const planTrialAt = options.includeTrialAt
@@ -1417,22 +1386,10 @@ export async function queryAppOwnerPostgres(
 
   const appOwner = await drizzleClient
     .select({
-      owner_org: schema.apps.owner_org,
+      owner_org: ownerOrgColumn,
       plan_valid: planExpression,
       plan_trial_at: planTrialAt,
-      channel_device_count: schema.apps.channel_device_count,
-      manifest_bundle_count: schema.apps.manifest_bundle_count,
-      rollout_channel_count: schema.apps.rollout_channel_count,
-      rollout_paused_version_names: schema.apps.rollout_paused_version_names,
-      expose_metadata: schema.apps.expose_metadata,
-      allow_device_custom_id: schema.apps.allow_device_custom_id,
-      block_provider_infra_requests: schema.apps.block_provider_infra_requests,
-      device_data_collection: schema.apps.device_data_collection,
-      orgs: {
-        created_by: orgAlias.created_by,
-        id: orgAlias.id,
-        management_email: orgAlias.management_email,
-      },
+      ...ownerColumns,
     })
     .from(schema.apps)
     .where(eq(schema.apps.app_id, appId))
@@ -1440,6 +1397,11 @@ export async function queryAppOwnerPostgres(
     .limit(1)
     .then(data => data[0])
 
+  return finishAppOwnerRow(c, appId, appOwner)
+}
+
+/** A missing owner org keeps the cloud classification from the apps row. */
+function finishAppOwnerRow(c: Context, appId: string, appOwner: any): AppOwnerPostgresResult | null {
   if (!appOwner)
     return null
 
@@ -1478,6 +1440,8 @@ export async function getAppOwnerPostgres(
       appId,
       planActions: actions,
     })
+    if (isPluginStateMiss(e))
+      throw e
     // A failed lookup is never "app missing": null makes callers answer a
     // publicly cached on_premise_app 429 for an hour. Any database error
     // (lost connection, no free connection slot, recovery conflict on a
@@ -1499,6 +1463,9 @@ export async function getAppBlockProviderInfraRequestsPostgres(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<AppBlockProviderInfraRequestsLookup> {
   try {
+    const state = pluginStateQueriesFor(drizzleClient, appId)
+    if (state)
+      return await state.blockProviderInfraRequests()
     const app = await drizzleClient
       .select({
         block_provider_infra_requests: schema.apps.block_provider_infra_requests,
@@ -1515,6 +1482,8 @@ export async function getAppBlockProviderInfraRequestsPostgres(
   }
   catch (e: unknown) {
     logPgError(c, 'getAppBlockProviderInfraRequestsPostgres', e)
+    if (isPluginStateMiss(e))
+      throw e
     return { status: 'error' }
   }
 }
@@ -1526,6 +1495,9 @@ export async function queryAppVersionPostgres(
   allowedDeleted: boolean | undefined,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ id: number, owner_org: string } | null> {
+  const state = pluginStateQueriesFor(drizzleClient, appId)
+  if (state)
+    return state.appVersion(versionName, allowedDeleted)
   const deletedConditions: ReturnType<typeof eq>[] = []
   if (allowedDeleted !== undefined)
     deletedConditions.push(eq(schema.app_versions.deleted, allowedDeleted))
@@ -1558,6 +1530,8 @@ export async function getAppVersionPostgres(
   }
   catch (e: unknown) {
     logPgError(c, 'getAppVersionPostgres', e)
+    if (isPluginStateMiss(e))
+      throw e
     return null
   }
 }
@@ -1590,6 +1564,8 @@ export async function getAppVersionsByAppIdPg(
   }
   catch (e: unknown) {
     logPgError(c, 'getAppVersionsByAppIdPg', e)
+    if (isPluginStateMiss(e))
+      throw e
     return []
   }
 }
@@ -1601,6 +1577,9 @@ export async function getChannelDeviceOverridePg(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ app_id: string, device_id: string, channel_id: { id: number, allow_device_self_set: boolean, name: string } } | null> {
   try {
+    const state = pluginStateQueriesFor(drizzleClient, appId)
+    if (state)
+      return await state.channelDeviceOverride(deviceId)
     const result = await drizzleClient
       .select({
         app_id: schema.channel_devices.app_id,
@@ -1637,6 +1616,8 @@ export async function getChannelDeviceOverridePg(
   }
   catch (e: unknown) {
     logPgError(c, 'getChannelDeviceOverridePg', e)
+    if (isPluginStateMiss(e))
+      throw e
     return null
   }
 }
@@ -1645,7 +1626,11 @@ async function queryChannelByPg(
   appId: string,
   channelFilter: SQL,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
+  stateFilter: { name: string } | { id: number },
 ): Promise<ChannelLookupResult | null> {
+  const state = pluginStateQueriesFor(drizzleClient, appId)
+  if (state)
+    return state.channelLookup(stateFilter)
   const channel = await drizzleClient
     .select({
       id: schema.channels.id,
@@ -1670,7 +1655,7 @@ export function queryChannelByNamePg(
   channelName: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<ChannelLookupResult | null> {
-  return queryChannelByPg(appId, eq(schema.channels.name, channelName), drizzleClient)
+  return queryChannelByPg(appId, eq(schema.channels.name, channelName), drizzleClient, { name: channelName })
 }
 
 async function getChannelByPg(
@@ -1679,9 +1664,10 @@ async function getChannelByPg(
   channelFilter: SQL,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
   logName: string,
+  stateFilter: { name: string } | { id: number },
 ): Promise<ChannelLookupResult | null> {
   try {
-    return await queryChannelByPg(appId, channelFilter, drizzleClient)
+    return await queryChannelByPg(appId, channelFilter, drizzleClient, stateFilter)
   }
   catch (e: unknown) {
     logPgError(c, logName, e)
@@ -1695,7 +1681,7 @@ export async function getChannelByNamePg(
   channelName: string,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<ChannelLookupResult | null> {
-  return getChannelByPg(c, appId, eq(schema.channels.name, channelName), drizzleClient, 'getChannelByNamePg')
+  return getChannelByPg(c, appId, eq(schema.channels.name, channelName), drizzleClient, 'getChannelByNamePg', { name: channelName })
 }
 
 export async function getChannelByIdPg(
@@ -1704,7 +1690,7 @@ export async function getChannelByIdPg(
   channelId: number,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<ChannelLookupResult | null> {
-  return getChannelByPg(c, appId, eq(schema.channels.id, channelId), drizzleClient, 'getChannelByIdPg')
+  return getChannelByPg(c, appId, eq(schema.channels.id, channelId), drizzleClient, 'getChannelByIdPg', { id: channelId })
 }
 
 export async function getMainChannelsPg(
@@ -1713,6 +1699,9 @@ export async function getMainChannelsPg(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ name: string, ios: boolean, android: boolean, electron: boolean }[]> {
   try {
+    const state = pluginStateQueriesFor(drizzleClient, appId)
+    if (state)
+      return await state.mainChannels()
     const channels = await drizzleClient
       .select({
         name: schema.channels.name,
@@ -1729,6 +1718,8 @@ export async function getMainChannelsPg(
   }
   catch (e: unknown) {
     logPgError(c, 'getMainChannelsPg', e)
+    if (isPluginStateMiss(e))
+      throw e
     return []
   }
 }
@@ -1794,6 +1785,9 @@ export async function getChannelsPg(
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<{ id: number, name: string, ios: boolean, android: boolean, electron: boolean, public: boolean }[]> {
   try {
+    const state = pluginStateQueriesFor(drizzleClient, appId)
+    if (state)
+      return await state.channels(condition)
     const whereConditions = [eq(schema.channels.app_id, appId)]
 
     if ('defaultChannel' in condition && condition.defaultChannel) {
@@ -1818,6 +1812,8 @@ export async function getChannelsPg(
   }
   catch (e: unknown) {
     logPgError(c, 'getChannelsPg', e)
+    if (isPluginStateMiss(e))
+      throw e
     return []
   }
 }
@@ -1831,6 +1827,9 @@ export async function getAppByIdPg(
   try {
     if (actions.length === 0)
       return null
+    const state = pluginStateQueriesFor(drizzleClient, appId)
+    if (state)
+      return (await state.appById(actions)) as { owner_org: string, plan_valid: boolean } | null
     const planExpression = buildPlanValidationExpression(actions, schema.apps.owner_org)
     const app = await drizzleClient
       .select({
@@ -1866,6 +1865,8 @@ export async function getCompatibleChannelsPg(
   }
   catch (e: unknown) {
     logPgError(c, 'getCompatibleChannelsPg', e)
+    if (isPluginStateMiss(e))
+      throw e
     return []
   }
 }
@@ -1878,6 +1879,9 @@ export async function queryCompatibleChannelsPg(
   isProd: boolean,
   drizzleClient: ReturnType<typeof getDrizzleClient>,
 ): Promise<CompatibleChannelRow[]> {
+  const state = pluginStateQueriesFor(drizzleClient, appId)
+  if (state)
+    return state.compatibleChannels(platform, isEmulator, isProd)
   const deviceCondition = isEmulator
     ? eq(schema.channels.allow_emulator, true)
     : eq(schema.channels.allow_device, true)

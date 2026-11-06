@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { CacheHelper } from './cache.ts'
 import { withFreshReads } from './hyperdriveFreshRead.ts'
+import { isPluginStateEnabled, isPluginStateServed } from './pluginStateSwitch.ts'
 import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
@@ -111,6 +112,9 @@ const sampledRequests = new WeakMap<object, boolean>()
  * app id + device id only, so a device gets the same answer on every endpoint.
  */
 export function shouldUseUpdatesEdgeCache(c: Context, appId: string, deviceId: string) {
+  // Answered from the KV plugin state: its own cache layer replaces this one.
+  if (isPluginStateServed(c))
+    return false
   const known = sampledRequests.get(c.req.raw)
   if (known !== undefined)
     return known
@@ -127,9 +131,12 @@ export function getUpdatesEdgeCacheTtlSeconds(c: Context) {
   return Math.min(Math.max(raw, UPDATES_EDGE_CACHE_MIN_TTL_SECONDS), UPDATES_EDGE_CACHE_MAX_TTL_SECONDS)
 }
 
-/** Tags to attach to any /updates Cache API entry of this app, or none when the edge cache is off. */
+/**
+ * Tags to attach to any /updates Cache API entry of this app, or none when
+ * neither the edge cache nor the KV plugin state is on (both rely on purges).
+ */
 export function updatesCacheTags(c: Context, appId: string) {
-  return isUpdatesEdgeCacheEnabled(c) ? [updatesAppCacheTag(appId)] : undefined
+  return isUpdatesEdgeCacheEnabled(c) || isPluginStateEnabled(c) ? [updatesAppCacheTag(appId)] : undefined
 }
 
 export interface EdgeCacheLookup<T> {

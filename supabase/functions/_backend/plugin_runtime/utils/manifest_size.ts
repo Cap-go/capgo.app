@@ -1,6 +1,11 @@
 import type { Context } from 'hono'
+import type { PluginStateSession } from './pluginState.ts'
+import type { PluginStateManifestDoc } from './pluginStateFormat.ts'
 import { CacheHelper } from './cache.ts'
 import { closeClient, getPgClient } from './pg.ts'
+import { abandonPluginStateRequest, isPluginStateMiss, startPluginStateRequest } from './pluginState.ts'
+import { evalManifestSizeLookup, evalManifestVersionSizes } from './pluginStateEval.ts'
+import { updatesAppCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask } from './utils.ts'
 import { versionManifestSizeRowsSql } from './version_manifest_sql.ts'
 
@@ -19,7 +24,7 @@ const MANIFEST_SIZES_MAX_CACHED_VERSIONS = 1
 interface ManifestSizeRow {
   file_hash: string
   // pg returns bigint columns as strings at runtime.
-  version_id: number | null
+  version_id: number | string | null
   file_size: number | string | null
 }
 
@@ -111,7 +116,7 @@ export function normalizeManifestSizeFiles(files: unknown): NormalizedManifestSi
 
 export function buildManifestDownloadSizeResult(
   files: NormalizedManifestSizeFile[],
-  rows: Array<{ file_hash: string, version_id: number | null, file_size: number | string | null }>,
+  rows: ManifestSizeRow[],
 ): ManifestDownloadSizeResult {
   const sizesByVersionAndHash = new Map<string, number>()
   const sizesByHash = new Map<string, number>()
@@ -166,6 +171,11 @@ export interface ManifestSizeLookupQuery {
   text: string
   values: [string, string] | [string, string, number | string]
 }
+
+/** A size lookup: its SQL, and its inputs for the KV plugin state. */
+type ManifestSizeQuery
+  = | { text: string, values: unknown[], lookup: { appId: string, versionName: string | null, versionId: number | null, files: Array<{ file_hash: string, version_id: number | null }> } }
+    | { text: string, values: unknown[], versionSizes: { appId: string, versionIds: number[] } }
 
 const MANIFEST_SIZE_REQUESTED_CTE = `
 WITH requested AS MATERIALIZED (
@@ -324,6 +334,65 @@ export function buildCompleteManifestVersionSizes(rows: ManifestSizeRow[]): Map<
   return complete
 }
 
+type ManifestSizeRowsSource = (queries: ManifestSizeQuery[]) => Promise<ManifestSizeRow[][]>
+
+function lookupQuery(appId: string, versionName: string | undefined, versionId: number | undefined, files: NormalizedManifestSizeFile[]): ManifestSizeQuery | null {
+  const query = buildManifestSizeLookupQuery(appId, versionName, versionId, files)
+  if (!query)
+    return null
+  return {
+    ...query,
+    lookup: {
+      appId,
+      versionName: versionId == null && versionName ? versionName : null,
+      versionId: versionId ?? null,
+      files: files.map(file => ({ file_hash: file.file_hash, version_id: file.version_id })),
+    },
+  }
+}
+
+/**
+ * The size lookups over the KV plugin state (pluginStateEval.ts). A bundle
+ * whose manifest was never synced makes the session throw PluginStateMiss:
+ * the caller then runs the SQL.
+ */
+function pluginStateManifestSizeRows(session: PluginStateSession): ManifestSizeRowsSource {
+  return async (queries) => {
+    const results: ManifestSizeRow[][] = []
+    for (const query of queries) {
+      const manifests = new Map<number, PluginStateManifestDoc | null>()
+      const load = async (versionId: number) => {
+        if (!manifests.has(versionId))
+          manifests.set(versionId, await session.manifest(versionId))
+      }
+      if ('versionSizes' in query) {
+        for (const versionId of query.versionSizes.versionIds)
+          await load(versionId)
+        results.push(evalManifestVersionSizes(query.versionSizes.appId, query.versionSizes.versionIds, manifests))
+        continue
+      }
+      const { appId, versionName, versionId, files } = query.lookup
+      for (const file of files) {
+        if (file.version_id != null)
+          await load(file.version_id)
+      }
+      let fallback: Parameters<typeof evalManifestSizeLookup>[2] = null
+      if (versionId != null) {
+        await load(versionId)
+        fallback = { versionId }
+      }
+      else if (versionName != null) {
+        const version = await session.versionByName(versionName)
+        if (version && version.deleted === false)
+          await load(version.id)
+        fallback = { versionName, version }
+      }
+      results.push(evalManifestSizeLookup(appId, files, fallback, manifests))
+    }
+    return results
+  }
+}
+
 async function queryManifestSizeRows(c: Context, queries: Array<{ text: string, values: unknown[] }>): Promise<ManifestSizeRow[][]> {
   const pgClient = await getPgClient(c, true)
   try {
@@ -346,6 +415,32 @@ export async function getManifestDownloadSize(
   versionName: string | undefined,
   versionId: number | undefined,
   filesInput: unknown,
+  deviceId?: string,
+): Promise<ManifestDownloadSizeResult> {
+  const pluginState = await startPluginStateRequest(c, appId, deviceId ?? '')
+  if (pluginState) {
+    try {
+      const result = await computeManifestDownloadSize(c, appId, versionName, versionId, filesInput, pluginStateManifestSizeRows(pluginState), false)
+      c.header('X-Plugin-State', 'kv')
+      return result
+    }
+    catch (error) {
+      if (!isPluginStateMiss(error))
+        throw error
+      abandonPluginStateRequest(c)
+    }
+  }
+  return computeManifestDownloadSize(c, appId, versionName, versionId, filesInput, queries => queryManifestSizeRows(c, queries))
+}
+
+async function computeManifestDownloadSize(
+  c: Context,
+  appId: string,
+  versionName: string | undefined,
+  versionId: number | undefined,
+  filesInput: unknown,
+  rowsSource: ManifestSizeRowsSource,
+  useVersionSizeCache = true,
 ): Promise<ManifestDownloadSizeResult> {
   const files = normalizeManifestSizeFiles(filesInput)
   if (files.length === 0) {
@@ -358,11 +453,13 @@ export async function getManifestDownloadSize(
   }
 
   const scopedVersionIds = [...new Set(files.flatMap(file => file.version_id == null ? [] : [file.version_id]))]
-  if (scopedVersionIds.length === 0 || scopedVersionIds.length > MANIFEST_SIZES_MAX_CACHED_VERSIONS) {
-    const lookup = buildManifestSizeLookupQuery(appId, versionName, versionId, files)
+  // KV manifests carry their current deleted flag. A legacy day-long size map
+  // must not hide a subsequent deletion when this request reads from KV.
+  if (!useVersionSizeCache || scopedVersionIds.length === 0 || scopedVersionIds.length > MANIFEST_SIZES_MAX_CACHED_VERSIONS) {
+    const lookup = lookupQuery(appId, versionName, versionId, files)
     if (!lookup)
       return buildManifestDownloadSizeResult(files, [])
-    const [rows] = await queryManifestSizeRows(c, [lookup])
+    const [rows] = await rowsSource([lookup])
     return buildManifestDownloadSizeResult(files, rows)
   }
 
@@ -384,22 +481,22 @@ export async function getManifestDownloadSize(
       rows.push({ file_hash: fileHash, version_id: id, file_size: fileSize })
   })
 
-  const queries: Array<{ text: string, values: unknown[] }> = []
+  const queries: ManifestSizeQuery[] = []
   if (missingVersionIds.length > 0)
-    queries.push(buildManifestVersionSizesQuery(appId, missingVersionIds))
-  const unscopedLookup = buildManifestSizeLookupQuery(appId, versionName, versionId, files.filter(file => file.version_id == null))
+    queries.push({ ...buildManifestVersionSizesQuery(appId, missingVersionIds), versionSizes: { appId, versionIds: missingVersionIds } })
+  const unscopedLookup = lookupQuery(appId, versionName, versionId, files.filter(file => file.version_id == null))
   if (unscopedLookup)
     queries.push(unscopedLookup)
   if (queries.length === 0)
     return buildManifestDownloadSizeResult(files, rows)
 
-  const results = await queryManifestSizeRows(c, queries)
+  const results = await rowsSource(queries)
   if (missingVersionIds.length > 0) {
     const versionRows = results[0]
     for (const [id, sizes] of buildCompleteManifestVersionSizes(versionRows)) {
       const cacheKey = cacheKeys.get(id)
       if (cacheKey)
-        await backgroundTask(c, helper.putJson(cacheKey, sizes, MANIFEST_SIZES_CACHE_TTL_SECONDS))
+        await backgroundTask(c, helper.putJson(cacheKey, sizes, MANIFEST_SIZES_CACHE_TTL_SECONDS, { tags: [updatesAppCacheTag(appId)] }))
     }
   }
   for (const result of results)
