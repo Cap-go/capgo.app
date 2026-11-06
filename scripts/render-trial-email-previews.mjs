@@ -2,13 +2,18 @@
  * Renders trial recap Bento HTML fixtures to PNG image files for PR screenshots.
  * Run from repo root: node scripts/render-trial-email-previews.mjs
  * Writes to .github/pr-assets/ (for raw.githubusercontent.com links on the PR branch).
+ *
+ * Legacy before screenshots read real Bento export HTML from the agent store
+ * (not committed): /cursor/stores/bot/trial-legacy-bento/2-43142.html and 3-43141.html
  */
-import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, writeFile, access } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')
+
+const legacyBentoDir = '/cursor/stores/bot/trial-legacy-bento'
 
 const fixture = {
   kind: 'trial_usage_recap',
@@ -36,7 +41,6 @@ const fixture = {
   docs_upload_url: 'https://capgo.app/docs/getting-started/deploy/#uploading-a-bundle',
   docs_channels_url: 'https://capgo.app/docs/live-updates/channels/',
   show_successful_updates: true,
-  show_failed_updates: true,
   show_bandwidth: true,
   show_peak_mau: true,
   show_bundles_uploaded: true,
@@ -64,7 +68,6 @@ const lowFixture = {
   apps_count: 1,
   show_pay_as_you_go: true,
   show_successful_updates: false,
-  show_failed_updates: false,
   show_bandwidth: false,
   show_peak_mau: false,
   show_bundles_uploaded: false,
@@ -99,11 +102,34 @@ function liquidReplace(html, details) {
   return out
 }
 
+/** Minimal document wrapper so Playwright lays out email fragments like a narrow viewport. */
+function wrapFragment(bodyHtml) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+${bodyHtml}
+</body>
+</html>`
+}
+
+async function readLegacyFragment(filename) {
+  const path = join(legacyBentoDir, filename)
+  await access(path)
+  const raw = await readFile(path, 'utf8')
+  return wrapFragment(raw)
+}
+
 async function main() {
   const { chromium } = await import('@playwright/test')
   const usageTpl = await readFile(join(root, 'supabase/templates/bento/trial_usage_recap_usage.html'), 'utf8')
   const lowTpl = await readFile(join(root, 'supabase/templates/bento/trial_usage_recap_low_usage.html'), 'utf8')
-  const beforeTpl = await readFile(join(root, 'supabase/templates/bento/pr_trial_before_legacy_placeholder.html'), 'utf8')
+
+  const beforeThreeDaysLeft = await readLegacyFragment('2-43142.html')
+  const beforeEndsToday = await readLegacyFragment('3-43141.html')
 
   const usageHtml = liquidReplace(usageTpl, { ...fixture, email_variant: 'usage' })
   const lowHtml = liquidReplace(lowTpl, { ...lowFixture, email_variant: 'low_usage' })
@@ -114,8 +140,10 @@ async function main() {
   const browser = await chromium.launch()
   try {
     for (const [name, html, width] of [
-      ['before-legacy-trial-flow-desktop.png', beforeTpl, 900],
-      ['before-legacy-trial-flow-mobile.png', beforeTpl, 375],
+      ['before-bento-3-days-left-desktop.png', beforeThreeDaysLeft, 900],
+      ['before-bento-3-days-left-mobile.png', beforeThreeDaysLeft, 375],
+      ['before-bento-ends-today-desktop.png', beforeEndsToday, 900],
+      ['before-bento-ends-today-mobile.png', beforeEndsToday, 375],
       ['trial-recap-usage-desktop.png', usageHtml, 900],
       ['trial-recap-usage-mobile.png', usageHtml, 375],
       ['trial-recap-low-usage-desktop.png', lowHtml, 900],
@@ -133,9 +161,11 @@ async function main() {
 
   const readme = [
     'Email preview PNGs (Playwright; liquid fixture substitution for new templates):',
-    'Before (legacy Bento trial flow; no HTML in repo):',
-    '- before-legacy-trial-flow-desktop.png',
-    '- before-legacy-trial-flow-mobile.png',
+    'Before (legacy Bento trial emails; HTML from agent store, not in repo):',
+    '- before-bento-3-days-left-desktop.png',
+    '- before-bento-3-days-left-mobile.png',
+    '- before-bento-ends-today-desktop.png',
+    '- before-bento-ends-today-mobile.png',
     'After (new Bento templates):',
     '- trial-recap-usage-desktop.png',
     '- trial-recap-usage-mobile.png',

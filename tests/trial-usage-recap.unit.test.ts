@@ -101,7 +101,6 @@ describe('trial usage recap', () => {
       apps_count: 0,
     } as const
     expect(trialUsageRecapDisplayFlags({ ...baseZeros, successful_updates: 1 }).show_successful_updates).toBe(true)
-    expect(trialUsageRecapDisplayFlags({ ...baseZeros, failed_updates: 1 }).show_failed_updates).toBe(true)
     expect(trialUsageRecapDisplayFlags({ ...baseZeros, bandwidth_bytes: 1n }).show_bandwidth).toBe(true)
     expect(trialUsageRecapDisplayFlags({ ...baseZeros, peak_daily_mau: 1 }).show_peak_mau).toBe(true)
     expect(trialUsageRecapDisplayFlags({ ...baseZeros, bundles_uploaded: 1 }).show_bundles_uploaded).toBe(true)

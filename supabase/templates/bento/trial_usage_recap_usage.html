@@ -30,12 +30,6 @@
                 <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.successful_updates }}</td>
               </tr>
               {% endif %}
-              {% if event.details.show_failed_updates %}
-              <tr>
-                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Failed updates</td>
-                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.failed_updates }}</td>
-              </tr>
-              {% endif %}
               {% if event.details.show_peak_mau %}
               <tr>
                 <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Peak active devices in one day</td>

@@ -32,7 +32,6 @@ export interface TrialUsageRecapDisplayInputs {
 export function trialUsageRecapDisplayFlags(input: TrialUsageRecapDisplayInputs): Pick<
   TrialUsageRecapPayload,
   | 'show_successful_updates'
-  | 'show_failed_updates'
   | 'show_bandwidth'
   | 'show_peak_mau'
   | 'show_bundles_uploaded'
@@ -51,7 +50,6 @@ export function trialUsageRecapDisplayFlags(input: TrialUsageRecapDisplayInputs)
   }
   return {
     show_successful_updates: input.successful_updates > 0,
-    show_failed_updates: input.failed_updates > 0,
     show_bandwidth: bw > 0n,
     show_peak_mau: input.peak_daily_mau > 0,
     show_bundles_uploaded: input.bundles_uploaded > 0,
@@ -109,7 +107,6 @@ export interface TrialUsageRecapPayload {
   docs_upload_url: string
   docs_channels_url: string
   show_successful_updates: boolean
-  show_failed_updates: boolean
   show_bandwidth: boolean
   show_peak_mau: boolean
   show_bundles_uploaded: boolean
