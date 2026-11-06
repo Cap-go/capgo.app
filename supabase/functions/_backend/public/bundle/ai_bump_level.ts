@@ -9,7 +9,7 @@ import { checkPermission } from '../../utils/rbac.ts'
 import { getEnv, isValidAppId } from '../../utils/utils.ts'
 import { extractAiText, parseJsonObjectFromAiText } from '../../utils/workers_ai.ts'
 
-const DEFAULT_BUMP_LEVEL_MODEL = '@cf/moonshotai/kimi-k2.6'
+const DEFAULT_BUMP_LEVEL_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
 const MAX_PATHS_PER_LIST = 200
 const BUMP_LEVELS = new Set<string>(['major', 'minor', 'patch', 'metadata'])
 

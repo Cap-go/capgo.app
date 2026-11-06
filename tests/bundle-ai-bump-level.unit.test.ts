@@ -92,7 +92,7 @@ describe('bundle ai_bump_level', () => {
       reason: 'Added feature files',
     })
     expect(run).toHaveBeenCalledTimes(1)
-    expect(run.mock.calls[0]![0]).toBe('@cf/moonshotai/kimi-k2.6')
+    expect(run.mock.calls[0]![0]).toBe('@cf/deepseek-ai/deepseek-v4.1-flash-1017')
   })
 
   it('returns 502 when AI returns an invalid level', async () => {

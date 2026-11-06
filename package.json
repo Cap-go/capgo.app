@@ -432,7 +432,7 @@
     "vite-plugin-vue-layouts": "0.11.0",
     "vitest": "^4.1.10",
     "vue-tsc": "3.3.11",
-    "wrangler": "^4.145.0",
+    "wrangler": "^4.158.0",
     "yaml": "^2.9.0",
     "zod": "4.5.4",
     "zod-compiler": "^1.15.0"

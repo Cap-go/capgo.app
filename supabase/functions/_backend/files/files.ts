@@ -34,6 +34,13 @@ const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
 const DO_FETCH_RETRY_DELAY_MS = 250
 
+/** Disable runtime DO stub retries so only our replay aware loop counts (Workers runtime default is 4 retries). */
+export const DO_STUB_DISABLE_RUNTIME_RETRY = { retry: { maxRetries: 0 } } as const
+
+export function getAttachmentUploadDurableObjectStub(ns: DurableObjectNamespace, id: DurableObjectId): DurableObjectStub {
+  return ns.get(id, DO_STUB_DISABLE_RUNTIME_RETRY as Parameters<DurableObjectNamespace['get']>[1])
+}
+
 // # test deploy
 
 const ATTACHMENT_PREFIX = 'attachments'
@@ -875,7 +882,7 @@ async function uploadHandler(c: Context) {
     throw simpleError('invalid_bucket_configuration', 'Invalid bucket configuration')
   }
 
-  const handler = durableObjNs.get(durableObjNs.idFromName(normalizedRequestId))
+  const handler = getAttachmentUploadDurableObjectStub(durableObjNs, durableObjNs.idFromName(normalizedRequestId))
   cloudlog({ requestId: c.get('requestId'), message: 'upload handler - forwarding to DO', method: c.req.raw.method, url: c.req.url })
 
   const method = c.req.raw.method
@@ -1416,4 +1423,6 @@ export const filesTestUtils = {
   fetchUploadHandlerWithRetry,
   isRetryableDurableObjectFetchError,
   retryableUploadUnavailableResponse,
+  DO_STUB_DISABLE_RUNTIME_RETRY,
+  getAttachmentUploadDurableObjectStub,
 }

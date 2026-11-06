@@ -34,6 +34,47 @@ import { completeVersionManifest, versionManifestJsonSql, versionManifestRowsSql
  */
 export type PluginPgClient = Client | Pool
 
+function pgAbortRace<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
+  if (signal.aborted)
+    return Promise.reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort)
+      reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+/**
+ * `pg` 8.22 does not take `AbortSignal` on `Client` or `Pool` constructors or on `query`
+ * (verified in node_modules/pg). Race read only Hyperdrive queries with request.signal
+ * so disconnect can drop replica work early without cancelling connect or close paths.
+ */
+/** Hyperdrive read clients only. Used by tests to validate abort racing without bootstrapping Hyperdrive. */
+export function wrapPluginReadOnlyClientForRequestSignal(db: PluginPgClient, signal: AbortSignal): PluginPgClient {
+  const orig = db.query.bind(db) as (...args: unknown[]) => Promise<unknown>
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'query') {
+        return (...args: unknown[]) => pgAbortRace(signal, orig(...args) as Promise<unknown>)
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  }) as PluginPgClient
+}
+
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
 
@@ -424,6 +465,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
   const readOnlyOptions = readOnlyStartupOptions(dbName, readOnly)
+  const readAbortSignal = readOnly ? c.get('pluginReadAbortSignal') : undefined
   const isWorkerd = getRuntimeKey() === 'workerd'
   // Match on the actual connection string (not just databaseSource metadata) so the
   // Hyperdrive Client contract cannot silently become Pool+end() if c.set is missed.
@@ -443,7 +485,8 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     await client.connect()
     skipEndClients.add(client)
     pgClientSources.set(client, dbName)
-    return setPgAccessMode(client, readOnly)
+    const withMode = setPgAccessMode(client, readOnly)
+    return readAbortSignal && readOnly ? wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal) : withMode
   }
 
   const pool = new Pool({
@@ -477,7 +520,8 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   })
 
   pgClientSources.set(pool, dbName)
-  return setPgAccessMode(pool, readOnly)
+  const withMode = setPgAccessMode(pool, readOnly)
+  return readAbortSignal && readOnly ? wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal) : withMode
 }
 
 /**
