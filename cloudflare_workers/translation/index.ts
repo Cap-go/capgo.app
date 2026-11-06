@@ -6,14 +6,14 @@ import { translationStyleGuide } from './style_guides.ts'
 const CACHE_TTL_SECONDS = 5 * 60
 const PENDING_TRANSLATION_STORE_TTL_SECONDS = 60 * 60
 const READY_TRANSLATION_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
-// Picked from a French benchmark against Workers AI models (see the PR introducing it):
-// Gemma 4 drafts with thinking disabled, then DeepSeek V4.1 Flash reviews against the
-// style guide with its reasoning on.
-const DEFAULT_TRANSLATION_MODEL = '@cf/google/gemma-4-26b-a4b-it'
+// Qwen 3.8 27B drafts with thinking disabled (it replaced Gemma 4, created 2026-04-02,
+// once that passed the 5-month model age limit), then DeepSeek V4.1 Flash reviews
+// against the style guide with its reasoning on. Both: no planned deprecation.
+const DEFAULT_TRANSLATION_MODEL = '@cf/qwen/qwen3.8-27b'
 const DEFAULT_TRANSLATION_REVIEW_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
 // Bump when the prompt, style guides or default models change so every locale is
 // translated again instead of serving catalogs made by the previous pipeline.
-const TRANSLATION_PIPELINE_VERSION = 4
+const TRANSLATION_PIPELINE_VERSION = 5
 // Hybrid reasoning models think before answering by default. The first translation
 // pass does not need it (same benchmark score, a fraction of the latency and cost);
 // the optional review pass keeps it, since reviewing without thinking changed nothing.

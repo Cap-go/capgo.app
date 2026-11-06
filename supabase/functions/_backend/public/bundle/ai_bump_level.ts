@@ -7,9 +7,10 @@ import { quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { checkPermission } from '../../utils/rbac.ts'
 import { getEnv, isValidAppId } from '../../utils/utils.ts'
-import { extractAiText, parseJsonObjectFromAiText } from '../../utils/workers_ai.ts'
+import { disableThinkingOptions, extractAiText, parseJsonObjectFromAiText } from '../../utils/workers_ai.ts'
 
-const DEFAULT_BUMP_LEVEL_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
+// Workers AI catalog: created 2026-08-17, no planned deprecation. Override with BUMP_LEVEL_MODEL.
+const DEFAULT_BUMP_LEVEL_MODEL = '@cf/qwen/qwen3.8-27b'
 const MAX_PATHS_PER_LIST = 200
 const BUMP_LEVELS = new Set<string>(['major', 'minor', 'patch', 'metadata'])
 
@@ -126,6 +127,7 @@ export async function aiBumpLevel(
 
   try {
     const result = await ai.run(model, {
+      ...disableThinkingOptions(model),
       temperature: 0,
       max_tokens: 512,
       response_format: {

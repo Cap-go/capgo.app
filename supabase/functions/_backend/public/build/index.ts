@@ -12,6 +12,7 @@ import {
 } from '../../files/util.ts'
 import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { apikeyPrincipal } from '../../utils/pg_rls.ts'
 import { aiAnalyzeDeprecated } from './ai_analyze.ts'
 import { aiAnalyzeStreamBuild } from './ai_analyze_stream.ts'
 import { cancelBuild } from './cancel.ts'
@@ -25,6 +26,7 @@ import {
 } from './credentials.ts'
 import { streamBuildLogs } from './logs.ts'
 import { requestBuild } from './request.ts'
+import { readSimulator, startSimulator, stopSimulator, type SimulatorBody } from './simulator.ts'
 import { startBuild } from './start.ts'
 import { getBuildStatus } from './status.ts'
 import { uploadSupportLogs } from './support_logs.ts'
@@ -39,6 +41,25 @@ app.post('/capacity', async (c) => {
 })
 
 const uploadWriteMiddleware = middlewareKey(['all', 'write'])
+
+// POST /build/simulator - Start a simulator. It uses one builder slot and build minutes.
+app.post('/simulator', middlewareKey(['all', 'write']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return startSimulator(c, body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
+
+app.get('/simulator/:id', middlewareKey(['all', 'read']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return readSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
+
+app.post('/simulator/:id/stop', middlewareKey(['all', 'write']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return stopSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
 
 // POST /build/request - Request a new native build
 app.post('/request', middlewareKey(['all', 'write']), async (c) => {

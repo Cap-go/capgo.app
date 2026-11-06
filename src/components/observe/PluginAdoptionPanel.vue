@@ -12,6 +12,7 @@ import IconExternalLink from '~icons/lucide/external-link'
 import IconLayers from '~icons/lucide/layers'
 import IconRocket from '~icons/lucide/rocket'
 import IconSmartphone from '~icons/lucide/smartphone'
+import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
 import DeviceDataCollectionGate from '~/components/dashboard/DeviceDataCollectionGate.vue'
 import InfoPopover from '~/components/InfoPopover.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
@@ -192,6 +193,13 @@ watch(packageId, async () => {
                   }) }}
                 </template>
               </p>
+              <ChangelogUpdateBadge
+                v-if="recommendation.needsUpdate && recommendation.recommendedVersion"
+                class="mt-2"
+                product="updater"
+                :current="recommendation.dominantVersion"
+                :latest="recommendation.recommendedVersion"
+              />
               <p v-if="recommendation.behindDevices > 0" class="mt-1 text-sm text-slate-600 dark:text-slate-300">
                 {{ t('native-observe-plugin-behind-stats', {
                   count: formatCount(recommendation.behindDevices),

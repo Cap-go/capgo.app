@@ -6,6 +6,7 @@ import AppPageNotFound from '~/components/dashboard/AppPageNotFound.vue'
 import BuildChartControls from '~/components/dashboard/BuildChartControls.vue'
 import BuildStatsCard from '~/components/dashboard/BuildStatsCard.vue'
 import BuildTimeCard from '~/components/dashboard/BuildTimeCard.vue'
+import SimulatorSessionCard from '~/components/dashboard/SimulatorSessionCard.vue'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
@@ -101,6 +102,7 @@ watchEffect(async () => {
             </div>
           </div>
 
+          <SimulatorSessionCard v-if="id" v-show="!showingBuildSteps" :key="id" :app-id="id" />
           <BuildTable :app-id="id" @update:showing-steps="showingBuildSteps = $event" />
         </div>
       </div>

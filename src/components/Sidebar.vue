@@ -31,8 +31,8 @@ onClickOutside(sidebar, () => emit('closeSidebar'))
 // Group destinations the way capgo.app groups products: where you work first,
 // then help and community links that open outside the console.
 const navGroups = computed(() => [
-  { key: 'workspace', label: 'section-group-workspace', tabs: tabs.value.filter(tab => !tab.redirect) },
-  { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect) },
+  { key: 'workspace', label: 'section-group-workspace', tabs: tabs.value.filter(tab => !tab.redirect && tab.group !== 'help') },
+  { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect || tab.group === 'help') },
 ].filter(group => group.tabs.length))
 </script>
 

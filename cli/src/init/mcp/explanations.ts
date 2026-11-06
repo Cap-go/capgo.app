@@ -5,6 +5,14 @@ const FALLBACK = [
   'If you tell me which part is unclear, I can explain it in more detail.',
 ].join(' ')
 
+export const BUNDLE_ENCRYPTION_GUIDANCE = [
+  'Recommend "skip" for most apps, including public-content apps such as quotes, news, and catalogs.',
+  'Bundle encryption protects the shipped JavaScript, HTML, CSS, and bundled assets. It does not encrypt API traffic, databases, or on-device user data, and must not be used to hide embedded secrets.',
+  'An app handling sensitive data at runtime is not by itself a reason to enable bundle encryption.',
+  'Recommend "enable" only when the user explicitly requests it or a concrete security or compliance requirement calls for end-to-end encrypted bundle delivery, for example to protect proprietary code or licensed assets.',
+  'Enabling it requires private-key backup, key configuration for CI uploads, and a native rebuild to ship the public key.',
+].join(' ')
+
 const EXPLANATIONS: Record<string, string> = {
   'no-capacitor-project': 'WHAT: We could not find a Capacitor app in this folder.\nWHY: Capgo OTA onboarding needs a Capacitor project with an app id in capacitor.config.\nWHAT TO DO: Run this from your app directory, or run `npx cap init` first, then start again.',
   'login-required': 'WHAT: You need to be logged into Capgo before we can register your app and upload bundles.\nWHY: Capgo stores apps and channels against your account.\nWHAT TO DO: Run `npx @capgo/cli@latest login` in your terminal. Do not paste your API key into chat.',
@@ -13,7 +21,7 @@ const EXPLANATIONS: Record<string, string> = {
   'add-channel': 'WHAT: Create the default release channel (usually "production").\nWHY: Channels control which devices receive which OTA bundles.\nWHAT TO DO: Wait — this step runs automatically.',
   'install-updater': 'WHAT: Install @capgo/capacitor-updater and configure capacitor.config for Capgo.\nWHY: The native app needs the updater plugin to download and apply OTA bundles.\nWHAT TO DO: Wait — this step runs automatically.',
   'add-integration-code': 'WHAT: Add CapacitorUpdater.notifyAppReady() to your app entry file.\nWHY: Without this call the plugin cannot confirm the bundle started correctly.\nWHAT TO DO: Wait — this step runs automatically.',
-  'setup-encryption': 'WHAT: Choose whether to enable end-to-end bundle encryption.\nWHY: Encryption protects bundle contents in transit and at rest on Capgo.\nOPTIONS: "enable" generates keys and encrypts uploads; "skip" uses standard signing only.\nWHAT TO DO: Pick based on whether your app handles sensitive data.',
+  'setup-encryption': `WHAT: Choose whether to enable end-to-end bundle encryption.\nWHY: ${BUNDLE_ENCRYPTION_GUIDANCE}\nOPTIONS: "skip" continues without generating encryption keys; "enable" generates keys and encrypts uploads.\nWHAT TO DO: Use the app purpose and bundle contents already known from the conversation or project context to explain your recommendation. Do not ask the user to repeat known app details. If a confidentiality requirement is unclear, ask one focused question about it. Present the recommendation and wait for the user's choice. Never enable encryption just as a conservative default.`,
   'select-platform': 'WHAT: Choose iOS or Android for the guided device validation.\nWHY: Native build and run commands differ per platform.\nOPTIONS: "ios" or "android".\nWHAT TO DO: Pick the platform you can run on a device or simulator now.',
   'build-project': 'WHAT: Build web assets and sync them into the native project.\nWHY: The device needs a baseline native build before we can test OTA.\nWHAT TO DO: Wait — this step runs automatically.',
   'run-on-device': 'WHAT: Launch the app on a real device or simulator.\nWHY: OTA updates apply inside a running native shell — we need the baseline app installed first.\nWHAT TO DO: Run the command shown, confirm the app opens, then continue.',
