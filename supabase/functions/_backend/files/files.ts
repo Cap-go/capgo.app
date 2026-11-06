@@ -903,6 +903,7 @@ async function uploadHandler(c: Context) {
     // HEAD must not forward a request body and must preserve the verb (Hono/tiny maps HEAD to GET).
     method,
     headers,
+    signal: c.req.raw.signal,
   }
   const uploadBody = getForwardedUploadBody(c.req.raw)
   if (uploadBody != null) {

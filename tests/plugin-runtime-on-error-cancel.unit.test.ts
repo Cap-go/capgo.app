@@ -51,4 +51,40 @@ describe('plugin_runtime onError client cancel', () => {
     })
     expect(cloudlogMock).toHaveBeenCalledWith(expect.objectContaining({ kind: 'request_cancelled' }))
   })
+
+  it('does not return 499 for AbortError when request.signal is not aborted', async () => {
+    const { onError } = await import('../supabase/functions/_backend/plugin_runtime/utils/on_error.ts')
+    const response = await onError('plugin')(
+      Object.assign(new Error('request aborted'), { name: 'AbortError' }),
+      {
+        get: (key: string) => key === 'requestId' ? 'rid' : undefined,
+        json: (body: unknown, status: number) => ({ body, status }),
+        req: {
+          method: 'GET',
+          url: 'https://example.com/updates',
+          raw: new Request('https://example.com/updates'),
+        },
+      } as any,
+    )
+    expect(response.status).not.toBe(499)
+  })
+
+  it('does not return 499 for non-abort error when request.signal is aborted', async () => {
+    const { onError } = await import('../supabase/functions/_backend/plugin_runtime/utils/on_error.ts')
+    const controller = new AbortController()
+    controller.abort()
+    const response = await onError('plugin')(
+      new Error('upstream failure'),
+      {
+        get: (key: string) => key === 'requestId' ? 'rid' : undefined,
+        json: (body: unknown, status: number) => ({ body, status }),
+        req: {
+          method: 'GET',
+          url: 'https://example.com/updates',
+          raw: new Request('https://example.com/updates', { signal: controller.signal }),
+        },
+      } as any,
+    )
+    expect(response.status).not.toBe(499)
+  })
 })

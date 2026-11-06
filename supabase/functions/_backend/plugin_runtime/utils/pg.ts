@@ -13,7 +13,7 @@ import { getClientDbRegionSB } from './geolocation.ts'
 import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { isDatabaseOriginError, isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
-import { configureTransactionAccessMode, readOnlyStartupOptions, setPgAccessMode } from './pg_transaction_mode.ts'
+import { configureTransactionAccessMode, inheritPgAccessMode, readOnlyStartupOptions, setPgAccessMode } from './pg_transaction_mode.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
 import { withOptionalManifestSelect } from './queryHelpers.ts'
@@ -531,7 +531,14 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     skipEndClients.add(client)
     pgClientSources.set(client, dbName)
     const withMode = setPgAccessMode(client, readOnly)
-    return readAbortSignal && readOnly ? wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal) : withMode
+    if (readAbortSignal && readOnly) {
+      const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal)
+      if (skipEndClients.has(withMode))
+        skipEndClients.add(wrapped)
+      inheritPgAccessMode(withMode, wrapped)
+      return wrapped
+    }
+    return withMode
   }
 
   const pool = new Pool({
@@ -566,7 +573,12 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
 
   pgClientSources.set(pool, dbName)
   const withMode = setPgAccessMode(pool, readOnly)
-  return readAbortSignal && readOnly ? wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal) : withMode
+  if (readAbortSignal && readOnly) {
+    const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal)
+    inheritPgAccessMode(withMode, wrapped)
+    return wrapped
+  }
+  return withMode
 }
 
 /**
