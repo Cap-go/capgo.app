@@ -71,7 +71,8 @@ export const CHANGELOG_PRODUCTS: ChangelogProduct[] = ['console', 'cli', 'update
 
 const RELEASES_CACHE_MS = 5 * 60 * 1000
 const releasesCache = new Map<string, { at: number, promise: Promise<ChangelogReleasesResponse | null> }>()
-let pluginsPromise: Promise<ChangelogPlugin[]> | null = null
+const PLUGINS_CACHE_MS = 30 * 60 * 1000
+let pluginsCache: { at: number, promise: Promise<ChangelogPlugin[]> } | null = null
 const digestCache = new Map<string, Promise<ChangelogDigest | null>>()
 
 export function isChangelogProduct(value: unknown): value is ChangelogProduct {
@@ -109,13 +110,17 @@ export function pluginRepoFromPackage(name: string, plugins: ChangelogPlugin[] =
   return plugins.find(plugin => plugin.name === name)?.repo ?? null
 }
 
-export function changelogLocation(product: ChangelogProduct, options: { since?: string | null, repo?: string | null } = {}): RouteLocationRaw {
+export function changelogLocation(product: ChangelogProduct, options: { since?: string | null, repo?: string | null, to?: string | null } = {}): RouteLocationRaw {
   const query: Record<string, string> = { product }
   if (options.repo)
     query.repo = options.repo
   const since = cleanVersion(options.since)
   if (since)
     query.since = since
+  // Upper bound of the upgrade, e.g. the latest updater for the app's Capacitor major (not the overall latest).
+  const to = cleanVersion(options.to)
+  if (to)
+    query.to = to
   return { path: '/changelog', query }
 }
 
@@ -154,15 +159,18 @@ export async function fetchLatestVersion(product: ChangelogProduct, repo?: strin
 }
 
 export function fetchPlugins(): Promise<ChangelogPlugin[]> {
-  pluginsPromise ??= invokeCapgoApi<{ plugins: ChangelogPlugin[] }>('private/changelog/plugins', { method: 'GET' })
+  if (pluginsCache && Date.now() - pluginsCache.at < PLUGINS_CACHE_MS)
+    return pluginsCache.promise
+  const promise = invokeCapgoApi<{ plugins: ChangelogPlugin[] }>('private/changelog/plugins', { method: 'GET' })
     .then(({ data, error }) => {
       if (error || !data) {
-        pluginsPromise = null
+        pluginsCache = null
         return []
       }
       return data.plugins
     })
-  return pluginsPromise
+  pluginsCache = { at: Date.now(), promise }
+  return promise
 }
 
 export function fetchDigest(input: {
@@ -183,11 +191,10 @@ export function fetchDigest(input: {
     // Workers AI can take a few seconds; never retry a paid call.
     retries: 0,
   }).then(({ data, error }) => {
-    if (error || !data) {
+    // Keep only AI digests: a fallback (AI down, rate limited) should be retried on the next open.
+    if (error || !data || !data.aiGenerated)
       digestCache.delete(key)
-      return null
-    }
-    return data
+    return error ? null : data
   })
   digestCache.set(key, promise)
   return promise
@@ -200,6 +207,9 @@ export function filterReleases(
   types: Set<ChangelogSectionType>,
 ): ChangelogRelease[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  // Without filters every release stays, even one with no parsed notes (it shows its version and GitHub link).
+  if (!words.length && types.size === 0)
+    return releases
   return releases.flatMap((release) => {
     const versionHit = words.length > 0 && words.every(word => release.version.includes(word))
     const sections = release.sections

@@ -159,6 +159,7 @@ declare module 'vue' {
     SearchInput: typeof import('./components/forms/SearchInput.vue')['default']
     SectionIntro: typeof import('./components/SectionIntro.vue')['default']
     Sidebar: typeof import('./components/Sidebar.vue')['default']
+    SimulatorSessionCard: typeof import('./components/dashboard/SimulatorSessionCard.vue')['default']
     Spinner: typeof import('./components/Spinner.vue')['default']
     SsoConfiguration: typeof import('./components/organizations/SsoConfiguration.vue')['default']
     SsoRoleMappingDialog: typeof import('./components/organizations/SsoRoleMappingDialog.vue')['default']

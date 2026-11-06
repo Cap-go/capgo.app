@@ -4195,7 +4195,7 @@
   "changelog-load-failed": "Release notes could not be loaded. Try again in a moment.",
   "changelog-no-match": "No change matches these filters.",
   "changelog-empty": "No release notes yet.",
-  "changelog-up-to-date": "You are on v{version}, the latest version.",
+  "changelog-up-to-date": "No release after v{version} in these release notes.",
   "changelog-up-to-date-short": "Up to date",
   "changelog-update-available": "v{version} available · What's new",
   "changelog-type-added": "New",
@@ -4224,5 +4224,6 @@
   "console-update-description": "You are on v{current}. Reload to get the latest console. Your work on this page is not saved.",
   "console-update-later": "Later",
   "console-update-reload": "Reload now",
-  "console-updated-toast": "Capgo was updated to v{version}."
+  "console-updated-toast": "Capgo was updated to v{version}.",
+  "changelog-history-truncated": "Only the most recent releases are listed here. Older history is on"
 }

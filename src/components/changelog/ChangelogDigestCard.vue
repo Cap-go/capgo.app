@@ -43,7 +43,10 @@ const countBadges = computed(() => {
     .map(type => ({ type, count: counts[type] }))
 })
 
+let requestId = 0
+
 async function load() {
+  const current = ++requestId
   loading.value = true
   failed.value = false
   const result = await fetchDigest({
@@ -54,13 +57,16 @@ async function load() {
     locale: String(locale.value),
     context: props.context,
   })
+  // A newer request (locale, range or setup changed) owns the card now.
+  if (current !== requestId)
+    return
   digest.value = result
   failed.value = !result
   loading.value = false
   emit('loaded', result)
 }
 
-watch(() => [props.product, props.repo, props.fromVersion, props.toVersion, locale.value], load, { immediate: true })
+watch(() => [props.product, props.repo, props.fromVersion, props.toVersion, locale.value, JSON.stringify(props.context ?? {})], load, { immediate: true })
 
 async function copyCommand() {
   if (!props.upgradeCommand)

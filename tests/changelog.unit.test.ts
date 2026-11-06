@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { parseAiDigest } from '../supabase/functions/_backend/private/changelog.ts'
+import { aiDigest, parseAiDigest } from '../supabase/functions/_backend/private/changelog.ts'
 import {
   buildFallbackDigest,
   changelogSource,
@@ -43,6 +43,24 @@ describe('parseReleaseBody', () => {
     expect(sections.map(section => section.type)).toEqual(['security', 'added', 'fixed'])
     expect(sections.find(section => section.type === 'added')?.items).toHaveLength(2)
     expect(JSON.stringify(sections)).not.toContain('Full Changelog')
+  })
+
+  it('classifies combined headings by their most specific word', () => {
+    expect(parseReleaseBody('## Security fixes\n- Masked keys')[0].type).toBe('security')
+    expect(parseReleaseBody('## Breaking changes\n- Dropped v5')[0].type).toBe('removed')
+  })
+
+  it('keeps changes after a separator and stops only at the compare footer', () => {
+    const body = '## Added\n- First\n\n---\n\n## Fixed\n- See the full changelog policy\n\n🔗 **Full Changelog**: https://github.com/Cap-go/x/compare/1.0.0...1.1.0\n- not parsed'
+    expect(parseReleaseBody(body)).toEqual([
+      { type: 'added', items: ['First'] },
+      { type: 'fixed', items: ['See the full changelog policy'] },
+    ])
+  })
+
+  it('attaches indented continuation lines to their bullet', () => {
+    const body = '## Changed\n- Downloads now require HTTPS.\n  If you serve plain HTTP, set `httpsOnly: false`.\n- Next item'
+    expect(parseReleaseBody(body)[0].items).toEqual(['Downloads now require HTTPS. If you serve plain HTTP, set `httpsOnly: false`.', 'Next item'])
   })
 
   it('handles empty bodies and unknown headings', () => {
@@ -127,6 +145,12 @@ describe('buildFallbackDigest', () => {
       .toEqual(['Dropped Node 18', 'You must now set httpsOnly to keep HTTP updates'])
   })
 
+  it('never lets setup-matching features push out security or breaking entries', () => {
+    const notes = normalizeReleases([release('capgo-23.0.0', `## Added\n${Array.from({ length: 8 }, (_, i) => `- iOS feature ${i}`).join('\n')}\n## Security\n- Patched token leak`)], 'capgo-')
+    const digest = buildFallbackDigest('console', 'capgo.app', notes, '22.0.0', null, { platforms: ['ios'], features: [] })
+    expect(digest.highlights[0]).toMatchObject({ type: 'security', title: 'Patched token leak' })
+  })
+
   it('says up to date when nothing is in range', () => {
     expect(buildFallbackDigest('cli', 'capgo.app', [], '8.99.2', null, { platforms: [], features: [] }).headline).toMatch(/latest/)
   })
@@ -190,6 +214,34 @@ describe('parseAiDigest', () => {
   })
 })
 
+describe('aiDigest', () => {
+  const fakeContext = (response: unknown) => ({
+    env: { AI: { run: vi.fn(async () => response) } },
+    get: () => 'test',
+  }) as never
+
+  it('keeps required actions and breaking entries of releases cut from the prompt', async () => {
+    const long = '- '.concat('x'.repeat(390))
+    const releases = normalizeReleases([
+      release('capgo-23.0.0', `## Added\n${Array.from({ length: 30 }, () => long).join('\n')}`),
+      release('capgo-22.31.0', '## Breaking\n- Dropped the v1 API'),
+    ], 'capgo-')
+    const context = { platforms: [], features: [] }
+    const fallback = buildFallbackDigest('console', 'capgo.app', releases, '22.30.0', null, context)
+    const digest = await aiDigest(fakeContext({ response: { headline: 'h', highlights: [{ title: 'Big feature', detail: '', type: 'added', version: '23.0.0', impact: 'medium', relevant: false }], actionRequired: [] } }), fallback, releases, context, 'en')
+    expect(digest.aiGenerated).toBe(true)
+    expect(digest.actionRequired).toContain('Dropped the v1 API')
+    expect(digest.highlights.map(h => h.title)).toContain('Dropped the v1 API')
+  })
+
+  it('falls back when the model returns no highlights', async () => {
+    const releases = normalizeReleases([release('capgo-23.0.0')], 'capgo-')
+    const context = { platforms: [], features: [] }
+    const fallback = buildFallbackDigest('console', 'capgo.app', releases, '22.30.0', null, context)
+    expect((await aiDigest(fakeContext({ response: { headline: 'h', highlights: [], actionRequired: [] } }), fallback, releases, context, 'en')).aiGenerated).toBe(false)
+  })
+})
+
 describe('console changelog helpers', async () => {
   const { filterReleases, highlightParts, inlineMarkdownParts, isNewerVersion, releasesSince, changelogLocationForPackage } = await import('../src/services/changelog')
   const releases = normalizeReleases([release('capgo-22.30.0'), release('capgo-22.29.4', '## Fixed\n- Fixed Android splash')], 'capgo-')
@@ -199,6 +251,8 @@ describe('console changelog helpers', async () => {
     expect(filterReleases(releases, 'android', new Set(['fixed'])).flatMap(r => r.sections.flatMap(s => s.items))).toHaveLength(2)
     expect(filterReleases(releases, '22.29.4', new Set())[0].sections[0].items).toEqual(['Fixed Android splash'])
     expect(filterReleases(releases, '', new Set(['security'])).map(r => r.version)).toEqual(['22.30.0'])
+    const empty = [...releases, { version: '22.29.0', tag: 'capgo-22.29.0', date: '', url: '', sections: [] }]
+    expect(filterReleases(empty, '', new Set()).map(r => r.version)).toContain('22.29.0')
   })
 
   it('compares versions and scopes releases to the user version', () => {
@@ -214,10 +268,12 @@ describe('console changelog helpers', async () => {
     expect(highlightParts('a+b', '+')[1]).toEqual({ text: '+', match: true })
   })
 
-  it('routes packages to the right changelog tab', () => {
+  it('routes packages to the right changelog tab', async () => {
     const plugins = [{ name: '@capgo/capacitor-nfc', repo: 'capacitor-nfc', description: '', version: '8.3.6', date: '' }]
     expect(changelogLocationForPackage('@capgo/capacitor-updater', '^8.40.0', plugins)).toEqual({ path: '/changelog', query: { product: 'updater', since: '8.40.0' } })
     expect(changelogLocationForPackage('@capgo/capacitor-nfc', '8.0.0', plugins)).toEqual({ path: '/changelog', query: { product: 'plugin', repo: 'capacitor-nfc', since: '8.0.0' } })
     expect(changelogLocationForPackage('left-pad', '1.0.0', plugins)).toBeNull()
+    const { changelogLocation } = await import('../src/services/changelog')
+    expect(changelogLocation('updater', { since: '7.30.0', to: '7.40.1' })).toEqual({ path: '/changelog', query: { product: 'updater', since: '7.30.0', to: '7.40.1' } })
   })
 })

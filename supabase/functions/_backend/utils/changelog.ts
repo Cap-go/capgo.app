@@ -68,16 +68,17 @@ export function sectionTypeFromHeading(heading: string): ChangelogSectionType | 
   const normalized = heading.toLowerCase().replace(/[^a-z\s]/g, ' ').trim()
   if (!normalized || normalized === 'changelog')
     return null
-  if (/\b(added|new|features?)\b/.test(normalized))
-    return 'added'
-  if (/\b(fixed|fix|fixes|bug)\b/.test(normalized))
-    return 'fixed'
+  // Most specific first: "Security fixes" is security, "Breaking changes" is not "changed".
   if (/\bsecurity\b/.test(normalized))
     return 'security'
   if (/\b(removed|breaking)\b/.test(normalized))
     return 'removed'
   if (/\bdeprecat/.test(normalized))
     return 'deprecated'
+  if (/\b(added|new|features?)\b/.test(normalized))
+    return 'added'
+  if (/\b(fixed|fix|fixes|bug)\b/.test(normalized))
+    return 'fixed'
   if (/\b(changed|improved|improvements?|performance|updated?)\b/.test(normalized))
     return 'changed'
   return 'other'
@@ -97,9 +98,14 @@ function headingText(line: string): string | null {
   return text.startsWith(' ') ? text.trim() : null
 }
 
-/** Footer: a "---" rule then the "Full Changelog" compare link. */
+/** Footer: the "Full Changelog: …/compare/a...b" link GitHub release notes end with. */
 function isFooter(line: string) {
-  return /^-{3,}$/.test(line) || line.toLowerCase().includes('full changelog')
+  const lower = line.toLowerCase()
+  return lower.includes('full changelog') && lower.includes('/compare/')
+}
+
+function isSeparator(line: string) {
+  return /^(?:-{3,}|\*{3,}|_{3,})$/.test(line)
 }
 
 /** Parse one release body into typed sections; unknown prose lands in "other". */
@@ -108,21 +114,36 @@ export function parseReleaseBody(body: string | null | undefined): ChangelogSect
     return []
   const sections = new Map<ChangelogSectionType, string[]>()
   let current: ChangelogSectionType = 'other'
-  for (const line of body.split(/\r?\n/).map(raw => raw.trim())) {
+  // Set while the previous line was a bullet: indented lines that follow continue it.
+  let lastItems: string[] | null = null
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim()
     if (isFooter(line))
       break
+    if (!line || isSeparator(line)) {
+      lastItems = null
+      continue
+    }
     const heading = headingText(line)
     if (heading !== null) {
       current = sectionTypeFromHeading(heading) ?? current
+      lastItems = null
       continue
     }
-    const item = BULLET.test(line) ? cleanItem(line) : ''
+    if (!BULLET.test(line)) {
+      // e.g. a migration instruction wrapped onto an indented line under its bullet.
+      if (lastItems?.length && /^\s/.test(raw))
+        lastItems[lastItems.length - 1] = `${lastItems.at(-1)} ${line}`.slice(0, MAX_ITEM_LENGTH)
+      continue
+    }
+    const item = cleanItem(line)
     if (!item)
       continue
     const items = sections.get(current) ?? []
     if (items.length < MAX_ITEMS_PER_SECTION)
       items.push(item)
     sections.set(current, items)
+    lastItems = items
   }
   return SECTION_ORDER
     .filter(type => sections.get(type)?.length)
@@ -306,7 +327,16 @@ function rankHighlights(releases: ChangelogRelease[], needles: string[]) {
       }
     }
   }
-  return scored.toSorted((a, b) => b.score - a.score).map(({ score: _score, ...highlight }) => highlight)
+  // Security and breaking entries always outrank features, even ones that match the developer's setup.
+  const tier = (highlight: DigestHighlight) => (highlight.impact === 'high' ? 1 : 0)
+  return scored
+    .toSorted((a, b) => tier(b) - tier(a) || b.score - a.score)
+    .map(({ score: _score, ...highlight }) => highlight)
+}
+
+/** High-impact (security/breaking) highlights only, ranked; used to keep them when the AI never saw a release. */
+export function highImpactHighlights(releases: ChangelogRelease[], context: ChangelogDigestContext) {
+  return rankHighlights(releases, [...context.platforms, ...context.features]).filter(h => h.impact === 'high')
 }
 
 function fallbackHeadline(counts: Record<ChangelogSectionType, number>, total: number, fromVersion: string | null) {

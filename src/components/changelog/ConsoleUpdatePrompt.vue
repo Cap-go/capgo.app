@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -63,7 +63,9 @@ const pendingVersion = ref<string | null>(null)
 async function openUpdateDialog(version: string) {
   // DialogV2 is a single shared dialog: never replace one the user is answering; show ours once it closes.
   if (dialogStore.showDialog) {
-    pendingVersion.value = version
+    // Our own dialog is already up (e.g. a check on tab focus): nothing to queue.
+    if (dialogStore.dialogOptions?.id !== DIALOG_ID)
+      pendingVersion.value = version
     return
   }
   pendingVersion.value = null
@@ -119,11 +121,21 @@ function announceWhatsNew() {
   })
 }
 
+let queuedTimer: ReturnType<typeof setTimeout> | undefined
+
 watch(() => dialogStore.showDialog, (open) => {
   const version = pendingVersion.value
-  if (!open && version)
-    setTimeout(() => void openUpdateDialog(version), 400)
+  if (open || !version)
+    return
+  clearTimeout(queuedTimer)
+  queuedTimer = setTimeout(() => {
+    pendingVersion.value = null
+    if (dismissedVersion() !== version)
+      void openUpdateDialog(version)
+  }, 400)
 })
+
+onBeforeUnmount(() => clearTimeout(queuedTimer))
 
 onMounted(() => {
   announceWhatsNew()

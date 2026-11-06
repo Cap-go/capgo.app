@@ -4223,5 +4223,6 @@
   "console-update-description": "Used in Capgo web console areas: components/changelog, pages. Role: changelog / what's new UI text for the console, CLI, updater and plugin release notes. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "console-update-later": "Button that dismisses the new console version modal for now. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "console-update-reload": "Button that reloads the page to load the newer console version. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "console-updated-toast": "Used in Capgo web console areas: components/changelog, pages. Role: changelog / what's new UI text for the console, CLI, updater and plugin release notes. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "console-updated-toast": "Used in Capgo web console areas: components/changelog, pages. Role: changelog / what's new UI text for the console, CLI, updater and plugin release notes. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-history-truncated": "Used in Capgo web console areas: pages. Role: notice that older release notes are not loaded; a 'GitHub' link follows the sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

@@ -7,6 +7,7 @@ import { CacheHelper } from '../utils/cache.ts'
 import {
   buildFallbackDigest,
   changelogSource,
+  highImpactHighlights,
   requiredActions,
   isChangelogProduct,
   normalizeReleases,
@@ -17,6 +18,7 @@ import {
 import { quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
+import { format as formatSemver, tryParse as parseSemver } from '@std/semver'
 import { getEnv } from '../utils/utils.ts'
 import { extractAiText, parseJsonObjectFromAiText, recordOf } from '../utils/workers_ai.ts'
 
@@ -38,7 +40,9 @@ const MAX_DIGEST_RELEASES = 80
 // request (reasoning_effort: none) so the whole token budget goes to the summary and the modal stays fast.
 const DEFAULT_CHANGELOG_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
 const LOCALE_PATTERN = /^[a-z]{2}(?:-[a-z0-9]{2,4})?$/i
-const VERSION_PATTERN = /^v?\d+\.\d+\.\d+(?:[-+][\w.]+)?$/
+// Each AI digest costs Workers AI quota shared by the whole account; cached digests are free.
+const AI_DIGESTS_PER_USER_PER_HOUR = 20
+const AI_QUOTA_CACHE_PATH = '/private/changelog/ai-quota'
 const SECTION_TYPES = new Set<ChangelogSectionType>(['added', 'changed', 'fixed', 'security', 'removed', 'deprecated', 'other'])
 const IMPACTS = new Set<DigestImpact>(['high', 'medium', 'low'])
 
@@ -75,7 +79,13 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
   // Pages are read one by one on purpose: we stop at the first short page instead of firing every request.
   for (let page = 1; page <= maxPages; page++) {
     const url = `https://api.github.com/repos/${GITHUB_ORG}/${encodeURIComponent(source.repo)}/releases?per_page=${GITHUB_PAGE_SIZE}&page=${page}`
-    const response = await fetch(url, { headers: githubHeaders(c) }) // NOSONAR: sequential pagination, see above
+    const response = await fetch(url, { headers: githubHeaders(c) }).catch(() => null) // NOSONAR: sequential pagination, see above
+    if (!response) {
+      // Network failure on a later page: partial history beats an error page.
+      if (raw.length)
+        return { releases: normalizeReleases(raw as never[], source.tagPrefix), truncated: true }
+      throw quickError(502, 'changelog_fetch_failed', 'Could not load release notes', { repo: source.repo })
+    }
     if (response.status === 404)
       throw quickError(404, 'changelog_repo_not_found', 'No releases found for this product', { repo: source.repo })
     if (!response.ok) {
@@ -117,8 +127,9 @@ async function fetchPluginCatalog(): Promise<ChangelogPlugin[]> {
   for (const from of [0, 250]) {
     const response = await fetch( // NOSONAR: the second page is only needed when the first one is full
 `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent('@capgo/capacitor')}&size=250&from=${from}`)
+    // A failed page must not be cached as the catalog for hours: fail so the next request retries.
     if (!response.ok)
-      break
+      throw new Error(`npm search failed: HTTP ${response.status}`)
     const json = await response.json() as NpmSearchResponse
     for (const entry of json.objects ?? []) {
       const pkg = entry.package
@@ -136,7 +147,7 @@ async function fetchPluginCatalog(): Promise<ChangelogPlugin[]> {
       })
     }
   }
-  return [...plugins.values()].sort((a, b) => a.name.localeCompare(b.name))
+  return [...plugins.values()].toSorted((a, b) => a.name.localeCompare(b.name))
 }
 
 export async function getPluginCatalog(c: Context): Promise<ChangelogPlugin[]> {
@@ -246,7 +257,7 @@ const PRODUCT_LABELS: Record<ChangelogProduct, string> = {
   plugin: 'a Capgo Capacitor plugin',
 }
 
-async function aiDigest(
+export async function aiDigest(
   c: Context<MiddlewareKeyVariables>,
   fallback: ChangelogDigest,
   releases: ChangelogRelease[],
@@ -303,11 +314,13 @@ async function aiDigest(
       relevant: highlight.relevant && needles.some(needle => `${highlight.title} ${highlight.detail}`.toLowerCase().includes(needle)),
     }))
     // Releases that did not fit the prompt budget never reached the model: keep their required actions
-    // and security/breaking entries from the deterministic digest so nothing important is dropped.
+    // and security/breaking entries from the deterministic digest, in reserved slots, so nothing important is dropped.
     const omitted = releases.filter(release => !prompt.included.has(release.version))
-    const omittedHighlights = fallback.highlights.filter(h => !prompt.included.has(h.version) && h.impact === 'high')
-    const actionRequired = [...new Set([...parsed.actionRequired, ...requiredActions(omitted)])].slice(0, 6)
-    return { ...fallback, ...parsed, highlights: [...highlights, ...omittedHighlights].slice(0, 8), actionRequired, aiGenerated: true }
+    const reserved = highImpactHighlights(omitted, context).slice(0, 2)
+    // The model may drop a required step it saw: when it returns none but the notes have some, keep the notes' own.
+    const seenActions = parsed.actionRequired.length ? [] : requiredActions(releases.filter(release => prompt.included.has(release.version)))
+    const actionRequired = [...new Set([...parsed.actionRequired, ...seenActions, ...requiredActions(omitted)])].slice(0, 6)
+    return { ...fallback, ...parsed, highlights: [...highlights.slice(0, 8 - reserved.length), ...reserved], actionRequired, aiGenerated: true }
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'changelog digest AI failed', product: fallback.product, repo: fallback.repo, error: serializeError(error) })
@@ -338,16 +351,44 @@ app.get('/plugins', middlewareAuth, async (c) => {
 
 // "What's new since my version": a short, Workers AI tailored summary of every release in range.
 app.post('/digest', middlewareAuth, async (c) => {
-  const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+  const raw = await c.req.json<unknown>().catch(() => null)
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
   return c.json(await changelogDigest(c, body))
 })
 
+/** Strict SemVer bound: undefined when absent, null when supplied but invalid. */
+function versionBound(value: unknown): string | null | undefined {
+  if (value === undefined || value === null || value === '')
+    return undefined
+  if (typeof value !== 'string')
+    return null
+  const parsed = parseSemver(value.trim().replace(/^v/, ''))
+  return parsed ? formatSemver(parsed) : null
+}
+
+/** Best-effort per-user hourly quota (Cache API, per colo): over it, the caller gets the deterministic digest. */
+async function takeAiQuota(c: Context<MiddlewareKeyVariables>) {
+  const userId = c.get('auth')?.userId
+  if (!userId)
+    return false
+  const cache = new CacheHelper(c)
+  const hour = Math.floor(Date.now() / 3_600_000).toString()
+  const key = cache.buildRequest(AI_QUOTA_CACHE_PATH, { user: userId, hour })
+  const used = (await cache.matchJson<{ count: number }>(key, { timeoutMs: CACHE_TIMEOUT_MS }))?.count ?? 0
+  if (used >= AI_DIGESTS_PER_USER_PER_HOUR)
+    return false
+  await cache.putJson(key, { count: used + 1 }, 3600, { timeoutMs: CACHE_TIMEOUT_MS })
+  return true
+}
+
 export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: Record<string, unknown>) {
   const { product, source } = resolveSource(body.product, body.repo)
-  const fromVersion = typeof body.fromVersion === 'string' && VERSION_PATTERN.test(body.fromVersion.trim()) ? body.fromVersion.trim().replace(/^v/, '') : null
-  const requestedTo = typeof body.toVersion === 'string' && VERSION_PATTERN.test(body.toVersion.trim()) ? body.toVersion.trim().replace(/^v/, '') : null
+  const fromVersion = versionBound(body.fromVersion)
+  const requestedTo = versionBound(body.toVersion)
   if (!fromVersion)
     throw simpleError('invalid_from_version', 'fromVersion must be a semver version', { fromVersion: body.fromVersion })
+  if (requestedTo === null)
+    throw simpleError('invalid_to_version', 'toVersion must be a semver version', { toVersion: body.toVersion })
   const locale = typeof body.locale === 'string' && LOCALE_PATTERN.test(body.locale) ? body.locale.toLowerCase() : 'en'
   const context = sanitizeDigestContext(body.context)
 
@@ -358,11 +399,16 @@ export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: 
   const reachedFromVersion = releasesBetween(releases, null, fromVersion).length > 0
   const truncated = (historyTruncated && !reachedFromVersion) || fullRange.length > inRange.length
   const toVersion = requestedTo ?? inRange[0]?.version ?? releases[0]?.version ?? null
+  const oldestInRange = inRange.at(-1)?.version ?? ''
 
   const cache = new CacheHelper(c)
   const key = cache.buildRequest(DIGEST_CACHE_PATH, {
-    v: '1',
+    v: '2',
     product,
+    // The exact release set: a digest built from partial history never outlives its recovery.
+    n: String(inRange.length),
+    oldest: oldestInRange,
+    t: truncated ? '1' : '0',
     repo: source.repo,
     from: fromVersion,
     to: toVersion ?? '',
@@ -375,7 +421,9 @@ export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: 
     return { ...cached, releases: inRange, truncated }
 
   const fallback = buildFallbackDigest(product, source.repo, inRange, fromVersion, toVersion, context)
-  const digest = await aiDigest(c, fallback, inRange, context, locale)
+  const digest = inRange.length && await takeAiQuota(c)
+    ? await aiDigest(c, fallback, inRange, context, locale)
+    : fallback
   // Only cache AI output: a fallback digest should be retried once Workers AI recovers.
   if (digest.aiGenerated)
     await cache.putJson(key, digest, DIGEST_TTL_SECONDS, { timeoutMs: CACHE_TIMEOUT_MS })

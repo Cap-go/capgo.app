@@ -24,13 +24,14 @@ const fetchedLatest = ref<string | null>(null)
 const latestVersion = computed(() => cleanVersion(props.latest) ?? fetchedLatest.value)
 const hasUpdate = computed(() => isNewerVersion(latestVersion.value, props.current))
 const target = computed(() => {
-  const location = changelogLocation(props.product, { since: props.current, repo: props.repo })
+  // Bound the digest to the advertised version: a Capacitor 7 fleet must not be sent to 8.x notes.
+  const location = changelogLocation(props.product, { since: props.current, repo: props.repo, to: cleanVersion(props.latest) })
   if (props.features?.length && typeof location === 'object' && 'query' in location)
     return { ...location, query: { ...location.query, features: props.features.join(',') } }
   return location
 })
 
-watch(() => [props.product, props.repo, props.latest], async () => {
+watch(() => [props.product, props.repo, props.latest, cleanVersion(props.current)], async () => {
   if (cleanVersion(props.latest) || !cleanVersion(props.current))
     return
   if (props.product === 'plugin' && !props.repo)

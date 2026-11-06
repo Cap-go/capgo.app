@@ -57,6 +57,8 @@ const product = computed<ChangelogProduct>(() => {
 })
 const pluginRepo = computed(() => queryString('repo') || null)
 const since = computed(() => cleanVersion(queryString('since')))
+// Optional upper bound from entry points (e.g. latest updater for the app's Capacitor major).
+const targetVersion = computed(() => cleanVersion(queryString('to')))
 const context = computed<DigestContext>(() => ({
   features: queryString('features').split(',').map(f => f.trim()).filter(Boolean),
   platforms: queryString('platforms').split(',').map(p => p.trim()).filter(Boolean),
@@ -110,6 +112,8 @@ async function load() {
   }
   loading.value = true
   loadFailed.value = false
+  // Never show another product's or plugin's releases (or digest bound) while the new ones load.
+  data.value = null
   const result = await fetchReleases(currentProduct, repo)
   // Ignore a slow response for a tab the user already left.
   if (currentProduct !== product.value || (currentProduct === 'plugin' && repo !== pluginRepo.value))
@@ -143,7 +147,16 @@ watch(since, (value) => {
   onlyNew.value = !!value
 })
 
-watch(debouncedSearch, value => setQuery({ q: value.trim() || null }))
+watch(debouncedSearch, (value) => {
+  const q = value.trim()
+  if (q !== queryString('q'))
+    setQuery({ q: q || null })
+})
+// Back/forward or a link that changes ?q= updates the box too.
+watch(() => queryString('q'), (q) => {
+  if (q !== search.value.trim())
+    search.value = q
+})
 
 function applySince() {
   const version = cleanVersion(sinceInput.value)
@@ -172,8 +185,10 @@ const typeCounts = computed(() => {
 })
 const resultCount = computed(() => visibleReleases.value.reduce((sum, release) => sum + release.sections.reduce((s, section) => s + section.items.length, 0), 0))
 const hasFilters = computed(() => !!debouncedSearch.value.trim() || activeTypes.value.size > 0)
-const showDigest = computed(() => !!since.value && !!data.value && isNewerVersion(data.value.latest, since.value))
-const isUpToDate = computed(() => !!since.value && !!data.value?.latest && !isNewerVersion(data.value.latest, since.value))
+const digestTarget = computed(() => targetVersion.value ?? data.value?.latest ?? null)
+const showDigest = computed(() => !!since.value && !!data.value && isNewerVersion(digestTarget.value, since.value))
+const isUpToDate = computed(() => !!since.value && !!digestTarget.value && !isNewerVersion(digestTarget.value, since.value))
+const digestKey = computed(() => [product.value, pluginRepo.value, since.value, digestTarget.value, queryString('platforms'), queryString('features')].join(':'))
 
 const selectedPlugin = computed(() => plugins.value.find(plugin => plugin.repo === pluginRepo.value) ?? null)
 const filteredPlugins = computed(() => {
@@ -185,7 +200,7 @@ const filteredPlugins = computed(() => {
 })
 
 const upgradeCommand = computed(() => {
-  const latest = data.value?.latest
+  const latest = digestTarget.value
   if (!latest)
     return null
   switch (product.value) {
@@ -289,11 +304,11 @@ function clearFilters() {
 
             <ChangelogDigestCard
               v-if="showDigest && since"
-              :key="`${product}:${pluginRepo}:${since}`"
+              :key="digestKey"
               :product="product"
               :repo="pluginRepo"
               :from-version="since"
-              :to-version="data?.latest"
+              :to-version="digestTarget"
               :context="context"
               :upgrade-command="upgradeCommand"
             />
@@ -366,6 +381,14 @@ function clearFilters() {
               </p>
             </div>
 
+            <p
+              v-if="data?.truncated && !loading"
+              class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500 dark:border-white/10 dark:bg-slate-800/60 dark:text-slate-400"
+              data-test="changelog-truncated"
+            >
+              {{ t('changelog-history-truncated') }}
+              <a v-if="data.repo" :href="`https://github.com/Cap-go/${data.repo}/releases`" target="_blank" rel="noopener noreferrer" class="font-medium text-azure-600 hover:underline dark:text-azure-300">GitHub</a>
+            </p>
             <div v-if="loading" class="flex justify-center py-16">
               <Spinner size="w-10 h-10" />
             </div>
