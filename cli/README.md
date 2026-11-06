@@ -214,6 +214,10 @@ Capgo continues to load the root config while writing only the selected source. 
   - [Routes](#observe-routes)
 - 🔹 [Generate-docs](#generate-docs)
 - 🔹 [Mcp](#mcp)
+- 🔹 [Simulator](#simulator)
+  - [Start](#simulator-start)
+  - [Get](#simulator-get)
+  - [Stop](#simulator-stop)
 
 ## <a id="init"></a> 🚀 **Init**
 
@@ -2526,6 +2530,61 @@ npx @capgo/cli@latest mcp
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **--capacitor-config** | <code>string</code> | Capacitor config source to update (useful with dynamic monorepo configs) |
+
+
+## <a id="simulator"></a> 🔹 **Simulator**
+
+Start a cloud simulator. A running simulator uses one builder slot and build minutes.
+
+### <a id="simulator-start"></a> 🔹 **Start**
+
+```bash
+npx @capgo/cli@latest simulator start
+```
+
+Start an iOS or Android simulator and print its session URL.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-p** | <code>string</code> | ios or android |
+| **-n** | <code>string</code> | Session name |
+| **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+### <a id="simulator-get"></a> 🔹 **Get**
+
+```bash
+npx @capgo/cli@latest simulator get
+```
+
+Read one simulator session.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+### <a id="simulator-stop"></a> 🔹 **Stop**
+
+```bash
+npx @capgo/cli@latest simulator stop
+```
+
+Stop a simulator session and record its build minutes.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 
 
 

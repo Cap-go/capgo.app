@@ -9,6 +9,7 @@ import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceWithoutCrea
 import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { applyDirectOfferBentoTags, buildBillingPlanBentoTags } from './billing_bento_tags.ts'
+import { buildChannelInsertOrExistingSql, resolveChannelInsert } from './channel_insert.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { CREATE_DEFAULT_API_KEYS_SQL } from './default_apikeys.ts'
 import { getDirectOfferStatus } from './direct_offer.ts'
@@ -16,7 +17,7 @@ import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
 import { isTransientPgError } from './pg_errors.ts'
-import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from './pg_rls.ts'
+import { authPrincipal, queryJson, withRlsContext } from './pg_rls.ts'
 import { getPlanPriceInterval } from './plan_price_interval.ts'
 import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -431,6 +432,10 @@ export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<s
   return Array.from(new Set(apps))
 }
 
+/**
+ * Updates channel `existingChannelId`, or inserts a new channel when it is null.
+ * Throws ChannelAlreadyExistsError when the insert finds the channel already exists.
+ */
 export async function updateOrCreateChannel(
   c: Context,
   update: Database['public']['Tables']['channels']['Insert'],
@@ -450,11 +455,17 @@ export async function updateOrCreateChannel(
 
   const principal = authPrincipal(c, auth)
   if (existingChannelId === null) {
-    const insert = buildInsertSql('public.channels', update)
-    const data = await withRlsContext(c, principal, client => queryJsonOne<{ id: number }>(client, `${insert.text} RETURNING id`, insert.values))
-    if (!data)
-      throw new Error('JSON object requested, multiple (or no) rows returned')
-    return { data, error: null }
+    // The caller's lookup may be a cached "missing"; the insert itself returns the
+    // existing row (ChannelAlreadyExistsError) instead of failing on the unique key.
+    const { columns, values } = definedColumns(update)
+    const insert = buildChannelInsertOrExistingSql(columns, values, update.app_id, update.name)
+    // Resolve inside the transaction: BEFORE INSERT triggers (normalize_public_channel_overlap)
+    // run even when ON CONFLICT skips the row, so the conflict must roll their writes back.
+    const channel = await withRlsContext(c, principal, async (client) => {
+      const result = await client.query(insert.text, insert.values)
+      return resolveChannelInsert(result.rows as Parameters<typeof resolveChannelInsert>[0])
+    })
+    return { data: { id: channel.id }, error: null }
   }
 
   // Keep the original creator immutable. Omitted stable versions are read only

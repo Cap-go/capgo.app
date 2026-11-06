@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BundleSummaryWithNativePackages } from '~/services/bundleColumns'
 import type { IncompatibilityReason, NativePackage, PackageComparison, PackageStatus } from '~/services/bundleCompatibility'
+import type { ChangelogPlugin } from '~/services/changelog'
 import type { Database } from '~/types/database.types'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -10,10 +11,12 @@ import IconCheckCircle from '~icons/heroicons/check-circle'
 import IconPuzzle from '~icons/heroicons/puzzle-piece'
 import IconSearch from '~icons/ic/round-search'
 import IconAlertCircle from '~icons/lucide/alert-circle'
+import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
 import EmptyState from '~/components/EmptyState.vue'
 import FormField from '~/components/forms/FormField.vue'
 import { BUNDLE_SUMMARY_COLUMNS } from '~/services/bundleColumns'
 import { comparePackages, hasPlatformChecksumMetadataDrift, summarizeCompatibility } from '~/services/bundleCompatibility'
+import { fetchPlugins, UPDATER_PACKAGE } from '~/services/changelog'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 
@@ -91,6 +94,17 @@ const displayComparisons = computed(() => {
     entry.baselineVersion,
   ))
 })
+
+// Capgo plugins link to their changelog since the bundled version; the catalog also gives the latest npm version.
+const capgoPlugins = ref<ChangelogPlugin[]>([])
+watch(() => nativePackages.value.some(pkg => pkg.name.startsWith('@capgo/')), async (hasCapgo) => {
+  if (hasCapgo && !capgoPlugins.value.length)
+    capgoPlugins.value = await fetchPlugins()
+}, { immediate: true })
+
+function capgoPluginFor(name: string) {
+  return capgoPlugins.value.find(plugin => plugin.name === name) ?? null
+}
 
 const displayNativePackages = computed(() => {
   if (!searchLower.value)
@@ -693,6 +707,9 @@ watch(bundleRouteKey, async (key) => {
                         <th scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
                           {{ t('version') }}
                         </th>
+                        <th v-if="capgoPlugins.length" scope="col" class="px-6 py-3 text-xs font-medium tracking-wider text-left text-gray-500 uppercase dark:text-gray-400">
+                          {{ t('changelog-whats-new') }}
+                        </th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-white/5">
@@ -715,6 +732,16 @@ watch(bundleRouteKey, async (key) => {
                           <span class="px-2 py-1 text-xs font-medium text-blue-800 bg-blue-100 rounded-full dark:text-blue-200 dark:bg-blue-900">
                             {{ pkg.version }}
                           </span>
+                        </td>
+                        <td v-if="capgoPlugins.length" class="px-6 py-4 text-sm whitespace-nowrap">
+                          <ChangelogUpdateBadge
+                            v-if="capgoPluginFor(pkg.name)"
+                            :product="pkg.name === UPDATER_PACKAGE ? 'updater' : 'plugin'"
+                            :repo="pkg.name === UPDATER_PACKAGE ? null : capgoPluginFor(pkg.name)?.repo"
+                            :current="pkg.version"
+                            :latest="capgoPluginFor(pkg.name)?.version"
+                            show-current
+                          />
                         </td>
                       </tr>
                     </tbody>
