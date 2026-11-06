@@ -31,7 +31,8 @@ import { isTransientPgError } from './pg_errors.ts'
  * a revoked permission would keep passing. Hyperdrive never caches a query that calls a
  * STABLE function; PostgreSQL does not evaluate this unused CTE.
  */
-const BYPASS_HYPERDRIVE_CACHE = sql.raw('WITH capgo_fresh_read AS (SELECT now())')
+export const BYPASS_HYPERDRIVE_CACHE_SQL = 'WITH capgo_fresh_read AS (SELECT now())'
+const BYPASS_HYPERDRIVE_CACHE = sql.raw(BYPASS_HYPERDRIVE_CACHE_SQL)
 
 // =============================================================================
 // Types

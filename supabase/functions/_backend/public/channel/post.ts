@@ -9,7 +9,7 @@ import { cloudlogErr } from '../../utils/logging.ts'
 import type { PgClient } from '../../utils/pg.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getDrizzleClient, getPgClient, logPgError, releasePgClient } from '../../utils/pg.ts'
 import { queryJson, queryJsonOne, setRequestApikeyHeader } from '../../utils/pg_rls.ts'
-import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
+import { BYPASS_HYPERDRIVE_CACHE_SQL, checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { updateOrCreateChannel } from '../../utils/supabase.ts'
 import { isInternalVersionName, isValidAppId } from '../../utils/utils.ts'
 import { assertCanPromoteChannelInTransaction, setChannelInTransaction } from '../bundle/set_channel.ts'
@@ -120,7 +120,7 @@ function validateConfidence(value: number | undefined) {
 async function findActiveVersionId(pg: PgClient, appID: string, ownerOrg: string, filter: { name: string } | { id: number }) {
   const rows = await queryJson<{ id: number }>(
     pg,
-    `SELECT id
+    `${BYPASS_HYPERDRIVE_CACHE_SQL} SELECT id
      FROM public.app_versions
      WHERE app_id = $1
        AND ${'name' in filter ? 'name = $3' : 'id = $3'}
@@ -381,9 +381,12 @@ export async function post(c: Context<MiddlewareKeyVariables>, body: ChannelSet,
 }
 
 async function upsertChannel(c: Context<MiddlewareKeyVariables>, pg: PgClient, body: ChannelSet, apikey: Database['public']['Tables']['apikeys']['Row']): Promise<Response> {
+  // Reads on the bare client go through the Hyperdrive cache (60s, not invalidated
+  // on writes). Bypass it: a channel created seconds ago would read as missing and
+  // the insert would hit unique_name_app_id, even on the retry in post().
   const existingChannel = await queryJson<ExistingChannel>(
     pg,
-    'SELECT id, version, rollout_version, public, paused_at FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2',
+    `${BYPASS_HYPERDRIVE_CACHE_SQL} SELECT id, version, rollout_version, public, paused_at FROM public.channels WHERE app_id = $1 AND name = $2 LIMIT 2`,
     [body.app_id, body.channel],
   ).then(rows => rows.length === 1 ? rows[0] : null).catch((error: unknown) => {
     logPgError(c, 'channel_post_existing_channel', error)
@@ -407,7 +410,7 @@ async function upsertChannel(c: Context<MiddlewareKeyVariables>, pg: PgClient, b
   if (isPublicizing && !(await checkPermission(c, 'app.update_settings', { appId: body.app_id }))) {
     throw simpleError('cannot_access_app', 'You can\'t access this app', { app_id: body.app_id, channel: body.channel })
   }
-  const org = await queryJsonOne<{ owner_org: string }>(pg, 'SELECT owner_org FROM public.apps WHERE app_id = $1', [body.app_id]).catch(() => null)
+  const org = await queryJsonOne<{ owner_org: string }>(pg, `${BYPASS_HYPERDRIVE_CACHE_SQL} SELECT owner_org FROM public.apps WHERE app_id = $1`, [body.app_id]).catch(() => null)
   if (!org) {
     throw simpleError('invalid_app_id', 'You can\'t access this app', { app_id: body.app_id })
   }
