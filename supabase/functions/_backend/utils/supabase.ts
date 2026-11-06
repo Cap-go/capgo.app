@@ -455,8 +455,12 @@ export async function updateOrCreateChannel(
     // existing row (ChannelAlreadyExistsError) instead of failing on the unique key.
     const { columns, values } = definedColumns(update)
     const insert = buildChannelInsertOrExistingSql(columns, values, update.app_id, update.name)
-    const result = await withRlsContext(c, principal, client => client.query(insert.text, insert.values))
-    const channel = resolveChannelInsert(result.rows as Parameters<typeof resolveChannelInsert>[0])
+    // Resolve inside the transaction: BEFORE INSERT triggers (normalize_public_channel_overlap)
+    // run even when ON CONFLICT skips the row, so the conflict must roll their writes back.
+    const channel = await withRlsContext(c, principal, async (client) => {
+      const result = await client.query(insert.text, insert.values)
+      return resolveChannelInsert(result.rows as Parameters<typeof resolveChannelInsert>[0])
+    })
     return { data: { id: channel.id }, error: null }
   }
 
