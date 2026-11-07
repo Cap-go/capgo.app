@@ -14,6 +14,7 @@ import { emitBuildTransitionEvent } from '../../utils/build_tracking.ts'
 import { isoFromBuilderTimestamp } from '../../utils/builder_capacity.ts'
 import { getBuilderXcodeVersion } from '../../utils/builder_machine.ts'
 import { persistBuilderBuildOutcome } from '../../utils/builder_onboarding_checklist.ts'
+import { explainBuildStatus } from '../../utils/buildDiagnostics.ts'
 import { simpleError } from '../../utils/hono.ts'
 import type { PgClient } from '../../utils/pg.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
@@ -372,6 +373,8 @@ export async function getBuildStatus(
   return c.json({
     job_id,
     status: effectiveStatus,
+    diagnostic: explainBuildStatus(effectiveStatus),
+    poll_after_seconds: 15,
     machine: builderJob.machine || null,
     started_at: builderJob.job.started_at,
     completed_at: effectiveCompletedAt,

@@ -10,6 +10,8 @@ import { fetchObserve } from './api'
 
 export interface ObserveCliOptions {
   apikey?: string
+  source?: string
+  channelId?: string
   days?: string
   action?: string
   device?: string
@@ -110,6 +112,8 @@ export async function observeCommand(
       appId,
       view,
       days: parseObserveDays(options.days),
+      source: observeOptionsObjectSchema.shape.source.parse(options.source),
+      channelId: parsePositiveInt(options.channelId, '--channel-id'),
       action: options.action,
       deviceId,
       versionName: options.versionName,
@@ -130,7 +134,10 @@ export async function observeCommand(
     if (typeof payload.handoff_prompt === 'string')
       log.info(payload.handoff_prompt)
 
-    if (view === 'metrics' || view === 'device') {
+    if (view === 'release' || view === 'logs' || view === 'errors') {
+      log.message(JSON.stringify(payload, null, 2))
+    }
+    else if (view === 'metrics' || view === 'device') {
       const rows = (payload.samples ?? payload.events) as Array<Record<string, unknown>> | undefined
       if (rows?.length) {
         const table = new Table()

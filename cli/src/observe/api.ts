@@ -11,6 +11,8 @@ export async function fetchObserve(options: ObserveOptions): Promise<Record<stri
       appId: options.appId,
       view: options.view ?? 'summary',
       days: options.days,
+      source: options.source,
+      channelId: options.channelId,
       action: options.action,
       deviceId: options.deviceId,
       versionName: options.versionName,

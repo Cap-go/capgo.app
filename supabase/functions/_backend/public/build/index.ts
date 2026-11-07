@@ -94,7 +94,7 @@ app.get('/logs/:jobId', middlewareKey(['all', 'read']), async (c) => {
     throw new Error('app_id query parameter is required')
   }
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return streamBuildLogs(c, jobId, appId, apikey)
+  return streamBuildLogs(c, jobId, appId, apikey, c.req.query('snapshot') === 'true')
 })
 
 // POST /build/cancel/:jobId - Cancel a running build

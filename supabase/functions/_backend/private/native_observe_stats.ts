@@ -124,7 +124,7 @@ export const nativeObserveActions = [
   'native_app_version_changed',
 ] as const
 
-const issueActions = [
+export const issueActions = [
   'app_crash',
   'app_crash_native',
   'app_anr',
