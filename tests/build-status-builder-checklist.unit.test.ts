@@ -34,9 +34,15 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
 const appId = 'com.test.status-checklist'
 const jobId = 'builder-job'
 
-function context() {
+function context(headers: Record<string, string> = {}) {
   return {
     get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
+    req: {
+      header: (name: string) => {
+        const key = Object.keys(headers).find(header => header.toLowerCase() === name.toLowerCase())
+        return key ? headers[key] : undefined
+      },
+    },
     json: (data: unknown, status = 200) => new Response(JSON.stringify(data), { status }),
   } as any
 }
@@ -78,10 +84,14 @@ describe('shouldPersistBuildStatus', () => {
     expect(shouldPersistBuildStatus({ persist: 'true' })).toBe(true)
   })
 
-  it.concurrent('skips persistence for false-like query values', () => {
-    expect(shouldPersistBuildStatus({ persist: false })).toBe(false)
-    expect(shouldPersistBuildStatus({ persist: 'false' })).toBe(false)
-    expect(shouldPersistBuildStatus({ persist: '0' })).toBe(false)
+  it.concurrent('ignores persist=false from non-MCP callers', () => {
+    expect(shouldPersistBuildStatus({ persist: false })).toBe(true)
+    expect(shouldPersistBuildStatus({ persist: 'false' })).toBe(true)
+    expect(shouldPersistBuildStatus({ persist: false }, { hostedMcp: false })).toBe(true)
+  })
+
+  it.concurrent('allows persist=false only on the hosted MCP relay', () => {
+    expect(shouldPersistBuildStatus({ persist: 'false' }, { hostedMcp: true })).toBe(false)
   })
 })
 
@@ -100,11 +110,21 @@ describe('build status Builder checklist persistence', () => {
     const response = await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios' }, { key: 'api-key' } as any)
 
     expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ persisted: false })
     expect(mocks.checklist).not.toHaveBeenCalled()
   })
 
-  it('skips DB sync, billing and checklist when persist is false', async () => {
-    const response = await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' }, { key: 'api-key' } as any)
+  it('still persists when persist=false is not from the MCP relay', async () => {
+    await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' }, { key: 'api-key' } as any)
+    expect(mocks.adminQuery).toHaveBeenCalled()
+  })
+
+  it('skips DB sync, billing and checklist when MCP relay sets persist=false', async () => {
+    const response = await getBuildStatus(
+      context({ 'x-cli-command': 'mcp' }),
+      { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
+      { key: 'api-key' } as any,
+    )
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ job_id: jobId, status: 'succeeded', persisted: false })
@@ -112,5 +132,26 @@ describe('build status Builder checklist persistence', () => {
     expect(mocks.checklist).not.toHaveBeenCalled()
     expect(mocks.emit).not.toHaveBeenCalled()
     expect(mocks.recordBuildTime).not.toHaveBeenCalled()
+  })
+
+  it('does not cancel a timed-out build when MCP read-only polling', async () => {
+    const startedAt = Date.now() - 901_000
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (init?.method === 'POST' && url.includes('/cancel'))
+        throw new Error('unexpected_builder_cancel')
+      return new Response(JSON.stringify({
+        job: { status: 'running', started_at: startedAt, completed_at: null, error: null },
+        machine: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    const response = await getBuildStatus(
+      context({ 'x-cli-command': 'mcp' }),
+      { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
+      { key: 'api-key' } as any,
+    )
+    expect(response.status).toBe(200)
+    const urls = vi.mocked(globalThis.fetch).mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`)
+    expect(urls.some(entry => entry.includes('/cancel'))).toBe(false)
   })
 })

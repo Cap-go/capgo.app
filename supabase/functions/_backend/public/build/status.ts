@@ -31,20 +31,33 @@ export interface BuildStatusParams {
   job_id: string
   app_id: string
   platform?: 'ios' | 'android'
-  /** When false, return builder status without syncing build_requests, billing, webhooks or builder cancel. */
+  /** When false on the hosted MCP relay only, return builder status without syncing build_requests, billing, webhooks or builder cancel. */
   persist?: boolean | string
 }
 
-export function shouldPersistBuildStatus(params: Pick<BuildStatusParams, 'persist'>): boolean {
+/** Direct API and CLI callers always persist; only the MCP HTTP relay may skip side effects. */
+export function shouldPersistBuildStatus(
+  params: Pick<BuildStatusParams, 'persist'>,
+  relay?: { hostedMcp?: boolean },
+): boolean {
+  let skip = false
   const value = params.persist
   if (value === false)
-    return false
-  if (typeof value === 'string') {
+    skip = true
+  else if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase()
     if (normalized === 'false' || normalized === '0' || normalized === 'no')
-      return false
+      skip = true
   }
+  if (!skip)
+    return true
+  if (relay?.hostedMcp === true)
+    return false
   return true
+}
+
+export function isHostedMcpBuildStatusRelay(c: Context): boolean {
+  return c.req.header('x-cli-command') === 'mcp'
 }
 
 interface BuilderStatusResponse {
@@ -116,7 +129,7 @@ export async function getBuildStatus(
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
   const { job_id, app_id, platform } = params
-  const shouldPersist = shouldPersistBuildStatus(params)
+  const shouldPersist = shouldPersistBuildStatus(params, { hostedMcp: isHostedMcpBuildStatusRelay(c) })
 
   // Use authenticated client for data queries - RLS will enforce access
   const principal = apikeyPrincipal(c, apikey.key)
@@ -407,5 +420,5 @@ export async function getBuildStatus(
     )
   }
 
-  return c.json({ ...statusPayload, persisted: true }, 200)
+  return c.json({ ...statusPayload, persisted: !updateFailed && updatedCount > 0 }, 200)
 }

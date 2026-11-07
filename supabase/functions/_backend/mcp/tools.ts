@@ -250,6 +250,8 @@ const bundleUploadTools: McpTool[] = [
       + 'First, change into the absolute local Capacitor app directory (not the workspace root or MCP server directory) and package the web build offline (no login needed): `npx @capgo/cli@latest bundle zip <appId> --for-upload --json` (add --delta-pack <file> for delta updates; it encrypts like bundle upload when the project has an encryption key). '
       + 'Pass the JSON fields it prints (checksum, native_packages, updater_version, session_key, key_id, size_bytes, cli_version) here. '
       + 'Capgo runs every check the CLI runs (permissions, plan, version name, encryption policy, channel permissions, same-checksum and native compatibility per channel), then creates an unfinished app_versions row (storage_provider r2-direct) and returns signed PUT URLs plus upload_token. '
+      + 'Native compatibility per channel is skipped when native_packages is omitted and ignore_metadata_check is true (complete can still deploy without a server-side native check). '
+      + 'When version_exists_ok is true and the version already exists, the response is { skipped: true, reason: "VERSION_EXISTS" } with no upload_token or signed URLs: stop there and do not PUT or call capgo_complete_bundle_upload. '
       + 'No channel deploy and no device update until capgo_complete_bundle_upload. Cancel a pending upload with capgo_abort_bundle_upload (removes the unfinished version and staged files). '
       + 'Step 2: upload with `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<url>"` (and the delta pack to its own URL). Step 3: capgo_complete_bundle_upload with upload_token.',
     input: {
