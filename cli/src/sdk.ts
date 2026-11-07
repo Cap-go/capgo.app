@@ -17,6 +17,7 @@ import type {
   AppInfo,
   BundleCompatibilityOptions,
   BundleInfo,
+  BuildMonitorOptions,
   CleanupOptions,
   CurrentBundleOptions,
   DecryptBundleOptions,
@@ -83,6 +84,7 @@ import { starAllRepositories as starAllRepositoriesInternal, starRepository } fr
 import { createKeyInternal, deleteOldPrivateKeyInternal, saveKeyInternal } from './key'
 import { loginInternal } from './login'
 import { fetchObserve } from './observe/api'
+import { fetchBuildMonitor } from './build/monitor'
 import { addOrganizationInternal } from './organization/add'
 import { deleteOrganizationInternal } from './organization/delete'
 import { listOrganizationsInternal } from './organization/list'
@@ -1508,6 +1510,27 @@ export class CapgoSDK {
    * Query Capgo Observe (launch, issues, routes, device timelines).
    * Start with view=summary; follow findings.next. Use --json / MCP for agents.
    */
+  /** Read any authorized cloud build, including builds started by CI or the hosted MCP. */
+  async getBuildStatus(options: BuildMonitorOptions): Promise<SDKResult<Record<string, unknown>>> {
+    return this.readBuildMonitor('status', options)
+  }
+
+  /** Bounded JSON snapshot; disconnecting never cancels a build. */
+  async getBuildLogs(options: BuildMonitorOptions): Promise<SDKResult<Record<string, unknown>>> {
+    return this.readBuildMonitor('logs', options)
+  }
+
+  private async readBuildMonitor(kind: 'status' | 'logs', options: BuildMonitorOptions): Promise<SDKResult<Record<string, unknown>>> {
+    try {
+      return { success: true, data: await fetchBuildMonitor(kind, {
+        ...options, apikey: options.apikey || this.apikey, apiHost: this.resolveApiHost(options),
+      }) }
+    }
+    catch (error) {
+      return createErrorResult(error)
+    }
+  }
+
   async observe(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
     try {
       const data = await fetchObserve({
@@ -1901,6 +1924,14 @@ export async function getObserve(options: ObserveOptions): Promise<SDKResult<Rec
   return sdk.observe(options)
 }
 
+export async function getBuildStatus(options: BuildMonitorOptions): Promise<SDKResult<Record<string, unknown>>> {
+  return new CapgoSDK({ apikey: options.apikey, apiHost: options.apiHost }).getBuildStatus(options)
+}
+
+export async function getBuildLogs(options: BuildMonitorOptions): Promise<SDKResult<Record<string, unknown>>> {
+  return new CapgoSDK({ apikey: options.apikey, apiHost: options.apiHost }).getBuildLogs(options)
+}
+
 export async function probeUpdates(options: ProbeOptions): Promise<SDKResult<ProbeInternalResult>> {
   const sdk = new CapgoSDK()
   return sdk.probe(options)
@@ -1946,6 +1977,7 @@ export type {
   AppInfo,
   BundleCompatibilityOptions,
   BundleInfo,
+  BuildMonitorOptions,
   CleanupOptions,
   CurrentBundleOptions,
   DecryptBundleOptions,
