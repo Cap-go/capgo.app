@@ -6,7 +6,7 @@ import { getEnv } from './utils.ts'
 /** User-Agent set only by the hosted MCP HTTP relay in mcp/index.ts createCaller. */
 export const HOSTED_MCP_RELAY_USER_AGENT = 'capgo-mcp'
 
-/** Proof header: SHA-256 of a salted API_SECRET, minted server-side in createCaller only. */
+/** Proof header: SHA-256 of salted API_SECRET, minted server-side in createCaller only. */
 export const HOSTED_MCP_RELAY_HEADER = 'x-capgo-hosted-mcp-relay'
 
 const RELAY_SALT = 'capgo-hosted-mcp-relay-v1'
