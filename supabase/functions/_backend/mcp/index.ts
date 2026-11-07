@@ -4,7 +4,7 @@ import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
-import { HOSTED_MCP_RELAY_USER_AGENT } from '../utils/hosted_mcp_relay.ts'
+import { hostedMcpRelayRequestHeaders } from '../utils/hosted_mcp_relay.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
@@ -97,8 +97,7 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
     const headers = new Headers({
       'capgkey': token,
       'accept': 'application/json',
-      'user-agent': HOSTED_MCP_RELAY_USER_AGENT,
-      'x-cli-command': 'mcp',
+      ...hostedMcpRelayRequestHeaders(c),
     })
     // Keep the caller's IP so per-IP rate limits and logs stay meaningful.
     for (const name of ['cf-connecting-ip', 'x-forwarded-for', 'cf-ipcountry', 'cf-ray']) {

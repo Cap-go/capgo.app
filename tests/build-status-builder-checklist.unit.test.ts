@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { HOSTED_MCP_RELAY_HEADER, hostedMcpRelayProof, hostedMcpRelayRequestHeaders } from '../supabase/functions/_backend/utils/hosted_mcp_relay.ts'
 import { getBuildStatus, shouldPersistBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
+import { API_SECRET } from './test-utils.ts'
 
 const mocks = vi.hoisted(() => ({
   adminQuery: vi.fn(),
@@ -28,7 +30,7 @@ vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal)
   }
 })
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  getEnv: (_c: unknown, key: string) => key === 'BUILDER_URL' ? 'https://builder.test' : key === 'BUILDER_API_KEY' ? 'builder-key' : '',
+  getEnv: (_c: unknown, key: string) => ({ BUILDER_URL: 'https://builder.test', BUILDER_API_KEY: 'builder-key', API_SECRET } as Record<string, string>)[key] ?? '',
 }))
 
 const appId = 'com.test.status-checklist'
@@ -77,12 +79,21 @@ beforeEach(() => {
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 })
 
+describe('hostedMcp relay dispatch', () => {
+  it('mint request headers createCaller uses for sub-requests', () => {
+    const headers = hostedMcpRelayRequestHeaders(context() as any)
+    expect(headers['user-agent']).toBe('capgo-mcp')
+    expect(headers[HOSTED_MCP_RELAY_HEADER]).toBe(hostedMcpRelayProof(API_SECRET))
+  })
+})
+
 describe('isHostedMcpBuildStatusRelay', () => {
-  it('rejects spoofed x-cli-command without relay user-agent', async () => {
+  it('accepts only the server-side relay proof', async () => {
     const { isHostedMcpBuildStatusRelay } = await import('../supabase/functions/_backend/utils/hosted_mcp_relay.ts')
-    expect(isHostedMcpBuildStatusRelay(context({ 'x-cli-command': 'mcp' }) as any)).toBe(false)
-    expect(isHostedMcpBuildStatusRelay(context({ 'user-agent': 'capgo-mcp', 'x-cli-version': '1.0.0' }) as any)).toBe(false)
-    expect(isHostedMcpBuildStatusRelay(context({ 'user-agent': 'capgo-mcp' }) as any)).toBe(true)
+    const proof = hostedMcpRelayProof(API_SECRET)
+    expect(await isHostedMcpBuildStatusRelay(context({ 'x-cli-command': 'mcp' }) as any)).toBe(false)
+    expect(await isHostedMcpBuildStatusRelay(context({ [HOSTED_MCP_RELAY_HEADER]: proof }) as any)).toBe(true)
+    expect(await isHostedMcpBuildStatusRelay(context({ [HOSTED_MCP_RELAY_HEADER]: 'deadbeef' }) as any)).toBe(false)
   })
 })
 
@@ -130,7 +141,7 @@ describe('build status Builder checklist persistence', () => {
 
   it('skips DB sync, billing and checklist when MCP relay sets persist=false', async () => {
     const response = await getBuildStatus(
-      context({ 'user-agent': 'capgo-mcp' }),
+      context({ [HOSTED_MCP_RELAY_HEADER]: hostedMcpRelayProof(API_SECRET) }),
       { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
       { key: 'api-key' } as any,
     )
@@ -155,7 +166,7 @@ describe('build status Builder checklist persistence', () => {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     const response = await getBuildStatus(
-      context({ 'user-agent': 'capgo-mcp' }),
+      context({ [HOSTED_MCP_RELAY_HEADER]: hostedMcpRelayProof(API_SECRET) }),
       { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
       { key: 'api-key' } as any,
     )

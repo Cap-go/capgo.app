@@ -131,7 +131,7 @@ export async function getBuildStatus(
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
   const { job_id, app_id, platform } = params
-  const shouldPersist = shouldPersistBuildStatus(params, { hostedMcp: isHostedMcpBuildStatusRelay(c) })
+  const shouldPersist = shouldPersistBuildStatus(params, { hostedMcp: await isHostedMcpBuildStatusRelay(c) })
 
   // Use authenticated client for data queries - RLS will enforce access
   const principal = apikeyPrincipal(c, apikey.key)
