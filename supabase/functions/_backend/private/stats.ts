@@ -65,7 +65,7 @@ type InsightPeriodDays = typeof insightPeriodDays[number]
 
 // Live update failures only. App crashes and WebView signals come from the host
 // app and are reported by /private/native_observe_stats instead.
-const defaultInsightActions = [
+export const defaultInsightActions = [
   'set_fail',
   'update_fail',
   'download_fail',
