@@ -59,6 +59,8 @@ export interface MiddlewareKeyVariables {
     skipChannelSelfPostgresFallback?: boolean
     requireReadReplica?: boolean
     deviceDataCollection?: import('./deviceDataCollection.ts').DeviceDataCollection
+    /** Read replica Hyperdrive queries only. Never pass into waitUntil. */
+    pluginReadAbortSignal?: AbortSignal
   }
 }
 

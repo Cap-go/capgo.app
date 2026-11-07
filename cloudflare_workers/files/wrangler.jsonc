@@ -1,7 +1,7 @@
 {
   "name": "capgo_file",
   "logpush": true,
-  "compatibility_date": "2026-04-21",
+  "compatibility_date": "2026-11-17",
   "dependencies_instrumentation": {
     "enabled": true
   },
