@@ -22,6 +22,7 @@ import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.t
 import { checkPermission } from '../../utils/rbac.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
+import { isHostedMcpBuildStatusRelay } from '../../utils/hosted_mcp_relay.ts'
 import {
   computeNativeBuildEffectiveQueuePriority,
   nativeBuildQueueTierFromPriority,
@@ -56,10 +57,6 @@ export function shouldPersistBuildStatus(
   return true
 }
 
-export function isHostedMcpBuildStatusRelay(c: Context): boolean {
-  return c.req.header('x-cli-command') === 'mcp'
-}
-
 interface BuilderStatusResponse {
   job: {
     status: string
@@ -72,6 +69,7 @@ interface BuilderStatusResponse {
   uploadUrl?: string
 }
 
+/** Ask the builder to cancel a job that exceeded the build timeout window. */
 async function cancelTimedOutBuilderJob(c: Context, jobId: string, appId: string): Promise<boolean> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 5000)
@@ -123,6 +121,10 @@ async function cancelTimedOutBuilderJob(c: Context, jobId: string, appId: string
   }
 }
 
+/**
+ * Poll builder job status for a native build request, optionally syncing DB state, billing, and webhooks.
+ * persist=false skips side effects only for the hosted MCP relay (see hosted_mcp_relay.ts).
+ */
 export async function getBuildStatus(
   c: Context,
   params: BuildStatusParams,

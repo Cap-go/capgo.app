@@ -77,6 +77,15 @@ beforeEach(() => {
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 })
 
+describe('isHostedMcpBuildStatusRelay', () => {
+  it('rejects spoofed x-cli-command without relay user-agent', async () => {
+    const { isHostedMcpBuildStatusRelay } = await import('../supabase/functions/_backend/utils/hosted_mcp_relay.ts')
+    expect(isHostedMcpBuildStatusRelay(context({ 'x-cli-command': 'mcp' }) as any)).toBe(false)
+    expect(isHostedMcpBuildStatusRelay(context({ 'user-agent': 'capgo-mcp', 'x-cli-version': '1.0.0' }) as any)).toBe(false)
+    expect(isHostedMcpBuildStatusRelay(context({ 'user-agent': 'capgo-mcp' }) as any)).toBe(true)
+  })
+})
+
 describe('shouldPersistBuildStatus', () => {
   it.concurrent('defaults to persisting', () => {
     expect(shouldPersistBuildStatus({})).toBe(true)
@@ -121,7 +130,7 @@ describe('build status Builder checklist persistence', () => {
 
   it('skips DB sync, billing and checklist when MCP relay sets persist=false', async () => {
     const response = await getBuildStatus(
-      context({ 'x-cli-command': 'mcp' }),
+      context({ 'user-agent': 'capgo-mcp' }),
       { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
       { key: 'api-key' } as any,
     )
@@ -146,7 +155,7 @@ describe('build status Builder checklist persistence', () => {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     const response = await getBuildStatus(
-      context({ 'x-cli-command': 'mcp' }),
+      context({ 'user-agent': 'capgo-mcp' }),
       { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
       { key: 'api-key' } as any,
     )
