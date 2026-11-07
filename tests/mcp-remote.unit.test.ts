@@ -138,6 +138,43 @@ describe('hosted MCP protocol', () => {
     }
   })
 
+  it.concurrent('annotates OpenAI-reviewed upload and build tools accurately', () => {
+    const byName = new Map(MCP_TOOLS.map(tool => [tool.name, tool]))
+    expect(byName.get('capgo_prepare_bundle_upload')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+      idempotentHint: false,
+    })
+    expect(byName.get('capgo_get_build_status')?.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    })
+    expect(byName.get('capgo_prepare_build_credentials_upload')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+      idempotentHint: false,
+    })
+  })
+
+  it.concurrent('polls build status read-only with persist=false', async () => {
+    const { ctx, calls } = fakeContext({ status: 'running', persisted: false })
+    await handleJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 50,
+      method: 'tools/call',
+      params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
+    }, ctx)
+    expect(calls).toEqual([{
+      method: 'GET',
+      path: '/build/status',
+      query: { app_id: 'com.example.app', job_id: 'job-9', persist: 'false' },
+    }])
+  })
+
   it.concurrent('marks tools that reach systems outside Capgo as open-world', () => {
     const openWorld = [
       'capgo_invite_organization_member', // sends an invitation email

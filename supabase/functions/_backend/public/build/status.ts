@@ -30,7 +30,21 @@ import {
 export interface BuildStatusParams {
   job_id: string
   app_id: string
-  platform: 'ios' | 'android'
+  platform?: 'ios' | 'android'
+  /** When false, return builder status without syncing build_requests, billing, webhooks or builder cancel. */
+  persist?: boolean | string
+}
+
+export function shouldPersistBuildStatus(params: Pick<BuildStatusParams, 'persist'>): boolean {
+  const value = params.persist
+  if (value === false)
+    return false
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'false' || normalized === '0' || normalized === 'no')
+      return false
+  }
+  return true
 }
 
 interface BuilderStatusResponse {
@@ -102,6 +116,7 @@ export async function getBuildStatus(
   apikey: Database['public']['Tables']['apikeys']['Row'],
 ): Promise<Response> {
   const { job_id, app_id, platform } = params
+  const shouldPersist = shouldPersistBuildStatus(params)
 
   // Use authenticated client for data queries - RLS will enforce access
   const principal = apikeyPrincipal(c, apikey.key)
@@ -186,7 +201,7 @@ export async function getBuildStatus(
   const timeoutSeconds = normalizeBuildTimeoutSeconds(appSettings.build_timeout_seconds)
   const resolvedPlatform = (buildRequest.platform === 'ios' || buildRequest.platform === 'android')
     ? buildRequest.platform
-    : platform
+    : (platform === 'ios' || platform === 'android' ? platform : 'android')
 
   // Fetch status from builder
   const builderResponse = await fetch(`${getEnv(c, 'BUILDER_URL')}/jobs/${job_id}`, {
@@ -225,7 +240,7 @@ export async function getBuildStatus(
 
   if (timedOut && builderJob.job.completed_at)
     timeoutApplied = true
-  else if (timedOut)
+  else if (timedOut && shouldPersist)
     timeoutApplied = await cancelTimedOutBuilderJob(c, job_id, buildRequest.app_id)
 
   const effectiveStatus = timeoutApplied ? BUILD_TIMEOUT_STATUS : builderJob.job.status
@@ -261,10 +276,43 @@ export async function getBuildStatus(
   // if `updatedRows` is empty, another writer already moved the status and has
   // (or will) emit the lifecycle event — skip emission here to avoid double-firing.
   const previousStatus = buildRequest.status
+  const baseQueuePriority = typeof buildRequest.queue_priority === 'number'
+    ? buildRequest.queue_priority
+    : null
+  const enqueuedAtMs = buildRequest.created_at
+    ? Date.parse(buildRequest.created_at)
+    : Date.now()
+  const effectiveQueuePriority = baseQueuePriority !== null
+    ? computeNativeBuildEffectiveQueuePriority(baseQueuePriority, enqueuedAtMs)
+    : null
+
+  const statusPayload = {
+    job_id,
+    status: effectiveStatus,
+    machine: builderJob.machine || null,
+    started_at: builderJob.job.started_at,
+    completed_at: effectiveCompletedAt,
+    runner_wait_seconds: runnerWaitSeconds,
+    build_time_seconds: timeoutApplied
+      ? effectiveBuildTimeSeconds
+      : builderJob.job.started_at && builderJob.job.completed_at
+        ? runtimeSeconds
+        : null,
+    error: effectiveError,
+    upload_url: builderJob.uploadUrl || null,
+    queue_priority: baseQueuePriority,
+    effective_queue_priority: effectiveQueuePriority,
+    queue_priority_tier: baseQueuePriority !== null
+      ? nativeBuildQueueTierFromPriority(baseQueuePriority)
+      : null,
+  }
 
   let updatedCount = 0
   let updateFailed = false
   let pg: PgClient | null = null
+  if (!shouldPersist)
+    return c.json({ ...statusPayload, persisted: false }, 200)
+
   try {
     pg = await getPgClient(c)
     // Null builder timestamps/xcode leave the stored value untouched, as the omitted
@@ -359,34 +407,5 @@ export async function getBuildStatus(
     )
   }
 
-  const baseQueuePriority = typeof buildRequest.queue_priority === 'number'
-    ? buildRequest.queue_priority
-    : null
-  const enqueuedAtMs = buildRequest.created_at
-    ? Date.parse(buildRequest.created_at)
-    : Date.now()
-  const effectiveQueuePriority = baseQueuePriority !== null
-    ? computeNativeBuildEffectiveQueuePriority(baseQueuePriority, enqueuedAtMs)
-    : null
-
-  return c.json({
-    job_id,
-    status: effectiveStatus,
-    machine: builderJob.machine || null,
-    started_at: builderJob.job.started_at,
-    completed_at: effectiveCompletedAt,
-    runner_wait_seconds: runnerWaitSeconds,
-    build_time_seconds: timeoutApplied
-      ? effectiveBuildTimeSeconds
-      : builderJob.job.started_at && builderJob.job.completed_at
-        ? runtimeSeconds
-        : null,
-    error: effectiveError,
-    upload_url: builderJob.uploadUrl || null,
-    queue_priority: baseQueuePriority,
-    effective_queue_priority: effectiveQueuePriority,
-    queue_priority_tier: baseQueuePriority !== null
-      ? nativeBuildQueueTierFromPriority(baseQueuePriority)
-      : null,
-  }, 200)
+  return c.json({ ...statusPayload, persisted: true }, 200)
 }

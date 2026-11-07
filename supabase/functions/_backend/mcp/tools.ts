@@ -249,7 +249,8 @@ const bundleUploadTools: McpTool[] = [
     description: 'Step 1 of 3 to upload a live update bundle without a logged-in CLI. '
       + 'First, change into the absolute local Capacitor app directory (not the workspace root or MCP server directory) and package the web build offline (no login needed): `npx @capgo/cli@latest bundle zip <appId> --for-upload --json` (add --delta-pack <file> for delta updates; it encrypts like bundle upload when the project has an encryption key). '
       + 'Pass the JSON fields it prints (checksum, native_packages, updater_version, session_key, key_id, size_bytes, cli_version) here. '
-      + 'Capgo runs every check the CLI runs (permissions, plan, version name, encryption policy, channel permissions, same-checksum and native compatibility per channel), creates the version and returns signed PUT URLs. '
+      + 'Capgo runs every check the CLI runs (permissions, plan, version name, encryption policy, channel permissions, same-checksum and native compatibility per channel), then creates an unfinished app_versions row (storage_provider r2-direct) and returns signed PUT URLs plus upload_token. '
+      + 'No channel deploy and no device update until capgo_complete_bundle_upload. Cancel a pending upload with capgo_abort_bundle_upload (removes the unfinished version and staged files). '
       + 'Step 2: upload with `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<url>"` (and the delta pack to its own URL). Step 3: capgo_complete_bundle_upload with upload_token.',
     input: {
       appId,
@@ -285,7 +286,7 @@ const bundleUploadTools: McpTool[] = [
       rollout_cache_ttl_seconds: z.number().int().min(60).max(31536000).optional(),
       delete_linked_bundle_on_upload: z.boolean().optional().describe('Delete the bundle the channel served before. Confirm with the user first'),
     },
-    annotations: WRITE,
+    annotations: { ...WRITE, destructiveHint: true },
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/bundle/upload/prepare', body: compact({ app_id: id, ...rest }) }),
   }),
   apiTool({
@@ -1074,14 +1075,15 @@ const buildTools: McpTool[] = [
   }),
   apiTool({
     name: 'capgo_prepare_build_credentials_upload',
-    title: 'Upload build credentials',
-    description: 'Get a 10-minute signed URL to store this app\'s signing credentials for one platform, so secrets never pass through the chat. '
-      + 'Write a JSON file locally with the same keys as the CLI credentials file (e.g. BUILD_CERTIFICATE_BASE64, P12_PASSWORD, CAPGO_IOS_PROVISIONING_MAP, APPLE_KEY_ID, APPLE_ISSUER_ID, APPLE_KEY_CONTENT, APP_STORE_CONNECT_TEAM_ID; '
-      + 'Android: ANDROID_KEYSTORE_FILE, KEYSTORE_KEY_ALIAS, KEYSTORE_KEY_PASSWORD, KEYSTORE_STORE_PASSWORD, PLAY_CONFIG_JSON) with file contents base64-encoded, '
-      + 'then `curl -fsS -X PUT -H "Content-Type: application/json" --data-binary @<file> "<url>"` and delete the file. Never print the secrets. '
-      + 'Users with a logged-in CLI can instead run `npx @capgo/cli@latest build credentials push`.',
+    title: 'Prepare build credentials upload',
+    description: 'Step 1 of 2 to store native cloud build signing credentials for one app and platform in Capgo (encrypted at rest). '
+      + 'This tool only returns a 10 minute signed PUT URL on api.capgo.app. Secrets never pass through chat or MCP. '
+      + 'iOS JSON keys: BUILD_CERTIFICATE_BASE64 (distribution .p12), P12_PASSWORD, CAPGO_IOS_PROVISIONING_MAP (base64 provisioning profiles per bundle id), optional Apple API keys (APPLE_KEY_ID, APPLE_ISSUER_ID, APPLE_KEY_CONTENT) and APP_STORE_CONNECT_TEAM_ID for App Store upload. '
+      + 'Android JSON keys: ANDROID_KEYSTORE_FILE (base64 .jks or .keystore), KEYSTORE_KEY_ALIAS, KEYSTORE_KEY_PASSWORD, KEYSTORE_STORE_PASSWORD, optional PLAY_CONFIG_JSON (base64 Play service account JSON for Play upload). '
+      + 'Step 2: `curl -fsS -X PUT -H "Content-Type: application/json" --data-binary @credentials.json "<upload_url>"` then delete the local file. mode replace overwrites stored credentials for that platform; merge only updates keys present in the JSON. '
+      + 'Confirm with the user before replace. Users with a logged-in CLI can instead run `npx @capgo/cli@latest build credentials push`.',
     input: { appId, platform, mode: z.enum(['replace', 'merge']).optional().describe('merge keeps stored keys missing from the file (default replace)') },
-    annotations: DESTRUCTIVE,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     request: input => ({ method: 'POST', path: '/build/credentials/upload-url', body: compact({ app_id: input.appId, platform: input.platform, mode: input.mode }) }),
   }),
   apiTool({
@@ -1095,10 +1097,12 @@ const buildTools: McpTool[] = [
   apiTool({
     name: 'capgo_get_build_status',
     title: 'Build status',
-    description: 'Get the status of a native cloud build. Call it again after the build ends so its status and build time are recorded.',
+    description: 'Read the current status of a native cloud build from the builder (queued, running, succeeded, failed, cancelled). '
+      + 'This is a read-only poll: it does not update build_requests, record build minutes, emit webhooks or cancel timed-out jobs. '
+      + 'After a successful build, use the Capgo CLI or console if you need billing and history synced.',
     input: { appId, job_id: z.string().min(1) },
     annotations: READ,
-    request: input => ({ method: 'GET', path: '/build/status', query: { app_id: input.appId, job_id: input.job_id } }),
+    request: input => ({ method: 'GET', path: '/build/status', query: { app_id: input.appId, job_id: input.job_id, persist: 'false' } }),
   }),
   apiTool({
     name: 'capgo_get_build_logs',

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
+import { getBuildStatus, shouldPersistBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
 
 const mocks = vi.hoisted(() => ({
   adminQuery: vi.fn(),
@@ -71,13 +71,27 @@ beforeEach(() => {
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 })
 
+describe('shouldPersistBuildStatus', () => {
+  it.concurrent('defaults to persisting', () => {
+    expect(shouldPersistBuildStatus({})).toBe(true)
+    expect(shouldPersistBuildStatus({ persist: true })).toBe(true)
+    expect(shouldPersistBuildStatus({ persist: 'true' })).toBe(true)
+  })
+
+  it.concurrent('skips persistence for false-like query values', () => {
+    expect(shouldPersistBuildStatus({ persist: false })).toBe(false)
+    expect(shouldPersistBuildStatus({ persist: 'false' })).toBe(false)
+    expect(shouldPersistBuildStatus({ persist: '0' })).toBe(false)
+  })
+})
+
 describe('build status Builder checklist persistence', () => {
   it('runs after the CAS winner without changing the endpoint response', async () => {
     const c = context()
     const response = await getBuildStatus(c, { job_id: jobId, app_id: appId, platform: 'ios' }, { key: 'api-key' } as any)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({ job_id: jobId, status: 'succeeded' })
+    expect(await response.json()).toMatchObject({ job_id: jobId, status: 'succeeded', persisted: true })
     expect(mocks.checklist).toHaveBeenCalledWith(c, { appId, platform: 'ios', status: 'succeeded' })
   })
 
@@ -87,5 +101,16 @@ describe('build status Builder checklist persistence', () => {
 
     expect(response.status).toBe(200)
     expect(mocks.checklist).not.toHaveBeenCalled()
+  })
+
+  it('skips DB sync, billing and checklist when persist is false', async () => {
+    const response = await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' }, { key: 'api-key' } as any)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ job_id: jobId, status: 'succeeded', persisted: false })
+    expect(mocks.adminQuery).not.toHaveBeenCalled()
+    expect(mocks.checklist).not.toHaveBeenCalled()
+    expect(mocks.emit).not.toHaveBeenCalled()
+    expect(mocks.recordBuildTime).not.toHaveBeenCalled()
   })
 })
