@@ -437,41 +437,9 @@ defineExpose({
   showCumulative,
 })
 
-const allLimits = computed(() => {
-  return plans.value.reduce((p, plan) => {
-    const newP = {
-      ...p,
-    }
-    newP.mau[plan.name] = plan.mau
-    newP.storage[plan.name] = plan.storage
-    newP.bandwidth[plan.name] = plan.bandwidth
-    return newP
-  }, {
-    mau: {} as any,
-    storage: {} as any,
-    bandwidth: {} as any,
-  })
-})
-
-const storageLimitHours = computed(() => {
-  const start = effectiveOrganization.value?.subscription_start ? new Date(effectiveOrganization.value.subscription_start) : null
-  const end = effectiveOrganization.value?.subscription_end ? new Date(effectiveOrganization.value.subscription_end) : null
-  if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start)
-    return 31 * 24
-  return Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000))
-})
-
-const storageLimits = computed(() => {
-  if (storageUsageMode.value === 'total')
-    return allLimits.value.storage
-
-  return Object.fromEntries(
-    Object.entries(allLimits.value.storage as Record<string, number>).map(([planName, value]) => [
-      planName,
-      value * storageLimitHours.value,
-    ]),
-  )
-})
+// Only MAU has a plan limit line. Storage and bandwidth are fair use on every
+// plan, so their charts show usage without plan limits.
+const mauLimits = computed(() => Object.fromEntries(plans.value.map(plan => [plan.name, plan.mau])))
 
 async function getAppStats(rangeStart: Date, rangeEnd: Date) {
   if (props.appId) {
@@ -1090,7 +1058,7 @@ onBeforeUnmount(() => {
     class="grid grid-cols-1 gap-6 mb-6 sm:grid-cols-12"
   >
     <UsageCard
-      id="mau-stat" :limits="allLimits.mau" :colors="colors.cyan" :accumulated="useBillingPeriod && showCumulative"
+      id="mau-stat" :limits="mauLimits" :colors="colors.cyan" :accumulated="useBillingPeriod && showCumulative"
       :data="mauData" :data-by-app="mauDataByApp" :app-names="appNames" :title="`${t('monthly-active')}`" :unit="t('units-users')"
       :use-billing-period="useBillingPeriod"
       :is-loading="isLoading"
@@ -1101,7 +1069,7 @@ onBeforeUnmount(() => {
       class="col-span-full sm:col-span-6 xl:col-span-4"
     />
     <UsageCard
-      :limits="storageLimits" :colors="colors.blue" :data="storageData" :data-by-app="storageDataByApp" :app-names="appNames" :accumulated="useBillingPeriod && showCumulative"
+      :colors="colors.blue" :data="storageData" :data-by-app="storageDataByApp" :app-names="appNames" :accumulated="useBillingPeriod && showCumulative"
       :title="t('Storage')" :unit="storageUnit"
       :use-billing-period="useBillingPeriod"
       :is-loading="isLoading"
@@ -1138,7 +1106,7 @@ onBeforeUnmount(() => {
       </template>
     </UsageCard>
     <UsageCard
-      :limits="allLimits.bandwidth" :colors="colors.orange" :data="bandwidthData" :data-by-app="bandwidthDataByApp" :app-names="appNames" :accumulated="useBillingPeriod && showCumulative"
+      :colors="colors.orange" :data="bandwidthData" :data-by-app="bandwidthDataByApp" :app-names="appNames" :accumulated="useBillingPeriod && showCumulative"
       :title="t('Bandwidth')" :unit="t('units-gb')"
       :use-billing-period="useBillingPeriod"
       :is-loading="isLoading"

@@ -51,12 +51,13 @@ type UsageTotals = Record<'mau' | 'bandwidth' | 'storage' | 'build_time', number
 
 async function estimateOverageCost(orgId: string, plan: Plan, usage: UsageTotals) {
   // Credit-only orgs have no plan allowance: billing prices all usage
-  // from the bottom of the tier ladder.
+  // from the bottom of the tier ladder. On a plan, storage and bandwidth are
+  // fair use, so all of it counts as included and never costs credits.
   const creditsOnly = isCreditsOnlyOrg(organizationStore.currentOrganization)
   const included: UsageTotals = {
     mau: creditsOnly ? 0 : plan.mau,
-    bandwidth: creditsOnly ? 0 : Math.round(plan.bandwidth * 1073741824),
-    storage: creditsOnly ? 0 : Math.round(plan.storage * 1073741824),
+    bandwidth: creditsOnly ? 0 : usage.bandwidth,
+    storage: creditsOnly ? 0 : usage.storage,
     build_time: creditsOnly ? 0 : plan.build_time_unit,
   }
   try {
@@ -216,6 +217,8 @@ const planUsage = computed(() => planUsageMap.value?.get(currentOrganization.val
 const currentPlan = computed(() => main.plans.find(plan => plan.name === planUsage.value?.currentPlan?.name))
 const currentPlanSuggest = computed(() => main.plans.find(plan => plan.name === main.bestPlan))
 const isCreditsOnly = computed(() => isCreditsOnlyOrg(currentOrganization.value))
+// On a plan, storage and bandwidth have no limit to measure against.
+const storageBandwidthFairUse = computed(() => !isCreditsOnly.value)
 const currentPlanLabel = computed(() => {
   if (isCreditsOnly.value)
     return t('credits')
@@ -303,10 +306,9 @@ function maybeDeriveMissingUsagePercents(params: {
     bandwidth_percent: fallback.bandwidth_percent,
     storage_percent: fallback.storage_percent,
     build_time_percent: fallback.build_time_percent,
+    // Storage and bandwidth are fair use: they never count toward plan usage.
     total_percent: Math.max(
       fallback.mau_percent,
-      fallback.bandwidth_percent,
-      fallback.storage_percent,
       fallback.build_time_percent,
     ),
   }
@@ -528,11 +530,17 @@ function nextRunDate() {
             <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
               {{ t('Storage') }}
             </div>
-            <div class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.storage_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
+            <div v-if="storageBandwidthFairUse" class="py-0.5 px-2 text-xs font-medium text-purple-700 bg-purple-100 rounded-full dark:text-purple-200 dark:bg-purple-900/40">
+              {{ t('fair-use') }}
+            </div>
+            <div v-else class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.storage_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
               {{ formatPercentValue(planUsage?.detailPlanUsage?.storage_percent) }}%
             </div>
           </div>
-          <div class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
+          <p v-if="storageBandwidthFairUse" class="mb-4 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('fair-use-usage-hint') }}
+          </p>
+          <div v-else class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
             <div class="h-full transition-all duration-500 rounded-full" :class="(planUsage?.detailPlanUsage?.storage_percent || 0) >= 100 ? 'bg-red-500' : 'bg-purple-500'" :style="{ width: `${Math.min(planUsage?.detailPlanUsage?.storage_percent || 0, 100)}%` }" />
           </div>
           <div class="space-y-1 text-sm">
@@ -542,7 +550,8 @@ function nextRunDate() {
             </div>
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('included-in-plan') }}</span>
-              <span>{{ formatNumberValue(planUsage?.currentPlan?.storage) }} GB</span>
+              <span v-if="storageBandwidthFairUse">{{ t('fair-use') }}</span>
+              <span v-else>{{ formatNumberValue(planUsage?.currentPlan?.storage) }} GB</span>
             </div>
           </div>
         </div>
@@ -553,11 +562,17 @@ function nextRunDate() {
             <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
               {{ t('Bandwidth') }}
             </div>
-            <div class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.bandwidth_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
+            <div v-if="storageBandwidthFairUse" class="py-0.5 px-2 text-xs font-medium text-green-700 bg-green-100 rounded-full dark:text-green-200 dark:bg-green-900/40">
+              {{ t('fair-use') }}
+            </div>
+            <div v-else class="text-lg font-bold" :class="(planUsage?.detailPlanUsage?.bandwidth_percent || 0) >= 100 ? 'text-red-600' : 'text-gray-900 dark:text-white'">
               {{ formatPercentValue(planUsage?.detailPlanUsage?.bandwidth_percent) }}%
             </div>
           </div>
-          <div class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
+          <p v-if="storageBandwidthFairUse" class="mb-4 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('fair-use-usage-hint') }}
+          </p>
+          <div v-else class="w-full h-2 mb-4 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-700">
             <div class="h-full transition-all duration-500 rounded-full" :class="(planUsage?.detailPlanUsage?.bandwidth_percent || 0) >= 100 ? 'bg-red-500' : 'bg-green-500'" :style="{ width: `${Math.min(planUsage?.detailPlanUsage?.bandwidth_percent || 0, 100)}%` }" />
           </div>
           <div class="space-y-1 text-sm">
@@ -567,7 +582,8 @@ function nextRunDate() {
             </div>
             <div class="flex justify-between text-gray-600 dark:text-gray-400">
               <span>{{ t('included-in-plan') }}</span>
-              <span>{{ formatNumberValue(planUsage?.currentPlan?.bandwidth) }} GB</span>
+              <span v-if="storageBandwidthFairUse">{{ t('fair-use') }}</span>
+              <span v-else>{{ formatNumberValue(planUsage?.currentPlan?.bandwidth) }} GB</span>
             </div>
           </div>
         </div>
@@ -621,11 +637,11 @@ function nextRunDate() {
             </div>
             <div class="flex justify-between">
               <span>{{ t('bandwidth-usage') }}</span>
-              <span class="font-medium">{{ formatPercentValue(planUsage?.detailPlanUsage?.bandwidth_percent) }}%</span>
+              <span class="font-medium">{{ storageBandwidthFairUse ? t('fair-use') : `${formatPercentValue(planUsage?.detailPlanUsage?.bandwidth_percent)}%` }}</span>
             </div>
             <div class="flex justify-between">
               <span>{{ t('storage-usage') }}</span>
-              <span class="font-medium">{{ formatPercentValue(planUsage?.detailPlanUsage?.storage_percent) }}%</span>
+              <span class="font-medium">{{ storageBandwidthFairUse ? t('fair-use') : `${formatPercentValue(planUsage?.detailPlanUsage?.storage_percent)}%` }}</span>
             </div>
             <div class="flex justify-between">
               <span>{{ t('build-time-usage') }}</span>
