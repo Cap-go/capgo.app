@@ -30,6 +30,8 @@ export async function fetchObserve(options: ObserveOptions): Promise<Record<stri
     schema = baseSchema.extend({ release: z.record(z.string(), z.unknown()).nullable() })
   else if (options.view === 'errors')
     schema = baseSchema.extend({ summary: z.record(z.string(), z.unknown()), actions: z.array(z.record(z.string(), z.unknown())), samples: z.array(z.record(z.string(), z.unknown())) })
+  else if (options.view === 'logs')
+    schema = baseSchema.extend({ samples: z.array(z.record(z.string(), z.unknown())) })
   const result = schema.safeParse(data)
   if (!result.success)
     throw new CliUserError('Capgo returned an invalid Observe response. Retry the read; missing telemetry does not prove the release is healthy.')

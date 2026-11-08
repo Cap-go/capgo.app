@@ -63,10 +63,10 @@ test('rejects malformed JSON instead of treating it as healthy empty data', asyn
 })
 
 test('generated CLI reference only advertises supported Observe filters', () => {
-  const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url))
+  const entry = fileURLToPath(new URL('../src/index.ts', import.meta.url))
   const directory = mkdtempSync(join(tmpdir(), 'capgo-monitoring-reference-'))
   try {
-    execFileSync('node', [entry, 'generate-docs', '--folder', directory], { stdio: 'pipe', env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '1' } })
+    execFileSync(process.execPath, [entry, 'generate-docs', '--folder', directory], { stdio: 'pipe', env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '1' } })
     const reference = readFileSync(join(directory, 'observe.mdx'), 'utf8')
     const section = (view: string) => {
       const content = reference.split(`<a id="observe-${view}"></a>`)[1]
@@ -108,4 +108,18 @@ test('rejects incomplete errors and empty build statuses', async () => {
   await expect(fetchObserve({ ...options, view: 'errors' })).rejects.toThrow('invalid Observe response')
   globalThis.fetch = Object.assign(async () => Response.json({ job_id: 'ci-job', status: '' }), { preconnect: originalFetch.preconnect })
   await expect(fetchBuildMonitor('status', { ...options, jobId: 'ci-job' })).rejects.toThrow('invalid build status response')
+})
+
+
+test.each(['status', 'logs'] as const)('rejects %s data for a different build job', async (kind) => {
+  globalThis.fetch = Object.assign(async () => Response.json({ job_id: 'other-job', status: 'queued', logs: '', cursor: 0, truncated: false }), { preconnect: originalFetch.preconnect })
+  await expect(fetchBuildMonitor(kind, { appId: 'com.example.app', jobId: 'ci-job', apikey: 'example-test-key', apiHost: 'http://localhost:8787' })).rejects.toThrow(`invalid build ${kind} response`)
+})
+
+test('requires log samples while accepting an empty sample array', async () => {
+  const options = { appId: 'com.example.app', view: 'logs' as const, apikey: 'example-test-key', apiHost: 'http://localhost:8787' }
+  globalThis.fetch = Object.assign(async () => Response.json({ app_id: options.appId, view: 'logs' }), { preconnect: originalFetch.preconnect })
+  await expect(fetchObserve(options)).rejects.toThrow('invalid Observe response')
+  globalThis.fetch = Object.assign(async () => Response.json({ app_id: options.appId, view: 'logs', samples: [] }), { preconnect: originalFetch.preconnect })
+  expect(await fetchObserve(options)).toMatchObject({ samples: [] })
 })
