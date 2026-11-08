@@ -19,7 +19,7 @@ export function ciProductionEncryptionEvidence(bundles: readonly (CiEncryptionBu
   let allPlaintext = bundles.length > 0
   for (const bundle of bundles) {
     const name = typeof bundle?.name === 'string' ? bundle.name.trim() : ''
-    if (!bundle || bundle.deleted !== false || bundle.deleted_at !== null || !name || name === 'builtin' || name === 'unknown') {
+    if (bundle?.deleted !== false || bundle.deleted_at !== null || !name || name === 'builtin' || name === 'unknown') {
       allPlaintext = false
       continue
     }
