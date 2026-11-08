@@ -145,13 +145,37 @@ export function normalizeCiChannels(values: readonly (string | null | undefined)
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/
 
+const CI_EXPRESSION_DELIMITERS = [
+  { open: '$(', close: ')' },
+  { open: '$[[', close: ']]' },
+  { open: '<<', close: '>>' },
+]
+
+/** Keeps empty or unmatched delimiters literal while rejecting provider interpolation. */
+function containsCiExpression(name: string) {
+  if (name.includes('${{'))
+    return true
+  return CI_EXPRESSION_DELIMITERS.some(({ open, close }) => {
+    let start = name.indexOf(open)
+    while (start !== -1) {
+      const end = name.indexOf(close, start + open.length)
+      if (end === -1)
+        return false
+      if (end > start + open.length)
+        return true
+      start = name.indexOf(open, end + close.length)
+    }
+    return false
+  })
+}
+
 /**
  * `bundle upload --channel` splits on commas and trims each name, so such a
- * channel cannot be targeted from CI. GitHub also expands expressions before
+ * channel cannot be targeted from CI. Providers also expand expressions before
  * shell quoting applies. The guide asks for a rename for either case.
  */
 export function isCiChannelSupported(name: string) {
-  return name.length > 0 && name === name.trim() && !name.includes(',') && !name.includes('${{') && !CONTROL_CHARACTERS.test(name)
+  return name.length > 0 && name === name.trim() && !name.includes(',') && !containsCiExpression(name) && !CONTROL_CHARACTERS.test(name)
 }
 
 // Inside single quotes only the quote itself needs escaping: close, escape, reopen.

@@ -20,6 +20,11 @@
 -- No policy, view, or table scan invokes these checks once per candidate row.
 -- record_app_cicd_deploy runs once per bundle upload or build request
 -- (backend, service_role), and writes only until the first detection per product.
+-- The policy RPC runs once per guide load: one apps/orgs PK join and one
+-- request-scoped app-read check, never a policy, view, or plugin hot path.
+-- Only authenticated/service_role callers can execute it. apps_pkey and
+-- orgs_pkey keep the lookup to one app and owner even as those tables grow;
+-- the existing RBAC helper checks only the caller's principal/scope bindings.
 
 CREATE OR REPLACE FUNCTION "public"."app_onboarding_cicd_timestamp"()
 RETURNS text
@@ -33,6 +38,43 @@ $$;
 ALTER FUNCTION public.app_onboarding_cicd_timestamp() OWNER TO "postgres";
 REVOKE ALL ON FUNCTION public.app_onboarding_cicd_timestamp() FROM PUBLIC;
 GRANT ALL ON FUNCTION public.app_onboarding_cicd_timestamp() TO "service_role";
+
+CREATE OR REPLACE FUNCTION "public"."get_app_cicd_encryption_policy"(
+  "p_app_id" character varying
+) RETURNS TABLE("owner_org" uuid, "enforce_encrypted_bundles" boolean)
+LANGUAGE "plpgsql"
+SECURITY DEFINER
+SET "search_path" TO ''
+AS $$
+DECLARE
+  v_owner_org uuid;
+  v_enforce_encrypted_bundles boolean;
+BEGIN
+  SELECT apps.owner_org, orgs.enforce_encrypted_bundles
+  INTO v_owner_org, v_enforce_encrypted_bundles
+  FROM public.apps
+  JOIN public.orgs ON orgs.id = apps.owner_org
+  WHERE apps.app_id = p_app_id;
+
+  IF v_owner_org IS NULL OR NOT public.rbac_check_permission_request(
+    public.rbac_perm_app_read(),
+    v_owner_org,
+    p_app_id,
+    NULL::bigint
+  ) THEN
+    RAISE EXCEPTION 'NO_PERMISSION' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN QUERY SELECT v_owner_org, v_enforce_encrypted_bundles;
+END;
+$$;
+
+ALTER FUNCTION public.get_app_cicd_encryption_policy(character varying) OWNER TO "postgres";
+REVOKE ALL ON FUNCTION public.get_app_cicd_encryption_policy(character varying) FROM PUBLIC, "anon", "authenticated";
+GRANT EXECUTE ON FUNCTION public.get_app_cicd_encryption_policy(character varying) TO "authenticated", "service_role";
+
+COMMENT ON FUNCTION public.get_app_cicd_encryption_policy(character varying) IS
+  'Returns only the app owner and required-encryption flag to app readers, including app-scoped uploaders without organization read access.';
 
 CREATE OR REPLACE FUNCTION "public"."record_app_cicd_setup"(
   "p_app_id" character varying,

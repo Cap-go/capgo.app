@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Json } from '~/types/database.types'
+import type { CiEncryptionBundle } from '~/utils/cicdEncryption'
 import type { CiKeySpec, CiPlatform, CiProduct, CiProvider, CiSecretName, CiStrategy } from '~/utils/cicdSetupGuide'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -33,6 +34,7 @@ import { formatDate } from '~/services/date'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { ciChannelEncryptionBundles, ciProductionEncryptionEvidence } from '~/utils/cicdEncryption'
 import {
   buildCiPipeline,
   BUILDER_PREVIEW_SCOPE,
@@ -92,6 +94,7 @@ const preprodBranchInvalid = computed(() => preprodBranchInput.value.trim() !== 
 // Apps can have one default channel per platform: CI uploads to all of them.
 const defaultChannels = ref<string[] | null | undefined>(undefined)
 const availableChannels = ref<string[]>([])
+const channelBundles = ref<Record<string, (CiEncryptionBundle | null)[]>>({})
 type LoadStatus = 'loading' | 'ready' | 'error'
 const channelStatus = ref<LoadStatus>('loading')
 const productionChannels = computed(() => {
@@ -110,15 +113,22 @@ const testerChannelCollision = computed(() => showTesterChannel.value && product
 // Encrypted apps need the private key in CI, or the CLI uploads plaintext
 // bundles (or fails when the organization enforces encryption).
 const encryptionRequired = ref(false)
-const encryptionDetected = ref(false)
+const encryptionEvidence = computed(() => ciProductionEncryptionEvidence(productionChannels.value.flatMap(name => channelBundles.value[name] ?? [null])))
+const encryptionDetected = computed(() => encryptionEvidence.value === 'encrypted')
 const encryptionStatus = ref<LoadStatus>('loading')
 const encryptedChoice = ref<boolean | null>(null)
 const encrypted = computed(() => encryptionRequired.value || (encryptedChoice.value ?? encryptionDetected.value))
+const encryptionChoiceRequired = computed(() => product.value === 'ota' && channelStatus.value === 'ready' && encryptionStatus.value === 'ready'
+  && !productionTargetMissing.value && !encryptionRequired.value && encryptionEvidence.value === 'unknown')
+const encryptionChoiceMissing = computed(() => encryptionChoiceRequired.value && encryptedChoice.value === null)
+watch(productionChannel, () => {
+  encryptedChoice.value = null
+}, { flush: 'sync' })
 
 // Never swap in another channel: CI would ship to a channel the user didn't pick.
 const unsupportedChannel = computed(() => productionChannels.value.find(channel => !isCiChannelSupported(channel)))
 const channelUnsupported = computed(() => product.value === 'ota' && unsupportedChannel.value !== undefined)
-const pipeline = computed(() => provider.value && !productionTargetMissing.value && !channelUnsupported.value && !branchesEqual.value
+const pipeline = computed(() => provider.value && !productionTargetMissing.value && !encryptionChoiceMissing.value && !channelUnsupported.value && !branchesEqual.value
   && !testerChannelInvalid.value && !testerChannelCollision.value
   && (product.value !== 'ota' || (channelStatus.value === 'ready' && encryptionStatus.value === 'ready'))
   ? buildCiPipeline({
@@ -300,55 +310,54 @@ async function createKey(spec: CiKeySpec) {
   }
 }
 
+let policyRequest = 0
+let channelRequest = 0
+
 async function loadEncryptionState() {
   const appId = props.appId
+  const ownerOrgId = props.ownerOrgId
+  const request = ++policyRequest
   encryptionStatus.value = 'loading'
   try {
-    const [policy, latestBundle] = await Promise.all([
-      capgo.from('orgs').select('enforce_encrypted_bundles').eq('id', props.ownerOrgId).maybeSingle(),
-      capgo
-        .from('app_versions')
-        .select('key_id')
-        .eq('app_id', appId)
-        .eq('deleted', false)
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-        .limit(1),
-    ])
-    if (policy.error || latestBundle.error)
-      throw policy.error ?? latestBundle.error
-    if (!policy.data)
+    const { data, error } = await capgo.rpc('get_app_cicd_encryption_policy', { p_app_id: appId }).single()
+    if (request !== policyRequest || appId !== props.appId || ownerOrgId !== props.ownerOrgId)
+      return
+    if (error)
+      throw error
+    if (!data || data.owner_org !== ownerOrgId)
       throw new Error('The app organization encryption policy is unavailable')
-    if (appId === props.appId) {
-      encryptionRequired.value = policy.data.enforce_encrypted_bundles === true
-      encryptionDetected.value = !!latestBundle.data?.[0]?.key_id
-      encryptionStatus.value = 'ready'
-    }
+    encryptionRequired.value = data.enforce_encrypted_bundles
+    encryptionStatus.value = 'ready'
   }
   catch (error) {
     console.error('Cannot check CI/CD bundle encryption', error)
-    if (appId === props.appId)
+    if (request === policyRequest && appId === props.appId && ownerOrgId === props.ownerOrgId)
       encryptionStatus.value = 'error'
   }
 }
 
 async function loadDefaultChannel() {
   const appId = props.appId
+  const ownerOrgId = props.ownerOrgId
+  const request = ++channelRequest
   channelStatus.value = 'loading'
+  encryptedChoice.value = null
+  channelBundles.value = {}
   try {
     // Bound the picker and return public defaults before optional private targets.
     const { data, error } = await capgo
       .from('channels')
-      .select('name, public, ios, android, electron')
+      .select('name, public, ios, android, electron, version, rollout_enabled, rollout_version, current_version:app_versions!channels_version_fkey(name,key_id,deleted,deleted_at), rollout_bundle:app_versions!channels_rollout_version_fkey(name,key_id,deleted,deleted_at)')
       .eq('app_id', appId)
       .order('public', { ascending: false })
       .order('name')
       .limit(1000)
+    if (request !== channelRequest || appId !== props.appId || ownerOrgId !== props.ownerOrgId)
+      return
     if (error)
       throw error
-    if (appId !== props.appId)
-      return
     const enabled = (data ?? []).filter(row => row.ios || row.android || row.electron)
+    channelBundles.value = Object.fromEntries(enabled.filter(row => row.name).map(row => [row.name, ciChannelEncryptionBundles(row)]))
     const names = enabled
       .filter(row => row.public)
       .map(row => row.name)
@@ -361,7 +370,7 @@ async function loadDefaultChannel() {
   }
   catch (error) {
     console.error('Cannot load CI/CD default channels', error)
-    if (appId === props.appId)
+    if (request === channelRequest && appId === props.appId && ownerOrgId === props.ownerOrgId)
       channelStatus.value = 'error'
   }
 }
@@ -485,9 +494,15 @@ async function recordCreatedKey(spec: CiKeySpec) {
   }
 }
 
-onMounted(() => {
+watch([() => props.appId, () => props.ownerOrgId], () => {
+  encryptionRequired.value = false
+  defaultChannels.value = undefined
+  availableChannels.value = []
   void loadDefaultChannel()
   void loadEncryptionState()
+}, { immediate: true })
+
+onMounted(() => {
   void refreshStatus()
   track('onboarding_cicd_guide_opened')
   statusTimer = setInterval(() => {
@@ -497,6 +512,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  policyRequest += 1
+  channelRequest += 1
   statusGeneration += 1
   if (statusTimer)
     clearInterval(statusTimer)
@@ -583,9 +600,21 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           <IconCheck v-if="product === option" class="h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
         </button>
       </fieldset>
-      <div v-if="product === 'ota'" class="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1" data-test="cicd-encryption">
+      <fieldset v-if="product === 'ota' && encryptionChoiceRequired" class="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-encryption-choice">
+        <legend class="px-1 font-semibold">
+          {{ t('cicd-guide-encryption-choice-title') }}
+        </legend>
+        <p>{{ t('cicd-guide-encryption-choice-description') }}</p>
+        <div class="flex flex-wrap gap-x-5 gap-y-2">
+          <label v-for="choice in [true, false]" :key="String(choice)" class="inline-flex min-h-11 cursor-pointer items-center gap-2">
+            <input v-model="encryptedChoice" type="radio" name="production-encryption" :value="choice" class="d-radio d-radio-sm" :data-test="choice ? 'cicd-encryption-choice-encrypted' : 'cicd-encryption-choice-plaintext'">
+            {{ t(choice ? 'cicd-guide-encryption-choice-encrypted' : 'cicd-guide-encryption-choice-plaintext') }}
+          </label>
+        </div>
+      </fieldset>
+      <div v-else-if="product === 'ota'" class="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1" data-test="cicd-encryption">
         <label class="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm font-medium text-slate-800 dark:text-slate-100" :class="choiceClass(encrypted)">
-          <input type="checkbox" class="d-checkbox d-checkbox-sm" :checked="encrypted" :disabled="encryptionRequired" data-test="cicd-encrypted" @change="encryptedChoice = ($event.target as HTMLInputElement).checked">
+          <input type="checkbox" class="d-checkbox d-checkbox-sm" :checked="encrypted" :disabled="encryptionRequired || channelStatus !== 'ready' || encryptionStatus !== 'ready'" data-test="cicd-encrypted" @change="encryptedChoice = ($event.target as HTMLInputElement).checked">
           {{ t('cicd-guide-encrypted') }}
         </label>
         <span v-if="encryptionRequired || encryptionDetected" class="text-sm text-slate-500 dark:text-slate-400">

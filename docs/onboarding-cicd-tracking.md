@@ -113,6 +113,28 @@ GitLab live-update upload and preview cleanup jobs share one app-level
 next bundle version concurrently. Preview environments and stop jobs remain
 specific to each merge request.
 
+## Production encryption decisions
+
+The guide reads the required-encryption flag through
+`get_app_cicd_encryption_policy`, which checks app-read permission and returns
+only the current owner and flag. App-scoped readers and legacy uploaders can use
+the guide without permission to read organization settings.
+
+Encryption evidence comes from the selected production channels, including a
+chosen private target. Their base bundles and configured, enabled rollout
+bundles are considered together. Enabled rollouts remain candidates while
+paused or at zero percent because devices already on the rollout can keep it.
+Base evidence is retained conservatively at a full rollout. Newer tester uploads
+do not change the production inference.
+
+Any readable encrypted production candidate defaults key restoration on. A
+plaintext default requires every candidate to be a readable, live uploaded
+bundle. Missing, internal, deleted, or unreadable metadata requires an explicit
+encrypted/plaintext answer unless the organization already requires encryption.
+Changing a target or refreshing its metadata clears the previous answer.
+Owner changes reload both policy and channel metadata; responses for old owners
+and superseded reads are ignored. Builder generation remains independent.
+
 ## Protected encrypted previews
 
 The bundle encryption private key also authenticates bundles accepted by the

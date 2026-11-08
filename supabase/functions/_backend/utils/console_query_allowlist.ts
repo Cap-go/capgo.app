@@ -41,6 +41,7 @@ export const CONSOLE_RPCS = new Set([
   'find_best_plan_v3',
   'get_account_removal_date',
   'get_app_access_rbac',
+  'get_app_cicd_encryption_policy',
   'get_app_stats_refresh_state',
   'get_bundle_channel_removals',
   'get_bundle_upload_daily_counts',

@@ -272,7 +272,7 @@ test.describe('CI/CD setup guide', () => {
     await page.goto(`${fixture}&defaultChannel=${encodeURIComponent('Live app')}`)
     await page.locator('[data-test="cicd-provider-github"]').click()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText(`--channel 'Live app' --auto-bump patch`)
-    for (const channel of ['beta,stable', '${{ github.event.head_commit.message }}']) {
+    for (const channel of ['beta,stable', '${{ github.event.head_commit.message }}', '$(releaseChannel)', '$[[ inputs.channel ]]', '<< pipeline.git.branch >>']) {
       await page.goto(`${fixture}&defaultChannel=${encodeURIComponent(channel)}`)
       await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toContainText(`"${channel}"`)
       await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
@@ -312,7 +312,7 @@ test.describe('CI/CD setup guide', () => {
   test('restores the encryption key in CI when the app encrypts its bundles', async ({ page }) => {
     await page.goto(`${fixture}&encrypted=1`)
     await expect(page.locator('[data-test="cicd-encrypted"]')).toBeChecked()
-    await expect(page.locator('[data-test="cicd-encryption"]')).toContainText('Your latest bundle is encrypted')
+    await expect(page.locator('[data-test="cicd-encryption"]')).toContainText('A production channel has an encrypted bundle')
     await page.locator('[data-test="cicd-provider-github"]').click()
     await expect(page.locator('[data-test="cicd-encryption-secret"]')).toContainText(`base64 < .capgo_key_v2 | tr -d '\\n' | gh secret set CAPGO_PRIVATE_KEY_BASE64`)
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('echo "$CAPGO_PRIVATE_KEY_BASE64" | base64 -d > .capgo_key_v2')
@@ -368,7 +368,7 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
     await expect(page.locator('[data-test="cicd-encrypted"]')).toBeChecked()
     await expect(page.locator('[data-test="cicd-encrypted"]')).toBeDisabled()
-    expect((await previewState(page)).policyQueries).toEqual(['?id=eq.00000000-0000-4000-8000-000000000002'])
+    expect((await previewState(page)).policyQueries).toEqual([{ appId, ownerOrgId: '00000000-0000-4000-8000-000000000002' }])
   })
 
   test('retries failed organization policy reads and keeps Builder available', async ({ page }) => {
@@ -384,20 +384,105 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
   })
 
-  test('uses the latest live bundle to detect encryption', async ({ page }) => {
-    await page.clock.install()
-    await page.goto(`${fixture}&bundle=1.0.2&encryptionDelay=2000`)
-    await page.evaluate(() => {
-      (window as any).onboardingSetupPreview.state.latestBundles.unshift(
-        { name: '1.0.1', created_at: '2026-11-05T10:00:00.000Z', key_id: 'older-encrypted-key' },
-        { name: '1.0.3', created_at: '2026-11-07T10:00:00.000Z', key_id: 'deleted-encrypted-key', deleted: true },
-      )
-    })
+  test('reads required encryption with app-scoped access and no organization read', async ({ page }) => {
+    await page.goto(`${fixture}&orgReadDenied=1&policyRequired=1`)
     await page.locator('[data-test="cicd-provider-github"]').click()
-    await page.clock.fastForward(2000)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    expect((await previewState(page)).orgPolicyReads).toBe(0)
+  })
+
+  test('uses encrypted production targets despite newer plaintext tester bundles', async ({ page }) => {
+    await page.goto(`${fixture}&bundle=2.0.0&productionEncrypted=1`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await expect(page.locator('[data-test="cicd-encrypted"]')).toBeChecked()
+    expect((await previewState(page)).encryptionQueries).toEqual([])
+  })
+
+  test('keeps plaintext production independent from encrypted tester bundles', async ({ page }) => {
+    await page.goto(`${fixture}&encrypted=1&productionEncrypted=0`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toBeVisible()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('CAPGO_PRIVATE_KEY_BASE64')
     await expect(page.locator('[data-test="cicd-encrypted"]')).not.toBeChecked()
+  })
+
+  test('covers encrypted defaults and enabled rollout targets', async ({ page }) => {
+    for (const query of ['defaultChannels=ios-release|android-release&encryptedChannel=android-release', 'rolloutEncrypted=1']) {
+      await page.goto(`${fixture}&${query}`)
+      await page.locator('[data-test="cicd-provider-github"]').click()
+      await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    }
+  })
+
+  test('resets an encryption override when selecting another private target', async ({ page }) => {
+    await page.goto(`${fixture}&defaultChannel=0&privateChannels=plain|secure&encryptedChannel=secure`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await page.locator('[data-test="cicd-production-target"]').selectOption('secure')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await page.locator('[data-test="cicd-encrypted"]').uncheck()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await page.locator('[data-test="cicd-production-target"]').selectOption('plain')
+    await page.locator('[data-test="cicd-production-target"]').selectOption('secure')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+  })
+
+  test('requires an explicit encryption choice for unreadable production metadata', async ({ page }) => {
+    await page.goto(`${fixture}&productionUnknown=1`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-encryption-choice"]')).toBeVisible()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
+    await page.locator('[data-test="cicd-product-builder"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('build request')
+    await page.locator('[data-test="cicd-product-ota"]').click()
+    await page.locator('[data-test="cicd-encryption-choice-plaintext"]').check()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toBeVisible()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await page.locator('[data-test="cicd-encryption-choice-encrypted"]').check()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+  })
+
+  test('honors required encryption even without readable production metadata', async ({ page }) => {
+    await page.goto(`${fixture}&productionUnknown=1&policyRequired=1`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await expect(page.locator('[data-test="cicd-encrypted"]')).toBeDisabled()
+    await expect(page.locator('[data-test="cicd-encryption-choice"]')).toHaveCount(0)
+  })
+
+  test('ignores stale policy responses after an owner change', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`${fixture}&policyDelay=3000`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await page.evaluate(() => {
+      const preview = (window as any).onboardingSetupPreview
+      preview.state.policyDelayMs = 0
+      preview.state.policyRequired = true
+      preview.ownerOrgId.value = '00000000-0000-4000-8000-000000000003'
+    })
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await page.clock.fastForward(3000)
+    await expect(page.locator('[data-test="cicd-encrypted"]')).toBeChecked()
+    await expect(page.locator('[data-test="cicd-encrypted"]')).toBeDisabled()
+    expect((await previewState(page)).policyQueries.map((query: { ownerOrgId: string }) => query.ownerOrgId)).toEqual([
+      '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003',
+    ])
+  })
+
+  test('ignores stale channel responses after an owner change', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`${fixture}&encrypted=1&channelDelay=3000`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await page.evaluate(() => {
+      const preview = (window as any).onboardingSetupPreview
+      preview.state.channelDelayMs = 0
+      preview.state.channels[0].current_version = { name: '2.0.0', key_id: null, deleted: false, deleted_at: null }
+      preview.ownerOrgId.value = '00000000-0000-4000-8000-000000000003'
+    })
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toBeVisible()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await page.clock.fastForward(3000)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('CAPGO_PRIVATE_KEY_BASE64')
   })
 
   test('retries key registration without replacing the one-time key', async ({ page }) => {

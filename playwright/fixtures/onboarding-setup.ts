@@ -1,4 +1,5 @@
 import type { OrganizationApp } from '../../src/stores/organization'
+import type { CiEncryptionBundle } from '../../src/utils/cicdEncryption'
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../../src/utils/onboardingChannelAnalytics'
 import gsap from 'gsap'
 import { createPinia } from 'pinia'
@@ -35,6 +36,25 @@ const builderComponentView = params.get('view') === 'builder'
 const cicdView = params.get('view') === 'cicd'
 const assignment = params.get('assignment')
 const previewAppId = 'com.example.onboarding-preview'
+const ownerOrgId = ref('00000000-0000-4000-8000-000000000002')
+interface PreviewChannel {
+  id: number
+  app_id: string
+  name: string
+  public?: boolean
+  allow_device_self_set?: boolean
+  ios?: boolean
+  android?: boolean
+  electron?: boolean
+  version?: number | null
+  current_version?: CiEncryptionBundle | null
+  rollout_enabled?: boolean
+  rollout_version?: number | null
+  rollout_bundle?: CiEncryptionBundle | null
+}
+const initialChannels: PreviewChannel[] = params.get('channel') === '1'
+  ? [{ id: 1, app_id: previewAppId, name: 'staging', public: true, allow_device_self_set: true }]
+  : []
 const savedChannelStatus = params.get('channelStatus')
 const state = {
   version: Number(params.get('version') ?? 3),
@@ -50,7 +70,7 @@ const state = {
   error: false,
   requests: 0,
   polls: [] as Array<{ appId: string, N: number, initial: boolean }>,
-  channels: (params.get('channel') === '1' ? [{ id: 1, app_id: previewAppId, name: 'staging', public: true, allow_device_self_set: true }] : []) as Array<{ id: number, app_id: string, name: string, public?: boolean, allow_device_self_set?: boolean, ios?: boolean, android?: boolean, electron?: boolean }>,
+  channels: initialChannels,
   channelError: params.get('channelError') === '1',
   channelRequests: 0,
   channelQueries: [] as string[],
@@ -76,7 +96,9 @@ const state = {
   policyError: params.get('policyError') === '1',
   policyDelayMs: Number(params.get('policyDelay') ?? 0),
   policyRequired: params.get('policyRequired') === '1',
-  policyQueries: [] as string[],
+  policyQueries: [] as Array<{ appId: string, ownerOrgId: string }>,
+  orgPolicyReads: 0,
+  orgReadDenied: params.get('orgReadDenied') === '1',
   cicdRegistrationError: params.get('registrationError') === '1',
   cicdRegistrationDelayMs: Number(params.get('registrationDelay') ?? 0),
   cicdStatusDelayMs: 0,
@@ -100,8 +122,11 @@ if (cicdView && params.get('defaultChannel') !== '0') {
     state.channels.push({ id: index + 1, app_id: previewAppId, name, public: true, ios: index % 2 === 0, android: index % 2 !== 0, electron: false })
 }
 const privateChannel = params.get('privateChannel')
-if (cicdView && privateChannel)
-  state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name: privateChannel, public: false, ios: true, android: true, electron: false })
+const privateChannels = params.get('privateChannels')?.split('|') ?? (privateChannel ? [privateChannel] : [])
+if (cicdView) {
+  for (const name of privateChannels)
+    state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name, public: false, ios: true, android: true, electron: false })
+}
 if (params.get('disabledPublicChannel') === '1')
   state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name: 'disabled-public', public: true, ios: false, android: false, electron: false })
 if (params.get('checklistState') === 'completed') {
@@ -139,7 +164,7 @@ if (params.get('otaComplete') === '1') {
   state.channels.push({ id: 1, app_id: previewAppId, name: 'staging', public: true })
 }
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
-const preview = { state, cicdLedger, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, sidebarApps: ref<OrganizationApp[]>([]), appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
+const preview = { state, cicdLedger, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, sidebarApps: ref<OrganizationApp[]>([]), appId: ref(previewAppId), ownerOrgId, command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 const previewUserOnboarding = {
   profile_completed_at: '2026-09-25T00:00:00.000Z',
   abtests: {
@@ -265,11 +290,20 @@ const fixtureFetch: typeof fetch = async (input, init) => {
   }
   if (url.pathname.endsWith('/build_requests'))
     return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json', 'Content-Range': '*/0' } })
+  if (url.pathname.endsWith('/rpc/get_app_cicd_encryption_policy')) {
+    const args = JSON.parse(String(init?.body))
+    const snapshot = { owner_org: ownerOrgId.value, enforce_encrypted_bundles: state.policyRequired }
+    const error = state.policyError || state.encryptionError
+    const delay = state.policyDelayMs || state.encryptionDelayMs
+    state.policyQueries.push({ appId: args.p_app_id, ownerOrgId: snapshot.owner_org })
+    if (delay)
+      await new Promise(resolve => setTimeout(resolve, delay))
+    const single = new Headers(init?.headers).get('Accept')?.includes('object')
+    return new Response(JSON.stringify(error ? { message: 'App policy unavailable' } : single ? snapshot : [snapshot]), { status: error ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+  }
   if (url.pathname.endsWith('/orgs')) {
-    state.policyQueries.push(url.search)
-    if (state.policyDelayMs)
-      await new Promise(resolve => setTimeout(resolve, state.policyDelayMs))
-    return new Response(JSON.stringify(state.policyError ? { message: 'Organization policy unavailable' } : [{ enforce_encrypted_bundles: state.policyRequired }]), { status: state.policyError ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+    state.orgPolicyReads += 1
+    return new Response(JSON.stringify(state.orgReadDenied ? [] : [{ enforce_encrypted_bundles: state.policyRequired }]), { headers: { 'Content-Type': 'application/json' } })
   }
   if (url.pathname.endsWith('/app_versions')) {
     state.encryptionQueries.push(url.search)
@@ -330,7 +364,16 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       (!filter || filter === `eq.${channel.app_id}`)
       && (!url.searchParams.get('public') || url.searchParams.get('public') === `eq.${channel.public}`)
       && (!url.searchParams.get('name') || url.searchParams.get('name') === `eq.${channel.name}`)
-    )).slice(0, Number(url.searchParams.get('limit') ?? state.channels.length))
+    )).slice(0, Number(url.searchParams.get('limit') ?? state.channels.length)).map(channel => ({
+      ...channel,
+      version: params.get('productionUnknown') === '1' ? null : channel.version === undefined ? 1 : channel.version,
+      current_version: channel.version === null || params.get('productionUnknown') === '1' ? null : channel.current_version === undefined
+        ? { name: params.get('bundle') ?? '1.0.0', key_id: (params.get('productionEncrypted') ?? params.get('encrypted')) === '1' || params.get('encryptedChannel') === channel.name ? 'MIIB' : null, deleted: false, deleted_at: null }
+        : channel.current_version,
+      rollout_enabled: channel.rollout_enabled ?? params.get('rolloutEncrypted') === '1',
+      rollout_version: channel.rollout_version ?? (params.get('rolloutEncrypted') === '1' ? 2 : null),
+      rollout_bundle: channel.rollout_bundle ?? (params.get('rolloutEncrypted') === '1' ? { name: '1.0.1', key_id: 'ROLLOUT', deleted: false, deleted_at: null } : null),
+    }))
     const error = state.channelError
     if (state.channelDelayMs > 0)
       await new Promise(resolve => setTimeout(resolve, state.channelDelayMs))
@@ -346,7 +389,7 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       await new Promise(resolve => setTimeout(resolve, state.cicdStatusDelayMs))
     state.cicdStatusResponses += 1
     if (cicdView)
-      return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: '00000000-0000-4000-8000-000000000002', onboarding: snapshot }]), { headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: ownerOrgId.value, onboarding: snapshot }]), { headers: { 'Content-Type': 'application/json' } })
   }
   if (params.get('view') === 'flow' || navigationView) {
     if (url.pathname.endsWith('/apps') && params.get('unavailable') === '1')
@@ -437,7 +480,7 @@ const app = createApp(defineComponent({
             : cicdView
             ? h(CiCdSetupGuide, {
                 appId: preview.appId.value,
-                ownerOrgId: '00000000-0000-4000-8000-000000000002',
+                ownerOrgId: ownerOrgId.value,
                 initialProduct: params.get('product') === 'builder' ? 'builder' : undefined,
                 initialPlatform: params.get('platform') === 'ios' || params.get('platform') === 'android' ? params.get('platform') as 'ios' | 'android' : undefined,
               })

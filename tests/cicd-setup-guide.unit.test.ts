@@ -673,6 +673,31 @@ void (async () => {
     }
   })
 
+  it.each([
+    '$(releaseChannel)',
+    'release-$(releaseChannel)',
+    '$(Build.SourceBranchName)',
+    '$()release-$(releaseChannel)',
+    '$[[ inputs.release_channel ]]',
+    '$[[]]release-$[[ inputs.release_channel ]]',
+    '<< pipeline.git.branch >>',
+    '<<>>release-<< pipeline.git.branch >>',
+  ])('rejects interpolated release target %s before rendering any pipeline', (channel) => {
+    expect(isCiChannelSupported(channel)).toBe(false)
+    for (const provider of CI_PROVIDERS) {
+      for (const strategy of CI_STRATEGIES)
+        expect(() => buildCiPipeline({ ...base, productionChannels: [channel], product: 'ota', strategy, provider })).toThrow('Production channels must be supported')
+      expect(() => buildCiPipeline({ ...base, product: 'ota', strategy: 'main_preprod', preprodChannel: channel, provider })).toThrow('Tester channel must be supported')
+    }
+  })
+
+  it('keeps literal punctuation that is not a CI expression', () => {
+    for (const channel of ['release$cash', 'Live (iOS)', 'release$()', 'release$(', 'release$[[', 'release<<', 'release<<>>', 'release$[variables.channel]']) {
+      expect(isCiChannelSupported(channel), channel).toBe(true)
+      expect(buildCiPipeline({ ...base, productionChannels: [channel], product: 'ota', strategy: 'main', provider: 'azure' }).jobs[0]?.command).toContain(`--channel '${channel}'`)
+    }
+  })
+
   it('prints the credentials push command for each platform', () => {
     expect(builderCredentialsPushCommand(appId, 'ios')).toBe('npx @capgo/cli@latest build credentials push com.example.app --platform ios')
   })
@@ -701,6 +726,13 @@ describe('CI/CD guide selection storage', () => {
     for (const productionChannel of ['', 'private,live', ' private-live', 'private-live\n', null, 42, ['private-live']]) {
       localStorage.setItem(`capgo:cicd-guide:user-1:${appId}`, JSON.stringify({ productionChannel }))
       expect(loadCiGuideSelection('user-1', appId).productionChannel).toBeUndefined()
+    }
+  })
+
+  it('drops stored production and tester names containing provider expressions', () => {
+    for (const channel of ['$(releaseChannel)', '${{ github.ref_name }}', '$[[ inputs.channel ]]', '<< pipeline.git.branch >>']) {
+      localStorage.setItem(`capgo:cicd-guide:user-1:${appId}`, JSON.stringify({ productionChannel: channel, preprodChannel: channel }))
+      expect(loadCiGuideSelection('user-1', appId)).toEqual({})
     }
   })
 

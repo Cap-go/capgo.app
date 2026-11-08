@@ -4798,6 +4798,13 @@ export type Database = {
           role_name: string
         }[]
       }
+      get_app_cicd_encryption_policy: {
+        Args: { p_app_id: string }
+        Returns: {
+          enforce_encrypted_bundles: boolean
+          owner_org: string
+        }[]
+      }
       get_app_metrics:
         | {
             Args: { org_id: string }

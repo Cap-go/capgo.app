@@ -572,7 +572,7 @@
   "cicd-guide-platform-ios": "iOS",
   "cicd-guide-platform-android": "Android",
   "cicd-guide-encrypted": "Bundles are encrypted",
-  "cicd-guide-encrypted-detected": "Your latest bundle is encrypted, so CI needs your private key.",
+  "cicd-guide-encrypted-detected": "A production channel has an encrypted bundle, so CI needs your private key.",
   "cicd-guide-encrypted-required": "Your organization requires encrypted bundles.",
   "cicd-guide-secret-encryption": "Add your encryption private key as {secret} the same way. Run this in your project folder, where .capgo_key_v2 is, to print it as one line, and never commit that file:",
   "cicd-guide-secret-gitlab-preview-encryption": "Keep {secret} Protected and Masked. Add one copy scoped to capgo-release and another scoped to {scope}. Only reviewed, protected preview branches may use the preview copy.",
@@ -628,7 +628,7 @@
   "cicd-guide-key-registration-error": "Your key is ready to copy, but Capgo couldn't save it for CI detection. Retry so the guide can recognize its first upload.",
   "cicd-guide-key-registration-retry": "Retry CI detection setup",
   "cicd-guide-channels-error": "Couldn't check the default channels. Refresh to generate a pipeline for this app's channels.",
-  "cicd-guide-encryption-error": "Couldn't check the app's encryption settings. Refresh before generating the pipeline so encrypted apps include their private key.",
+  "cicd-guide-encryption-error": "We couldn't read this app's encryption policy. Try again before generating the pipeline.",
   "cicd-guide-settings-loading": "Checking the app's CI/CD settings…",
   "cicd-guide-branches-equal": "Choose different branches for production and preproduction before generating the pipeline.",
   "cicd-guide-secret-azure-protect": "Before authorizing capgo-release, open its Approvals and checks and add a Branch control check. Allow only {branches}, require branch protection, and fail when protection status is unknown. A YAML condition alone does not protect the release key.",
@@ -4428,5 +4428,9 @@
   "cicd-guide-production-target-select": "Choose a channel",
   "cicd-guide-production-target-create": "Create a channel with at least one platform enabled, then return here and refresh the list.",
   "cicd-guide-production-target-pending": "your production channel",
-  "cicd-guide-production-channel-label": "the {channel} channel"
+  "cicd-guide-production-channel-label": "the {channel} channel",
+  "cicd-guide-encryption-choice-title": "Are your production bundles encrypted?",
+  "cicd-guide-encryption-choice-description": "We could not determine encryption from the selected production channels. Choose how your production app is configured before creating its CI pipeline.",
+  "cicd-guide-encryption-choice-encrypted": "Yes, restore my encryption key in CI",
+  "cicd-guide-encryption-choice-plaintext": "No, my production app uses unencrypted bundles"
 }

@@ -22,7 +22,7 @@ const initialPlatform = computed(() => isCiPlatform(route.query.platform) ? rout
   <AppPageFrame :found="!!app" :loading="isLoading">
     <CiCdSetupGuide
       v-if="app"
-      :key="app.app_id"
+      :key="`${app.app_id}:${app.owner_org}`"
       :app-id="app.app_id"
       :owner-org-id="app.owner_org"
       :initial-product="initialProduct"

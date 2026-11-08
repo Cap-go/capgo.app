@@ -4427,5 +4427,9 @@
   "cicd-guide-production-target-select": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
   "cicd-guide-production-target-create": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
   "cicd-guide-production-target-pending": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
-  "cicd-guide-production-channel-label": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged."
+  "cicd-guide-production-channel-label": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
+  "cicd-guide-encryption-choice-title": "Used in the CI/CD guide when production bundle encryption cannot be read. Role: fieldset legend. Translate for UI; keep CI unchanged.",
+  "cicd-guide-encryption-choice-description": "Used in the CI/CD guide when production bundle encryption cannot be read. Role: helper text. Translate for UI; keep CI unchanged.",
+  "cicd-guide-encryption-choice-encrypted": "Used in the CI/CD guide when production bundle encryption cannot be read. Role: radio option label. Translate for UI; keep CI unchanged.",
+  "cicd-guide-encryption-choice-plaintext": "Used in the CI/CD guide when production bundle encryption cannot be read. Role: radio option label. Translate for UI; keep CI unchanged."
 }
