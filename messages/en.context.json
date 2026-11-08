@@ -4345,6 +4345,7 @@
   "cicd-guide-note-store-review": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-note-package-manager": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-note-cleanup-auto": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-note-cleanup-approval": "Explains encrypted GitHub preview cleanup: the protected environment requires a separate approval after the pull request closes. Keep {scope} unchanged; it is the GitHub environment name.",
   "cicd-guide-note-cleanup-manual": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-note-forks": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-step-verify-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

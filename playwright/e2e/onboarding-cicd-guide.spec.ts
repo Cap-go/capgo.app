@@ -194,6 +194,7 @@ test.describe('CI/CD setup guide', () => {
     await expect(secrets).toContainText('gh secret set CAPGO_PREVIEW_TOKEN --env capgo-encrypted-preview')
     await expect(content).toContainText('environment: capgo-encrypted-preview')
     await expect(page.locator('[data-test="cicd-notes"]')).toContainText('Pull request previews get a unique version name for each run.')
+    await expect(page.locator('[data-test="cicd-note-cleanup"]')).toContainText('approve its cleanup job in capgo-encrypted-preview')
 
     await page.locator('[data-test="cicd-provider-gitlab"]').click()
     await expect(page.locator('[data-test="cicd-notes"]')).toContainText('--auto-bump patch gives each upload the next free version number')
@@ -212,7 +213,9 @@ test.describe('CI/CD setup guide', () => {
       await page.locator(`[data-test="cicd-provider-${provider}"]`).click()
       await expect(trust).toContainText(instruction)
     }
+    await page.locator('[data-test="cicd-provider-github"]').click()
     await page.locator('[data-test="cicd-encrypted"]').uncheck()
+    await expect(page.locator('[data-test="cicd-note-cleanup"]')).toContainText('channel and bundle are deleted')
     await expect(trust).toHaveCount(0)
     await expect(content).not.toContainText('capgo-encrypted-preview')
   })
@@ -331,6 +334,9 @@ test.describe('CI/CD setup guide', () => {
       await page.locator('[data-test="cicd-provider-github"]').click()
       await expect(page.locator('[data-test="cicd-encryption-secret"]')).toBeVisible()
       await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('echo "$CAPGO_PRIVATE_KEY_BASE64" | base64 -d > .capgo_key_v2')
+      const select = (await previewState(page)).channelSelects.join('\n')
+      expect(select).toMatch(/current_version:app_versions!channels_version_fkey\([^)]*\bsession_key\b/)
+      expect(select).toMatch(/rollout_bundle:app_versions!channels_rollout_version_fkey\([^)]*\bsession_key\b/)
     })
   }
 

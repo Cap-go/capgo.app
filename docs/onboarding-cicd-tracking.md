@@ -123,6 +123,8 @@ auto-bumping produces a distinct stable version even if its fallback base is a
 preview. The temporary zip is written outside the project and removed. This adds
 one offline packaging pass per preview; it receives no Capgo token or restored
 private key. Closing a pull request still cancels its preview before cleanup.
+Encrypted GitHub cleanup jobs require a separate approval in
+`capgo-encrypted-preview`; the channel and bundle remain until that job runs.
 These concurrency groups coordinate workflows within one repository; release
 jobs maintained elsewhere must coordinate their own uploads.
 

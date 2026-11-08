@@ -74,6 +74,7 @@ const state = {
   channelError: params.get('channelError') === '1',
   channelRequests: 0,
   channelQueries: [] as string[],
+  channelSelects: [] as string[],
   channelDelayMs: Number(params.get('channelDelay') ?? 0),
   channelPermissions: true,
   channelInsertError: false,
@@ -434,6 +435,8 @@ window.fetch = async (input, init) => {
   let body = query.kind === 'rpc' ? JSON.stringify(query.args[0]) : undefined
   const headers = new Headers(init?.headers)
   for (const { method: operation, args } of query.operations) {
+    if (query.name === 'channels' && operation === 'select')
+      state.channelSelects.push(String(args[0]))
     if (['eq', 'neq', 'is'].includes(operation)) {
       fixtureURL.searchParams.set(args[0], `${operation}.${args[1]}`)
     }

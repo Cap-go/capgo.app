@@ -3,8 +3,9 @@ import { execFile } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { env, execPath } from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { lessThan, parse as parseSemver } from '@std/semver'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -605,6 +606,53 @@ process.stdout.write(JSON.stringify({ bundle: process.env.FIXTURE_BUNDLE }))
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('feeds real offline packer JSON into the generated preview version resolver', async () => {
+    const workflow = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'github' }).content)
+    const resolve = workflow.jobs.preview.steps.find((step: { id?: string }) => step.id === 'preview_version')
+    const directory = mkdtempSync(join(tmpdir(), 'capgo-preview-packer-'))
+    const project = join(directory, 'project')
+    const bin = join(directory, 'bin')
+    const temporary = join(directory, 'runner-temp')
+    const output = join(temporary, 'output')
+    try {
+      for (const path of [bin, temporary, join(project, 'dist'), join(project, 'node_modules/@capgo/capacitor-updater')])
+        mkdirSync(path, { recursive: true })
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'preview-packer-fixture', version: '1.2.3', dependencies: { '@capgo/capacitor-updater': '7.30.0' } }))
+      writeFileSync(join(project, 'node_modules/@capgo/capacitor-updater/package.json'), JSON.stringify({ name: '@capgo/capacitor-updater', version: '7.30.0' }))
+      writeFileSync(join(project, 'dist/index.html'), '<html><body><script src="app.js"></script></body></html>')
+      writeFileSync(join(project, 'dist/app.js'), 'CapacitorUpdater.notifyAppReady();\n')
+      // Resolve npx to the workspace CLI without downloading a package or fabricating its JSON.
+      writeFileSync(join(bin, 'npx'), '#!/bin/sh\nshift\nexec bun "$CAPGO_CLI_ENTRY" "$@"\n', { mode: 0o755 })
+      for (const [version, expected] of [['5.4.3', '5.4.4'], [null, '1.2.4']] as const) {
+        writeFileSync(join(project, 'capacitor.config.json'), JSON.stringify({ appId: 'com.example.app', appName: 'Preview', webDir: 'dist', plugins: { CapacitorUpdater: version ? { version } : {} } }))
+        rmSync(output, { force: true })
+        await runFile('bash', ['-e', '-o', 'pipefail', '-c', resolve.run], {
+          cwd: project,
+          env: {
+            ...env,
+            PATH: `${bin}${delimiter}${env.PATH ?? ''}`,
+            CAPGO_CLI_ENTRY: join(dirname(fileURLToPath(import.meta.url)), '..', 'cli/src/index.ts'),
+            CAPGO_DISABLE_TELEMETRY: 'true',
+            CAPGO_TOKEN: '',
+            CAPGO_PRIVATE_KEY_BASE64: '',
+            RUNNER_TEMP: temporary,
+            GITHUB_OUTPUT: output,
+            GITHUB_REPOSITORY_ID: '101',
+            PR_NUMBER: '7',
+            GITHUB_RUN_ID: '202',
+            GITHUB_RUN_ATTEMPT: '1',
+          },
+        })
+        expect(readFileSync(output, 'utf8').trim()).toBe(`bundle=${expected}-pr.101.7.202.1`)
+        expect(existsSync(join(temporary, 'capgo-preview.zip'))).toBe(false)
+        expect(existsSync(join(temporary, 'capgo-preview.json'))).toBe(false)
+      }
+    }
+    finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }, 20000)
 
   it('preserves generated config dependencies without rerunning install scripts or transferring private keys', async () => {
     const workflow = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)

@@ -1034,9 +1034,9 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
                   <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
                   {{ t('cicd-guide-note-forks') }}
                 </li>
-                <li v-if="product === 'ota' && pipeline.cleansUpPreviews" class="flex items-start gap-2">
+                <li v-if="product === 'ota' && pipeline.cleansUpPreviews" class="flex items-start gap-2" data-test="cicd-note-cleanup">
                   <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
-                  {{ t('cicd-guide-note-cleanup-auto') }}
+                  {{ t(provider === 'github' && encryptedPreview ? 'cicd-guide-note-cleanup-approval' : 'cicd-guide-note-cleanup-auto', { scope: previewScope }) }}
                 </li>
                 <li v-else-if="product === 'ota'" class="flex items-start gap-2" data-test="cicd-note-cleanup-manual">
                   <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />

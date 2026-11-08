@@ -675,6 +675,7 @@
   "cicd-guide-note-tester-builds": "Tester and pull request builds set CAPGO_STORE_SUBMIT_REVIEW=false, and Android tester builds use the internal track as drafts, so release settings saved with your credentials never send them for store review.",
   "cicd-guide-note-package-manager": "Using pnpm, Yarn, or Bun? Replace npm ci and npm run build with your own install and build commands.",
   "cicd-guide-note-cleanup-auto": "When a pull request is merged or closed, its pr-<number> channel and bundle are deleted.",
+  "cicd-guide-note-cleanup-approval": "After a pull request is merged or closed, approve its cleanup job in {scope}. The preview channel and bundle remain until that job runs.",
   "cicd-guide-note-cleanup-manual": "{provider} has no event for closed pull requests, so pr-<number> channels stay. Delete them in Channels, or run:",
   "cicd-guide-note-forks": "Pull requests from forks don't get your secrets, so their preview jobs skip.",
   "cicd-guide-step-verify-title": "Push and check the first run",
