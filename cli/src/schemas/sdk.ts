@@ -570,7 +570,7 @@ export type DeviceStats = z.infer<typeof deviceStatsSchema>
 export const buildMonitorOptionsSchema = z.object({
   appId: z.string().min(1).describe('App ID owning the cloud build'),
   jobId: z.string().min(1).max(256).describe('Cloud job ID from the build request, not a local onboarding job ID'),
-  cursor: z.number().int().nonnegative().optional().describe('For build logs: previous snapshot cursor; omit for recent retained logs'),
+  cursor: z.number().int().nonnegative().optional().describe('For build logs: previous snapshot cursor; omit for the current live-stream backlog'),
   apikey: z.string().optional(),
   apiHost: z.string().optional(),
   filesHost: z.string().optional(),
