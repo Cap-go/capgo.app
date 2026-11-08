@@ -20,24 +20,10 @@ export interface PreparedOnboardingCheck {
 }
 
 export async function runOnboardingCheck(prepared: PreparedOnboardingCheck, check: BackgroundOnboardingCheck): Promise<void> {
-  const { project, apiHost, apikey, command, attemptId } = prepared
+  const { project, apiHost, apikey, command } = prepared
   setCurrentCliCommand(command)
-  const trackScan = (event: 'scan_started' | 'scan_ended', timestamp: number, tags: Record<string, string | number> = {}) => {
-    parentPort?.postMessage({
-      type: 'onboarding-analytics',
-      payload: {
-        channel: check.channel,
-        event,
-        tracking_version: 2,
-        timestamp: new Date(timestamp),
-        tags: { app_id: project.appId },
-        nonPersonTags: { attempt_id: attemptId, command_path: command, ...tags },
-      },
-    })
-  }
 
   const scanStartedAt = Date.now()
-  trackScan('scan_started', scanStartedAt)
   let scanEndedAt = scanStartedAt
   let result: 'found' | 'not_found' | 'unknown' | 'error' = 'error'
   let todoReportStatus = 'not_attempted'
@@ -78,11 +64,5 @@ export async function runOnboardingCheck(prepared: PreparedOnboardingCheck, chec
   finally {
     if (result === 'error')
       scanEndedAt = Date.now()
-    trackScan('scan_ended', scanEndedAt, {
-      result,
-      duration_ms: scanEndedAt - scanStartedAt,
-      todo_report_status: todoReportStatus,
-      ...(todoReportHttpStatus === undefined ? {} : { todo_report_http_status: todoReportHttpStatus }),
-    })
   }
 }

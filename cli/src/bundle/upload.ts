@@ -752,22 +752,24 @@ async function uploadBundleToCapgoCloud(apikey: string, client: CapgoClientType,
     log.info(`  - Upload time: ${uploadTime} seconds`)
     log.info(`  - Upload method: ${isTus ? 'TUS (resumable)' : 'Standard HTTP PUT'}`)
     log.info(`  - Bundle size: ${Math.floor(zipped.byteLength / 1024)} KB`)
-    log.info(`[Verbose] Sending performance event...`)
+    if (!isTus)
+      log.info(`[Verbose] Sending performance event...`)
   }
 
-  await sendEvent(apikey, {
-    channel: 'performance',
-    event: isTus ? 'TUS upload zip performance' : 'Upload zip performance',
-    org_id: orgId,
-    tracking_version: 2,
-    tags: {
-      'app-id': appid,
-      'time': uploadTime,
-    },
-  }, options.verbose)
-
-  if (options.verbose)
-    log.info(`[Verbose] Performance event sent successfully`)
+  if (!isTus) {
+    await sendEvent(apikey, {
+      channel: 'performance',
+      event: 'Upload zip performance',
+      org_id: orgId,
+      tracking_version: 2,
+      tags: {
+        'app-id': appid,
+        'time': uploadTime,
+      },
+    }, options.verbose)
+    if (options.verbose)
+      log.info(`[Verbose] Performance event sent successfully`)
+  }
 }
 
 type LinkedChannelVersion = {

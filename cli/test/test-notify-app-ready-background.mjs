@@ -33,7 +33,7 @@ async function workerHarness(worker = workerUrl, standalone = false) {
     // Transport assertions now exercise the coordinator, scoped to the selected check.
     if (standalone || worker.href === combinedWorkerUrl.href || entry.body.channel === channel || entry.body.onboarding?.steps?.[step]) {
       requests.push(entry)
-      if (request.method === 'POST')
+      if (request.method === 'POST' || request.method === 'PUT')
         behavior.onEvent?.(entry.body)
     }
     if (request.method === 'PUT' && behavior.putError) {
@@ -110,29 +110,29 @@ async function workerHarness(worker = workerUrl, standalone = false) {
   }
 }
 
-function scanEvents(requests, result, reportStatus, channel = 'notify-app-ready') {
-  const events = requests.filter(request => request.method === 'POST').sort((a, b) => b.body.event.localeCompare(a.body.event))
-  assert.deepEqual(events.map(request => request.body.event), ['scan_started', 'scan_ended'])
-  const [started, ended] = events.map(request => request.body)
-  assert.match(started.nonPersonTags.attempt_id, /^[0-9a-f-]{36}$/)
-  assert.equal(ended.nonPersonTags.attempt_id, started.nonPersonTags.attempt_id)
-  for (const request of events) {
-    assert.equal(request.path.endsWith('/private/events'), true)
-    assert.equal(request.headers.capgkey, 'fake-api-key')
-    assert.equal(request.headers['x-cli-command'], 'app list')
-    assert.equal(request.body.channel, channel)
-    assert.equal(request.body.tracking_version, 2)
-    assert.deepEqual(request.body.tags, { app_id: 'com.example.ready' })
-    assert.equal(request.body.nonPersonTags.command_path, 'app list')
-    assert.equal(typeof request.body.nonPersonTags.cli_version, 'string')
-    assert.equal(Number.isFinite(Date.parse(request.body.timestamp)), true)
-  }
-  assert.equal(Date.parse(ended.timestamp) >= Date.parse(started.timestamp), true)
-  assert.equal(ended.nonPersonTags.result, result)
-  assert.equal(ended.nonPersonTags.todo_report_status, reportStatus)
-  assert.equal(typeof ended.nonPersonTags.duration_ms, 'number')
-  assert.equal(ended.nonPersonTags.duration_ms >= 0, true)
-  return started.nonPersonTags.attempt_id
+function postAnalyticsEvents(requests) {
+  return requests.filter(request => request.method === 'POST')
+}
+
+function assertNoScanLifecycleAnalytics(requests) {
+  const events = postAnalyticsEvents(requests)
+  assert.equal(events.some(request => request.body.event === 'scan_started' || request.body.event === 'scan_ended'), false)
+}
+
+function assertLatestNotifyPut(requests, step = 'add_code', path = '/app/com.example.ready') {
+  assertNoScanLifecycleAnalytics(requests)
+  const patch = requests.filter(request => request.method === 'PUT').at(-1)
+  assert.ok(patch, 'expected an onboarding todo PUT')
+  assert.deepEqual(patch.body, { onboarding: { steps: { [step]: { status: 'done' } } } })
+  assert.equal(patch.path, path)
+  assert.equal(patch.headers.capgkey, 'fake-api-key')
+  assert.equal(patch.headers.authorization, 'fake-api-key')
+  assert.equal(patch.headers['x-cli-command'], 'app list')
+}
+
+function assertNotifyPut(requests, step = 'add_code') {
+  assert.equal(requests.filter(request => request.method === 'PUT').length, 1)
+  assertLatestNotifyPut(requests, step)
 }
 
 function write(path, content) {
@@ -301,24 +301,14 @@ test('incomplete scans and invalid Capacitor configs cannot mark integration com
   assert.equal(resolved.webDir, join(project.dir, 'www'))
 })
 
-test.concurrent('coordinator pairs notify-app-ready events while its worker sends the add_code patch with CLI auth and destination context', async () => {
+test.concurrent('coordinator sends the add_code patch with CLI auth and destination context without scan lifecycle analytics', async () => {
   const harness = await workerHarness()
   const { api, requests } = harness
   try {
-    const parentAttempt = '11111111-1111-4111-8111-111111111111'
-    await harness.run({ attemptId: parentAttempt })
-    const firstAttempt = scanEvents(requests, 'found', 'success')
-    assert.equal(firstAttempt, parentAttempt)
-    assert.equal(requests.filter(request => request.method === 'PUT').length, 1)
-    const patch = requests.find(request => request.method === 'PUT')
-    assert.deepEqual(patch.body, { onboarding: { steps: { add_code: { status: 'done' } } } })
-    assert.equal(patch.path, '/app/com.example.ready')
-    assert.equal(patch.headers.capgkey, 'fake-api-key')
-    assert.equal(patch.headers.authorization, 'fake-api-key')
-    assert.equal(patch.headers['x-cli-command'], 'app list')
-    assert.equal(requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags.todo_report_http_status, 200)
+    await harness.run({ attemptId: '11111111-1111-4111-8111-111111111111' })
+    assertNotifyPut(requests)
     await harness.run({ apiHost: `${api}/functions/v1` })
-    assert.notEqual(scanEvents(requests, 'found', 'success'), firstAttempt)
+    assertLatestNotifyPut(requests, 'add_code', '/functions/v1/app/com.example.ready')
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
     assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'fake-api-key', 'self-host uses the API key, no anon key')
   }
@@ -327,28 +317,24 @@ test.concurrent('coordinator pairs notify-app-ready events while its worker send
   }
 }, 20_000)
 
-test.concurrent('scan-ended records negative, unknown, rejected, and failed todo outcomes without changing unrelated todos', async () => {
+test.concurrent('scan outcomes still skip or complete todos without scan lifecycle analytics', async () => {
   const harness = await workerHarness()
   const { project, requests, behavior } = harness
   try {
-    const attempts = new Set()
-    for (const [source, result] of [['// notifyAppReady()', 'not_found'], ['const broken = (', 'unknown']]) {
+    for (const source of ['// notifyAppReady()', 'const broken = (']) {
       write(join(project.dir, 'src/main.ts'), source)
       await harness.run()
-      attempts.add(scanEvents(requests, result, 'not_attempted'))
-      assert.equal(requests.length, 2)
-      assert.equal('todo_report_http_status' in requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags, false)
+      assert.equal(requests.length, 0)
+      assertNoScanLifecycleAnalytics(requests)
     }
     write(join(project.dir, 'src/main.ts'), call)
     behavior.putStatus = 403
     await harness.run()
-    attempts.add(scanEvents(requests, 'found', 'rejected'))
-    assert.equal(requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags.todo_report_http_status, 403)
+    assert.equal(requests.filter(request => request.method === 'PUT').length, 1)
+    assertNoScanLifecycleAnalytics(requests)
     behavior.putError = true
     await harness.run()
-    attempts.add(scanEvents(requests, 'found', 'failed'))
-    assert.equal('todo_report_http_status' in requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags, false)
-    assert.equal(attempts.size, 4)
+    assertNoScanLifecycleAnalytics(requests)
   }
   finally {
     harness.close()
@@ -367,7 +353,7 @@ test.concurrent('analytics opt-out and unavailable telemetry never prevent the t
     for (const mode of ['rejected', 'hang']) {
       behavior.events = mode
       await harness.run()
-      scanEvents(requests, 'found', 'success')
+      assertNoScanLifecycleAnalytics(requests)
       assert.equal(requests.filter(request => request.method === 'PUT').length, 1)
     }
   }
@@ -384,7 +370,7 @@ test.concurrent('both workers allow successful todo reports to take longer than 
     harness.behavior.putDelayMs = 2_200
     try {
       await harness.run()
-      scanEvents(harness.requests, 'found', 'success', channel)
+      assertNotifyPut(harness.requests, channel === 'updater-installed' ? 'add_updater' : 'add_code')
     }
     finally {
       harness.close()
@@ -392,13 +378,15 @@ test.concurrent('both workers allow successful todo reports to take longer than 
   }
 }, 20_000)
 
-test.concurrent('foreground exits while the coordinator is waiting on scan-started telemetry', async () => {
+test.concurrent('foreground exits after the onboarding todo update starts', async () => {
   const harness = await workerHarness()
-  harness.behavior.events = 'hang'
   let started
   const received = new Promise(resolve => { started = resolve })
-  harness.behavior.onEvent = event => {
-    if (event.event === 'scan_started')
+  const server = harness.behavior
+  const previousOnEvent = server.onEvent
+  server.onEvent = body => {
+    previousOnEvent?.(body)
+    if (body?.onboarding?.steps?.add_code)
       started()
   }
   const dir = fixture()
@@ -429,14 +417,15 @@ test.concurrent('foreground exits while the coordinator is waiting on scan-start
   const exited = once(child, 'exit')
   const timeout = setTimeout(() => child.kill(), 5_000)
   try {
-    await Promise.race([received, exited.then(() => { throw new Error('foreground exited before the started event') })])
+    await Promise.race([received, exited.then(() => { throw new Error('foreground exited before the todo update') })])
     child.stdin.end()
     const [code, signal] = await exited
-    assert.equal(signal, null, 'pending telemetry kept the foreground alive')
+    assert.equal(signal, null, 'pending onboarding work kept the foreground alive')
     assert.equal(code, 0)
     assert.equal(output.trim(), 'foreground-finished')
     assert.equal(errors, '')
-    assert.equal(harness.requests.some(request => request.body.event === 'scan_started'), true)
+    assert.equal(harness.requests.some(request => request.method === 'PUT'), true)
+    assertNoScanLifecycleAnalytics(harness.requests)
   }
   finally {
     clearTimeout(timeout)
@@ -525,20 +514,15 @@ test('updater detection supports hoisted and pnpm-style symlinked installations 
   assert.equal(scanUpdaterInstalled(linked), 'found')
 })
 
-test.concurrent('installed-updater worker pairs scan events and only completes add_updater, including self-hosted destinations', async () => {
+test.concurrent('installed-updater worker completes add_updater without scan lifecycle analytics, including self-hosted destinations', async () => {
   const harness = await workerHarness(updaterWorkerUrl)
   const { api, project, requests } = harness
   installUpdater(project)
   try {
     await harness.run()
-    const firstAttempt = scanEvents(requests, 'found', 'success', 'updater-installed')
-    const patch = requests.find(request => request.method === 'PUT')
-    assert.deepEqual(patch.body, { onboarding: { steps: { add_updater: { status: 'done' } } } })
-    assert.equal(patch.path, '/app/com.example.ready')
-    assert.equal(patch.headers.authorization, 'fake-api-key')
-    assert.equal(patch.headers['x-cli-command'], 'app list')
+    assertNotifyPut(requests, 'add_updater')
     await harness.run({ apiHost: `${api}/functions/v1` })
-    assert.notEqual(scanEvents(requests, 'found', 'success', 'updater-installed'), firstAttempt)
+    assertLatestNotifyPut(requests, 'add_updater', '/functions/v1/app/com.example.ready')
     assert.equal(requests.every(request => request.path.startsWith('/functions/v1/')), true)
     assert.equal(requests.find(request => request.method === 'PUT').headers.authorization, 'fake-api-key', 'self-host uses the API key, no anon key')
   }
@@ -552,13 +536,13 @@ test.concurrent('installed-updater worker skips missing packages and handles rej
   const { project, requests, behavior } = harness
   try {
     await harness.run()
-    scanEvents(requests, 'not_found', 'not_attempted', 'updater-installed')
-    assert.equal(requests.length, 2, 'missing installation must never clear progress')
+    assert.equal(requests.length, 0, 'missing installation must never clear progress')
+    assertNoScanLifecycleAnalytics(requests)
     installUpdater(project)
     behavior.putStatus = 403
     await harness.run()
-    scanEvents(requests, 'found', 'rejected', 'updater-installed')
-    assert.equal(requests.find(request => request.body.event === 'scan_ended').body.nonPersonTags.todo_report_http_status, 403)
+    assert.equal(requests.filter(request => request.method === 'PUT').length, 1)
+    assertNoScanLifecycleAnalytics(requests)
     behavior.putStatus = 200
     for (const setting of ['CAPGO_DISABLE_TELEMETRY', 'CAPGO_DISABLE_POSTHOG']) {
       await harness.run({}, { [setting]: 'true' })
@@ -566,7 +550,8 @@ test.concurrent('installed-updater worker skips missing packages and handles rej
     }
     behavior.events = 'hang'
     await harness.run()
-    scanEvents(requests, 'found', 'success', 'updater-installed')
+    assertNoScanLifecycleAnalytics(requests)
+    assert.equal(requests.filter(request => request.method === 'PUT').length, 1)
   }
   finally {
     harness.close()
@@ -585,11 +570,7 @@ test.concurrent('coordinator loads the project once and reports both checks inde
   try {
     await harness.run()
     assert.equal(readFileSync(configLoaded, 'utf8'), '1', 'project config should load only once')
-    const sourceRequests = requests.filter(request => request.body.channel === 'notify-app-ready')
-    const updaterRequests = requests.filter(request => request.body.channel === 'updater-installed')
-    const sourceAttempt = scanEvents(sourceRequests, 'found', 'success')
-    const updaterAttempt = scanEvents(updaterRequests, 'found', 'success', 'updater-installed')
-    assert.notEqual(sourceAttempt, updaterAttempt)
+    assertNoScanLifecycleAnalytics(requests)
     assert.deepEqual(requests.filter(request => request.method === 'PUT').map(request => request.body).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))), [
       { onboarding: { steps: { add_code: { status: 'done' } } } },
       { onboarding: { steps: { add_updater: { status: 'done' } } } },
@@ -600,40 +581,29 @@ test.concurrent('coordinator loads the project once and reports both checks inde
   }
 }, 20_000)
 
-test.concurrent('both scans update todos before the coordinator receives scan-started analytics responses', async () => {
+test.concurrent('both scans update todos without waiting on scan lifecycle analytics', async () => {
   const harness = await workerHarness(combinedWorkerUrl)
   installUpdater(harness.project)
   harness.behavior.events = 'until_puts'
   try {
     await harness.run()
     assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2)
-    for (const channel of ['notify-app-ready', 'updater-installed']) {
-      const events = harness.requests.filter(request => request.body.channel === channel).sort((a, b) => b.body.event.localeCompare(a.body.event))
-      scanEvents(events, 'found', 'success', channel)
-      const [started, ended] = events.map(request => request.body)
-      assert.equal(Date.parse(ended.timestamp) - Date.parse(started.timestamp), ended.nonPersonTags.duration_ms,
-        'local scanning must start at scan_started, without waiting for analytics to respond or time out')
-    }
+    assertNoScanLifecycleAnalytics(harness.requests)
   }
   finally {
     harness.close()
   }
 }, 10_000)
 
-test.concurrent('scan workers report analytics over IPC and only send their own todo HTTP update', async () => {
-  for (const [worker, channel, step] of [[workerUrl, 'notify-app-ready', 'add_code'], [updaterWorkerUrl, 'updater-installed', 'add_updater']]) {
+test.concurrent('scan workers only send their own todo HTTP update over IPC', async () => {
+  for (const [worker, step] of [[workerUrl, 'add_code'], [updaterWorkerUrl, 'add_updater']]) {
     const harness = await workerHarness(worker, true)
     installUpdater(harness.project)
     try {
       const messages = await harness.run()
       assert.deepEqual(harness.requests.map(request => request.method), ['PUT'])
       assert.deepEqual(harness.requests[0].body, { onboarding: { steps: { [step]: { status: 'done' } } } })
-      const events = messages.filter(message => message.type === 'onboarding-analytics').map(message => message.payload)
-      assert.deepEqual(events.map(event => event.event), ['scan_started', 'scan_ended'])
-      assert.equal(events.every(event => event.channel === channel && event.tags.app_id === harness.project.appId), true)
-      assert.equal(events[0].nonPersonTags.attempt_id, events[1].nonPersonTags.attempt_id)
-      assert.equal(events[1].nonPersonTags.todo_report_status, 'success')
-      assert.equal(events[1].nonPersonTags.todo_report_http_status, 200)
+      assert.equal(messages.some(message => message.type === 'onboarding-analytics'), false)
       assert.equal(messages.some(message => message.type === 'onboarding-step' && message.step === step), true)
     }
     finally {
@@ -679,7 +649,8 @@ test.concurrent('coordinator skips custom updater endpoints without reporting or
       write(configPath, { ...harness.project.config, plugins: { CapacitorUpdater: { localApi: harness.api, ...endpoints } } })
       await harness.run()
       assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2)
-      assert.equal(harness.requests.filter(request => request.method === 'POST').length, 4)
+      assert.equal(harness.requests.filter(request => request.method === 'POST').length, 0)
+      assertNoScanLifecycleAnalytics(harness.requests)
     }
   }
   finally {
@@ -690,14 +661,13 @@ test.concurrent('coordinator skips custom updater endpoints without reporting or
 test.concurrent('coordinator and its scan workers can be abandoned without holding the foreground open', async () => {
   const harness = await workerHarness(combinedWorkerUrl)
   installUpdater(harness.project)
-  harness.behavior.events = 'hang'
-  const channels = new Set()
+  let puts = 0
   let ready
   const received = new Promise(resolve => { ready = resolve })
-  harness.behavior.onEvent = event => {
-    if (event.event === 'scan_started') {
-      channels.add(event.channel)
-      if (channels.size === 2)
+  harness.behavior.onEvent = body => {
+    if (body?.onboarding?.steps) {
+      puts += 1
+      if (puts === 2)
         ready()
     }
   }
@@ -727,17 +697,15 @@ test.concurrent('coordinator and its scan workers can be abandoned without holdi
   const exited = once(child, 'exit')
   const timeout = setTimeout(() => child.kill(), 5_000)
   try {
-    await Promise.race([received, exited.then(() => { throw new Error('foreground exited before both workers started') })])
-    const attempts = harness.requests.filter(request => request.body.event === 'scan_started')
-      .map(request => request.body.nonPersonTags.attempt_id)
-    assert.equal(new Set(attempts).size, 2, 'each worker must have its own attempt ID')
+    await Promise.race([received, exited.then(() => { throw new Error('foreground exited before both todo updates started') })])
     child.stdin.end()
     const [code, signal] = await exited
     assert.equal(signal, null, 'background workers kept the foreground alive')
     assert.equal(code, 0)
     assert.equal(output.trim(), 'foreground-finished')
     assert.equal(errors, '')
-    assert.deepEqual([...channels].sort(), ['notify-app-ready', 'updater-installed'])
+    assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 2)
+    assertNoScanLifecycleAnalytics(harness.requests)
   }
   finally {
     clearTimeout(timeout)
@@ -801,8 +769,8 @@ test.concurrent('neither telemetry nor onboarding redirects can forward worker c
         harness.behavior.events = 'ok'
         harness.behavior.putRedirect = true
         await harness.run()
-        // The 3xx is returned unfollowed (redirect: 'manual'), so the report counts as rejected.
-        assert.equal(harness.requests.at(-1).body.nonPersonTags.todo_report_status, 'rejected')
+        assert.equal(harness.requests.filter(request => request.method === 'PUT').length, 1)
+        assertNoScanLifecycleAnalytics(harness.requests)
         assert.deepEqual(forwarded, [], 'custom capgkey headers must never follow a redirect')
       }
       finally {
