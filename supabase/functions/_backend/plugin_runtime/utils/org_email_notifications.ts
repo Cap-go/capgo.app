@@ -153,6 +153,11 @@ async function fetchOrgScopeRoleBindings(
   errorMessage: string,
 ): Promise<{ bindings: OrgRoleBindingRow[], failed: boolean }> {
   try {
+    const scopeFilters = [
+      eq(schema.role_bindings.org_id, orgId),
+      eq(schema.role_bindings.principal_type, principalType),
+      eq(schema.role_bindings.scope_type, 'org'),
+    ] as const
     const bindings = await drizzle
       .select({
         principal_id: schema.role_bindings.principal_id,
@@ -161,12 +166,9 @@ async function fetchOrgScopeRoleBindings(
       .from(schema.role_bindings)
       .innerJoin(schema.roles, eq(schema.role_bindings.role_id, schema.roles.id))
       .where(
-        and(
-          eq(schema.role_bindings.org_id, orgId),
-          eq(schema.role_bindings.principal_type, principalType),
-          eq(schema.role_bindings.scope_type, 'org'),
-          inArray(schema.roles.name, adminRoleNames),
-        ),
+        adminRoleNames.length > 0
+          ? and(...scopeFilters, inArray(schema.roles.name, adminRoleNames))
+          : and(...scopeFilters),
       )
 
     return { bindings, failed: false }
@@ -888,5 +890,7 @@ export async function getOrgAdminMemberEmailsForTags(
 }
 
 export const orgEmailNotificationTestUtils = {
+  AUDIENCE_ROLE_NAMES,
+  fetchOrgScopeRoleBindings,
   getEligibleEmailTargets,
 }
