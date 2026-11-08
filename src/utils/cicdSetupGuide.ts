@@ -237,8 +237,14 @@ function platformLabel(platform: CiPlatform) {
   return platform === 'ios' ? 'iOS' : 'Android'
 }
 
-function validateTesterChannel(options: ReturnType<typeof resolved>) {
-  if (options.product !== 'ota' || options.strategy !== 'main_preprod')
+function validateOtaChannels(options: ReturnType<typeof resolved>) {
+  if (options.product !== 'ota')
+    return
+  if (!options.productionChannels.length)
+    throw new Error('An existing production release channel is required')
+  if (options.productionChannels.some(channel => !isCiChannelSupported(channel)))
+    throw new Error('Production channels must be supported by the CLI and CI providers')
+  if (options.strategy !== 'main_preprod')
     return
   if (!isCiChannelSupported(options.preprodChannel))
     throw new Error('Tester channel must be supported by the CLI')
@@ -248,11 +254,7 @@ function validateTesterChannel(options: ReturnType<typeof resolved>) {
 
 export function buildCiJobs(input: CiGuideOptions): CiJob[] {
   const options = resolved(input)
-  if (options.product === 'ota' && !options.productionChannels.length)
-    throw new Error('An existing production release channel is required')
-  if (options.product === 'ota' && options.productionChannels.some(channel => !isCiChannelSupported(channel)))
-    throw new Error('Production channels must be supported by the CLI and CI providers')
-  validateTesterChannel(options)
+  validateOtaChannels(options)
   const { appId, strategy, productionBranch, preprodBranch } = options
   if (strategy === 'main_preprod' && productionBranch === preprodBranch)
     throw new Error('Production and preproduction branches must be different')
@@ -617,6 +619,19 @@ function gitlabMergeRequestCondition(protectedPreview: boolean) {
     : mergeRequest
 }
 
+function gitlabPreviewRules({ job, environment, hasCleanup }: { job: CiJob, environment: string, hasCleanup: boolean }) {
+  const lines = requiresPreviewApproval(job)
+    ? [`    - if: ${gitlabMergeRequestCondition(true)}`, '      when: manual']
+    : ['    - if: $CI_PIPELINE_SOURCE == "merge_request_event"']
+  if (hasCleanup) {
+    lines.push('  environment:', `    name: ${environment}`, '    on_stop: capgo-preview-cleanup', '    auto_stop_in: 2 weeks')
+  }
+  else if (requiresPreviewApproval(job)) {
+    lines.push('  environment:', `    name: ${secretScope(job)}`)
+  }
+  return lines
+}
+
 function renderGitlab(jobs: CiJob[], options: CiGuideOptions) {
   const lines = ['default:', '  image: node:24']
   const prVariable = '$CI_MERGE_REQUEST_IID'
@@ -634,26 +649,7 @@ function renderGitlab(jobs: CiJob[], options: CiGuideOptions) {
       lines.push(`    - if: $CI_COMMIT_BRANCH == "${job.trigger.branch}"`, '  environment:', '    name: capgo-release')
     }
     else if (job.trigger.kind === 'pull_request') {
-      if (requiresPreviewApproval(job)) {
-        lines.push(
-          `    - if: ${gitlabMergeRequestCondition(true)}`,
-          '      when: manual',
-        )
-      }
-      else {
-        lines.push('    - if: $CI_PIPELINE_SOURCE == "merge_request_event"')
-      }
-      if (hasCleanup) {
-        lines.push(
-          '  environment:',
-          `    name: ${environment}`,
-          '    on_stop: capgo-preview-cleanup',
-          '    auto_stop_in: 2 weeks',
-        )
-      }
-      else if (requiresPreviewApproval(job)) {
-        lines.push('  environment:', `    name: ${secretScope(job)}`)
-      }
+      lines.push(...gitlabPreviewRules({ job, environment, hasCleanup }))
     }
     else {
       // GitLab runs this stop job when the merge request is merged or closed. It
