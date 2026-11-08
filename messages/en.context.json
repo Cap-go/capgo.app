@@ -4256,5 +4256,14 @@
   "saved-build": "Used in Capgo web console areas: components/dashboard. Role: table column label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "download-saved-build": "Used in Capgo web console areas: components/dashboard. Role: link label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "open-in-simulator": "Used in Capgo web console areas: components/dashboard. Role: button label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "saved-build-expired": "Used in Capgo web console areas: components/dashboard. Role: error sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "saved-build-expired": "Used in Capgo web console areas: components/dashboard. Role: error sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-dependency-package": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-load-notes": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-native-rebuild": "Used in Capgo web console areas: pages. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-capacitor": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-capacitor-description": "Used in Capgo web console. Role: helper or description text about \"changelog product capacitor description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-capacitor-long": "Used in Capgo web console. Role: UI label about \"changelog product capacitor long\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-dependency": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-dependency-description": "Used in Capgo web console. Role: helper or description text about \"changelog product dependency description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-dependency-long": "Used in Capgo web console. Role: UI label about \"changelog product dependency long\". Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }

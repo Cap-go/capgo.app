@@ -1506,10 +1506,6 @@ export class CapgoSDK {
     }
   }
 
-  /**
-   * Query Capgo Observe (launch, issues, routes, device timelines).
-   * Start with view=summary; follow findings.next. Use --json / MCP for agents.
-   */
   /** Read any authorized cloud build, including builds started by CI or the hosted MCP. */
   async getBuildStatus(options: BuildMonitorOptions): Promise<SDKResult<Record<string, unknown>>> {
     return this.readBuildMonitor('status', options)
@@ -1531,6 +1527,10 @@ export class CapgoSDK {
     }
   }
 
+  /**
+   * Query Capgo Observe (launch, issues, routes, device timelines).
+   * Start with view=summary; follow findings.next. Use --json / MCP for agents.
+   */
   async observe(options: ObserveOptions): Promise<SDKResult<Record<string, unknown>>> {
     try {
       const data = await fetchObserve({

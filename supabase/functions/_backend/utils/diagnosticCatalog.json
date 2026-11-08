@@ -585,7 +585,7 @@
     "classification": "error",
     "meaning": "The app did not report ready within its launch measurement window.",
     "next_steps": [
-      "Inspect startup errors and the device timeline. Check that startup reaches the readiness call, and call notifyAppReady after bootstrapping succeeds. Compare timing and failures with the previous bundle before changing timeout settings."
+      "Inspect startup errors and the device timeline. Check that startup reaches the readiness call, and call notifyAppReady() after bootstrapping succeeds. Compare timing and failures with the previous bundle before changing timeout settings."
     ],
     "docs_url": "https://capgo.app/docs/plugins/updater/debugging/#app_launch_timeout"
   },
