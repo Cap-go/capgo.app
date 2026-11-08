@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { fetchBuildMonitor } from '../src/build/monitor'
@@ -59,15 +62,27 @@ test('rejects malformed JSON instead of treating it as healthy empty data', asyn
   await expect(fetchObserve({ appId: 'com.example.app', view: 'release', apikey: 'example-test-key', apiHost: 'http://localhost:8787' })).rejects.toThrow('invalid Observe response')
 })
 
-test('CLI help only advertises filters supported by each Observe view', () => {
+test('generated CLI reference only advertises supported Observe filters', () => {
   const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url))
-  const help = (view: string) => execFileSync('node', [entry, 'observe', view, '--help'], { encoding: 'utf8' })
-  for (const view of ['summary', 'versions']) {
-    expect(help(view)).not.toContain('--version-name')
-    expect(help(view)).not.toContain('--action')
+  const directory = mkdtempSync(join(tmpdir(), 'capgo-monitoring-reference-'))
+  try {
+    execFileSync('node', [entry, 'generate-docs', '--folder', directory], { stdio: 'pipe', env: { ...process.env, CAPGO_DISABLE_TELEMETRY: '1' } })
+    const reference = readFileSync(join(directory, 'observe.mdx'), 'utf8')
+    const section = (view: string) => {
+      const content = reference.split(`<a id="observe-${view}"></a>`)[1]
+      expect(content).toBeDefined()
+      return content.split('### ')[0]
+    }
+    for (const view of ['summary', 'versions']) {
+      expect(section(view)).not.toContain('--version-name')
+      expect(section(view)).not.toContain('--action')
+    }
+    expect(section('release')).not.toContain('--days')
+    expect(section('release')).toContain('--channel-id')
+    expect(section('errors')).toContain('update_fail')
+    expect(section('errors')).toContain('overrides the default action filter')
   }
-  expect(help('release')).not.toContain('--days')
-  expect(help('release')).toContain('--channel-id')
-  expect(help('errors')).toContain('update_fail')
-  expect(help('errors').replace(/\s+/g, ' ')).toContain('overrides the default action filter')
+  finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
