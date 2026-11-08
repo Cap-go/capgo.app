@@ -18,6 +18,7 @@ Run from repo root with Node or Bun:
 | `node scripts/untangle/skeleton.mjs` | `.context/untangle/skeleton/` (gitignored) |
 | `node scripts/untangle/comment-estimate.mjs` | stdout JSON |
 | `node scripts/untangle/find-candidates.mjs` | heuristic special-case scan |
+| `node scripts/untangle/compare-mirrors.mjs origin/main` | stdout or `scripts/untangle/mirror-verification-main.json` |
 
 ### Import graph summary
 
@@ -355,6 +356,103 @@ Unrelated: production code.
 
 - X-13, X-14 (document why skips exist; out of scope to merge harnesses)
 
+## Byte-identical mirrors (verified at `origin/main`)
+
+Command: `node scripts/untangle/compare-mirrors.mjs origin/main` (byte equality and SHA-256 of each file at that ref). Artifact: `scripts/untangle/mirror-verification-main.json`.
+
+Live plugin traffic (`/updates`, `/stats`, `/channel_self`) is served by `cloudflare_workers/plugin/index.ts`, which imports only `supabase/functions/_backend/plugin_runtime/`. Supabase Deno entries `supabase/functions/updates`, `stats`, and `channel_self` also import `plugin_runtime/plugins/*`. All other Supabase function bundles import `supabase/functions/_backend/utils/`.
+
+| File (both paths under `.../utils/`) | SHA-256 (both copies identical) |
+| --- | --- |
+| `channelSelfRateLimit.ts` | `a7c525832fad440056b7e5178c7815691f502ac294e9a30994df2606027068b3` |
+| `deviceComparison.ts` | `4d2d20d757a582acbd4e9f576cee66c0828acd0a15e8590b42447d83880f8090` |
+| `downloadUrl.ts` | `3d223d91cf0746ae1e5684653480eb74f729df286b08ca2d5f976f4661710faa` |
+| `geolocation.ts` | `f667ac8e8e2290ec0dbec1a5403d83cf3a5c25ef0b987382bfdda2a4e6b6c696` |
+| `manifest_encoding.ts` | `d0ce7ded74e77bec5e1867cd094309a37a373d8fb4bb94dab76ef5a94b2b5183` |
+| `plugin_notification_queue.ts` | `de674c3cc4bf90f4d66ed280baf64dd3ddb1016c53997c913c5aa4a9cb94b725` |
+| `queryHelpers.ts` | `579561b9bf1b4960c867190c4395dd32a5c8be1e04a861a7a04a0bf1753976bc` |
+| `rateLimitInfo.ts` | `ce4809313988a1de01d678f11eb3dc023c933506d428a3a2d72e5b6e66124151` |
+| `rollout.ts` | `607dbc1ebc2ea92b82ea1e629d815c76eb06383fe4ad565404f3154f63fa1e3d` |
+| `statsInsights.ts` | `97bc1bf5863e671ce65d1a80dee0829cdec175b496bdc9704f4d4f5bbd8852fd` |
+| `supabase_write_guard.ts` | `f711f08424d12056f2907c95307efd39e89d631aff68a9520cca371e66424592` |
+| `version_manifest_sql.ts` | `3986b456ffcc8e89730e4b6fe4a535d9a47c2633b4f93deaf5fee7ce5da501ce` |
+
+PR 7 collapses these twelve by keeping one file and redirecting imports.
+
+## PR 8: diverged mirrors (29 files)
+
+Goal: one canonical module per basename without changing behavior. Winner picks which copy survives when both trees still import the basename today.
+
+Routing note: plugin worker and plugin Deno functions use `plugin_runtime/utils/*`. API, private, public, and trigger functions use `_backend/utils/*` (see `supabase/functions/private/index.ts:64`, `cloudflare_workers/api/*`).
+
+| File | What differs | Winner if merge proceeds | Why |
+| --- | --- | --- | --- |
+| `api_version.ts` | Plugin copy drops console and upload CORS negotiation helpers present in main. | needs Martin decision | Plugin `public/ok.ts` and API worker both expose version headers from different copies. |
+| `appStatus.ts` | Main checks `helper.available` synchronously and skips cache when false; plugin always builds cache keys and passes `updatesCacheTags` on `setAppStatus`. | needs Martin decision | `/updates`, `/stats`, `channel_self` use plugin copy; `public/app/put.ts:476` calls `deleteAppStatus` on main copy. |
+| `bento.ts` | Main includes org lifecycle and marketing email paths; plugin copy is a reduced worker subset. | needs Martin decision | Main triggers and private jobs import main copy only. |
+| `cache.ts` | Plugin adds `Cache-Tag`, `purgeLocalTaggedKeys`, and tagged `putJson`; main lacks purge-by-tag emulation. | needs Martin decision | Plugin hot paths tag app status; console and API rate limits use main copy. |
+| `channelSelfStore.ts` | Main keeps `pg_rls` sync helpers and imports version constants from `plugin_compatibility`; plugin inlines constants and drops primary DB sync on write. | needs Martin decision | Affects legacy channel_self store bridge and whether primary writes run from Supabase routes. |
+| `cloudflare.ts` | Main adds admin analytics, legacy download fail SQL, `versionCompare`, queue bindings; plugin trims bindings and analytics for worker bundle size. | needs Martin decision | `plugin_stats` and `nativeNotifications` split across copies. |
+| `deviceDataCollection.ts` | Main file is a re-export barrel only. | `plugin_runtime` | Main already re-exports plugin implementation (`utils/deviceDataCollection.ts:1`). |
+| `discord.ts` | Main redacts URLs via `sensitive_url.ts`; plugin logs raw `c.req.url` in 500 alerts. | needs Martin decision | Alert content changes if one copy wins. |
+| `hono.ts` | Main keeps console upload CORS headers, `triggerValidator`, richer JWT claim types; plugin copy is minimal for device traffic. | needs Martin decision | Every Supabase route vs plugin worker entry diverge. |
+| `invalids_ip.ts` | Provider ASN handling and block list logic diverge (plugin larger). | needs Martin decision | Imported on plugin hot paths and security tests reference both trees. |
+| `legacyDownloadFail.ts` | Main implements download fail accounting integrated with `cloudflare.ts` stats; plugin stub is tiny. | needs Martin decision | Stats correctness on main private analytics if plugin stub wins. |
+| `logging.ts` | Main exports `accessLog` with URL redaction; plugin uses shared `formatLogArgs` only. | needs Martin decision | Console access logging uses main hono logger wiring. |
+| `manifest_size.ts` | Plugin adds batching and caps aimed at worker CPU limits; main keeps older sizing path. | needs Martin decision | Upload finalization touches both trees in tests. |
+| `notifications.ts` | Main supports `recordDelivery` uniq ids; plugin drops `helper.available` sync guard. | needs Martin decision | Org retention and delivery gates differ. |
+| `on_error.ts` | Plugin shortens PostHog capture and error mapping; main keeps extra branches for console. | needs Martin decision | `hono.ts` in each tree wires `onError` from its local copy. |
+| `org_email_notifications.ts` | Plugin removes primary DB and RLS paths present in main; async cache guard pattern matches plugin `cache.ts`. | needs Martin decision | Billing and lifecycle emails use main copy on primary. |
+| `pg.ts` | Different types (`PluginPgClient` vs `PgClient`), lazy connect, Hyperdrive fresh reads, vs checkout or release and Drizzle logger on main. | needs Martin decision | Co-change rank 2; both runtimes depend on different transaction and pool semantics. |
+| `pg_errors.ts` | Regex character classes for SQLSTATE detection only (`\d` vs `[0-9]`). | Either copy | Equivalent acceptance rules; tests in `tests/pg-errors.unit.test.ts` should stay green. |
+| `plugin_compatibility.ts` | Main file is a re-export barrel only. | `plugin_runtime` | Main already re-exports plugin (`utils/plugin_compatibility.ts:1`). |
+| `plugin_stats.ts` | Small Cloudflare stats write and error surface differences. | needs Martin decision | `/stats` uses plugin copy; one main importer remains for internal stats helpers. |
+| `postgres_schema.ts` | Drizzle table map drift between copies. | needs Martin decision | Both `pg.ts` copies import local `postgres_schema.ts`. |
+| `posthog.ts` | Main wires queue and worker admin analytics env bindings; plugin copy is slimmer. | needs Martin decision | Error pipeline and triggers use main bindings. |
+| `rate_limit.ts` | Main uses `>` vs plugin `>=` for API key limits, fixed window reset, and `RateLimit-Policy` headers. | needs Martin decision | Plugin endpoints and console API keys do not share semantics today. |
+| `s3.ts` | Main keeps multipart and console upload helpers; plugin copy drops large sections. | needs Martin decision | Bundle and file routes on API worker need main behaviors. |
+| `schema_validation.ts` | Main keeps Zod `numericStringSchema` helpers; plugin forbids Zod import for bundle size. | needs Martin decision | Console and private parsers use Zod helpers on main. |
+| `supabase.types.ts` | Generated Database type line count differs (5788 vs 6622 lines at main). | Single generator output | Not runtime logic; fix is typegen parity (PR 2), not picking one handwritten file. |
+| `types.ts` | Main exports analytics helper types (`VersionCompareFilter`, `NativeActiveDevicesByPlatformRow`, optional `version_name` on insights). | needs Martin decision | `cloudflare.ts` on each side imports its local `types.ts`. |
+| `utils.ts` | Plugin uses `crypto.getRandomValues` for `isLimited`, adds `isVersionDeleted`, and calls `c.executionCtx.waitUntil` directly in `backgroundTask`. | needs Martin decision | `LIMITED_APPS` throttling and background tasks differ on plugin vs API worker. |
+| `version.ts` | `utils/version.ts` exports `22.33.1` while `plugin_runtime/utils/version.ts` exports `12.201.4` at main. | needs Martin decision | `scripts/update-version.js` writes both paths from `package.json`, but release fingerprints intentionally diverge (`scripts/release-test-fingerprint.ts:22`). |
+
+### PR 8 merge safety summary
+
+| Bucket | Count | Files |
+| --- | ---: | --- |
+| Safe to merge in PR 8 without behavior choice | 4 | `deviceDataCollection.ts`, `plugin_compatibility.ts`, `pg_errors.ts`, `supabase.types.ts` (via PR 2 typegen) |
+| needs Martin decision before single-file merge | 25 | All other rows marked above |
+| Collapsed in PR 7 first | 12 | Byte-identical list in previous section |
+
+### needs Martin decision (one line each)
+
+1. `api_version.ts`: Merging changes which Capgo API version header non-plugin routes advertise versus plugin `ok`.
+2. `appStatus.ts`: Merging changes whether cache is skipped when Cache API is not yet ready and whether purge tags attach on set.
+3. `bento.ts`: Merging drops or keeps org marketing email flows that exist only in main.
+4. `cache.ts`: Merging changes purge-by-tag behavior and tagged writes used by `/updates` edge cache.
+5. `channelSelfStore.ts`: Merging changes whether legacy channel_self writes still sync through primary `pg_rls`.
+6. `cloudflare.ts`: Merging changes analytics SQL, legacy download fail math, and worker binding surface area.
+7. `discord.ts`: Merging changes whether Discord 500 alerts redact URLs.
+8. `hono.ts`: Merging changes console CORS, DB triggers, and auth middleware available on API routes.
+9. `invalids_ip.ts`: Merging changes provider infrastructure IP blocking on plugin endpoints.
+10. `legacyDownloadFail.ts`: Merging changes stats adjustment for legacy download failures on dashboards.
+11. `logging.ts`: Merging changes access log redaction used by console routes.
+12. `manifest_size.ts`: Merging changes manifest size backfill throughput and limits.
+13. `notifications.ts`: Merging changes delivery marker writes for retention crons.
+14. `on_error.ts`: Merging changes global error JSON shape and PostHog capture on API vs plugin.
+15. `org_email_notifications.ts`: Merging changes whether org emails still enqueue through primary DB paths.
+16. `pg.ts`: Merging changes pool lifecycle, lazy connect, and replica lag handling on hot plugin paths and console SQL.
+17. `plugin_stats.ts`: Merging changes how device stats posts hit Cloudflare analytics from `/stats`.
+18. `postgres_schema.ts`: Merging changes Drizzle schema used by both `pg.ts` copies.
+19. `posthog.ts`: Merging changes queue based exception capture on API worker.
+20. `rate_limit.ts`: Merging changes API key quota math and response headers on console traffic.
+21. `s3.ts`: Merging changes multipart upload and signing helpers on bundle file routes.
+22. `schema_validation.ts`: Merging removes Zod coercions used by private and console parsers.
+23. `types.ts`: Merging removes analytics types used by main `cloudflare.ts` insights queries.
+24. `utils.ts`: Merging changes `LIMITED_APPS` randomness and `backgroundTask` waitUntil guard semantics.
+25. `version.ts`: Merging collapses two intentional deploy version strings used in separate release fingerprints.
+
 ## Proposed PR plan (order)
 
 Safest, highest leverage first. No changes under `capacitor-*` plugin packages (separate owners). No `.github/workflows` edits.
@@ -368,8 +466,8 @@ Safest, highest leverage first. No changes under `capacitor-*` plugin packages (
 | 5 | Edge snippet contract tests + ASN single export | H-33 to H-36, Fix 5 | Medium | `cloudflare-snippet.unit`, `snippet-edge-answer.unit` |
 | 6 | Worker request context + write guard alignment | H-32, Fix 6 | Medium | `plugin-supabase-write-guard`, Cloudflare plugin tests |
 | 7 | Collapse 12 identical mirrors (import path redirect) | S-09, H-30, H-31 | Medium | `bun test:cloudflare:updates`, backend integration |
-| 8 | Merge diverged plugin utils (29 files) behind one tree | H-01 to H-29, Fix 1, Fix 12 | High | Cloudflare all + backend integration shards |
-| 9 | Updates / stats / channel_self vertical file moves | Fix 7, Fix 8 | High | Plugin tests, `test:cloudflare:updates` |
+| 8 | Merge diverged plugin utils (29 files) behind one tree; only the 4 safe rows plus Martin-approved rows | H-01 to H-29, Fix 1, Fix 12, PR 8 table | High | Must prove `/updates`, `/stats`, and `channel_self` unchanged: `bun test:cloudflare:updates`, `bun test:cloudflare:all`, plugin unit or integration tests green. PR body lists test command exit codes and pass counts. |
+| 9 | Updates / stats / channel_self vertical file moves | Fix 7, Fix 8 | High | Same proof bar as PR 8 for `/updates`, `/stats`, and `channel_self` with Cloudflare Workers and plugin test suites green; pass counts in PR body. |
 | 10 | Stripe billing facade | H-49, Fix 9 | Medium | Stripe tests, Playwright billing specs |
 | 11 | CLI registrar split (index vs sdk/mcp) | Fix 11 | Medium | `bun run cli:check`, `cli-compat` in monorepo |
 | 12 | Comment sweep: `plugin_runtime` | Fix 13 | Low | Lint only |
