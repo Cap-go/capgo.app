@@ -93,6 +93,9 @@ if (cicdView && params.get('defaultChannel') !== '0') {
   for (const [index, name] of names.entries())
     state.channels.push({ id: index + 1, app_id: previewAppId, name, public: true, ios: index % 2 === 0, android: index % 2 !== 0, electron: false })
 }
+const privateChannel = params.get('privateChannel')
+if (cicdView && privateChannel)
+  state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name: privateChannel, public: false, ios: true, android: true, electron: false })
 if (params.get('disabledPublicChannel') === '1')
   state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name: 'disabled-public', public: true, ios: false, android: false, electron: false })
 if (params.get('checklistState') === 'completed') {

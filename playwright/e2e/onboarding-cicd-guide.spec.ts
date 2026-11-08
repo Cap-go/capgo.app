@@ -215,14 +215,57 @@ test.describe('CI/CD setup guide', () => {
     await expect(content).not.toContainText('capgo-encrypted-preview')
   })
 
-  test('remembers answers per app and warns when there is no default channel', async ({ page }) => {
+  test('requires an existing release target before generating a pipeline', async ({ page }) => {
     await page.goto(`${fixture}&defaultChannel=0`)
     await page.locator('[data-test="cicd-provider-other"]').click()
     await expect(page.locator('[data-test="cicd-no-default-channel"]')).toBeVisible()
-    await expect(page.locator('[data-test="cicd-pipeline-file"]')).toHaveText('shell')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="cicd-step-key"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="cicd-no-default-channel"]')).toContainText('Create a channel with at least one platform enabled')
+    await expect(page.locator('[data-test="cicd-no-default-channel"] a')).toHaveAttribute('href', `/app/${appId}/channels`)
+    await page.locator('[data-test="cicd-strategy-pull_request"]').click()
+    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
     await page.reload()
     await expect(page.locator('[data-test="cicd-provider-other"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+    await page.locator('[data-test="cicd-product-builder"]').click()
     await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
+  })
+
+  test('selects and remembers an existing private target without widening the key role', async ({ page }) => {
+    await page.goto(`${fixture}&defaultChannel=0&privateChannel=internal-release`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+    await page.locator('[data-test="cicd-production-target"]').selectOption('internal-release')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('--channel internal-release --auto-bump patch')
+    await expect(page.locator('[data-test="cicd-key-CAPGO_TOKEN"]')).toContainText('Role: App uploader')
+    await page.reload()
+    await expect(page.locator('[data-test="cicd-production-target"]')).toHaveValue('internal-release')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('--channel internal-release --auto-bump patch')
+    await page.goto(`${fixture}&defaultChannel=0&privateChannel=another-release`)
+    await expect(page.locator('[data-test="cicd-production-target"]')).toHaveValue('')
+    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+  })
+
+  test('refreshes created or deleted production targets before generating jobs', async ({ page }) => {
+    await page.goto(`${fixture}&defaultChannel=0`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+    await page.evaluate((appId) => {
+      (window as any).onboardingSetupPreview.state.channels.push({ id: 1, app_id: appId, name: 'internal-release', public: false, ios: true })
+    }, appId)
+    await page.locator('[data-test="cicd-targets-refresh"]').click()
+    await page.locator('[data-test="cicd-production-target"]').selectOption('internal-release')
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('--channel internal-release --auto-bump patch')
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.channels = [] })
+    await page.locator('[data-test="cicd-targets-refresh"]').click()
+    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+    await page.evaluate((appId) => {
+      (window as any).onboardingSetupPreview.state.channels.push({ id: 2, app_id: appId, name: 'stable', public: true, ios: true })
+    }, appId)
+    await page.locator('[data-test="cicd-targets-refresh"]').click()
+    await expect(page.locator('[data-test="cicd-no-default-channel"]')).toHaveCount(0)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('--channel stable --auto-bump patch')
   })
 
   test('keeps the real default channel and blocks one the CLI cannot target', async ({ page }) => {

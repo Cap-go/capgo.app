@@ -35,6 +35,26 @@ const base = { appId, productionChannels: ['production'] } as const
 const runFile = promisify(execFile)
 
 describe('CI/CD guide pipelines', () => {
+  it.each(CI_PROVIDERS)('requires an existing production target for live updates on %s', (provider) => {
+    for (const strategy of CI_STRATEGIES) {
+      for (const productionChannels of [undefined, [], ['']]) {
+        expect(() => buildCiPipeline({ appId, product: 'ota', strategy, provider, productionChannels })).toThrow('An existing production release channel is required')
+      }
+      // Native builds do not publish to a channel.
+      expect(() => buildCiPipeline({ appId, product: 'builder', strategy, provider })).not.toThrow()
+    }
+  })
+
+  it('keeps an explicitly selected private target without widening release permissions', () => {
+    for (const strategy of ['main', 'pull_request'] as const) {
+      for (const provider of CI_PROVIDERS) {
+        const pipeline = buildCiPipeline({ appId, product: 'ota', strategy, provider, productionChannels: ['private-live'] })
+        expect(pipeline.keys.find(key => key.purpose === 'release')).toEqual({ secret: 'CAPGO_TOKEN', role: 'app_uploader', purpose: 'release' })
+        expect(pipeline.jobs.find(job => job.id === 'production')?.command).toContain('--channel private-live --auto-bump')
+      }
+    }
+  })
+
   it('renders valid YAML for every product, strategy and provider', () => {
     for (const product of CI_PRODUCTS) {
       for (const strategy of CI_STRATEGIES) {
@@ -601,8 +621,9 @@ describe('CI/CD guide pipelines', () => {
     const job = parse(pipeline.content).jobs.production
     expect(job.steps.at(-1).run).toBe('npx @capgo/cli@latest bundle upload com.example.app --channel production-android,production-ios --auto-bump patch --fail-on-incompatible')
     expect(job.name).toBe('Upload live update to production-android, production-ios')
-    expect(normalizeCiChannels([])).toEqual(['production'])
-    expect(normalizeCiChannels(null)).toEqual(['production'])
+    expect(normalizeCiChannels([])).toEqual([])
+    expect(normalizeCiChannels(null)).toEqual([])
+    expect(normalizeCiChannels(undefined)).toEqual([])
     expect(normalizeCiChannels(['b', '', 'a', 'b'])).toEqual(['a', 'b'])
     // A name with spaces stays one quoted --channel value.
     expect(buildCiPipeline({ ...base, productionChannels: ['Live iOS', 'Live Android'], product: 'ota', strategy: 'main', provider: 'other' }).content)
@@ -636,6 +657,15 @@ describe('CI/CD guide selection storage', () => {
     expect(loadCiGuideSelection('user-1', appId).preprodChannel).toBe('ci-testers')
     localStorage.setItem(`capgo:cicd-guide:user-1:${appId}`, JSON.stringify({ preprodChannel: 'production,preprod' }))
     expect(loadCiGuideSelection('user-1', appId).preprodChannel).toBeUndefined()
+  })
+
+  it('remembers an existing production target and drops malformed stored choices', () => {
+    saveCiGuideSelection('user-1', appId, { product: 'ota', strategy: 'main', provider: 'github', platforms: ['ios'], productionBranch: 'main', preprodBranch: 'preprod', productionChannel: 'private-live' })
+    expect(loadCiGuideSelection('user-1', appId).productionChannel).toBe('private-live')
+    for (const productionChannel of ['', 'private,live', ' private-live', 'private-live\n', null, 42, ['private-live']]) {
+      localStorage.setItem(`capgo:cicd-guide:user-1:${appId}`, JSON.stringify({ productionChannel }))
+      expect(loadCiGuideSelection('user-1', appId).productionChannel).toBeUndefined()
+    }
   })
 
   it('drops unknown or malformed values', () => {

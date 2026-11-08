@@ -18,6 +18,19 @@ At most three apps are listed, the most recently active first. There is no
 dismiss button: the entry stays until CI ships once or the guide marks it set
 up.
 
+## Production release targets
+
+Live-update pipelines require an existing channel. The guide uses the app's
+enabled public/default channels automatically. When there are no defaults, users
+choose an existing release channel, including a private one, or open Channels to
+create a target and refresh the list. Key creation and generated jobs stay hidden
+until a valid target is selected. A saved selection is checked against the current
+channel list, so a deleted channel cannot remain the target after a refresh.
+
+The picker reads at most 1,000 app-scoped channels with public defaults first.
+The generator also rejects empty target lists. Release keys keep their existing
+roles; the uploader role does not need permission to create a channel.
+
 Visible tabs refresh only the three displayed CI/CD entries every 30 seconds.
 When those entries connect, the next displayed apps are checked on the next
 tick. Initial organization refreshes still cover all apps; store updates batch

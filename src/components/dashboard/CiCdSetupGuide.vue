@@ -77,6 +77,7 @@ const platforms = ref<CiPlatform[]>(props.initialPlatform ? [props.initialPlatfo
 const productionBranchInput = ref(saved.productionBranch ?? DEFAULT_PRODUCTION_BRANCH)
 const preprodBranchInput = ref(saved.preprodBranch ?? DEFAULT_PREPROD_BRANCH)
 const preprodChannel = ref(saved.preprodChannel ?? PREPROD_CHANNEL)
+const selectedProductionChannel = ref(saved.productionChannel ?? '')
 const productionBranch = computed(() => normalizeCiBranch(productionBranchInput.value, DEFAULT_PRODUCTION_BRANCH))
 const preprodBranch = computed(() => normalizeCiBranch(preprodBranchInput.value, DEFAULT_PREPROD_BRANCH))
 const productionBranchInvalid = computed(() => productionBranchInput.value.trim() !== productionBranch.value)
@@ -89,10 +90,18 @@ const preprodBranchInvalid = computed(() => preprodBranchInput.value.trim() !== 
 // undefined while loading; null when the app has no default channel yet.
 // Apps can have one default channel per platform: CI uploads to all of them.
 const defaultChannels = ref<string[] | null | undefined>(undefined)
+const availableChannels = ref<string[]>([])
 type LoadStatus = 'loading' | 'ready' | 'error'
 const channelStatus = ref<LoadStatus>('loading')
-const productionChannels = computed(() => normalizeCiChannels(defaultChannels.value))
+const productionChannels = computed(() => {
+  if (defaultChannels.value?.length)
+    return normalizeCiChannels(defaultChannels.value)
+  if (availableChannels.value.includes(selectedProductionChannel.value))
+    return [selectedProductionChannel.value]
+  return []
+})
 const productionChannel = computed(() => productionChannels.value.join(', '))
+const productionTargetMissing = computed(() => product.value === 'ota' && productionChannels.value.length === 0)
 const showTesterChannel = computed(() => product.value === 'ota' && strategy.value === 'main_preprod')
 const testerChannelInvalid = computed(() => showTesterChannel.value && !isCiChannelSupported(preprodChannel.value))
 const testerChannelCollision = computed(() => showTesterChannel.value && productionChannels.value.includes(preprodChannel.value))
@@ -108,7 +117,7 @@ const encrypted = computed(() => encryptionRequired.value || (encryptedChoice.va
 // Never swap in another channel: CI would ship to a channel the user didn't pick.
 const unsupportedChannel = computed(() => productionChannels.value.find(channel => !isCiChannelSupported(channel)))
 const channelUnsupported = computed(() => product.value === 'ota' && unsupportedChannel.value !== undefined)
-const pipeline = computed(() => provider.value && !channelUnsupported.value && !branchesEqual.value
+const pipeline = computed(() => provider.value && !productionTargetMissing.value && !channelUnsupported.value && !branchesEqual.value
   && !testerChannelInvalid.value && !testerChannelCollision.value
   && (product.value !== 'ota' || (channelStatus.value === 'ready' && encryptionStatus.value === 'ready'))
   ? buildCiPipeline({
@@ -159,7 +168,13 @@ const checklistPath = computed(() => `${getAppGettingStartedPath(props.appId)}?s
 const docsHref = computed(() => product.value === 'ota'
   ? 'https://capgo.app/docs/getting-started/cicd-integration/'
   : 'https://capgo.app/docs/builder/github-actions/')
-const strategyParams = computed(() => ({ branch: productionBranch.value, preprod: preprodBranch.value, channel: productionChannel.value, testerChannel: preprodChannel.value }))
+const strategyParams = computed(() => ({
+  branch: productionBranch.value,
+  preprod: preprodBranch.value,
+  channel: productionChannel.value || t('cicd-guide-production-target-pending'),
+  channelLabel: productionChannel.value ? t('cicd-guide-production-channel-label', { channel: productionChannel.value }) : t('cicd-guide-production-target-pending'),
+  testerChannel: preprodChannel.value,
+}))
 
 // Keyed by secret and role: a key made for another answer (uploader vs admin)
 // cannot run this pipeline, so a changed role asks for a new key.
@@ -188,7 +203,7 @@ interface KeyRegistration {
 }
 const keyRegistrations = reactive<Partial<Record<CiKeySlot, KeyRegistration>>>({})
 
-watch([product, strategy, provider, platforms, productionBranch, preprodBranch, preprodChannel], () => {
+watch([product, strategy, provider, platforms, productionBranch, preprodBranch, preprodChannel, selectedProductionChannel], () => {
   if (!provider.value)
     return
   saveCiGuideSelection(userId.value, props.appId, {
@@ -199,6 +214,7 @@ watch([product, strategy, provider, platforms, productionBranch, preprodBranch, 
     productionBranch: productionBranch.value,
     preprodBranch: preprodBranch.value,
     preprodChannel: preprodChannel.value,
+    productionChannel: selectedProductionChannel.value,
   })
 }, { deep: true })
 
@@ -312,20 +328,26 @@ async function loadDefaultChannel() {
   const appId = props.appId
   channelStatus.value = 'loading'
   try {
-    // One default channel per platform at most, so this list stays tiny.
+    // Bound the picker and return public defaults before optional private targets.
     const { data, error } = await capgo
       .from('channels')
-      .select('name, ios, android, electron')
+      .select('name, public, ios, android, electron')
       .eq('app_id', appId)
-      .eq('public', true)
+      .order('public', { ascending: false })
+      .order('name')
+      .limit(1000)
     if (error)
       throw error
     if (appId !== props.appId)
       return
-    const names = (data ?? [])
-      .filter(row => row.ios || row.android || row.electron)
+    const enabled = (data ?? []).filter(row => row.ios || row.android || row.electron)
+    const names = enabled
+      .filter(row => row.public)
       .map(row => row.name)
       .filter((name): name is string => !!name)
+    availableChannels.value = normalizeCiChannels(enabled.map(row => row.name))
+    if (!availableChannels.value.includes(selectedProductionChannel.value))
+      selectedProductionChannel.value = ''
     defaultChannels.value = names.length ? names : null
     channelStatus.value = 'ready'
   }
@@ -662,6 +684,26 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       </template>
     </div>
 
+    <section v-if="product === 'ota' && channelStatus === 'ready' && defaultChannels === null" class="space-y-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-no-default-channel" aria-labelledby="cicd-production-target-title">
+      <h2 id="cicd-production-target-title" class="font-semibold">{{ t('cicd-guide-production-target-title') }}</h2>
+      <p>{{ t('cicd-guide-no-default-channel') }}</p>
+      <label v-if="availableChannels.length" class="block">
+        <span class="font-medium">{{ t('cicd-guide-production-target') }}</span>
+        <select v-model="selectedProductionChannel" class="d-select mt-1 w-full rounded-lg border-slate-300 bg-white text-slate-950 dark:border-white/20 dark:bg-slate-900 dark:text-white" data-test="cicd-production-target">
+          <option value="">{{ t('cicd-guide-production-target-select') }}</option>
+          <option v-for="channel in availableChannels" :key="channel" :value="channel">{{ channel }}</option>
+        </select>
+      </label>
+      <p v-else>{{ t('cicd-guide-production-target-create') }}</p>
+      <div class="flex flex-wrap items-center gap-3">
+        <RouterLink :to="`/app/${encodeURIComponent(appId)}/channels`" class="font-medium underline underline-offset-4">{{ t('cicd-guide-open-channels') }}</RouterLink>
+        <button type="button" :class="secondaryLinkClass" data-test="cicd-targets-refresh" @click="loadDefaultChannel()">
+          <IconRefresh class="h-4 w-4" aria-hidden="true" />
+          {{ t('cicd-guide-refresh') }}
+        </button>
+      </div>
+    </section>
+
     <section v-if="provider && pipeline" aria-labelledby="cicd-steps-title" class="space-y-4" data-test="cicd-steps">
       <div>
         <h2 id="cicd-steps-title" class="text-2xl font-semibold tracking-tight text-slate-950 dark:text-white">
@@ -671,14 +713,6 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           {{ t('cicd-guide-steps-subtitle') }}
         </p>
       </div>
-
-      <output v-if="product === 'ota' && defaultChannels === null" class="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-no-default-channel">
-        <IconTriangleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-        <span class="min-w-0 flex-1">{{ t('cicd-guide-no-default-channel') }}</span>
-        <RouterLink :to="checklistPath" class="font-medium underline underline-offset-4">
-          {{ t('cicd-guide-open-checklist') }}
-        </RouterLink>
-      </output>
 
       <ol class="space-y-4">
         <li v-if="product === 'builder'" class="flex gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 dark:border-white/15 dark:bg-slate-900" data-test="cicd-step-credentials">

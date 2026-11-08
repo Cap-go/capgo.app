@@ -36,8 +36,8 @@ export interface CiGuideOptions {
   /** Builder only: platforms to build. */
   platforms?: readonly CiPlatform[]
   /**
-   * Live updates only: the app's default channels. Apps can have one default
-   * channel per platform; CI uploads to all of them (`--channel a,b`).
+   * Live updates only: existing channels selected for production releases.
+   * Apps can have one default per platform; CI uploads to all selected targets.
    */
   productionChannels?: readonly string[]
   /** Live updates only: a tester channel distinct from all production defaults. */
@@ -137,10 +137,9 @@ export function normalizeCiChannel(value: string | null | undefined) {
   return value || DEFAULT_PRODUCTION_CHANNEL
 }
 
-/** The app's default channels, de-duplicated in a stable order; production when there is none. */
+/** Existing release targets, de-duplicated in a stable order without inventing a channel. */
 export function normalizeCiChannels(values: readonly (string | null | undefined)[] | null | undefined) {
-  const channels = [...new Set((values ?? []).filter((value): value is string => !!value))].sort((a, b) => a.localeCompare(b))
-  return channels.length ? channels : [DEFAULT_PRODUCTION_CHANNEL]
+  return [...new Set((values ?? []).filter((value): value is string => !!value))].sort((a, b) => a.localeCompare(b))
 }
 
 // eslint-disable-next-line no-control-regex
@@ -249,6 +248,8 @@ function validateTesterChannel(options: ReturnType<typeof resolved>) {
 
 export function buildCiJobs(input: CiGuideOptions): CiJob[] {
   const options = resolved(input)
+  if (options.product === 'ota' && !options.productionChannels.length)
+    throw new Error('An existing production release channel is required')
   validateTesterChannel(options)
   const { appId, strategy, productionBranch, preprodBranch } = options
   if (strategy === 'main_preprod' && productionBranch === preprodBranch)
@@ -910,6 +911,8 @@ export interface CiGuideSelection {
   platforms: CiPlatform[]
   productionBranch: string
   preprodBranch: string
+  /** Existing release target chosen when the app has no default channel. */
+  productionChannel?: string
   preprodChannel?: string
 }
 
@@ -932,6 +935,7 @@ export function loadCiGuideSelection(userId: string | null | undefined, appId: s
       ...(platforms.length ? { platforms: [...new Set(platforms)] } : {}),
       ...(typeof saved.productionBranch === 'string' ? { productionBranch: normalizeCiBranch(saved.productionBranch, DEFAULT_PRODUCTION_BRANCH) } : {}),
       ...(typeof saved.preprodBranch === 'string' ? { preprodBranch: normalizeCiBranch(saved.preprodBranch, DEFAULT_PREPROD_BRANCH) } : {}),
+      ...(typeof saved.productionChannel === 'string' && isCiChannelSupported(saved.productionChannel) ? { productionChannel: saved.productionChannel } : {}),
       ...(typeof saved.preprodChannel === 'string' && isCiChannelSupported(saved.preprodChannel) ? { preprodChannel: saved.preprodChannel } : {}),
     }
   }

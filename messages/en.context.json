@@ -4267,7 +4267,7 @@
   "cicd-guide-strategy-main": "Used in Capgo web console. Role: UI label about \"cicd guide strategy main\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-strategy-main_preprod": "Used in Capgo web console. Role: UI label about \"cicd guide strategy main_preprod\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-strategy-pull_request": "Used in Capgo web console. Role: UI label about \"cicd guide strategy pull_request\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "cicd-guide-strategy-ota-main-description": "Used in Capgo web console. Role: helper or description text about \"cicd guide strategy ota main description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-strategy-ota-main-description": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
   "cicd-guide-strategy-ota-main_preprod-description": "Used in Capgo web console. Role: helper or description text about \"cicd guide strategy ota main_preprod description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-strategy-ota-pull_request-description": "Used in Capgo web console. Role: helper or description text about \"cicd guide strategy ota pull_request description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-strategy-builder-main-description": "Used in Capgo web console. Role: helper or description text about \"cicd guide strategy builder main description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
@@ -4287,7 +4287,7 @@
   "cicd-guide-steps-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-steps-subtitle": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-step-label": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "cicd-guide-no-default-channel": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-no-default-channel": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
   "cicd-guide-open-checklist": "Used in Capgo web console areas: components/dashboard. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-step-credentials-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-step-credentials-description": "Used in Capgo web console areas: components/dashboard. Role: helper or description text. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
@@ -4421,5 +4421,11 @@
   "changelog-product-capacitor-long": "Used in Capgo web console. Role: UI label about \"changelog product capacitor long\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "changelog-product-dependency": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "changelog-product-dependency-description": "Used in Capgo web console. Role: helper or description text about \"changelog product dependency description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
-  "changelog-product-dependency-long": "Used in Capgo web console. Role: UI label about \"changelog product dependency long\". Translate for UI; keep Capgo product names, code, and placeholders unchanged."
+  "changelog-product-dependency-long": "Used in Capgo web console. Role: UI label about \"changelog product dependency long\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-production-target-title": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
+  "cicd-guide-production-target": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
+  "cicd-guide-production-target-select": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
+  "cicd-guide-production-target-create": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
+  "cicd-guide-production-target-pending": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged.",
+  "cicd-guide-production-channel-label": "Used in CI/CD onboarding to require an existing production release target before generating live-update pipelines. Keep channel names and placeholders unchanged."
 }
