@@ -1,0 +1,326 @@
+{
+  "topPairs": [
+    {
+      "count": 12,
+      "a": "supabase/functions/_backend/plugin_runtime/utils/supabase.types.ts",
+      "b": "supabase/functions/_backend/utils/supabase.types.ts"
+    },
+    {
+      "count": 9,
+      "a": "cli/src/index.ts",
+      "b": "cli/src/mcp/server.ts"
+    },
+    {
+      "count": 7,
+      "a": "cli/src/index.ts",
+      "b": "cli/src/mcp/tool-schemas.ts"
+    },
+    {
+      "count": 7,
+      "a": "cli/src/mcp/server.ts",
+      "b": "cli/src/mcp/tool-schemas.ts"
+    },
+    {
+      "count": 7,
+      "a": "src/services/stripe.ts",
+      "b": "supabase/functions/_backend/private/stripe_billing.ts"
+    },
+    {
+      "count": 6,
+      "a": "cli/src/index.ts",
+      "b": "cli/src/schemas/sdk.ts"
+    },
+    {
+      "count": 6,
+      "a": "cli/src/mcp/server.ts",
+      "b": "cli/src/schemas/sdk.ts"
+    },
+    {
+      "count": 6,
+      "a": "cli/src/index.ts",
+      "b": "cli/src/sdk.ts"
+    },
+    {
+      "count": 6,
+      "a": "cli/src/mcp/server.ts",
+      "b": "cli/src/sdk.ts"
+    },
+    {
+      "count": 6,
+      "a": "supabase/functions/_backend/plugin_runtime/utils/pg.ts",
+      "b": "supabase/functions/_backend/utils/pg.ts"
+    },
+    {
+      "count": 5,
+      "a": "cli/src/mcp/tool-schemas.ts",
+      "b": "cli/src/schemas/sdk.ts"
+    },
+    {
+      "count": 5,
+      "a": "cli/src/mcp/tool-schemas.ts",
+      "b": "cli/src/sdk.ts"
+    },
+    {
+      "count": 5,
+      "a": "cli/src/schemas/sdk.ts",
+      "b": "cli/src/sdk.ts"
+    },
+    {
+      "count": 5,
+      "a": "supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts",
+      "b": "supabase/functions/_backend/utils/cloudflare.ts"
+    },
+    {
+      "count": 5,
+      "a": "supabase/functions/_backend/private/stripe_billing.ts",
+      "b": "supabase/functions/_backend/utils/stripe.ts"
+    },
+    {
+      "count": 5,
+      "a": "supabase/functions/_backend/private/stripe_billing.ts",
+      "b": "supabase/functions/_backend/utils/stripe_trial_plan.ts"
+    },
+    {
+      "count": 5,
+      "a": "supabase/functions/_backend/utils/stripe.ts",
+      "b": "supabase/functions/_backend/utils/stripe_billing.ts"
+    },
+    {
+      "count": 5,
+      "a": "supabase/functions/_backend/plugin_runtime/utils/supabase.types.ts",
+      "b": "supabase/functions/_backend/utils/cloudflare.ts"
+    },
+    {
+      "count": 5,
+      "a": "supabase/functions/_backend/utils/cloudflare.ts",
+      "b": "supabase/functions/_backend/utils/supabase.types.ts"
+    },
+    {
+      "count": 5,
+      "a": "src/services/stripe.ts",
+      "b": "supabase/functions/_backend/utils/stripe.ts"
+    },
+    {
+      "count": 5,
+      "a": "src/services/stripe.ts",
+      "b": "supabase/functions/_backend/utils/stripe_trial_plan.ts"
+    },
+    {
+      "count": 5,
+      "a": "cli/src/onboarding/background-shutdown.ts",
+      "b": "cli/src/onboarding/setup-notices.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/index.ts",
+      "b": "cli/src/init/command.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/plugin_runtime/utils/version_manifest_sql.ts",
+      "b": "supabase/functions/_backend/utils/version_manifest_sql.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/build/request.ts",
+      "b": "cli/src/index.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/private/stripe_billing.ts",
+      "b": "supabase/functions/_backend/utils/stripe_billing.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/private/stripe_checkout.ts",
+      "b": "supabase/functions/_backend/utils/stripe.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/public/organization/post.ts",
+      "b": "supabase/functions/_backend/utils/supabase.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/utils/stripe.ts",
+      "b": "supabase/functions/_backend/utils/stripe_trial_plan.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/plugin_runtime/utils/pg.ts",
+      "b": "supabase/functions/_backend/plugin_runtime/utils/update.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/index.ts",
+      "b": "cli/src/onboarding/background.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/api/preflight.ts",
+      "b": "cli/src/onboarding/background-shutdown.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/api/preflight.ts",
+      "b": "cli/src/onboarding/setup-notices.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/plugin_runtime/plugins/stats.ts",
+      "b": "supabase/functions/_backend/plugin_runtime/utils/snippetEdgeAnswer.ts"
+    },
+    {
+      "count": 4,
+      "a": "supabase/functions/_backend/plugin_runtime/plugins/stats.ts",
+      "b": "supabase/functions/_backend/plugin_runtime/utils/update.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/app/todo.ts",
+      "b": "cli/src/index.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/types/supabase.types.ts",
+      "b": "supabase/functions/_backend/plugin_runtime/utils/supabase.types.ts"
+    },
+    {
+      "count": 4,
+      "a": "cli/src/types/supabase.types.ts",
+      "b": "supabase/functions/_backend/utils/supabase.types.ts"
+    },
+    {
+      "count": 3,
+      "a": "cli/src/index.ts",
+      "b": "supabase/functions/_backend/public/build/logs.ts"
+    },
+    {
+      "count": 3,
+      "a": "cli/src/mcp/server.ts",
+      "b": "supabase/functions/_backend/public/build/logs.ts"
+    }
+  ],
+  "topFiles": [
+    {
+      "file": "supabase/functions/_backend/utils/version.ts",
+      "count": 143
+    },
+    {
+      "file": "cli/src/index.ts",
+      "count": 17
+    },
+    {
+      "file": "supabase/functions/_backend/utils/supabase.types.ts",
+      "count": 16
+    },
+    {
+      "file": "supabase/functions/_backend/plugin_runtime/utils/supabase.types.ts",
+      "count": 12
+    },
+    {
+      "file": "cli/src/mcp/server.ts",
+      "count": 10
+    },
+    {
+      "file": "supabase/functions/_backend/utils/cloudflare.ts",
+      "count": 10
+    },
+    {
+      "file": "supabase/functions/_backend/utils/supabase.ts",
+      "count": 9
+    },
+    {
+      "file": "supabase/functions/_backend/utils/stripe.ts",
+      "count": 9
+    },
+    {
+      "file": "supabase/functions/_backend/utils/pg.ts",
+      "count": 9
+    },
+    {
+      "file": "supabase/functions/_backend/plugin_runtime/utils/pg.ts",
+      "count": 9
+    },
+    {
+      "file": "cli/src/init/command.ts",
+      "count": 8
+    },
+    {
+      "file": "supabase/functions/_backend/private/stripe_billing.ts",
+      "count": 8
+    },
+    {
+      "file": "src/services/stripe.ts",
+      "count": 8
+    },
+    {
+      "file": "cli/src/mcp/tool-schemas.ts",
+      "count": 7
+    },
+    {
+      "file": "cli/src/build/request.ts",
+      "count": 7
+    },
+    {
+      "file": "src/services/cliAiPrompt.ts",
+      "count": 7
+    },
+    {
+      "file": "cli/src/onboarding/setup-notices.ts",
+      "count": 7
+    },
+    {
+      "file": "cli/src/onboarding/background-shutdown.ts",
+      "count": 7
+    },
+    {
+      "file": "cli/src/schemas/sdk.ts",
+      "count": 6
+    },
+    {
+      "file": "cli/src/sdk.ts",
+      "count": 6
+    },
+    {
+      "file": "supabase/functions/_backend/private/onboarding_progress.ts",
+      "count": 6
+    },
+    {
+      "file": "cli/src/utils.ts",
+      "count": 6
+    },
+    {
+      "file": "supabase/functions/_backend/utils/hono.ts",
+      "count": 6
+    },
+    {
+      "file": "supabase/functions/_backend/utils/stripe_billing.ts",
+      "count": 6
+    },
+    {
+      "file": "supabase/functions/_backend/utils/stripe_trial_plan.ts",
+      "count": 6
+    },
+    {
+      "file": "cli/src/bundle/upload.ts",
+      "count": 6
+    },
+    {
+      "file": "supabase/functions/_backend/plugin_runtime/plugins/stats.ts",
+      "count": 6
+    },
+    {
+      "file": "cli/src/api/preflight.ts",
+      "count": 6
+    },
+    {
+      "file": "supabase/functions/_backend/public/build/logs.ts",
+      "count": 5
+    },
+    {
+      "file": "supabase/functions/_backend/private/release_live.ts",
+      "count": 5
+    }
+  ]
+}

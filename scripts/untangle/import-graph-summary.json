@@ -1,0 +1,508 @@
+{
+  "scannedFiles": 1342,
+  "edges": 5913,
+  "crossRoot": {
+    "src->backend": 8,
+    "cli->backend": 0,
+    "backend->plugin_runtime_dup": 5,
+    "plugin_runtime->backend_utils_dup": 0
+  },
+  "topOutDegree": [
+    [
+      "src/components.d.ts",
+      178
+    ],
+    [
+      "cloudflare_workers/api/index.ts",
+      123
+    ],
+    [
+      "cli/src/index.ts",
+      73
+    ],
+    [
+      "cli/src/build/onboarding/ui/app.tsx",
+      59
+    ],
+    [
+      "cli/src/build/onboarding/android/ui/app.tsx",
+      53
+    ],
+    [
+      "src/components/dashboard/AppOnboardingFlow.vue",
+      49
+    ],
+    [
+      "cli/src/sdk.ts",
+      49
+    ],
+    [
+      "cli/src/init/command.ts",
+      43
+    ],
+    [
+      "cli/src/build/onboarding/mcp/onboarding-tools.ts",
+      39
+    ],
+    [
+      "cli/src/bundle/upload.ts",
+      35
+    ],
+    [
+      "cli/src/build/request.ts",
+      34
+    ],
+    [
+      "src/auto-imports.d.ts",
+      32
+    ],
+    [
+      "supabase/functions/_backend/triggers/stripe_event.ts",
+      30
+    ],
+    [
+      "supabase/functions/_backend/files/files.ts",
+      26
+    ],
+    [
+      "supabase/functions/_backend/plugin_runtime/utils/update.ts",
+      26
+    ],
+    [
+      "cloudflare_workers/api/email_templates/index.ts",
+      26
+    ],
+    [
+      "cli/src/build/onboarding/mcp/engine.ts",
+      25
+    ],
+    [
+      "supabase/functions/_backend/public/bundle/upload_session.ts",
+      25
+    ],
+    [
+      "src/pages/settings/organization/Plans.vue",
+      24
+    ],
+    [
+      "cli/src/utils.ts",
+      24
+    ],
+    [
+      "cli/src/build/onboarding/command.ts",
+      23
+    ],
+    [
+      "src/modules/auth.ts",
+      22
+    ],
+    [
+      "supabase/functions/_backend/private/events.ts",
+      22
+    ],
+    [
+      "supabase/functions/_backend/plugin_runtime/plugins/channel_self.ts",
+      21
+    ],
+    [
+      "supabase/functions/_backend/public/app/put.ts",
+      21
+    ]
+  ],
+  "topInDegree": [
+    [
+      "supabase/functions/_backend/utils/hono.ts",
+      237
+    ],
+    [
+      "supabase/functions/_backend/utils/logging.ts",
+      218
+    ],
+    [
+      "supabase/functions/_backend/utils/pg.ts",
+      159
+    ],
+    [
+      "src/services/console.ts",
+      152
+    ],
+    [
+      "supabase/functions/_backend/utils/utils.ts",
+      136
+    ],
+    [
+      "supabase/functions/_backend/utils/supabase.types.ts",
+      115
+    ],
+    [
+      "supabase/functions/_backend/utils/pg_rls.ts",
+      104
+    ],
+    [
+      "cli/src/utils",
+      102
+    ],
+    [
+      "src/stores/organization.ts",
+      87
+    ],
+    [
+      "supabase/functions/_backend/utils/rbac.ts",
+      86
+    ],
+    [
+      "src/types/database.types.ts",
+      75
+    ],
+    [
+      "src/services/date.ts",
+      60
+    ],
+    [
+      "cli/src/shared/cli-user-error.ts",
+      57
+    ],
+    [
+      "src/stores/display.ts",
+      54
+    ],
+    [
+      "src/stores/main.ts",
+      54
+    ],
+    [
+      "src/stores/dialogv2.ts",
+      51
+    ],
+    [
+      "src/services/capgoApi.ts",
+      43
+    ],
+    [
+      "supabase/functions/_backend/utils/schema_validation.ts",
+      43
+    ],
+    [
+      "src/components/comp_def.ts",
+      39
+    ],
+    [
+      "supabase/functions/_backend/utils/supabase.ts",
+      38
+    ],
+    [
+      "cli/src/analytics/track.ts",
+      37
+    ],
+    [
+      "supabase/functions/_backend/utils/hono_middleware.ts",
+      36
+    ],
+    [
+      "supabase/functions/_backend/utils/hono_jwt.ts",
+      34
+    ],
+    [
+      "src/services/permissions.ts",
+      32
+    ],
+    [
+      "src/services/formatLocale.ts",
+      32
+    ]
+  ],
+  "duplicateBasenamesAcrossLayers": [
+    {
+      "name": "types.ts",
+      "paths": [
+        "src/types.ts",
+        "cli/src/build/onboarding/android/types.ts",
+        "cli/src/build/onboarding/appflow/types.ts",
+        "cli/src/build/onboarding/types.ts",
+        "cli/src/build/prescan/types.ts",
+        "supabase/functions/_backend/plugin_runtime/utils/types.ts",
+        "supabase/functions/_backend/utils/types.ts"
+      ]
+    },
+    {
+      "name": "deviceDataCollection.ts",
+      "paths": [
+        "src/services/deviceDataCollection.ts",
+        "cli/src/schemas/deviceDataCollection.ts",
+        "supabase/functions/_backend/plugin_runtime/utils/deviceDataCollection.ts",
+        "supabase/functions/_backend/utils/deviceDataCollection.ts"
+      ]
+    },
+    {
+      "name": "posthog.ts",
+      "paths": [
+        "src/services/posthog.ts",
+        "cli/src/posthog.ts",
+        "supabase/functions/_backend/plugin_runtime/utils/posthog.ts",
+        "supabase/functions/_backend/utils/posthog.ts"
+      ]
+    },
+    {
+      "name": "schema_validation.ts",
+      "paths": [
+        "cli/src/schemas/schema_validation.ts",
+        "supabase/functions/_backend/plugin_runtime/utils/schema_validation.ts",
+        "supabase/functions/_backend/utils/schema_validation.ts"
+      ]
+    },
+    {
+      "name": "utils.ts",
+      "paths": [
+        "cli/src/utils.ts",
+        "supabase/functions/_backend/plugin_runtime/utils/utils.ts",
+        "supabase/functions/_backend/utils/utils.ts"
+      ]
+    },
+    {
+      "name": "stats.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/plugins/stats.ts",
+        "supabase/functions/_backend/private/stats.ts",
+        "supabase/functions/_backend/utils/stats.ts"
+      ]
+    },
+    {
+      "name": "update.ts",
+      "paths": [
+        "cli/src/api/update.ts",
+        "supabase/functions/_backend/plugin_runtime/utils/update.ts"
+      ]
+    },
+    {
+      "name": "latency.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/private/latency.ts",
+        "supabase/functions/_backend/private/latency.ts"
+      ]
+    },
+    {
+      "name": "ok.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/public/ok.ts",
+        "supabase/functions/_backend/public/ok.ts"
+      ]
+    },
+    {
+      "name": "api_version.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/api_version.ts",
+        "supabase/functions/_backend/utils/api_version.ts"
+      ]
+    },
+    {
+      "name": "appStatus.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/appStatus.ts",
+        "supabase/functions/_backend/utils/appStatus.ts"
+      ]
+    },
+    {
+      "name": "bento.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/bento.ts",
+        "supabase/functions/_backend/utils/bento.ts"
+      ]
+    },
+    {
+      "name": "cache.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/cache.ts",
+        "supabase/functions/_backend/utils/cache.ts"
+      ]
+    },
+    {
+      "name": "channelSelfRateLimit.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/channelSelfRateLimit.ts",
+        "supabase/functions/_backend/utils/channelSelfRateLimit.ts"
+      ]
+    },
+    {
+      "name": "channelSelfStore.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/channelSelfStore.ts",
+        "supabase/functions/_backend/utils/channelSelfStore.ts"
+      ]
+    },
+    {
+      "name": "cloudflare.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/cloudflare.ts",
+        "supabase/functions/_backend/utils/cloudflare.ts"
+      ]
+    },
+    {
+      "name": "deviceComparison.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/deviceComparison.ts",
+        "supabase/functions/_backend/utils/deviceComparison.ts"
+      ]
+    },
+    {
+      "name": "discord.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/discord.ts",
+        "supabase/functions/_backend/utils/discord.ts"
+      ]
+    },
+    {
+      "name": "downloadUrl.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/downloadUrl.ts",
+        "supabase/functions/_backend/utils/downloadUrl.ts"
+      ]
+    },
+    {
+      "name": "geolocation.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/geolocation.ts",
+        "supabase/functions/_backend/utils/geolocation.ts"
+      ]
+    },
+    {
+      "name": "hono.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/hono.ts",
+        "supabase/functions/_backend/utils/hono.ts"
+      ]
+    },
+    {
+      "name": "invalids_ip.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/invalids_ip.ts",
+        "supabase/functions/_backend/utils/invalids_ip.ts"
+      ]
+    },
+    {
+      "name": "legacyDownloadFail.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/legacyDownloadFail.ts",
+        "supabase/functions/_backend/utils/legacyDownloadFail.ts"
+      ]
+    },
+    {
+      "name": "logging.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/logging.ts",
+        "supabase/functions/_backend/utils/logging.ts"
+      ]
+    },
+    {
+      "name": "manifest_encoding.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/manifest_encoding.ts",
+        "supabase/functions/_backend/utils/manifest_encoding.ts"
+      ]
+    },
+    {
+      "name": "manifest_size.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/manifest_size.ts",
+        "supabase/functions/_backend/utils/manifest_size.ts"
+      ]
+    },
+    {
+      "name": "notifications.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/notifications.ts",
+        "supabase/functions/_backend/utils/notifications.ts"
+      ]
+    },
+    {
+      "name": "on_error.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/on_error.ts",
+        "supabase/functions/_backend/utils/on_error.ts"
+      ]
+    },
+    {
+      "name": "org_email_notifications.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/org_email_notifications.ts",
+        "supabase/functions/_backend/utils/org_email_notifications.ts"
+      ]
+    },
+    {
+      "name": "pg.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/pg.ts",
+        "supabase/functions/_backend/utils/pg.ts"
+      ]
+    },
+    {
+      "name": "pg_errors.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/pg_errors.ts",
+        "supabase/functions/_backend/utils/pg_errors.ts"
+      ]
+    },
+    {
+      "name": "plugin_compatibility.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/plugin_compatibility.ts",
+        "supabase/functions/_backend/utils/plugin_compatibility.ts"
+      ]
+    },
+    {
+      "name": "plugin_notification_queue.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/plugin_notification_queue.ts",
+        "supabase/functions/_backend/utils/plugin_notification_queue.ts"
+      ]
+    },
+    {
+      "name": "plugin_stats.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/plugin_stats.ts",
+        "supabase/functions/_backend/utils/plugin_stats.ts"
+      ]
+    },
+    {
+      "name": "postgres_schema.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/postgres_schema.ts",
+        "supabase/functions/_backend/utils/postgres_schema.ts"
+      ]
+    },
+    {
+      "name": "queryHelpers.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/queryHelpers.ts",
+        "supabase/functions/_backend/utils/queryHelpers.ts"
+      ]
+    },
+    {
+      "name": "rateLimitInfo.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/rateLimitInfo.ts",
+        "supabase/functions/_backend/utils/rateLimitInfo.ts"
+      ]
+    },
+    {
+      "name": "rate_limit.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/rate_limit.ts",
+        "supabase/functions/_backend/utils/rate_limit.ts"
+      ]
+    },
+    {
+      "name": "rollout.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/rollout.ts",
+        "supabase/functions/_backend/utils/rollout.ts"
+      ]
+    },
+    {
+      "name": "s3.ts",
+      "paths": [
+        "supabase/functions/_backend/plugin_runtime/utils/s3.ts",
+        "supabase/functions/_backend/utils/s3.ts"
+      ]
+    }
+  ]
+}
