@@ -9,7 +9,7 @@ import { sendUpdateNotificationsForChannels } from '../notifications/send-update
 import { printPreviewQrForResolvedTarget, resolveChannelPreviewTarget } from '../preview/qr'
 import { CliUserError } from '../shared/cli-user-error'
 import { formatTable } from '../terminal-table'
-import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createCapgoClient, findSavedKey, getAppId, getBundleVersion, getCapgoCliHttpStatus, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, readCapgoCliApiErrorPayload, resolveUserIdFromApiKey, sendEvent } from '../utils'
+import { channelUpdatePackageCliError, checkCompatibilityNativePackages, createCapgoClient, findSavedKey, formatCapgoCliInvokeError, getAppId, getBundleVersion, getCapgoCliHttpStatus, getCompatibilityDetails, getConfig, getOrganizationId, invokeCapgoCliApi, isCompatible, readCapgoCliApiErrorPayload, resolveUserIdFromApiKey, sendEvent } from '../utils'
 
 /**
  * Display a compatibility table for the given packages
@@ -87,30 +87,53 @@ export function rejectOrAcceptIncompatibleChannelBundle(params: {
 
 // Backend error codes for a channel write that the API key may not do.
 const CHANNEL_WRITE_DENIED_ERROR_CODES = new Set(['cannot_access_app', 'cannot_promote_bundle', 'cannot_find_channel', 'cannot_find_version'])
+// The backend wraps database errors in this code, including channel trigger denials.
+const CHANNEL_WRITE_DB_ERROR_CODE = 'cannot_set_bundle_to_channel'
+const CHANNEL_TRIGGER_DENIAL_PATTERN = /PERMISSION_DENIED|NO_PERMISSION|PREVIEW_APIKEY_CAN_ONLY/
 
-async function isChannelWriteDenied(error: unknown) {
-  const status = getCapgoCliHttpStatus(error)
+type CapgoCliApiErrorPayload = Awaited<ReturnType<typeof readCapgoCliApiErrorPayload>>
+
+function isChannelWriteDenied(status: number | undefined, payload: CapgoCliApiErrorPayload) {
   if (status === 401 || status === 403)
     return true
-  const payload = await readCapgoCliApiErrorPayload(error)
-  return !!payload?.error && CHANNEL_WRITE_DENIED_ERROR_CODES.has(payload.error)
+  if (!payload?.error)
+    return false
+  if (payload.error === CHANNEL_WRITE_DB_ERROR_CODE)
+    return CHANNEL_TRIGGER_DENIAL_PATTERN.test(String(payload.moreInfo?.error ?? ''))
+  return CHANNEL_WRITE_DENIED_ERROR_CODES.has(payload.error)
+}
+
+// A 4xx response is the API rejecting this request. A timeout, a rate limit, or
+// an unexpected database error can pass on retry, so error tracking keeps them.
+function isChannelWriteRejected(status: number | undefined, payload: CapgoCliApiErrorPayload) {
+  return status !== undefined && status >= 400 && status < 500
+    && status !== 408 && status !== 429
+    && payload?.error !== CHANNEL_WRITE_DB_ERROR_CODE
 }
 
 /**
- * A permission denial is a user outcome (CliUserError). Network failures and
- * other API errors stay plain errors so error tracking still captures them.
+ * A permission denial or another API rejection is a user outcome (CliUserError).
+ * Network failures, server errors and unexpected database errors stay plain
+ * errors so error tracking still captures them.
  */
 export async function throwChannelWriteError(error: Error, silent: boolean): Promise<never> {
   const packageError = await channelUpdatePackageCliError(error)
   if (packageError) {
     if (!silent)
       log.error(packageError)
-    throw new Error(packageError)
+    throw new CliUserError(packageError)
   }
+  const status = getCapgoCliHttpStatus(error)
+  const payload = await readCapgoCliApiErrorPayload(error)
+  if (isChannelWriteDenied(status, payload)) {
+    if (!silent)
+      log.error('Cannot set channel because this API key does not have the required RBAC permission.')
+    throw new CliUserError('API key is not allowed to set this channel')
+  }
+  const message = `Cannot set channel: ${await formatCapgoCliInvokeError(error)}`
   if (!silent)
-    log.error('Cannot set channel because this API key does not have the required RBAC permission.')
-  const message = 'API key is not allowed to set this channel'
-  if (await isChannelWriteDenied(error))
+    log.error(message)
+  if (isChannelWriteRejected(status, payload))
     throw new CliUserError(message)
   throw new Error(message, { cause: error })
 }
