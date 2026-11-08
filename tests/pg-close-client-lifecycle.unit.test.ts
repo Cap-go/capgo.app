@@ -50,8 +50,8 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', async (importOriginal
   }
 })
 
-vi.mock('../supabase/functions/_backend/utils/utils.ts', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/utils.ts')>()
+const utilsTestMock = async (importOriginal: () => Promise<typeof import('../supabase/functions/_backend/utils/utils.ts')>) => {
+  const actual = await importOriginal()
   return {
     ...actual,
     backgroundTask: vi.fn((_c: any, p: any) => p),
@@ -68,7 +68,10 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', async (importOriginal) 
     }),
     existInEnv: vi.fn((_c, key: string) => key === 'ENV_NAME' || key === 'SB_REGION' || key === 'MAIN_SUPABASE_DB_URL'),
   }
-})
+}
+
+vi.mock('../supabase/functions/_backend/utils/utils.ts', () => utilsTestMock(async () => import('../supabase/functions/_backend/utils/utils.ts')))
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/utils.ts', () => utilsTestMock(async () => import('../supabase/functions/_backend/plugin_runtime/utils/utils.ts')))
 
 function createContext(env: Record<string, any> = {}) {
   const variables = new Map<string, unknown>([['requestId', 'request-id']])

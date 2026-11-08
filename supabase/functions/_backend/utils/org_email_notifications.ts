@@ -884,7 +884,7 @@ export async function sendNotifToOrgMembersCached(
       orgId,
       uniqId,
       cron,
-      audience,
+      audience: audience as import('../plugin_runtime/utils/org_email_notifications.ts').NotificationAudience,
     })
     return false
   }
