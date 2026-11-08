@@ -39,33 +39,40 @@ function whereQuery(whereExpr: unknown) {
   return new PgDialect().sqlToQuery(whereExpr as SQL)
 }
 
+function expectScopePredicates(sql: string, params: unknown[], orgId: string, principalType: string) {
+  expect(sql).toMatch(/role_bindings/)
+  expect(params).toContain(orgId)
+  expect(params).toContain(principalType)
+  expect(params).toContain('org')
+}
+
 describe('plugin org_email_notifications all audience', () => {
-  it('omits role-name filter when audience role list is empty', async () => {
+  it.each(['user', 'group'] as const)('omits role-name filter when audience role list is empty (%s)', async (principalType) => {
     const { drizzle, getLastWhere } = createWhereCaptureDrizzle()
     const result = await orgEmailNotificationTestUtils.fetchOrgScopeRoleBindings(
       createContext(),
       'org-123',
       drizzle,
       orgEmailNotificationTestUtils.AUDIENCE_ROLE_NAMES.all,
-      'user',
+      principalType,
       'test',
     )
     expect(result.failed).toBe(false)
     const capturedWhere = getLastWhere()
     expect(capturedWhere).toBeDefined()
-    const { sql } = whereQuery(capturedWhere)
+    const { sql, params } = whereQuery(capturedWhere)
     expect(sql).not.toMatch(/roles.*name|"roles"\."name"/i)
-    expect(sql).toMatch(/role_bindings/)
+    expectScopePredicates(sql, params, 'org-123', principalType)
   })
 
-  it('applies role-name filter for admins audience', async () => {
+  it.each(['user', 'group'] as const)('applies role-name filter for admins audience (%s)', async (principalType) => {
     const { drizzle, getLastWhere } = createWhereCaptureDrizzle()
     const result = await orgEmailNotificationTestUtils.fetchOrgScopeRoleBindings(
       createContext(),
       'org-123',
       drizzle,
       orgEmailNotificationTestUtils.AUDIENCE_ROLE_NAMES.admins,
-      'user',
+      principalType,
       'test',
     )
     expect(result.failed).toBe(false)
@@ -73,6 +80,8 @@ describe('plugin org_email_notifications all audience', () => {
     expect(capturedWhere).toBeDefined()
     const { sql, params } = whereQuery(capturedWhere)
     expect(sql).toMatch(/roles.*name|"roles"\."name"/i)
+    expectScopePredicates(sql, params, 'org-123', principalType)
     expect(params).toContain('org_admin')
+    expect(params).toContain('org_super_admin')
   })
 })
