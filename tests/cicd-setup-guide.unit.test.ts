@@ -588,7 +588,8 @@ process.stdout.write(JSON.stringify({ bundle: process.env.FIXTURE_BUNDLE }))
         expect(existsSync(join(directory, 'capgo-preview.json'))).toBe(false)
       }
       const versions = new Set<string>()
-      for (const overrides of [{}, { GITHUB_RUN_ID: '203' }, { GITHUB_RUN_ATTEMPT: '2' }, { GITHUB_REPOSITORY_ID: '102' }, { PR_NUMBER: '8' }]) {
+      const identityOverrides: Array<Record<string, string>> = [{}, { GITHUB_RUN_ID: '203' }, { GITHUB_RUN_ATTEMPT: '2' }, { GITHUB_REPOSITORY_ID: '102' }, { PR_NUMBER: '8' }]
+      for (const overrides of identityOverrides) {
         rmSync(output, { force: true })
         await run('1.2.3', overrides)
         versions.add(readFileSync(output, 'utf8'))
