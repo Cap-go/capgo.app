@@ -7,6 +7,7 @@ import {
   normalizeReleases,
   parseReleaseBody,
   releasesBetween,
+  releasesFromChangelog,
   releasesToPromptText,
   requiredActions,
   sanitizeDigestContext,
@@ -86,6 +87,28 @@ describe('normalizeReleases', () => {
   })
 })
 
+describe('dependency release tags', () => {
+  it('scopes monorepo releases to the requested package and skips other plugin versions', () => {
+    const notes = [release('camera@8.2.0'), release('@capacitor/camera@8.1.0'), release('toast@8.3.0'), release('v9.0.0')]
+    expect(normalizeReleases(notes, '', '@capacitor/camera', true).map(note => note.version)).toEqual(['8.2.0', '8.1.0'])
+  })
+
+  it('also accepts plain version tags for standalone plugin repositories', () => {
+    expect(normalizeReleases([release('v8.1.0'), release('8.0.0')], '', '@capacitor-community/sqlite').map(note => note.version)).toEqual(['8.1.0', '8.0.0'])
+  })
+})
+
+describe('releasesFromChangelog', () => {
+  it('reads version sections from a plugin changelog without including unreleased or beta notes', () => {
+    const markdown = '# Changelog\n## [Unreleased]\n- Next feature\n## [8.2.0-beta.1] (2026-11-05)\n- Preview\n## [8.1.0](https://example.com/compare) (2026-11-01)\n### Bug Fixes\n* Fixed Android crash\n## 8.0.0 - 2026-10-01\n### BREAKING CHANGES\n- Dropped old native APIs'
+    const notes = releasesFromChangelog(markdown, 'https://github.com/example/plugin/blob/HEAD/CHANGELOG.md')
+    expect(notes.map(note => note.version)).toEqual(['8.1.0', '8.0.0'])
+    expect(notes[0]).toMatchObject({ date: '2026-11-01', sections: [{ type: 'fixed', items: ['Fixed Android crash'] }] })
+    expect(notes[1].sections[0].type).toBe('removed')
+    expect(JSON.stringify(notes)).not.toContain('Preview')
+  })
+})
+
 describe('releasesBetween', () => {
   const releases = normalizeReleases([release('capgo-22.30.0'), release('capgo-22.29.4'), release('capgo-22.29.3'), release('capgo-22.28.0')], 'capgo-')
 
@@ -103,6 +126,7 @@ describe('changelogSource', () => {
     expect(changelogSource('cli')).toEqual({ repo: 'capgo.app', tagPrefix: 'cli-' })
     expect(changelogSource('updater')).toEqual({ repo: 'capacitor-updater', tagPrefix: '' })
     expect(changelogSource('plugin', 'capacitor-nfc')).toEqual({ repo: 'capacitor-nfc', tagPrefix: '' })
+    expect(changelogSource('capacitor')).toEqual({ owner: 'ionic-team', repo: 'capacitor', tagPrefix: '' })
     expect(changelogSource('plugin', '../../users')).toBeNull()
     expect(isValidPluginRepo('a/b')).toBe(false)
     expect(isValidPluginRepo('..')).toBe(false)
@@ -282,7 +306,9 @@ describe('console changelog helpers', async () => {
     const plugins = [{ name: '@capgo/capacitor-nfc', repo: 'capacitor-nfc', description: '', version: '8.3.6', date: '' }]
     expect(changelogLocationForPackage('@capgo/capacitor-updater', '^8.40.0', plugins)).toEqual({ path: '/changelog', query: { product: 'updater', since: '8.40.0' } })
     expect(changelogLocationForPackage('@capgo/capacitor-nfc', '8.0.0', plugins)).toEqual({ path: '/changelog', query: { product: 'plugin', repo: 'capacitor-nfc', since: '8.0.0' } })
-    expect(changelogLocationForPackage('left-pad', '1.0.0', plugins)).toBeNull()
+    expect(changelogLocationForPackage('@capacitor/camera', '8.0.0', plugins)).toEqual({ path: '/changelog', query: { product: 'dependency', repo: '@capacitor/camera', since: '8.0.0' } })
+    for (const name of ['@capacitor/core', '@capacitor/ios', '@capacitor/android', '@capacitor/cli'])
+      expect(changelogLocationForPackage(name, '^8.0.0', plugins)).toEqual({ path: '/changelog', query: { product: 'capacitor', since: '8.0.0' } })
     const { changelogLocation } = await import('../src/services/changelog')
     expect(changelogLocation('updater', { since: '7.30.0', to: '7.40.1' })).toEqual({ path: '/changelog', query: { product: 'updater', since: '7.30.0', to: '7.40.1' } })
   })

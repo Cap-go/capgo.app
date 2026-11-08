@@ -5,6 +5,7 @@ import type { PluginVersionRow } from '~/services/pluginVersionRecommendation'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconTimer from '~icons/lucide/timer'
+import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
 import { Line } from '~/components/dashboard/lazyCharts'
 import PeriodDaySelector from '~/components/dashboard/PeriodDaySelector.vue'
 import PageHeader from '~/components/PageHeader.vue'
@@ -339,6 +340,14 @@ watch(
             <p class="mt-1 text-sm text-center text-slate-500 dark:text-slate-400 max-w-lg">
               {{ emptyHelp }}
             </p>
+            <ChangelogUpdateBadge
+              v-if="outdatedPlugin"
+              class="mt-2"
+              product="updater"
+              :current="outdatedPlugin.current"
+              :latest="outdatedPlugin.single ? outdatedPlugin.required : null"
+              show-notes
+            />
           </div>
         </div>
         <div v-else class="relative" :class="dense ? 'flex-1 min-h-0' : 'h-80'">

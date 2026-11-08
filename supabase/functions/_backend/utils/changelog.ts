@@ -15,7 +15,7 @@ import { compare, tryParse } from '@std/semver'
  *   🔗 **Full Changelog**: ...
  */
 
-export type ChangelogProduct = 'console' | 'cli' | 'updater' | 'plugin'
+export type ChangelogProduct = 'console' | 'cli' | 'updater' | 'plugin' | 'capacitor' | 'dependency'
 export type ChangelogSectionType = 'added' | 'changed' | 'fixed' | 'security' | 'removed' | 'deprecated' | 'other'
 
 export interface ChangelogSection {
@@ -32,11 +32,17 @@ export interface ChangelogRelease {
 }
 
 export interface ChangelogSource {
+  owner?: string
   repo: string
   tagPrefix: string
+  packageName?: string
+  monorepo?: boolean
+  directory?: string
 }
 
-export const CHANGELOG_PRODUCTS: ChangelogProduct[] = ['console', 'cli', 'updater', 'plugin']
+export const CHANGELOG_PRODUCTS: ChangelogProduct[] = ['console', 'cli', 'updater', 'plugin', 'capacitor', 'dependency']
+
+export const NPM_PACKAGE_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 
 const GITHUB_REPO_NAME = /^[\w.-]{1,100}$/
 const MAX_ITEM_LENGTH = 600
@@ -61,6 +67,11 @@ export function changelogSource(product: ChangelogProduct, pluginRepo?: string):
       return { repo: 'capacitor-updater', tagPrefix: '' }
     case 'plugin':
       return isValidPluginRepo(pluginRepo) ? { repo: pluginRepo, tagPrefix: '' } : null
+    case 'capacitor':
+      return { owner: 'ionic-team', repo: 'capacitor', tagPrefix: '' }
+    case 'dependency':
+      // Resolved through the public npm registry, never from a caller-supplied URL.
+      return null
   }
 }
 
@@ -167,12 +178,16 @@ export interface GithubReleaseLike {
   prerelease?: boolean
 }
 
-export function normalizeReleases(releases: GithubReleaseLike[], tagPrefix: string): ChangelogRelease[] {
+export function normalizeReleases(releases: GithubReleaseLike[], tagPrefix: string, packageName?: string, monorepo = false): ChangelogRelease[] {
   const out: ChangelogRelease[] = []
   for (const release of releases) {
     if (!release || release.draft || release.prerelease || !release.tag_name)
       continue
-    const version = versionFromTag(release.tag_name, tagPrefix)
+    const tag = release.tag_name
+    const prefixes = packageName
+      ? [`${packageName}@`, `${packageName.split('/').at(-1)}@`, ...monorepo ? [] : [tagPrefix]]
+      : [tagPrefix]
+    const version = prefixes.map(prefix => versionFromTag(tag, prefix)).find(Boolean)
     if (!version)
       continue
     // Prerelease semver (rc, beta) is noise for customers reading "what's new".
@@ -188,6 +203,29 @@ export function normalizeReleases(releases: GithubReleaseLike[], tagPrefix: stri
     })
   }
   return sortReleasesDesc(out)
+}
+
+/** Conventional changelog files used by plugins that do not publish GitHub Releases. */
+export function releasesFromChangelog(markdown: string, url: string): ChangelogRelease[] {
+  const releases: ChangelogRelease[] = []
+  let current: { version: string, date: string, body: string[] } | null = null
+  const finish = () => {
+    if (current)
+      releases.push({ version: current.version, tag: current.version, date: current.date, url, sections: parseReleaseBody(current.body.join('\n')) })
+  }
+  for (const line of markdown.split(/\r?\n/)) {
+    const heading = /^#{1,2}\s+\[?v?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)(?=[\s\])]|$)/.exec(line)
+    if (heading) {
+      finish()
+      const version = tryParse(heading[1])
+      current = version && !version.prerelease?.length ? { version: heading[1], date: /\b\d{4}-\d{2}-\d{2}\b/.exec(line)?.[0] ?? '', body: [] } : null
+    }
+    else {
+      current?.body.push(line)
+    }
+  }
+  finish()
+  return sortReleasesDesc(releases)
 }
 
 export function sortReleasesDesc(releases: ChangelogRelease[]): ChangelogRelease[] {
