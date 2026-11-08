@@ -668,6 +668,7 @@
   "cicd-guide-file-azure-pr": "Azure Repos ignores the pr trigger. To build pull requests, add this pipeline in Project settings → Repositories → your repository → Policies → {branch} → Build validation.",
   "cicd-guide-file-circleci-project": "If CircleCI doesn't build this repository yet, set it up from Projects → Set Up Project.",
   "cicd-guide-note-version": "--auto-bump patch gives each upload the next free version number, so you don't edit package.json for every release.",
+  "cicd-guide-note-github-preview-version": "Releases use --auto-bump patch. Pull request previews get a unique version name for each run.",
   "cicd-guide-note-incompatible": "--fail-on-incompatible stops the run when a change needs a native build, instead of sending devices a bundle they can't run.",
   "cicd-guide-note-stored-credentials": "--use-stored-credentials signs with the credentials from step 1, so CI only needs CAPGO_TOKEN.",
   "cicd-guide-note-store-review": "--submit-to-store-review on {branch} sends each build to Apple and Google for review. Remove it to submit releases yourself.",

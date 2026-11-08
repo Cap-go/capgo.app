@@ -1004,7 +1004,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
               <template v-if="product === 'ota'">
                 <li class="flex items-start gap-2">
                   <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
-                  {{ t('cicd-guide-note-version') }}
+                  {{ t(provider === 'github' && strategy === 'pull_request' ? 'cicd-guide-note-github-preview-version' : 'cicd-guide-note-version') }}
                 </li>
                 <li class="flex items-start gap-2">
                   <IconInfo class="mt-1 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />

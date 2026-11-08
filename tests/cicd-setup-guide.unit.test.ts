@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { env, execPath } from 'node:process'
 import { promisify } from 'node:util'
+import { lessThan, parse as parseSemver } from '@std/semver'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
+import { autoBumpVersionBy } from '../cli/src/versionHelpers'
 import {
   buildCiJobs,
   buildCiPipeline,
@@ -175,8 +177,8 @@ describe('CI/CD guide pipelines', () => {
     const workflow = parse(pipeline.content)
     expect(workflow.on.pull_request.types).toContain('closed')
     expect(workflow.jobs.preview.steps.at(-1)).toEqual({
-      run: 'npx @capgo/cli@latest bundle upload com.example.app --channel pr-${{ github.event.pull_request.number }} --auto-bump patch --fail-on-incompatible',
-      env: { CAPGO_TOKEN: '${{ secrets.CAPGO_PREVIEW_TOKEN }}' },
+      run: 'npx @capgo/cli@latest bundle upload com.example.app --channel pr-${{ github.event.pull_request.number }} --bundle "$CAPGO_PREVIEW_BUNDLE" --fail-on-incompatible',
+      env: { CAPGO_TOKEN: '${{ secrets.CAPGO_PREVIEW_TOKEN }}', CAPGO_PREVIEW_BUNDLE: '${{ steps.preview_version.outputs.bundle }}' },
     })
     expect(workflow.jobs['preview-cleanup'].steps.map((step: { uses?: string, run?: string }) => step.uses ?? step.run)).toEqual([
       'actions/checkout@v6',
@@ -406,11 +408,9 @@ describe('CI/CD guide pipelines', () => {
     const concurrency = { group: 'capgo-preview-${{ github.event.pull_request.number }}', 'cancel-in-progress': true }
     expect(github.jobs.preview.concurrency).toEqual(concurrency)
     expect(github.jobs['preview-cleanup'].concurrency).toEqual(concurrency)
-    expect(github.concurrency).toEqual({
-      group: 'capgo-release-com.example.app-${{ github.workflow }}-${{ github.event_name == \'push\' && github.ref || github.run_id }}',
-      'cancel-in-progress': false,
-      queue: 'max',
-    })
+    expect(github.concurrency).toBeUndefined()
+    expect(github.jobs.preview.concurrency.group).not.toBe(github.jobs.production.concurrency.group)
+    expect(github.jobs['preview-cleanup'].concurrency.group).not.toBe(github.jobs.production.concurrency.group)
     const gitlab = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'gitlab' }).content)
     expect(gitlab['capgo-preview'].resource_group).toBe('capgo-com.example.app')
     expect(gitlab['capgo-preview-cleanup'].resource_group).toBe('capgo-com.example.app')
@@ -431,54 +431,57 @@ describe('CI/CD guide pipelines', () => {
     expect(builder['capgo-ios-release'].resource_group).toBeUndefined()
   })
 
-  it('isolates every GitHub live-update branch check between building and uploading', () => {
+  it('serializes GitHub stable version selection across channels and checks the head only after acquiring the lock', () => {
     for (const strategy of CI_STRATEGIES) {
-      const pipeline = buildCiPipeline({ ...base, product: 'ota', strategy, provider: 'github' })
+      const pipeline = buildCiPipeline({ ...base, product: 'ota', strategy, provider: 'github', encrypted: true })
       const github = parse(pipeline.content)
+      expect(github.concurrency).toBeUndefined()
       for (const job of pipeline.jobs) {
         const rendered = github.jobs[job.id]
         if (job.trigger.kind === 'push') {
           const buildId = `${job.id}_build`
-          const headId = `${job.id}_head`
           const build = github.jobs[buildId]
-          const head = github.jobs[headId]
-          expect(github.concurrency['cancel-in-progress']).toBe(false)
-          expect(github.concurrency.queue).toBe('max')
           expect(build['runs-on']).toBe('ubuntu-latest')
           expect(build.environment).toBeUndefined()
+          expect(build.concurrency).toBeUndefined()
           expect(build.outputs.artifact_id).toBe('${{ steps.archive.outputs.artifact-id }}')
           const archive = build.steps.at(-1)
           expect(archive.uses).toBe('actions/upload-artifact@v7')
           expect(archive.with.overwrite).toBe(true)
-          expect(head.needs).toBe(buildId)
-          expect(head['runs-on']).toBe('ubuntu-latest')
-          expect(head.steps).toHaveLength(1)
-          expect(head.steps[0].id).toBe('release_head')
-          expect(head.steps[0].env).toEqual({ GH_TOKEN: '${{ github.token }}' })
-          expect(head.steps[0].uses).toBeUndefined()
-          expect(head.steps[0].run).not.toMatch(/npm|npx|tar|checkout|artifact/)
-          expect(head.outputs.current).toBe('${{ steps.release_head.outputs.current }}')
-          expect(head.outputs.check_attempt).toBe('${{ steps.release_head.outputs.check_attempt }}')
-          expect(rendered.needs).toEqual([buildId, headId])
-          expect(rendered.if).toBe(`needs.${headId}.outputs.current == 'true'`)
-          expect(rendered.permissions).toEqual({})
-          expect(rendered.steps[0].env).toEqual({ CHECK_ATTEMPT: `\${{ needs.${headId}.outputs.check_attempt }}` })
+          expect(rendered.concurrency).toEqual({ group: 'capgo-ota-com.example.app', 'cancel-in-progress': false, queue: 'max' })
+          expect(rendered.needs).toBe(buildId)
+          expect(rendered['runs-on']).toBe('ubuntu-latest')
+          const check = rendered.steps[0]
+          expect(check.id).toBe('release_head')
+          expect(check.env).toEqual({ GH_TOKEN: '${{ github.token }}' })
+          expect(check.uses).toBeUndefined()
+          expect(check.run).not.toMatch(/npm|npx|tar|checkout|artifact/)
           expect(rendered.steps[1]).toEqual({
             uses: 'actions/download-artifact@v8',
+            if: "steps.release_head.outputs.current == 'true'",
             with: { 'artifact-ids': `\${{ needs.${buildId}.outputs.artifact_id }}`, path: '${{ runner.temp }}/capgo-release' },
           })
+          for (const step of rendered.steps.slice(1))
+            expect(step.if).toBe("steps.release_head.outputs.current == 'true'")
           expect(rendered.steps.some((step: { uses?: string }) => step.uses === 'actions/checkout@v6')).toBe(false)
         }
         else {
           expect(rendered.steps.some((step: { id?: string }) => step.id === 'release_head')).toBe(false)
+          expect(rendered.concurrency.group).toBe('capgo-preview-${{ github.event.pull_request.number }}')
+          expect(rendered.concurrency['cancel-in-progress']).toBe(true)
+          expect(rendered.environment).toBe(ENCRYPTED_PREVIEW_SCOPE)
         }
       }
     }
+    const otherApp = parse(buildCiPipeline({ ...base, appId: 'com.example.other', product: 'ota', strategy: 'main', provider: 'github' }).content)
+    expect(otherApp.jobs.production.concurrency.group).toBe('capgo-ota-com.example.other')
+    const builder = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'main_preprod', provider: 'github' }).content)
+    expect(builder.jobs['ios-release'].concurrency).toBeUndefined()
   })
 
   it('authenticates the branch check without Git credentials, skips superseded commits, and fails closed on API errors', async () => {
     const github = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
-    const guard = github.jobs.production_head.steps[0]
+    const guard = github.jobs.production.steps[0]
     expect(guard.shell).toBe('bash')
     const directory = mkdtempSync(join(tmpdir(), 'capgo-release-order-'))
     const newer = 'b'.repeat(40)
@@ -531,7 +534,7 @@ void (async () => {
           cwd: directory,
           env: { ...guardEnv, GITHUB_SHA: sha, GITHUB_OUTPUT: output },
         })
-        expect(readFileSync(output, 'utf8').trim()).toBe(`check_attempt=1\ncurrent=${expected}`)
+        expect(readFileSync(output, 'utf8').trim()).toBe(`current=${expected}`)
       }
       expect(requests).toEqual(Array.from({ length: 2 }, () => ({ path: '/repos/example/app/git/ref/heads/release/stable', authenticated: true })))
       for (const overrides of [{ GITHUB_REF: 'refs/heads/missing' }, { GH_TOKEN: 'invalid-fixture-token' }, { GH_TOKEN: '' }]) {
@@ -549,17 +552,57 @@ void (async () => {
     }
   })
 
-  it('requires a branch check from the current attempt before an upload-only rerun', async () => {
-    const workflow = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
-    const check = workflow.jobs.production.steps[0]
-    expect(check.shell).toBe('bash')
-    const run = (checked: string, current: string) => runFile('bash', ['-e', '-o', 'pipefail', '-c', check.run], {
-      env: { ...env, CHECK_ATTEMPT: checked, GITHUB_RUN_ATTEMPT: current },
-    })
-    await expect(run('1', '1')).resolves.toMatchObject({ stdout: '' })
-    await expect(run('1', '2')).rejects.toMatchObject({ stdout: expect.stringContaining('Re-run all jobs') })
-    await expect(run('', '2')).rejects.toMatchObject({ stdout: expect.stringContaining('Re-run all jobs') })
-    await expect(run('2', '2')).resolves.toMatchObject({ stdout: '' })
+  it('uses collision-free next-patch preview versions without release credentials or an app-wide approval lock', async () => {
+    const workflow = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'github', encrypted: true }).content)
+    const preview = workflow.jobs.preview
+    const resolve = preview.steps.find((step: { id?: string }) => step.id === 'preview_version')
+    expect(resolve.env).toEqual({ PR_NUMBER: '${{ github.event.pull_request.number }}' })
+    expect(resolve.run).toContain('bundle zip com.example.app --for-upload --no-key --json --name "$RUNNER_TEMP/capgo-preview.zip"')
+    expect(preview.steps.indexOf(resolve)).toBeLessThan(preview.steps.findIndex((step: { run?: string }) => step.run === CI_RESTORE_KEY_COMMAND))
+    const directory = mkdtempSync(join(tmpdir(), 'capgo-preview-version-'))
+    const output = join(directory, 'output')
+    try {
+      // The published offline packer supplies the configured version; execute the generated resolver itself.
+      writeFileSync(join(directory, 'npx'), `#!${execPath}
+const { writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] !== '@capgo/cli@latest' || args[1] !== 'bundle' || args[2] !== 'zip' || !args.includes('--no-key') || process.env.CAPGO_TOKEN || process.env.CAPGO_PRIVATE_KEY_BASE64) process.exit(1)
+writeFileSync(args[args.indexOf('--name') + 1], 'offline zip fixture')
+process.stdout.write(JSON.stringify({ bundle: process.env.FIXTURE_BUNDLE }))
+`, { mode: 0o755 })
+      const run = (bundle: string, overrides: Record<string, string> = {}) => runFile('bash', ['-e', '-o', 'pipefail', '-c', resolve.run], {
+        cwd: directory,
+        env: { ...env, CAPGO_TOKEN: '', CAPGO_PRIVATE_KEY_BASE64: '', PATH: `${directory}${delimiter}${env.PATH ?? ''}`, RUNNER_TEMP: directory, GITHUB_OUTPUT: output, GITHUB_REPOSITORY_ID: '101', PR_NUMBER: '7', GITHUB_RUN_ID: '202', GITHUB_RUN_ATTEMPT: '1', FIXTURE_BUNDLE: bundle, ...overrides },
+      })
+      for (const bundle of ['0.0.0', '1.2.3', '1.2.3-beta.7+build', '2.9.999999']) {
+        rmSync(output, { force: true })
+        await run(bundle)
+        const version = readFileSync(output, 'utf8').trim().slice('bundle='.length)
+        expect(version).toMatch(/-pr\.101\.7\.202\.1$/)
+        // Default native downgrade protection accepts the next-patch prerelease.
+        expect(lessThan(parseSemver(bundle), parseSemver(version))).toBe(true)
+        // A first stable upload based on the latest preview chooses a distinct stable release.
+        expect(autoBumpVersionBy(version, 'patch')).not.toContain('-')
+        expect(autoBumpVersionBy(version, 'patch')).not.toBe(version)
+        expect(existsSync(join(directory, 'capgo-preview.zip'))).toBe(false)
+        expect(existsSync(join(directory, 'capgo-preview.json'))).toBe(false)
+      }
+      const versions = new Set<string>()
+      for (const overrides of [{}, { GITHUB_RUN_ID: '203' }, { GITHUB_RUN_ATTEMPT: '2' }, { GITHUB_REPOSITORY_ID: '102' }, { PR_NUMBER: '8' }]) {
+        rmSync(output, { force: true })
+        await run('1.2.3', overrides)
+        versions.add(readFileSync(output, 'utf8'))
+      }
+      expect(versions.size).toBe(5)
+      for (const [bundle, overrides] of [['invalid', {}], ['01.2.3', {}], ['1.2.3', { GITHUB_RUN_ID: 'unsafe-value' }]] as const) {
+        rmSync(output, { force: true })
+        await expect(run(bundle, overrides)).rejects.toThrow()
+        expect(existsSync(output)).toBe(false)
+      }
+    }
+    finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   it('preserves generated config dependencies without rerunning install scripts or transferring private keys', async () => {
@@ -592,10 +635,10 @@ void (async () => {
         scripts: { postinstall: 'node -e "require(\'node:fs\').writeFileSync(\'web/custom/index.html\', \'Changed by install\')"' },
       }))
       writeFileSync(join(project, 'package-lock.json'), JSON.stringify({ name, version, lockfileVersion: 3, packages: { '': { name, version, hasInstallScript: true } } }))
-      const commandEnv = { ...env, RUNNER_TEMP: temporary, CHECK_ATTEMPT: '1', GITHUB_RUN_ATTEMPT: '1', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
+      const commandEnv = { ...env, RUNNER_TEMP: temporary, GITHUB_RUN_ATTEMPT: '1', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
       await runFile('bash', ['-e', '-o', 'pipefail', '-c', archive], { cwd: project, env: commandEnv })
       copyFileSync(join(temporary, 'capgo-release.tar.gz'), join(temporary, 'capgo-release/capgo-release.tar.gz'))
-      for (const step of workflow.jobs.production.steps.slice(0, -1)) {
+      for (const step of workflow.jobs.production.steps.slice(1, -1)) {
         if (step.run)
           await runFile('bash', ['-e', '-o', 'pipefail', '-c', step.run], { cwd: deployment, env: commandEnv })
       }

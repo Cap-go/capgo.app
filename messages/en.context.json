@@ -4339,6 +4339,7 @@
   "cicd-guide-file-azure-pr": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-file-circleci-project": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-note-version": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "cicd-guide-note-github-preview-version": "Explains the generated GitHub live-update workflow: release uploads auto-bump stable versions, while pull request previews use a unique prerelease version per run. Keep --auto-bump patch unchanged.",
   "cicd-guide-note-incompatible": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-note-stored-credentials": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "cicd-guide-note-store-review": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

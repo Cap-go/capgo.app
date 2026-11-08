@@ -468,8 +468,6 @@ function yamlQuote(value: string) {
 
 const GITHUB_PR_NUMBER = '$' + '{{ github.event.pull_request.number }}'
 const GITHUB_BASE_REF = '$' + '{{ github.event.pull_request.base.ref }}'
-const GITHUB_WORKFLOW = '$' + '{{ github.workflow }}'
-const GITHUB_RELEASE_GROUP_REF = '$' + '{{ github.event_name == \'push\' && github.ref || github.run_id }}'
 const GITHUB_NODE_STEPS = [
   '      - uses: actions/setup-node@v6',
   '        with:',
@@ -489,10 +487,24 @@ function githubCheckoutSteps(job: CiJob) {
   ]
 }
 
-/** Keep the authenticated branch check on a fresh runner with no project code or artifacts. */
-function githubReleaseJobs(job: CiJob, condition: string) {
+/** Check the branch on a fresh runner after acquiring the app-wide upload lock. */
+function githubReleaseJobs(job: CiJob, condition: string, appId: string) {
   const buildId = `${job.id}_build`
-  const headId = `${job.id}_head`
+  const uploadSteps = [
+    '      - uses: actions/download-artifact@v8',
+    '        with:',
+    `          artifact-ids: \${{ needs.${buildId}.outputs.artifact_id }}`,
+    `          path: \${{ runner.temp }}/capgo-release`,
+    '      - run: tar -xzf "$RUNNER_TEMP/capgo-release/capgo-release.tar.gz"',
+    ...GITHUB_NODE_STEPS,
+    '      # Reuse the build dependencies so install scripts cannot rebuild the artifact.',
+    ...(job.restoreKey ? setupStep(CI_RESTORE_KEY_COMMAND, '      ', 'run', secret => `\${{ secrets.${secret} }}`) : []),
+    `      - run: ${yamlScalar(job.command)}`,
+    '        env:',
+    `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
+  ].flatMap(line => line.startsWith('      - ')
+    ? [line, '        if: steps.release_head.outputs.current == \'true\'']
+    : [line])
   return [
     `  ${buildId}:`,
     `    name: Build web app for ${job.id}`,
@@ -516,15 +528,17 @@ function githubReleaseJobs(job: CiJob, condition: string) {
     '          overwrite: true',
     '          retention-days: 1',
     '',
-    `  ${headId}:`,
-    `    name: Check latest commit for ${job.id}`,
+    `  ${job.id}:`,
+    `    name: ${yamlScalar(job.name)}`,
     `    needs: ${buildId}`,
     '    runs-on: ubuntu-latest',
-    '    outputs:',
-    `      current: \${{ steps.release_head.outputs.current }}`,
-    `      check_attempt: \${{ steps.release_head.outputs.check_attempt }}`,
+    '    environment: capgo-release',
+    '    concurrency:',
+    `      group: capgo-ota-${appId}`,
+    '      cancel-in-progress: false',
+    '      queue: max',
     '    steps:',
-    '      # This runner never checks out, downloads, or executes project files.',
+    '      # Check under the lock, before any project files or release secrets arrive.',
     '      - name: Check release commit is still the branch head',
     '        id: release_head',
     '        shell: bash',
@@ -532,42 +546,37 @@ function githubReleaseJobs(job: CiJob, condition: string) {
     `          GH_TOKEN: \${{ github.token }}`,
     '        run: |',
     `          latest="$(gh api "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/ref/\${GITHUB_REF#refs/}" --jq .object.sha)"`,
-    '          echo "check_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"',
     '          if [ "$latest" = "$GITHUB_SHA" ]; then',
     '            echo "current=true" >> "$GITHUB_OUTPUT"',
     '          else',
     '            echo "current=false" >> "$GITHUB_OUTPUT"',
     '            echo "Skipping this release because the branch has a newer commit."',
     '          fi',
-    '',
-    `  ${job.id}:`,
-    `    name: ${yamlScalar(job.name)}`,
-    `    needs: [${buildId}, ${headId}]`,
-    `    if: needs.${headId}.outputs.current == 'true'`,
-    '    runs-on: ubuntu-latest',
-    '    permissions: {}',
-    '    environment: capgo-release',
-    '    steps:',
-    '      - name: Require a fresh branch check for this attempt',
+    ...uploadSteps,
+  ]
+}
+
+function githubPreviewVersionSteps(appId: string) {
+  return [
+    '      - name: Resolve a unique preview version',
+    '        id: preview_version',
     '        shell: bash',
     '        env:',
-    `          CHECK_ATTEMPT: \${{ needs.${headId}.outputs.check_attempt }}`,
+    `          PR_NUMBER: ${GITHUB_PR_NUMBER}`,
     '        run: |',
-    '          if [ "$CHECK_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then',
-    '            echo "::error::Re-run all jobs so the branch check runs again before deployment."',
-    '            exit 1',
-    '          fi',
-    '      - uses: actions/download-artifact@v8',
-    '        with:',
-    `          artifact-ids: \${{ needs.${buildId}.outputs.artifact_id }}`,
-    `          path: \${{ runner.temp }}/capgo-release`,
-    '      - run: tar -xzf "$RUNNER_TEMP/capgo-release/capgo-release.tar.gz"',
-    ...GITHUB_NODE_STEPS,
-    '      # Reuse the build dependencies so install scripts cannot rebuild the artifact.',
-    ...(job.restoreKey ? setupStep(CI_RESTORE_KEY_COMMAND, '      ', 'run', secret => `\${{ secrets.${secret} }}`) : []),
-    `      - run: ${yamlScalar(job.command)}`,
-    '        env:',
-    `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
+    '          # The offline packer resolves the same Capacitor version as bundle upload.',
+    `          ${CLI} bundle zip ${appId} --for-upload --no-key --json --name "$RUNNER_TEMP/capgo-preview.zip" > "$RUNNER_TEMP/capgo-preview.json"`,
+    '          node --input-type=module <<\'NODE\'',
+    '          import { appendFileSync, readFileSync } from "node:fs"',
+    '          const { bundle } = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/capgo-preview.json", "utf8"))',
+    '          const version = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+].*)?$/.exec(bundle)',
+    '          const ids = [process.env.GITHUB_REPOSITORY_ID, process.env.PR_NUMBER, process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT]',
+    '          if (!version || ids.some(id => !/^[1-9]\\d*$/.test(id ?? ""))) throw new Error("Cannot resolve a unique preview version")',
+    '          // A next-patch prerelease stays above the installed native version.',
+    '          const preview = version[1] + "." + version[2] + "." + (BigInt(version[3]) + 1n) + "-pr." + ids.join(".")',
+    '          appendFileSync(process.env.GITHUB_OUTPUT, "bundle=" + preview + "\\n")',
+    '          NODE',
+    '          rm "$RUNNER_TEMP/capgo-preview.zip" "$RUNNER_TEMP/capgo-preview.json"',
   ]
 }
 
@@ -585,10 +594,6 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
       lines.push('    types: [opened, synchronize, reopened, closed]')
   }
   lines.push('', 'permissions:', '  contents: read')
-  if (options.product === 'ota') {
-    // Hold one lock across build, isolated check, and upload. PRs keep their job-level cancellation.
-    lines.push('', 'concurrency:', `  group: capgo-release-${options.appId}-${GITHUB_WORKFLOW}-${GITHUB_RELEASE_GROUP_REF}`, '  cancel-in-progress: false', '  queue: max')
-  }
   lines.push('', 'jobs:')
   // Fork pull requests get no secrets, so they skip instead of failing.
   const sameRepo = 'github.event.pull_request.head.repo.full_name == github.repository'
@@ -603,9 +608,10 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
     if (index > 0)
       lines.push('')
     if (options.product === 'ota' && job.trigger.kind === 'push') {
-      lines.push(...githubReleaseJobs(job, condition))
+      lines.push(...githubReleaseJobs(job, condition, options.appId))
       return
     }
+    const otaPreview = options.product === 'ota' && job.trigger.kind === 'pull_request'
     lines.push(
       `  ${job.id}:`,
       `    name: ${yamlScalar(job.name)}`,
@@ -624,12 +630,18 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
       ...githubCheckoutSteps(job),
       ...GITHUB_NODE_STEPS,
     )
-    for (const command of setupCommands(job))
+    for (const command of setupCommands(job).filter(command => !otaPreview || command !== CI_RESTORE_KEY_COMMAND))
       lines.push(...setupStep(command, '      ', 'run', secret => `\${{ secrets.${secret} }}`))
+    if (otaPreview) {
+      lines.push(...githubPreviewVersionSteps(options.appId))
+      if (job.restoreKey)
+        lines.push(...setupStep(CI_RESTORE_KEY_COMMAND, '      ', 'run', secret => `\${{ secrets.${secret} }}`))
+    }
     lines.push(
-      `      - run: ${yamlScalar(withPr(job.command, GITHUB_PR_NUMBER))}`,
+      `      - run: ${yamlScalar(withPr(otaPreview ? job.command.replace('--auto-bump patch', '--bundle "$CAPGO_PREVIEW_BUNDLE"') : job.command, GITHUB_PR_NUMBER))}`,
       '        env:',
       `          CAPGO_TOKEN: \${{ secrets.${job.secret} }}`,
+      ...(otaPreview ? [`          CAPGO_PREVIEW_BUNDLE: \${{ steps.preview_version.outputs.bundle }}`] : []),
       ...yamlEnv(job, '          '),
     )
   })

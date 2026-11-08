@@ -193,8 +193,10 @@ test.describe('CI/CD setup guide', () => {
     await expect(secrets).toContainText('gh secret set CAPGO_PRIVATE_KEY_BASE64 --env capgo-encrypted-preview')
     await expect(secrets).toContainText('gh secret set CAPGO_PREVIEW_TOKEN --env capgo-encrypted-preview')
     await expect(content).toContainText('environment: capgo-encrypted-preview')
+    await expect(page.locator('[data-test="cicd-notes"]')).toContainText('Pull request previews get a unique version name for each run.')
 
     await page.locator('[data-test="cicd-provider-gitlab"]').click()
+    await expect(page.locator('[data-test="cicd-notes"]')).toContainText('--auto-bump patch gives each upload the next free version number')
     await expect(trust).toContainText('Keep CAPGO_PREVIEW_TOKEN and CAPGO_PRIVATE_KEY_BASE64 Protected and Masked')
     await expect(trust).toContainText('Environment scope set to capgo/pr-*')
     await expect(trust).toContainText('Both branches must be protected')
