@@ -163,7 +163,10 @@ describe('hosted MCP protocol', () => {
 
   it.concurrent('polls build status in-process without HTTP persist', async () => {
     const calls: McpApiRequest[] = []
-    const hono = { req: { header: () => undefined } } as any
+    const hono = {
+      get: (key: string) => key === 'requestId' ? 'req-mcp-build-status' : undefined,
+      req: { header: () => undefined },
+    } as any
     const apikeyRow = { key: 'test-key', user_id: '00000000-0000-0000-0000-000000000001' } as any
     const spy = vi.spyOn(buildStatus, 'getBuildStatus').mockResolvedValue(
       new Response(JSON.stringify({ status: 'running', persisted: false }), { status: 200 }),
@@ -177,12 +180,15 @@ describe('hosted MCP protocol', () => {
       hono,
       apikeyRow,
     }
-    await handleJsonRpcMessage({
+    const response = await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 50,
       method: 'tools/call',
       params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
     }, ctx)
+    const body = JSON.parse((response?.result as { content: Array<{ text: string }> }).content[0].text)
+    expect(response?.error).toBeUndefined()
+    expect(body).toMatchObject({ status: 'running', persisted: false })
     expect(calls.filter(call => call.path === '/build/status')).toHaveLength(0)
     expect(spy).toHaveBeenCalledWith(
       hono,

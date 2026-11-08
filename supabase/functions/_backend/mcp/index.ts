@@ -4,6 +4,7 @@ import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
+import { setApiKeyAuthContext } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
@@ -196,6 +197,7 @@ export function createMcpApp(dispatch: McpDispatch) {
       await recordFailedAuth(c)
       return unauthorized(c, 'Invalid or expired Capgo API key: sign in to the Capgo MCP again through OAuth, or create a new key at https://console.capgo.app/apikeys and update the connection', true)
     }
+    setApiKeyAuthContext(c, apikey, token)
 
     const raw = await c.req.text()
     if (raw.length > MAX_BODY_BYTES)
