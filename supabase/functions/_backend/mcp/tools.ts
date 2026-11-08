@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { getBuildStatus } from '../public/build/status.ts'
 import type { Database } from '../utils/supabase.types.ts'
@@ -90,6 +91,25 @@ export function apiResult(response: McpApiResponse): McpToolResult {
     ...(typeof response.data === 'object' && response.data !== null ? response.data : { error: response.data }),
     ...(response.requestId ? { request_id: response.requestId } : {}),
   }, true)
+}
+
+/** Map an in-process public handler throw (HTTPException from quickError) into an MCP tool error. */
+export function inProcessApiError(error: unknown, ctx: McpToolContext): McpToolResult {
+  if (error instanceof HTTPException) {
+    const cause = error.cause as { error?: string, message?: string, moreInfo?: Record<string, unknown> } | undefined
+    const requestId = ctx.hono?.get?.('requestId')
+    return apiResult({
+      ok: false,
+      status: error.status,
+      data: {
+        error: cause?.error ?? 'error',
+        message: cause?.message ?? error.message,
+        ...(cause?.moreInfo ?? {}),
+      },
+      requestId: typeof requestId === 'string' ? requestId : undefined,
+    })
+  }
+  return textResult({ error: 'tool_failed', message: error instanceof Error ? error.message : String(error) }, true)
 }
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } satisfies McpToolAnnotations
@@ -1120,20 +1140,39 @@ const buildTools: McpTool[] = [
         }, true)
       }
       const { appId: app_id, job_id } = input as { appId: string, job_id: string }
-      const response = await getBuildStatus(
-        ctx.hono,
-        { job_id, app_id },
-        ctx.apikeyRow,
-        { hostedMcpReadOnly: true },
-      )
-      let data: unknown
       try {
-        data = await response.json()
+        const response = await getBuildStatus(
+          ctx.hono,
+          { job_id, app_id },
+          ctx.apikeyRow,
+          { hostedMcpReadOnly: true },
+        )
+        const requestId = ctx.hono.get('requestId')
+        let data: unknown
+        try {
+          data = await response.json()
+        }
+        catch {
+          return apiResult({
+            ok: false,
+            status: response.status,
+            data: { error: 'invalid_response', message: 'Build status returned non-JSON.' },
+            requestId: typeof requestId === 'string' ? requestId : undefined,
+          })
+        }
+        if (!response.ok) {
+          return apiResult({
+            ok: false,
+            status: response.status,
+            data,
+            requestId: typeof requestId === 'string' ? requestId : undefined,
+          })
+        }
+        return textResult(data)
       }
-      catch {
-        data = { error: 'invalid_response', message: 'Build status returned non-JSON.' }
+      catch (error) {
+        return inProcessApiError(error, ctx)
       }
-      return textResult(data, !response.ok)
     },
   },
   apiTool({
