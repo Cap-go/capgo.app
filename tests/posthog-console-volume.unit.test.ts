@@ -11,7 +11,6 @@ describe('console posthog volume guardrails', () => {
     const options = createPosthogClientOptions()
     expect(options.autocapture).toBe(false)
     expect(options.capture_performance).toEqual({ web_vitals: false })
-    expect(options.capture_pageview).not.toBe(false)
   })
 
   it.concurrent('keeps pageviews enabled through before_send', () => {
