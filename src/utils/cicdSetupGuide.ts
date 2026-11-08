@@ -569,15 +569,23 @@ function githubPreviewVersionSteps(appId: string) {
     '          node --input-type=module <<\'NODE\'',
     '          import { appendFileSync, readFileSync } from "node:fs"',
     '          const { bundle } = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/capgo-preview.json", "utf8"))',
-    '          const version = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+].*)?$/.exec(bundle)',
+    String.raw`          const version = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/.exec(bundle)`,
     '          const ids = [process.env.GITHUB_REPOSITORY_ID, process.env.PR_NUMBER, process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT]',
-    '          if (!version || ids.some(id => !/^[1-9]\\d*$/.test(id ?? ""))) throw new Error("Cannot resolve a unique preview version")',
+    String.raw`          if (!version || ids.some(id => !/^[1-9]\d*$/.test(id ?? ""))) throw new Error("Cannot resolve a unique preview version")`,
     '          // A next-patch prerelease stays above the installed native version.',
     '          const preview = version[1] + "." + version[2] + "." + (BigInt(version[3]) + 1n) + "-pr." + ids.join(".")',
-    '          appendFileSync(process.env.GITHUB_OUTPUT, "bundle=" + preview + "\\n")',
+    String.raw`          appendFileSync(process.env.GITHUB_OUTPUT, "bundle=" + preview + "\n")`,
     '          NODE',
     '          rm "$RUNNER_TEMP/capgo-preview.zip" "$RUNNER_TEMP/capgo-preview.json"',
   ]
+}
+
+function githubJobEnvironment(job: CiJob, encryptedPreviews: boolean) {
+  if (job.trigger.kind === 'push')
+    return ['    environment: capgo-release']
+  if (requiresPreviewApproval(job) || (encryptedPreviews && job.trigger.kind === 'pull_request_closed'))
+    return [`    environment: ${isBuilderPreview(job) ? BUILDER_PREVIEW_SCOPE : ENCRYPTED_PREVIEW_SCOPE}`]
+  return []
 }
 
 function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptions) {
@@ -593,8 +601,7 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
     if (hasCleanup)
       lines.push('    types: [opened, synchronize, reopened, closed]')
   }
-  lines.push('', 'permissions:', '  contents: read')
-  lines.push('', 'jobs:')
+  lines.push('', 'permissions:', '  contents: read', '', 'jobs:')
   // Fork pull requests get no secrets, so they skip instead of failing.
   const sameRepo = 'github.event.pull_request.head.repo.full_name == github.repository'
   jobs.forEach((job, index) => {
@@ -617,10 +624,7 @@ function renderGithub(jobs: CiJob[], workflowName: string, options: CiGuideOptio
       `    name: ${yamlScalar(job.name)}`,
       `    if: ${condition}`,
       '    runs-on: ubuntu-latest',
-      ...(job.trigger.kind === 'push' ? ['    environment: capgo-release'] : []),
-      ...(requiresPreviewApproval(job) || (encryptedPreviews && job.trigger.kind === 'pull_request_closed')
-        ? [`    environment: ${isBuilderPreview(job) ? BUILDER_PREVIEW_SCOPE : ENCRYPTED_PREVIEW_SCOPE}`]
-        : []),
+      ...githubJobEnvironment(job, encryptedPreviews),
       // Without this, cleanup can finish before an in-flight preview upload,
       // which then recreates the deleted channel. Closing cancels the upload.
       ...(hasCleanup && job.trigger.kind !== 'push'
