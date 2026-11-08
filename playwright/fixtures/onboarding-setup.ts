@@ -492,7 +492,7 @@ const app = createApp(defineComponent({
             ? h(CiCdSetupGuide, {
                 appId: preview.appId.value,
                 ownerOrgId: ownerOrgId.value,
-                initialProduct: params.get('product') === 'builder' ? 'builder' : undefined,
+                initialProduct: params.get('product') === 'builder' ? 'builder' : 'ota',
                 initialPlatform: params.get('platform') === 'ios' || params.get('platform') === 'android' ? params.get('platform') as 'ios' | 'android' : undefined,
               })
             : builderComponentView

@@ -13,7 +13,7 @@ import {
   withGettingStartedDismissed,
   withoutGettingStartedDismissed,
 } from '~/utils/appOnboardingProgress'
-import { shouldShowCiCdNav } from '~/utils/cicdSetupState'
+import { resolveCiGuideContext, shouldShowCiCdNav } from '~/utils/cicdSetupState'
 import { isStoreReleaseValidated } from '~/utils/gettingStartedDismiss'
 import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 
@@ -85,6 +85,14 @@ function isActive(appId: string) {
 
 function cicdPath(appId: string) {
   return `/app/${encodeURIComponent(appId)}/ci-cd`
+}
+
+function cicdLocation(app: OrganizationApp) {
+  const context = resolveCiGuideContext({ onboarding: app.onboarding })
+  return {
+    path: cicdPath(app.app_id),
+    query: { product: context.product, ...(context.platform ? { platform: context.platform } : {}) },
+  }
 }
 
 function isCiCdActive(appId: string) {
@@ -219,7 +227,7 @@ onUnmounted(() => {
         <router-link
           class="d-btn d-btn-ghost flex min-h-11 h-auto w-full min-w-0 items-center justify-start rounded-lg border-none p-0 shadow-none transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
           :class="isCiCdActive(app.app_id) ? 'bg-azure-500/20 hover:bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20'"
-          :to="cicdPath(app.app_id)"
+          :to="cicdLocation(app)"
           :aria-current="isCiCdActive(app.app_id) ? 'page' : undefined"
           :aria-label="`${t('setup-checklist-cicd-start')} — ${appLabel(app)}`"
           :title="`${t('setup-checklist-cicd-start')} — ${appLabel(app)}`"

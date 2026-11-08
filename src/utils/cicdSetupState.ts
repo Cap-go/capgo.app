@@ -1,5 +1,7 @@
 import type { Json } from '~/types/database.types'
+import type { CiPlatform, CiProduct } from '~/utils/cicdSetupGuide'
 import { parseAppOnboardingLedger } from '~/utils/appOnboardingProgress'
+import { isCiPlatform, isCiProduct } from '~/utils/cicdSetupGuide'
 
 type CiCdDetectionSource = 'ci' | 'key' | null
 
@@ -28,6 +30,32 @@ function nonEmptyString(value: unknown) {
 
 function detectionSource(value: unknown) {
   return value === 'ci' || value === 'key' ? value : null
+}
+
+/** Entry links choose the product; direct visits resume the app's onboarding context. */
+export function resolveCiGuideContext({ onboarding, product, platform }: {
+  onboarding: unknown
+  product?: unknown
+  platform?: unknown
+}): { product: CiProduct, platform: CiPlatform | undefined } {
+  const value = record(onboarding)
+  const setup = record(value.setup)
+  const features = parseAppOnboardingLedger(onboarding).features ?? {}
+  const onlyPath = Array.isArray(setup.paths) && setup.paths.length === 1 ? setup.paths[0] : undefined
+  const onboardingProduct = isCiProduct(setup.selected_path) ? setup.selected_path : onlyPath
+  const lastActivity = (feature: typeof features[string]) => Math.max(0, ...[
+    feature?.last_used_at,
+    feature?.succeeded_at,
+    feature?.started_at,
+  ].map(at => at ? Date.parse(at) || 0 : 0))
+  const recentProduct = lastActivity(features.builder) > lastActivity(features.ota) ? 'builder' : 'ota'
+  const inheritedProduct = isCiProduct(onboardingProduct) ? onboardingProduct : recentProduct
+  const resolvedProduct = isCiProduct(product) ? product : inheritedProduct
+  const preferredPlatform = isCiPlatform(platform) ? platform : setup.selected_builder_platform
+  return {
+    product: resolvedProduct,
+    platform: resolvedProduct === 'builder' && isCiPlatform(preferredPlatform) ? preferredPlatform : undefined,
+  }
 }
 
 export function parseCiCdSetupState(onboarding: unknown): CiCdSetupState {

@@ -770,27 +770,33 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     })
   }
 
-  test('replaces Getting started with a CI/CD entry until CI/CD is set up', async ({ page }) => {
-    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
-    const link = page.locator('[data-test="cicd-nav-link"]')
-    await expect(link).toHaveAccessibleName('Set up CI/CD — My Capacitor app')
-    await expect(page.locator('[data-test="getting-started-nav-dismiss"]')).toHaveCount(0)
-    await link.click()
-    await expect(page).toHaveURL(`/app/${appId}/ci-cd`)
-    await expect(page.getByRole('heading', { name: 'Automate releases with CI/CD' })).toBeVisible()
-    await expect(link).toHaveAttribute('aria-current', 'page')
-    await page.locator('[data-test="cicd-mark-done"]').click()
-    await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
-    await expect(link).toHaveCount(0)
+  for (const [product, query] of [
+    ['ota', 'version=3&otaInstalled=1'],
+    ['builder', 'assignment=both-builder&checklistState=completed&platform=android'],
+  ] as const) {
+    test(`resumes ${product} setup from the CI/CD sidebar entry`, async ({ page }) => {
+      await page.goto(`/app/${appId}?${query}`)
+      const link = page.locator('[data-test="cicd-nav-link"]')
+      await expect(link).toHaveAccessibleName('Set up CI/CD — My Capacitor app')
+      await expect(page.locator('[data-test="getting-started-nav-dismiss"]')).toHaveCount(0)
+      await link.click()
+      await expect(page).toHaveURL(`/app/${appId}/ci-cd?product=${product}${product === 'builder' ? '&platform=android' : ''}`)
+      await expect(page.getByRole('heading', { name: product === 'ota' ? 'Automate live updates with CI/CD' : 'Automate native builds with CI/CD' })).toBeVisible()
+      await expect(page.locator('[data-test^="cicd-product-"]')).toHaveCount(0)
+      await expect(link).toHaveAttribute('aria-current', 'page')
+      await page.locator('[data-test="cicd-mark-done"]').click()
+      await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+      await expect(link).toHaveCount(0)
 
-    // Apps whose CI already uploaded, or that never shipped, get no entry.
-    await page.goto(`/app/${appId}?version=3&otaInstalled=1&cicd=detected`)
-    await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
-    await expect(link).toHaveCount(0)
-    await page.goto(`/app/${appId}?version=3&checklistState=dismissed`)
-    await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
-    await expect(link).toHaveCount(0)
-  })
+      // Apps whose CI already uploaded, or that never shipped, get no entry.
+      await page.goto(`/app/${appId}?version=3&otaInstalled=1&cicd=detected`)
+      await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+      await expect(link).toHaveCount(0)
+      await page.goto(`/app/${appId}?version=3&checklistState=dismissed`)
+      await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+      await expect(link).toHaveCount(0)
+    })
+  }
 
   test('refreshes the sidebar after CI connects while outside the guide', async ({ page }) => {
     await page.clock.install()

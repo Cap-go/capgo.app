@@ -15,7 +15,6 @@ import IconGitMerge from '~icons/lucide/git-merge'
 import IconGitPullRequest from '~icons/lucide/git-pull-request'
 import IconInfo from '~icons/lucide/info'
 import IconKey from '~icons/lucide/key-round'
-import IconLayers from '~icons/lucide/layers'
 import IconLoader from '~icons/lucide/loader-2'
 import IconRefresh from '~icons/lucide/refresh-cw'
 import IconTerminal from '~icons/lucide/terminal'
@@ -62,7 +61,7 @@ import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 const props = defineProps<{
   appId: string
   ownerOrgId: string
-  initialProduct?: CiProduct
+  initialProduct: CiProduct
   initialPlatform?: CiPlatform
 }>()
 
@@ -73,7 +72,7 @@ const organizationStore = useOrganizationStore()
 const userId = computed(() => main.user?.id ?? main.auth?.id ?? null)
 
 const saved = loadCiGuideSelection(userId.value, props.appId)
-const product = ref<CiProduct>(props.initialProduct ?? saved.product ?? 'ota')
+const product = computed(() => props.initialProduct)
 const strategy = ref<CiStrategy>(saved.strategy ?? 'main')
 const provider = ref<CiProvider | null>(saved.provider ?? null)
 const platforms = ref<CiPlatform[]>(props.initialPlatform ? [props.initialPlatform] : saved.platforms ?? [...CI_PLATFORMS])
@@ -550,7 +549,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
         {{ t('cicd-guide-eyebrow') }}
       </p>
       <h1 class="mt-1 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl dark:text-white">
-        {{ t('cicd-guide-title') }}
+        {{ t(`cicd-guide-title-${product}`) }}
       </h1>
       <p class="mt-3 max-w-3xl text-base leading-7 text-slate-600 dark:text-slate-300">
         {{ t('cicd-guide-subtitle') }}
@@ -577,29 +576,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       </button>
     </header>
 
-    <section aria-labelledby="cicd-question-product" class="space-y-3">
-      <h2 id="cicd-question-product" class="text-lg font-semibold text-slate-950 dark:text-white">
-        <span class="mr-2 text-slate-400" aria-hidden="true">1.</span>{{ t('cicd-guide-question-product') }}
-      </h2>
-      <fieldset class="min-w-0 grid gap-3 sm:grid-cols-2" aria-labelledby="cicd-question-product">
-        <button
-          v-for="option in (['ota', 'builder'] as const)"
-          :key="option"
-          type="button"
-          :aria-pressed="product === option"
-          class="flex min-h-24 items-start gap-4 rounded-2xl border p-5 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500"
-          :class="choiceClass(product === option)"
-          :data-test="`cicd-product-${option}`"
-          @click="product = option"
-        >
-          <component :is="option === 'ota' ? IconRefresh : IconLayers" class="mt-0.5 h-6 w-6 shrink-0 text-primary-500 dark:text-azure-300" aria-hidden="true" />
-          <span class="min-w-0 flex-1">
-            <span class="block text-base font-semibold text-slate-950 dark:text-white">{{ t(`cicd-guide-product-${option}`) }}</span>
-            <span class="mt-1 block text-sm leading-6 text-slate-600 dark:text-slate-300">{{ t(`cicd-guide-product-${option}-description`) }}</span>
-          </span>
-          <IconCheck v-if="product === option" class="h-5 w-5 shrink-0 text-azure-500" aria-hidden="true" />
-        </button>
-      </fieldset>
+    <section :aria-label="t(`cicd-guide-product-${product}`)" class="space-y-3">
       <fieldset v-if="product === 'ota' && encryptionChoiceRequired" class="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-encryption-choice">
         <legend class="px-1 font-semibold">
           {{ t('cicd-guide-encryption-choice-title') }}
@@ -642,7 +619,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
 
     <section aria-labelledby="cicd-question-strategy" class="space-y-3">
       <h2 id="cicd-question-strategy" class="text-lg font-semibold text-slate-950 dark:text-white">
-        <span class="mr-2 text-slate-400" aria-hidden="true">2.</span>{{ t('cicd-guide-question-strategy') }}
+        <span class="mr-2 text-slate-400" aria-hidden="true">1.</span>{{ t('cicd-guide-question-strategy') }}
       </h2>
       <fieldset class="min-w-0 grid gap-3 md:grid-cols-3" aria-labelledby="cicd-question-strategy">
         <button
@@ -686,7 +663,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
 
     <section aria-labelledby="cicd-question-provider" class="space-y-3">
       <h2 id="cicd-question-provider" class="text-lg font-semibold text-slate-950 dark:text-white">
-        <span class="mr-2 text-slate-400" aria-hidden="true">3.</span>{{ t('cicd-guide-question-provider') }}
+        <span class="mr-2 text-slate-400" aria-hidden="true">2.</span>{{ t('cicd-guide-question-provider') }}
       </h2>
       <fieldset class="min-w-0 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-labelledby="cicd-question-provider">
         <button

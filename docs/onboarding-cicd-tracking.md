@@ -4,6 +4,12 @@ The console guides users to automate releases at `/app/APP_ID/ci-cd`. The
 sidebar keeps a **Set up CI/CD** entry per app until Capgo sees CI ship the app
 once, or the user says CI/CD is already set up.
 
+The Getting Started entry point selects the product. Live Updates opens the
+live-update guide, and Builder opens the native-build guide with its selected
+platform. The guide asks when to release and which CI provider to use; it does
+not ask users to choose the product again. Sidebar links resume the app's
+onboarding context.
+
 ## When the sidebar shows it
 
 `shouldShowCiCdNav` in `src/utils/cicdSetupState.ts`, rendered by

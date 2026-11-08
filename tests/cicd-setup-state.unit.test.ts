@@ -1,9 +1,57 @@
 import { describe, expect, it } from 'vitest'
-import { ciCdDetectedAt, isAppShipping, isCiCdSetupDone, parseCiCdSetupState, shouldShowCiCdNav, withCiCdMarkedDone } from '../src/utils/cicdSetupState'
+import { ciCdDetectedAt, isAppShipping, isCiCdSetupDone, parseCiCdSetupState, resolveCiGuideContext, shouldShowCiCdNav, withCiCdMarkedDone } from '../src/utils/cicdSetupState'
 
 const shipping = { features: { ota: { succeeded_at: '2026-10-01T00:00:00.000Z' } } }
 
 describe('CI/CD setup state', () => {
+  it.concurrent.each([
+    { product: 'ota', selectedPath: 'builder', expected: 'ota' },
+    { product: 'builder', selectedPath: 'ota', expected: 'builder' },
+    { product: undefined, selectedPath: 'builder', expected: 'builder' },
+    { product: 'invalid', selectedPath: 'ota', expected: 'ota' },
+    { product: ['builder'], selectedPath: 'ota', expected: 'ota' },
+  ])('resolves the product from entry context before onboarding ($product, $selectedPath)', ({ product, selectedPath, expected }) => {
+    expect(resolveCiGuideContext({
+      product,
+      onboarding: { setup: { selected_path: selectedPath } },
+    }).product).toBe(expected)
+  })
+
+  it.concurrent('uses product history for context-free visits with no selected path', () => {
+    const onboarding = { features: {
+      ota: { succeeded_at: '2026-10-01T00:00:00.000Z' },
+      builder: { last_used_at: '2026-11-01T00:00:00.000Z' },
+    } }
+    expect(resolveCiGuideContext({ onboarding }).product).toBe('builder')
+    expect(resolveCiGuideContext({ onboarding: {
+      ...onboarding,
+      features: { ...onboarding.features, ota: { started_at: '2026-11-02T00:00:00.000Z' } },
+    } }).product).toBe('ota')
+    expect(resolveCiGuideContext({ onboarding: {
+      ...onboarding,
+      setup: { selected_path: 'ota' },
+    } }).product).toBe('ota')
+  })
+
+  it.concurrent.each([null, {}, { features: [] }, { setup: { selected_path: 'other' } }, {
+    features: { builder: { started_at: 'invalid' }, ota: { succeeded_at: 'invalid' } },
+  }])('falls back to live updates without valid context or history (%j)', (onboarding) => {
+    expect(resolveCiGuideContext({ onboarding })).toEqual({ product: 'ota', platform: undefined })
+  })
+
+  it.concurrent.each(['ota', 'builder'] as const)('resumes a single %s onboarding path without a selected_path', (product) => {
+    expect(resolveCiGuideContext({ onboarding: { setup: { paths: [product] } } }).product).toBe(product)
+  })
+
+  it.concurrent('carries the selected Builder platform and accepts an explicit platform override', () => {
+    const onboarding = { setup: { selected_path: 'builder', selected_builder_platform: 'ios' } }
+    expect(resolveCiGuideContext({ onboarding })).toEqual({ product: 'builder', platform: 'ios' })
+    expect(resolveCiGuideContext({ onboarding, platform: 'android' })).toEqual({ product: 'builder', platform: 'android' })
+    expect(resolveCiGuideContext({ onboarding, platform: ['android'] })).toEqual({ product: 'builder', platform: 'ios' })
+    expect(resolveCiGuideContext({ onboarding: {}, product: 'builder', platform: 'invalid' })).toEqual({ product: 'builder', platform: undefined })
+    expect(resolveCiGuideContext({ onboarding, product: 'ota', platform: 'android' })).toEqual({ product: 'ota', platform: undefined })
+  })
+
   it('parses the onboarding.cicd ledger and ignores malformed values', () => {
     expect(parseCiCdSetupState({ cicd: {
       ota_detected_at: '2026-11-01T00:00:00.000Z',

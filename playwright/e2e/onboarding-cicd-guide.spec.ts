@@ -1,8 +1,16 @@
 import type { Page } from '@playwright/test'
+import type { CiProduct } from '../../src/utils/cicdSetupGuide'
 import { expect, test } from '@playwright/test'
 
 const fixture = '/playwright/fixtures/onboarding-setup.html?view=cicd'
 const appId = 'com.example.onboarding-preview'
+
+async function openGuide(page: Page, product: CiProduct) {
+  const url = new URL(page.url())
+  url.searchParams.set('product', product)
+  await page.goto(url.href)
+  await expect(page.getByRole('heading', { name: product === 'ota' ? 'Automate live updates with CI/CD' : 'Automate native builds with CI/CD' })).toBeVisible()
+}
 
 function previewState(page: Page) {
   return page.evaluate(() => (window as any).onboardingSetupPreview.state)
@@ -12,8 +20,9 @@ test.describe('CI/CD setup guide', () => {
   test('guides live updates from main through GitHub Actions step by step', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.goto(fixture)
-    await expect(page.getByRole('heading', { name: 'Automate releases with CI/CD' })).toBeVisible()
-    await expect(page.locator('[data-test="cicd-product-ota"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('heading', { name: 'Automate live updates with CI/CD' })).toBeVisible()
+    await expect(page.locator('[data-test^="cicd-product-"]')).toHaveCount(0)
+    await expect(page.getByText('What should CI ship?', { exact: true })).toHaveCount(0)
     await expect(page.locator('[data-test="cicd-strategy-main"]')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-test="cicd-strategy-main"]')).toContainText('Every merge to main ships a live update to the production channel.')
     await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
@@ -57,16 +66,18 @@ test.describe('CI/CD setup guide', () => {
     await page.locator('[data-test="cicd-copy-pipeline"]').click()
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('name: Capgo live updates')
 
-    // An uploader key cannot run Builder pipelines: a changed role asks for a new key.
-    await page.locator('[data-test="cicd-product-builder"]').click()
+    // The Builder entry uses its own role despite the saved live-update selection.
+    await openGuide(page, 'builder')
     await expect(keyCard).toContainText('Role: App admin')
     await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveCount(0)
     await keyCard.locator('[data-test="cicd-create-key-CAPGO_TOKEN"]').click()
-    await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_2')
-    expect((await previewState(page)).apikeyCreates[1].bindings[1].role_name).toBe('app_admin')
-    // Going back to live updates shows the uploader key created earlier.
-    await page.locator('[data-test="cicd-product-ota"]').click()
     await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_1')
+    expect((await previewState(page)).apikeyCreates[0].bindings[1].role_name).toBe('app_admin')
+    // Save a Builder selection, then follow the Live Updates entry again.
+    await page.locator('[data-test="cicd-platform-ios"]').uncheck()
+    await openGuide(page, 'ota')
+    await expect(keyCard).toContainText('Role: App uploader')
+    await expect(keyCard.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveCount(0)
   })
 
   test('creates a release key and a preview key for pull requests', async ({ page }) => {
@@ -129,7 +140,8 @@ test.describe('CI/CD setup guide', () => {
 
   test('starts native builds with stored credentials for the platform from the checklist', async ({ page }) => {
     await page.goto(`${fixture}&product=builder&platform=android`)
-    await expect(page.locator('[data-test="cicd-product-builder"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('heading', { name: 'Automate native builds with CI/CD' })).toBeVisible()
+    await expect(page.locator('[data-test^="cicd-product-"]')).toHaveCount(0)
     await expect(page.locator('[data-test="cicd-platform-android"]')).toBeChecked()
     await expect(page.locator('[data-test="cicd-platform-ios"]')).not.toBeChecked()
     await page.locator('[data-test="cicd-provider-circleci"]').click()
@@ -156,7 +168,7 @@ test.describe('CI/CD setup guide', () => {
 
   test('guides native previews through provider-enforced trust restrictions', async ({ page }) => {
     await page.goto(fixture)
-    await page.locator('[data-test="cicd-product-builder"]').click()
+    await openGuide(page, 'builder')
     await page.locator('[data-test="cicd-strategy-pull_request"]').click()
     await page.locator('[data-test="cicd-provider-gitlab"]').click()
     const trust = page.locator('[data-test="cicd-builder-preview-trust"]')
@@ -176,7 +188,7 @@ test.describe('CI/CD setup guide', () => {
     }
     await page.locator('[data-test="cicd-provider-github"]').click()
     await expect(page.locator('[data-test="cicd-step-secret"]')).toContainText('gh secret set CAPGO_PREVIEW_TOKEN --env capgo-builder-preview')
-    await page.locator('[data-test="cicd-product-ota"]').click()
+    await openGuide(page, 'ota')
     await expect(trust).toHaveCount(0)
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('capgo-builder-preview')
   })
@@ -233,7 +245,7 @@ test.describe('CI/CD setup guide', () => {
     await page.reload()
     await expect(page.locator('[data-test="cicd-provider-other"]')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
-    await page.locator('[data-test="cicd-product-builder"]').click()
+    await openGuide(page, 'builder')
     await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
   })
 
@@ -283,7 +295,7 @@ test.describe('CI/CD setup guide', () => {
       await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
     }
     // Native builds don't upload to a channel, so they stay available.
-    await page.locator('[data-test="cicd-product-builder"]').click()
+    await openGuide(page, 'builder')
     await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toHaveCount(0)
     await expect(page.locator('[data-test="cicd-steps"]')).toBeVisible()
   })
@@ -394,9 +406,9 @@ test.describe('CI/CD setup guide', () => {
     await page.locator('[data-test="cicd-provider-github"]').click()
     await expect(page.locator('[data-test="cicd-encryption-retry"]')).toBeVisible()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
-    await page.locator('[data-test="cicd-product-builder"]').click()
+    await openGuide(page, 'builder')
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('build request')
-    await page.locator('[data-test="cicd-product-ota"]').click()
+    await openGuide(page, 'ota')
     await page.evaluate(() => { (window as any).onboardingSetupPreview.state.policyError = false })
     await page.locator('[data-test="cicd-encryption-retry"]').click()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
@@ -450,9 +462,9 @@ test.describe('CI/CD setup guide', () => {
     await page.locator('[data-test="cicd-provider-github"]').click()
     await expect(page.locator('[data-test="cicd-encryption-choice"]')).toBeVisible()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
-    await page.locator('[data-test="cicd-product-builder"]').click()
+    await openGuide(page, 'builder')
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('build request')
-    await page.locator('[data-test="cicd-product-ota"]').click()
+    await openGuide(page, 'ota')
     await page.locator('[data-test="cicd-encryption-choice-plaintext"]').check()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toBeVisible()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('CAPGO_PRIVATE_KEY_BASE64')
@@ -525,7 +537,7 @@ test.describe('CI/CD setup guide', () => {
       await page.goto(`${fixture}&cicd=detected`)
       await page.locator('[data-test="cicd-provider-github"]').click()
       await expect(page.locator('[data-test="cicd-detection"]')).toContainText('received a bundle')
-      await page.locator('[data-test="cicd-product-builder"]').click()
+      await openGuide(page, 'builder')
       await expect(page.locator('[data-test="cicd-detection"]')).toContainText('Waiting for the first build requested from CI')
       await expect(page.locator('[data-test="cicd-status-detected"]')).toHaveCount(0)
       await page.evaluate((source) => {
