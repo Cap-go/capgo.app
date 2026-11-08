@@ -101,12 +101,15 @@ export interface EmailPreferences {
  * Which org members receive a notification.
  * - 'admins': org_admin + org_super_admin (org management + usage-credit data; the default).
  * - 'billing': org_super_admin + org_billing_admin (billing/payment actions; the org.update_billing holders).
+ * - 'all': every active org-scoped user/group binding, any role.
  */
-export type NotificationAudience = 'admins' | 'billing'
+export type NotificationAudience = 'admins' | 'billing' | 'all'
 
 const AUDIENCE_ROLE_NAMES: Record<NotificationAudience, string[]> = {
   admins: ['org_admin', 'org_super_admin'],
   billing: ['org_super_admin', 'org_billing_admin'],
+  // Empty means no role-name filter; collect every org-scoped binding.
+  all: [],
 }
 
 interface OrgWithPreferences {
