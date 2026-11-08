@@ -17,7 +17,7 @@ export function explainBuildLogs(logs: string) {
     if (!line)
       return []
     const start = Math.max(0, line.search(symptom.pattern) - 200)
-    const match = line.match(symptom.pattern)![0]
+    const match = symptom.pattern.exec(line)![0]
     const evidence = match.length > 1000 ? `${match.slice(0, 497)} [...] ${match.slice(-496)}` : line.slice(Math.max(start, line.search(symptom.pattern) + match.length - 1000), Math.max(start + 1000, line.search(symptom.pattern) + match.length))
     return [{
       classification: 'error', evidence, meaning: symptom.meaning,
