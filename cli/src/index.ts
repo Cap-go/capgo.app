@@ -1644,8 +1644,10 @@ function addObserveQueryOptions(command: Command) {
   command.option('-a, --apikey <apikey>', optionDescriptions.apikey)
   if (view !== 'release')
     command.option('--days <days>', 'Lookback window in days: 1, 3, 7, or 30 (default: 7)')
-  if (!['release', 'summary', 'versions'].includes(view))
-    command.option('--action <action>', 'Filter by stats action, for example update_fail or app_crash_native; overrides the default action filter')
+  if (!['release', 'summary', 'versions'].includes(view)) {
+    const examples = view === 'metrics' ? 'app_launch_ready or app_nav' : view === 'routes' ? 'app_nav' : 'update_fail or app_crash_native'
+    command.option('--action <action>', `Filter by stats action, for example ${examples}; overrides the default action filter`)
+  }
   if (['logs', 'errors', 'metrics', 'routes'].includes(view))
     command.option('--sort <sort>', 'Sort samples: slowest, fastest, newest, or oldest')
   if (['logs', 'errors', 'metrics', 'routes', 'device'].includes(view))

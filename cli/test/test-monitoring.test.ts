@@ -77,6 +77,10 @@ test('generated CLI reference only advertises supported Observe filters', () => 
       expect(section(view)).not.toContain('--version-name')
       expect(section(view)).not.toContain('--action')
     }
+    expect(section('metrics')).toContain('app_launch_ready or app_nav')
+    expect(section('routes')).toContain('for example app_nav;')
+    expect(section('metrics')).not.toContain('app_crash_native')
+    expect(section('routes')).not.toContain('app_crash_native')
     expect(section('release')).not.toContain('--days')
     expect(section('release')).toContain('--channel-id')
     expect(section('errors')).toContain('update_fail')
