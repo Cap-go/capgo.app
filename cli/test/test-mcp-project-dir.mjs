@@ -230,13 +230,17 @@ else {
         if (source === 'global') writeFileSync(join(fakeHome, '.capgo'), 'example-global-monitoring-key')
         await withServer([fileRoot(multiple)], async (client) => {
           if (source === 'global-after-start') writeFileSync(join(fakeHome, '.capgo'), 'example-global-monitoring-key')
+          const requestStart = requests.length
           for (const name of ['capgo_get_build_status', 'capgo_get_build_logs']) {
+            const beforeRequest = requests.length
             const result = await client.callTool({ name, arguments: { appId: 'com.example.app', job_id: 'ci-job' } })
+            ok(requests.length === beforeRequest + 1, `${name} must send one request`)
             ok(!result.isError, toolText(result))
           }
           const observeResult = await client.callTool({ name: 'capgo_observe', arguments: { appId: 'com.example.app', view: 'release' } })
           ok(!observeResult.isError, toolText(observeResult))
           const expectedKey = source === 'env' ? 'example-env-monitoring-key' : 'example-global-monitoring-key'
+          ok(requests.length === requestStart + 3, 'each monitoring tool must send a request')
           ok(requests.slice(-3).every(request => request.key === expectedKey), 'monitoring must use the current independent credential')
           const rejected = await client.callTool({ name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'ci-job', projectDir: join(tmp, 'missing-app') } })
           ok(rejected.isError, 'explicit invalid project paths must not be bypassed')

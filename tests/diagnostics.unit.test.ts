@@ -37,3 +37,11 @@ it.concurrent('quotes the matched symptom even when a log line has a long prefix
   expect(diagnostics[0].evidence).toContain('Code signing failed')
   expect(diagnostics[0].evidence.length).toBeLessThanOrEqual(1000)
 })
+
+it.concurrent('preserves both ends of a long signing failure match', () => {
+  const [diagnostic] = explainBuildLogs(`codesign ${'x'.repeat(2000)} failed`)
+  expect(diagnostic.evidence).toContain('codesign')
+  expect(diagnostic.evidence).toContain('failed')
+  expect(diagnostic.evidence).toContain('[...]')
+  expect(diagnostic.evidence.length).toBeLessThanOrEqual(1000)
+})

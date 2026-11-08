@@ -16,7 +16,7 @@ describe('AI monitoring requests', () => {
     const calls: Array<{ url: string, body: unknown }> = []
     globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
       calls.push({ url: String(input), body: JSON.parse(String(init?.body)) })
-      return Response.json({ app_id: 'com.example.app', view: 'release', release: null })
+      return Response.json(calls.length === 1 ? { app_id: 'com.example.app', view: 'release', release: null } : { app_id: 'com.example.app', view: 'errors', summary: { total: 0 }, actions: [], samples: [] })
     }, { preconnect: originalFetch.preconnect })
     await fetchObserve({ appId: 'com.example.app', view: 'release', channelId: 42, versionName: '1.2.0', apikey: 'example-test-key', apiHost: 'http://localhost:8787' })
     expect(calls[0].body).toMatchObject({ view: 'release', channelId: 42, versionName: '1.2.0' })
@@ -81,6 +81,8 @@ test('generated CLI reference only advertises supported Observe filters', () => 
     expect(section('routes')).toContain('for example app_nav;')
     expect(section('metrics')).not.toContain('app_crash_native')
     expect(section('routes')).not.toContain('app_crash_native')
+    expect(section('summary')).not.toContain('--source')
+    expect(section('device')).not.toContain('--sort')
     expect(section('release')).not.toContain('--days')
     expect(section('release')).toContain('--channel-id')
     expect(section('errors')).toContain('update_fail')
@@ -89,4 +91,21 @@ test('generated CLI reference only advertises supported Observe filters', () => 
   finally {
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+
+test.each([
+  { app_id: 'com.example.other', view: 'release', release: null },
+  { app_id: 'com.example.app', view: 'summary', release: null },
+])('rejects monitoring data for a different request: %j', async (body) => {
+  globalThis.fetch = Object.assign(async () => Response.json(body), { preconnect: originalFetch.preconnect })
+  await expect(fetchObserve({ appId: 'com.example.app', view: 'release', apikey: 'example-test-key', apiHost: 'http://localhost:8787' })).rejects.toThrow('invalid Observe response')
+})
+
+test('rejects incomplete errors and empty build statuses', async () => {
+  globalThis.fetch = Object.assign(async () => Response.json({ app_id: 'com.example.app', view: 'errors' }), { preconnect: originalFetch.preconnect })
+  const options = { appId: 'com.example.app', apikey: 'example-test-key', apiHost: 'http://localhost:8787' }
+  await expect(fetchObserve({ ...options, view: 'errors' })).rejects.toThrow('invalid Observe response')
+  globalThis.fetch = Object.assign(async () => Response.json({ job_id: 'ci-job', status: '' }), { preconnect: originalFetch.preconnect })
+  await expect(fetchBuildMonitor('status', { ...options, jobId: 'ci-job' })).rejects.toThrow('invalid build status response')
 })

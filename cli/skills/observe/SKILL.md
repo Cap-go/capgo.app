@@ -59,3 +59,5 @@ See [monitoring API](https://capgo.app/docs/public-api/monitoring/) and [updater
 Raw sample views (`metrics`, `routes`, `device`, `logs`, `errors`) require `app.read_logs`. Default error queries exclude policy restrictions; inspect those through logs or an explicit action filter. Summary/versions do not accept `--version-name`, and release does not accept `--days` because its window follows deployment time.
 
 For explicit action filters, use `app_launch_ready` or `app_nav` with metrics and `app_nav` with routes. An explicit action replaces the default filter; failure actions belong in errors or events queries.
+
+Error aggregates group by action and do not filter policy codes inside `backend_refusal` metadata. Inspect sample diagnostics before treating aggregate totals as confirmed failures.

@@ -20,7 +20,7 @@ export async function fetchBuildMonitor(kind: 'status' | 'logs', options: BuildM
   if (error)
     throw new CliUserError(await formatCapgoCliInvokeError(error))
   const schema = kind === 'status'
-    ? z.object({ job_id: z.string(), status: z.string() }).passthrough()
+    ? z.object({ job_id: z.string(), status: z.string().trim().min(1) }).passthrough()
     : z.object({ job_id: z.string(), logs: z.string(), cursor: z.number().int().nonnegative(), truncated: z.boolean() }).passthrough()
   const result = schema.safeParse(data)
   if (!result.success)

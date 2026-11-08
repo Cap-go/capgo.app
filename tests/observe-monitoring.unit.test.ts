@@ -62,6 +62,10 @@ describe('Observe monitoring API', () => {
 })
 
 it('allows explicitly inspecting policy events without counting them as default errors', async () => {
-  await post({ view: 'errors', action: 'channelPaused' })
+  mocks.insights.mockResolvedValueOnce({ summary: { total: 1 }, actions: [{ action: 'channelPaused', total: 1 }], daily: [], versions: [], devices: [] })
+  const response = await post({ view: 'errors', action: 'channelPaused' })
+  expect(response.status).toBe(200)
+  expect(mocks.insights.mock.calls[0][1].actions).toEqual(['channelPaused'])
+  expect(await response.json()).toMatchObject({ summary: { total: 1 }, actions: [{ action: 'channelPaused', total: 1 }] })
   expect(mocks.stats.mock.calls[0][1].actions).toEqual(['channelPaused'])
 })

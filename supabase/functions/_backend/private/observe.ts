@@ -230,7 +230,8 @@ async function respondSampleView(
     })
     return c.json({
       view: input.view, app_id: input.appId, period: input.period, ...insights, samples, sample_scan,
-      aggregate_scope: { app_id: input.appId, version_name: input.versionName ?? null, device_filter_applied: false },
+      aggregate_scope: { app_id: input.appId, version_name: input.versionName ?? null, device_filter_applied: false, metadata_policy_filter_applied: false },
+      aggregate_caveat: 'Totals are grouped by action. backend_refusal can include policy-coded metadata; inspect sample diagnostics before treating these totals as confirmed failures.',
       diagnostics: insights.actions.map(row => ({ action: row.action, ...explainDiagnostic(row.action) })),
       agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
     })
