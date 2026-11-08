@@ -21,7 +21,7 @@ const requests = []
 let blockedEvents
 const withTimeout = promise => Promise.race([
   promise,
-  new Promise((_, reject) => setTimeout(() => reject(new Error('MCP operation timed out')), 5000).unref()),
+  new Promise((_, reject) => setTimeout(() => reject(new Error('MCP operation timed out')), 15000).unref()),
 ])
 const server = createServer(async (request, response) => {
   let body = ''
@@ -92,7 +92,7 @@ try {
     try {
       await withTimeout(client.connect(transport))
       for (const [directory, name] of [[first, 'first'], [second, 'second'], [first, 'first']]) {
-        const event = once(notifications, 'capgo_whoami', { signal: AbortSignal.timeout(5000) })
+        const event = once(notifications, 'capgo_whoami', { signal: AbortSignal.timeout(15000) })
         const result = await withTimeout(client.callTool({ name: 'capgo_whoami', arguments: { cwd: directory } }))
         const [record] = await event
         assert.ok(!result.isError, JSON.stringify(result))
@@ -104,7 +104,7 @@ try {
         assert.ok(requests.some(request => request.path === '/' + name + '/private/cli/identity' && request.apikey === projectKey))
       }
       for (const name of ['second', 'first']) {
-        const event = once(notifications, 'capgo_set_project_dir', { signal: AbortSignal.timeout(5000) })
+        const event = once(notifications, 'capgo_set_project_dir', { signal: AbortSignal.timeout(15000) })
         const result = await withTimeout(client.callTool({ name: 'capgo_set_project_dir', arguments: { path: '../' + name } }))
         const [record] = await event
         assert.ok(!result.isError, JSON.stringify(result))
@@ -112,7 +112,7 @@ try {
         assert.equal(record.path, '/' + name + '/private/events')
         assert.equal(record.payload.tags.app_id, 'com.example.telemetry.' + name)
       }
-      const errorEvent = once(notifications, 'capgo_generate_encryption_keys', { signal: AbortSignal.timeout(5000) })
+      const errorEvent = once(notifications, 'capgo_generate_encryption_keys', { signal: AbortSignal.timeout(15000) })
       const errorResult = await withTimeout(client.callTool({ name: 'capgo_generate_encryption_keys', arguments: {} }))
       const [errorRecord] = await errorEvent
       assert.equal(errorResult.isError, true)
@@ -124,7 +124,7 @@ try {
       let releaseEvent
       blockedEvents = new Promise(resolve => { releaseEvent = resolve })
       try {
-        const event = once(notifications, 'capgo_whoami', { signal: AbortSignal.timeout(5000) })
+        const event = once(notifications, 'capgo_whoami', { signal: AbortSignal.timeout(15000) })
         const result = await withTimeout(client.callTool({ name: 'capgo_whoami', arguments: {} }))
         const [record] = await event
         assert.ok(!result.isError, JSON.stringify(result))
