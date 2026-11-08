@@ -101,15 +101,12 @@ export interface EmailPreferences {
  * Which org members receive a notification.
  * - 'admins': org_admin + org_super_admin (org management + usage-credit data; the default).
  * - 'billing': org_super_admin + org_billing_admin (billing/payment actions; the org.update_billing holders).
- * - 'all': every active org-scoped user/group binding, any role.
  */
-export type NotificationAudience = 'admins' | 'billing' | 'all'
+export type NotificationAudience = 'admins' | 'billing'
 
 const AUDIENCE_ROLE_NAMES: Record<NotificationAudience, string[]> = {
   admins: ['org_admin', 'org_super_admin'],
   billing: ['org_super_admin', 'org_billing_admin'],
-  // Empty means no role-name filter; collect every org-scoped binding.
-  all: [],
 }
 
 interface OrgWithPreferences {
@@ -153,11 +150,6 @@ async function fetchOrgScopeRoleBindings(
   errorMessage: string,
 ): Promise<{ bindings: OrgRoleBindingRow[], failed: boolean }> {
   try {
-    const scopeFilters = [
-      eq(schema.role_bindings.org_id, orgId),
-      eq(schema.role_bindings.principal_type, principalType),
-      eq(schema.role_bindings.scope_type, 'org'),
-    ] as const
     const bindings = await drizzle
       .select({
         principal_id: schema.role_bindings.principal_id,
@@ -166,9 +158,12 @@ async function fetchOrgScopeRoleBindings(
       .from(schema.role_bindings)
       .innerJoin(schema.roles, eq(schema.role_bindings.role_id, schema.roles.id))
       .where(
-        adminRoleNames.length > 0
-          ? and(...scopeFilters, inArray(schema.roles.name, adminRoleNames))
-          : and(...scopeFilters),
+        and(
+          eq(schema.role_bindings.org_id, orgId),
+          eq(schema.role_bindings.principal_type, principalType),
+          eq(schema.role_bindings.scope_type, 'org'),
+          inArray(schema.roles.name, adminRoleNames),
+        ),
       )
 
     return { bindings, failed: false }
@@ -890,7 +885,5 @@ export async function getOrgAdminMemberEmailsForTags(
 }
 
 export const orgEmailNotificationTestUtils = {
-  AUDIENCE_ROLE_NAMES,
-  fetchOrgScopeRoleBindings,
   getEligibleEmailTargets,
 }
