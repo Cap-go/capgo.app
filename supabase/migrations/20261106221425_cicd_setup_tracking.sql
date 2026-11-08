@@ -205,7 +205,7 @@ END;
 $$;
 
 ALTER FUNCTION public.record_app_cicd_deploy(character varying, text, uuid, text) OWNER TO "postgres";
-REVOKE ALL ON FUNCTION public.record_app_cicd_deploy(character varying, text, uuid, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.record_app_cicd_deploy(character varying, text, uuid, text) FROM PUBLIC, "anon", "authenticated";
 GRANT ALL ON FUNCTION public.record_app_cicd_deploy(character varying, text, uuid, text) TO "service_role";
 
 COMMENT ON FUNCTION public.record_app_cicd_deploy(character varying, text, uuid, text) IS

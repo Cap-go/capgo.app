@@ -14,6 +14,7 @@ import {
   SUPABASE_BASE_URL,
   USER_EMAIL,
   USER_EMAIL_NONMEMBER,
+  USER_ID_NONMEMBER,
   USER_PASSWORD,
   USER_PASSWORD_NONMEMBER,
 } from './test-utils.ts'
@@ -123,8 +124,17 @@ describe('CI/CD setup tracking', () => {
     expect(outsiderError?.message).toContain('NO_PERMISSION')
 
     const client = await signedIn()
-    const { error: foreignKeyError } = await client.rpc('record_app_cicd_setup', { p_app_id: APP_RPC, p_event: 'key_created', p_apikey_rbac_id: randomUUID() })
-    expect(foreignKeyError?.message).toContain('NO_PERMISSION')
+    const foreignKeyId = randomUUID()
+    await executeSQL('INSERT INTO public.apikeys (user_id, key, name, rbac_id) VALUES ($1, $2, $3, $4)', [USER_ID_NONMEMBER, `cicd-foreign-${randomUUID()}`, 'CI/CD foreign-owned test key', foreignKeyId])
+    try {
+      const { error: foreignKeyError } = await client.rpc('record_app_cicd_setup', { p_app_id: APP_RPC, p_event: 'key_created', p_apikey_rbac_id: foreignKeyId })
+      expect(foreignKeyError?.message).toContain('NO_PERMISSION')
+      const [row] = await executeSQL<{ keys: unknown }>(`SELECT onboarding -> 'cicd' -> 'keys' AS keys FROM public.apps WHERE app_id = $1`, [APP_RPC])
+      expect(row?.keys ?? []).not.toContain(foreignKeyId)
+    }
+    finally {
+      await executeSQL('DELETE FROM public.apikeys WHERE rbac_id = $1', [foreignKeyId])
+    }
     const { error: eventError } = await client.rpc('record_app_cicd_setup', { p_app_id: APP_RPC, p_event: 'detected' })
     expect(eventError?.message).toContain('INVALID_EVENT')
 
@@ -140,6 +150,16 @@ describe('CI/CD setup tracking', () => {
     expect(isCiCdSetupDone(data)).toBe(true)
     const { data: again } = await client.rpc('record_app_cicd_setup', { p_app_id: APP_RPC, p_event: 'marked_done' })
     expect(parseCiCdSetupState(again).markedDoneAt).toBe(markedDoneAt)
+  })
+
+  it.concurrent('restricts deployment tracking execution to the backend role', async () => {
+    const grants = await executeSQL<{ role: string, can_execute: boolean }>(`
+      SELECT role, pg_catalog.has_function_privilege(role, 'public.record_app_cicd_deploy(character varying,text,uuid,text)', 'EXECUTE') AS can_execute
+      FROM (VALUES ('anon'), ('authenticated'), ('service_role')) AS roles(role)
+    `)
+    expect(Object.fromEntries(grants.map(row => [row.role, row.can_execute]))).toEqual({ anon: false, authenticated: false, service_role: true })
+    const { error } = await authClient().rpc('record_app_cicd_deploy', { p_app_id: APP_RPC, p_product: 'ota', p_apikey_rbac_id: randomUUID(), p_ci_provider: 'GitHub Actions' })
+    expect(error?.code).toBe('42501')
   })
 
   it('keeps the other onboarding fields and caps tracked keys', async () => {

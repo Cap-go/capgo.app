@@ -24,6 +24,7 @@ const initialPlatform = computed(() => isCiPlatform(route.query.platform) ? rout
       v-if="app"
       :key="app.app_id"
       :app-id="app.app_id"
+      :owner-org-id="app.owner_org"
       :initial-product="initialProduct"
       :initial-platform="initialPlatform"
     />

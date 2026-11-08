@@ -72,13 +72,19 @@ const state = {
   apikeyError: params.get('apikeyError'),
   encryptionError: params.get('encryptionError') === '1',
   encryptionDelayMs: Number(params.get('encryptionDelay') ?? 0),
+  encryptionQueries: [] as string[],
+  policyError: params.get('policyError') === '1',
+  policyDelayMs: Number(params.get('policyDelay') ?? 0),
+  policyRequired: params.get('policyRequired') === '1',
+  policyQueries: [] as string[],
   cicdRegistrationError: params.get('registrationError') === '1',
+  cicdRegistrationDelayMs: Number(params.get('registrationDelay') ?? 0),
   cicdStatusDelayMs: 0,
   cicdStatusRequests: 0,
   cicdStatusResponses: 0,
   cicdSidebarRefreshes: [] as Array<string[] | null>,
   cicdRemoteLedger: null as Record<string, unknown> | null,
-  latestBundles: (params.get('bundle') || params.get('encrypted') === '1' ? [{ name: params.get('bundle') ?? '1.0.0', created_at: '2026-11-06T10:00:00.000Z', key_id: params.get('encrypted') === '1' ? 'MIIB' : null }] : []) as Array<{ name: string | null, created_at: string, key_id: string | null }>,
+  latestBundles: (params.get('bundle') || params.get('encrypted') === '1' ? [{ name: params.get('bundle') ?? '1.0.0', created_at: '2026-11-06T10:00:00.000Z', key_id: params.get('encrypted') === '1' ? 'MIIB' : null }] : []) as Array<{ name: string | null, created_at: string, key_id: string | null, deleted?: boolean }>,
 }
 // apps.onboarding.cicd, reactive so the sidebar follows the guide's writes.
 const cicdLedger = ref<Record<string, unknown> | undefined>(params.get('cicd') === 'detected'
@@ -259,10 +265,26 @@ const fixtureFetch: typeof fetch = async (input, init) => {
   }
   if (url.pathname.endsWith('/build_requests'))
     return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json', 'Content-Range': '*/0' } })
+  if (url.pathname.endsWith('/orgs')) {
+    state.policyQueries.push(url.search)
+    if (state.policyDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.policyDelayMs))
+    return new Response(JSON.stringify(state.policyError ? { message: 'Organization policy unavailable' } : [{ enforce_encrypted_bundles: state.policyRequired }]), { status: state.policyError ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+  }
   if (url.pathname.endsWith('/app_versions')) {
+    state.encryptionQueries.push(url.search)
     if (state.encryptionDelayMs)
       await new Promise(resolve => setTimeout(resolve, state.encryptionDelayMs))
-    return new Response(JSON.stringify(state.encryptionError ? { message: 'Encryption unavailable' } : state.latestBundles), { status: state.encryptionError ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+    let bundles = [...state.latestBundles]
+    if (url.searchParams.get('deleted') === 'eq.false')
+      bundles = bundles.filter(bundle => !bundle.deleted)
+    if (url.searchParams.get('key_id') === 'not.is.null')
+      bundles = bundles.filter(bundle => bundle.key_id !== null)
+    if (url.searchParams.get('order')?.includes('created_at.desc'))
+      bundles.sort((first, second) => second.created_at.localeCompare(first.created_at))
+    if (url.searchParams.has('limit'))
+      bundles = bundles.slice(0, Number(url.searchParams.get('limit')))
+    return new Response(JSON.stringify(state.encryptionError ? { message: 'Encryption unavailable' } : bundles), { status: state.encryptionError ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
   }
   // The CI/CD guide creates app-scoped secure keys through the API key endpoint.
   if (url.pathname.endsWith('/apikey') && method === 'POST') {
@@ -282,7 +304,10 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       cicdLedger.value = { ...cicdLedger.value, marked_done_at: at }
     else
       cicdLedger.value = { ...cicdLedger.value, keys: [args.p_apikey_rbac_id], key_created_at: at }
-    return new Response(JSON.stringify(previewOnboarding()), { headers: { 'Content-Type': 'application/json' } })
+    const snapshot = previewOnboarding()
+    if (args.p_event === 'key_created' && state.cicdRegistrationDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdRegistrationDelayMs))
+    return new Response(JSON.stringify(snapshot), { headers: { 'Content-Type': 'application/json' } })
   }
   if (url.pathname.includes('/rpc/')) {
     return new Response(JSON.stringify(state.channelPermissions), { headers: { 'Content-Type': 'application/json' } })
@@ -361,6 +386,13 @@ window.fetch = async (input, init) => {
     if (['eq', 'neq', 'is'].includes(operation)) {
       fixtureURL.searchParams.set(args[0], `${operation}.${args[1]}`)
     }
+    else if (operation === 'not') {
+      fixtureURL.searchParams.set(args[0], `not.${args[1]}.${args[2]}`)
+    }
+    else if (operation === 'order') {
+      const order = `${args[0]}.${args[1]?.ascending === false ? 'desc' : 'asc'}`
+      fixtureURL.searchParams.set('order', [fixtureURL.searchParams.get('order'), order].filter(Boolean).join(','))
+    }
     else if (operation === 'limit') {
       fixtureURL.searchParams.set('limit', String(args[0]))
     }
@@ -405,6 +437,7 @@ const app = createApp(defineComponent({
             : cicdView
             ? h(CiCdSetupGuide, {
                 appId: preview.appId.value,
+                ownerOrgId: '00000000-0000-4000-8000-000000000002',
                 initialProduct: params.get('product') === 'builder' ? 'builder' : undefined,
                 initialPlatform: params.get('platform') === 'ios' || params.get('platform') === 'android' ? params.get('platform') as 'ios' | 'android' : undefined,
               })

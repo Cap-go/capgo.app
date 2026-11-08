@@ -147,11 +147,11 @@ const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/
 
 /**
  * `bundle upload --channel` splits on commas and trims each name, so such a
- * channel cannot be targeted from CI. The guide asks for a rename instead of
- * silently shipping to another channel.
+ * channel cannot be targeted from CI. GitHub also expands expressions before
+ * shell quoting applies. The guide asks for a rename for either case.
  */
 export function isCiChannelSupported(name: string) {
-  return name.length > 0 && name === name.trim() && !name.includes(',') && !CONTROL_CHARACTERS.test(name)
+  return name.length > 0 && name === name.trim() && !name.includes(',') && !name.includes('${{') && !CONTROL_CHARACTERS.test(name)
 }
 
 // Inside single quotes only the quote itself needs escaping: close, escape, reopen.
@@ -250,6 +250,8 @@ export function buildCiJobs(input: CiGuideOptions): CiJob[] {
   const options = resolved(input)
   if (options.product === 'ota' && !options.productionChannels.length)
     throw new Error('An existing production release channel is required')
+  if (options.product === 'ota' && options.productionChannels.some(channel => !isCiChannelSupported(channel)))
+    throw new Error('Production channels must be supported by the CLI and CI providers')
   validateTesterChannel(options)
   const { appId, strategy, productionBranch, preprodBranch } = options
   if (strategy === 'main_preprod' && productionBranch === preprodBranch)
@@ -477,8 +479,8 @@ function githubReleaseJobs(job: CiJob, condition: string) {
     ...GITHUB_NODE_STEPS,
     '      - run: npm ci',
     '      - run: npm run build',
-    '      # Preserve custom webDir paths and Capacitor config without checkout credentials.',
-    '      - run: tar --exclude=.git --exclude=node_modules --exclude=.capgo_key_v2 -czf "$RUNNER_TEMP/capgo-release.tar.gz" .',
+    '      # Preserve webDir, config imports, and installed/generated dependencies.',
+    '      - run: tar --exclude=.git --exclude=.capgo_key_v2 -czf "$RUNNER_TEMP/capgo-release.tar.gz" .',
     '      - uses: actions/upload-artifact@v7',
     '        id: archive',
     '        with:',
@@ -535,8 +537,7 @@ function githubReleaseJobs(job: CiJob, condition: string) {
     `          path: \${{ runner.temp }}/capgo-release`,
     '      - run: tar -xzf "$RUNNER_TEMP/capgo-release/capgo-release.tar.gz"',
     ...GITHUB_NODE_STEPS,
-    '      # Config imports need dependencies, but install scripts must not rebuild the artifact.',
-    '      - run: npm ci --ignore-scripts',
+    '      # Reuse the build dependencies so install scripts cannot rebuild the artifact.',
     ...(job.restoreKey ? setupStep(CI_RESTORE_KEY_COMMAND, '      ', 'run', secret => `\${{ secrets.${secret} }}`) : []),
     `      - run: ${yamlScalar(job.command)}`,
     '        env:',
@@ -616,15 +617,19 @@ function gitlabMergeRequestCondition(protectedPreview: boolean) {
     : mergeRequest
 }
 
-function renderGitlab(jobs: CiJob[]) {
+function renderGitlab(jobs: CiJob[], options: CiGuideOptions) {
   const lines = ['default:', '  image: node:24']
   const prVariable = '$CI_MERGE_REQUEST_IID'
   const environment = `capgo/${PREVIEW_CHANNEL_PREFIX}$CI_MERGE_REQUEST_IID`
-  const resourceGroup = `capgo-${PREVIEW_CHANNEL_PREFIX}$CI_MERGE_REQUEST_IID`
+  const resourceGroup = `capgo-${options.appId}`
   const hasCleanup = jobs.some(job => job.trigger.kind === 'pull_request_closed')
   const encryptedPreviews = jobs.some(isEncryptedPreview)
   for (const job of jobs) {
-    lines.push('', `capgo-${job.id}:`, '  rules:')
+    lines.push('', `capgo-${job.id}:`)
+    // Bundle version names belong to the app, across release and preview channels.
+    if (options.product === 'ota')
+      lines.push(`  resource_group: ${resourceGroup}`)
+    lines.push('  rules:')
     if (job.trigger.kind === 'push') {
       lines.push(`    - if: $CI_COMMIT_BRANCH == "${job.trigger.branch}"`, '  environment:', '    name: capgo-release')
     }
@@ -640,7 +645,6 @@ function renderGitlab(jobs: CiJob[]) {
       }
       if (hasCleanup) {
         lines.push(
-          `  resource_group: ${resourceGroup}`,
           '  environment:',
           `    name: ${environment}`,
           '    on_stop: capgo-preview-cleanup',
@@ -658,8 +662,6 @@ function renderGitlab(jobs: CiJob[]) {
         `    - if: ${gitlabMergeRequestCondition(encryptedPreviews)}`,
         '      when: manual',
         '  allow_failure: true',
-        // Waits for a running preview upload of the same merge request.
-        `  resource_group: ${resourceGroup}`,
         '  environment:',
         `    name: ${environment}`,
         '    action: stop',
@@ -868,7 +870,7 @@ export function buildCiPipeline(input: CiGuideOptions): CiPipeline {
   const workflowName = input.product === 'ota' ? 'Capgo live updates' : 'Capgo native builds'
   const renderers: Record<CiProvider, () => string> = {
     github: () => renderGithub(jobs, workflowName, input),
-    gitlab: () => renderGitlab(jobs),
+    gitlab: () => renderGitlab(jobs, input),
     azure: () => renderAzure(jobs),
     bitbucket: () => renderBitbucket(jobs),
     circleci: () => renderCircleci(jobs),

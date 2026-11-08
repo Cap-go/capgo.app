@@ -3,8 +3,8 @@ import { execFile } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { env } from 'node:process'
+import { delimiter, join } from 'node:path'
+import { env, execPath } from 'node:process'
 import { promisify } from 'node:util'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
@@ -102,7 +102,7 @@ describe('CI/CD guide pipelines', () => {
     const steps = workflow.jobs.production.steps
     expect(workflow.jobs.production_build.steps.filter((step: { run?: string }) => step.run).slice(0, 2).map((step: { run: string }) => step.run)).toEqual(['npm ci', 'npm run build'])
     expect(steps.at(-1).run).toBe('npx @capgo/cli@latest bundle upload com.example.app --channel stable --auto-bump patch --fail-on-incompatible')
-    expect(steps.some((step: { run?: string }) => step.run === 'npm ci --ignore-scripts')).toBe(true)
+    expect(steps.some((step: { run?: string }) => step.run?.startsWith('npm ci'))).toBe(false)
     expect(steps.some((step: { run?: string }) => step.run === 'npm run build')).toBe(false)
     expect(steps.at(-1).env).toEqual({ CAPGO_TOKEN: '${{ secrets.CAPGO_TOKEN }}' })
     expect(pipeline.keys).toEqual([{ secret: 'CAPGO_TOKEN', role: 'app_uploader', purpose: 'release' }])
@@ -368,7 +368,7 @@ describe('CI/CD guide pipelines', () => {
         when: 'manual',
       }])
       expect(gitlab[id].environment.name).toBe('capgo/pr-$CI_MERGE_REQUEST_IID')
-      expect(gitlab[id].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
+      expect(gitlab[id].resource_group).toBe('capgo-com.example.app')
     }
     expect(gitlab['capgo-preview'].environment.on_stop).toBe('capgo-preview-cleanup')
     expect(gitlab['capgo-preview-cleanup'].environment.action).toBe('stop')
@@ -412,10 +412,23 @@ describe('CI/CD guide pipelines', () => {
       queue: 'max',
     })
     const gitlab = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'pull_request', provider: 'gitlab' }).content)
-    expect(gitlab['capgo-preview'].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
-    expect(gitlab['capgo-preview-cleanup'].resource_group).toBe('capgo-pr-$CI_MERGE_REQUEST_IID')
+    expect(gitlab['capgo-preview'].resource_group).toBe('capgo-com.example.app')
+    expect(gitlab['capgo-preview-cleanup'].resource_group).toBe('capgo-com.example.app')
     // Builder previews have no cleanup to race with.
     expect(parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'pull_request', provider: 'github' }).content).jobs['ios-preview'].concurrency).toBeUndefined()
+  })
+
+  it('uses the same GitLab app lock for production, tester, preview, and cleanup uploads', () => {
+    for (const strategy of CI_STRATEGIES) {
+      const pipeline = buildCiPipeline({ ...base, product: 'ota', strategy, provider: 'gitlab' })
+      const gitlab = parse(pipeline.content)
+      for (const job of pipeline.jobs)
+        expect(gitlab[`capgo-${job.id}`].resource_group).toBe('capgo-com.example.app')
+    }
+    const otherApp = parse(buildCiPipeline({ ...base, appId: 'com.example.other', product: 'ota', strategy: 'main', provider: 'gitlab' }).content)
+    expect(otherApp['capgo-production'].resource_group).toBe('capgo-com.example.other')
+    const builder = parse(buildCiPipeline({ ...base, product: 'builder', strategy: 'main_preprod', provider: 'gitlab' }).content)
+    expect(builder['capgo-ios-release'].resource_group).toBeUndefined()
   })
 
   it('isolates every GitHub live-update branch check between building and uploading', () => {
@@ -491,16 +504,26 @@ describe('CI/CD guide pipelines', () => {
       throw new Error('Expected a local API port')
     const guardEnv = {
       ...env,
+      PATH: `${directory}${delimiter}${env.PATH ?? ''}`,
       GH_CONFIG_DIR: directory,
       GH_TOKEN: token,
-      // gh uses its enterprise-token variable for the loopback API fixture.
-      GH_ENTERPRISE_TOKEN: token,
       GITHUB_API_URL: `http://127.0.0.1:${address.port}`,
       GITHUB_REPOSITORY: 'example/app',
       GITHUB_REF: 'refs/heads/release/stable',
       GITHUB_RUN_ATTEMPT: '1',
     }
     try {
+      // Keep the shell guard and authenticated HTTP request real without requiring gh locally.
+      writeFileSync(join(directory, 'gh'), `#!${execPath}
+const [command, endpoint, flag, query] = process.argv.slice(2)
+if (command !== 'api' || flag !== '--jq' || query !== '.object.sha') process.exit(2)
+void (async () => {
+  const response = await fetch(endpoint, { headers: { authorization: 'token ' + (process.env.GH_TOKEN || '') } })
+  if (!response.ok) process.exit(1)
+  const data = await response.json()
+  process.stdout.write(data.object.sha + '\\n')
+})().catch(() => process.exit(1))
+`, { mode: 0o755 })
       const older = 'a'.repeat(40)
       for (const [sha, expected] of [[older, 'false'], [newer, 'true']]) {
         const output = join(directory, `${sha}.output`)
@@ -511,7 +534,7 @@ describe('CI/CD guide pipelines', () => {
         expect(readFileSync(output, 'utf8').trim()).toBe(`check_attempt=1\ncurrent=${expected}`)
       }
       expect(requests).toEqual(Array.from({ length: 2 }, () => ({ path: '/repos/example/app/git/ref/heads/release/stable', authenticated: true })))
-      for (const overrides of [{ GITHUB_REF: 'refs/heads/missing' }, { GH_TOKEN: 'invalid-fixture-token', GH_ENTERPRISE_TOKEN: 'invalid-fixture-token' }]) {
+      for (const overrides of [{ GITHUB_REF: 'refs/heads/missing' }, { GH_TOKEN: 'invalid-fixture-token' }, { GH_TOKEN: '' }]) {
         const failedOutput = join(directory, 'failed.output')
         await expect(runFile('bash', ['-e', '-o', 'pipefail', '-c', guard.run], {
           cwd: directory,
@@ -539,26 +562,27 @@ describe('CI/CD guide pipelines', () => {
     await expect(run('2', '2')).resolves.toMatchObject({ stdout: '' })
   })
 
-  it('transfers a custom web output and config without Git history, dependencies, or private keys', async () => {
+  it('preserves generated config dependencies without rerunning install scripts or transferring private keys', async () => {
     const workflow = parse(buildCiPipeline({ ...base, product: 'ota', strategy: 'main', provider: 'github' }).content)
     const archive = workflow.jobs.production_build.steps.find((step: { run?: string }) => step.run?.startsWith('tar ')).run
-    const restore = workflow.jobs.production.steps.find((step: { run?: string }) => step.run?.startsWith('tar ')).run
-    const install = workflow.jobs.production.steps.find((step: { run?: string }) => step.run?.startsWith('npm ci')).run
     const directory = mkdtempSync(join(tmpdir(), 'capgo-release-artifact-'))
     const project = join(directory, 'project')
     const deployment = join(directory, 'deployment')
     const temporary = join(directory, 'temporary')
     try {
-      for (const path of ['.git', 'node_modules/example', 'web/custom', '.config'])
+      const dependency = join(project, 'node_modules/config-fixture')
+      for (const path of ['.git', 'node_modules/config-fixture', 'web/custom', '.config'])
         mkdirSync(join(project, path), { recursive: true })
       mkdirSync(deployment)
       mkdirSync(join(temporary, 'capgo-release'), { recursive: true })
       writeFileSync(join(project, 'web/custom/index.html'), '<p>Built app</p>')
       writeFileSync(join(project, 'web/custom/script.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-      writeFileSync(join(project, 'capacitor.config.ts'), 'export default { webDir: "web/custom" }\n')
+      writeFileSync(join(project, 'capacitor.config.js'), 'module.exports = require("config-fixture")\n')
       writeFileSync(join(project, '.config/channel.json'), '{"channel":"stable"}')
       writeFileSync(join(project, '.git/config'), 'fixture git configuration')
-      writeFileSync(join(project, 'node_modules/example/index.js'), 'fixture dependency')
+      writeFileSync(join(dependency, 'package.json'), JSON.stringify({ name: 'config-fixture', version: '1.0.0', main: 'generated.cjs', scripts: { postinstall: 'node postinstall.cjs' } }))
+      writeFileSync(join(dependency, 'postinstall.cjs'), 'require("node:fs").writeFileSync("generated.cjs", \'module.exports = { webDir: "web/custom" }\\n\')\n')
+      await runFile(execPath, ['postinstall.cjs'], { cwd: dependency })
       writeFileSync(join(project, '.capgo_key_v2'), 'fixture private key')
       const name = 'cicd-artifact-fixture'
       const version = '1.0.0'
@@ -568,15 +592,18 @@ describe('CI/CD guide pipelines', () => {
         scripts: { postinstall: 'node -e "require(\'node:fs\').writeFileSync(\'web/custom/index.html\', \'Changed by install\')"' },
       }))
       writeFileSync(join(project, 'package-lock.json'), JSON.stringify({ name, version, lockfileVersion: 3, packages: { '': { name, version, hasInstallScript: true } } }))
-      const commandEnv = { ...env, RUNNER_TEMP: temporary, npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
+      const commandEnv = { ...env, RUNNER_TEMP: temporary, CHECK_ATTEMPT: '1', GITHUB_RUN_ATTEMPT: '1', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' }
       await runFile('bash', ['-e', '-o', 'pipefail', '-c', archive], { cwd: project, env: commandEnv })
       copyFileSync(join(temporary, 'capgo-release.tar.gz'), join(temporary, 'capgo-release/capgo-release.tar.gz'))
-      await runFile('bash', ['-e', '-o', 'pipefail', '-c', restore], { cwd: deployment, env: commandEnv })
-      for (const path of ['.git', 'node_modules', '.capgo_key_v2'])
+      for (const step of workflow.jobs.production.steps.slice(0, -1)) {
+        if (step.run)
+          await runFile('bash', ['-e', '-o', 'pipefail', '-c', step.run], { cwd: deployment, env: commandEnv })
+      }
+      for (const path of ['.git', '.capgo_key_v2'])
         expect(existsSync(join(deployment, path)), path).toBe(false)
-      await runFile('bash', ['-e', '-o', 'pipefail', '-c', install], { cwd: deployment, env: commandEnv })
       expect(readFileSync(join(deployment, 'web/custom/index.html'), 'utf8')).toBe('<p>Built app</p>')
-      expect(readFileSync(join(deployment, 'capacitor.config.ts'), 'utf8')).toContain('web/custom')
+      const config = await runFile(execPath, ['-e', 'process.stdout.write(require("./capacitor.config.js").webDir)'], { cwd: deployment })
+      expect(config.stdout).toBe('web/custom')
       expect(readFileSync(join(deployment, '.config/channel.json'), 'utf8')).toBe('{"channel":"stable"}')
       expect(statSync(join(deployment, 'web/custom/script.sh')).mode & 0o777).toBe(0o755)
     }
@@ -633,8 +660,17 @@ describe('CI/CD guide pipelines', () => {
   it('flags channel names the CLI channel option cannot target', () => {
     expect(isCiChannelSupported('production')).toBe(true)
     expect(isCiChannelSupported('Live app / v2')).toBe(true)
-    for (const name of ['', 'a,b', ' production', 'production ', 'prod\nuction', 'prod\tuction'])
+    for (const name of ['', 'a,b', ' production', 'production ', 'prod\nuction', 'prod\tuction', '${{ github.event.head_commit.message }}'])
       expect(isCiChannelSupported(name), JSON.stringify(name)).toBe(false)
+  })
+
+  it('rejects GitHub expression syntax before rendering production or tester channel names', () => {
+    const channel = '${{ github.event.head_commit.message }}'
+    for (const provider of CI_PROVIDERS) {
+      for (const strategy of CI_STRATEGIES)
+        expect(() => buildCiPipeline({ ...base, productionChannels: [channel], product: 'ota', strategy, provider })).toThrow('Production channels must be supported')
+      expect(() => buildCiPipeline({ ...base, product: 'ota', strategy: 'main_preprod', preprodChannel: channel, provider })).toThrow('Tester channel must be supported')
+    }
   })
 
   it('prints the credentials push command for each platform', () => {

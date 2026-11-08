@@ -59,6 +59,7 @@ import { getAppGettingStartedPath } from '~/utils/onboardingRedirect'
 
 const props = defineProps<{
   appId: string
+  ownerOrgId: string
   initialProduct?: CiProduct
   initialPlatform?: CiPlatform
 }>()
@@ -108,7 +109,7 @@ const testerChannelCollision = computed(() => showTesterChannel.value && product
 
 // Encrypted apps need the private key in CI, or the CLI uploads plaintext
 // bundles (or fails when the organization enforces encryption).
-const encryptionRequired = computed(() => organizationStore.getOrgByAppId(props.appId)?.enforce_encrypted_bundles === true)
+const encryptionRequired = ref(false)
 const encryptionDetected = ref(false)
 const encryptionStatus = ref<LoadStatus>('loading')
 const encryptedChoice = ref<boolean | null>(null)
@@ -221,7 +222,7 @@ watch([product, strategy, provider, platforms, productionBranch, preprodBranch, 
 function track(event: string, properties: Record<string, string | number | boolean> = {}) {
   sendOnboardingEvent(event, {
     app_id: props.appId,
-    ...(organizationStore.currentOrganization?.gid ? { org_id: organizationStore.currentOrganization.gid } : {}),
+    org_id: props.ownerOrgId,
     product: product.value,
     strategy: strategy.value,
     ...(provider.value ? { provider: provider.value } : {}),
@@ -303,17 +304,24 @@ async function loadEncryptionState() {
   const appId = props.appId
   encryptionStatus.value = 'loading'
   try {
-    // key_id is set on bundles encrypted with a v2 key.
-    const { data, error } = await capgo
-      .from('app_versions')
-      .select('key_id')
-      .eq('app_id', appId)
-      .not('key_id', 'is', null)
-      .limit(1)
-    if (error)
-      throw error
+    const [policy, latestBundle] = await Promise.all([
+      capgo.from('orgs').select('enforce_encrypted_bundles').eq('id', props.ownerOrgId).maybeSingle(),
+      capgo
+        .from('app_versions')
+        .select('key_id')
+        .eq('app_id', appId)
+        .eq('deleted', false)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(1),
+    ])
+    if (policy.error || latestBundle.error)
+      throw policy.error ?? latestBundle.error
+    if (!policy.data)
+      throw new Error('The app organization encryption policy is unavailable')
     if (appId === props.appId) {
-      encryptionDetected.value = !!data?.[0]?.key_id
+      encryptionRequired.value = policy.data.enforce_encrypted_bundles === true
+      encryptionDetected.value = !!latestBundle.data?.[0]?.key_id
       encryptionStatus.value = 'ready'
     }
   }
@@ -370,6 +378,18 @@ const markingDone = ref(false)
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let statusGeneration = 0
 let onboardingWrites = 0
+let onboardingWriteQueue = Promise.resolve()
+
+function writeOnboarding(write: () => Promise<void>) {
+  onboardingWrites += 1
+  statusGeneration += 1
+  statusLoading.value = false
+  const pending = onboardingWriteQueue.then(write)
+  onboardingWriteQueue = pending.catch(() => {})
+  return pending.finally(() => {
+    onboardingWrites -= 1
+  })
+}
 
 function applyOnboarding(value: unknown) {
   onboarding.value = value
@@ -417,24 +437,22 @@ async function markDone() {
   if (markingDone.value)
     return
   markingDone.value = true
-  onboardingWrites += 1
-  statusGeneration += 1
-  statusLoading.value = false
   const appId = props.appId
   try {
-    const { data, error } = await capgo.rpc('record_app_cicd_setup', { p_app_id: appId, p_event: 'marked_done' })
-    if (error)
-      throw error
-    if (appId === props.appId)
-      applyOnboarding(data ?? withCiCdMarkedDone(onboarding.value))
-    track('onboarding_cicd_marked_done')
+    await writeOnboarding(async () => {
+      const { data, error } = await capgo.rpc('record_app_cicd_setup', { p_app_id: appId, p_event: 'marked_done' })
+      if (error)
+        throw error
+      if (appId === props.appId)
+        applyOnboarding(data ?? withCiCdMarkedDone(onboarding.value))
+      track('onboarding_cicd_marked_done')
+    })
   }
   catch (error) {
     console.error('Cannot mark CI/CD as set up', error)
     toast.error(t('cicd-guide-mark-done-error'))
   }
   finally {
-    onboardingWrites -= 1
     markingDone.value = false
   }
 }
@@ -446,28 +464,24 @@ async function recordCreatedKey(spec: CiKeySpec) {
   if (!registration || registration.status === 'saving' || registration.status === 'saved')
     return
   registration.status = 'saving'
-  onboardingWrites += 1
-  statusGeneration += 1
-  statusLoading.value = false
   try {
-    const { data, error } = await capgo.rpc('record_app_cicd_setup', {
-      p_app_id: registration.appId,
-      p_event: 'key_created',
-      p_apikey_rbac_id: registration.rbacId,
-      p_selection: registration.selection,
+    await writeOnboarding(async () => {
+      const { data, error } = await capgo.rpc('record_app_cicd_setup', {
+        p_app_id: registration.appId,
+        p_event: 'key_created',
+        p_apikey_rbac_id: registration.rbacId,
+        p_selection: registration.selection,
+      })
+      if (error)
+        throw error
+      registration.status = 'saved'
+      if (data && registration.appId === props.appId)
+        applyOnboarding(data)
     })
-    if (error)
-      throw error
-    registration.status = 'saved'
-    if (data && registration.appId === props.appId)
-      applyOnboarding(data)
   }
   catch (error) {
     console.error('Cannot record the CI/CD key', error)
     registration.status = 'error'
-  }
-  finally {
-    onboardingWrites -= 1
   }
 }
 

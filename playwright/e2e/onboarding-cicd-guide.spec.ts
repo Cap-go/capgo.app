@@ -272,9 +272,11 @@ test.describe('CI/CD setup guide', () => {
     await page.goto(`${fixture}&defaultChannel=${encodeURIComponent('Live app')}`)
     await page.locator('[data-test="cicd-provider-github"]').click()
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText(`--channel 'Live app' --auto-bump patch`)
-    await page.goto(`${fixture}&defaultChannel=${encodeURIComponent('beta,stable')}`)
-    await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toContainText('"beta,stable"')
-    await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+    for (const channel of ['beta,stable', '${{ github.event.head_commit.message }}']) {
+      await page.goto(`${fixture}&defaultChannel=${encodeURIComponent(channel)}`)
+      await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toContainText(`"${channel}"`)
+      await expect(page.locator('[data-test="cicd-steps"]')).toHaveCount(0)
+    }
     // Native builds don't upload to a channel, so they stay available.
     await page.locator('[data-test="cicd-product-builder"]').click()
     await expect(page.locator('[data-test="cicd-channel-unsupported"]')).toHaveCount(0)
@@ -357,6 +359,47 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
   })
 
+  test('waits for the app owner encryption policy on a direct visit', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`${fixture}&wrongOrg=1&policyRequired=1&policyDelay=2000`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
+    await page.clock.fastForward(2000)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await expect(page.locator('[data-test="cicd-encrypted"]')).toBeChecked()
+    await expect(page.locator('[data-test="cicd-encrypted"]')).toBeDisabled()
+    expect((await previewState(page)).policyQueries).toEqual(['?id=eq.00000000-0000-4000-8000-000000000002'])
+  })
+
+  test('retries failed organization policy reads and keeps Builder available', async ({ page }) => {
+    await page.goto(`${fixture}&policyError=1&policyRequired=1`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await expect(page.locator('[data-test="cicd-encryption-retry"]')).toBeVisible()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toHaveCount(0)
+    await page.locator('[data-test="cicd-product-builder"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('build request')
+    await page.locator('[data-test="cicd-product-ota"]').click()
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.policyError = false })
+    await page.locator('[data-test="cicd-encryption-retry"]').click()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('CAPGO_PRIVATE_KEY_BASE64')
+  })
+
+  test('uses the latest live bundle to detect encryption', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`${fixture}&bundle=1.0.2&encryptionDelay=2000`)
+    await page.evaluate(() => {
+      (window as any).onboardingSetupPreview.state.latestBundles.unshift(
+        { name: '1.0.1', created_at: '2026-11-05T10:00:00.000Z', key_id: 'older-encrypted-key' },
+        { name: '1.0.3', created_at: '2026-11-07T10:00:00.000Z', key_id: 'deleted-encrypted-key', deleted: true },
+      )
+    })
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await page.clock.fastForward(2000)
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).toBeVisible()
+    await expect(page.locator('[data-test="cicd-pipeline-content"]')).not.toContainText('CAPGO_PRIVATE_KEY_BASE64')
+    await expect(page.locator('[data-test="cicd-encrypted"]')).not.toBeChecked()
+  })
+
   test('retries key registration without replacing the one-time key', async ({ page }) => {
     await page.goto(`${fixture}&registrationError=1`)
     await page.locator('[data-test="cicd-provider-github"]').click()
@@ -409,6 +452,22 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
     await expect.poll(async () => (await previewState(page)).cicdStatusResponses).toBe(before.cicdStatusResponses + 1)
     await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+  })
+
+  test('saves manual completion after an in-flight key registration', async ({ page }) => {
+    await page.clock.install()
+    await page.goto(`${fixture}&registrationDelay=2500`)
+    await page.locator('[data-test="cicd-provider-github"]').click()
+    await page.locator('[data-test="cicd-create-key-CAPGO_TOKEN"]').click()
+    await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls.length)).toBe(1)
+    await page.locator('[data-test="cicd-mark-done"]').click()
+    await expect(page.locator('[data-test="cicd-mark-done"]')).toBeDisabled()
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls.map((call: { p_event: string }) => call.p_event))).toEqual(['key_created'])
+    await page.clock.fastForward(2500)
+    await expect(page.locator('[data-test="cicd-status-marked-done"]')).toBeVisible()
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls.map((call: { p_event: string }) => call.p_event))).toEqual(['key_created', 'marked_done'])
+    await expect(page.locator('[data-test="cicd-key-value-CAPGO_TOKEN"]')).toHaveText('cap_ci_preview_key_1')
+    await expect(page.locator('[data-test="cicd-mark-done"]')).toHaveCount(0)
   })
 
   test('requires separate production and preproduction branches', async ({ page }) => {
