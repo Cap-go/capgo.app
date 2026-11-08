@@ -22,6 +22,7 @@ import {
   fetchPlugins,
   fetchReleases,
   filterReleases,
+  githubRepoUrl,
   isChangelogProduct,
   isNewerVersion,
   releasesSince,
@@ -42,6 +43,8 @@ const tabs = computed<Tab[]>(() => [
   { label: 'changelog-product-cli', icon: IconTerminal, key: 'cli' },
   { label: 'changelog-product-updater', icon: IconRefreshCw, key: 'updater' },
   { label: 'changelog-product-plugins', icon: IconPuzzle, key: 'plugin' },
+  { label: 'changelog-product-dependency', icon: IconPackage, key: 'dependency' },
+  { label: 'changelog-product-capacitor', icon: IconPackage, key: 'capacitor' },
 ])
 
 function queryString(key: string) {
@@ -56,6 +59,10 @@ const product = computed<ChangelogProduct>(() => {
   return isChangelogProduct(value) ? value : 'console'
 })
 const pluginRepo = computed(() => queryString('repo') || null)
+const dependencyInput = ref(queryString('repo'))
+watch(pluginRepo, (value) => {
+  dependencyInput.value = value ?? ''
+})
 const since = computed(() => cleanVersion(queryString('since')))
 // Optional upper bound from entry points (e.g. latest updater for the app's Capacitor major).
 const targetVersion = computed(() => cleanVersion(queryString('to')))
@@ -105,18 +112,20 @@ function selectPlugin(plugin: ChangelogPlugin) {
 
 async function load() {
   const currentProduct = product.value
-  const repo = currentProduct === 'plugin' ? pluginRepo.value : null
-  if (currentProduct === 'plugin' && !repo) {
+  data.value = null
+  loading.value = false
+  loadFailed.value = false
+  const hasRepo = currentProduct === 'plugin' || currentProduct === 'dependency'
+  const repo = hasRepo ? pluginRepo.value : null
+  if (hasRepo && !repo) {
     data.value = null
     return
   }
+  // Never show another product's or plugin's releases while the new ones load.
   loading.value = true
-  loadFailed.value = false
-  // Never show another product's or plugin's releases (or digest bound) while the new ones load.
-  data.value = null
   const result = await fetchReleases(currentProduct, repo)
   // Ignore a slow response for a tab the user already left.
-  if (currentProduct !== product.value || (currentProduct === 'plugin' && repo !== pluginRepo.value))
+  if (currentProduct !== product.value || (hasRepo && repo !== pluginRepo.value))
     return
   data.value = result
   loadFailed.value = !result
@@ -172,7 +181,7 @@ function toggleType(type: ChangelogSectionType) {
   activeTypes.value = next
 }
 
-const allReleases = computed(() => data.value?.releases ?? [])
+const allReleases = computed(() => (data.value?.releases ?? []).filter(release => !targetVersion.value || !isNewerVersion(release.version, targetVersion.value)))
 const scopedReleases = computed(() => onlyNew.value && since.value ? releasesSince(allReleases.value, since.value) : allReleases.value)
 const visibleReleases = computed(() => filterReleases(scopedReleases.value, debouncedSearch.value, activeTypes.value))
 const typeCounts = computed(() => {
@@ -208,6 +217,10 @@ const upgradeCommand = computed(() => {
       return 'npx @capgo/cli@latest --version'
     case 'updater':
       return `npm i ${UPDATER_PACKAGE}@${latest} && npx cap sync`
+    case 'capacitor':
+      return `npm i @capacitor/core@${latest} @capacitor/android@${latest} @capacitor/ios@${latest} && npm i -D @capacitor/cli@${latest} && npx cap sync`
+    case 'dependency':
+      return pluginRepo.value && /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(pluginRepo.value) ? `npm i ${pluginRepo.value}@${latest} && npx cap sync` : null
     case 'plugin':
       return selectedPlugin.value ? `npm i ${selectedPlugin.value.name}@${latest} && npx cap sync` : null
     default:
@@ -218,6 +231,8 @@ const upgradeCommand = computed(() => {
 const productTitle = computed(() => {
   if (product.value === 'plugin')
     return selectedPlugin.value?.name ?? t('changelog-product-plugins')
+  if (product.value === 'dependency')
+    return pluginRepo.value ?? t('changelog-product-dependency')
   return t(`changelog-product-${product.value}-long`)
 })
 
@@ -301,6 +316,19 @@ function clearFilters() {
                 {{ product === 'plugin' && selectedPlugin ? selectedPlugin.description : t(`changelog-product-${product}-description`) }}
               </p>
             </header>
+
+            <form v-if="product === 'dependency'" class="flex flex-col gap-2 sm:flex-row sm:items-end" @submit.prevent="setQuery({ repo: dependencyInput.trim(), since: null, to: null })">
+              <div class="flex-1">
+                <label for="changelog-dependency" class="mb-1 block text-sm text-slate-600 dark:text-slate-300">{{ t('changelog-dependency-package') }}</label>
+                <input id="changelog-dependency" v-model="dependencyInput" type="text" required maxlength="214" class="d-input w-full" placeholder="@capacitor/camera" pattern="(?:@[a-z0-9][a-z0-9._\-]*/)?[a-z0-9][a-z0-9._\-]*">
+              </div>
+              <button type="submit" class="d-btn d-btn-primary">
+                {{ t('changelog-load-notes') }}
+              </button>
+            </form>
+            <p v-if="['updater', 'plugin', 'dependency', 'capacitor'].includes(product) && showDigest" class="text-sm text-slate-600 dark:text-slate-300">
+              {{ t('changelog-native-rebuild') }}
+            </p>
 
             <ChangelogDigestCard
               v-if="showDigest && since"
@@ -387,14 +415,15 @@ function clearFilters() {
               data-test="changelog-truncated"
             >
               {{ t('changelog-history-truncated') }}
-              <a v-if="data.repo" :href="`https://github.com/Cap-go/${data.repo}/releases`" target="_blank" rel="noopener noreferrer" class="font-medium text-azure-600 hover:underline dark:text-azure-300">GitHub</a>
+              <a v-if="data.repo" :href="`${githubRepoUrl(data.repo)}/releases`" target="_blank" rel="noopener noreferrer" class="font-medium text-azure-600 hover:underline dark:text-azure-300">GitHub</a>
             </p>
             <div v-if="loading" class="flex justify-center py-16">
               <Spinner size="w-10 h-10" />
             </div>
-            <p v-else-if="loadFailed" class="py-12 text-center text-sm text-slate-500">
-              {{ t('changelog-load-failed') }}
-            </p>
+            <div v-else-if="loadFailed" class="flex flex-col items-center gap-2 py-12 text-center text-sm text-slate-500">
+              <p>{{ t('changelog-load-failed') }}</p>
+              <a v-if="product === 'dependency' && pluginRepo" :href="`https://www.npmjs.com/package/${encodeURIComponent(pluginRepo)}`" target="_blank" rel="noopener noreferrer" class="text-azure-600 hover:underline dark:text-azure-300">{{ t('view-on-npm') }}</a>
+            </div>
             <p v-else-if="!visibleReleases.length" class="py-12 text-center text-sm text-slate-500" data-test="changelog-empty">
               {{ hasFilters ? t('changelog-no-match') : t('changelog-empty') }}
             </p>

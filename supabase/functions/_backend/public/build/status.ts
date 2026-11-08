@@ -14,6 +14,7 @@ import { emitBuildTransitionEvent } from '../../utils/build_tracking.ts'
 import { isoFromBuilderTimestamp } from '../../utils/builder_capacity.ts'
 import { getBuilderXcodeVersion } from '../../utils/builder_machine.ts'
 import { persistBuilderBuildOutcome } from '../../utils/builder_onboarding_checklist.ts'
+import { explainBuildStatus } from '../../utils/buildDiagnostics.ts'
 import { simpleError } from '../../utils/hono.ts'
 import type { PgClient } from '../../utils/pg.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
@@ -22,7 +23,6 @@ import { apikeyPrincipal, queryJson, withRlsContext } from '../../utils/pg_rls.t
 import { checkPermission } from '../../utils/rbac.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { getEnv } from '../../utils/utils.ts'
-import { isHostedMcpBuildStatusRelay } from '../../utils/hosted_mcp_relay.ts'
 import {
   computeNativeBuildEffectiveQueuePriority,
   nativeBuildQueueTierFromPriority,
@@ -32,29 +32,16 @@ export interface BuildStatusParams {
   job_id: string
   app_id: string
   platform?: 'ios' | 'android'
-  /** When false on the hosted MCP relay only, return builder status without syncing build_requests, billing, webhooks or builder cancel. */
+  /**
+   * Ignored on HTTP: external callers always persist. Hosted MCP uses in-process
+   * `hostedMcpReadOnly` (see getBuildStatus options), not this query field.
+   */
   persist?: boolean | string
 }
 
-/** Direct API and CLI callers always persist; only the MCP HTTP relay may skip side effects. */
-export function shouldPersistBuildStatus(
-  params: Pick<BuildStatusParams, 'persist'>,
-  relay?: { hostedMcp?: boolean },
-): boolean {
-  let skip = false
-  const value = params.persist
-  if (value === false)
-    skip = true
-  else if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase()
-    if (normalized === 'false' || normalized === '0' || normalized === 'no')
-      skip = true
-  }
-  if (!skip)
-    return true
-  if (relay?.hostedMcp === true)
-    return false
-  return true
+export interface GetBuildStatusOptions {
+  /** Hosted MCP tool only: skip DB sync, billing, webhooks and builder timeout cancel. */
+  hostedMcpReadOnly?: boolean
 }
 
 interface BuilderStatusResponse {
@@ -123,15 +110,16 @@ async function cancelTimedOutBuilderJob(c: Context, jobId: string, appId: string
 
 /**
  * Poll builder job status for a native build request, optionally syncing DB state, billing, and webhooks.
- * persist=false skips side effects only for the hosted MCP relay (see hosted_mcp_relay.ts).
+ * HTTP always persists. Hosted MCP passes `hostedMcpReadOnly: true` in options (in-process).
  */
 export async function getBuildStatus(
   c: Context,
   params: BuildStatusParams,
   apikey: Database['public']['Tables']['apikeys']['Row'],
+  options?: GetBuildStatusOptions,
 ): Promise<Response> {
   const { job_id, app_id, platform } = params
-  const shouldPersist = shouldPersistBuildStatus(params, { hostedMcp: await isHostedMcpBuildStatusRelay(c) })
+  const shouldPersist = !options?.hostedMcpReadOnly
 
   // Use authenticated client for data queries - RLS will enforce access
   const principal = apikeyPrincipal(c, apikey.key)
@@ -304,6 +292,8 @@ export async function getBuildStatus(
   const statusPayload = {
     job_id,
     status: effectiveStatus,
+    diagnostic: explainBuildStatus(effectiveStatus),
+    poll_after_seconds: 15,
     machine: builderJob.machine || null,
     started_at: builderJob.job.started_at,
     completed_at: effectiveCompletedAt,

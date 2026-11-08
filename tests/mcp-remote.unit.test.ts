@@ -1,7 +1,7 @@
 import type { McpApiRequest, McpToolContext } from '../supabase/functions/_backend/mcp/tools.ts'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import {
   base64UrlEncode,
@@ -19,6 +19,7 @@ import {
 import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
 import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
+import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
 
 function fakeContext(response: unknown = { ok: true }) {
   const calls: McpApiRequest[] = []
@@ -160,19 +161,36 @@ describe('hosted MCP protocol', () => {
     })
   })
 
-  it.concurrent('polls build status read-only with persist=false', async () => {
-    const { ctx, calls } = fakeContext({ status: 'running', persisted: false })
+  it.concurrent('polls build status in-process without HTTP persist', async () => {
+    const calls: McpApiRequest[] = []
+    const hono = { req: { header: () => undefined } } as any
+    const apikeyRow = { key: 'test-key', user_id: '00000000-0000-0000-0000-000000000001' } as any
+    const spy = vi.spyOn(buildStatus, 'getBuildStatus').mockResolvedValue(
+      new Response(JSON.stringify({ status: 'running', persisted: false }), { status: 200 }),
+    )
+    const ctx: McpToolContext = {
+      call: async (request) => {
+        calls.push(request)
+        return { ok: true, status: 200, data: {} }
+      },
+      caller: { userId: '00000000-0000-0000-0000-000000000001', apikeyId: 42, apikeyName: 'MCP · Test', apikeyExpiresAt: null },
+      hono,
+      apikeyRow,
+    }
     await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 50,
       method: 'tools/call',
       params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
     }, ctx)
-    expect(calls).toEqual([{
-      method: 'GET',
-      path: '/build/status',
-      query: { app_id: 'com.example.app', job_id: 'job-9', persist: 'false' },
-    }])
+    expect(calls.filter(call => call.path === '/build/status')).toHaveLength(0)
+    expect(spy).toHaveBeenCalledWith(
+      hono,
+      { job_id: 'job-9', app_id: 'com.example.app' },
+      apikeyRow,
+      { hostedMcpReadOnly: true },
+    )
+    spy.mockRestore()
   })
 
   it.concurrent('marks tools that reach systems outside Capgo as open-world', () => {
@@ -608,7 +626,7 @@ describe('hosted MCP errors always give a way out', () => {
       [500, '<html>Internal Server Error</html>'],
     ] as const
     // Tools that answer without calling the API (whoami, docs search) are covered separately.
-    const localTools = new Set(['capgo_whoami', 'capgo_search_docs'])
+    const localTools = new Set(['capgo_whoami', 'capgo_search_docs', 'capgo_get_build_status'])
     const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
     for (const tool of tools) {
       const args = sampleArgs(tool.inputSchema)

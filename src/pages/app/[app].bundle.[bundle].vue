@@ -978,6 +978,7 @@ async function deleteBundle() {
                     {{ version.cli_version }}
                     <ChangelogUpdateBadge
                       product="cli"
+                      show-notes
                       :current="version.cli_version"
                       :features="[version.session_key ? 'encryption' : '', hasManifest ? 'delta' : ''].filter(Boolean)"
                     />

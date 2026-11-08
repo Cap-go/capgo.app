@@ -11,6 +11,7 @@ import IconCopy from '~icons/heroicons/clipboard-document-check'
 import IconCode from '~icons/heroicons/code-bracket'
 import IconAlertCircle from '~icons/lucide/alert-circle'
 import IconDown from '~icons/material-symbols/keyboard-arrow-down-rounded'
+import ChangelogUpdateBadge from '~/components/changelog/ChangelogUpdateBadge.vue'
 import ChannelOverrideRetentionNotice from '~/components/ChannelOverrideRetentionNotice.vue'
 import EmptyState from '~/components/EmptyState.vue'
 import { useDeviceDataCollection } from '~/composables/useDeviceDataCollection'
@@ -452,7 +453,10 @@ async function copyCurlCommand() {
               {{ device.platform }}
             </InfoRow>
             <InfoRow v-if="collection.plugin_version && device.plugin_version" :label="t('plugin-version')">
-              {{ device.plugin_version }}
+              <span class="inline-flex flex-wrap items-center justify-end gap-2">
+                {{ device.plugin_version }}
+                <ChangelogUpdateBadge v-if="device.plugin_version !== '0.0.0'" product="updater" :current="device.plugin_version" show-notes />
+              </span>
             </InfoRow>
             <InfoRow v-if="device.version_name" :label="t('version')" is-link @click="openBundle()">
               {{ device.version_name }}

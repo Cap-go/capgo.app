@@ -64,7 +64,7 @@ async function signHs256Jwt(payload: Record<string, unknown>, secret: string): P
  * Generate a JWT token for direct log stream access
  * Uses HMAC-SHA256 for signing
  */
-async function generateLogStreamToken(
+export async function generateLogStreamToken(
   jobId: string,
   userId: string,
   appId: string,

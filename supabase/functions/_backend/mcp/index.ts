@@ -4,7 +4,6 @@ import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
-import { hostedMcpRelayRequestHeaders } from '../utils/hosted_mcp_relay.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
@@ -97,7 +96,8 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
     const headers = new Headers({
       'capgkey': token,
       'accept': 'application/json',
-      ...hostedMcpRelayRequestHeaders(c),
+      'user-agent': 'capgo-mcp',
+      'x-cli-command': 'mcp',
     })
     // Keep the caller's IP so per-IP rate limits and logs stay meaningful.
     for (const name of ['cf-connecting-ip', 'x-forwarded-for', 'cf-ipcountry', 'cf-ray']) {
@@ -214,7 +214,13 @@ export function createMcpApp(dispatch: McpDispatch) {
       apikeyName: apikey.name,
       apikeyExpiresAt: apikey.expires_at,
     }
-    const ctx: McpToolContext = { call: createCaller(c, dispatch, token), caller, apikey: token }
+    const ctx: McpToolContext = {
+      call: createCaller(c, dispatch, token),
+      caller,
+      apikey: token,
+      hono: c,
+      apikeyRow: apikey,
+    }
 
     if (Array.isArray(payload) && (payload.length === 0 || payload.length > MAX_BATCH_MESSAGES))
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)

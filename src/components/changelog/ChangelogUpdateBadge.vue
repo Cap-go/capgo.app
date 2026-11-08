@@ -17,6 +17,8 @@ const props = defineProps<{
   features?: string[]
   /** Show "up to date" instead of nothing when current is the latest. */
   showCurrent?: boolean
+  /** Keep release notes reachable when the version check fails or is still loading. */
+  showNotes?: boolean
 }>()
 
 const { t } = useI18n()
@@ -25,18 +27,25 @@ const latestVersion = computed(() => cleanVersion(props.latest) ?? fetchedLatest
 const hasUpdate = computed(() => isNewerVersion(latestVersion.value, props.current))
 const target = computed(() => {
   // Bound the digest to the advertised version: a Capacitor 7 fleet must not be sent to 8.x notes.
-  const location = changelogLocation(props.product, { since: props.current, repo: props.repo, to: cleanVersion(props.latest) })
+  const location = changelogLocation(props.product, { since: props.current, repo: props.repo, to: latestVersion.value })
   if (props.features?.length && typeof location === 'object' && 'query' in location)
     return { ...location, query: { ...location.query, features: props.features.join(',') } }
   return location
 })
 
-watch(() => [props.product, props.repo, props.latest, cleanVersion(props.current)], async () => {
+watch(() => [props.product, props.repo, props.latest, cleanVersion(props.current)], async (_, __, onCleanup) => {
+  let active = true
+  onCleanup(() => {
+    active = false
+  })
+  fetchedLatest.value = null
   if (cleanVersion(props.latest) || !cleanVersion(props.current))
     return
-  if (props.product === 'plugin' && !props.repo)
+  if ((props.product === 'plugin' || props.product === 'dependency') && !props.repo)
     return
-  fetchedLatest.value = await fetchLatestVersion(props.product, props.repo)
+  const latest = await fetchLatestVersion(props.product, props.repo)
+  if (active)
+    fetchedLatest.value = latest
 }, { immediate: true })
 </script>
 
@@ -52,11 +61,20 @@ watch(() => [props.product, props.repo, props.latest, cleanVersion(props.current
     {{ t('changelog-update-available', { version: latestVersion }) }}
   </router-link>
   <router-link
-    v-else-if="showCurrent && latestVersion"
+    v-else-if="showCurrent && latestVersion && cleanVersion(current)"
     :to="changelogLocation(product, { repo })"
     class="text-xs text-slate-500 hover:text-azure-600 hover:underline dark:text-slate-400"
     @click.stop
   >
     {{ t('changelog-up-to-date-short') }}
+  </router-link>
+  <router-link
+    v-else-if="showNotes && cleanVersion(current)"
+    :to="target"
+    class="text-xs text-azure-600 hover:underline dark:text-azure-300"
+    data-test="changelog-notes-link"
+    @click.stop
+  >
+    {{ t('changelog-whats-new') }}
   </router-link>
 </template>

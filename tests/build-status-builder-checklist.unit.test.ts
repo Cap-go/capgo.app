@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { HOSTED_MCP_RELAY_HEADER, hostedMcpRelayProof, hostedMcpRelayRequestHeaders } from '../supabase/functions/_backend/utils/hosted_mcp_relay.ts'
-import { getBuildStatus, shouldPersistBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
-import { API_SECRET } from './test-utils.ts'
+import { getBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
 
 const mocks = vi.hoisted(() => ({
   adminQuery: vi.fn(),
@@ -30,21 +28,16 @@ vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', async (importOriginal)
   }
 })
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
-  getEnv: (_c: unknown, key: string) => ({ BUILDER_URL: 'https://builder.test', BUILDER_API_KEY: 'builder-key', API_SECRET } as Record<string, string>)[key] ?? '',
+  getEnv: (_c: unknown, key: string) => key === 'BUILDER_URL' ? 'https://builder.test' : key === 'BUILDER_API_KEY' ? 'builder-key' : '',
 }))
 
 const appId = 'com.test.status-checklist'
 const jobId = 'builder-job'
 
-function context(headers: Record<string, string> = {}) {
+function context() {
   return {
     get: (key: string) => key === 'requestId' ? 'request-id' : undefined,
-    req: {
-      header: (name: string) => {
-        const key = Object.keys(headers).find(header => header.toLowerCase() === name.toLowerCase())
-        return key ? headers[key] : undefined
-      },
-    },
+    req: { header: () => undefined },
     json: (data: unknown, status = 200) => new Response(JSON.stringify(data), { status }),
   } as any
 }
@@ -79,42 +72,6 @@ beforeEach(() => {
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 })
 
-describe('hostedMcp relay dispatch', () => {
-  it('mint request headers createCaller uses for sub-requests', () => {
-    const headers = hostedMcpRelayRequestHeaders(context() as any)
-    expect(headers['user-agent']).toBe('capgo-mcp')
-    expect(headers[HOSTED_MCP_RELAY_HEADER]).toBe(hostedMcpRelayProof(API_SECRET))
-  })
-})
-
-describe('isHostedMcpBuildStatusRelay', () => {
-  it('accepts only the server-side relay proof', async () => {
-    const { isHostedMcpBuildStatusRelay } = await import('../supabase/functions/_backend/utils/hosted_mcp_relay.ts')
-    const proof = hostedMcpRelayProof(API_SECRET)
-    expect(await isHostedMcpBuildStatusRelay(context({ 'x-cli-command': 'mcp' }) as any)).toBe(false)
-    expect(await isHostedMcpBuildStatusRelay(context({ [HOSTED_MCP_RELAY_HEADER]: proof }) as any)).toBe(true)
-    expect(await isHostedMcpBuildStatusRelay(context({ [HOSTED_MCP_RELAY_HEADER]: 'deadbeef' }) as any)).toBe(false)
-  })
-})
-
-describe('shouldPersistBuildStatus', () => {
-  it.concurrent('defaults to persisting', () => {
-    expect(shouldPersistBuildStatus({})).toBe(true)
-    expect(shouldPersistBuildStatus({ persist: true })).toBe(true)
-    expect(shouldPersistBuildStatus({ persist: 'true' })).toBe(true)
-  })
-
-  it.concurrent('ignores persist=false from non-MCP callers', () => {
-    expect(shouldPersistBuildStatus({ persist: false })).toBe(true)
-    expect(shouldPersistBuildStatus({ persist: 'false' })).toBe(true)
-    expect(shouldPersistBuildStatus({ persist: false }, { hostedMcp: false })).toBe(true)
-  })
-
-  it.concurrent('allows persist=false only on the hosted MCP relay', () => {
-    expect(shouldPersistBuildStatus({ persist: 'false' }, { hostedMcp: true })).toBe(false)
-  })
-})
-
 describe('build status Builder checklist persistence', () => {
   it('runs after the CAS winner without changing the endpoint response', async () => {
     const c = context()
@@ -134,16 +91,17 @@ describe('build status Builder checklist persistence', () => {
     expect(mocks.checklist).not.toHaveBeenCalled()
   })
 
-  it('still persists when persist=false is not from the MCP relay', async () => {
+  it('still persists when HTTP query has persist=false', async () => {
     await getBuildStatus(context(), { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' }, { key: 'api-key' } as any)
     expect(mocks.adminQuery).toHaveBeenCalled()
   })
 
-  it('skips DB sync, billing and checklist when MCP relay sets persist=false', async () => {
+  it('skips DB sync, billing and checklist for hosted MCP read-only', async () => {
     const response = await getBuildStatus(
-      context({ [HOSTED_MCP_RELAY_HEADER]: hostedMcpRelayProof(API_SECRET) }),
-      { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
+      context(),
+      { job_id: jobId, app_id: appId, platform: 'ios' },
       { key: 'api-key' } as any,
+      { hostedMcpReadOnly: true },
     )
 
     expect(response.status).toBe(200)
@@ -166,9 +124,10 @@ describe('build status Builder checklist persistence', () => {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     const response = await getBuildStatus(
-      context({ [HOSTED_MCP_RELAY_HEADER]: hostedMcpRelayProof(API_SECRET) }),
-      { job_id: jobId, app_id: appId, platform: 'ios', persist: 'false' },
+      context(),
+      { job_id: jobId, app_id: appId, platform: 'ios' },
       { key: 'api-key' } as any,
+      { hostedMcpReadOnly: true },
     )
     expect(response.status).toBe(200)
     const urls = vi.mocked(globalThis.fetch).mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`)
