@@ -108,11 +108,15 @@ export async function observeCommand(
     if (view === 'device' && !deviceId)
       throw new CliUserError('Missing device ID. Example: npx @capgo/cli@latest observe device DEVICE_ID')
 
+    const source = observeOptionsObjectSchema.shape.source.safeParse(options.source)
+    if (!source.success)
+      throw new CliUserError('--source must be native, updater, or all')
+
     const payload = await fetchObserve({
       appId,
       view,
       days: parseObserveDays(options.days),
-      source: observeOptionsObjectSchema.shape.source.parse(options.source),
+      source: source.data,
       channelId: parsePositiveInt(options.channelId, '--channel-id'),
       action: options.action,
       deviceId,

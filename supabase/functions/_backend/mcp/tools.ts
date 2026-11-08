@@ -1097,7 +1097,7 @@ const buildTools: McpTool[] = [
   apiTool({
     name: 'capgo_get_build_status',
     title: 'Build status',
-    description: 'Get the status of a native cloud build. Call it again after the build ends so its status and build time are recorded.',
+    description: 'Get the status of a native cloud build. This reconciles configured timeouts and may cancel an overdue build. Call it again after the build ends so its status and build time are recorded.',
     input: { appId, job_id: z.string().min(1) },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/build/status', query: { app_id: input.appId, job_id: input.job_id } }),
