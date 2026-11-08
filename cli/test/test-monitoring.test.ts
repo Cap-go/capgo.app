@@ -123,3 +123,21 @@ test('requires log samples while accepting an empty sample array', async () => {
   globalThis.fetch = Object.assign(async () => Response.json({ app_id: options.appId, view: 'logs', samples: [] }), { preconnect: originalFetch.preconnect })
   expect(await fetchObserve(options)).toMatchObject({ samples: [] })
 })
+
+
+test.each(['logs', 'errors'] as const)('validates required sample fields in %s responses', async (view) => {
+  const options = { appId: 'com.example.app', view, apikey: 'example-test-key', apiHost: 'http://localhost:8787' }
+  const sample = { device_id: 'example-device', action: 'update_fail', version_name: '1.0.0', created_at: '2026-11-01T12:00:00Z', duration_ms: null, route: null, metadata: null }
+  let samples: unknown[] = [sample]
+  globalThis.fetch = Object.assign(async () => Response.json({ app_id: options.appId, view, samples, summary: { total: 1 }, actions: [] }), { preconnect: originalFetch.preconnect })
+  expect(await fetchObserve(options)).toMatchObject({ samples: [sample] })
+  for (const field of Object.keys(sample)) {
+    const incomplete = Object.fromEntries(Object.entries(sample).filter(([key]) => key !== field))
+    samples = [incomplete]
+    await expect(fetchObserve(options)).rejects.toThrow('invalid Observe response')
+  }
+  samples = [{}]
+  await expect(fetchObserve(options)).rejects.toThrow('invalid Observe response')
+  samples = []
+  expect(await fetchObserve(options)).toMatchObject({ samples: [] })
+})

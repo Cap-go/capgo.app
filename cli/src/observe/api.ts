@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { observeSampleResponseSchema } from '../schemas/observe-response'
 import type { ObserveOptions } from '../schemas/sdk'
 import { CliUserError } from '../shared/cli-user-error'
 import { findSavedKey, formatCapgoCliInvokeError, invokeCapgoCliApi } from '../utils'
@@ -29,9 +30,9 @@ export async function fetchObserve(options: ObserveOptions): Promise<Record<stri
   if (options.view === 'release')
     schema = baseSchema.extend({ release: z.record(z.string(), z.unknown()).nullable() })
   else if (options.view === 'errors')
-    schema = baseSchema.extend({ summary: z.record(z.string(), z.unknown()), actions: z.array(z.record(z.string(), z.unknown())), samples: z.array(z.record(z.string(), z.unknown())) })
+    schema = baseSchema.extend({ summary: z.record(z.string(), z.unknown()), actions: z.array(z.record(z.string(), z.unknown())), samples: z.array(observeSampleResponseSchema) })
   else if (options.view === 'logs')
-    schema = baseSchema.extend({ samples: z.array(z.record(z.string(), z.unknown())) })
+    schema = baseSchema.extend({ samples: z.array(observeSampleResponseSchema) })
   const result = schema.safeParse(data)
   if (!result.success)
     throw new CliUserError('Capgo returned an invalid Observe response. Retry the read; missing telemetry does not prove the release is healthy.')
