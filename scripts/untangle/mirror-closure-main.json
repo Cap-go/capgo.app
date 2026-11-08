@@ -8,12 +8,14 @@
         "cache.ts",
         "logging.ts",
         "rate_limit.ts",
+        "sensitive_url.ts",
         "utils.ts"
       ],
       "driftedInClosure": [
         "cache.ts",
         "logging.ts",
         "rate_limit.ts",
+        "sensitive_url.ts",
         "utils.ts"
       ],
       "safeReExport": false
@@ -32,11 +34,13 @@
         "logging.ts",
         "manifest_encoding.ts",
         "s3.ts",
+        "sensitive_url.ts",
         "utils.ts"
       ],
       "driftedInClosure": [
         "logging.ts",
         "s3.ts",
+        "sensitive_url.ts",
         "utils.ts"
       ],
       "safeReExport": false
@@ -95,10 +99,12 @@
       "file": "supabase_write_guard.ts",
       "selfByteIdentical": true,
       "runtimeClosure": [
-        "logging.ts"
+        "logging.ts",
+        "sensitive_url.ts"
       ],
       "driftedInClosure": [
-        "logging.ts"
+        "logging.ts",
+        "sensitive_url.ts"
       ],
       "safeReExport": false
     },

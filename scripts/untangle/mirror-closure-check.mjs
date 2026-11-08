@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 // Usage: node scripts/untangle/mirror-closure-check.mjs <git-ref> [basename.ts ...]
-import { execSync } from 'node:child_process'
-import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { join, posix } from 'node:path'
 
 const ROOT = join(import.meta.dirname, '../..')
 const REF = process.argv[2] || 'origin/main'
 const PLUGIN_DIR = 'supabase/functions/_backend/plugin_runtime/utils'
 const BACKEND_DIR = 'supabase/functions/_backend/utils'
 
-function gitShow(path) {
-  return execSync(`git show ${REF}:${path}`, { cwd: ROOT, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 })
+/** Read a file at ref from git without invoking a shell. */
+function gitShow(repoPath) {
+  return execFileSync('git', ['show', `${REF}:${repoPath}`], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 20 * 1024 * 1024,
+  })
 }
 
+/** True when plugin_runtime and _backend copies of basename are byte-identical at ref. */
 function bytesMatch(basename) {
   const a = `${PLUGIN_DIR}/${basename}`
   const b = `${BACKEND_DIR}/${basename}`
@@ -23,31 +29,43 @@ function bytesMatch(basename) {
   }
 }
 
+/** Resolve a relative import from a utils basename to another basename under utils/. */
+function resolveRelativeImport(fromBasename, rel) {
+  const fromDir = posix.dirname(fromBasename)
+  const joined = posix.normalize(posix.join(fromDir === '.' ? '' : fromDir, rel))
+  if (joined.startsWith('..') || posix.isAbsolute(joined))
+    return null
+  return joined.endsWith('.ts') ? joined : `${joined}.ts`
+}
+
+/** Collect runtime relative import targets (static, re-export, dynamic); skips import type. */
 function parseRuntimeRelativeImports(source) {
   const paths = new Set()
-  const importBlocks = source.match(/^\s*import[\s\S]*?from\s+['"][^'"]+['"]\s*;?/gm) || []
-  const sideEffects = source.match(/^\s*import\s+['"][^'"]+['"]\s*;?/gm) || []
-  for (const block of [...importBlocks, ...sideEffects]) {
+  const blocks = [
+    ...(source.match(/^\s*import[\s\S]*?from\s+['"][^'"]+['"]\s*;?/gm) || []),
+    ...(source.match(/^\s*import\s+['"][^'"]+['"]\s*;?/gm) || []),
+    ...(source.match(/^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+['"][^'"]+['"]\s*;?/gm) || []),
+    ...(source.match(/import\s*\(\s*['"][^'"]+['"]\s*\)/g) || []),
+  ]
+  const relPattern = /(?:from|import)\s*\(?\s*['"](\.\.?\/[^'"]+)['"]/
+  for (const block of blocks) {
     if (/^\s*import\s+type\s+/m.test(block))
       continue
-    const m = block.match(/from\s+['"](\.\/[^'"]+)['"]/) || block.match(/import\s+['"](\.\/[^'"]+)['"]/)
+    const m = block.match(relPattern)
     const rel = m?.[1]
-    if (!rel)
-      continue
-    let name = rel.replace(/^\.\//, '')
-    if (!name.endsWith('.ts'))
-      name = `${name}.ts`
-    paths.add(name)
+    if (rel)
+      paths.add(rel)
   }
   return [...paths]
 }
 
+/** Depth-first runtime dependency basenames reachable from basename in one utils tree. */
 function closureBasenames(basename, visited, side) {
   const dir = side === 'plugin' ? PLUGIN_DIR : BACKEND_DIR
   const sourcePath = `${dir}/${basename}`
-  if (visited.has(basename))
+  if (visited.has(`${side}:${basename}`))
     return []
-  visited.add(basename)
+  visited.add(`${side}:${basename}`)
 
   let source
   try {
@@ -59,16 +77,23 @@ function closureBasenames(basename, visited, side) {
 
   const rels = parseRuntimeRelativeImports(source)
   const all = [basename]
-  for (const dep of rels) {
+  for (const rel of rels) {
+    const dep = resolveRelativeImport(basename, rel)
+    if (!dep)
+      continue
     all.push(...closureBasenames(dep, visited, side))
   }
   return all
 }
 
+/** Classify one mirror candidate for safe one-line re-export. */
 function analyze(basename) {
   const selfMatch = bytesMatch(basename)
   const pluginVisited = new Set()
-  const runtimeClosure = [...new Set(closureBasenames(basename, pluginVisited, 'plugin'))]
+  const backendVisited = new Set()
+  const pluginReach = [...new Set(closureBasenames(basename, pluginVisited, 'plugin'))]
+  const backendReach = [...new Set(closureBasenames(basename, backendVisited, 'backend'))]
+  const runtimeClosure = [...new Set([...pluginReach, ...backendReach])]
     .filter(f => f !== basename)
     .sort()
 
