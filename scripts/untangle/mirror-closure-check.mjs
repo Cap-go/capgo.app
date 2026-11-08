@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Usage: node scripts/untangle/mirror-closure-check.mjs <git-ref> [basename.ts ...]
 import { execSync } from 'node:child_process'
 import { join } from 'node:path'
 
