@@ -15,7 +15,7 @@ async function assertCompatibilityTableColumns(appId: string, packageName: strin
     nodeModules: join(process.cwd(), 'node_modules'),
   })
 
-  expect(result.success).toBe(true)
+  expect(result.success, result.error).toBe(true)
   const packageEntry = result.data?.find((entry: any) => entry.name === packageName)
   expect(packageEntry).toBeDefined()
   expect(packageEntry!.localVersion).toContain(localVersion)
