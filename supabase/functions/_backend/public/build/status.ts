@@ -289,7 +289,7 @@ export async function getBuildStatus(
     ? computeNativeBuildEffectiveQueuePriority(baseQueuePriority, enqueuedAtMs)
     : null
 
-  const statusPayload = {
+  const statusPayload: Record<string, unknown> = {
     job_id,
     status: effectiveStatus,
     diagnostic: explainBuildStatus(effectiveStatus),
@@ -310,6 +310,11 @@ export async function getBuildStatus(
     queue_priority_tier: baseQueuePriority !== null
       ? nativeBuildQueueTierFromPriority(baseQueuePriority)
       : null,
+  }
+
+  if (!shouldPersist && timedOut && !timeoutApplied) {
+    statusPayload.timeout_exceeded = true
+    statusPayload.timeout_warning = `${formatBuildTimeoutError(timeoutSeconds)}. This hosted MCP poll is read-only: it does not cancel the builder job or update billing. Cancel with capgo_cancel_build if you need to stop the job, or wait for Capgo reconciliation to finish the job and record build time.`
   }
 
   let updatedCount = 0

@@ -1129,6 +1129,7 @@ const buildTools: McpTool[] = [
     title: 'Build status',
     description: 'Read the current status of a native cloud build from the builder (queued, running, succeeded, failed, cancelled). '
       + 'This is a read-only poll: it does not update build_requests, record build minutes, emit webhooks or cancel timed-out jobs. '
+      + 'When the builder still reports running past the app timeout, the response includes `timeout_exceeded` and `timeout_warning` advising `capgo_cancel_build` or waiting for Capgo reconciliation. '
       + 'After a successful build, use the Capgo CLI or console if you need billing and history synced.',
     inputSchema: z.object({ appId, job_id: z.string().min(1) }),
     annotations: { title: 'Build status', ...READ },

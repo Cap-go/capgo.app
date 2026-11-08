@@ -130,6 +130,12 @@ describe('build status Builder checklist persistence', () => {
       { hostedMcpReadOnly: true },
     )
     expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      status: 'running',
+      persisted: false,
+      timeout_exceeded: true,
+      timeout_warning: expect.stringMatching(/exceeded configured timeout/i),
+    })
     const urls = vi.mocked(globalThis.fetch).mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`)
     expect(urls.some(entry => entry.includes('/cancel'))).toBe(false)
   })
