@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { CLI_PROJECT_MODES } from '../framework/mode'
 import { buildCacheKeyOptionSchema, buildCacheOptionSchema } from '../schemas/build'
 import {
+  buildMonitorOptionsSchema,
   capacitorConfigOptionSchema,
   getAccountOptionsSchema,
   observeOptionsObjectSchema,
@@ -189,6 +190,10 @@ export const mcpGetStatsInputSchema = z.object({
   limit: z.number().optional(),
   rangeStart: z.string().optional(),
   rangeEnd: z.string().optional(),
+})
+
+export const mcpBuildMonitorInputSchema = buildMonitorOptionsSchema.omit(sdkAuthFields).omit({ jobId: true }).extend({
+  job_id: buildMonitorOptionsSchema.shape.jobId,
 })
 
 export const mcpObserveInputSchema = observeOptionsObjectSchema.omit(sdkAuthFields).superRefine(refineObserveDeviceId)

@@ -4412,5 +4412,14 @@
   "cicd-guide-encrypted-preview-azure": "Used in Capgo CI/CD onboarding. Explain protected credentials and trusted-code approval for encrypted live-update previews. Keep provider UI names, command names, and placeholders unchanged.",
   "cicd-guide-encrypted-preview-gitlab": "Used in Capgo CI/CD onboarding. Explain protected credentials and trusted-code approval for encrypted live-update previews. Keep provider UI names, command names, and placeholders unchanged.",
   "cicd-guide-encrypted-preview-github": "Used in Capgo CI/CD onboarding. Explain protected credentials and trusted-code approval for encrypted live-update previews. Keep provider UI names, command names, and placeholders unchanged.",
-  "cicd-guide-encrypted-preview-trust-title": "Used in Capgo CI/CD onboarding. Explain protected credentials and trusted-code approval for encrypted live-update previews. Keep provider UI names, command names, and placeholders unchanged."
+  "cicd-guide-encrypted-preview-trust-title": "Used in Capgo CI/CD onboarding. Explain protected credentials and trusted-code approval for encrypted live-update previews. Keep provider UI names, command names, and placeholders unchanged.",
+  "changelog-dependency-package": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-load-notes": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-native-rebuild": "Used in Capgo web console areas: pages. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-capacitor": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-capacitor-description": "Used in Capgo web console. Role: helper or description text about \"changelog product capacitor description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-capacitor-long": "Used in Capgo web console. Role: UI label about \"changelog product capacitor long\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-dependency": "Used in Capgo web console areas: pages. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-dependency-description": "Used in Capgo web console. Role: helper or description text about \"changelog product dependency description\". Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "changelog-product-dependency-long": "Used in Capgo web console. Role: UI label about \"changelog product dependency long\". Translate for UI; keep Capgo product names, code, and placeholders unchanged."
 }
