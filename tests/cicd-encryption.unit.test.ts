@@ -2,20 +2,25 @@ import type { CiEncryptionBundle, CiEncryptionChannel, CiProductionEncryptionEvi
 import { describe, expect, it } from 'vitest'
 import { ciChannelEncryptionBundles, ciProductionEncryptionEvidence } from '../src/utils/cicdEncryption'
 
-const plaintext = { name: '1.0.0', key_id: null, deleted: false, deleted_at: null } satisfies CiEncryptionBundle
-const encrypted = { name: '1.0.1', key_id: 'fixture-encryption-key', deleted: false, deleted_at: null } satisfies CiEncryptionBundle
+const plaintext = { name: '1.0.0', key_id: null, session_key: null, deleted: false, deleted_at: null } satisfies CiEncryptionBundle
+const encrypted = { ...plaintext, name: '1.0.1', key_id: 'fixture-encryption-key' } satisfies CiEncryptionBundle
+const sessionOnly = { ...plaintext, session_key: 'fixture-encrypted-session-key' } satisfies CiEncryptionBundle
 
 const cases: Array<[string, Array<CiEncryptionBundle | null>, CiProductionEncryptionEvidence]> = [
   ['no production candidates', [], 'unknown'],
   ['a readable plaintext production bundle', [plaintext], 'plaintext'],
   ['all selected targets use plaintext', [plaintext, { ...plaintext, name: '2.0.0' }], 'plaintext'],
   ['a readable encrypted production bundle', [encrypted], 'encrypted'],
+  ['an encrypted session without a key identifier', [sessionOnly], 'encrypted'],
+  ['an encrypted session with a blank key identifier', [{ ...sessionOnly, key_id: '   ' }], 'encrypted'],
+  ['one session-encrypted target among plaintext and unreadable targets', [plaintext, null, sessionOnly], 'encrypted'],
   ['one encrypted target among plaintext targets', [plaintext, encrypted], 'encrypted'],
   ['one encrypted target among unreadable targets', [null, encrypted], 'encrypted'],
   ['one encrypted target before unreadable targets', [encrypted, null], 'encrypted'],
   ['a missing or unreadable bundle', [null], 'unknown'],
   ['a plaintext target and an unreadable target', [plaintext, null], 'unknown'],
   ['a deleted encrypted bundle', [{ ...encrypted, deleted: true }], 'unknown'],
+  ['a deleted session-encrypted bundle', [{ ...sessionOnly, deleted: true }], 'unknown'],
   ['a deleted plaintext bundle', [{ ...plaintext, deleted: true }], 'unknown'],
   ['a deletion-marked bundle even when deleted is false', [{ ...encrypted, deleted_at: '2026-11-08T10:00:00.000Z' }], 'unknown'],
   ['a live plaintext target and deleted encrypted target', [plaintext, { ...encrypted, deleted: true }], 'unknown'],
@@ -25,6 +30,8 @@ const cases: Array<[string, Array<CiEncryptionBundle | null>, CiProductionEncryp
   ['a blank version name', [{ ...plaintext, name: '   ' }], 'unknown'],
   ['an empty key on a live bundle', [{ ...plaintext, key_id: '' }], 'plaintext'],
   ['a blank key on a live bundle', [{ ...plaintext, key_id: '   ' }], 'plaintext'],
+  ['empty encryption markers on a live bundle', [{ ...plaintext, key_id: '', session_key: '' }], 'plaintext'],
+  ['blank encryption markers on a live bundle', [{ ...plaintext, key_id: '   ', session_key: '   ' }], 'plaintext'],
 ]
 
 describe('CI/CD production encryption evidence', () => {

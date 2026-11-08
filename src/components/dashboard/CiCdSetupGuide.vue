@@ -347,7 +347,7 @@ async function loadDefaultChannel() {
     // Bound the picker and return public defaults before optional private targets.
     const { data, error } = await capgo
       .from('channels')
-      .select('name, public, ios, android, electron, version, rollout_enabled, rollout_version, current_version:app_versions!channels_version_fkey(name,key_id,deleted,deleted_at), rollout_bundle:app_versions!channels_rollout_version_fkey(name,key_id,deleted,deleted_at)')
+      .select('name, public, ios, android, electron, version, rollout_enabled, rollout_version, current_version:app_versions!channels_version_fkey(name,key_id,session_key,deleted,deleted_at), rollout_bundle:app_versions!channels_rollout_version_fkey(name,key_id,session_key,deleted,deleted_at)')
       .eq('app_id', appId)
       .order('public', { ascending: false })
       .order('name')

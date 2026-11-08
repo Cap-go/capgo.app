@@ -1,6 +1,6 @@
 import type { Database } from '~/types/database.types'
 
-export type CiEncryptionBundle = Pick<Database['public']['Tables']['app_versions']['Row'], 'name' | 'key_id' | 'deleted' | 'deleted_at'>
+export type CiEncryptionBundle = Pick<Database['public']['Tables']['app_versions']['Row'], 'name' | 'key_id' | 'session_key' | 'deleted' | 'deleted_at'>
 export type CiProductionEncryptionEvidence = 'encrypted' | 'plaintext' | 'unknown'
 export type CiEncryptionChannel = Pick<Database['public']['Tables']['channels']['Row'], 'rollout_enabled' | 'rollout_version'> & {
   current_version: CiEncryptionBundle | null
@@ -23,7 +23,7 @@ export function ciProductionEncryptionEvidence(bundles: readonly (CiEncryptionBu
       allPlaintext = false
       continue
     }
-    if (bundle.key_id?.trim())
+    if (bundle.key_id?.trim() || bundle.session_key?.trim())
       return 'encrypted'
   }
   return allPlaintext ? 'plaintext' : 'unknown'

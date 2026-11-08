@@ -368,11 +368,19 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       ...channel,
       version: params.get('productionUnknown') === '1' ? null : channel.version === undefined ? 1 : channel.version,
       current_version: channel.version === null || params.get('productionUnknown') === '1' ? null : channel.current_version === undefined
-        ? { name: params.get('bundle') ?? '1.0.0', key_id: (params.get('productionEncrypted') ?? params.get('encrypted')) === '1' || params.get('encryptedChannel') === channel.name ? 'MIIB' : null, deleted: false, deleted_at: null }
+        ? {
+            name: params.get('bundle') ?? '1.0.0',
+            key_id: params.get('sessionKeyOnly') !== '1' && ((params.get('productionEncrypted') ?? params.get('encrypted')) === '1' || params.get('encryptedChannel') === channel.name) ? 'MIIB' : null,
+            session_key: params.get('sessionKeyOnly') === '1' && ((params.get('productionEncrypted') ?? params.get('encrypted')) === '1' || params.get('encryptedChannel') === channel.name) ? 'fixture-encrypted-session-key' : null,
+            deleted: false,
+            deleted_at: null,
+          }
         : channel.current_version,
       rollout_enabled: channel.rollout_enabled ?? params.get('rolloutEncrypted') === '1',
       rollout_version: channel.rollout_version ?? (params.get('rolloutEncrypted') === '1' ? 2 : null),
-      rollout_bundle: channel.rollout_bundle ?? (params.get('rolloutEncrypted') === '1' ? { name: '1.0.1', key_id: 'ROLLOUT', deleted: false, deleted_at: null } : null),
+      rollout_bundle: channel.rollout_bundle ?? (params.get('rolloutEncrypted') === '1'
+        ? { name: '1.0.1', key_id: params.get('sessionKeyOnly') === '1' ? null : 'ROLLOUT', session_key: params.get('sessionKeyOnly') === '1' ? 'fixture-encrypted-rollout-session-key' : null, deleted: false, deleted_at: null }
+        : null),
     }))
     const error = state.channelError
     if (state.channelDelayMs > 0)

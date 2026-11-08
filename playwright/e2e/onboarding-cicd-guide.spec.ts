@@ -322,6 +322,16 @@ test.describe('CI/CD setup guide', () => {
     await expect(page.locator('[data-test="cicd-encryption-secret"]')).toHaveCount(0)
   })
 
+  for (const source of ['encrypted', 'rolloutEncrypted']) {
+    test(`restores encryption from ${source} session metadata without a key identifier`, async ({ page }) => {
+      await page.goto(`${fixture}&${source}=1&sessionKeyOnly=1`)
+      await expect(page.locator('[data-test="cicd-encrypted"]')).toBeChecked()
+      await page.locator('[data-test="cicd-provider-github"]').click()
+      await expect(page.locator('[data-test="cicd-encryption-secret"]')).toBeVisible()
+      await expect(page.locator('[data-test="cicd-pipeline-content"]')).toContainText('echo "$CAPGO_PRIVATE_KEY_BASE64" | base64 -d > .capgo_key_v2')
+    })
+  }
+
   test('explains when only an admin can create the CI key', async ({ page }) => {
     await page.goto(`${fixture}&apikeyError=forbidden_binding`)
     await page.locator('[data-test="cicd-provider-github"]').click()
