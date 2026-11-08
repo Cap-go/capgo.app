@@ -1,17 +1,23 @@
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-const posthogSource = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), '../src/services/posthog.ts'),
-  'utf8',
-)
+vi.mock('~/services/staleAssetErrors', () => ({
+  shouldSuppressPostHogExceptionEvent: () => false,
+}))
+
+const { createPosthogClientOptions } = await import('../src/services/posthog.ts')
 
 describe('console posthog volume guardrails', () => {
-  it.concurrent('disables autocapture and web vitals while keeping explicit pageviews', () => {
-    expect(posthogSource).toMatch(/autocapture:\s*false/)
-    expect(posthogSource).toMatch(/capture_performance:\s*\{\s*web_vitals:\s*false\s*\}/)
-    expect(posthogSource).not.toMatch(/capture_pageview:\s*false/)
+  it.concurrent('disables autocapture and web vitals on console init', () => {
+    const options = createPosthogClientOptions()
+    expect(options.autocapture).toBe(false)
+    expect(options.capture_performance).toEqual({ web_vitals: false })
+    expect(options.capture_pageview).not.toBe(false)
+  })
+
+  it.concurrent('keeps pageviews enabled through before_send', () => {
+    const options = createPosthogClientOptions()
+    const pageview = { event: '$pageview', properties: { $current_url: 'https://console.capgo.app/' } }
+    expect(options.before_send(pageview)).not.toBe(false)
+    expect((options.before_send(pageview) as { event?: string }).event).toBe('$pageview')
   })
 })
