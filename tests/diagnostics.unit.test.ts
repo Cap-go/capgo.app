@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Constants } from '../supabase/functions/_backend/utils/supabase.types.ts'
-import { explainBuildStatus } from '../supabase/functions/_backend/utils/buildDiagnostics.ts'
+import { explainBuildLogs, explainBuildStatus } from '../supabase/functions/_backend/utils/buildDiagnostics.ts'
 import { explainDiagnostic } from '../supabase/functions/_backend/utils/diagnostics.ts'
 
 describe('documented event diagnostics', () => {
@@ -30,4 +30,10 @@ it.concurrent('does not classify queued, cancelled or unknown builds as compiler
   expect(explainBuildStatus('cancelled').classification).toBe('cancelled')
   expect(explainBuildStatus('future_state').classification).toBe('unknown')
   expect(explainBuildStatus('failed').classification).toBe('error')
+})
+
+it.concurrent('quotes the matched symptom even when a log line has a long prefix', () => {
+  const diagnostics = explainBuildLogs(`${'prefix '.repeat(400)}Code signing failed`)
+  expect(diagnostics[0].evidence).toContain('Code signing failed')
+  expect(diagnostics[0].evidence.length).toBeLessThanOrEqual(1000)
 })

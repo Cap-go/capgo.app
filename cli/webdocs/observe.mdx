@@ -29,12 +29,11 @@ Native and updater event logs with metadata and documented explanations.
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--action** | <code>string</code> | Filter by stats action, for example update_fail or app_crash_native; overrides the default action filter |
 | **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
+| **--source** | <code>string</code> | native, updater, or all (default all) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -53,12 +52,11 @@ Native and updater error trends with metadata and documented explanations.
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--action** | <code>string</code> | Filter by stats action, for example update_fail or app_crash_native; overrides the default action filter |
 | **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
+| **--source** | <code>string</code> | native, updater, or all (default all) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -76,13 +74,8 @@ Live release adoption, success, failures and rollout stats.
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
-| **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
-| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
-| **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
+| **--channel-id** | <code>string</code> | Channel ID (default app default channel) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -108,12 +101,6 @@ npx @capgo/cli@latest observe summary
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
-| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
-| **--limit** | <code>string</code> | Max rows to return |
-| **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -139,12 +126,10 @@ npx @capgo/cli@latest observe metrics --action app_launch_ready --sort slowest -
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--action** | <code>string</code> | Filter by stats action, for example update_fail or app_crash_native; overrides the default action filter |
 | **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -169,12 +154,8 @@ npx @capgo/cli@latest observe events --action app_crash_native
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
-| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
-| **--limit** | <code>string</code> | Max rows to return |
+| **--action** | <code>string</code> | Filter by stats action, for example update_fail or app_crash_native; overrides the default action filter |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -201,12 +182,10 @@ npx @capgo/cli@latest observe device DEVICE_ID --json
 | **-d** | <code>string</code> | Device ID |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
-| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
+| **--action** | <code>string</code> | Filter by stats action, for example update_fail or app_crash_native; overrides the default action filter |
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
+| **--source** | <code>string</code> | native, updater, or all (default all) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -231,12 +210,6 @@ npx @capgo/cli@latest observe versions
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
-| **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
-| **--limit** | <code>string</code> | Max rows to return |
-| **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
@@ -262,12 +235,10 @@ npx @capgo/cli@latest observe routes --json
 | -------------- | ------------- | -------------------- |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--days** | <code>string</code> | Lookback window in days: 1, 3, 7, or 30 (default: 7) |
-| **--action** | <code>string</code> | Filter by stats action, for example app_launch_ready or app_nav |
+| **--action** | <code>string</code> | Filter by stats action, for example update_fail or app_crash_native; overrides the default action filter |
 | **--sort** | <code>string</code> | Sort samples: slowest, fastest, newest, or oldest |
 | **--limit** | <code>string</code> | Max rows to return |
 | **--version-name** | <code>string</code> | Filter by bundle version name |
-| **--source** | <code>string</code> | For logs, errors, device: native, updater, or all |
-| **--channel-id** | <code>string</code> | For release: channel ID (default app default channel) |
 | **--json** | <code>boolean</code> | Output as JSON |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |

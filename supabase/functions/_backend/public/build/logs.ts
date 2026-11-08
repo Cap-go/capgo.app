@@ -158,10 +158,13 @@ export async function streamBuildLogs(
     const upstream = await fetch(url, { headers: { 'x-capgo-log-token': token }, signal: AbortSignal.timeout(10_000) })
     if (!upstream.ok)
       throw simpleError('builder_error', 'Build log snapshot unavailable', { status: upstream.status })
-    const result = z.object({
+    const parsed = z.object({
       logs: z.string().max(64_000), cursor: z.number().int().nonnegative(),
       first_available_id: z.number().int().nonnegative(), truncated: z.boolean(), retention: z.string(),
-    }).parse(await upstream.json())
+    }).safeParse(await upstream.json().catch(() => null))
+    if (!parsed.success)
+      throw simpleError('builder_error', 'Builder returned an invalid log snapshot')
+    const result = parsed.data
     c.header('Cache-Control', 'no-store')
     return c.json({
       app_id: appId, job_id: jobId, ...result, diagnostics: explainBuildLogs(result.logs), format: 'text', poll_after_seconds: 15,

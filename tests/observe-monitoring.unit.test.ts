@@ -26,6 +26,8 @@ describe('Observe monitoring API', () => {
     expect(body).toMatchObject({ samples: [expect.objectContaining({ action: 'update_fail', metadata: { reason: 'timeout' }, diagnostic: expect.objectContaining({ classification: 'error' }) })], diagnostics: [expect.objectContaining({ next_steps: [expect.stringContaining('notifyAppReady')] })] })
     expect(mocks.stats.mock.calls[0][1].actions).toContain('update_fail')
     expect(mocks.stats.mock.calls[0][1].actions).not.toContain('app_crash_native')
+    expect(mocks.stats.mock.calls[0][1].actions).not.toContain('channelPaused')
+    expect(mocks.stats.mock.calls[0][1].actions).not.toContain('disableAutoUpdateToMajor')
   })
   it('keeps normal events in log and device queries', async () => {
     await post({ view: 'logs' })
@@ -34,9 +36,9 @@ describe('Observe monitoring API', () => {
     await post({ view: 'device', deviceId: '00000000-0000-0000-0000-000000000001' })
     expect(mocks.stats.mock.calls[1][1].actions).toBeUndefined()
   })
-  it('requires log permission before reading diagnostic samples', async () => {
+  it.each(['errors', 'logs', 'device', 'metrics', 'routes'])('requires log permission before reading %s samples', async (view) => {
     mocks.permission.mockImplementation((_c, permission) => permission !== 'app.read_logs')
-    const response = await post({ view: 'errors' })
+    const response = await post({ view, deviceId: view === 'device' ? '00000000-0000-0000-0000-000000000001' : undefined })
     expect(response.status).toBeGreaterThanOrEqual(400)
     expect(mocks.stats).not.toHaveBeenCalled()
     expect(mocks.insights).not.toHaveBeenCalled()
@@ -57,4 +59,9 @@ describe('Observe monitoring API', () => {
     expect(mocks.stats).not.toHaveBeenCalled()
     expect(mocks.release).not.toHaveBeenCalled()
   })
+})
+
+it('allows explicitly inspecting policy events without counting them as default errors', async () => {
+  await post({ view: 'errors', action: 'channelPaused' })
+  expect(mocks.stats.mock.calls[0][1].actions).toEqual(['channelPaused'])
 })

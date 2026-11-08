@@ -115,7 +115,7 @@ function sampleActionsForView(view: ObserveView, action?: string, source?: 'nati
   if (action)
     return [action]
   if (view === 'errors') {
-    const updaterIssues = [...new Set([...defaultInsightActions, ...Constants.public.Enums.stats_action.filter(action => !nativeObserveActions.some(native => native === action) && explainDiagnostic(action).requires_action === true)])]
+    const updaterIssues = [...new Set([...defaultInsightActions, ...Constants.public.Enums.stats_action.filter(action => !nativeObserveActions.some(native => native === action) && explainDiagnostic(action).classification === 'error')])]
     return source === 'native' ? [...issueActions] : source === 'updater' ? updaterIssues : [...issueActions, ...updaterIssues]
   }
   if (view === 'logs' || view === 'device')
@@ -324,7 +324,7 @@ app.post('/', middlewareAuth(), async (c) => {
 
   cloudlog({ requestId: c.get('requestId'), message: 'post private/observe body', body: { appId, view, days, action, deviceId, versionName, sort, limit } })
 
-  if (['logs', 'errors'].includes(view) && !(await checkPermission(c, 'app.read_logs', { appId })))
+  if (!['summary', 'events', 'versions', 'release'].includes(view) && !(await checkPermission(c, 'app.read_logs', { appId })))
     throw simpleError('app_access_denied', 'You cannot read logs for this app')
 
   if (view === 'release') {

@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import type { BuildMonitorOptions } from '../schemas/sdk'
 import { buildMonitorOptionsSchema } from '../schemas/sdk'
 import { CliUserError } from '../shared/cli-user-error'
@@ -18,5 +19,11 @@ export async function fetchBuildMonitor(kind: 'status' | 'logs', options: BuildM
   })
   if (error)
     throw new CliUserError(await formatCapgoCliInvokeError(error))
-  return data ?? {}
+  const schema = kind === 'status'
+    ? z.object({ job_id: z.string(), status: z.string() }).passthrough()
+    : z.object({ job_id: z.string(), logs: z.string(), cursor: z.number().int().nonnegative(), truncated: z.boolean() }).passthrough()
+  const result = schema.safeParse(data)
+  if (!result.success)
+    throw new CliUserError(`Capgo returned an invalid build ${kind} response. Retry the read; do not infer build success from missing data.`)
+  return result.data
 }

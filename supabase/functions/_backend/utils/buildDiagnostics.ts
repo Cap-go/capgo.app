@@ -14,10 +14,13 @@ export function explainBuildLogs(logs: string) {
   const lines = logs.split('\n')
   return symptoms.flatMap((symptom) => {
     const line = lines.find(line => symptom.pattern.test(line))
-    return line ? [{
-      classification: 'error', evidence: line.slice(0, 1000), meaning: symptom.meaning,
+    if (!line)
+      return []
+    const start = Math.max(0, line.search(symptom.pattern) - 200)
+    return [{
+      classification: 'error', evidence: line.slice(start, start + 1000), meaning: symptom.meaning,
       next_steps: symptom.steps, docs_url: `${docs}#${symptom.section}`, confidence: 'documented_symptom',
-    }] : []
+    }]
   })
 }
 
