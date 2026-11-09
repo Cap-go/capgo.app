@@ -11,7 +11,7 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
   createI18n: () => ({ global: { t: (key: string) => key }, install: () => {} }),
 }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn() } }))
 vi.mock('../src/stores/dialogv2', () => ({ useDialogV2Store: () => ({}) }))
 vi.mock('../src/stores/organization', () => ({ useOrganizationStore: () => ({ currentOrganization: { gid: 'fixture-org' }, getOrgByAppId: () => ({ paying: true }), getAppByAppId: (appId: string) => ({ onboarding: mocks.onboarding[appId] }), awaitInitialLoad: async () => {} }) }))

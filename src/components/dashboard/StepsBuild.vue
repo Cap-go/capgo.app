@@ -2,6 +2,7 @@
 import type { Component } from 'vue'
 import { computed, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconArrowLeft from '~icons/lucide/arrow-left'
 import IconCheckCircle from '~icons/lucide/check-circle-2'
@@ -14,6 +15,7 @@ import IconTerminal from '~icons/lucide/terminal-square'
 import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import AiAgentTaskCard from '~/components/dashboard/AiAgentTaskCard.vue'
+import BuildLiveProgress from '~/components/dashboard/BuildLiveProgress.vue'
 import TechnicalTeammateInviteCard from '~/components/dashboard/TechnicalTeammateInviteCard.vue'
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey } from '~/services/apikeys'
@@ -57,6 +59,11 @@ const realtimeListener = ref(false)
 const pollTimer = ref<number | null>(null)
 const initialCount = ref<number | null>(null)
 const selectedPlatform = ref<Platform>('ios')
+// Dev-only scripted build: `?buildDemo=success|store|failure[&platform=android]`.
+const route = useRoute()
+const buildDemo = import.meta.env.DEV && typeof route.query.buildDemo === 'string' ? route.query.buildDemo : undefined
+// The build being followed on the live page, once the CLI created it.
+const liveBuild = ref<{ id: string, platform: Platform } | null>(buildDemo ? { id: '', platform: route.query.platform === 'android' ? 'android' : 'ios' } : null)
 const apiKey = ref('[APIKEY]')
 const capgo = useConsole()
 const main = useMainStore()
@@ -157,9 +164,6 @@ function setLog() {
       sendOnboardingEvent(`user:onboarding-build-${stepToName(step.value)}`, { org_id: orgId })
     }
   }
-  if (step.value === completedStepIndex.value) {
-    emit('done')
-  }
 }
 
 function clearWatchers() {
@@ -175,7 +179,15 @@ function resetFlow() {
   realtimeListener.value = false
   initialCount.value = null
   buildId.value = undefined
+  liveBuild.value = null
   clearWatchers()
+}
+
+// The live build failed: go back to the build command so the user can run it again.
+function retryBuild() {
+  resetFlow()
+  step.value = steps.value.findIndex(s => s.key === requestStep.value.key)
+  scrollToElement(`build_step_${step.value}`)
 }
 
 // Someone else (an AI agent or a teammate) requests the build: wait for it.
@@ -334,6 +346,10 @@ watchEffect(async () => {
           realtimeListener.value = false
           clearWatchers()
           setLog()
+          if (latestId)
+            liveBuild.value = { id: latestId, platform }
+          else
+            emit('done')
         }
       }
       catch (e) {
@@ -355,7 +371,17 @@ onUnmounted(() => {
 <template>
   <section class="overflow-y-auto pb-4 sm:pb-6">
     <!-- Rendered inside the Builds page, which already pads the content: no extra inset. -->
-    <div class="flex w-full flex-col gap-6 px-4 sm:px-0">
+    <BuildLiveProgress
+      v-if="liveBuild"
+      class="px-4 sm:px-0"
+      :app-id="appId"
+      :build-id="liveBuild.id"
+      :platform="liveBuild.platform"
+      :demo="buildDemo"
+      @retry="retryBuild"
+      @done="emit('done')"
+    />
+    <div v-else class="flex w-full flex-col gap-6 px-4 sm:px-0">
       <header class="flex flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60 sm:p-6">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div class="flex min-w-0 gap-3">

@@ -11,7 +11,7 @@ import {
   TUS_VERSION,
 } from '../../files/util.ts'
 import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
-import { middlewareKey } from '../../utils/hono_middleware.ts'
+import { middlewareAuth, middlewareKey } from '../../utils/hono_middleware.ts'
 import { apikeyPrincipal } from '../../utils/pg_rls.ts'
 import { aiAnalyzeDeprecated } from './ai_analyze.ts'
 import { aiAnalyzeStreamBuild } from './ai_analyze_stream.ts'
@@ -25,6 +25,7 @@ import {
   uploadBuildCredentialsWithToken,
 } from './credentials.ts'
 import { streamBuildLogs } from './logs.ts'
+import { getBuildLogsToken } from './logs_token.ts'
 import { requestBuild } from './request.ts'
 import { readSimulator, startSimulator, stopSimulator, type SimulatorBody } from './simulator.ts'
 import { startBuild } from './start.ts'
@@ -96,6 +97,9 @@ app.get('/logs/:jobId', middlewareKey(['all', 'read']), async (c) => {
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return streamBuildLogs(c, jobId, appId, apikey, c.req.query('snapshot') === 'true')
 })
+
+// GET /build/logs_token/:jobId - Read-only live log stream token (console JWT or API key, app.read_logs)
+app.get('/logs_token/:jobId', middlewareAuth(), c => getBuildLogsToken(c, c.req.param('jobId')))
 
 // POST /build/cancel/:jobId - Cancel a running build
 app.post('/cancel/:jobId', middlewareKey(['all', 'write']), async (c) => {
