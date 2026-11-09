@@ -53,6 +53,24 @@ describe('syncSecurityUpdatesBento', () => {
     })
   })
 
+  it('reapplies Bento when force sync is requested', async () => {
+    await syncSecurityUpdatesBento(
+      createContext(),
+      'user@example.com',
+      { security_updates: true },
+      { security_updates: true },
+      { force: true },
+    )
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(expect.anything(), {
+      email: 'user@example.com',
+      segments: ['security-updates'],
+      deleteSegments: [],
+    })
+    expect(updateBentoFieldsMock).toHaveBeenCalledWith(expect.anything(), 'user@example.com', {
+      security_updates_opt_in: true,
+    })
+  })
+
   it('skips Bento when the preference did not change', async () => {
     await syncSecurityUpdatesBento(
       createContext(),

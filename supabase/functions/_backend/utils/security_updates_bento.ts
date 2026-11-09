@@ -18,10 +18,11 @@ export async function syncSecurityUpdatesBento(
   email: string,
   prefs: EmailPreferences | null | undefined,
   previousPrefs?: EmailPreferences | null,
+  options?: { force?: boolean },
 ) {
   const enabled = isSecurityUpdatesEmailOptIn(prefs)
   const previousEnabled = isSecurityUpdatesEmailOptIn(previousPrefs)
-  if (enabled === previousEnabled)
+  if (!options?.force && enabled === previousEnabled)
     return
   try {
     await syncBentoSubscriberTags(c, {

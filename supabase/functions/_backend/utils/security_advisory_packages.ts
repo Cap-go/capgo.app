@@ -1,6 +1,9 @@
 /** npm package name used for Capgo CLI version matching. */
 export const CAPGO_CLI_PACKAGE = '@capgo/cli'
 
+/** Capacitor runtime package (often omitted from bundle native_packages). */
+export const CAPACITOR_CORE_PACKAGE = '@capacitor/core'
+
 export function normalizePackageName(name: string): string {
   return name.trim().toLowerCase()
 }

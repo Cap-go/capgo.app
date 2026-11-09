@@ -1,8 +1,19 @@
 import type { Context } from 'hono'
 import type { NativePackage } from './bundle_compatibility.ts'
-import { CAPGO_CLI_PACKAGE, filterInScopePackages, normalizePackageName } from './security_advisory_packages.ts'
+import { canParse, compare, parse } from '@std/semver'
+import { CAPGO_CLI_PACKAGE, CAPACITOR_CORE_PACKAGE, filterInScopePackages, normalizePackageName } from './security_advisory_packages.ts'
+import { normalizeVersionString } from './security_advisory_version.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { queryJson, queryJsonOne } from './pg_rls.ts'
+
+/** Omitted from CLI native_packages (non-native); still used for advisory matching. */
+const CAPACITOR_CORE_INFER_EXCLUDE = new Set([
+  '@capacitor/cli',
+  '@capacitor/ios',
+  '@capacitor/android',
+  '@capacitor/assets',
+  '@capacitor/synapse',
+])
 
 interface ReportedVersionsRow {
   native_packages: unknown
@@ -73,6 +84,38 @@ async function loadLatestUploadReported(c: Context, appId: string): Promise<Repo
   }
 }
 
+/** Infer @capacitor/core from uploaded plugin versions when CLI metadata omits it. */
+export function augmentInferredCapacitorCore(map: Map<string, string>): void {
+  const coreKey = normalizePackageName(CAPACITOR_CORE_PACKAGE)
+  if (map.has(coreKey))
+    return
+
+  for (const platform of ['@capacitor/ios', '@capacitor/android']) {
+    const version = map.get(normalizePackageName(platform))?.trim()
+    if (version) {
+      map.set(coreKey, version)
+      return
+    }
+  }
+
+  let bestVersion: string | null = null
+  let bestParsed: ReturnType<typeof parse> | null = null
+  for (const [name, version] of map) {
+    if (!name.startsWith('@capacitor/') || CAPACITOR_CORE_INFER_EXCLUDE.has(name))
+      continue
+    const normalized = normalizeVersionString(version)
+    if (!normalized || !canParse(normalized))
+      continue
+    const parsed = parse(normalized)
+    if (!bestParsed || compare(parsed, bestParsed) > 0) {
+      bestParsed = parsed
+      bestVersion = normalized
+    }
+  }
+  if (bestVersion)
+    map.set(coreKey, bestVersion)
+}
+
 function rowToPackageMap(row: ReportedVersionsRow | null): Map<string, string> {
   const map = toNativePackageMap(row?.native_packages as NativePackage[] | null | undefined)
   return withCliVersion(map, row?.cli_version)
@@ -83,6 +126,7 @@ export async function loadAppReportedPackages(c: Context, appId: string): Promis
   const production = await loadProductionChannelReported(c, appId)
   const row = production ?? await loadLatestUploadReported(c, appId)
   const map = filterInScopePackages(rowToPackageMap(row))
+  augmentInferredCapacitorCore(map)
   const cliKey = normalizePackageName(CAPGO_CLI_PACKAGE)
   if (!map.has(cliKey))
     map.set(cliKey, '')

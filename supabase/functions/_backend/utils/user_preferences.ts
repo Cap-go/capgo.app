@@ -116,11 +116,13 @@ export async function syncUserPreferenceTags(
     if (segments.segments.length === 0 && segments.deleteSegments.length === 0)
       return
     await syncBentoSubscriberTags(c, { email, ...segments })
+    const emailChanged = Boolean(previousEmail && previousEmail !== email)
     await syncSecurityUpdatesBento(
       c,
       email,
       record?.email_preferences as EmailPreferences | null | undefined,
       previousRecord?.email_preferences as EmailPreferences | null | undefined,
+      { force: emailChanged },
     )
   }
   catch (error) {
