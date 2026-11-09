@@ -35,6 +35,10 @@ export async function handleCustomMsg(
     return
   }
 
+  // Build step progress is meant for the console live page; the terminal already shows the logs.
+  if (kind === 'step')
+    return
+
   // Unknown kind — warn and dump raw data
   warn(`Unknown message type "${kind}" — you may need to update the CLI`)
   log(JSON.stringify(data, null, 2))
