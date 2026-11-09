@@ -56,6 +56,7 @@ import { app as stripe_billing } from '../_backend/private/stripe_billing.ts'
 import { app as stripe_checkout } from '../_backend/private/stripe_checkout.ts'
 import { app as stripe_past_due } from '../_backend/private/stripe_past_due.ts'
 import { app as simulator } from '../_backend/private/simulator.ts'
+import { app as securityUpdates } from '../_backend/private/security_updates.ts'
 import { app as stripe_portal } from '../_backend/private/stripe_portal.ts'
 import { app as upload_link } from '../_backend/private/upload_link.ts'
 import { app as validate_password_compliance } from '../_backend/private/validate_password_compliance.ts'
@@ -120,6 +121,7 @@ appGlobal.route('/invite_new_user_to_org', invite_new_user_to_org)
 appGlobal.route('/invite_existing_user_to_org', invite_existing_user_to_org)
 appGlobal.route('/accept_invitation', accept_invitation)
 appGlobal.route('/email_preferences', emailPreferences)
+appGlobal.route('/security_updates', securityUpdates)
 appGlobal.route('/validate_password_compliance', validate_password_compliance)
 appGlobal.route('/verify_email_otp', verify_email_otp)
 appGlobal.route('/website_preview', website_preview)
