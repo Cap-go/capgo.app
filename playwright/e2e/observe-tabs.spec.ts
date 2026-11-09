@@ -16,15 +16,23 @@ test.describe('Observe sections', () => {
     const nativeTab = page.getByRole('button', { name: 'Native', exact: true })
     const compatibilityTab = page.getByRole('button', { name: 'Compatibility', exact: true })
     const logsTab = page.getByRole('button', { name: 'Logs', exact: true })
+    const securityTab = page.getByRole('button', { name: 'Security updates', exact: true })
 
     await expect(liveReleaseTab).toBeVisible()
     await expect(errorsTab).toBeVisible()
     await expect(nativeTab).toBeVisible()
     await expect(compatibilityTab).toBeVisible()
     await expect(logsTab).toBeVisible()
+    await expect(securityTab).toBeVisible()
     await expect(page.getByRole('button', { name: 'Plugins', exact: true })).toHaveCount(0)
     await expect(errorsTab).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-test="observe-updater-version-filter"]')).toBeVisible()
+
+    await securityTab.click()
+    await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/security(?:\?|$)/)
+    await expect(securityTab).toHaveAttribute('aria-current', 'page')
+    await expect(page.getByTestId('security-updates-feed')).toBeVisible()
+    await expect(page.getByTestId('security-advisory-match-card').first()).toBeVisible()
 
     await logsTab.click()
     await expect(page).toHaveURL(/\/app\/com\.demo\.app\/observe\/logs(?:\?|$)/)
