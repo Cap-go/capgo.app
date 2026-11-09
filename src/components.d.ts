@@ -45,6 +45,7 @@ declare module 'vue' {
     BuildChartControls: typeof import('./components/dashboard/BuildChartControls.vue')['default']
     BuilderIntroduction: typeof import('./components/dashboard/BuilderIntroduction.vue')['default']
     BuilderPresentationModal: typeof import('./components/dashboard/BuilderPresentationModal.vue')['default']
+    BuildLiveProgress: typeof import('./components/dashboard/BuildLiveProgress.vue')['default']
     BuildStatsCard: typeof import('./components/dashboard/BuildStatsCard.vue')['default']
     BuildStatsChart: typeof import('./components/dashboard/BuildStatsChart.vue')['default']
     BuildTable: typeof import('./components/tables/BuildTable.vue')['default']

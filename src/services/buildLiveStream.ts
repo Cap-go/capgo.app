@@ -185,7 +185,11 @@ function currentIndex(rows: TimelineRow[], outcome: BuildOutcome | null): number
   const runningIndex = rows.findIndex(r => r.state === 'running')
   if (runningIndex !== -1)
     return runningIndex
-  return outcome ? rows.length - 1 : 0
+  if (outcome)
+    return rows.length - 1
+  // Between two steps nothing runs yet: point at the next one.
+  const nextIndex = rows.findIndex(r => r.state === 'pending')
+  return nextIndex === -1 ? rows.length - 1 : nextIndex
 }
 
 export function buildTimeline(input: {

@@ -24,6 +24,8 @@ const props = defineProps<{
   platform: BuildPlatform
   // Dev-only scripted build (`?buildDemo=`), never set in production.
   demo?: string
+  // Inside a host card that already has its own title (Getting started checklist).
+  embedded?: boolean
 }>()
 const emit = defineEmits<{ retry: [], done: [] }>()
 
@@ -248,8 +250,8 @@ onUnmounted(stop)
 </script>
 
 <template>
-  <div class="flex flex-col gap-6" data-test="build-live-progress">
-    <header class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60 sm:p-6">
+  <div class="@container flex flex-col gap-6" data-test="build-live-progress">
+    <header v-if="!embedded" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60 sm:p-6">
       <h2 class="text-2xl font-semibold text-slate-950 dark:text-white sm:text-3xl">
         {{ title }}
       </h2>
@@ -260,7 +262,7 @@ onUnmounted(stop)
 
     <!-- Success -->
     <section v-if="outcome === 'success'" class="rounded-xl border border-emerald-300 bg-white p-5 shadow-sm dark:border-emerald-500/40 dark:bg-slate-800/60 sm:p-6" data-test="build-live-success">
-      <div class="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex flex-col gap-6 @xl:flex-row @xl:items-center @xl:justify-between">
         <div class="min-w-0">
           <span class="d-badge d-badge-success gap-2 font-semibold">
             <IconCheckCircle class="h-3.5 w-3.5" />
@@ -274,7 +276,7 @@ onUnmounted(stop)
               <IconDownload class="h-4 w-4" />
               {{ t('build-live-download') }}
             </a>
-            <button type="button" class="d-btn" :class="live.downloadUrl ? 'd-btn-outline' : 'd-btn-primary'" @click="emit('done')">
+            <button v-if="!embedded" type="button" class="d-btn" :class="live.downloadUrl ? 'd-btn-outline' : 'd-btn-primary'" @click="emit('done')">
               {{ t('build-live-view-builds') }}
             </button>
           </div>
@@ -347,14 +349,14 @@ onUnmounted(stop)
           <button type="button" class="d-btn d-btn-outline" @click="copyFixPrompt">
             {{ t('build-live-copy-fix-prompt') }}
           </button>
-          <button type="button" class="d-btn d-btn-ghost" @click="emit('done')">
+          <button v-if="!embedded" type="button" class="d-btn d-btn-ghost" @click="emit('done')">
             {{ t('build-live-view-builds') }}
           </button>
         </div>
       </div>
     </section>
 
-    <div v-if="outcome !== 'success'" class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <div v-if="outcome !== 'success'" class="grid gap-6 @3xl:grid-cols-[minmax(0,1fr)_20rem]">
       <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60">
         <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-white/10">
           <h3 class="font-semibold text-slate-950 dark:text-white">

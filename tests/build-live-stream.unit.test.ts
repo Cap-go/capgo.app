@@ -136,6 +136,12 @@ describe('buildTimeline', () => {
     expect(timeline.progress).toBeCloseTo(3 / 7)
   })
 
+  it('points at the next step between two steps', () => {
+    const state = feed([step(1, 'project_bundle_download', 'started'), step(2, 'project_bundle_download', 'succeeded')])
+    const timeline = buildTimeline({ live: state, dbStatus: 'running', machineStarted: true, platform: 'android' })
+    expect(timeline.rows[timeline.current].key).toBe('android_sdk_setup')
+  })
+
   it('marks the running step as failed when the build fails', () => {
     const state = feed([step(1, 'ios_archive_build', 'started'), { type: 'status', id: 2, status: 'failed' }])
     const timeline = buildTimeline({ live: state, dbStatus: 'running', machineStarted: true, platform: 'ios' })
