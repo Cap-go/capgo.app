@@ -37,6 +37,7 @@ export async function markAiOnboardingAgentConnected(
   const rbacId = apikey.rbac_id ?? null
 
   let pool: Awaited<ReturnType<typeof getPgClient>> | undefined
+  let row: { agent_first: boolean, mcp_first: boolean, intent: string | null, org_id: string | null } | undefined
   try {
     pool = await getPgClient(c)
     // First contact sets ai_agent_connected_at; the first MCP tool call also sets
@@ -45,7 +46,7 @@ export async function markAiOnboardingAgentConnected(
     // setups started before that field existed keep accepting any prompt key.
     // A marker equal to this transaction's now() was written by this UPDATE, so RETURNING
     // tells which markers are new without a second query.
-    const result = await getDrizzleClient(pool, { logger: false }).execute<{ agent_first: boolean, mcp_first: boolean, intent: string | null, org_id: string | null }>(sql`
+    const result = await getDrizzleClient(pool, { logger: false }).execute<NonNullable<typeof row>>(sql`
       UPDATE public.users
       SET onboarding = onboarding
         || jsonb_build_object('ai_agent_connected_at', coalesce(onboarding -> 'ai_agent_connected_at', to_jsonb(now())))
@@ -75,25 +76,7 @@ export async function markAiOnboardingAgentConnected(
         onboarding ->> 'intent' AS intent,
         onboarding ->> 'ai_setup_org_id' AS org_id
     `)
-    const row = result.rows[0]
-    // The console page only sees these markers while it is open, so the funnel events are
-    // sent from here, once, when the marker is first written.
-    const events = row
-      ? [row.agent_first && 'onboarding_ai_agent_connected', row.mcp_first && 'onboarding_ai_mcp_connected'].filter(name => typeof name === 'string')
-      : []
-    if (row && events.length) {
-      const orgId = row.org_id ?? undefined
-      await backgroundTask(c, Promise.all(events.map(name => trackPosthogEvent(c, {
-        channel: 'onboarding',
-        event: name,
-        user_id: auth.userId,
-        groups: orgId ? { organization: orgId } : undefined,
-        timeoutMs: 3000,
-        nonPersonTags: { source, ...(row.intent ? { intent: row.intent } : {}), ...(orgId ? { org_id: orgId } : {}) },
-      }))).catch((error) => {
-        cloudlogErr({ requestId: c.get('requestId'), message: 'ai onboarding agent tracking failed', error: serializeError(error) })
-      }))
-    }
+    row = result.rows[0]
   }
   catch (error) {
     // Best effort: the event itself must never fail because of this hint.
@@ -103,4 +86,23 @@ export async function markAiOnboardingAgentConnected(
     if (pool)
       await closeClient(c, pool)
   }
+  // Sent after the client is released, so a slow PostHog never holds a database connection.
+  // The console page only sees these markers while it is open, so the funnel events are
+  // sent from here, once, when the marker is first written.
+  const events = row
+    ? [row.agent_first && 'onboarding_ai_agent_connected', row.mcp_first && 'onboarding_ai_mcp_connected'].filter(name => typeof name === 'string')
+    : []
+  if (!row || !events.length)
+    return
+  const { intent, org_id: orgId } = row
+  await backgroundTask(c, Promise.all(events.map(name => trackPosthogEvent(c, {
+    channel: 'onboarding',
+    event: name,
+    user_id: auth.userId,
+    groups: orgId ? { organization: orgId } : undefined,
+    timeoutMs: 3000,
+    nonPersonTags: { source, ...(intent ? { intent } : {}), ...(orgId ? { org_id: orgId } : {}) },
+  }))).catch((error) => {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'ai onboarding agent tracking failed', error: serializeError(error) })
+  }))
 }

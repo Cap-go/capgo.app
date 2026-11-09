@@ -24,6 +24,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', async importOriginal 
 }))
 
 const { AI_ONBOARDING_API_KEY_NAME, markAiOnboardingAgentConnected } = await import('../supabase/functions/_backend/utils/ai_onboarding_agent.ts')
+const { cloudlogErr } = await import('../supabase/functions/_backend/utils/logging.ts')
 
 function context(auth: Record<string, unknown> | undefined) {
   const values: Record<string, unknown> = { auth, requestId: 'req' }
@@ -90,6 +91,21 @@ describe('markAiOnboardingAgentConnected', () => {
     execute.mockResolvedValueOnce({ rows: [{ agent_first: true, mcp_first: false, intent: 'ota', org_id: 'org-1' }] })
     trackPosthogEvent.mockRejectedValueOnce(new Error('posthog down'))
     await expect(markAiOnboardingAgentConnected(context(auth), 'user-login', 'User CLI login')).resolves.toBeUndefined()
+    expect(cloudlogErr).toHaveBeenCalledWith(expect.objectContaining({ message: 'ai onboarding agent tracking failed' }))
+  })
+
+  it('releases the database client before waiting for PostHog', async () => {
+    const auth = { authType: 'apikey', userId: 'user-1', apikey: { name: AI_ONBOARDING_API_KEY_NAME } }
+    execute.mockResolvedValueOnce({ rows: [{ agent_first: true, mcp_first: false, intent: null, org_id: null }] })
+    let deliver!: (value: boolean) => void
+    trackPosthogEvent.mockReturnValueOnce(new Promise((resolve) => {
+      deliver = resolve
+    }))
+    const done = markAiOnboardingAgentConnected(context(auth), 'user-login', 'User CLI login')
+    await vi.waitFor(() => expect(trackPosthogEvent).toHaveBeenCalled())
+    expect(closeClient).toHaveBeenCalledTimes(1)
+    deliver(true)
+    await done
   })
 
   it('only counts the prompt key of the organization being set up', async () => {
