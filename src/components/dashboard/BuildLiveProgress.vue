@@ -130,6 +130,14 @@ function closeSocket() {
   ws?.close()
 }
 
+// Token fetch failures and dropped sockets share one bounded backoff, then the page stays status-only.
+function scheduleReconnect(jobId: string) {
+  if (stopped || outcome.value || reconnects >= MAX_RECONNECTS)
+    return
+  reconnects += 1
+  reconnectTimer = setTimeout(() => void connectStream(jobId), HEARTBEAT_MS * reconnects)
+}
+
 // Read-only follower of the builder log stream (same protocol as the CLI). It
 // never acks messages and never calls /start: the CLI owns the session.
 async function connectStream(jobId: string) {
@@ -137,8 +145,9 @@ async function connectStream(jobId: string) {
     return
   const { data, error } = await invokeCapgoApi<{ logs_url?: string, logs_token?: string }>(`build/logs_token/${encodeURIComponent(jobId)}`, { method: 'GET', retries: 0 })
   if (error || !data?.logs_url || !data.logs_token) {
-    // Builder stream not available (older backend, local dev): status-only view.
+    // Builder stream not available (older backend, local dev): status-only view meanwhile.
     console.info('Live build stream unavailable, showing status only', error?.message)
+    scheduleReconnect(jobId)
     return
   }
   if (stopped || outcome.value)
@@ -176,10 +185,7 @@ async function connectStream(jobId: string) {
       return
     clearInterval(heartbeatTimer)
     socket = null
-    if (stopped || outcome.value || reconnects >= MAX_RECONNECTS)
-      return
-    reconnects += 1
-    reconnectTimer = setTimeout(() => void connectStream(jobId), HEARTBEAT_MS * reconnects)
+    scheduleReconnect(jobId)
   })
 }
 
