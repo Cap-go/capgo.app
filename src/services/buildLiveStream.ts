@@ -134,13 +134,58 @@ export function applyBuildStreamMessage(state: BuildLiveState, raw: unknown): Bu
   if (!isRecord(raw))
     return state
   if (raw.type === 'batch_messages' && Array.isArray(raw.messages))
-    return raw.messages.reduce(applyBuildStreamMessage, state)
+    return raw.messages.reduce((acc: BuildLiveState, message: unknown) => applyBuildStreamMessage(acc, message), state)
   const id = typeof raw.id === 'number' ? raw.id : null
   // Reconnects replay from the last id we reported: skip anything already applied.
   if (id !== null && id <= state.lastId)
     return state
   const next = applyEntry(state, raw)
   return id === null ? next : { ...next, lastId: id }
+}
+
+function machineState(uploading: boolean, onMachine: boolean): RowState {
+  if (uploading)
+    return 'pending'
+  return onMachine ? 'done' : 'running'
+}
+
+function stepRows(live: BuildLiveState, platform: BuildPlatform, running: boolean): TimelineRow[] {
+  const rows: TimelineRow[] = live.steps.map(s => ({
+    key: s.action,
+    state: s.status === 'succeeded' ? 'done' : s.status,
+    startedAt: s.startedAt,
+    durationMs: s.durationMs,
+  }))
+  // Upcoming milestones only make sense while the build still runs.
+  if (running) {
+    const seen = new Set(live.steps.map(s => s.action))
+    for (const action of PLATFORM_MILESTONES[platform].filter(a => !seen.has(a)))
+      rows.push({ key: action, state: 'pending' })
+  }
+  return rows
+}
+
+function applyOutcome(rows: TimelineRow[], outcome: BuildOutcome | null) {
+  if (outcome === 'success') {
+    for (const row of rows)
+      row.state = 'done'
+    return
+  }
+  if (outcome !== 'failure' || rows.some(r => r.state === 'failed'))
+    return
+  const culprit = rows.find(r => r.state === 'running') ?? rows.find(r => r.state === 'pending')
+  if (culprit)
+    culprit.state = 'failed'
+}
+
+function currentIndex(rows: TimelineRow[], outcome: BuildOutcome | null): number {
+  const failedIndex = rows.findIndex(r => r.state === 'failed')
+  if (failedIndex !== -1)
+    return failedIndex
+  const runningIndex = rows.findIndex(r => r.state === 'running')
+  if (runningIndex !== -1)
+    return runningIndex
+  return outcome ? rows.length - 1 : 0
 }
 
 export function buildTimeline(input: {
@@ -156,35 +201,10 @@ export function buildTimeline(input: {
   const onMachine = machineStarted || hasSteps
   const rows: TimelineRow[] = [
     { key: 'upload', state: uploading ? 'running' : 'done' },
-    { key: 'machine', state: uploading ? 'pending' : onMachine ? 'done' : 'running' },
+    { key: 'machine', state: machineState(uploading, onMachine) },
+    ...(hasSteps ? stepRows(live, platform, !outcome) : [{ key: 'build', state: onMachine ? 'running' : 'pending' } as TimelineRow]),
   ]
-  if (hasSteps) {
-    for (const s of live.steps)
-      rows.push({ key: s.action, state: s.status === 'succeeded' ? 'done' : s.status, startedAt: s.startedAt, durationMs: s.durationMs })
-    // Upcoming milestones only make sense while the build still runs.
-    if (!outcome) {
-      const seen = new Set(live.steps.map(s => s.action))
-      for (const action of PLATFORM_MILESTONES[platform].filter(a => !seen.has(a)))
-        rows.push({ key: action, state: 'pending' })
-    }
-  }
-  else {
-    rows.push({ key: 'build', state: onMachine ? 'running' : 'pending' })
-  }
-
-  if (outcome === 'success') {
-    for (const row of rows)
-      row.state = 'done'
-  }
-  else if (outcome === 'failure' && !rows.some(r => r.state === 'failed')) {
-    const culprit = rows.find(r => r.state === 'running') ?? rows.find(r => r.state === 'pending')
-    if (culprit)
-      culprit.state = 'failed'
-  }
-
-  const failedIndex = rows.findIndex(r => r.state === 'failed')
-  const runningIndex = rows.findIndex(r => r.state === 'running')
-  const current = failedIndex !== -1 ? failedIndex : runningIndex !== -1 ? runningIndex : outcome ? rows.length - 1 : 0
+  applyOutcome(rows, outcome)
   const progress = rows.filter(r => r.state === 'done').length / rows.length
-  return { rows, current, progress }
+  return { rows, current: currentIndex(rows, outcome), progress }
 }

@@ -141,7 +141,8 @@ async function connectStream(jobId: string) {
   }
   if (stopped || outcome.value)
     return
-  const ws = new WebSocket(`${data.logs_url.replace(/\/+$/, '').replace(/^http/, 'ws')}/stream?token=${encodeURIComponent(data.logs_token)}`)
+  const baseUrl = data.logs_url.endsWith('/') ? data.logs_url.slice(0, -1) : data.logs_url
+  const ws = new WebSocket(`${baseUrl.replace(/^http/, 'ws')}/stream?token=${encodeURIComponent(data.logs_token)}`)
   socket = ws
   let synced = false
   const heartbeat = () => {
@@ -292,7 +293,6 @@ onUnmounted(stop)
       <span
         class="d-badge gap-2 font-semibold"
         :class="outcome === 'failure' ? 'd-badge-error' : 'd-badge-info'"
-        role="status"
       >
         <span class="h-2 w-2 rounded-full bg-current" :class="{ 'animate-pulse': !outcome }" />
         {{ outcome === 'failure' ? t('build-live-status-failed') : queued ? t('build-live-status-queued') : t('build-live-status-building') }}
@@ -318,20 +318,13 @@ onUnmounted(stop)
           </dd>
         </div>
       </dl>
-      <div
-        class="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
-        role="progressbar"
-        :aria-valuenow="percent"
-        aria-valuemin="0"
-        aria-valuemax="100"
+      <progress
+        class="d-progress mt-4 h-2.5 w-full"
+        :class="outcome === 'failure' ? 'd-progress-error' : 'd-progress-info animate-pulse'"
+        :value="Math.max(percent, 3)"
+        max="100"
         :aria-label="t('build-live-progress')"
-      >
-        <div
-          class="h-full rounded-full transition-[width] duration-700"
-          :class="outcome === 'failure' ? 'bg-red-500' : 'animate-pulse bg-azure-500'"
-          :style="{ width: `${Math.max(percent, 3)}%` }"
-        />
-      </div>
+      />
       <div class="mt-2 flex justify-between text-xs text-slate-500 dark:text-slate-400">
         <span>{{ outcome === 'failure' ? t('build-live-failed-at', { step: currentLabel }) : `${currentLabel}…` }}</span>
         <span class="tabular-nums">{{ percent }}%</span>
