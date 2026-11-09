@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import type { NativePackage } from './bundle_compatibility.ts'
-import { CAPGO_CLI_PACKAGE, filterInScopePackages, normalizePackageName } from './security_advisory_packages.ts'
+import { CAPACITOR_CORE_PACKAGE, CAPGO_CLI_PACKAGE, filterInScopePackages, normalizePackageName } from './security_advisory_packages.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { queryJson, queryJsonOne } from './pg_rls.ts'
 
@@ -21,9 +21,23 @@ export function toNativePackageMap(packages: NativePackage[] | null | undefined)
     if (!name)
       continue
     const version = typeof pkg.version === 'string' ? pkg.version.trim() : ''
+    const existing = map.get(name)
+    if (existing !== undefined && existing !== '' && version === '')
+      continue
     map.set(name, version)
   }
   return map
+}
+
+/** Surface core advisories as unknown when platform packages are reported without core (no version guess). */
+export function ensureCapacitorCorePlaceholder(map: Map<string, string>): void {
+  const coreKey = normalizePackageName(CAPACITOR_CORE_PACKAGE)
+  if (map.has(coreKey))
+    return
+  const iosKey = normalizePackageName('@capacitor/ios')
+  const androidKey = normalizePackageName('@capacitor/android')
+  if (map.has(iosKey) || map.has(androidKey))
+    map.set(coreKey, '')
 }
 
 function withCliVersion(map: Map<string, string>, cliVersion: string | null | undefined): Map<string, string> {
@@ -84,6 +98,7 @@ export async function loadAppReportedPackages(c: Context, appId: string): Promis
   const production = await loadProductionChannelReported(c, appId)
   const row = production ?? await loadLatestUploadReported(c, appId)
   const map = filterInScopePackages(rowToPackageMap(row))
+  ensureCapacitorCorePlaceholder(map)
   const cliKey = normalizePackageName(CAPGO_CLI_PACKAGE)
   if (!map.has(cliKey))
     map.set(cliKey, '')
