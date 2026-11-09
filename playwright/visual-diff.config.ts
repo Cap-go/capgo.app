@@ -707,6 +707,7 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   { slug: 'account-settings', path: '/settings/account', auth: true },
+  { slug: 'account-notifications', path: '/settings/account/notifications', auth: true },
   {
     slug: 'email-verification-send',
     path: '/resend_email',
@@ -946,6 +947,44 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       const heading = page.getByRole('heading', { name: /Error categories|Failure types/ })
       await heading.waitFor()
       await heading.evaluate(el => el.scrollIntoView({ block: 'start' }))
+    },
+  },
+  {
+    slug: 'observe-security-updates',
+    path: '/app/com.demo.app/observe/security',
+    auth: true,
+    prepare: async (page) => {
+      const exampleAdvisory = {
+        id: 'GHSA-example-0000',
+        ghsa_id: 'GHSA-example-0000',
+        title: 'EXAMPLE: demonstration advisory only (not a real CVE)',
+        severity: 'high',
+        affected: [{
+          package: '@capacitor/core',
+          affected_range: '>= 6.0.0, < 6.2.0',
+          patched_version: '6.2.0',
+        }],
+        fix_steps: 'Upgrade to the patched version for your major line.',
+        published_at: '2026-01-15T00:00:00.000Z',
+        url: 'https://capgo.app/security/',
+      }
+      await page.route('**/private/security_updates/feed**', route => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          app_id: 'com.demo.app',
+          feed: { generated_at: '2026-01-15T00:00:00.000Z', advisories: [exampleAdvisory] },
+          items: [{
+            package: '@capacitor/core',
+            current_version: '6.1.0',
+            status: 'affected',
+            advisory: exampleAdvisory,
+            affected: exampleAdvisory.affected[0],
+          }],
+        }),
+      }))
+      await page.goto('/app/com.demo.app/observe/security')
+      await page.getByTestId('security-advisory-match-card').first().waitFor()
     },
   },
   {
