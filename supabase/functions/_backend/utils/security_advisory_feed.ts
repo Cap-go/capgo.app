@@ -9,6 +9,14 @@ export const SECURITY_ADVISORIES_BASE_URL_ENV = 'SECURITY_ADVISORIES_BASE_URL'
 
 const ADVISORY_FEED_CACHE_PATH = '/private/security-advisories-feed'
 const ADVISORY_FEED_CACHE_TTL_SECONDS = 120
+const ADVISORY_FEED_CACHE_PUT_TIMEOUT_MS = 1000
+
+export class SecurityAdvisoryFeedUnavailableError extends Error {
+  constructor(message = 'advisory feed unavailable') {
+    super(message)
+    this.name = 'SecurityAdvisoryFeedUnavailableError'
+  }
+}
 
 const FIXTURE_GENERATED_AT = '2026-01-15T00:00:00.000Z'
 
@@ -60,6 +68,7 @@ function isAdvisoryAffected(value: unknown): value is Advisory['affected'][numbe
   return typeof row.package === 'string'
     && typeof row.affected_range === 'string'
     && patchedOk
+    && (row.capacitor_plus_version === undefined || typeof row.capacitor_plus_version === 'string')
 }
 
 function isAdvisory(value: unknown): value is Advisory {
@@ -121,14 +130,19 @@ export const configurableSecurityAdvisoryFeedLoader: SecurityAdvisoryFeedLoader 
       return cached
 
     if (!base) {
-      await cache.putJson(cacheKey, FIXTURE_ADVISORY_FEED, ADVISORY_FEED_CACHE_TTL_SECONDS)
+      await cache.putJson(
+        cacheKey,
+        FIXTURE_ADVISORY_FEED,
+        ADVISORY_FEED_CACHE_TTL_SECONDS,
+        { timeoutMs: ADVISORY_FEED_CACHE_PUT_TIMEOUT_MS },
+      )
       return FIXTURE_ADVISORY_FEED
     }
 
     const url = advisoryFeedUrl(base)
     try {
       const feed = await fetchAdvisoryFeed(c, url)
-      await cache.putJson(cacheKey, feed, ADVISORY_FEED_CACHE_TTL_SECONDS)
+      await cache.putJson(cacheKey, feed, ADVISORY_FEED_CACHE_TTL_SECONDS, { timeoutMs: ADVISORY_FEED_CACHE_PUT_TIMEOUT_MS })
       return feed
     }
     catch (error) {
@@ -138,8 +152,7 @@ export const configurableSecurityAdvisoryFeedLoader: SecurityAdvisoryFeedLoader 
         url,
         error: serializeError(error),
       })
-      await cache.putJson(cacheKey, FIXTURE_ADVISORY_FEED, 30)
-      return FIXTURE_ADVISORY_FEED
+      throw new SecurityAdvisoryFeedUnavailableError()
     }
   },
 }

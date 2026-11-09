@@ -26,6 +26,12 @@ describe('satisfiesGhsaAffectedRange', () => {
     expect(satisfiesGhsaAffectedRange(version, '>= 6.0.0, < 6.14.3')).toBe(true)
     expect(satisfiesGhsaAffectedRange(version, '>= 6.0.0, < 6.14.0')).toBe(false)
   })
+
+  it('treats || as OR between intervals', () => {
+    const version = parse('6.1.0')
+    expect(satisfiesGhsaAffectedRange(version, '>= 7.0.0, < 7.2.1 || >= 6.0.0, < 6.2.0')).toBe(true)
+    expect(satisfiesGhsaAffectedRange(version, '>= 7.0.0, < 7.1.0')).toBe(false)
+  })
 })
 
 describe('resolveAdvisoryStatus', () => {
@@ -45,6 +51,7 @@ describe('resolveAdvisoryStatus', () => {
   it('never claims safe for unknown versions', () => {
     expect(resolveAdvisoryStatus('not-a-version', { affected_range: '>= 6.0.0, < 6.2.0', patched_version: '6.2.0' })).toBe('unknown')
     expect(resolveAdvisoryStatus('', { affected_range: '>= 6.0.0, < 6.2.0', patched_version: '6.2.0' })).toBe('unknown')
+    expect(resolveAdvisoryStatus('6.0.0', { affected_range: '', patched_version: '6.2.0' })).toBe('unknown')
   })
 })
 

@@ -28,9 +28,9 @@ function toNativePackageMap(packages: NativePackage[] | null | undefined): Map<s
     if (typeof pkg?.name !== 'string' || typeof pkg?.version !== 'string')
       continue
     const name = normalizePackageName(pkg.name)
-    const version = pkg.version.trim()
-    if (!name || !version)
+    if (!name)
       continue
+    const version = typeof pkg.version === 'string' ? pkg.version.trim() : ''
     map.set(name, version)
   }
   return map

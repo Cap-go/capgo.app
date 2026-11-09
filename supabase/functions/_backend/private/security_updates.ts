@@ -2,7 +2,7 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { AppAdvisoryFeedResponse } from '../../shared/security_advisory.ts'
 import { Hono } from 'hono/tiny'
 import { loadAppReportedPackages } from '../utils/app_native_packages.ts'
-import { loadSecurityAdvisoryFeed } from '../utils/security_advisory_feed.ts'
+import { loadSecurityAdvisoryFeed, SecurityAdvisoryFeedUnavailableError } from '../utils/security_advisory_feed.ts'
 import { matchAppPackagesToAdvisories } from '../utils/security_advisory_matching.ts'
 import { quickError, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
@@ -20,10 +20,17 @@ app.get('/feed', middlewareAuth, async (c) => {
   if (!(await checkPermission(c, 'app.read', { appId })))
     throw quickError(403, 'app_access_denied', 'You can\'t access this app', { app_id: appId })
 
-  const [packages, feed] = await Promise.all([
-    loadAppReportedPackages(c, appId),
-    loadSecurityAdvisoryFeed(c),
-  ])
+  let feed
+  try {
+    feed = await loadSecurityAdvisoryFeed(c)
+  }
+  catch (error) {
+    if (error instanceof SecurityAdvisoryFeedUnavailableError)
+      throw quickError(503, 'advisory_feed_unavailable', 'Security advisory feed is temporarily unavailable')
+    throw error
+  }
+
+  const packages = await loadAppReportedPackages(c, appId)
 
   const body: AppAdvisoryFeedResponse = {
     app_id: appId,

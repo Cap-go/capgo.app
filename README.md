@@ -90,8 +90,9 @@ Per-agent setup instructions are at [capgo.app/agents](https://capgo.app/agents/
 ### Security updates (backend preview)
 
 Console API support for **published** Capacitor security advisories and optional
-email alerts. Each user can opt in to `security_updates` emails from account
-settings. Per app, `GET /private/security_updates/feed` matches native package
+email alerts. The `security_updates` email preference defaults to off; the account
+settings opt-in control ships with the console UI follow-up. Per app,
+`GET /private/security_updates/feed` matches native package
 versions already reported on bundles against the advisory feed (fixture today,
 configurable feed host via `SECURITY_ADVISORIES_BASE_URL` when live). Console UI and
 public docs ship in follow-up PRs.

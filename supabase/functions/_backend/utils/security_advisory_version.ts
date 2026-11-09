@@ -9,10 +9,18 @@ export function normalizeVersionString(value: string): string | null {
   return trimmed.replace(/^v/i, '')
 }
 
-/** GHSA ranges use comma-separated AND clauses (e.g. ">= 6.0.0, < 6.14.3"). */
+/**
+ * GHSA ranges use comma-separated AND clauses per interval, with `||` between intervals.
+ * Example: `>= 7.0.0, < 7.2.1 || >= 6.0.0, < 6.2.0`
+ */
 export function satisfiesGhsaAffectedRange(version: SemVer, affectedRange: string): boolean {
-  const clauses = affectedRange.split(',').map(part => part.trim()).filter(Boolean)
-  if (clauses.length === 0)
-    return false
-  return clauses.every(clause => satisfies(version, parseRange(clause)))
+  const intervals = affectedRange.split('||').map(part => part.trim()).filter(Boolean)
+  if (intervals.length === 0)
+    throw new Error('Empty advisory affected range')
+  return intervals.some((interval) => {
+    const clauses = interval.split(',').map(part => part.trim()).filter(Boolean)
+    if (clauses.length === 0)
+      return false
+    return clauses.every(clause => satisfies(version, parseRange(clause)))
+  })
 }

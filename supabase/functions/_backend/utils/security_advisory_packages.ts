@@ -12,6 +12,8 @@ export function isInScopeAppPackage(name: string): boolean {
   const n = normalizePackageName(name)
   if (n === normalizePackageName(CAPGO_CLI_PACKAGE))
     return true
+  if (n === normalizePackageName('@capgo/camera-preview'))
+    return true
   if (n.startsWith('@capgo/capacitor-'))
     return true
   if (n.startsWith('@capacitor/'))
