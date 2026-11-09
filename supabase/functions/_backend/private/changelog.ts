@@ -79,19 +79,35 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
   const maxPages = (source.tagPrefix || source.monorepo) ? MAX_PAGES_SHARED_REPO : MAX_PAGES_SINGLE_REPO
   const raw: unknown[] = []
   let truncated = false
+  const headers = githubHeaders(c, !source.owner)
   // Pages are read one by one on purpose: we stop at the first short page instead of firing every request.
   for (let page = 1; page <= maxPages; page++) {
     const url = `https://api.github.com/repos/${source.owner ?? GITHUB_ORG}/${encodeURIComponent(source.repo)}/releases?per_page=${GITHUB_PAGE_SIZE}&page=${page}`
-    const response = await fetch(url, { headers: githubHeaders(c, !source.owner), signal: AbortSignal.timeout(10_000) }).catch(() => null) // NOSONAR: sequential pagination, see above
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) }).catch(() => null) // NOSONAR: sequential pagination, see above
     if (!response) {
       // Network failure on a later page: partial history beats an error page.
       if (raw.length)
         return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
       throw quickError(502, 'changelog_fetch_failed', 'Could not load release notes', { repo: source.repo })
     }
-    if (response.status === 404)
-      throw quickError(404, 'changelog_repo_not_found', 'No releases found for this product', { repo: source.repo })
     if (!response.ok) {
+      // Keep upstream diagnostics server-side, without credentials or response bodies.
+      cloudlogErr({
+        requestId: c.get('requestId'),
+        message: 'Changelog GitHub release fetch failed',
+        owner: source.owner ?? GITHUB_ORG,
+        repo: source.repo,
+        page,
+        status: response.status,
+        authenticated: !!headers.Authorization,
+        rateLimit: response.headers.get('x-ratelimit-limit'),
+        rateLimitRemaining: response.headers.get('x-ratelimit-remaining'),
+        rateLimitReset: response.headers.get('x-ratelimit-reset'),
+        retryAfter: response.headers.get('retry-after'),
+        githubRequestId: response.headers.get('x-github-request-id'),
+      })
+      if (response.status === 404)
+        throw quickError(404, 'changelog_repo_not_found', 'No releases found for this product', { repo: source.repo })
       // Partial history beats an error page: keep what earlier pages returned.
       if (raw.length)
         return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
@@ -145,6 +161,8 @@ export async function getReleases(c: Context<MiddlewareKeyVariables>, source: Ch
     path: RELEASES_CACHE_PATH,
     params: { owner: source.owner ?? GITHUB_ORG, repo: source.repo, prefix: source.tagPrefix, package: source.packageName ?? '', monorepo: source.monorepo ? '1' : '0', directory: source.directory ?? '', v: '2' },
     ttl: RELEASES_TTL_SECONDS,
+    // Release notes are public and shared by every user and Cloudflare location.
+    persistent: true,
     load: () => fetchReleasesFromGithub(c, source),
   })
 }

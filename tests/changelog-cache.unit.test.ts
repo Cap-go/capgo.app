@@ -28,6 +28,7 @@ app.use('*', async (c, next) => {
 app.post('/digest', async c => c.json(await changelogDigest(c, await c.req.json())))
 app.get('/dependency', async c => c.json(await getDependency(c, c.req.query('name'))))
 app.get('/releases', async c => c.json(await getReleases(c, { owner: 'ionic-team', repo: 'capacitor', tagPrefix: '' })))
+app.get('/console-releases', async c => c.json(await getReleases(c, { repo: 'capgo.app', tagPrefix: 'capgo-' })))
 app.get('/plugin-releases', async (c) => {
   const dependency = await getDependency(c, '@capacitor/camera')
   if (!dependency.source)
@@ -87,11 +88,13 @@ describe('shared changelog caching', () => {
     edge.clear()
     expect(await (await digest({}, {}, '00000000-0000-4000-8000-000000000002')).json()).toMatchObject({ aiGenerated: true })
     expect(ai.run).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
   it('invalidates summaries for edited notes, models, locales and version bounds', async () => {
     await digest()
     notes = '### Bug Fixes\n* **android:** fix startup crash and preserve settings'
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
     edge.clear()
     await digest()
     vi.stubEnv('CHANGELOG_MODEL', 'test-model')
@@ -116,6 +119,55 @@ describe('shared changelog caching', () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000)
     expect(await (await digest()).json()).toMatchObject({ aiGenerated: true })
     expect(ai.run).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('release fetch reliability', () => {
+  it('authenticates Capgo release requests and reuses public notes across locations until expiry', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'fake-github-token')
+    fetchMock.mockResolvedValue(Response.json([{ tag_name: 'capgo-8.1.0', body: notes }]))
+    const request = () => app.request('https://api.example.com/console-releases', {}, { CHANNEL_SELF_STORE: kv })
+    expect(await (await request()).json()).toMatchObject({ releases: [{ version: '8.1.0' }] })
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/Cap-go/capgo.app/releases'), expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer fake-github-token' }),
+    }))
+    expect(kv.put).toHaveBeenCalledWith(expect.any(String), expect.any(String), { expirationTtl: 900 })
+    edge.clear()
+    expect(await (await request()).json()).toMatchObject({ releases: [{ version: '8.1.0' }] })
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    // Neither the shared cache nor its edge copy may keep notes fresh indefinitely.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    fetchMock.mockResolvedValue(Response.json([{ tag_name: 'capgo-8.2.0', body: notes }]))
+    expect(await (await request()).json()).toMatchObject({ releases: [{ version: '8.2.0' }] })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('logs rate-limit diagnostics without secrets and does not cache failed requests', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'fake-github-token')
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchMock.mockResolvedValueOnce(Response.json({ message: 'untrusted upstream body' }, {
+      status: 403,
+      headers: { 'x-ratelimit-limit': '5000', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1800000000', 'x-github-request-id': 'test-request' },
+    }))
+    const request = () => app.request('https://api.example.com/console-releases', {}, { CHANNEL_SELF_STORE: kv })
+    expect((await request()).status).toBe(502)
+    expect(log.mock.calls.flat()).toEqual(expect.arrayContaining([
+      'Changelog GitHub release fetch failed', 'authenticated', true, 'rateLimitRemaining', '0', 'githubRequestId', 'test-request',
+    ]))
+    expect(JSON.stringify(log.mock.calls)).not.toContain('fake-github-token')
+    expect(JSON.stringify(log.mock.calls)).not.toContain('untrusted upstream body')
+    expect(kv.put).not.toHaveBeenCalled()
+    fetchMock.mockResolvedValueOnce(Response.json([{ tag_name: 'capgo-8.1.0', body: notes }]))
+    expect(await (await request()).json()).toMatchObject({ releases: [{ version: '8.1.0' }] })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps fetching releases when the shared cache is unavailable', async () => {
+    kv.get.mockRejectedValueOnce(new Error('KV unavailable'))
+    kv.put.mockRejectedValueOnce(new Error('KV unavailable'))
+    const response = await app.request('https://api.example.com/releases', {}, { CHANNEL_SELF_STORE: kv })
+    expect(await response.json()).toMatchObject({ releases: [{ version: '8.1.0' }] })
   })
 })
 
