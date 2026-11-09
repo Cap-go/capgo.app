@@ -22,4 +22,16 @@ describe('security_updates email preference', () => {
     expect(fn({}, 'weekly_stats')).toBe(true)
     expect(fn({ weekly_stats: false }, 'weekly_stats')).toBe(false)
   })
+
+  it.each(helpers)('drops org admin recipients without explicit opt-in for security_updates in $name', ({ fn }) => {
+    const admins = [
+      { email: 'opted-in@example.com', prefs: { security_updates: true } },
+      { email: 'default-off@example.com', prefs: {} },
+      { email: 'opted-out@example.com', prefs: { security_updates: false } },
+    ]
+    const recipients = admins
+      .filter(admin => fn(admin.prefs, 'security_updates'))
+      .map(admin => admin.email)
+    expect(recipients).toEqual(['opted-in@example.com'])
+  })
 })

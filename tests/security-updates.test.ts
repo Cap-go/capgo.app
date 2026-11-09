@@ -5,6 +5,24 @@ import { fetchTestRequest, getAuthHeaders, getEndpointUrl } from './test-utils.t
 const DEMO_APP_ID = 'com.demo.app'
 
 describe('[GET] /private/security_updates/feed', () => {
+  it.concurrent('rejects unauthenticated requests', async () => {
+    const response = await fetchTestRequest(
+      `${getEndpointUrl('/private/security_updates/feed')}?app_id=${encodeURIComponent(DEMO_APP_ID)}`,
+      { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+    )
+    expect(response.status).toBe(401)
+  })
+
+  it.concurrent('rejects users without app.read on the requested app', async () => {
+    const response = await fetchTestRequest(
+      `${getEndpointUrl('/private/security_updates/feed')}?app_id=com.demoadmin.app`,
+      { method: 'GET', headers: await getAuthHeaders() },
+    )
+    expect(response.status).toBe(403)
+    const data = await response.json() as { error?: string }
+    expect(data.error).toBe('app_access_denied')
+  })
+
   it('returns feed and per-app matches for an authorized app', async () => {
     const response = await fetchTestRequest(
       `${getEndpointUrl('/private/security_updates/feed')}?app_id=${encodeURIComponent(DEMO_APP_ID)}`,
