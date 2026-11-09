@@ -8,7 +8,7 @@ const componentSource = readFileSync(new URL('../src/components/dashboard/Channe
 
 describe('channel creation onboarding', () => {
   it.concurrent('inserts the channel without chaining a RLS-dependent select', () => {
-    const channelInsert = componentSource.slice(componentSource.indexOf(`const { error } = await capgo`), componentSource.indexOf(`completedChannel.value = {`))
+    const channelInsert = componentSource.slice(componentSource.indexOf(`const { error } = await capgo`), componentSource.indexOf(`// Avoid coupling a successful INSERT`))
     expect(channelInsert).toContain(`.from('channels')`)
     expect(channelInsert).not.toContain('.select(')
   })
