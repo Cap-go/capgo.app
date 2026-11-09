@@ -2213,6 +2213,7 @@
   "notifications-issues": "Issues & errors",
   "notifications-monthly-stats": "Monthly statistics",
   "notifications-monthly-stats-desc": "Receive monthly email summaries of bundles and deployments",
+  "notifications-security-advisories": "Security advisories",
   "notifications-onboarding": "Onboarding",
   "notifications-onboarding-emails": "Onboarding emails",
   "notifications-onboarding-emails-desc": "Receive helpful onboarding reminders and tips",

@@ -25,10 +25,15 @@ const viewports = {
 }
 
 async function login(page) {
-  await page.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded' })
-  await page.locator('input[type="email"]').fill('test@capgo.app')
-  await page.locator('input[type="password"]').fill('testtest')
-  await page.getByRole('button', { name: /log in|sign in/i }).click()
+  await page.goto(`${baseUrl}/login/`, { waitUntil: 'domcontentloaded' })
+  await page.fill('[data-test="email"]', 'test@capgo.app')
+  await page.fill('[data-test="password"]', 'testtest')
+  const submit = page.locator('[data-test="submit"]')
+  await submit.waitFor({ state: 'visible', timeout: 10_000 })
+  if (await submit.isEnabled())
+    await submit.click()
+  else
+    await page.locator('form').first().evaluate(form => form.requestSubmit())
   await page.waitForURL(/\/(apps|dashboard|onboarding)/, { timeout: 120_000 })
 }
 
