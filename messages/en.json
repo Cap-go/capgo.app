@@ -3760,7 +3760,7 @@
   "ai-onboarding-plan-subtitle": "Two quick answers. We start your free trial on the matching plan, and your agent handles the app details.",
   "ai-onboarding-plan-title": "Your goal and plan",
   "ai-onboarding-prompt-copied": "Copied. Paste it into your agent",
-  "ai-onboarding-prompt-key-note": "The prompt includes an API key created only for this organization. Your agent only needs it to log in the Capgo CLI, and you can revoke it anytime in API keys. The preview hides it. Only paste it into an agent you trust.",
+  "ai-onboarding-prompt-key-note": "The prompt includes a Capgo API key. Your agent only needs it to log in the Capgo CLI, and you can revoke it anytime in API keys. The preview hides it. Only paste it into an agent you trust.",
   "ai-onboarding-prompt-subtitle": "Open your agent in your Capacitor project and paste the prompt. It takes it from there and asks you only what it needs.",
   "ai-onboarding-prompt-title": "Copy this prompt into your agent",
   "ai-onboarding-prompt-where": "Paste it into one of these tools, opened in your Capacitor project. Not in a web chat or the Capgo console.",
