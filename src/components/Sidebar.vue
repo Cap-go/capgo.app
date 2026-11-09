@@ -43,7 +43,7 @@ const navGroups = computed(() => [
     label: 'section-group-workspace',
     tabs: [
       ...tabs.value.filter(tab => !tab.redirect && tab.group !== 'help'),
-      ...(organizationStore.currentOrganization ? [organizationSettingsTab] : []),
+      ...(main.user && organizationStore.currentOrganization ? [organizationSettingsTab] : []),
     ],
   },
   { key: 'help', label: 'sidebar-group-help', tabs: tabs.value.filter(tab => tab.redirect || tab.group === 'help') },

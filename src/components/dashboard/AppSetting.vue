@@ -1803,7 +1803,7 @@ async function transferAppOwnership() {
             {{ t('delete-app-danger-description') }}
           </p>
         </div>
-        <button type="button" class="d-btn d-btn-error shrink-0" @click="openDeleteAppDialog()">
+        <button type="button" class="d-btn d-btn-error shrink-0" :disabled="isLoading" @click="openDeleteAppDialog()">
           {{ t('delete-app') }}
         </button>
       </div>

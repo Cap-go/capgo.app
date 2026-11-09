@@ -755,7 +755,7 @@ onMounted(async () => {
               <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
               <span v-else>{{ t('save') }}</span>
             </button>
-            <button v-if="isNativeApp" type="button" class="d-btn d-btn-outline" data-test="account-sign-out" @click="logOut()">
+            <button v-if="isNativeApp" type="button" class="d-btn d-btn-outline" data-test="account-sign-out" :disabled="isLoading" @click="logOut()">
               {{ t('sign-out') }}
             </button>
           </footer>

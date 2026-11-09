@@ -108,7 +108,7 @@
   "danger-zone": "Danger zone",
   "danger-zone-description": "Actions here permanently remove data and can't be undone. Read each warning before you continue.",
   "delete-account-danger-description": "Your account is deleted 30 days after you confirm. Organizations where you are the only super admin are deleted with it.",
-  "delete-app-danger-description": "Deletes the app with its bundles, channels, and device links for everyone in the organization. This cannot be undone.",
+  "delete-app-danger-description": "Deletes the app with its bundles and channels for everyone in the organization. This cannot be undone.",
   "delete-org-danger-description": "Deletes the organization with its apps, bundles, channels, and devices for every member. This cannot be undone.",
   "total-above-plan": "Total above plan",
   "total-above-plan-description": "Organizations currently over plan limits (with and without credits)",

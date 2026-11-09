@@ -86,6 +86,11 @@ function onMenuFocusout(event: FocusEvent) {
 }
 
 function onMenuKeydown(event: KeyboardEvent) {
+  // Tab leaves a menu (ARIA menu pattern), even toward browser chrome where focusout has no relatedTarget.
+  if (event.key === 'Tab') {
+    close()
+    return
+  }
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')
     return
   const items = Array.from(menu.value?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])
