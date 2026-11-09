@@ -7,12 +7,14 @@ import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, rele
 import { recordBuildTime } from '../../utils/supabase.ts'
 import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 import { reserveSimulatorSlot } from './concurrency.ts'
+import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
 
 export interface SimulatorBody {
   app_id?: string
   platform?: string
   name?: string
+  build_job_id?: string
 }
 
 export interface EmulatorSessionData {
@@ -25,6 +27,36 @@ export interface EmulatorSessionData {
 const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
 const SIMULATOR_HOST_TIMEOUT_MS = 30_000
 const SIMULATOR_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const SAVED_IPA_MAX_BYTES = 512 * 1024 * 1024
+const SAVED_IPA_TRANSFER_MS = 60_000
+
+export function savedIpaContentLength(header: string | null): number | undefined {
+  if (!header)
+    return undefined
+  const length = Number(header)
+  if (!Number.isFinite(length) || length < 0)
+    return undefined
+  return length
+}
+
+export function multipartIpaStream(body: ReadableStream<Uint8Array>, boundary: string, maxBytes = SAVED_IPA_MAX_BYTES): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder()
+  let sent = 0
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`--${boundary}\r\nContent-Disposition: form-data; name="ipa"; filename="app.ipa"\r\nContent-Type: application/octet-stream\r\n\r\n`))
+    },
+    transform(chunk, controller) {
+      sent += chunk.byteLength
+      if (sent > maxBytes)
+        throw new Error('The saved build is too large to install.')
+      controller.enqueue(chunk)
+    },
+    flush(controller) {
+      controller.enqueue(encoder.encode(`\r\n--${boundary}--\r\n`))
+    },
+  }))
+}
 
 export function emulatorSessionCreateBody(input: { id?: string, appId: string, platform: 'ios' | 'android', orgId: string, name?: string }) {
   return {
@@ -225,6 +257,39 @@ async function postEmulator(origin: string, accessKey: string, path: string, met
   return { status: response.status, data: payload?.data }
 }
 
+async function installSavedIpa(c: Context, principal: RlsPrincipal, appId: string, ownerOrg: string, jobId: string, sessionUrl: string, accessKey: string) {
+  const saved = (await savedOutputsForJobs(c, principal, appId, ownerOrg, [jobId]))[jobId]
+  if (saved?.kind !== 'ios_ipa')
+    throw new Error('This build has no saved iOS app.')
+  const file = await fetch(saved.url, { signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS) })
+  if (!file.ok || !file.body) {
+    await file.body?.cancel()
+    throw new Error('The saved build could not be downloaded.')
+  }
+  const length = savedIpaContentLength(file.headers.get('content-length'))
+  if (length !== undefined && length > SAVED_IPA_MAX_BYTES) {
+    await file.body.cancel()
+    throw new Error('The saved build is too large to install.')
+  }
+  const boundary = `capgo-${crypto.randomUUID()}`
+  const installUrl = new URL('api/install', sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`)
+  const init: RequestInit & { duplex?: 'half' } = {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${accessKey}`,
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+    },
+    body: multipartIpaStream(file.body, boundary),
+    duplex: 'half',
+    signal: AbortSignal.timeout(SAVED_IPA_TRANSFER_MS),
+  }
+  const response = await fetch(installUrl, init)
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(text.slice(0, 300) || 'The simulator could not install the build.')
+  }
+}
+
 function simulatorConfig(c: Context) {
   const accessKey = getEnv(c, 'SIMULATOR_ACCESS_KEY')
   if (!accessKey)
@@ -249,6 +314,45 @@ async function ownedSession(c: Context, principal: RlsPrincipal, userId: string,
   return { orgId, row }
 }
 
+async function savedBuildInstallError(input: {
+  c: Context
+  principal: RlsPrincipal
+  appId: string
+  ownerOrg: string
+  jobId: string | undefined
+  platform: string
+  sessionUrl: string
+  accessKey: string
+}) {
+  if (!input.jobId || input.platform !== 'ios')
+    return null
+  try {
+    await installSavedIpa(input.c, input.principal, input.appId, input.ownerOrg, input.jobId, input.sessionUrl, input.accessKey)
+    return null
+  }
+  catch (error) {
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))
+      return 'The saved build took too long to install.'
+    return error instanceof Error ? error.message : 'The saved build could not be installed.'
+  }
+}
+
+function openedSimulator(device: EmulatorSessionData | undefined) {
+  if (!device?.id || !device.url)
+    throw new Error('Simulator did not return a session URL.')
+  return device
+}
+
+async function failSimulatorStartup(c: Context, slotId: string, emulatorId: string, error: unknown, appId: string): Promise<never> {
+  const interrupted = emulatorId === '' && simulatorCreateWasInterrupted(error)
+  const deviceId = emulatorId || (interrupted ? slotId : '')
+  const deviceStopped = deviceId === '' || await createdDeviceStopped(c, deviceId, interrupted)
+  await recordStartupFailure(c, slotId, deviceStopped ? '' : deviceId, deviceStopped)
+  if (error instanceof Error && error.name === 'HTTPException')
+    throw error
+  throw quickError(502, 'simulator_unavailable', error instanceof Error ? error.message : 'Simulator did not start.', { app_id: appId }, error, { alert: false })
+}
+
 export async function startSimulator(c: Context, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const { appId, platform, name } = simulatorRequestFields(body)
   await ensureBuildPermission(c, appId, userId)
@@ -259,12 +363,11 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
   try {
     const { accessKey, origin } = simulatorConfig(c)
     const created = await postEmulator(origin, accessKey, '/v2/device-run-sessions', 'POST', emulatorSessionCreateBody({ id: slot.id, appId, platform, orgId, name }))
-    const device = created.data
-    if (device?.id)
-      emulatorId = device.id
-    if (!device?.id || !device.url)
-      throw new Error('Simulator did not return a session URL.')
+    if (created.data?.id)
+      emulatorId = created.data.id
+    const device = openedSimulator(created.data)
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
+    const installError = await savedBuildInstallError({ c, principal, appId, ownerOrg: orgId, jobId: body.build_job_id, platform, sessionUrl: device.url, accessKey })
     return c.json({
       data: {
         id: slot.id,
@@ -273,17 +376,12 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
         platform,
         kind: 'simulator',
         remoteConfig: device.remoteConfig ?? null,
+        install_error: installError,
       },
     })
   }
   catch (error) {
-    const interrupted = emulatorId === '' && simulatorCreateWasInterrupted(error)
-    const deviceId = emulatorId || (interrupted ? slot.id : '')
-    const deviceStopped = deviceId === '' || await createdDeviceStopped(c, deviceId, interrupted)
-    await recordStartupFailure(c, slot.id, deviceStopped ? '' : deviceId, deviceStopped)
-    if (error instanceof Error && error.name === 'HTTPException')
-      throw error
-    throw quickError(502, 'simulator_unavailable', error instanceof Error ? error.message : 'Simulator did not start.', { app_id: appId }, error, { alert: false })
+    return failSimulatorStartup(c, slot.id, emulatorId, error, appId)
   }
 }
 

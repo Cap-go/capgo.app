@@ -799,8 +799,7 @@ jobs:
         # Keep startup and functions serve on the same original image repositories.
         run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
-        # Start pulling while the runner sets up; supabase start reuses in-flight layers.
-        background: true
+        # Finish image extraction before installing dependencies or starting the database.
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
@@ -816,13 +815,19 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - parallel:
-          - name: Install dependencies
-            run: bun install
-          - name: Run Supabase Start
-            env:
-              SUPABASE_CLI_BIN: supabase
-            run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      # Avoid overlapping dependency extraction with Docker startup on constrained runners.
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        env:
+          SUPABASE_CLI_BIN: supabase
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Diagnose bootstrap resource failures
+        if: failure()
+        run: |
+          free -m
+          df -h
+          sudo dmesg --ctime | tail -n 120 || true
       - name: Export isolated test endpoints
         run: |
           {

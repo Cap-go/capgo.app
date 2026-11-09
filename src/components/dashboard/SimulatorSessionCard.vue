@@ -1,20 +1,16 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import IconSmartphone from '~icons/lucide/smartphone'
 import { defaultApiHost, useConsole } from '../../services/console'
+import { forgetSimulator, rememberSimulator, runningSimulators, sessionRemainsAfterLookup, simulatorEpoch } from '../../services/simulatorSessions'
 
 const props = defineProps<{ appId: string }>()
 const { t } = useI18n()
 const capgo = useConsole()
-interface RunningSimulator {
-  id: string
-  url: string
-}
-
 const pending = ref<'ios' | 'android' | ''>('')
 const stoppingId = ref('')
-const sessions = ref<RunningSimulator[]>([])
+const sessions = computed(() => runningSimulators(props.appId))
 const error = ref('')
 
 async function sessionToken() {
@@ -26,6 +22,7 @@ async function sessionToken() {
 }
 
 async function start(platform: 'ios' | 'android') {
+  const epoch = simulatorEpoch()
   error.value = ''
   pending.value = platform
   try {
@@ -42,7 +39,7 @@ async function start(platform: 'ios' | 'android') {
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-start'))
     const id = payload?.data?.id
     if (id)
-      sessions.value = [...sessions.value, { id, url: payload.data?.url || '' }]
+      rememberSimulator(props.appId, { id, url: payload.data?.url || '' }, epoch)
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : t('simulator-did-not-start')
@@ -51,6 +48,28 @@ async function start(platform: 'ios' | 'android') {
     pending.value = ''
   }
 }
+
+async function refreshSessions() {
+  const appId = props.appId
+  const known = [...runningSimulators(appId)]
+  await Promise.all(known.map(async (session) => {
+    const remains = await sessionRemainsAfterLookup(async () => {
+      const response = await fetch(`${defaultApiHost}/private/simulator/${session.id}?app_id=${encodeURIComponent(appId)}`, {
+        headers: { authorization: `Bearer ${await sessionToken()}` },
+      })
+      if (!response.ok)
+        return { httpStatus: response.status }
+      const payload = await response.json() as { data?: { status?: string } }
+      return { httpStatus: response.status, sessionStatus: payload.data?.status }
+    })
+    if (!remains)
+      forgetSimulator(appId, session.id)
+  }))
+}
+
+onMounted(() => {
+  void refreshSessions()
+})
 
 async function stop(id: string) {
   error.value = ''
@@ -67,7 +86,7 @@ async function stop(id: string) {
     const payload = await response.json().catch(() => undefined) as { message?: string, error?: string } | undefined
     if (!response.ok)
       throw new Error(payload?.message || payload?.error || t('simulator-did-not-stop'))
-    sessions.value = sessions.value.filter(session => session.id !== id)
+    forgetSimulator(props.appId, id)
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : t('simulator-did-not-stop')

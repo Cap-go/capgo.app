@@ -4,6 +4,8 @@ import type { ChangelogDigest, ChangelogDigestContext, ChangelogProduct, Changel
 import type { AiBinding } from '../utils/workers_ai.ts'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
+import { cachedChangelog } from '../utils/changelog_cache.ts'
+import { getDependency } from '../utils/changelog_dependencies.ts'
 import {
   buildFallbackDigest,
   changelogSource,
@@ -11,6 +13,7 @@ import {
   requiredActions,
   isChangelogProduct,
   normalizeReleases,
+  releasesFromChangelog,
   releasesBetween,
   releasesToPromptText,
   sanitizeDigestContext,
@@ -28,15 +31,15 @@ const PLUGINS_CACHE_PATH = '/private/changelog/plugins'
 const DIGEST_CACHE_PATH = '/private/changelog/digest'
 const RELEASES_TTL_SECONDS = 15 * 60
 const PLUGINS_TTL_SECONDS = 6 * 60 * 60
-// A digest is keyed by exact versions, so it never goes stale; a day bounds cache growth.
-const DIGEST_TTL_SECONDS = 24 * 60 * 60
+// Exact release contents and model are part of the key; edited notes invalidate shared summaries.
+const DIGEST_TTL_SECONDS = 7 * 24 * 60 * 60
 const CACHE_TIMEOUT_MS = 200
 const GITHUB_PAGE_SIZE = 100
 // capgo.app interleaves console and CLI tags, so it needs more pages to reach older versions.
 const MAX_PAGES_SHARED_REPO = 5
 const MAX_PAGES_SINGLE_REPO = 3
 const MAX_DIGEST_RELEASES = 80
-// DeepSeek V4.1 Flash (Workers AI, Oct 2026): 1M context, JSON schema output. Thinking is turned off per
+// DeepSeek V4.1 Flash (catalog created_at: 2026-10-17, checked 2026-11-06): 1M context, JSON schema output. Thinking is turned off per
 // request (reasoning_effort: none) so the whole token budget goes to the summary and the modal stays fast.
 const DEFAULT_CHANGELOG_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
 const LOCALE_PATTERN = /^[a-z]{2}(?:-[a-z0-9]{2,4})?$/i
@@ -60,30 +63,30 @@ interface ReleasesPayload {
   truncated: boolean
 }
 
-function githubHeaders(c: Context) {
+function githubHeaders(c: Context, authenticated = true) {
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github+json',
     'User-Agent': 'capgo-app',
     'X-GitHub-Api-Version': '2022-11-28',
   }
   const token = getEnv(c, 'GITHUB_TOKEN')
-  if (token)
+  if (token && authenticated)
     headers.Authorization = `Bearer ${token}`
   return headers
 }
 
 async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Promise<ReleasesPayload> {
-  const maxPages = source.tagPrefix ? MAX_PAGES_SHARED_REPO : MAX_PAGES_SINGLE_REPO
+  const maxPages = (source.tagPrefix || source.monorepo) ? MAX_PAGES_SHARED_REPO : MAX_PAGES_SINGLE_REPO
   const raw: unknown[] = []
   let truncated = false
   // Pages are read one by one on purpose: we stop at the first short page instead of firing every request.
   for (let page = 1; page <= maxPages; page++) {
-    const url = `https://api.github.com/repos/${GITHUB_ORG}/${encodeURIComponent(source.repo)}/releases?per_page=${GITHUB_PAGE_SIZE}&page=${page}`
-    const response = await fetch(url, { headers: githubHeaders(c) }).catch(() => null) // NOSONAR: sequential pagination, see above
+    const url = `https://api.github.com/repos/${source.owner ?? GITHUB_ORG}/${encodeURIComponent(source.repo)}/releases?per_page=${GITHUB_PAGE_SIZE}&page=${page}`
+    const response = await fetch(url, { headers: githubHeaders(c, !source.owner), signal: AbortSignal.timeout(10_000) }).catch(() => null) // NOSONAR: sequential pagination, see above
     if (!response) {
       // Network failure on a later page: partial history beats an error page.
       if (raw.length)
-        return { releases: normalizeReleases(raw as never[], source.tagPrefix), truncated: true }
+        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
       throw quickError(502, 'changelog_fetch_failed', 'Could not load release notes', { repo: source.repo })
     }
     if (response.status === 404)
@@ -91,7 +94,7 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
     if (!response.ok) {
       // Partial history beats an error page: keep what earlier pages returned.
       if (raw.length)
-        return { releases: normalizeReleases(raw as never[], source.tagPrefix), truncated: true }
+        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
       throw quickError(502, 'changelog_fetch_failed', 'Could not load release notes', { repo: source.repo, status: response.status })
     }
     const pageItems = await response.json() as unknown[]
@@ -103,18 +106,47 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
     if (page === maxPages)
       truncated = true
   }
-  return { releases: normalizeReleases(raw as never[], source.tagPrefix), truncated }
+  const releases = normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo)
+  if (!releases.length && source.packageName) {
+    const path = [...source.directory ? [source.directory] : [], 'CHANGELOG.md'].join('/')
+    const response = await fetch(`https://api.github.com/repos/${source.owner}/${source.repo}/contents/${path}`, {
+      headers: { ...githubHeaders(c, false), Accept: 'application/vnd.github.raw+json' },
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => null)
+    // GitHub's contents API bounds the file; reject large changelogs instead of reading without limit.
+    if (response?.ok && response.body) {
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let markdown = ''
+      let size = 0
+      try {
+        while (true) {
+          const chunk = await reader.read() // NOSONAR: bounded stream, at most 1 MiB
+          if (chunk.done)
+            break
+          size += chunk.value.byteLength
+          if (size > 1024 * 1024)
+            break
+          markdown += decoder.decode(chunk.value, { stream: true })
+        }
+      }
+      finally {
+        await reader.cancel()
+      }
+      if (size <= 1024 * 1024)
+        return { releases: releasesFromChangelog(markdown + decoder.decode(), `https://github.com/${source.owner}/${source.repo}/blob/HEAD/${path}`), truncated: true }
+    }
+  }
+  return { releases, truncated }
 }
 
-export async function getReleases(c: Context, source: ChangelogSource): Promise<ReleasesPayload> {
-  const cache = new CacheHelper(c)
-  const key = cache.buildRequest(RELEASES_CACHE_PATH, { repo: source.repo, prefix: source.tagPrefix, v: '1' })
-  const cached = await cache.matchJson<ReleasesPayload>(key, { timeoutMs: CACHE_TIMEOUT_MS })
-  if (cached)
-    return cached
-  const payload = await fetchReleasesFromGithub(c, source)
-  await cache.putJson(key, payload, RELEASES_TTL_SECONDS, { timeoutMs: CACHE_TIMEOUT_MS })
-  return payload
+export async function getReleases(c: Context<MiddlewareKeyVariables>, source: ChangelogSource): Promise<ReleasesPayload> {
+  return cachedChangelog(c, {
+    path: RELEASES_CACHE_PATH,
+    params: { owner: source.owner ?? GITHUB_ORG, repo: source.repo, prefix: source.tagPrefix, package: source.packageName ?? '', monorepo: source.monorepo ? '1' : '0', directory: source.directory ?? '', v: '2' },
+    ttl: RELEASES_TTL_SECONDS,
+    load: () => fetchReleasesFromGithub(c, source),
+  })
 }
 
 interface NpmSearchResponse {
@@ -150,22 +182,21 @@ async function fetchPluginCatalog(): Promise<ChangelogPlugin[]> {
   return [...plugins.values()].toSorted((a, b) => a.name.localeCompare(b.name))
 }
 
-export async function getPluginCatalog(c: Context): Promise<ChangelogPlugin[]> {
-  const cache = new CacheHelper(c)
-  const key = cache.buildRequest(PLUGINS_CACHE_PATH, { v: '1' })
-  const cached = await cache.matchJson<ChangelogPlugin[]>(key, { timeoutMs: CACHE_TIMEOUT_MS })
-  if (cached)
-    return cached
-  const plugins = await fetchPluginCatalog()
-  if (plugins.length)
-    await cache.putJson(key, plugins, PLUGINS_TTL_SECONDS, { timeoutMs: CACHE_TIMEOUT_MS })
-  return plugins
+export async function getPluginCatalog(c: Context<MiddlewareKeyVariables>): Promise<ChangelogPlugin[]> {
+  return cachedChangelog(c, {
+    path: PLUGINS_CACHE_PATH,
+    params: { v: '1' },
+    ttl: plugins => plugins.length ? PLUGINS_TTL_SECONDS : 60,
+    load: fetchPluginCatalog,
+  })
 }
 
-async function resolveSource(c: Context, product: unknown, repo: unknown) {
+async function resolveSource(c: Context<MiddlewareKeyVariables>, product: unknown, repo: unknown) {
   if (!isChangelogProduct(product))
-    throw simpleError('invalid_changelog_product', 'product must be console, cli, updater or plugin', { product })
-  const source = changelogSource(product, typeof repo === 'string' ? repo : undefined)
+    throw simpleError('invalid_changelog_product', 'Unknown changelog product', { product })
+  const source = product === 'dependency'
+    ? (await getDependency(c, repo)).source
+    : changelogSource(product, typeof repo === 'string' ? repo : undefined)
   if (!source)
     throw simpleError('invalid_changelog_repo', 'A valid plugin repo is required', { repo })
   // GitHub calls may carry GITHUB_TOKEN: only repos of published @capgo npm plugins (public by definition)
@@ -262,6 +293,8 @@ const PRODUCT_LABELS: Record<ChangelogProduct, string> = {
   cli: 'the Capgo CLI (@capgo/cli)',
   updater: 'the Capgo live-update plugin (@capgo/capacitor-updater)',
   plugin: 'a Capgo Capacitor plugin',
+  capacitor: 'Capacitor core (the iOS, Android and JavaScript runtime)',
+  dependency: 'a Capacitor dependency',
 }
 
 export async function aiDigest(
@@ -275,7 +308,7 @@ export async function aiDigest(
   if (!ai || !releases.length)
     return fallback
   const model = getEnv(c, 'CHANGELOG_MODEL') || DEFAULT_CHANGELOG_MODEL
-  const productLabel = fallback.product === 'plugin' ? `${PRODUCT_LABELS.plugin} (${fallback.repo})` : PRODUCT_LABELS[fallback.product]
+  const productLabel = (fallback.product === 'plugin' || fallback.product === 'dependency') ? `${PRODUCT_LABELS[fallback.product]} (${fallback.repo})` : PRODUCT_LABELS[fallback.product]
   const prompt = releasesToPromptText(releases)
   try {
     const result = await ai.run(model, {
@@ -345,8 +378,10 @@ app.use('*', useCors)
 app.get('/', middlewareAuth, async (c) => {
   const { product, source } = await resolveSource(c, c.req.query('product'), c.req.query('repo'))
   const { releases, truncated } = await getReleases(c, source)
-  return c.json({ product, repo: source.repo, latest: releases[0]?.version ?? null, truncated, releases })
+  return c.json({ product, repo: source.owner ? `${source.owner}/${source.repo}` : source.repo, latest: releases[0]?.version ?? null, truncated, releases })
 })
+
+app.get('/dependency', middlewareAuth, async (c) => c.json(await getDependency(c, c.req.query('package'))))
 
 app.get('/plugins', middlewareAuth, async (c) => {
   try {
@@ -422,7 +457,8 @@ export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: 
 
   const cache = new CacheHelper(c)
   const key = cache.buildRequest(DIGEST_CACHE_PATH, {
-    v: '3',
+    v: '4',
+    model: getEnv(c, 'CHANGELOG_MODEL') || DEFAULT_CHANGELOG_MODEL,
     product,
     // The exact release set and its contents: a digest built from partial history or older notes
     // never outlives a recovery or an edited release.
@@ -430,23 +466,26 @@ export async function changelogDigest(c: Context<MiddlewareKeyVariables>, body: 
     oldest: oldestInRange,
     t: truncated ? '1' : '0',
     h: releasesFingerprint(inRange),
-    repo: source.repo,
+    repo: `${source.owner ?? GITHUB_ORG}/${source.repo}`,
+    package: source.packageName ?? '',
     from: fromVersion,
     to: toVersion ?? '',
     locale,
     platforms: context.platforms.join(','),
     features: context.features.join(','),
   })
-  const cached = await cache.matchJson<ChangelogDigest>(key, { timeoutMs: CACHE_TIMEOUT_MS })
-  if (cached)
-    return { ...cached, releases: inRange, truncated }
-
-  const fallback = buildFallbackDigest(product, source.repo, inRange, fromVersion, toVersion, context)
-  const digest = inRange.length && await takeAiQuota(c)
-    ? await aiDigest(c, fallback, inRange, context, locale)
-    : fallback
-  // Only cache AI output: a fallback digest should be retried once Workers AI recovers.
-  if (digest.aiGenerated)
-    await cache.putJson(key, digest, DIGEST_TTL_SECONDS, { timeoutMs: CACHE_TIMEOUT_MS })
+  const digest = await cachedChangelog(c, {
+    path: DIGEST_CACHE_PATH,
+    params: Object.fromEntries(new URL(key.url).searchParams),
+    persistent: true,
+    ttl: value => value.aiGenerated ? DIGEST_TTL_SECONDS : 60,
+    load: async () => {
+      const repo = source.owner ? `${source.owner}/${source.repo}` : source.repo
+      const fallback = buildFallbackDigest(product, repo, inRange, fromVersion, toVersion, context)
+      return inRange.length && await takeAiQuota(c)
+        ? aiDigest(c, fallback, inRange, context, locale)
+        : fallback
+    },
+  })
   return { ...digest, releases: inRange, truncated }
 }
