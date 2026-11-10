@@ -312,8 +312,8 @@ export async function assertMcpEventsAuth(
     throw Object.assign(new Error('Cannot read filtered app'), { code: 'forbidden' })
 }
 
-export async function countActiveMcpSubscriptions(c: Context, orgId: string): Promise<number> {
-  const rows = await withAdminPg(c, pg => queryJson<{ count: number }>(
+async function countActiveMcpSubscriptionsOnPg(pg: PgClient, orgId: string): Promise<number> {
+  const rows = await queryJson<{ count: number }>(
     pg,
     `
     SELECT count(*)::int AS count
@@ -324,8 +324,35 @@ export async function countActiveMcpSubscriptions(c: Context, orgId: string): Pr
       AND (expires_at IS NULL OR expires_at > now())
     `,
     [orgId],
-  ))
+  )
   return rows[0]?.count ?? 0
+}
+
+async function withMcpSubscriptionOrgLock<T>(
+  c: Context,
+  orgId: string,
+  run: (pg: PgClient) => Promise<T>,
+): Promise<T> {
+  return await withAdminPg(c, async (pg) => {
+    await pg.query(BEGIN_WRITE_TRANSACTION_SQL)
+    try {
+      await pg.query(
+        'SELECT pg_catalog.pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`mcp_subs:${orgId}`],
+      )
+      const result = await run(pg)
+      await pg.query('COMMIT')
+      return result
+    }
+    catch (error) {
+      await pg.query('ROLLBACK').catch(() => {})
+      throw error
+    }
+  })
+}
+
+export async function countActiveMcpSubscriptions(c: Context, orgId: string): Promise<number> {
+  return await withAdminPg(c, pg => countActiveMcpSubscriptionsOnPg(pg, orgId))
 }
 
 type McpStoredArguments = z.infer<typeof mcpArgumentsSchema> | z.infer<typeof mcpFailureSpikeArgumentsSchema>
@@ -517,61 +544,36 @@ export async function upsertMcpEventSubscription(
     ))
   }
   else {
-    const inserted = await withAdminPg(c, async (pg) => {
-      await pg.query(BEGIN_WRITE_TRANSACTION_SQL)
-      try {
-        await pg.query(
-          'SELECT pg_catalog.pg_advisory_xact_lock(hashtextextended($1, 0))',
-          [`mcp_subs:${args.org_id}`],
+    const inserted = await withMcpSubscriptionOrgLock(c, args.org_id, async (pg) => {
+      const active = await countActiveMcpSubscriptionsOnPg(pg, args.org_id)
+      if (active >= MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG) {
+        throw Object.assign(
+          new Error(`Active MCP subscription limit reached (${MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG})`),
+          { code: 'subscription_cap' },
         )
-        const countRows = await queryJson<{ count: number }>(
-          pg,
-          `
-          SELECT count(*)::int AS count
-          FROM public.webhooks
-          WHERE org_id = $1
-            AND source = 'mcp'
-            AND enabled = true
-            AND (expires_at IS NULL OR expires_at > now())
-          `,
-          [args.org_id],
-        )
-        const active = countRows[0]?.count ?? 0
-        if (active >= MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG) {
-          throw Object.assign(
-            new Error(`Active MCP subscription limit reached (${MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG})`),
-            { code: 'subscription_cap' },
-          )
-        }
-        const row = await queryJsonOne<{ id: string }>(
-          pg,
-          `
-          INSERT INTO public.webhooks (
-            org_id, name, url, secret, enabled, events, delivery_version, created_by,
-            source, expires_at, mcp_event, mcp_arguments, mcp_verified_at
-          )
-          VALUES ($1, $2, $3, $4, true, ARRAY[$5]::text[], 'standard', $6, 'mcp', $7, $8, $9::jsonb, NULL)
-          RETURNING id
-          `,
-          [
-            args.org_id,
-            subscriptionNameValue,
-            input.delivery.url,
-            secret,
-            input.name,
-            auth.userId,
-            expiresAt.toISOString(),
-            input.name,
-            JSON.stringify(args),
-          ],
-        )
-        await pg.query('COMMIT')
-        return row
       }
-      catch (error) {
-        await pg.query('ROLLBACK').catch(() => {})
-        throw error
-      }
+      return await queryJsonOne<{ id: string }>(
+        pg,
+        `
+        INSERT INTO public.webhooks (
+          org_id, name, url, secret, enabled, events, delivery_version, created_by,
+          source, expires_at, mcp_event, mcp_arguments, mcp_verified_at
+        )
+        VALUES ($1, $2, $3, $4, true, ARRAY[$5]::text[], 'standard', $6, 'mcp', $7, $8, $9::jsonb, NULL)
+        RETURNING id
+        `,
+        [
+          args.org_id,
+          subscriptionNameValue,
+          input.delivery.url,
+          secret,
+          input.name,
+          auth.userId,
+          expiresAt.toISOString(),
+          input.name,
+          JSON.stringify(args),
+        ],
+      )
     })
     if (!inserted?.id)
       throw Object.assign(new Error('Failed to create MCP subscription row'), { code: 'internal' })
