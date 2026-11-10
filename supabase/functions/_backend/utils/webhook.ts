@@ -232,7 +232,11 @@ export async function findWebhooksForEvent(
   try {
     return await withAdminPg(c, pg => queryJson<WebhookRow>(
       pg,
-      'SELECT * FROM public.webhooks WHERE org_id = $1 AND enabled = true AND events @> ARRAY[$2]::text[]',
+      `SELECT * FROM public.webhooks
+       WHERE org_id = $1
+         AND enabled = true
+         AND COALESCE(source, 'console') = 'console'
+         AND events @> ARRAY[$2]::text[]`,
       [orgId, tableName],
     ))
   }
@@ -478,6 +482,7 @@ export async function deliverWebhook(
   payload: WebhookDeliveryPayload,
   secret: string,
   deliveryVersion: WebhookDeliveryVersion = 'legacy',
+  mcpSubscriptionId?: string,
 ): Promise<{ success: boolean, status?: number, body?: string, duration?: number, retryAfter?: string | null }> {
   const startTime = Date.now()
   const urlInfo = getWebhookLogUrlMetadata(url)
@@ -504,26 +509,33 @@ export async function deliverWebhook(
   const deliveryPayload = buildWebhookDeliveryPayload(payload, deliveryVersion)
   const payloadString = JSON.stringify(deliveryPayload)
   const timestamp = Math.floor(Date.now() / 1000).toString()
-  const eventId = getWebhookPayloadEventId(deliveryPayload)
-  const event = getWebhookPayloadEvent(deliveryPayload)
-
-  const legacySignature = await generateWebhookSignature(secret, timestamp, payloadString)
+  const mcpEnvelope = deliveryPayload as { eventId?: string, name?: string }
+  const isMcpDelivery = Boolean(mcpSubscriptionId && mcpEnvelope.eventId && mcpEnvelope.name)
+  const eventId = isMcpDelivery ? String(mcpEnvelope.eventId) : getWebhookPayloadEventId(deliveryPayload)
+  const event = isMcpDelivery ? String(mcpEnvelope.name) : getWebhookPayloadEvent(deliveryPayload)
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'User-Agent': 'Capgo-Webhook/1.0',
-    'X-Capgo-Event': event,
-    'X-Capgo-Event-ID': eventId,
-    'X-Capgo-Timestamp': timestamp,
-    'X-Capgo-Signature': legacySignature,
+    'User-Agent': isMcpDelivery ? 'Capgo-MCP-Events/1.0' : 'Capgo-Webhook/1.0',
   }
 
-  if (deliveryVersion === 'standard') {
+  if (!isMcpDelivery) {
+    const legacySignature = await generateWebhookSignature(secret, timestamp, payloadString)
+    headers['X-Capgo-Event'] = event
+    headers['X-Capgo-Event-ID'] = eventId
+    headers['X-Capgo-Timestamp'] = timestamp
+    headers['X-Capgo-Signature'] = legacySignature
+  }
+
+  if (deliveryVersion === 'standard' || isMcpDelivery) {
     const standardSignature = await generateStandardWebhookSignature(secret, eventId, timestamp, payloadString)
     headers['webhook-id'] = eventId
     headers['webhook-timestamp'] = timestamp
     headers['webhook-signature'] = standardSignature
   }
+
+  if (isMcpDelivery && mcpSubscriptionId)
+    headers['X-MCP-Subscription-Id'] = mcpSubscriptionId
 
   try {
     const controller = new AbortController()

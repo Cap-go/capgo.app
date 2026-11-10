@@ -61,7 +61,8 @@ Connect the Capgo MCP server so the agent can manage apps, channels, bundles,
 native builds, and stats:
 
 - Hosted MCP: `https://api.capgo.app/mcp` ([docs](https://capgo.app/docs/ai/mcp/))
-- Local MCP (served by the CLI in this repo): `npx @capgo/cli@latest mcp`
+- MCP Events on the hosted server: subscribe with `events/subscribe` or `capgo_subscribe_events` for `build.succeeded`, `build.failed`, `bundle.uploaded`, and `bundle.deployed` (Standard Webhooks delivery).
+- Local MCP (served by the CLI in this repo): `npx @capgo/cli@latest mcp` (stdio only; event callbacks require the hosted MCP).
 
 Per-agent setup instructions are at [capgo.app/agents](https://capgo.app/agents/).
 

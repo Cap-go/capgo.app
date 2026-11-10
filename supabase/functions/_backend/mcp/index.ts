@@ -218,7 +218,7 @@ export function createMcpApp(dispatch: McpDispatch) {
       apikeyName: apikey.name,
       apikeyExpiresAt: apikey.expires_at,
     }
-    const ctx: McpToolContext = { call: createCaller(c, dispatch, token), caller, apikey: token }
+    const ctx: McpToolContext = { call: createCaller(c, dispatch, token), caller, apikey: token, hono: c }
 
     if (Array.isArray(payload) && (payload.length === 0 || payload.length > MAX_BATCH_MESSAGES))
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)
@@ -229,7 +229,7 @@ export function createMcpApp(dispatch: McpDispatch) {
       const method = (message as { method?: unknown } | null)?.method
       if (method === 'tools/call')
         cloudlog({ requestId: c.get('requestId'), message: 'mcp_tool_call', tool: (message as { params?: { name?: unknown } }).params?.name, apikeyId: caller.apikeyId })
-      const response = await handleJsonRpcMessage(message, ctx)
+      const response = await handleJsonRpcMessage(message, ctx, c)
       exchanges.push([message, response])
       if (response)
         responses.push(response)

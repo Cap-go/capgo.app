@@ -571,7 +571,14 @@ describe('hosted MCP errors always give a way out', () => {
       [500, '<html>Internal Server Error</html>'],
     ] as const
     // Tools that answer without calling the API (whoami, docs search) are covered separately.
-    const localTools = new Set(['capgo_whoami', 'capgo_search_docs'])
+    const localTools = new Set([
+      'capgo_whoami',
+      'capgo_search_docs',
+      'capgo_list_event_types',
+      'capgo_subscribe_events',
+      'capgo_list_event_subscriptions',
+      'capgo_unsubscribe_events',
+    ])
     const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
     for (const tool of tools) {
       const args = sampleArgs(tool.inputSchema)
