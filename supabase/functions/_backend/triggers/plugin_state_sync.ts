@@ -794,10 +794,18 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     if (manifestIds.length > 0)
       await syncManifests(source, store, manifestIds)
 
-    // Single-key changes may publish, but must not grant an exhausted full
-    // scan a fresh implicit retry budget or app-manifest continuation.
-    if (syncStatus?.archived_full)
+    // A failed history scan must not freeze current channels, plan or app
+    // deletion. Publish only the bounded app snapshot; missing independent
+    // dependencies use replicas, without restarting manifest/history work.
+    if (syncStatus?.archived_full) {
+      if (wantsApp) {
+        const { doc } = await buildAppDoc(source, appId)
+        if (doc.exists)
+          doc.manifest_ids = []
+        await putJson(store, await pluginStateAppKey(appId), doc)
+      }
       return { appId, ok: true, versionsChanged: versionNames.length > 0 }
+    }
 
     if (needsFull) {
       // A fresh request restarts the full sync; otherwise resume the cursor.

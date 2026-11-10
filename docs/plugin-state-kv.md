@@ -135,6 +135,12 @@ the app primary key, the pending-full app index and the failed-key primary key.
 ACK completion checks likewise run per settled app, rather than per source row.
 Explicit full repair clears completion markers once per selected app; selecting
 all apps is an operator-triggered repair operation, not a device request.
+The selected set includes apps known only by pending or archived work, so a
+deleted app's unfinished cleanup remains discoverable. Explicit repair resets
+exhausted pending budgets without releasing live leases, and moves archived
+exact keys back to pending. Durable enqueue and marker changes commit together;
+an insertion error fails the repair call. A wake failure leaves the queued work
+for the existing tick.
 
 The enqueue trigger runs once per source statement over transition tables,
 including writes reached through authenticated APIs and internal jobs. It
@@ -195,9 +201,12 @@ another invocation cannot immediately overwrite the same key. Failed work
 gets at most five leases, then retains its exact key in the repair archive.
 Capacity continuation does not spend the provider failure budget.
 An archived full failure blocks implicit full-scan restarts and app-manifest
-continuations from ordinary changes. Those changes may still publish their
-individual version, device or manifest keys; a full repair requires an explicit
-operator request.
+continuations from ordinary changes. App jobs still publish a current app
+snapshot, including channel/plan changes and deletion tombstones, and individual
+version, device and manifest jobs still publish their keys. The app snapshot
+does not claim newly served manifests were prepared; missing dependencies use
+replicas. No history or manifest scan starts from this failure path. The archive
+remains and a full repair requires an explicit operator request.
 
 R2 metadata includes a content digest that excludes the snapshot's `built_at`.
 Unchanged refreshes still write an immutable value and advance the generation

@@ -330,6 +330,78 @@ describe('plugin KV sync queue contracts', () => {
     })
   })
 
+  it.each(['expired', 'live'])('refreshes exhausted pending work during explicit repair while preserving a %s lease', async (lease) => {
+    await inTransaction(async () => {
+      await client.query(`CREATE OR REPLACE FUNCTION public.plugin_state_sync_enabled()
+        RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $body$ SELECT true $body$`)
+      await client.query(`CREATE OR REPLACE FUNCTION public.wake_plugin_state_sync()
+        RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $body$ SELECT $body$`)
+      await client.query(`SELECT set_config('capgo.plugin_state_wake_sent', 'on', true)`)
+      await client.query(`INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at)
+        VALUES ($1, now(), now())`, [APP_ID])
+      const token = randomUUID()
+      await client.query(`INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, attempts, lease_token, leased_until)
+        VALUES ($1, 'full', $2, 5, $3, clock_timestamp() + $4::interval),
+          ($1, 'manifest', '123456', 5, $3, clock_timestamp() + $4::interval)`,
+      [APP_ID, JSON.stringify({ p: 'devices', after: 'old-cursor' }), token, lease === 'live' ? '1 minute' : '-1 minute'])
+      await client.query('SELECT public.enqueue_plugin_state_full_sync(ARRAY[$1]::text[])', [APP_ID])
+      const { rows: refreshed } = await client.query<{ attempts: number, lease_token: string }>(
+        'SELECT attempts, lease_token FROM public.plugin_state_sync_pending WHERE app_id = $1 AND lease_token = $2', [APP_ID, token])
+      expect(refreshed).toEqual([{ attempts: 0, lease_token: token }, { attempts: 0, lease_token: token }])
+      if (lease === 'live') {
+        const other = await claim()
+        expect(other.apps?.some(app => app.app_id === APP_ID) ?? false).toBe(false)
+        await client.query(`UPDATE public.plugin_state_sync_pending SET leased_until = clock_timestamp() - interval '1 second'
+          WHERE app_id = $1 AND lease_token = $2`, [APP_ID, token])
+      }
+      await client.query('SELECT public.plugin_state_sync_tick()')
+      const next = await claim()
+      expect(next.apps?.find(app => app.app_id === APP_ID)?.jobs).toContainEqual({ kind: 'full', ref: '' })
+      expect(next.apps?.find(app => app.app_id === APP_ID)?.jobs).toContainEqual({ kind: 'manifest', ref: '123456' })
+      await client.query(`SELECT public.ack_plugin_state_sync(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_full_done => ARRAY[$2]::text[],
+        p_changed_apps => '{}'::text[])`, [next.lease_token, APP_ID])
+      const { rows } = await client.query<{ complete: boolean }>('SELECT full_synced_at IS NOT NULL AS complete FROM public.plugin_state_sync_apps WHERE app_id = $1', [APP_ID])
+      expect(rows).toEqual([{ complete: true }])
+      const { rows: failed } = await client.query('SELECT kind FROM public.plugin_state_sync_failed WHERE app_id = $1', [APP_ID])
+      expect(failed).toEqual([])
+    })
+  })
+
+  it('fails explicit repair atomically when its durable enqueue fails', async () => {
+    await inTransaction(async () => {
+      await client.query(`INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at)
+        VALUES ($1, now(), now())`, [APP_ID])
+      await client.query(`CREATE FUNCTION pg_temp.fail_plugin_sync_repair()
+        RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $body$
+        BEGIN RAISE EXCEPTION 'synthetic durable repair failure'; END;
+        $body$`)
+      await client.query(`CREATE TRIGGER test_fail_plugin_sync_repair BEFORE INSERT ON public.plugin_state_sync_pending
+        FOR EACH ROW EXECUTE FUNCTION pg_temp.fail_plugin_sync_repair()`)
+      await client.query('SAVEPOINT before_repair')
+      await expect(client.query('SELECT public.enqueue_plugin_state_full_sync(ARRAY[$1]::text[])', [APP_ID])).rejects.toThrow('synthetic durable repair failure')
+      await client.query('ROLLBACK TO SAVEPOINT before_repair')
+      const { rows } = await client.query<{ complete: boolean }>('SELECT full_synced_at IS NOT NULL AS complete FROM public.plugin_state_sync_apps WHERE app_id = $1', [APP_ID])
+      expect(rows).toEqual([{ complete: true }])
+    })
+  })
+
+  it('includes deleted apps known only by pending work in explicit repair', async () => {
+    await inTransaction(async () => {
+      await client.query('DELETE FROM public.apps WHERE app_id = $1', [APP_ID])
+      await client.query('DELETE FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])
+      await client.query(`SELECT set_config('capgo.plugin_state_wake_sent', 'on', true)`)
+      await client.query(`INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, attempts)
+        VALUES ($1, 'full', $2, 5)`, [APP_ID, JSON.stringify({ p: 'devices', after: 'deleted-app-cursor' })])
+      const { rows } = await client.query<{ count: number }>('SELECT public.enqueue_plugin_state_full_sync(ARRAY[$1]::text[]) AS count', [APP_ID])
+      expect(rows).toEqual([{ count: 1 }])
+      const { rows: pending } = await client.query<{ ref: string, attempts: number }>(
+        'SELECT ref, attempts FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])
+      expect(pending).toContainEqual({ ref: '', attempts: 0 })
+      expect(pending.every(row => row.attempts === 0)).toBe(true)
+    })
+  })
+
   it('does not purge any cache for an unchanged snapshot refresh', async () => {
     await inTransaction(async () => {
       await enqueue()

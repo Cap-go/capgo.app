@@ -1,8 +1,9 @@
 import type { SQL } from 'drizzle-orm'
+import type { PluginStateAppDoc, PluginStateChannelRow } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import { Hono } from 'hono/tiny'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { publicationProviders } from './plugin-state-publication-fixture.ts'
 import { pluginStateAppKey, pluginStateDeviceKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { createPluginStateSyncStore, drainPluginStateSync } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
@@ -11,6 +12,9 @@ const provider = vi.hoisted(() => ({
   execute: vi.fn(),
   close: vi.fn(),
   log: vi.fn(),
+  owner: vi.fn(),
+  channels: vi.fn(),
+  channelListIds: vi.fn(),
 }))
 
 // The SQL and KV services are external boundaries. The real drain, app
@@ -26,6 +30,17 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlogErr: provider.log,
   serializeError: (error: unknown) => error,
 }))
+vi.mock('../supabase/functions/_backend/plugin_runtime/utils/pluginStateSelects.ts', () => ({
+  selectPluginStateOwner: provider.owner,
+  selectPluginStateChannels: provider.channels,
+  selectPluginStateChannelListIds: provider.channelListIds,
+}))
+
+beforeEach(() => {
+  provider.owner.mockResolvedValue(null)
+  provider.channels.mockResolvedValue([])
+  provider.channelListIds.mockResolvedValue([])
+})
 
 interface Statement {
   sql: string
@@ -167,7 +182,7 @@ describe('plugin state same-app reclaim', () => {
     expect(argument(acks[0], 'p_changed_apps')).toEqual([appId])
   })
 
-  it('publishes only the changed device key while a full scan remains archived', async () => {
+  it('publishes a device removal and current app tombstone while a full scan remains archived', async () => {
     const appId = 'com.test.archived-full'
     const storage = publicationProviders()
     const acks: Statement[] = []
@@ -189,9 +204,62 @@ describe('plugin state same-app reclaim', () => {
     const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
     expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
     expect(storage.publishedValue(await pluginStateDeviceKey(appId, 'fixture-device'))).toEqual({ channel_id: null })
-    expect(storage.objects.has(await pluginStateAppKey(appId))).toBe(false)
+    expect(storage.publishedValue(await pluginStateAppKey(appId))).toMatchObject({ exists: false, app_id: appId })
     expect(argument(acks[0], 'p_continuations')).toBe('{}')
     expect(argument(acks[0], 'p_full_done')).toEqual([])
+  })
+
+  it.each(['deleted', 'channels'] as const)('refreshes an archived app after %s changes without restarting its full scan', async (change) => {
+    const appId = `com.test.archived-app-${change}`
+    const storage = publicationProviders()
+    const key = await pluginStateAppKey(appId)
+    const previous = {
+      f: 1, app_id: appId, built_at: 1, exists: true,
+      owner: { owner_org: '00000000-0000-4000-8000-000000000001' },
+      plan: { has_credits: false, customer_id: null, stripe: null },
+      channels: [], overrides: {}, manifest_ids: [],
+    } satisfies PluginStateAppDoc
+    await createPluginStateSyncStore(storage.namespace, storage.pointers, '1').putJson(key, previous)
+    const channels: PluginStateChannelRow[] = Array.from({ length: 73 }, (_, index) => ({
+      channels: { id: index + 1, name: `channel-${index}` },
+      version: { id: index + 100 }, rolloutVersion: { id: null },
+      version_ref: index + 100, owner_org: '00000000-0000-4000-8000-000000000002',
+    }))
+    if (change === 'channels') {
+      provider.owner.mockResolvedValue({ owner_org: '00000000-0000-4000-8000-000000000002' })
+      provider.channels.mockResolvedValue(channels)
+      provider.channelListIds.mockResolvedValue(channels.map(row => row.channels.id))
+    }
+    const acks: Statement[] = []
+    const statements: string[] = []
+    const dialect = new PgDialect()
+    provider.execute.mockImplementation(async (query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      statements.push(statement.sql)
+      if (statement.sql.includes('public.claim_plugin_state_sync('))
+        return { rows: [{ result: { status: 'ok', lease_token: 'app-lease', generation: '2', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'app', ref: '' }], attempts: 1 }],
+        } }] }
+      if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
+        return { rows: [{ fully_synced: false, pending_full: false, archived_full: true }] }
+      if (statement.sql.includes('FROM public.orgs o'))
+        return { rows: [{ customer_id: null, has_credits: true }] }
+      if (statement.sql.includes('public.ack_plugin_state_sync('))
+        acks.push(statement)
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(storage.publishedValue(key)).toMatchObject(change === 'deleted'
+      ? { app_id: appId, exists: false }
+      : { app_id: appId, exists: true, owner: { owner_org: '00000000-0000-4000-8000-000000000002' }, plan: { has_credits: true }, channels, manifest_ids: [] })
+    expect(argument(acks[0], 'p_done')).toEqual([appId])
+    expect(argument(acks[0], 'p_continuations')).toBe('{}')
+    expect(argument(acks[0], 'p_full_done')).toEqual([])
+    expect(statements.some(statement => statement.includes('version_files') || statement.includes('public.manifest'))).toBe(false)
+    expect(storage.pointers.list).not.toHaveBeenCalled()
   })
 
 })

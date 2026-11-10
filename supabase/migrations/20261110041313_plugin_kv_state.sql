@@ -257,12 +257,25 @@ BEGIN
     SELECT s.app_id FROM public.plugin_state_sync_apps s
     UNION
     SELECT f.app_id FROM public.plugin_state_sync_failed f
+    UNION
+    SELECT p.app_id FROM public.plugin_state_sync_pending p
   ) AS known
   WHERE p_app_ids IS NULL OR known.app_id = ANY (p_app_ids);
   IF v_app_ids IS NULL THEN
     RETURN 0;
   END IF;
-  PERFORM public.notify_plugin_state_sync('full', v_app_ids);
+  -- An explicit repair must fail atomically if durable enqueue fails. The
+  -- business-write notification helper intentionally swallows those errors.
+  INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
+  SELECT selected.app_id, 'full', '' FROM pg_catalog.unnest(v_app_ids) AS selected (app_id)
+  ON CONFLICT ON CONSTRAINT plugin_state_sync_pending_producer_job_unique DO NOTHING;
+
+  -- Manual repair grants a fresh budget to exhausted exact keys, including
+  -- a fifth lease whose drain crashed. Preserve live leases: resetting a
+  -- budget must not permit a second drain to overlap its current owner.
+  UPDATE public.plugin_state_sync_pending
+  SET attempts = 0
+  WHERE app_id = ANY (v_app_ids) AND attempts >= 5;
   -- Prior completion is not evidence that this newly requested repair ran.
   UPDATE public.plugin_state_sync_apps
   SET full_synced_at = NULL
@@ -276,6 +289,15 @@ BEGIN
   INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
   SELECT app_id, kind, ref FROM repair
   ON CONFLICT ON CONSTRAINT plugin_state_sync_pending_producer_job_unique DO NOTHING;
+
+  IF pg_catalog.current_setting('capgo.plugin_state_wake_sent', true) IS DISTINCT FROM 'on' THEN
+    PERFORM pg_catalog.set_config('capgo.plugin_state_wake_sent', 'on', true);
+    BEGIN
+      PERFORM public.wake_plugin_state_sync();
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'plugin state repair wake failed: %', SQLERRM;
+    END;
+  END IF;
   RETURN pg_catalog.cardinality(v_app_ids);
 END;
 $$;

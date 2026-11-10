@@ -191,4 +191,41 @@ describe.skipIf(process.env.PLUGIN_STATE_KV_TESTS !== 'true')('KV and replica pl
     expect(error.error).toBe('on_premise_app')
     expect(kv.body).toMatchObject({ moreInfo: { retryAfterSeconds: 3600 } })
   })
+
+  it.each(['channel promotion', 'app deletion'])('publishes %s while a full repair remains archived', async (change) => {
+    const isolated = await createPluginStateFixture()
+    try {
+      await syncPluginState([isolated.appId])
+      const before = await comparePluginState(isolated.updateProbe())
+      expect(before.kv.body).toMatchObject({ version: isolated.stable.name })
+      await executeSQL(`INSERT INTO public.plugin_state_sync_failed (app_id, kind, ref, repair_at)
+        VALUES ($1, 'full', '', now() + interval '1 day')`, [isolated.appId])
+      await executeSQL('UPDATE public.plugin_state_sync_apps SET full_synced_at = NULL WHERE app_id = $1', [isolated.appId])
+      if (change === 'channel promotion') {
+        await executeSQL(`UPDATE public.channels SET version = $2::bigint
+          WHERE app_id = $1 AND name = 'production'`, [isolated.appId, isolated.next.id])
+      }
+      else {
+        await executeSQL('DELETE FROM public.apps WHERE app_id = $1', [isolated.appId])
+      }
+      // Drain ordinary jobs, without requesting a new explicit full repair.
+      await syncPluginState()
+      const { kv } = await comparePluginState(isolated.updateProbe())
+      if (change === 'channel promotion')
+        expect(kv.body).toMatchObject({ version: isolated.next.name })
+      else
+        expect(kv.status).toBeGreaterThanOrEqual(400)
+      const [archive] = await executeSQL<{ count: string }>(`SELECT count(*)::text AS count
+        FROM public.plugin_state_sync_failed WHERE app_id = $1 AND kind = 'full'`, [isolated.appId])
+      expect(archive.count).toBe('1')
+      const [pending] = await executeSQL<{ count: string }>(`SELECT count(*)::text AS count
+        FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'full'`, [isolated.appId])
+      expect(pending.count).toBe('0')
+    }
+    finally {
+      await executeSQL('DELETE FROM public.plugin_state_sync_failed WHERE app_id = $1', [isolated.appId])
+      await isolated.cleanup()
+      await syncPluginState()
+    }
+  }, 60_000)
 })
