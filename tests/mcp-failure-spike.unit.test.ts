@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import type { Context } from 'hono'
+import type { PgClient } from '../supabase/functions/_backend/utils/pg.ts'
+import { describe, expect, it, vi } from 'vitest'
 import {
   evaluateFailureSpike,
   formatFailureSpikeValidationError,
@@ -6,7 +8,16 @@ import {
   mcpFailureSpikeArgumentsSchema,
   resolveFailureSpikeThresholds,
 } from '../supabase/functions/_backend/utils/mcp_failure_spike_policy.ts'
-import { MCP_EVENT_CATALOG } from '../supabase/functions/_backend/utils/mcp_events.ts'
+import { dispatchMcpEventToWebhook, MCP_EVENT_CATALOG } from '../supabase/functions/_backend/utils/mcp_events.ts'
+import { evaluateMcpFailureSpikeSubscriptionFromMetrics } from '../supabase/functions/_backend/utils/mcp_failure_spike_runner.ts'
+
+vi.mock('../supabase/functions/_backend/utils/mcp_events.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/mcp_events.ts')>()
+  return {
+    ...actual,
+    dispatchMcpEventToWebhook: vi.fn(),
+  }
+})
 
 const baseArgs = {
   org_id: '046a36ac-e03c-4590-9257-bd6c9dba9ee8',
@@ -124,5 +135,103 @@ describe('mcp failure spike policy', () => {
     const entry = MCP_EVENT_CATALOG.find(event => event.name === 'update.failure_spike')
     expect(entry?.recommendedDefaults).toMatchObject(MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS)
     expect(entry?.recommendedDefaultsNote).toContain('device count')
+  })
+})
+
+describe('failure spike cooldown claim and delivery restore', () => {
+  const now = new Date('2026-11-10T12:00:00.000Z')
+  const thresholds = { ...MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS }
+  const metrics = {
+    failures: 20,
+    checks: 100,
+    version: '1.0.0',
+    topFailureActionCodes: [] as { action: string, count: number }[],
+    windowStart: '2026-11-10T11:45:00.000Z',
+    windowEnd: now.toISOString(),
+  }
+  const c = { get: () => undefined } as unknown as Context
+
+  const baseWebhook = {
+    id: 'd7820000-0000-4000-8000-0000000000c1',
+    org_id: baseArgs.org_id,
+    secret: 'whsec_test_spike_claim_restore',
+    url: 'https://hooks.example.com/capgo/mcp/spike',
+    enabled: true,
+    source: 'mcp',
+    mcp_event: 'update.failure_spike',
+    mcp_arguments: baseArgs,
+    mcp_verified_at: now.toISOString(),
+    expires_at: null,
+    mcp_spike_last_fired_at: null,
+  }
+
+  function mockPg(claim: boolean) {
+    const restores: unknown[][] = []
+    const pg = {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (sql.includes('RETURNING id'))
+          return { rows: claim ? [{ id: baseWebhook.id }] : [] }
+        if (sql.includes('mcp_spike_last_fired_at = $2::timestamptz WHERE id = $1 AND mcp_spike_last_fired_at = $3')) {
+          restores.push(params ?? [])
+          return { rows: [] }
+        }
+        return { rows: [] }
+      }),
+    }
+    return { pg: pg as unknown as PgClient, restores }
+  }
+
+  it('treats a failed cooldown claim as still in cooldown', async () => {
+    vi.mocked(dispatchMcpEventToWebhook).mockReset()
+    const { pg } = mockPg(false)
+    const result = await evaluateMcpFailureSpikeSubscriptionFromMetrics(
+      c,
+      pg,
+      baseWebhook,
+      baseArgs,
+      thresholds,
+      metrics,
+      now,
+    )
+    expect(result).toEqual({ fired: false, reason: 'cooldown' })
+    expect(dispatchMcpEventToWebhook).not.toHaveBeenCalled()
+  })
+
+  it('restores mcp_spike_last_fired_at when webhook dispatch fails', async () => {
+    vi.mocked(dispatchMcpEventToWebhook).mockReset()
+    vi.mocked(dispatchMcpEventToWebhook).mockResolvedValueOnce(false)
+    const previousFiredAt = '2026-11-09T12:00:00.000Z'
+    const { pg, restores } = mockPg(true)
+    const webhook = { ...baseWebhook, mcp_spike_last_fired_at: previousFiredAt }
+    const result = await evaluateMcpFailureSpikeSubscriptionFromMetrics(
+      c,
+      pg,
+      webhook,
+      baseArgs,
+      thresholds,
+      metrics,
+      now,
+    )
+    expect(result).toEqual({ fired: false, reason: 'delivery_failed' })
+    expect(restores).toHaveLength(1)
+    expect(restores[0]?.[1]).toBe(previousFiredAt)
+  })
+
+  it('keeps the cooldown claim when dispatch succeeds', async () => {
+    vi.mocked(dispatchMcpEventToWebhook).mockReset()
+    vi.mocked(dispatchMcpEventToWebhook).mockResolvedValueOnce(true)
+    const { pg, restores } = mockPg(true)
+    const result = await evaluateMcpFailureSpikeSubscriptionFromMetrics(
+      c,
+      pg,
+      baseWebhook,
+      baseArgs,
+      thresholds,
+      metrics,
+      now,
+    )
+    expect(result.fired).toBe(true)
+    expect(result.reason).toBe('triggered')
+    expect(restores).toHaveLength(0)
   })
 })

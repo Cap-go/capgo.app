@@ -297,6 +297,17 @@ export async function assertMcpEventsAuth(
     throw Object.assign(new Error('Cannot read filtered app'), { code: 'forbidden' })
 }
 
+export function isMcpSubscriptionCurrentlyActive(
+  row: Pick<WebhookRow, 'enabled' | 'expires_at'>,
+  now: Date = new Date(),
+): boolean {
+  if (!row.enabled)
+    return false
+  if (!row.expires_at)
+    return true
+  return new Date(row.expires_at).getTime() > now.getTime()
+}
+
 async function countActiveMcpSubscriptionsOnPg(pg: PgClient, orgId: string): Promise<number> {
   const rows = await queryJson<{ count: number }>(
     pg,
@@ -513,20 +524,32 @@ export async function upsertMcpEventSubscription(
   let webhookId: string
   if (existing[0]) {
     webhookId = existing[0].id
-    await withAdminPg(c, pg => pg.query(
-      `
-      UPDATE public.webhooks
-      SET secret = $2,
-          expires_at = $3,
-          enabled = true,
-          name = $4,
-          events = ARRAY[$5]::text[],
-          delivery_version = 'standard',
-          updated_at = now()
-      WHERE id = $1
-      `,
-      [webhookId, secret, expiresAt.toISOString(), subscriptionNameValue, input.name],
-    ))
+    const reactivating = !isMcpSubscriptionCurrentlyActive(existing[0])
+    await withMcpSubscriptionOrgLock(c, args.org_id, async (pg) => {
+      if (reactivating) {
+        const active = await countActiveMcpSubscriptionsOnPg(pg, args.org_id)
+        if (active >= MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG) {
+          throw Object.assign(
+            new Error(`Active MCP subscription limit reached (${MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG})`),
+            { code: 'subscription_cap' },
+          )
+        }
+      }
+      await pg.query(
+        `
+        UPDATE public.webhooks
+        SET secret = $2,
+            expires_at = $3,
+            enabled = true,
+            name = $4,
+            events = ARRAY[$5]::text[],
+            delivery_version = 'standard',
+            updated_at = now()
+        WHERE id = $1
+        `,
+        [webhookId, secret, expiresAt.toISOString(), subscriptionNameValue, input.name],
+      )
+    })
   }
   else {
     const inserted = await withMcpSubscriptionOrgLock(c, args.org_id, async (pg) => {
@@ -713,7 +736,10 @@ export async function dispatchMcpEventToWebhook(
   if (urlError)
     return false
 
-  await queueWebhookDelivery(c, delivery.id, webhook.id, webhook.url, deliveryPayload)
+  const queued = await queueWebhookDelivery(c, delivery.id, webhook.id, webhook.url, deliveryPayload)
+  if (!queued)
+    return false
+
   cloudlog({
     requestId: c.get('requestId'),
     message: 'Queued MCP event delivery',

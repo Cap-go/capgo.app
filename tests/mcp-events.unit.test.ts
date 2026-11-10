@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isMcpSubscriptionCurrentlyActive,
   mapAuditLogToMcpEvent,
   MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG,
   MCP_EVENT_DEFAULT_TTL_MS,
@@ -59,5 +60,13 @@ describe('mcp events mapping', () => {
     expect(MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG).toBe(25)
     expect(MCP_EVENT_DEFAULT_TTL_MS).toBe(24 * 60 * 60 * 1000)
     expect(MCP_EVENT_DEFAULT_TTL_MS).toBeGreaterThan(60_000)
+  })
+
+  it('treats disabled and expired MCP rows as inactive', () => {
+    const now = new Date('2026-11-10T12:00:00.000Z')
+    expect(isMcpSubscriptionCurrentlyActive({ enabled: false, expires_at: null }, now)).toBe(false)
+    expect(isMcpSubscriptionCurrentlyActive({ enabled: true, expires_at: '2026-11-10T11:00:00.000Z' }, now)).toBe(false)
+    expect(isMcpSubscriptionCurrentlyActive({ enabled: true, expires_at: '2026-11-10T13:00:00.000Z' }, now)).toBe(true)
+    expect(isMcpSubscriptionCurrentlyActive({ enabled: true, expires_at: null }, now)).toBe(true)
   })
 })

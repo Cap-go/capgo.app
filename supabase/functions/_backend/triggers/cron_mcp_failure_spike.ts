@@ -17,7 +17,7 @@ export const app = createHono('', version)
 const SUBSCRIPTION_PAGE_SIZE = 200
 // Queue consumer uses a 15s HTTP timeout for cron handlers; stay under it.
 const EVALUATION_BUDGET_MS = 12_000
-const EVALUATION_CONCURRENCY = 8
+const EVALUATION_CONCURRENCY = 1
 const METRICS_KEY_SEP = '\u0001'
 
 async function loadMcpFailureSpikeSubscriptions(pg: Awaited<ReturnType<typeof getPgClient>>) {
