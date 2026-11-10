@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   evaluateFailureSpike,
+  formatFailureSpikeValidationError,
   MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS,
   mcpFailureSpikeArgumentsSchema,
   resolveFailureSpikeThresholds,
@@ -100,6 +101,8 @@ describe('mcp failure spike policy', () => {
       window_minutes: 15,
     })
     expect(parsed.success).toBe(false)
+    if (!parsed.success)
+      expect(formatFailureSpikeValidationError(parsed.error)).toContain('cooldown_minutes')
   })
 
   it('exposes recommended defaults in the event catalog', () => {
