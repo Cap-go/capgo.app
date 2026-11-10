@@ -93,7 +93,10 @@ The Capgo console shows **published** Capacitor security advisories and optional
 alerts for your apps. The `security_updates` email preference defaults to off; turn it on
 under Account settings, Notifications. Per app, open Observe, Security updates to review
 matches against native package versions already reported on bundles. Public docs:
-[Console security updates](https://github.com/Cap-go/website/pull/1394) and
+[Notifications security advisories](https://capgo.app/docs/webapp/notifications-security-advisories/),
+[Observe security updates](https://capgo.app/docs/webapp/observe-security-updates/),
+[website #1413](https://github.com/Cap-go/website/pull/1413),
+[Console security updates](https://github.com/Cap-go/website/pull/1394), and
 [Security advisories feature](https://github.com/Cap-go/website/pull/1393).
 
 <br>
