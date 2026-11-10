@@ -8,7 +8,7 @@ import {
   unsubscribeMcpEvent,
   upsertMcpEventSubscription,
 } from '../utils/mcp_events.ts'
-import { getPgClient } from '../utils/pg.ts'
+import { closeClient, getPgClient } from '../utils/pg.ts'
 
 function mcpContext(c: Context, ctx: McpToolContext, apikeyRbacId: string) {
   return {
@@ -28,7 +28,6 @@ export async function loadApikeyRbacId(c: Context, apikeyId: number): Promise<st
     return result.rows[0]?.rbac_id ?? null
   }
   finally {
-    const { closeClient } = await import('../utils/pg.ts')
     closeClient(c, pg)
   }
 }
@@ -89,7 +88,10 @@ export async function handleEventsSubscribe(
     )
 
     if (result.verificationFailed) {
-      return jsonRpcError(requestId, -32027, 'Callback endpoint verification failed', { reason: 'challenge_failed' })
+      return jsonRpcError(requestId, -32027, 'Callback endpoint verification failed', {
+        id: result.id,
+        reason: result.verificationReason ?? 'challenge_failed',
+      })
     }
 
     return jsonRpcResult(requestId, {

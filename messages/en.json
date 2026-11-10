@@ -3627,6 +3627,8 @@
   "webhook-mcp-event": "MCP event",
   "webhook-mcp-expires-at": "Subscription expires",
   "webhook-mcp-managed-hint": "This subscription is managed by an MCP client. You can delete it here, but edits must happen through MCP Events.",
+  "webhook-mcp-unverified": "Unverified",
+  "webhook-mcp-unverified-hint": "Verification failed or is pending. Events are not delivered until the endpoint passes the MCP challenge.",
   "webhooks": "Webhooks",
   "webhooks-description": "Configure webhooks to receive HTTP notifications when events occur in your organization.",
   "welcome-to": "Welcome to",

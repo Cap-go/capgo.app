@@ -369,6 +369,12 @@ function getWebhookDetailsId(webhookId: string) {
                       >
                         {{ t('webhook-mcp-badge') }}
                       </span>
+                      <span
+                        v-if="isMcpWebhook(webhook) && !webhook.mcp_verified_at"
+                        class="px-2 py-0.5 text-xs font-semibold tracking-wide uppercase rounded-full text-amber-900 bg-amber-100 dark:bg-amber-900/40 dark:text-amber-200"
+                      >
+                        {{ t('webhook-mcp-unverified') }}
+                      </span>
                     </div>
                     <span class="sr-only">{{ webhook.enabled ? t('enabled') : t('disabled') }}</span>
                     <p class="max-w-xs text-sm text-gray-500 truncate dark:text-gray-400 sm:max-w-md">
@@ -493,6 +499,9 @@ function getWebhookDetailsId(webhookId: string) {
                 </p>
                 <p v-if="!isMcpWebhook(webhook)">
                   {{ t('webhook-delivery-version') }}: {{ getDeliveryVersionLabel(webhook) }}
+                </p>
+                <p v-if="isMcpWebhook(webhook) && !webhook.mcp_verified_at" class="text-amber-700 dark:text-amber-300">
+                  {{ t('webhook-mcp-unverified-hint') }}
                 </p>
                 <p v-if="isMcpWebhook(webhook) && webhook.expires_at">
                   {{ t('webhook-mcp-expires-at') }}: {{ formatDate(webhook.expires_at) }}
