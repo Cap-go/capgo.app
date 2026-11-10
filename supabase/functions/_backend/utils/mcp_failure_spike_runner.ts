@@ -9,7 +9,7 @@ import {
   mcpFailureSpikeArgumentsSchema,
   resolveFailureSpikeThresholds,
 } from './mcp_failure_spike_policy.ts'
-import { dispatchMcpEvent } from './mcp_events.ts'
+import { dispatchMcpEventToWebhook } from './mcp_events.ts'
 import { readStatsInsights, readStatsVersion } from './stats.ts'
 
 export type WebhookRow = Database['public']['Tables']['webhooks']['Row']
@@ -41,12 +41,14 @@ export async function gatherFailureSpikeMetrics(
     }
   }
 
-  const insights = await readStatsInsights(c, {
+  const insightsParams = {
     app_id: appId,
     start_date: start,
     end_date: end,
     actions: [...PUBLIC_FAILURE_ACTIONS],
-  })
+    ...(channelName && version !== 'unknown' ? { version_name: version } : {}),
+  }
+  const insights = await readStatsInsights(c, insightsParams)
 
   const topFailureActionCodes = insights.actions
     .filter(entry => (PUBLIC_FAILURE_ACTIONS as readonly string[]).includes(entry.action))
@@ -107,13 +109,15 @@ export async function evaluateMcpFailureSpikeSubscriptions(
   if (parsed.data.channel)
     data.channel = parsed.data.channel
 
+  const eventName = 'update.failure_spike' as McpEventName
+  const delivered = await dispatchMcpEventToWebhook(c, webhook, eventName, data)
+  if (!delivered)
+    return { fired: false, reason: 'delivery_failed' }
+
   await pg.query(
     'UPDATE public.webhooks SET mcp_spike_last_fired_at = $2 WHERE id = $1',
     [webhook.id, now.toISOString()],
   )
-
-  const eventName = 'update.failure_spike' as McpEventName
-  await dispatchMcpEvent(c, webhook.org_id, eventName, data)
 
   cloudlog({
     requestId: c.get('requestId'),

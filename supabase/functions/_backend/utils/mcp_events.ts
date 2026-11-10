@@ -665,34 +665,45 @@ export async function dispatchMcpEvent(
   if (webhooks.length === 0)
     return
 
+  await Promise.all(webhooks.map(webhook => dispatchMcpEventToWebhook(c, webhook, eventName, data)))
+}
+
+export async function dispatchMcpEventToWebhook(
+  c: Context,
+  webhook: WebhookRow,
+  eventName: McpEventName,
+  data: Record<string, unknown>,
+): Promise<boolean> {
+  if (!webhookIsDeliverable(webhook))
+    return false
+
   const envelope = buildMcpEventEnvelope(eventName, data)
   const deliveryPayload = mcpEnvelopeToDeliveryPayload(envelope)
 
-  await Promise.all(webhooks.map(async (webhook) => {
-    const delivery = await createDeliveryRecord(
-      c,
-      webhook.id,
-      webhook.org_id,
-      null,
-      eventName,
-      deliveryPayload,
-      'standard',
-    )
-    if (!delivery)
-      return
+  const delivery = await createDeliveryRecord(
+    c,
+    webhook.id,
+    webhook.org_id,
+    null,
+    eventName,
+    deliveryPayload,
+    'standard',
+  )
+  if (!delivery)
+    return false
 
-    const urlError = await getWebhookPublicUrlValidationError(c, webhook.url)
-    if (urlError)
-      return
+  const urlError = await getWebhookPublicUrlValidationError(c, webhook.url)
+  if (urlError)
+    return false
 
-    await queueWebhookDelivery(c, delivery.id, webhook.id, webhook.url, deliveryPayload)
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: 'Queued MCP event delivery',
-      eventName,
-      webhookId: webhook.id,
-    })
-  }))
+  await queueWebhookDelivery(c, delivery.id, webhook.id, webhook.url, deliveryPayload)
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'Queued MCP event delivery',
+    eventName,
+    webhookId: webhook.id,
+  })
+  return true
 }
 
 export function mapAuditLogToMcpEvent(audit: AuditLogData): McpEventName | null {
