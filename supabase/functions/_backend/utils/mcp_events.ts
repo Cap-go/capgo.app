@@ -7,9 +7,7 @@ import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { queryJson, queryJsonOne } from './pg_rls.ts'
 import {
-  buildWebhookDeliveryPayload,
   createDeliveryRecord,
-  deliverWebhook,
   generateStandardWebhookSignature,
   getWebhookPublicUrlValidationError,
   queueWebhookDelivery,
@@ -471,6 +469,8 @@ export async function upsertMcpEventSubscription(
         ],
       )
     })
+    if (!inserted?.id)
+      throw Object.assign(new Error('Failed to create MCP subscription row'), { code: 'internal' })
     webhookId = inserted.id
   }
 

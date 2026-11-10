@@ -53,7 +53,7 @@ export function jsonRpcError(id: JsonRpcId, code: number, message: string, data?
   return { jsonrpc: '2.0', id, error: data === undefined ? { code, message } : { code, message, data } }
 }
 
-function jsonRpcResult(id: JsonRpcId, result: unknown): JsonRpcResponse {
+export function jsonRpcResult(id: JsonRpcId, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id, result }
 }
 

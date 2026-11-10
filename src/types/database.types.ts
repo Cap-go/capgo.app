@@ -4061,10 +4061,15 @@ export type Database = {
           delivery_version: string
           enabled: boolean
           events: string[]
+          expires_at: string | null
           id: string
+          mcp_arguments: Json | null
+          mcp_event: string | null
+          mcp_verified_at: string | null
           name: string
           org_id: string
           secret: string
+          source: string
           updated_at: string
           url: string
         }
@@ -4074,10 +4079,15 @@ export type Database = {
           delivery_version?: string
           enabled?: boolean
           events: string[]
+          expires_at?: string | null
           id?: string
+          mcp_arguments?: Json | null
+          mcp_event?: string | null
+          mcp_verified_at?: string | null
           name: string
           org_id: string
           secret?: string
+          source?: string
           updated_at?: string
           url: string
         }
@@ -4087,10 +4097,15 @@ export type Database = {
           delivery_version?: string
           enabled?: boolean
           events?: string[]
+          expires_at?: string | null
           id?: string
+          mcp_arguments?: Json | null
+          mcp_event?: string | null
+          mcp_verified_at?: string | null
           name?: string
           org_id?: string
           secret?: string
+          source?: string
           updated_at?: string
           url?: string
         }

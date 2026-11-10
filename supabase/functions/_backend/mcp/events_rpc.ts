@@ -33,7 +33,7 @@ export async function loadApikeyRbacId(c: Context, apikeyId: number): Promise<st
   }
 }
 
-function mapSubscribeError(error: unknown): JsonRpcResponse['error'] {
+function mapSubscribeError(error: unknown): { code: number, message: string } {
   const record = (error && typeof error === 'object') ? error as { code?: string, message?: string } : {}
   const code = record.code
   if (code === 'forbidden')
@@ -100,7 +100,7 @@ export async function handleEventsSubscribe(
   }
   catch (error) {
     const mapped = mapSubscribeError(error)
-    return jsonRpcError(requestId, mapped.code, mapped.message)
+    return jsonRpcError(requestId, mapped.code ?? JSON_RPC_ERRORS.internalError, mapped.message ?? 'Subscribe failed')
   }
 }
 
@@ -131,7 +131,8 @@ export async function handleEventsUnsubscribe(
     return jsonRpcResult(requestId, { id: subscriptionId, unsubscribed: true })
   }
   catch (error) {
-    return jsonRpcError(requestId, mapSubscribeError(error).code, mapSubscribeError(error).message)
+    const mapped = mapSubscribeError(error)
+    return jsonRpcError(requestId, mapped.code ?? JSON_RPC_ERRORS.internalError, mapped.message ?? 'Unsubscribe failed')
   }
 }
 

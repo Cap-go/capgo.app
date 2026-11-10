@@ -11,7 +11,6 @@ const APP_ID = `com.mcp.events.${randomUUID()}`
 const customerId = `cus_mcp_events_${randomUUID().replace(/-/g, '').slice(0, 20)}`
 
 let orgApiKey: string
-let orgApiKeyId: number
 let appScopedKey: string
 let challengeUrl: string
 let challengeFailsUrl: string
@@ -98,17 +97,22 @@ beforeAll(async () => {
   })
 
   const orgKey = await createDirectApiKeyWithBindings({
+    key: randomUUID(),
     name: `mcp-events-org-${randomUUID().slice(0, 8)}`,
-    bindings: [{ role_name: 'org_super_admin', scope_type: 'org', org_id: ORG_ID }],
+    orgId: ORG_ID,
+    roleName: 'org_super_admin',
   })
-  orgApiKey = orgKey.key
-  orgApiKeyId = orgKey.id
+  orgApiKey = orgKey.key ?? randomUUID()
 
   const appKey = await createDirectApiKeyWithBindings({
+    key: randomUUID(),
     name: `mcp-events-app-${randomUUID().slice(0, 8)}`,
-    bindings: [{ role_name: 'org_super_admin', scope_type: 'app', org_id: ORG_ID, app_id: APP_ID }],
+    orgId: ORG_ID,
+    roleName: 'org_super_admin',
+    appId: APP_ID,
+    appRoleName: 'app_admin',
   })
-  appScopedKey = appKey.key
+  appScopedKey = appKey.key ?? randomUUID()
 
   process.env.CAPGO_ALLOW_LOCAL_WEBHOOK_URLS = 'true'
   const servers = await startChallengeServer()
