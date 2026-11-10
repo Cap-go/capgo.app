@@ -81,7 +81,7 @@ async function bentoFetch(c: Context, path: string, siteUuid: string, body: any,
   return await readBentoJson(response)
 }
 
-async function bentoGet(c: Context, path: string, siteUuid: string, query: Record<string, string>, signal?: AbortSignal) {
+export async function bentoGet(c: Context, path: string, siteUuid: string, query: Record<string, string>, signal?: AbortSignal) {
   const headers = getBentoHeaders(c)
   if (!headers)
     return null
