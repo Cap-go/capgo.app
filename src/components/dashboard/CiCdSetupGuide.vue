@@ -4,6 +4,7 @@ import type { CiEncryptionBundle } from '~/utils/cicdEncryption'
 import type { CiKeySpec, CiPlatform, CiProduct, CiProvider, CiSecretName, CiStrategy } from '~/utils/cicdSetupGuide'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import IconArrowLeft from '~icons/lucide/arrow-left'
@@ -28,6 +29,7 @@ import IconGithub from '~icons/simple-icons/githubactions'
 import IconGitlab from '~icons/simple-icons/gitlab'
 import { createDefaultApiKey } from '~/services/apikeys'
 import { getCapgoApiErrorCode } from '~/services/capgoApi'
+import { setCiCdReminderDismissed } from '~/services/cicdReminder'
 import { useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
@@ -66,6 +68,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const router = useRouter()
 const capgo = useConsole()
 const main = useMainStore()
 const organizationStore = useOrganizationStore()
@@ -383,6 +386,8 @@ const detectedAt = computed(() => product.value === 'ota' ? cicdState.value.otaD
 const statusError = ref(false)
 const statusLoading = ref(false)
 const markingDone = ref(false)
+const skipping = ref(false)
+let guideActive = true
 let statusTimer: ReturnType<typeof setInterval> | undefined
 let statusGeneration = 0
 let onboardingWrites = 0
@@ -465,6 +470,32 @@ async function markDone() {
   }
 }
 
+async function skipGuide() {
+  if (skipping.value)
+    return
+  skipping.value = true
+  const appId = props.appId
+  const routePath = router.currentRoute.value.fullPath
+  try {
+    await writeOnboarding(async () => {
+      const value = await setCiCdReminderDismissed(appId, true)
+      if (appId === props.appId)
+        applyOnboarding(value)
+    })
+    if (guideActive && appId === props.appId && router.currentRoute.value.fullPath === routePath) {
+      toast.success(t('cicd-reminder-hidden'))
+      await router.push(`/app/${encodeURIComponent(appId)}`)
+    }
+  }
+  catch (error) {
+    console.error('Cannot skip CI/CD guide', error)
+    toast.error(t('cicd-reminder-dismiss-error'))
+  }
+  finally {
+    skipping.value = false
+  }
+}
+
 // Tracks the guide key so its first use from CI marks this step done, even
 // where the CLI cannot tell it runs in CI.
 async function recordCreatedKey(spec: CiKeySpec) {
@@ -511,6 +542,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  guideActive = false
   policyRequest += 1
   channelRequest += 1
   statusGeneration += 1
@@ -541,10 +573,16 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
 <template>
   <div class="mx-auto max-w-[1080px] space-y-8 pb-12" data-test="cicd-guide">
     <header>
-      <RouterLink :to="checklistPath" class="mb-4 inline-flex min-h-11 items-center gap-2 rounded-sm text-sm font-medium text-slate-600 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 dark:text-slate-300" data-test="cicd-guide-back">
-        <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
-        {{ t('cicd-guide-back') }}
-      </RouterLink>
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <RouterLink :to="checklistPath" class="inline-flex min-h-11 items-center gap-2 rounded-sm text-sm font-medium text-slate-600 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-azure-500 dark:text-slate-300" data-test="cicd-guide-back">
+          <IconArrowLeft class="h-4 w-4" aria-hidden="true" />
+          {{ t('cicd-guide-back') }}
+        </RouterLink>
+        <button type="button" :class="secondaryLinkClass" :disabled="skipping" data-test="cicd-guide-skip" @click="skipGuide">
+          <IconLoader v-if="skipping" class="size-4 motion-safe:animate-spin" aria-hidden="true" />
+          {{ t('skip') }}
+        </button>
+      </div>
       <p class="text-sm font-medium text-sky-700 dark:text-azure-300">
         {{ t('cicd-guide-eyebrow') }}
       </p>
@@ -705,7 +743,9 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
     </div>
 
     <section v-if="product === 'ota' && channelStatus === 'ready' && defaultChannels === null" class="space-y-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-no-default-channel" aria-labelledby="cicd-production-target-title">
-      <h2 id="cicd-production-target-title" class="font-semibold">{{ t('cicd-guide-production-target-title') }}</h2>
+      <h2 id="cicd-production-target-title" class="font-semibold">
+        {{ t('cicd-guide-production-target-title') }}
+      </h2>
       <p>{{ t('cicd-guide-no-default-channel') }}</p>
       <label v-if="availableChannels.length" class="block">
         <span class="font-medium">{{ t('cicd-guide-production-target') }}</span>
@@ -714,9 +754,13 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
           <option v-for="channel in availableChannels" :key="channel" :value="channel">{{ channel }}</option>
         </select>
       </label>
-      <p v-else>{{ t('cicd-guide-production-target-create') }}</p>
+      <p v-else>
+        {{ t('cicd-guide-production-target-create') }}
+      </p>
       <div class="flex flex-wrap items-center gap-3">
-        <RouterLink :to="`/app/${encodeURIComponent(appId)}/channels`" class="font-medium underline underline-offset-4">{{ t('cicd-guide-open-channels') }}</RouterLink>
+        <RouterLink :to="`/app/${encodeURIComponent(appId)}/channels`" class="font-medium underline underline-offset-4">
+          {{ t('cicd-guide-open-channels') }}
+        </RouterLink>
         <button type="button" :class="secondaryLinkClass" data-test="cicd-targets-refresh" @click="loadDefaultChannel()">
           <IconRefresh class="h-4 w-4" aria-hidden="true" />
           {{ t('cicd-guide-refresh') }}

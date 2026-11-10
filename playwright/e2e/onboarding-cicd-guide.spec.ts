@@ -16,7 +16,67 @@ function previewState(page: Page) {
   return page.evaluate(() => (window as any).onboardingSetupPreview.state)
 }
 
+async function useNavigationFixture(page: Page) {
+  const response = await page.request.get(fixture)
+  const html = (await response.text()).replace('src="./onboarding-setup.ts', 'src="/playwright/fixtures/onboarding-setup.ts')
+  await page.route('**/*', async (route) => {
+    if (route.request().resourceType() === 'document' && new URL(route.request().url()).pathname.startsWith('/app/'))
+      await route.fulfill({ body: html, contentType: 'text/html' })
+    else
+      await route.continue()
+  })
+}
+
 test.describe('CI/CD setup guide', () => {
+  for (const product of ['ota', 'builder'] as const) {
+    test(`skips the ${product} guide without claiming CI/CD is configured`, async ({ page }) => {
+      await useNavigationFixture(page)
+      await page.goto(`/app/${appId}/ci-cd?version=3&otaInstalled=1&product=${product}`)
+      await expect(page.locator('[data-test="cicd-nav-link"]')).toBeVisible()
+      await page.locator('[data-test="cicd-guide-skip"]').click()
+      await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+      await expect(page).toHaveURL(`/app/${appId}`)
+      await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+      expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls)).toEqual([{ p_app_id: appId, p_event: 'dismissed' }])
+      const ledger = await page.evaluate(() => (window as any).onboardingSetupPreview.cicdLedger.value)
+      expect(ledger.dismissed_at).toBeTruthy()
+      expect(ledger).not.toHaveProperty('marked_done_at')
+      expect(ledger).not.toHaveProperty('ota_detected_at')
+      expect(ledger).not.toHaveProperty('builder_detected_at')
+      await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+      await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+    })
+  }
+
+  test('keeps the guide open and allows retrying when Skip cannot be saved', async ({ page }) => {
+    await useNavigationFixture(page)
+    await page.goto(`/app/${appId}/ci-cd?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdDismissError = true })
+    const skip = page.locator('[data-test="cicd-guide-skip"]')
+    await skip.click()
+    await expect(page.getByText('Could not hide the CI/CD reminder. Please try again.', { exact: true })).toBeVisible()
+    await expect(skip).toBeEnabled()
+    await expect(page.getByRole('heading', { name: 'Automate live updates with CI/CD' })).toBeVisible()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toBeVisible()
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdDismissError = false })
+    await skip.click()
+    await expect(page.locator('[data-test="preview-app-dashboard"]')).toBeVisible()
+  })
+
+  test('does not navigate away from settings when a delayed Skip finishes', async ({ page }) => {
+    await useNavigationFixture(page)
+    await page.goto(`/app/${appId}/ci-cd?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdReminderDelayMs = 1000 })
+    await page.locator('[data-test="cicd-guide-skip"]').click()
+    await page.evaluate(appId => (window as any).onboardingSetupPreview.navigate(`/app/${appId}/settings`), appId)
+    await expect(page.getByRole('heading', { name: 'App settings', exact: true })).toBeVisible()
+    await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdReminderResponses)).toBe(1)
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(page).toHaveURL(`/app/${appId}/settings`)
+    await expect(page.getByRole('heading', { name: 'App settings', exact: true })).toBeVisible()
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdLedger.value.dismissed_at)).toBeTruthy()
+  })
+
   test('guides live updates from main through GitHub Actions step by step', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.goto(fixture)

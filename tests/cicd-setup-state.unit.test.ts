@@ -74,6 +74,7 @@ describe('CI/CD setup state', () => {
       builderCiProvider: null,
       keyCreatedAt: null,
       markedDoneAt: null,
+      dismissedAt: null,
     })
     expect(parseCiCdSetupState(null).detectedVia).toBeNull()
     expect(parseCiCdSetupState({ cicd: [] }).otaDetectedAt).toBeNull()
@@ -109,5 +110,15 @@ describe('CI/CD setup state', () => {
     expect(next.features).toEqual(shipping.features)
     expect(next.cicd).toEqual({ keys: ['k'], marked_done_at: '2026-11-06T00:00:00.000Z' })
     expect((withCiCdMarkedDone(next, '2026-12-01T00:00:00.000Z') as Record<string, any>).cicd.marked_done_at).toBe('2026-11-06T00:00:00.000Z')
+  })
+
+  it.concurrent('hides dismissed reminders without counting them as configured', () => {
+    const onboarding = { ...shipping, cicd: { dismissed_at: '2026-11-10T00:00:00.000Z' } }
+    expect(parseCiCdSetupState(onboarding).dismissedAt).toBe('2026-11-10T00:00:00.000Z')
+    expect(shouldShowCiCdNav(onboarding, false)).toBe(false)
+    expect(isCiCdSetupDone(onboarding)).toBe(false)
+    expect(ciCdDetectedAt(parseCiCdSetupState(onboarding))).toBeNull()
+    expect(shouldShowCiCdNav({ ...shipping, cicd: { dismissed_at: null } }, false)).toBe(true)
+    expect(shouldShowCiCdNav({ ...shipping, cicd: { dismissed_at: 42 } }, false)).toBe(true)
   })
 })

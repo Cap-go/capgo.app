@@ -13,6 +13,7 @@ import Pencil from '~icons/heroicons/pencil-square'
 import IconTransfer from '~icons/mingcute/transfer-horizontal-line'
 import IconGearSix from '~icons/ph/gear-six'
 import IconName from '~icons/ph/user'
+import AppSetupGuides from '~/components/dashboard/AppSetupGuides.vue'
 import FormCheckbox from '~/components/forms/FormCheckbox.vue'
 import FormField from '~/components/forms/FormField.vue'
 import Toggle from '~/components/Toggle.vue'
@@ -1482,6 +1483,8 @@ async function transferAppOwnership() {
             </button>
           </div>
         </section>
+
+        <AppSetupGuides v-if="!isFirstLoading && appRef" :key="appId" :app-id="appId" />
 
         <!-- Personal Info -->
         <section v-if="!isFirstLoading && !isLoading">
