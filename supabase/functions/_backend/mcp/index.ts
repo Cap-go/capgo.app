@@ -201,6 +201,16 @@ export function createMcpApp(dispatch: McpDispatch) {
       return unauthorized(c, 'Invalid or expired Capgo API key: sign in to the Capgo MCP again through OAuth, or create a new key at https://console.capgo.app/apikeys and update the connection', true)
     }
 
+    c.set('auth', {
+      userId: apikey.user_id,
+      authType: 'apikey',
+      apikey,
+      jwt: null,
+    })
+    c.set('apikey', apikey)
+    c.set('parentApikey', apikey)
+    c.set('capgkey', token)
+
     const raw = await c.req.text()
     if (raw.length > MAX_BODY_BYTES)
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Request body too large (max 1 MB). Send files through the signed upload URL tools (capgo_prepare_bundle_upload, capgo_request_build) instead of inline.'), 413)
