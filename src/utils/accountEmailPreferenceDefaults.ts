@@ -3,7 +3,7 @@ export function defaultAccountEmailPref(key: string): boolean {
 }
 
 export function resolveAccountEmailPref(
-  prefs: Record<string, boolean | undefined>,
+  prefs: Partial<Record<string, boolean>>,
   key: string,
 ): boolean {
   return prefs[key] ?? defaultAccountEmailPref(key)

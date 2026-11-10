@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
-import { defaultAccountEmailPref, resolveAccountEmailPref } from '~/utils/accountEmailPreferenceDefaults'
+import { resolveAccountEmailPref } from '~/utils/accountEmailPreferenceDefaults'
 // tabs handled by settings layout
 
 const { t } = useI18n()
@@ -16,26 +16,24 @@ const optForNewsletters = ref(main.user?.opt_for_newsletters ?? true)
 const displayStore = useDisplayStore()
 displayStore.NavTitle = t('notifications')
 
-// Email preferences with defaults
-interface EmailPreferences {
-  usage_limit?: boolean
-  credit_usage?: boolean
-  onboarding?: boolean
-  builder_onboarding?: boolean
-  weekly_stats?: boolean
-  monthly_stats?: boolean
-  billing_period_stats?: boolean
-  deploy_stats_24h?: boolean
-  bundle_created?: boolean
-  bundle_deployed?: boolean
-  device_error?: boolean
-  channel_self_rejected?: boolean
-  bundle_incompatible?: boolean
-  cli_realtime_feed?: boolean
-  security_updates?: boolean
-}
+type EmailPreferenceKey =
+  | 'usage_limit'
+  | 'credit_usage'
+  | 'onboarding'
+  | 'builder_onboarding'
+  | 'weekly_stats'
+  | 'monthly_stats'
+  | 'billing_period_stats'
+  | 'deploy_stats_24h'
+  | 'bundle_created'
+  | 'bundle_deployed'
+  | 'device_error'
+  | 'channel_self_rejected'
+  | 'bundle_incompatible'
+  | 'cli_realtime_feed'
+  | 'security_updates'
 
-type EmailPreferenceKey = keyof EmailPreferences
+type EmailPreferences = Partial<Record<EmailPreferenceKey, boolean>>
 
 const emailPrefs = computed<EmailPreferences>(() => {
   // email_preferences is a JSONB column added in migration 20251228064121
