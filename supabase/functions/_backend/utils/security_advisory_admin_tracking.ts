@@ -1,11 +1,10 @@
 import type { Context } from 'hono'
-import type { Advisory, AdvisoryAffected } from '../../shared/security_advisory.ts'
+import type { Advisory, AdvisoryAffected, AppAdvisoryMatch } from '../../shared/security_advisory.ts'
 import { loadAllAppsReportedPackages } from './app_native_packages.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { queryJsonOne } from './pg_rls.ts'
 import { loadSecurityAdvisoryBentoEmailStats } from './security_advisory_bento_stats.ts'
 import { loadSecurityAdvisoryFeed } from './security_advisory_feed.ts'
-import type { AppAdvisoryMatch } from './security_advisory_matching.ts'
 import { matchAppPackagesToAdvisories } from './security_advisory_matching.ts'
 
 export interface SecurityUpdatePatchRow {
