@@ -1,3 +1,4 @@
+-- Ordered after 20261110143436_gotrue_cf_role_auth_cf_schema on main.
 ALTER TABLE public.webhooks
   ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'console',
   ADD COLUMN IF NOT EXISTS expires_at timestamp with time zone,
