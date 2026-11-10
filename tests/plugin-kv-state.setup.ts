@@ -68,13 +68,44 @@ function isPluginRequest(input: Parameters<typeof fetch>[0]) {
   return PLUGIN_PATHS.some(prefix => path.startsWith(prefix))
 }
 
+/** Only requests for nonexistent apps may miss after the setup's full drain. */
+async function assertUnpublishedAppMiss(input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1], requestCopy: Pick<Request, 'method' | 'json'> | null) {
+  const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const method = init?.method ?? requestCopy?.method ?? 'GET'
+  let appId: unknown
+  if (method === 'GET' || method === 'DELETE') {
+    appId = new URL(raw).searchParams.get('app_id')
+  }
+  else {
+    const payload: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : await requestCopy?.json()
+    const data = Array.isArray(payload) ? payload[0] : payload
+    appId = data && typeof data === 'object' && 'app_id' in data ? data.app_id : undefined
+  }
+  if (typeof appId !== 'string' || !appId)
+    throw new Error('Cannot verify unpublished-app fallback without an app id')
+  const pool = new Pool({ connectionString: POSTGRES_URL, max: 1 })
+  try {
+    const { rows } = await pool.query<{ exists: boolean }>(
+      'SELECT EXISTS (SELECT 1 FROM public.apps WHERE app_id = $1) AS exists', [appId],
+    )
+    expect(rows[0].exists, 'A published fixture app must be served by KV after the setup drain').toBe(false)
+  }
+  finally {
+    await pool.end()
+  }
+}
+
 globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
   if (!isPluginRequest(input))
     return originalFetch(input, init)
+  const requestCopy = input instanceof Request ? input.clone() : null
   await drainPluginStateSync()
   const response = await originalFetch(input, init)
   const state = response.headers.get('X-Plugin-State') ?? 'none'
-  responseStates.set(state, (responseStates.get(state) ?? 0) + 1)
+  if (state === 'miss')
+    await assertUnpublishedAppMiss(input, init, requestCopy)
+  const countedState = state === 'miss' ? 'unpublished-app-miss' : state
+  responseStates.set(countedState, (responseStates.get(countedState) ?? 0) + 1)
   return response
 }) as typeof fetch
 
@@ -105,6 +136,6 @@ beforeAll(async () => {
 afterAll(() => {
   const summary = Object.fromEntries(responseStates)
   console.info('[plugin-kv-state] plugin responses by X-Plugin-State', summary)
-  // Every request the state was asked to answer was answered by it alone.
+  // Published fixture apps must use KV; verified nonexistent apps use replicas.
   expect([...responseStates.keys()].filter(state => FAILED_STATES.has(state))).toEqual([])
 })

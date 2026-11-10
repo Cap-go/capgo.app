@@ -60,6 +60,35 @@ describe.skipIf(process.env.PLUGIN_STATE_KV_TESTS !== 'true')('KV and replica pl
     }
   })
 
+  it('uses the replica for a new app before its first publication in authoritative mode', async () => {
+    const isolated = await createPluginStateFixture()
+    try {
+      const synced = await executeSQL<{ synced: boolean }>(`SELECT EXISTS (
+        SELECT 1 FROM public.plugin_state_sync_apps WHERE app_id = $1
+      ) AS synced`, [isolated.appId])
+      expect(synced).toEqual([{ synced: false }])
+      const probe = { name: 'New app before publication', path: '/channel_self', method: 'PUT', body: isolated.base } as const
+      const db = await probePluginState(probe, 'db')
+      expect(db.status).toBe(200)
+      expect(db.body).toMatchObject({ channel: 'production', status: 'default' })
+      for (let request = 0; request < 2; request++) {
+        const pending = await probePluginState(probe, 'kv')
+        expect(pending.status).toBe(db.status)
+        expect(pending.body).toEqual(db.body)
+        expect(pending.state).toBe('miss')
+      }
+      await syncPluginState([isolated.appId])
+      const published = await probePluginState(probe, 'kv')
+      expect(published.status).toBe(db.status)
+      expect(published.body).toEqual(db.body)
+      expect(published.state).toBe('kv')
+    }
+    finally {
+      await isolated.cleanup()
+      await syncPluginState()
+    }
+  }, 60_000)
+
   it('preserves the deprecated plugin endpoint aliases', async () => {
     for (const probe of fixture.readProbes) {
       const { kv, db } = await comparePluginState({ ...probe, path: `/plugin${probe.path}` })

@@ -16,6 +16,71 @@ afterEach(() => {
 })
 
 describe('published plugin state reader', () => {
+  it.each(['true', 'false'])('falls back for cold and cached unpublished apps with authoritative mode %s', async (authoritative) => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('PLUGIN_STATE_KV_AUTHORITATIVE', authoritative)
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const entries = new Map<string, { body: string, headers: Headers }>()
+    const cache = {
+      match: async (request: Request) => {
+        const entry = entries.get(request.url)
+        return entry ? new Response(entry.body, { headers: entry.headers }) : undefined
+      },
+      put: vi.fn(async (request: Request, response: Response) => { entries.set(request.url, { body: await response.text(), headers: response.headers }) }),
+    }
+    vi.stubGlobal('caches', { open: async () => cache })
+    const getPointer = vi.fn(async () => null)
+    const getValue = vi.fn()
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const session = await startPluginStateRequest(c, 'com.example.unpublished', 'device')
+      return c.json({ source: session ? 'kv' : 'db', exists: session?.exists ?? null })
+    })
+    const bindings = { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } }
+    for (const resetMemory of [false, false, true]) {
+      if (resetMemory)
+        resetPluginStateMemory()
+      const response = await app.request('/', undefined, bindings)
+      expect(await response.json()).toEqual({ source: 'db', exists: null })
+      expect(response.headers.get('X-Plugin-State')).toBe('miss')
+    }
+    expect(getPointer).toHaveBeenCalledOnce()
+    expect(getValue).not.toHaveBeenCalled()
+    expect(cache.put).toHaveBeenCalledOnce()
+  })
+
+  it.each(['true', 'false'])('preserves cold and cached deletion-pointer behavior with authoritative mode %s', async (authoritative) => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('PLUGIN_STATE_KV_AUTHORITATIVE', authoritative)
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const entries = new Map<string, { body: string, headers: Headers }>()
+    const cache = {
+      match: async (request: Request) => {
+        const entry = entries.get(request.url)
+        return entry ? new Response(entry.body, { headers: entry.headers }) : undefined
+      },
+      put: async (request: Request, response: Response) => { entries.set(request.url, { body: await response.text(), headers: response.headers }) },
+    }
+    vi.stubGlobal('caches', { open: async () => cache })
+    const getPointer = vi.fn(async () => ({ json: async () => ({ f: 1, generation: '2', kvKey: null }) }))
+    const getValue = vi.fn()
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const session = await startPluginStateRequest(c, 'com.example.deleted-pointer', 'device')
+      return c.json({ source: session ? 'kv' : 'db', exists: session?.exists ?? null })
+    })
+    const bindings = { PLUGIN_STATE: { get: getValue }, PLUGIN_STATE_POINTERS: { get: getPointer } }
+    for (const resetMemory of [false, false, true]) {
+      if (resetMemory)
+        resetPluginStateMemory()
+      const response = await app.request('/', undefined, bindings)
+      expect(await response.json()).toEqual(authoritative === 'true' ? { source: 'kv', exists: false } : { source: 'db', exists: null })
+      expect(response.headers.get('X-Plugin-State')).toBe(authoritative === 'true' ? null : 'miss')
+    }
+    expect(getPointer).toHaveBeenCalledOnce()
+    expect(getValue).not.toHaveBeenCalled()
+  })
+
   it('falls back on a stalled R2 read and discards an object arriving after the deadline', async () => {
     vi.useFakeTimers()
     const pendingObject = Promise.withResolvers<{ json: ReturnType<typeof vi.fn>, body: { cancel: ReturnType<typeof vi.fn> } }>()

@@ -40,15 +40,14 @@ import { backgroundTask, getEnv } from './utils.ts'
  * reads it and answers the pg.ts queries from it (pluginStateEval.ts), so the
  * endpoint code and its responses are unchanged.
  *
- * Reads: isolate memory -> Cache API (per data center, free, purged by the
- * app's Cache-Tag after each sync) -> Workers KV. The app document is the
- * completion marker of an app: the sync writes every other key of the app
- * (bundle names, device overrides, served manifests) before it.
+ * Reads: Cache API (per data center, reusing parsed isolate memory for the
+ * same publication) -> R2 pointer -> immutable Workers KV value. Missing
+ * independent dependencies fall back to the replica.
  *
  * Rollout: worker secret `PLUGIN_STATE_KV` (off | on | N% of devices), one
- * stable decision per device. A device whose app has no document yet uses
- * the database path, unless `PLUGIN_STATE_KV_AUTHORITATIVE=true` (set once
- * the backfill is complete): a missing document then means a missing app.
+ * stable decision per device. Unpublished apps always use the replica.
+ * `PLUGIN_STATE_KV_AUTHORITATIVE=true` additionally trusts published deletion
+ * pointers as missing apps; it never treats an absent pointer as a deletion.
  * `PLUGIN_STATE_KV_STRICT=true` (tests) fails any database access of a
  * request served from the state.
  */
@@ -61,7 +60,7 @@ const MANIFEST_CACHE_PATH = '/.plugin-state-manifest-v2'
 const APP_CACHE_TTL_SECONDS = 30
 const VERSION_CACHE_TTL_SECONDS = 30
 const MANIFEST_CACHE_TTL_SECONDS = 30
-/** A missing key is cached shorter: its creation purges it anyway. */
+/** Bound repeated pointer misses; publication purges these entries. */
 const NEGATIVE_CACHE_TTL_SECONDS = 60
 /** App documents can be large: allow more than the default 20ms Cache API read. */
 const CACHE_MATCH_TIMEOUT_MS = 50
@@ -115,7 +114,7 @@ export function shouldUsePluginState(c: AnyContext, appId: string, deviceId: str
 }
 
 interface CachedDoc<T> {
-  revision: string
+  revision: string | null
   value: T | null
 }
 
@@ -159,14 +158,18 @@ interface DocLoadOptions<T> {
 }
 
 /**
- * One document: Cache API (reusing the parsed copy in isolate memory when
- * the entry is the same build), then KV. null: the key is not in KV.
+ * One document: Cache API (reusing the parsed copy of the same publication),
+ * then its R2 pointer and KV value. null: no live value is published.
  */
 function loadDoc<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<T | null> {
+  return loadDocWithRevision(c, store, options).then(doc => doc.value)
+}
+
+function loadDocWithRevision<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<CachedDoc<T>> {
   return withPluginStateDocument(c, options.kvKey, () => loadDocument(c, store, options))
 }
 
-async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<T | null> {
+async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<CachedDoc<T>> {
   const helper = new CacheHelper(c)
   const request = helper.buildRequest(options.cachePath, options.params)
   const cached = await helper.matchResponse(request, { timeoutMs: CACHE_MATCH_TIMEOUT_MS })
@@ -175,7 +178,7 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
     const remembered = options.reuseParsed ? memory.get(request.url) as CachedDoc<T> | undefined : undefined
     if (remembered && revision && remembered.revision === revision) {
       await cached.body?.cancel().catch(() => undefined)
-      return remembered.value
+      return remembered
     }
     try {
       const envelope: unknown = await cached.json()
@@ -184,7 +187,7 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
       const value = envelope.v === null ? null : options.parse(envelope.v)
       if (options.reuseParsed && revision)
         rememberDoc(request.url, { revision, value })
-      return value
+      return { revision, value }
     }
     catch {
       // Unreadable entry: read KV again.
@@ -208,11 +211,11 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
     timeoutMs: CACHE_PUT_TIMEOUT_MS,
     headers: revision ? { [REVISION_HEADER]: revision } : undefined,
   }))
-  return value
+  return { revision, value }
 }
 
 function loadAppDoc(c: AnyContext, store: KVNamespace, appId: string, kvKey: string) {
-  return loadDoc<PluginStateAppDoc>(c, store, {
+  return loadDocWithRevision<PluginStateAppDoc>(c, store, {
     cachePath: APP_CACHE_PATH,
     params: { app_id: appId },
     kvKey,
@@ -240,23 +243,23 @@ export async function startPluginStateRequest(c: AnyContext, appId: string, devi
     sessions.set(c.req.raw, null)
     return null
   }
-  let doc: PluginStateAppDoc | null
+  let published: CachedDoc<PluginStateAppDoc>
   try {
-    doc = await loadAppDoc(c, store, appId, await pluginStateAppKey(appId))
+    published = await loadAppDoc(c, store, appId, await pluginStateAppKey(appId))
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'plugin state read failed, using the database', app_id: appId, error })
-    doc = null
     sessions.set(c.req.raw, null)
     setStateHeader(c, 'error')
     return null
   }
+  const doc = published.value
   if (doc && doc.app_id !== appId) {
     sessions.set(c.req.raw, null)
     setStateHeader(c, 'error')
     return null
   }
-  if (!doc && !isPluginStateAuthoritative(c)) {
+  if (!doc && (!published.revision || !isPluginStateAuthoritative(c))) {
     sessions.set(c.req.raw, null)
     setStateHeader(c, 'miss')
     return null

@@ -45,7 +45,11 @@ Cloudflare documents that writes and negative lookups can remain stale for
 If R2 points to an immutable value that a location cannot read yet, the reader
 falls back to the replica. The Cache API can retain a previous published value
 until its 30-second TTL or a purge; R2 consistency does not bypass that cache.
-Missing document results have a separate 60-second negative TTL. Plugin-state
+Missing document results have a separate 60-second negative TTL. An absent app
+pointer has no publication revision and always uses the replica, including a
+cached miss in authoritative mode. A generation-bearing deletion pointer can
+be trusted when authoritative mode is enabled; a published `exists: false` app
+document remains an explicit deletion in either mode. Plugin-state
 entries use their own app tag, separate from DB/control and snippet caches.
 Writer publications purge only that namespace; they do not use the replica-lag
 re-purge ladder. KV-sourced answers must not fill the shared DB read cache or
@@ -95,7 +99,7 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 | --- | --- | --- |
 | `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | Vault | Disabled. Set to `true` to enqueue changes and run backfill. |
 | `PLUGIN_STATE_KV` | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints. |
-| `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Leave false during backfill so absent apps use replicas. Enable only after verifying complete coverage. |
+| `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
 | `PLUGIN_STATE_KV_STRICT` | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session. |
 | `PLUGIN_STATE_TIMING` | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths. |
 
