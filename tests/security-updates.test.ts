@@ -64,7 +64,7 @@ describe('[GET] /private/security_updates/feed reported package sourcing', () =>
 
   beforeAll(async () => {
     await resetAndSeedAppData(appId)
-    const iosOnlyPackages = JSON.stringify([{ name: '@capacitor/ios', version: '6.2.0' }])
+    const iosOnlyPackage = JSON.stringify({ name: '@capacitor/ios', version: '6.2.0' })
     await executeSQL(
       `INSERT INTO public.app_versions (
          app_id, name, owner_org, deleted, storage_provider, r2_path, checksum,
@@ -75,7 +75,7 @@ describe('[GET] /private/security_updates/feed reported package sourcing', () =>
          'feedabc1', ARRAY[$2::jsonb], '1.9.0', a.user_id
        FROM public.apps a WHERE a.app_id = $1::text
        ON CONFLICT (name, app_id) DO NOTHING`,
-      [appId, iosOnlyPackages],
+      [appId, iosOnlyPackage],
     )
     const prodRows = await executeSQL<{ id: number }>(
       `SELECT id FROM public.app_versions WHERE app_id = $1::text AND name = 'core-placeholder-prod' LIMIT 1`,
