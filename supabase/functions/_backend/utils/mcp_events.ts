@@ -41,7 +41,7 @@ export interface McpEventEnvelope {
   cursor: null
 }
 
-type WebhookRow = Database['public']['Tables']['webhooks']['Row'] & {
+export type McpDeliverableWebhookRow = Database['public']['Tables']['webhooks']['Row'] & {
   source?: string
   expires_at?: string | null
   mcp_event?: string | null
@@ -49,6 +49,8 @@ type WebhookRow = Database['public']['Tables']['webhooks']['Row'] & {
   mcp_verified_at?: string | null
   mcp_spike_last_fired_at?: string | null
 }
+
+type WebhookRow = McpDeliverableWebhookRow
 
 const mcpArgumentsSchema = z.object({
   org_id: z.string().uuid(),
@@ -670,7 +672,7 @@ export async function dispatchMcpEvent(
 
 export async function dispatchMcpEventToWebhook(
   c: Context,
-  webhook: WebhookRow,
+  webhook: McpDeliverableWebhookRow,
   eventName: McpEventName,
   data: Record<string, unknown>,
 ): Promise<boolean> {

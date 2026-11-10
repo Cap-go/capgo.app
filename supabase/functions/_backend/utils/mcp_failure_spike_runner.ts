@@ -9,7 +9,7 @@ import {
   mcpFailureSpikeArgumentsSchema,
   resolveFailureSpikeThresholds,
 } from './mcp_failure_spike_policy.ts'
-import { dispatchMcpEventToWebhook } from './mcp_events.ts'
+import { dispatchMcpEventToWebhook, type McpDeliverableWebhookRow } from './mcp_events.ts'
 import { readStatsInsights, readStatsVersion } from './stats.ts'
 
 export type WebhookRow = Database['public']['Tables']['webhooks']['Row']
@@ -110,7 +110,7 @@ export async function evaluateMcpFailureSpikeSubscriptions(
     data.channel = parsed.data.channel
 
   const eventName = 'update.failure_spike' as McpEventName
-  const delivered = await dispatchMcpEventToWebhook(c, webhook, eventName, data)
+  const delivered = await dispatchMcpEventToWebhook(c, webhook as McpDeliverableWebhookRow, eventName, data)
   if (!delivered)
     return { fired: false, reason: 'delivery_failed' }
 
