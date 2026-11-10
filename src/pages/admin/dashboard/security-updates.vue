@@ -135,6 +135,19 @@ onMounted(() => {
           </p>
         </div>
 
+        <p
+          v-if="!advisory.email.bento_configured"
+          class="text-xs text-slate-600 dark:text-slate-400"
+        >
+          {{ t('admin-security-updates-email-bento-unconfigured') }}
+        </p>
+        <p
+          v-else-if="advisory.email.partial"
+          class="text-xs text-slate-600 dark:text-slate-400"
+        >
+          {{ t('admin-security-updates-email-partial') }}
+        </p>
+
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
           <AdminStatsCard
             :title="t('admin-security-updates-email-sent')"
