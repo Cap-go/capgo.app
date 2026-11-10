@@ -172,7 +172,7 @@ describe('failure spike cooldown claim and delivery restore', () => {
     mcp_verified_at: now.toISOString(),
     expires_at: null,
     mcp_spike_last_fired_at: null,
-  } as McpFailureSpikeWebhookRow
+  } as unknown as McpFailureSpikeWebhookRow
 
   function mockPg(claim: boolean) {
     const restores: unknown[][] = []
