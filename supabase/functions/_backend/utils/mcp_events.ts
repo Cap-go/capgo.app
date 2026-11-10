@@ -4,7 +4,7 @@ import type { Database } from './supabase.types.ts'
 import type { AuditLogData, WebhookDeliveryPayload } from './webhook.ts'
 import { z } from 'zod'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
-import { closeClient, getPgClient } from './pg.ts'
+import { BEGIN_WRITE_TRANSACTION_SQL, closeClient, getPgClient } from './pg.ts'
 import { queryJson, queryJsonOne } from './pg_rls.ts'
 import {
   createDeliveryRecord,
@@ -241,7 +241,7 @@ function constantTimeEqual(a: string, b: string): boolean {
     return false
   let diff = 0
   for (let i = 0; i < a.length; i++)
-    diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0)
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
   return diff === 0
 }
 
@@ -517,33 +517,61 @@ export async function upsertMcpEventSubscription(
     ))
   }
   else {
-    const active = await countActiveMcpSubscriptions(c, args.org_id)
-    if (active >= MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG)
-      throw Object.assign(new Error(`Active MCP subscription limit reached (${MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG})`), { code: 'subscription_cap' })
-
     const inserted = await withAdminPg(c, async (pg) => {
-      return queryJsonOne<{ id: string }>(
-        pg,
-        `
-        INSERT INTO public.webhooks (
-          org_id, name, url, secret, enabled, events, delivery_version, created_by,
-          source, expires_at, mcp_event, mcp_arguments, mcp_verified_at
+      await pg.query(BEGIN_WRITE_TRANSACTION_SQL)
+      try {
+        await pg.query(
+          'SELECT pg_catalog.pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`mcp_subs:${args.org_id}`],
         )
-        VALUES ($1, $2, $3, $4, true, ARRAY[$5]::text[], 'standard', $6, 'mcp', $7, $8, $9::jsonb, NULL)
-        RETURNING id
-        `,
-        [
-          args.org_id,
-          subscriptionNameValue,
-          input.delivery.url,
-          secret,
-          input.name,
-          auth.userId,
-          expiresAt.toISOString(),
-          input.name,
-          JSON.stringify(args),
-        ],
-      )
+        const countRows = await queryJson<{ count: number }>(
+          pg,
+          `
+          SELECT count(*)::int AS count
+          FROM public.webhooks
+          WHERE org_id = $1
+            AND source = 'mcp'
+            AND enabled = true
+            AND (expires_at IS NULL OR expires_at > now())
+          `,
+          [args.org_id],
+        )
+        const active = countRows[0]?.count ?? 0
+        if (active >= MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG) {
+          throw Object.assign(
+            new Error(`Active MCP subscription limit reached (${MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG})`),
+            { code: 'subscription_cap' },
+          )
+        }
+        const row = await queryJsonOne<{ id: string }>(
+          pg,
+          `
+          INSERT INTO public.webhooks (
+            org_id, name, url, secret, enabled, events, delivery_version, created_by,
+            source, expires_at, mcp_event, mcp_arguments, mcp_verified_at
+          )
+          VALUES ($1, $2, $3, $4, true, ARRAY[$5]::text[], 'standard', $6, 'mcp', $7, $8, $9::jsonb, NULL)
+          RETURNING id
+          `,
+          [
+            args.org_id,
+            subscriptionNameValue,
+            input.delivery.url,
+            secret,
+            input.name,
+            auth.userId,
+            expiresAt.toISOString(),
+            input.name,
+            JSON.stringify(args),
+          ],
+        )
+        await pg.query('COMMIT')
+        return row
+      }
+      catch (error) {
+        await pg.query('ROLLBACK').catch(() => {})
+        throw error
+      }
     })
     if (!inserted?.id)
       throw Object.assign(new Error('Failed to create MCP subscription row'), { code: 'internal' })
