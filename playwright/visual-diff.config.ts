@@ -34,7 +34,9 @@ async function prepareSecurityUpdatesObserveTab(page: Page, viewport: { width: n
 async function prepareSecurityUpdatesEmailPreferences(page: Page, viewport: { width: number, height: number }) {
   await page.setViewportSize(viewport)
   const section = page.locator('#security-updates-email-public')
-  if (await section.isVisible().catch(() => false))
+  if (process.env.VISUAL_DIFF_PHASE === 'after')
+    await section.waitFor({ state: 'visible', timeout: 120_000 })
+  else if (await section.isVisible().catch(() => false))
     await section.scrollIntoViewIfNeeded()
 }
 

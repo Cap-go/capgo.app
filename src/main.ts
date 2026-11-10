@@ -181,11 +181,13 @@ const newRoutes = routes.map((route) => {
   return route
 })
 const router = createRouter({
-  scrollBehavior(to, _from, savedPosition) {
+  scrollBehavior(to, from, savedPosition) {
     if (savedPosition)
       return savedPosition
     if (to.hash)
       return { el: to.hash, top: 0 }
+    if (from && to.path === from.path && (to.hash || '') === (from.hash || ''))
+      return false
     return { top: 0 }
   },
   routes: [
