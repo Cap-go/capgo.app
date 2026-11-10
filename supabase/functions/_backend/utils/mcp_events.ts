@@ -58,6 +58,18 @@ const mcpArgumentsSchema = z.object({
   channel: z.string().min(1).optional(),
 }).strict()
 
+function mcpEventOrgFilterInputSchema(extraProperties: Record<string, unknown> = {}) {
+  return {
+    type: 'object',
+    properties: {
+      org_id: { type: 'string', format: 'uuid' },
+      app_id: { type: 'string', description: 'Optional app filter' },
+      ...extraProperties,
+    },
+    required: ['org_id'],
+  }
+}
+
 export const MCP_EVENT_CATALOG: Array<{
   name: McpEventName
   description: string
@@ -71,14 +83,7 @@ export const MCP_EVENT_CATALOG: Array<{
     name: 'build.succeeded',
     description: 'Fires when a native build finishes successfully.',
     delivery: ['webhook'],
-    inputSchema: {
-      type: 'object',
-      properties: {
-        org_id: { type: 'string', format: 'uuid' },
-        app_id: { type: 'string', description: 'Optional app filter' },
-      },
-      required: ['org_id'],
-    },
+    inputSchema: mcpEventOrgFilterInputSchema(),
     payloadSchema: {
       type: 'object',
       properties: {
@@ -95,14 +100,7 @@ export const MCP_EVENT_CATALOG: Array<{
     name: 'build.failed',
     description: 'Fires when a native build fails or times out (failure_category timeout).',
     delivery: ['webhook'],
-    inputSchema: {
-      type: 'object',
-      properties: {
-        org_id: { type: 'string', format: 'uuid' },
-        app_id: { type: 'string', description: 'Optional app filter' },
-      },
-      required: ['org_id'],
-    },
+    inputSchema: mcpEventOrgFilterInputSchema(),
     payloadSchema: {
       type: 'object',
       properties: {
@@ -120,14 +118,7 @@ export const MCP_EVENT_CATALOG: Array<{
     name: 'bundle.uploaded',
     description: 'Fires when a new bundle version is uploaded.',
     delivery: ['webhook'],
-    inputSchema: {
-      type: 'object',
-      properties: {
-        org_id: { type: 'string', format: 'uuid' },
-        app_id: { type: 'string', description: 'Optional app filter' },
-      },
-      required: ['org_id'],
-    },
+    inputSchema: mcpEventOrgFilterInputSchema(),
     payloadSchema: {
       type: 'object',
       properties: {
@@ -143,15 +134,9 @@ export const MCP_EVENT_CATALOG: Array<{
     name: 'bundle.deployed',
     description: 'Fires when a channel bundle version changes.',
     delivery: ['webhook'],
-    inputSchema: {
-      type: 'object',
-      properties: {
-        org_id: { type: 'string', format: 'uuid' },
-        app_id: { type: 'string', description: 'Optional app filter' },
-        channel: { type: 'string', description: 'Optional channel name filter for bundle.deployed' },
-      },
-      required: ['org_id'],
-    },
+    inputSchema: mcpEventOrgFilterInputSchema({
+      channel: { type: 'string', description: 'Optional channel name filter for bundle.deployed' },
+    }),
     payloadSchema: {
       type: 'object',
       properties: {
