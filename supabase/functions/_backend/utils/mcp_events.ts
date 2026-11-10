@@ -364,7 +364,7 @@ function parseMcpSubscriptionArguments(
 
   const parsed = mcpArgumentsSchema.safeParse(raw)
   if (!parsed.success)
-    return { ok: false, message: 'Invalid subscription arguments' }
+    return { ok: false, message: formatFailureSpikeValidationError(parsed.error) }
   return { ok: true, data: parsed.data }
 }
 
