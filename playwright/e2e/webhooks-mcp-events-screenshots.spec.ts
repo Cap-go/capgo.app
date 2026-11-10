@@ -1,5 +1,9 @@
+import { mkdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
+
+const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots/mcp-webhooks')
 
 const DEMO_ORG_ID = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
 const DEMO_USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
@@ -42,6 +46,10 @@ async function openWebhooksList(page: import('@playwright/test').Page) {
 }
 
 test.describe('Webhooks MCP badge screenshots', () => {
+  test.beforeAll(() => {
+    mkdirSync(screenshotDir, { recursive: true })
+  })
+
   test.beforeEach(async ({ page }) => {
     await page.login('test@capgo.app', 'testtest')
     await dismissSupportPrompt(page)
@@ -52,12 +60,12 @@ test.describe('Webhooks MCP badge screenshots', () => {
     await stubConsoleOnlyWebhooks(page)
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true })).toHaveCount(0)
-    await page.screenshot({ path: 'playwright/screenshots/webhooks-mcp-desktop-before.png', fullPage: true })
+    await page.screenshot({ path: resolve(screenshotDir, 'desktop-before.png'), fullPage: true })
 
     await page.unrouteAll({ behavior: 'ignoreErrors' })
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true }).first()).toBeVisible()
-    await page.screenshot({ path: 'playwright/screenshots/webhooks-mcp-desktop-after.png', fullPage: true })
+    await page.screenshot({ path: resolve(screenshotDir, 'desktop-after.png'), fullPage: true })
   })
 
   test('mobile before and after MCP badge', async ({ page }) => {
@@ -65,11 +73,11 @@ test.describe('Webhooks MCP badge screenshots', () => {
     await stubConsoleOnlyWebhooks(page)
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true })).toHaveCount(0)
-    await page.screenshot({ path: 'playwright/screenshots/webhooks-mcp-mobile-before.png', fullPage: true })
+    await page.screenshot({ path: resolve(screenshotDir, 'mobile-before.png'), fullPage: true })
 
     await page.unrouteAll({ behavior: 'ignoreErrors' })
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true }).first()).toBeVisible()
-    await page.screenshot({ path: 'playwright/screenshots/webhooks-mcp-mobile-after.png', fullPage: true })
+    await page.screenshot({ path: resolve(screenshotDir, 'mobile-after.png'), fullPage: true })
   })
 })
