@@ -54,6 +54,8 @@ The workers support two testing modes:
    This will start all three workers in the background. Press Ctrl+C to stop
    them.
 
+   `wrangler dev` refuses a `compatibility_date` that is still in the future, so this script runs Wrangler with `--compatibility-date` set to today in UTC (override with `WRANGLER_DEV_COMPATIBILITY_DATE`). Deployed Workers still use the date in each `wrangler.jsonc`.
+
 2. In another terminal, run the tests:
    ```bash
    bun test:cloudflare:all
