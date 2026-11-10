@@ -7,6 +7,7 @@ import { app as cron_clear_versions } from '../_backend/triggers/cron_clear_vers
 import { app as cron_email } from '../_backend/triggers/cron_email.ts'
 import { app as cron_onboarding_refresh_apps } from '../_backend/triggers/cron_onboarding_refresh_apps.ts'
 import { app as cron_reconcile_build_status } from '../_backend/triggers/cron_reconcile_build_status.ts'
+import { app as cron_mcp_failure_spike } from '../_backend/triggers/cron_mcp_failure_spike.ts'
 import { app as cron_rollout_auto_pause } from '../_backend/triggers/cron_rollout_auto_pause.ts'
 import { app as cron_stat_app } from '../_backend/triggers/cron_stat_app.ts'
 import { app as cron_stat_org } from '../_backend/triggers/cron_stat_org.ts'
@@ -68,6 +69,7 @@ appGlobal.route('/cron_clean_orphan_images', cron_clean_orphan_images)
 appGlobal.route('/cron_delta_storage_gc', cron_delta_storage_gc)
 appGlobal.route('/cron_reconcile_build_status', cron_reconcile_build_status)
 appGlobal.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+appGlobal.route('/cron_mcp_failure_spike', cron_mcp_failure_spike)
 appGlobal.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
 appGlobal.route('/canceled_org_retention_alerts', canceled_org_retention_alerts)
 appGlobal.route('/credit_usage_alerts', credit_usage_alerts)

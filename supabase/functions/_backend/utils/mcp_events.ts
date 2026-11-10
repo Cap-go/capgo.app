@@ -14,6 +14,11 @@ import {
 } from './webhook.ts'
 import { getPublicHostnameValidationError } from './publicUrl.ts'
 import { checkPermission } from './rbac.ts'
+import {
+  formatFailureSpikeValidationError,
+  MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS,
+  mcpFailureSpikeArgumentsSchema,
+} from './mcp_failure_spike_policy.ts'
 
 export const MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG = 25
 export const MCP_EVENT_DEFAULT_TTL_MS = 24 * 60 * 60 * 1000
@@ -24,6 +29,7 @@ export const MCP_EVENT_NAMES = [
   'build.failed',
   'bundle.uploaded',
   'bundle.deployed',
+  'update.failure_spike',
 ] as const
 
 export type McpEventName = typeof MCP_EVENT_NAMES[number]
@@ -42,6 +48,7 @@ type WebhookRow = Database['public']['Tables']['webhooks']['Row'] & {
   mcp_event?: string | null
   mcp_arguments?: Record<string, unknown> | null
   mcp_verified_at?: string | null
+  mcp_spike_last_fired_at?: string | null
 }
 
 const mcpArgumentsSchema = z.object({
@@ -56,6 +63,8 @@ export const MCP_EVENT_CATALOG: Array<{
   delivery: ['webhook']
   inputSchema: Record<string, unknown>
   payloadSchema: Record<string, unknown>
+  recommendedDefaults?: Record<string, unknown>
+  recommendedDefaultsNote?: string
 }> = [
   {
     name: 'build.succeeded',
@@ -151,6 +160,53 @@ export const MCP_EVENT_CATALOG: Array<{
         channel_name: { type: 'string' },
         bundle_id: { type: 'string' },
         previous_bundle_id: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'update.failure_spike',
+    description: 'Fires when OTA update failures spike in a rolling window for an app (optional channel filter). Evaluated every 5 minutes by a cron job.',
+    delivery: ['webhook'],
+    recommendedDefaults: { ...MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS, profile: 'Balanced' },
+    recommendedDefaultsNote: 'Balanced is a recommended starting point. Tune min_checks and failure_rate_percent to your active device count so small fleets are not noisy and large fleets still alert.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        org_id: { type: 'string', format: 'uuid' },
+        app_id: { type: 'string', description: 'App to monitor (required)' },
+        channel: { type: 'string', description: 'Optional channel name filter' },
+        min_failures: { type: 'integer', minimum: 1, default: MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS.min_failures, description: 'Minimum failed update attempts in the window' },
+        failure_rate_percent: { type: 'number', minimum: 1, maximum: 100, default: MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS.failure_rate_percent, description: 'Minimum failures divided by checks, as percent' },
+        min_checks: { type: 'integer', minimum: 1, default: MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS.min_checks, description: 'Minimum update checks before the event can fire' },
+        window_minutes: { type: 'integer', minimum: 5, maximum: 1440, default: MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS.window_minutes, description: 'Rolling stats window length in minutes' },
+        cooldown_minutes: { type: 'integer', minimum: 5, maximum: 1440, default: MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS.cooldown_minutes, description: 'Minimum minutes between dispatches for the same subscription' },
+      },
+      required: ['org_id', 'app_id'],
+    },
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        org_id: { type: 'string' },
+        app_id: { type: 'string' },
+        channel: { type: 'string' },
+        version: { type: 'string' },
+        failures: { type: 'integer' },
+        checks: { type: 'integer' },
+        rate_percent: { type: 'number' },
+        window_minutes: { type: 'integer' },
+        thresholds: { type: 'object' },
+        top_failure_action_codes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string' },
+              count: { type: 'integer' },
+            },
+          },
+        },
+        window_start: { type: 'string', format: 'date-time' },
+        window_end: { type: 'string', format: 'date-time' },
       },
     },
   },
@@ -271,13 +327,32 @@ export async function countActiveMcpSubscriptions(c: Context, orgId: string): Pr
   return rows[0]?.count ?? 0
 }
 
-function subscriptionName(eventName: McpEventName, args: z.infer<typeof mcpArgumentsSchema>): string {
+type McpStoredArguments = z.infer<typeof mcpArgumentsSchema> | z.infer<typeof mcpFailureSpikeArgumentsSchema>
+
+function subscriptionName(eventName: McpEventName, args: McpStoredArguments): string {
   const parts = ['MCP', eventName, args.org_id]
   if (args.app_id)
     parts.push(args.app_id)
   if (args.channel)
     parts.push(args.channel)
   return parts.join(' · ')
+}
+
+function parseMcpSubscriptionArguments(
+  eventName: McpEventName,
+  raw: Record<string, unknown>,
+): { ok: true, data: McpStoredArguments } | { ok: false, message: string } {
+  if (eventName === 'update.failure_spike') {
+    const parsed = mcpFailureSpikeArgumentsSchema.safeParse(raw)
+    if (!parsed.success)
+      return { ok: false, message: formatFailureSpikeValidationError(parsed.error) }
+    return { ok: true, data: parsed.data }
+  }
+
+  const parsed = mcpArgumentsSchema.safeParse(raw)
+  if (!parsed.success)
+    return { ok: false, message: 'Invalid subscription arguments' }
+  return { ok: true, data: parsed.data }
 }
 
 function computeExpiresAt(ttlMs: number | null | undefined): Date {
@@ -377,9 +452,9 @@ export async function upsertMcpEventSubscription(
   if (!isMcpEventName(input.name))
     throw Object.assign(new Error(`Unknown event: ${input.name}`), { code: 'invalid_event' })
 
-  const argsParsed = mcpArgumentsSchema.safeParse(input.arguments)
-  if (!argsParsed.success)
-    throw Object.assign(new Error('Invalid subscription arguments'), { code: 'invalid_arguments', details: argsParsed.error })
+  const argsParsed = parseMcpSubscriptionArguments(input.name, input.arguments)
+  if (!argsParsed.ok)
+    throw Object.assign(new Error(argsParsed.message), { code: 'invalid_arguments' })
 
   const args = argsParsed.data
   await assertMcpEventsAuth(c, args.org_id, auth.userId, auth.rbacId, args.app_id)
@@ -544,7 +619,9 @@ function argumentsMatch(webhook: WebhookRow, data: Record<string, unknown>): boo
 
   const channelFilter = typeof args.channel === 'string' ? args.channel : null
   if (channelFilter) {
-    const channelName = typeof data.channel_name === 'string' ? data.channel_name : null
+    const channelName = typeof data.channel_name === 'string'
+      ? data.channel_name
+      : (typeof data.channel === 'string' ? data.channel : null)
     if (channelName !== channelFilter)
       return false
   }
