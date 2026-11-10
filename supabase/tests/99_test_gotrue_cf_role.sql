@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(5);
+SELECT plan(8);
 
 SELECT ok(
   (SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname = 'gotrue_cf'),
@@ -23,6 +23,21 @@ SELECT is(
 SELECT ok(
   pg_catalog.pg_has_role('postgres', 'gotrue_cf', 'USAGE'),
   'postgres inherits gotrue_cf privileges'
+);
+
+SELECT ok(
+  pg_catalog.has_schema_privilege('gotrue_cf', 'auth_cf', 'CREATE'),
+  'gotrue_cf can create objects in auth_cf'
+);
+
+SELECT ok(
+  pg_catalog.has_schema_privilege('postgres', 'auth_cf', 'CREATE'),
+  'postgres can create objects in auth_cf'
+);
+
+SELECT ok(
+  NOT pg_catalog.has_schema_privilege('public', 'auth_cf', 'CREATE'),
+  'PUBLIC cannot create objects in auth_cf'
 );
 
 SELECT * FROM finish();
