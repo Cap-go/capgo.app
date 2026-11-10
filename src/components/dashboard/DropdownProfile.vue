@@ -87,8 +87,9 @@ function onMenuFocusout(event: FocusEvent) {
 
 function onMenuKeydown(event: KeyboardEvent) {
   // Tab leaves a menu (ARIA menu pattern), even toward browser chrome where focusout has no relatedTarget.
+  // Focus the trigger first so the browser's Tab moves on from there, not from the removed menu.
   if (event.key === 'Tab') {
-    close()
+    close(true)
     return
   }
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')

@@ -487,52 +487,57 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     return
   }
   isLoading.value = true
-
-  const updateData: Database['public']['Tables']['users']['Insert'] = {
-    id: main.user?.id,
-    first_name: form.first_name,
-    last_name: form.last_name,
-    email: main.user.email,
-    country: form.country,
-    discord_username: form.discord_username || null,
-    // Keep "follow UI language" (null) unless the user picked a different format.
-    format_locale: !main.user.format_locale && formatLocale === currentFormatLocale ? null : formatLocale,
-  }
-
-  if (main.user?.email !== form.email) {
-    const data = await capgo.auth.updateUser({ email: form.email })
-    // The new address only applies once confirmed; keep showing the current one. The other
-    // fields keep the user's edits until the profile save below returns.
-    accountEmail.value = main.user.email ?? ''
-    accountSubmitted.value = false
-    if (data.error && data.error.name === 'AuthApiError') {
-      isLoading.value = false
-      return toast.error(t('email-already-taken'))
+  try {
+    const updateData: Database['public']['Tables']['users']['Insert'] = {
+      id: main.user?.id,
+      first_name: form.first_name,
+      last_name: form.last_name,
+      email: main.user.email,
+      country: form.country,
+      discord_username: form.discord_username || null,
+      // Keep "follow UI language" (null) unless the user picked a different format.
+      format_locale: !main.user.format_locale && formatLocale === currentFormatLocale ? null : formatLocale,
     }
-    toast.success(t('confirm-new-email-sent'), {
-      duration: 10000,
-    })
-    // public.users.email follows the auth email; it syncs once the change is confirmed.
+
+    if (main.user?.email !== form.email) {
+      const data = await capgo.auth.updateUser({ email: form.email })
+      // The new address only applies once confirmed; keep showing the current one. The other
+      // fields keep the user's edits until the profile save below returns.
+      accountEmail.value = main.user.email ?? ''
+      accountSubmitted.value = false
+      if (data.error && data.error.name === 'AuthApiError') {
+        return toast.error(t('email-already-taken'))
+      }
+      toast.success(t('confirm-new-email-sent'), {
+        duration: 10000,
+      })
+      // public.users.email follows the auth email; it syncs once the change is confirmed.
+    }
+
+    const { data: usr, error: dbError } = await capgo
+      .from('users')
+      .upsert(updateData, { onConflict: 'id' })
+      .select()
+      .single()
+
+    if (dbError || !usr) {
+      accountFormErrors.value = [t('account-error')]
+      return
+    }
+    else {
+      toast.success(t('account-updated-succ'))
+    }
+    main.user = usr
+    // Show what was actually saved (e.g. trimmed or normalized values).
+    seedAccountForm()
   }
-
-  const { data: usr, error: dbError } = await capgo
-    .from('users')
-    .upsert(updateData, { onConflict: 'id' })
-    .select()
-    .single()
-
-  if (dbError || !usr) {
+  catch (error) {
+    console.error('Account update failed', error)
+    toast.error(t('something-went-wrong-try-again-later'))
+  }
+  finally {
     isLoading.value = false
-    accountFormErrors.value = [t('account-error')]
-    return
   }
-  else {
-    toast.success(t('account-updated-succ'))
-  }
-  main.user = usr
-  // Show what was actually saved (e.g. trimmed or normalized values).
-  seedAccountForm()
-  isLoading.value = false
 }
 
 // Native shells have no sidebar profile menu, so sign out stays on this page there.

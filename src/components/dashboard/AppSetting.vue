@@ -323,7 +323,7 @@ function setCustomRetentionValue(value: string | number | null | undefined) {
 // A second click while a save is running would repeat every update and toast.
 let isSaving = false
 async function onSubmit() {
-  if (isSaving)
+  if (isSaving || isDeletingApp.value)
     return
   isSaving = true
   try {
@@ -1771,7 +1771,7 @@ async function transferAppOwnership() {
           </section>
         </div>
         <footer class="px-6 pb-6">
-          <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading">
+          <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading || isDeletingApp">
             <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
             <span v-else>{{ t('save') }}</span>
           </button>
