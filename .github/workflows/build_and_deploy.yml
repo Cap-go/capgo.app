@@ -322,10 +322,18 @@ jobs:
             echo "ENV=prod" >> $GITHUB_ENV
           fi
       - name: Deploy CF Worker API
-        run: bun run deploy:cloudflare:api:${{ env.ENV }}
+        run: |
+          set -euo pipefail
+          : "${CHANGELOG_GITHUB_TOKEN:?Missing GitHub credential for release notes}"
+          secrets_file=$(mktemp)
+          trap 'rm -f "$secrets_file"' EXIT
+          # The Actions GITHUB_TOKEN expires after this job; use the existing long-lived credential.
+          bun -e 'await Bun.write(process.argv[1], JSON.stringify({ GITHUB_TOKEN: process.env.CHANGELOG_GITHUB_TOKEN }))' "$secrets_file"
+          bun run deploy:cloudflare:api:${{ env.ENV }} --secrets-file "$secrets_file"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CHANGELOG_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       - name: Retire removed CF Workers
         if: ${{ env.ENV == 'prod' }}
         run: bun scripts/retire-cloudflare-workers.ts

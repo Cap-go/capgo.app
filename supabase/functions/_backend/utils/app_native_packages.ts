@@ -88,16 +88,16 @@ async function loadLatestUploadReported(c: Context, appId: string): Promise<Repo
   }
 }
 
-function rowToPackageMap(row: ReportedVersionsRow | null): Map<string, string> {
-  const map = toNativePackageMap(row?.native_packages as NativePackage[] | null | undefined)
-  return withCliVersion(map, row?.cli_version)
-}
-
 /** Native and CLI versions already reported on bundles for this app (no new SDK fields). */
 export async function loadAppReportedPackages(c: Context, appId: string): Promise<Map<string, string>> {
   const production = await loadProductionChannelReported(c, appId)
-  const row = production ?? await loadLatestUploadReported(c, appId)
-  const map = filterInScopePackages(rowToPackageMap(row))
+  const latest = await loadLatestUploadReported(c, appId)
+  const nativeRow = production ?? latest
+  const map = filterInScopePackages(
+    toNativePackageMap(nativeRow?.native_packages as NativePackage[] | null | undefined),
+  )
+  const cliVersion = latest?.cli_version ?? nativeRow?.cli_version
+  withCliVersion(map, cliVersion)
   ensureCapacitorCorePlaceholder(map)
   const cliKey = normalizePackageName(CAPGO_CLI_PACKAGE)
   if (!map.has(cliKey))

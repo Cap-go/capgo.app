@@ -11,6 +11,8 @@ export async function cachedChangelog<T>(c: Context<MiddlewareKeyVariables>, opt
   params: Record<string, string>
   ttl: number | ((value: T) => number)
   persistent?: boolean
+  /** Skip both cache writes for results obtained from a failed upstream request. */
+  shouldCache?: (value: T) => boolean
   load: () => Promise<T>
 }): Promise<T> {
   const cache = new CacheHelper(c)
@@ -37,6 +39,8 @@ export async function cachedChangelog<T>(c: Context<MiddlewareKeyVariables>, opt
       }
     }
     const value = await options.load()
+    if (options.shouldCache && !options.shouldCache(value))
+      return value
     const ttl = typeof options.ttl === 'function' ? options.ttl(value) : options.ttl
     if (kv) {
       try {

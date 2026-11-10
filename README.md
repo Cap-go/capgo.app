@@ -87,15 +87,14 @@ Per-agent setup instructions are at [capgo.app/agents](https://capgo.app/agents/
 - 🌐 **Open Source Backend**: Self install
   [our backend](https://github.com/Cap-go/capgo) in your infra
 
-### Security updates (backend preview)
+### Security updates
 
-Console API support for **published** Capacitor security advisories and optional
-email alerts. The `security_updates` email preference defaults to off; turn it on under
-Account settings, Notifications. Per app, open Observe, Security updates to review matches.
-`GET /private/security_updates/feed` matches native package
-versions already reported on bundles against the advisory feed (fixture today,
-configurable feed host via `SECURITY_ADVISORIES_BASE_URL` when live). Console UI and
-public docs ship in follow-up PRs.
+The Capgo console shows **published** Capacitor security advisories and optional email
+alerts for your apps. The `security_updates` email preference defaults to off; turn it on
+under Account settings, Notifications. Per app, open Observe, Security updates to review
+matches against native package versions already reported on bundles. Public docs:
+[Console security updates](https://github.com/Cap-go/website/pull/1394) and
+[Security advisories feature](https://github.com/Cap-go/website/pull/1393).
 
 <br>
 

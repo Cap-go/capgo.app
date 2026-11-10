@@ -164,6 +164,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].ci-cd': RouteRecordInfo<
+      '/app/[app].ci-cd',
+      '/app/:app/ci-cd',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].device.[device]': RouteRecordInfo<
       '/app/[app].device.[device]',
       '/app/:app/device/:device',
@@ -782,6 +789,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].channels.vue': {
       routes:
         | '/app/[app].channels'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].ci-cd.vue': {
+      routes:
+        | '/app/[app].ci-cd'
       views:
         | never
       pathParamNames:
