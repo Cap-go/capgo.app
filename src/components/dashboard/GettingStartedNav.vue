@@ -4,7 +4,7 @@ import { computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import IconX from '~icons/lucide/x'
+import GettingStartedDismissButton from '~/components/dashboard/GettingStartedDismissButton.vue'
 import { setCiCdReminderDismissed } from '~/services/cicdReminder'
 import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
@@ -234,16 +234,12 @@ onUnmounted(() => {
               {{ t('getting-started') }}
             </span>
           </router-link>
-          <button
+          <GettingStartedDismissButton
             v-if="!props.compact"
-            type="button"
-            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
-            :aria-label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"
-            data-test="getting-started-nav-dismiss"
+            :label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"
+            test-id="getting-started-nav-dismiss"
             @click="dismiss(app, $event)"
-          >
-            <IconX class="size-4" />
-          </button>
+          />
         </div>
       </li>
       <li v-for="app in cicdApps" :key="`cicd-${app.app_id}`">
@@ -280,18 +276,13 @@ onUnmounted(() => {
               {{ t('setup-checklist-cicd-start') }}
             </span>
           </router-link>
-          <button
+          <GettingStartedDismissButton
             v-if="!props.compact"
-            type="button"
-            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500 disabled:opacity-50"
-            :aria-label="`${t('cicd-reminder-dismiss')} — ${appLabel(app)}`"
-            :title="t('cicd-reminder-dismiss')"
+            :label="`${t('cicd-reminder-dismiss')} — ${appLabel(app)}`"
             :disabled="dismissingCiCd.has(app.app_id)"
-            data-test="cicd-nav-dismiss"
+            test-id="cicd-nav-dismiss"
             @click="dismissCiCd(app)"
-          >
-            <IconX class="size-4" aria-hidden="true" />
-          </button>
+          />
         </div>
       </li>
     </ul>

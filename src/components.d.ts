@@ -111,6 +111,7 @@ declare module 'vue' {
     FilterModal: typeof import('./components/FilterModal.vue')['default']
     FormCheckbox: typeof import('./components/forms/FormCheckbox.vue')['default']
     FormField: typeof import('./components/forms/FormField.vue')['default']
+    GettingStartedDismissButton: typeof import('./components/dashboard/GettingStartedDismissButton.vue')['default']
     GettingStartedNav: typeof import('./components/dashboard/GettingStartedNav.vue')['default']
     GitHubProfileDialog: typeof import('./components/dashboard/GitHubProfileDialog.vue')['default']
     GroupsRbacManager: typeof import('./components/organization/GroupsRbacManager.vue')['default']
