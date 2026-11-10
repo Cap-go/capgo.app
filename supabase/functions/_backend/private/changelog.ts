@@ -5,6 +5,7 @@ import type { AiBinding } from '../utils/workers_ai.ts'
 import { Hono } from 'hono/tiny'
 import { CacheHelper } from '../utils/cache.ts'
 import { cachedChangelog } from '../utils/changelog_cache.ts'
+import { fetchAnonymousGithub } from '../utils/changelog_github.ts'
 import { getDependency } from '../utils/changelog_dependencies.ts'
 import {
   buildFallbackDigest,
@@ -75,6 +76,7 @@ function githubHeaders(c: Context, authenticated = true) {
   return headers
 }
 
+/** Read bounded release history, preserving partial results if later pages fail or hit a rate limit. */
 async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Promise<ReleasesPayload> {
   const maxPages = (source.tagPrefix || source.monorepo) ? MAX_PAGES_SHARED_REPO : MAX_PAGES_SINGLE_REPO
   const raw: unknown[] = []
@@ -83,12 +85,21 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
   // Pages are read one by one on purpose: we stop at the first short page instead of firing every request.
   for (let page = 1; page <= maxPages; page++) {
     const url = `https://api.github.com/repos/${source.owner ?? GITHUB_ORG}/${encodeURIComponent(source.repo)}/releases?per_page=${GITHUB_PAGE_SIZE}&page=${page}`
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) }).catch(() => null) // NOSONAR: sequential pagination, see above
+    const response = await (headers.Authorization
+      ? fetch(url, { headers, signal: AbortSignal.timeout(10_000) })
+      : fetchAnonymousGithub(c, url, headers)).catch(() => null) // NOSONAR: sequential pagination, see above
     if (!response) {
       // Network failure on a later page: partial history beats an error page.
       if (raw.length)
         return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
       throw quickError(502, 'changelog_fetch_failed', 'Could not load release notes', { repo: source.repo })
+    }
+    if (response.status === 404)
+      throw quickError(404, 'changelog_repo_not_found', 'No releases found for this product', { repo: source.repo })
+    if (response.status === 429 && !headers.Authorization) {
+      if (raw.length)
+        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
+      throw quickError(429, 'changelog_rate_limited', 'Release notes are temporarily rate limited', { retryAfterSeconds: Number(response.headers.get('retry-after')) })
     }
     if (!response.ok) {
       // Keep upstream diagnostics server-side, without credentials or response bodies.
@@ -106,8 +117,6 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
         retryAfter: response.headers.get('retry-after'),
         githubRequestId: response.headers.get('x-github-request-id'),
       })
-      if (response.status === 404)
-        throw quickError(404, 'changelog_repo_not_found', 'No releases found for this product', { repo: source.repo })
       // Partial history beats an error page: keep what earlier pages returned.
       if (raw.length)
         return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
@@ -125,10 +134,11 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
   const releases = normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo)
   if (!releases.length && source.packageName) {
     const path = [...source.directory ? [source.directory] : [], 'CHANGELOG.md'].join('/')
-    const response = await fetch(`https://api.github.com/repos/${source.owner}/${source.repo}/contents/${path}`, {
-      headers: { ...githubHeaders(c, false), Accept: 'application/vnd.github.raw+json' },
-      signal: AbortSignal.timeout(10_000),
+    const response = await fetchAnonymousGithub(c, `https://api.github.com/repos/${source.owner}/${source.repo}/contents/${path}`, {
+      ...githubHeaders(c, false), Accept: 'application/vnd.github.raw+json',
     }).catch(() => null)
+    if (response?.status === 429)
+      throw quickError(429, 'changelog_rate_limited', 'Release notes are temporarily rate limited', { retryAfterSeconds: Number(response.headers.get('retry-after')) })
     // GitHub's contents API bounds the file; reject large changelogs instead of reading without limit.
     if (response?.ok && response.body) {
       const reader = response.body.getReader()
@@ -156,6 +166,7 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
   return { releases, truncated }
 }
 
+/** Reuse public release notes across users and locations before making any quota-limited GitHub calls. */
 export async function getReleases(c: Context<MiddlewareKeyVariables>, source: ChangelogSource): Promise<ReleasesPayload> {
   return cachedChangelog(c, {
     path: RELEASES_CACHE_PATH,

@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { changelogDigest, getReleases } from '../supabase/functions/_backend/private/changelog.ts'
 import { dependencySource, getDependency } from '../supabase/functions/_backend/utils/changelog_dependencies.ts'
+import { fetchAnonymousGithub } from '../supabase/functions/_backend/utils/changelog_github.ts'
 
 const edge = new Map<string, { response: Response, expires: number }>()
 const shared = new Map<string, { value: string, expires: number }>()
@@ -29,6 +30,7 @@ app.post('/digest', async c => c.json(await changelogDigest(c, await c.req.json(
 app.get('/dependency', async c => c.json(await getDependency(c, c.req.query('name'))))
 app.get('/releases', async c => c.json(await getReleases(c, { owner: 'ionic-team', repo: 'capacitor', tagPrefix: '' })))
 app.get('/console-releases', async c => c.json(await getReleases(c, { repo: 'capgo.app', tagPrefix: 'capgo-' })))
+app.get('/public-github', c => fetchAnonymousGithub(c, 'https://api.github.com/repos/example/plugin/releases', { 'User-Agent': 'capgo-app' }))
 app.get('/plugin-releases', async (c) => {
   const dependency = await getDependency(c, '@capacitor/camera')
   if (!dependency.source)
@@ -123,6 +125,90 @@ describe('shared changelog caching', () => {
 })
 
 describe('release fetch reliability', () => {
+  it('returns missing repositories as 404 without reporting server errors', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchMock.mockResolvedValueOnce(Response.json({ message: 'Not Found' }, { status: 404 }))
+    expect((await app.request('https://api.example.com/releases')).status).toBe(404)
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it('backs off across anonymous repos while cached and authenticated releases remain available', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'fake-github-token')
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    expect((await app.request('https://api.example.com/releases')).status).toBe(200)
+    fetchMock.mockResolvedValueOnce(Response.json({}, {
+      status: 403,
+      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.ceil(now / 1000) + 120) },
+    }))
+    const limited = await app.request('https://api.example.com/public-github')
+    expect(limited.status).toBe(429)
+    expect(Number(limited.headers.get('retry-after'))).toBeGreaterThanOrEqual(120)
+    expect((await app.request('https://api.example.com/public-github')).status).toBe(429)
+    expect((await app.request('https://api.example.com/releases')).status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // A different uncached dependency shares the anonymous quota, but not the private token.
+    expect((await app.request('https://api.example.com/plugin-releases')).status).toBe(429)
+    expect(fetchMock).toHaveBeenCalledTimes(3) // npm metadata only
+    expect((await app.request('https://api.example.com/console-releases')).status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    clock.mockReturnValue(now + 122_000)
+    expect((await app.request('https://api.example.com/public-github')).status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    for (const [url, options] of fetchMock.mock.calls) {
+      if (url.includes('api.github.com') && !url.includes('/Cap-go/'))
+        expect(options.headers).not.toHaveProperty('Authorization')
+    }
+  })
+
+  it.each<{ status: number, headers: Record<string, string>, message: string, seconds: number }>([
+    { status: 429, headers: { 'retry-after': '120', 'x-ratelimit-remaining': '20', 'x-ratelimit-reset': '9999999999' }, message: '', seconds: 120 },
+    { status: 429, headers: { 'retry-after': 'invalid' }, message: '', seconds: 60 },
+    { status: 403, headers: {}, message: 'You have exceeded a secondary rate limit.', seconds: 60 },
+  ])('respects secondary backoff for $status and $seconds seconds', async ({ status, headers, message, seconds }) => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    fetchMock.mockResolvedValueOnce(Response.json({ message }, { status, headers }))
+    const response = await app.request('https://api.example.com/public-github')
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe(String(seconds))
+    clock.mockReturnValue(now + (seconds - 1) * 1000)
+    expect((await app.request('https://api.example.com/public-github')).status).toBe(429)
+    expect(fetchMock).toHaveBeenCalledOnce()
+    clock.mockReturnValue(now + (seconds + 1) * 1000)
+    expect((await app.request('https://api.example.com/public-github')).status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not treat permission failures as a shared anonymous rate limit', async () => {
+    fetchMock.mockResolvedValueOnce(Response.json({ message: 'Forbidden' }, { status: 403 }))
+    expect((await app.request('https://api.example.com/public-github')).status).toBe(403)
+    expect((await app.request('https://api.example.com/public-github')).status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves partial history when anonymous pagination hits a rate limit', async () => {
+    fetchMock.mockResolvedValueOnce(Response.json(Array.from({ length: 100 }, (_, i) => ({ tag_name: `8.1.${i}`, body: notes }))))
+    fetchMock.mockResolvedValueOnce(Response.json({}, { status: 429 }))
+    const response = await app.request('https://api.example.com/releases')
+    const payload = await response.json() as { truncated: boolean, releases: unknown[] }
+    expect(payload.truncated).toBe(true)
+    expect(payload.releases).toHaveLength(100)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache an empty success when the CHANGELOG fallback is rate limited', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('registry.npmjs.org'))
+        return Response.json({ name: '@capacitor/camera', version: '8.1.0', repository: 'https://github.com/ionic-team/capacitor-camera' })
+      return url.includes('/contents/') ? Response.json({}, { status: 429 }) : Response.json([])
+    })
+    const response = await app.request('https://api.example.com/plugin-releases', {}, { CHANNEL_SELF_STORE: kv })
+    expect(response.status).toBe(429)
+    expect(kv.put).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('authenticates Capgo release requests and reuses public notes across locations until expiry', async () => {
     vi.stubEnv('GITHUB_TOKEN', 'fake-github-token')
     fetchMock.mockResolvedValue(Response.json([{ tag_name: 'capgo-8.1.0', body: notes }]))
