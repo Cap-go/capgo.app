@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import { z } from 'zod'
 import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.ts'
 import { MCP_EVENT_CATALOG, MCP_EVENT_NAMES, unsubscribeMcpEvent, upsertMcpEventSubscription } from '../utils/mcp_events.ts'
-import { handleCapgoListEventSubscriptions, loadApikeyRbacId } from './events_rpc.ts'
+import { handleCapgoListEventSubscriptions, loadApikeyRbacId, mcpSubscribeInputFromTool } from './events_rpc.ts'
 import { guidanceForError } from './error_guidance.ts'
 
 /**
@@ -1242,16 +1242,7 @@ const mcpEventTools: McpTool[] = [
       try {
         const result = await upsertMcpEventSubscription(
           ctx.hono,
-          {
-            name: data.name,
-            arguments: {
-              org_id: data.orgId,
-              ...(data.app_id ? { app_id: data.app_id } : {}),
-              ...(data.channel ? { channel: data.channel } : {}),
-            },
-            delivery: { mode: 'webhook', url: data.url, secret: data.secret },
-            ttlMs: data.ttlMs,
-          },
+          mcpSubscribeInputFromTool(data),
           { userId: ctx.caller.userId, apikeyId: ctx.caller.apikeyId, rbacId, echoSecret: true },
         )
         return textResult(result)

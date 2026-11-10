@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { JsonRpcResponse } from './protocol.ts'
 import type { McpToolContext } from './tools.ts'
 import { JSON_RPC_ERRORS, jsonRpcError, jsonRpcResult } from './protocol.ts'
+import type { McpEventName, McpSubscribeInput } from '../utils/mcp_events.ts'
 import {
   listMcpEventSubscriptions,
   MCP_EVENT_CATALOG,
@@ -50,6 +51,54 @@ export function handleEventsList(requestId: string | number): JsonRpcResponse {
   return jsonRpcResult(requestId, { events: MCP_EVENT_CATALOG })
 }
 
+export type McpSubscribeToolInput = {
+  name: McpEventName
+  orgId: string
+  url: string
+  secret?: string
+  app_id?: string
+  channel?: string
+  ttlMs?: number
+}
+
+export function mcpSubscribeInputFromTool(data: McpSubscribeToolInput): McpSubscribeInput {
+  return {
+    name: data.name,
+    arguments: {
+      org_id: data.orgId,
+      ...(data.app_id ? { app_id: data.app_id } : {}),
+      ...(data.channel ? { channel: data.channel } : {}),
+    },
+    delivery: { mode: 'webhook', url: data.url, secret: data.secret },
+    ttlMs: data.ttlMs,
+  }
+}
+
+export function mcpSubscribeInputFromRpc(
+  params: Record<string, unknown>,
+): { ok: true, input: McpSubscribeInput } | { ok: false, message: string } {
+  const delivery = params.delivery
+  if (!delivery || typeof delivery !== 'object' || Array.isArray(delivery))
+    return { ok: false, message: 'delivery is required' }
+
+  const deliveryRecord = delivery as Record<string, unknown>
+  return {
+    ok: true,
+    input: {
+      name: typeof params.name === 'string' ? params.name : '',
+      arguments: (params.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments))
+        ? params.arguments as Record<string, unknown>
+        : {},
+      delivery: {
+        mode: typeof deliveryRecord.mode === 'string' ? deliveryRecord.mode : 'webhook',
+        url: typeof deliveryRecord.url === 'string' ? deliveryRecord.url : '',
+        secret: typeof deliveryRecord.secret === 'string' ? deliveryRecord.secret : undefined,
+      },
+      ttlMs: typeof params.ttlMs === 'number' ? params.ttlMs : undefined,
+    },
+  }
+}
+
 function orgIdFromUnsubscribeParams(params: Record<string, unknown>): string {
   if (typeof params.org_id === 'string')
     return params.org_id
@@ -72,29 +121,17 @@ export async function handleEventsSubscribe(
   if (!rbacId)
     return jsonRpcError(requestId, JSON_RPC_ERRORS.internalError, 'API key missing RBAC identity')
 
-  const delivery = params.delivery
-  if (!delivery || typeof delivery !== 'object' || Array.isArray(delivery))
-    return jsonRpcError(requestId, JSON_RPC_ERRORS.invalidParams, 'delivery is required')
+  const parsed = mcpSubscribeInputFromRpc(params)
+  if (!parsed.ok)
+    return jsonRpcError(requestId, JSON_RPC_ERRORS.invalidParams, parsed.message)
 
-  const deliveryRecord = delivery as Record<string, unknown>
-  if (!echoSecret && (typeof deliveryRecord.secret !== 'string' || !deliveryRecord.secret))
+  if (!echoSecret && (typeof parsed.input.delivery.secret !== 'string' || !parsed.input.delivery.secret))
     return jsonRpcError(requestId, JSON_RPC_ERRORS.invalidParams, 'delivery.secret is required for events/subscribe')
 
   try {
     const result = await upsertMcpEventSubscription(
       c,
-      {
-        name: typeof params.name === 'string' ? params.name : '',
-        arguments: (params.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments))
-          ? params.arguments as Record<string, unknown>
-          : {},
-        delivery: {
-          mode: typeof deliveryRecord.mode === 'string' ? deliveryRecord.mode : 'webhook',
-          url: typeof deliveryRecord.url === 'string' ? deliveryRecord.url : '',
-          secret: typeof deliveryRecord.secret === 'string' ? deliveryRecord.secret : undefined,
-        },
-        ttlMs: typeof params.ttlMs === 'number' ? params.ttlMs : undefined,
-      },
+      parsed.input,
       { ...mcpContext(c, ctx, rbacId), echoSecret },
     )
 
