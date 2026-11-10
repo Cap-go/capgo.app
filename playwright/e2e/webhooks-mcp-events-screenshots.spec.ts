@@ -46,7 +46,10 @@ async function openWebhooksList(page: import('@playwright/test').Page) {
   await page.getByRole('heading', { name: 'Webhooks', exact: true }).waitFor({ timeout: 60000 })
 }
 
+// CAPGO_PR_SCREENSHOTS=1 bunx playwright test playwright/e2e/webhooks-mcp-events-screenshots.spec.ts
 test.describe('Webhooks MCP badge screenshots', () => {
+  test.skip(!process.env.CAPGO_PR_SCREENSHOTS, 'Set CAPGO_PR_SCREENSHOTS=1 for local PR screenshot capture')
+
   test.beforeAll(() => {
     mkdirSync(screenshotDir, { recursive: true })
   })
