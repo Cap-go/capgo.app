@@ -508,6 +508,9 @@ async function submit(form: { first_name: string, last_name: string, email: stri
       if (data.error && data.error.name === 'AuthApiError') {
         return toast.error(t('email-already-taken'))
       }
+      if (data.error) {
+        return toast.error(t('something-went-wrong-try-again-later'))
+      }
       toast.success(t('confirm-new-email-sent'), {
         duration: 10000,
       })
