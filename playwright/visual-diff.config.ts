@@ -15,8 +15,13 @@ async function prepareSecurityUpdatesNotificationsSection(page: Page, viewport: 
   await page.setViewportSize(viewport)
   await dismissRemindMeLater(page)
   const section = page.locator('#security-updates-email')
-  if (await section.isVisible().catch(() => false))
+  if (process.env.VISUAL_DIFF_PHASE === 'after') {
+    await section.waitFor({ state: 'visible', timeout: 120_000 })
     await section.scrollIntoViewIfNeeded()
+  }
+  else if (await section.isVisible().catch(() => false)) {
+    await section.scrollIntoViewIfNeeded()
+  }
 }
 
 async function prepareSecurityUpdatesObserveTab(page: Page, viewport: { width: number, height: number }) {
