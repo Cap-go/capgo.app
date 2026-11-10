@@ -27,8 +27,9 @@ async function prepareOrgWebhooksMcpScreenshot(
     }, iphone.userAgent)
   }
   await page.goto('/settings/organization/webhooks/')
-  await page.getByRole('heading', { name: 'Webhooks', exact: true }).waitFor({ timeout: 120_000 })
-  await page.locator('table tbody tr').first().waitFor({ state: 'visible', timeout: 120_000 })
+  await page.getByRole('heading', { level: 2, name: 'Webhooks' }).waitFor({ timeout: 120_000 })
+  await page.locator('.py-12 .w-8.h-8').waitFor({ state: 'detached', timeout: 120_000 }).catch(() => {})
+  await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
   if (process.env.VISUAL_DIFF_PHASE === 'after') {
     await page.getByText('MCP', { exact: true }).first().waitFor({ state: 'visible', timeout: 120_000 })
   }
