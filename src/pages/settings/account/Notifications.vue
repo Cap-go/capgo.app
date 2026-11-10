@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
+import type { AccountEmailPreferenceKey } from '~/utils/accountEmailPreferenceDefaults'
 import { resolveAccountEmailPref } from '~/utils/accountEmailPreferenceDefaults'
 // tabs handled by settings layout
 
@@ -16,24 +17,7 @@ const optForNewsletters = ref(main.user?.opt_for_newsletters ?? true)
 const displayStore = useDisplayStore()
 displayStore.NavTitle = t('notifications')
 
-type EmailPreferenceKey =
-  | 'usage_limit'
-  | 'credit_usage'
-  | 'onboarding'
-  | 'builder_onboarding'
-  | 'weekly_stats'
-  | 'monthly_stats'
-  | 'billing_period_stats'
-  | 'deploy_stats_24h'
-  | 'bundle_created'
-  | 'bundle_deployed'
-  | 'device_error'
-  | 'channel_self_rejected'
-  | 'bundle_incompatible'
-  | 'cli_realtime_feed'
-  | 'security_updates'
-
-type EmailPreferences = Partial<Record<EmailPreferenceKey, boolean>>
+type EmailPreferences = Partial<Record<AccountEmailPreferenceKey, boolean>>
 
 const emailPrefs = computed<EmailPreferences>(() => {
   // email_preferences is a JSONB column added in migration 20251228064121
@@ -41,7 +25,7 @@ const emailPrefs = computed<EmailPreferences>(() => {
   return prefs ?? {}
 })
 
-function getEmailPref(key: EmailPreferenceKey): boolean {
+function getEmailPref(key: AccountEmailPreferenceKey): boolean {
   return resolveAccountEmailPref(emailPrefs.value, key)
 }
 
@@ -84,7 +68,7 @@ async function submitDoi() {
   isLoading.value = false
 }
 
-async function toggleEmailPref(key: EmailPreferenceKey) {
+async function toggleEmailPref(key: AccountEmailPreferenceKey) {
   if (!main.user?.id)
     return
 
