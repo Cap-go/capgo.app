@@ -58,6 +58,11 @@ export type McpSubscribeToolInput = {
   secret?: string
   app_id?: string
   channel?: string
+  min_failures?: number
+  failure_rate_percent?: number
+  min_checks?: number
+  window_minutes?: number
+  cooldown_minutes?: number
   ttlMs?: number
 }
 
@@ -68,6 +73,11 @@ export function mcpSubscribeInputFromTool(data: McpSubscribeToolInput): McpSubsc
       org_id: data.orgId,
       ...(data.app_id ? { app_id: data.app_id } : {}),
       ...(data.channel ? { channel: data.channel } : {}),
+      ...(data.min_failures !== undefined ? { min_failures: data.min_failures } : {}),
+      ...(data.failure_rate_percent !== undefined ? { failure_rate_percent: data.failure_rate_percent } : {}),
+      ...(data.min_checks !== undefined ? { min_checks: data.min_checks } : {}),
+      ...(data.window_minutes !== undefined ? { window_minutes: data.window_minutes } : {}),
+      ...(data.cooldown_minutes !== undefined ? { cooldown_minutes: data.cooldown_minutes } : {}),
     },
     delivery: { mode: 'webhook', url: data.url, secret: data.secret },
     ttlMs: data.ttlMs,

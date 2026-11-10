@@ -44,6 +44,9 @@ Event catalog:
 | `build.failed` | Native build fails or times out (`failure_category` includes `timeout`) |
 | `bundle.uploaded` | New bundle version inserted (`app_versions` INSERT) |
 | `bundle.deployed` | Channel `version` changes on `channels` UPDATE |
+| `update.failure_spike` | OTA failures exceed configurable thresholds in a rolling window (cron every 5 minutes) |
+
+For `update.failure_spike`, optional subscription arguments (stored in `mcp_arguments`) default to the Balanced profile: `min_failures` 10, `failure_rate_percent` 10, `min_checks` 50, `window_minutes` 15, `cooldown_minutes` 60. Tune them to your active device count. `events/list` and `capgo_list_event_types` expose these recommended defaults.
 
 Default subscription TTL is 24 hours. Refresh by calling `events/subscribe` again before `refreshBefore`. Each organization may hold up to 25 active MCP subscriptions.
 

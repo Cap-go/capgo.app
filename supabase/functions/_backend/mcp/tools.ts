@@ -1213,7 +1213,7 @@ const mcpEventTools: McpTool[] = [
   {
     name: 'capgo_subscribe_events',
     title: 'Subscribe to MCP events',
-    description: 'Subscribe to Capgo MCP Events over webhook delivery. Generates a whsec_ secret when omitted and returns it once.',
+    description: 'Subscribe to Capgo MCP Events over webhook delivery. Generates a whsec_ secret when omitted and returns it once. For update.failure_spike, optional threshold fields use the Balanced recommended defaults unless you override them (tune min_checks and failure_rate_percent to your device count).',
     inputSchema: z.object({
       name: mcpEventName,
       orgId,
@@ -1221,6 +1221,11 @@ const mcpEventTools: McpTool[] = [
       secret: z.string().optional(),
       app_id: appId.optional(),
       channel: z.string().min(1).optional(),
+      min_failures: z.number().int().min(1).optional(),
+      failure_rate_percent: z.number().min(1).max(100).optional(),
+      min_checks: z.number().int().min(1).optional(),
+      window_minutes: z.number().int().min(5).max(1440).optional(),
+      cooldown_minutes: z.number().int().min(5).max(1440).optional(),
       ttlMs: z.number().int().min(60_000).max(24 * 60 * 60 * 1000).optional(),
     }) as unknown as z.ZodObject<z.ZodRawShape>,
     annotations: { title: 'Subscribe to MCP events', ...EXTERNAL },
@@ -1237,6 +1242,11 @@ const mcpEventTools: McpTool[] = [
         secret?: string
         app_id?: string
         channel?: string
+        min_failures?: number
+        failure_rate_percent?: number
+        min_checks?: number
+        window_minutes?: number
+        cooldown_minutes?: number
         ttlMs?: number
       }
       try {

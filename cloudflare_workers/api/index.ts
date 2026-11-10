@@ -91,6 +91,7 @@ import { app as cron_clear_versions } from '../../supabase/functions/_backend/tr
 import { app as cron_email } from '../../supabase/functions/_backend/triggers/cron_email.ts'
 import { app as cron_onboarding_refresh_apps } from '../../supabase/functions/_backend/triggers/cron_onboarding_refresh_apps.ts'
 import { app as cron_reconcile_build_status } from '../../supabase/functions/_backend/triggers/cron_reconcile_build_status.ts'
+import { app as cron_mcp_failure_spike } from '../../supabase/functions/_backend/triggers/cron_mcp_failure_spike.ts'
 import { app as cron_rollout_auto_pause } from '../../supabase/functions/_backend/triggers/cron_rollout_auto_pause.ts'
 import { app as cron_stat_app } from '../../supabase/functions/_backend/triggers/cron_stat_app.ts'
 import { app as cron_stat_org } from '../../supabase/functions/_backend/triggers/cron_stat_org.ts'
@@ -264,6 +265,7 @@ appTriggers.route('/cron_stat_app', cron_stat_app)
 appTriggers.route('/cron_stat_org', cron_stat_org)
 appTriggers.route('/cron_sync_sub', cron_sync_sub)
 appTriggers.route('/cron_rollout_auto_pause', cron_rollout_auto_pause)
+appTriggers.route('/cron_mcp_failure_spike', cron_mcp_failure_spike)
 // The queue dispatcher sends onboarding refresh batches to this Cloudflare route.
 appTriggers.route('/cron_onboarding_refresh_apps', cron_onboarding_refresh_apps)
 appTriggers.route('/queue_consumer', queue_consumer)
