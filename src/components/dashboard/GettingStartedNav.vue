@@ -72,12 +72,14 @@ async function dismissCiCd(app: OrganizationApp) {
   const appId = app.app_id
   if (dismissingCiCd.has(appId))
     return
+  const startedOnGuide = isCiCdActive(appId)
+  const startingRoute = route.fullPath
   dismissingCiCd.add(appId)
   try {
     const onboarding = await setCiCdReminderDismissed(appId, true)
     organizationStore.updateAppOnboarding(appId, onboarding)
     toast.success(t('cicd-reminder-hidden'))
-    if (isCiCdActive(appId))
+    if (startedOnGuide && route.fullPath === startingRoute)
       await router.push(`/app/${encodeURIComponent(appId)}`)
   }
   catch (error) {

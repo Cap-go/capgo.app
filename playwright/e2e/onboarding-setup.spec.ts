@@ -833,6 +833,18 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     await expect(page.getByRole('heading', { name: 'Automate live updates with CI/CD' })).toBeVisible()
   })
 
+  test('keeps a newly opened CI/CD guide visible when an earlier sidebar dismissal finishes', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdReminderDelayMs = 1000 })
+    await page.locator('[data-test="cicd-nav-dismiss"]').click()
+    await page.evaluate(appId => (window as any).onboardingSetupPreview.navigate(`/app/${appId}/ci-cd?product=ota`), appId)
+    await expect(page.locator('[data-test="cicd-guide"]')).toBeVisible()
+    await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdReminderResponses)).toBe(1)
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(page).toHaveURL(`/app/${appId}/ci-cd?product=ota`)
+    await expect(page.locator('[data-test="cicd-guide"]')).toBeVisible()
+  })
+
   test('keeps the CI/CD reminder available when dismissal fails', async ({ page }) => {
     await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
     await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdDismissError = true })
