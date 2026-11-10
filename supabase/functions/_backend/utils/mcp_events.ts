@@ -300,44 +300,53 @@ export async function verifyMcpWebhookEndpoint(
   const messageId = crypto.randomUUID()
   const signature = await generateStandardWebhookSignature(secret, messageId, timestamp, body)
 
+  const MAX_VERIFICATION_BODY_BYTES = 65_536
+
   try {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 15_000)
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Capgo-MCP-Events/1.0',
-        'webhook-id': messageId,
-        'webhook-timestamp': timestamp,
-        'webhook-signature': signature,
-        'X-MCP-Subscription-Id': subscriptionId,
-      },
-      body,
-      redirect: 'manual',
-      signal: controller.signal,
-    })
-    clearTimeout(timeoutId)
-
-    if (!response.ok)
-      return { ok: false, reason: response.status >= 500 ? 'http_5xx' : 'challenge_failed' }
-
-    const text = await response.text()
-    let parsed: unknown
     try {
-      parsed = JSON.parse(text)
-    }
-    catch {
-      return { ok: false, reason: 'challenge_failed' }
-    }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Capgo-MCP-Events/1.0',
+          'webhook-id': messageId,
+          'webhook-timestamp': timestamp,
+          'webhook-signature': signature,
+          'X-MCP-Subscription-Id': subscriptionId,
+        },
+        body,
+        redirect: 'manual',
+        signal: controller.signal,
+      })
 
-    const echoed = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-      ? (parsed as Record<string, unknown>).challenge
-      : undefined
-    if (typeof echoed !== 'string' || !constantTimeEqual(echoed, challenge))
-      return { ok: false, reason: 'challenge_failed' }
+      if (!response.ok)
+        return { ok: false, reason: response.status >= 500 ? 'http_5xx' : 'challenge_failed' }
 
-    return { ok: true }
+      const text = await response.text()
+      if (text.length > MAX_VERIFICATION_BODY_BYTES)
+        return { ok: false, reason: 'challenge_failed' }
+
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(text)
+      }
+      catch {
+        return { ok: false, reason: 'challenge_failed' }
+      }
+
+      const echoed = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+        ? (parsed as Record<string, unknown>).challenge
+        : undefined
+      if (typeof echoed !== 'string' || !constantTimeEqual(echoed, challenge))
+        return { ok: false, reason: 'challenge_failed' }
+
+      return { ok: true }
+    }
+    finally {
+      clearTimeout(timeoutId)
+    }
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -363,6 +372,7 @@ export interface McpSubscribeResult {
   refreshBefore: string
   secret?: string
   verificationFailed?: boolean
+  verificationReason?: string
 }
 
 export async function upsertMcpEventSubscription(
@@ -473,7 +483,9 @@ export async function upsertMcpEventSubscription(
     id: webhookId,
     refreshBefore: expiresAt.toISOString(),
     ...(auth.echoSecret && !input.delivery.secret ? { secret } : {}),
-    ...(!verification.ok ? { verificationFailed: true } : {}),
+    ...(!verification.ok
+      ? { verificationFailed: true, verificationReason: verification.reason ?? 'challenge_failed' }
+      : {}),
   }
 }
 
