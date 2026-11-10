@@ -306,7 +306,16 @@ work without replacing higher-generation pointers.
    benchmark results for this gate.
 5. Raise the share only when both request and change-propagation measurements
    pass. Repeat across regions. Stable sampling keeps each device in one cohort
-   across endpoints. Raise to `on` only after coverage is complete.
+   across endpoints. At each share increase, compare snippet on-prem, plan-block
+   and edge-answer hit rates, app-status/read-cache hit rates, and Worker
+   invocations per incoming device request with the regional baseline. KV
+   responses cannot refill those shared caches; only DB-served responses,
+   including fallbacks, can. As the DB share shrinks, shared entries can expire
+   without replacement, sending more traffic to Workers. Observe a window that
+   includes their TTL expiry and measure provider operations, CPU, latency and
+   total cost with the resulting Worker traffic. Stop or roll back an increase
+   if the latency or cost gates fail. Complete state coverage alone does not
+   qualify a region for `on`; the cache and Worker gates must also pass.
 6. Treat removing placement or database infrastructure as a separate measured
    rollout. The current PR keeps both available for rollback.
 
