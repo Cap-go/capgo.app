@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDirectApiKeyWithBindings, fetchTestRequest, getEndpointUrl, getSupabaseClient, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
 const USE_CLOUDFLARE = process.env.USE_CLOUDFLARE_WORKERS === 'true'
-const describeBackend = describe.skipIf(USE_CLOUDFLARE)
+const describeMcpEvents = describe.skipIf(!USE_CLOUDFLARE)
 
 const ORG_ID = randomUUID()
 const APP_ID = `com.mcp.events.${randomUUID()}`
@@ -69,7 +69,7 @@ async function mcpEventsCall(apikey: string, body: unknown) {
 }
 
 beforeAll(async () => {
-  if (USE_CLOUDFLARE)
+  if (!USE_CLOUDFLARE)
     return
 
   const admin = getSupabaseClient()
@@ -121,12 +121,12 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  if (USE_CLOUDFLARE)
+  if (!USE_CLOUDFLARE)
     return
   delete process.env.CAPGO_ALLOW_LOCAL_WEBHOOK_URLS
 })
 
-describeBackend('mcp events subscriptions', () => {
+describeMcpEvents('mcp events subscriptions', () => {
   it('lists event types from events/list and initialize capabilities', async () => {
     const init = await mcpEventsCall(orgApiKey, {
       jsonrpc: '2.0',

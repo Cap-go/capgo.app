@@ -4,9 +4,9 @@
  */
 export function buildServerInstructions(opts: { onboardingEnabled: boolean, liveUpdateEnabled: boolean }): string {
   const base
-    = 'Capgo MCP: apps, bundles, channels, Observe (capgo_observe, start at summary), '
-    + 'native builds, docs (capgo_search_docs). For webhook event streams use the hosted Capgo MCP at https://api.capgo.app/mcp (MCP Events). Not signed in? capgo_login. '
-    + 'All tools accept projectDir or cwd: the absolute app path; or use capgo_set_project_dir. Check it before installing missing @capacitor/core.'
+    = 'Capgo MCP: apps, bundles, channels, Observe (capgo_observe, summary first), '
+    + 'native builds, docs (capgo_search_docs). MCP Events: https://api.capgo.app/mcp/. capgo_login if needed. '
+    + 'All tools accept projectDir or cwd: the absolute app path; or use capgo_set_project_dir. Check @capacitor/core.'
 
   const parts = [base]
   if (opts.onboardingEnabled) {
