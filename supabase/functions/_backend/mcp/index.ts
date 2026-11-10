@@ -4,6 +4,7 @@ import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
+import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
@@ -87,6 +88,7 @@ async function readSseSnapshot(response: Response): Promise<string> {
 
 function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch, token: string) {
   const origin = new URL(c.req.url).origin
+  const ciProvider = readCliCiProvider(c.req.header(CLI_CI_HEADER))
   return async (request: McpApiRequest): Promise<McpApiResponse> => {
     const url = new URL(request.path, origin)
     for (const [key, value] of Object.entries(request.query ?? {})) {
@@ -99,6 +101,8 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
       'user-agent': 'capgo-mcp',
       'x-cli-command': 'mcp',
     })
+    if (ciProvider)
+      headers.set(CLI_CI_HEADER, ciProvider)
     // Keep the caller's IP so per-IP rate limits and logs stay meaningful.
     for (const name of ['cf-connecting-ip', 'x-forwarded-for', 'cf-ipcountry', 'cf-ray']) {
       const value = c.req.header(name)
