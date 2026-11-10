@@ -9,7 +9,10 @@ import {
   resolveFailureSpikeThresholds,
 } from '../supabase/functions/_backend/utils/mcp_failure_spike_policy.ts'
 import { dispatchMcpEventToWebhook, MCP_EVENT_CATALOG } from '../supabase/functions/_backend/utils/mcp_events.ts'
-import { evaluateMcpFailureSpikeSubscriptionFromMetrics } from '../supabase/functions/_backend/utils/mcp_failure_spike_runner.ts'
+import {
+  evaluateMcpFailureSpikeSubscriptionFromMetrics,
+  type McpFailureSpikeWebhookRow,
+} from '../supabase/functions/_backend/utils/mcp_failure_spike_runner.ts'
 
 vi.mock('../supabase/functions/_backend/utils/mcp_events.ts', async importOriginal => {
   const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/mcp_events.ts')>()
@@ -152,25 +155,31 @@ describe('failure spike cooldown claim and delivery restore', () => {
   const c = { get: () => undefined } as unknown as Context
 
   const baseWebhook = {
-    id: 'd7820000-0000-4000-8000-0000000000c1',
+    id: 1,
     org_id: baseArgs.org_id,
+    name: 'MCP failure spike',
     secret: 'whsec_test_spike_claim_restore',
     url: 'https://hooks.example.com/capgo/mcp/spike',
     enabled: true,
+    events: ['update.failure_spike'],
+    delivery_version: 'standard',
+    created_at: now.toISOString(),
+    created_by: '6aa76066-55ef-4238-ade6-0b32334a4097',
+    updated_at: now.toISOString(),
     source: 'mcp',
     mcp_event: 'update.failure_spike',
     mcp_arguments: baseArgs,
     mcp_verified_at: now.toISOString(),
     expires_at: null,
     mcp_spike_last_fired_at: null,
-  }
+  } as McpFailureSpikeWebhookRow
 
   function mockPg(claim: boolean) {
     const restores: unknown[][] = []
     const pg = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
         if (sql.includes('RETURNING id'))
-          return { rows: claim ? [{ id: baseWebhook.id }] : [] }
+          return { rows: claim ? [{ id: 1 }] : [] }
         if (sql.includes('mcp_spike_last_fired_at = $2::timestamptz WHERE id = $1 AND mcp_spike_last_fired_at = $3')) {
           restores.push(params ?? [])
           return { rows: [] }
