@@ -239,7 +239,7 @@ function constantTimeEqual(a: string, b: string): boolean {
     return false
   let diff = 0
   for (let i = 0; i < a.length; i++)
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+    diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0)
   return diff === 0
 }
 
@@ -720,40 +720,51 @@ export function mapAuditLogToMcpEvent(audit: AuditLogData): McpEventName | null 
   return null
 }
 
+function auditRecordString(value: unknown, fallback = ''): string {
+  if (typeof value === 'string')
+    return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint')
+    return String(value)
+  return fallback
+}
+
+function buildBundleUploadedMcpData(audit: AuditLogData): Record<string, unknown> | null {
+  const record = audit.new_record
+  if (!record)
+    return null
+  const appId = typeof record.app_id === 'string' ? record.app_id : null
+  if (!appId)
+    return null
+  return {
+    org_id: audit.org_id,
+    app_id: appId,
+    bundle_id: auditRecordString(record.id, audit.record_id),
+    bundle_name: typeof record.name === 'string' ? record.name : auditRecordString(record.version),
+    checksum: typeof record.checksum === 'string' ? record.checksum : null,
+  }
+}
+
+function buildBundleDeployedMcpData(audit: AuditLogData): Record<string, unknown> | null {
+  const record = audit.new_record
+  const old = audit.old_record
+  if (!record)
+    return null
+  const appId = typeof record.app_id === 'string' ? record.app_id : auditRecordString(record.app_id)
+  return {
+    org_id: audit.org_id,
+    app_id: appId,
+    channel_id: auditRecordString(record.id, audit.record_id),
+    channel_name: typeof record.name === 'string' ? record.name : auditRecordString(record.id),
+    bundle_id: record.version !== undefined && record.version !== null ? auditRecordString(record.version) : '',
+    previous_bundle_id: old?.version !== undefined && old?.version !== null ? auditRecordString(old.version) : null,
+  }
+}
+
 export function buildMcpDataFromAudit(audit: AuditLogData, eventName: McpEventName): Record<string, unknown> | null {
-  const orgId = audit.org_id
-  if (eventName === 'bundle.uploaded') {
-    const record = audit.new_record
-    if (!record)
-      return null
-    const appId = typeof record.app_id === 'string' ? record.app_id : null
-    if (!appId)
-      return null
-    return {
-      org_id: orgId,
-      app_id: appId,
-      bundle_id: String(record.id ?? audit.record_id),
-      bundle_name: typeof record.name === 'string' ? record.name : String(record.version ?? ''),
-      checksum: typeof record.checksum === 'string' ? record.checksum : null,
-    }
-  }
-
-  if (eventName === 'bundle.deployed') {
-    const record = audit.new_record
-    const old = audit.old_record
-    if (!record)
-      return null
-    const appId = typeof record.app_id === 'string' ? record.app_id : String(record.app_id ?? '')
-    return {
-      org_id: orgId,
-      app_id: appId,
-      channel_id: String(record.id ?? audit.record_id),
-      channel_name: typeof record.name === 'string' ? record.name : String(record.id ?? ''),
-      bundle_id: record.version !== undefined && record.version !== null ? String(record.version) : '',
-      previous_bundle_id: old?.version !== undefined && old?.version !== null ? String(old.version) : null,
-    }
-  }
-
+  if (eventName === 'bundle.uploaded')
+    return buildBundleUploadedMcpData(audit)
+  if (eventName === 'bundle.deployed')
+    return buildBundleDeployedMcpData(audit)
   return null
 }
 

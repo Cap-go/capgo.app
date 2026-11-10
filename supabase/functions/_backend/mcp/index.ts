@@ -233,17 +233,14 @@ export function createMcpApp(dispatch: McpDispatch) {
     if (Array.isArray(payload) && (payload.length === 0 || payload.length > MAX_BATCH_MESSAGES))
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)
     const messages = Array.isArray(payload) ? payload : [payload]
-    const responses: JsonRpcResponse[] = []
-    const exchanges: [unknown, JsonRpcResponse | null][] = []
-    for (const message of messages) {
+    const exchanges = await Promise.all(messages.map(async (message) => {
       const method = (message as { method?: unknown } | null)?.method
       if (method === 'tools/call')
         cloudlog({ requestId: c.get('requestId'), message: 'mcp_tool_call', tool: (message as { params?: { name?: unknown } }).params?.name, apikeyId: caller.apikeyId })
       const response = await handleJsonRpcMessage(message, ctx, c)
-      exchanges.push([message, response])
-      if (response)
-        responses.push(response)
-    }
+      return [message, response] as [unknown, JsonRpcResponse | null]
+    }))
+    const responses = exchanges.map(([, response]) => response).filter((response): response is JsonRpcResponse => response !== null)
     await backgroundTask(c, trackHostedMcpToolCalls(c, caller, exchanges))
 
     if (responses.length === 0) {

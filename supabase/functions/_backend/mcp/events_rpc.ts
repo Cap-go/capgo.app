@@ -46,8 +46,19 @@ function mapSubscribeError(error: unknown): { code: number, message: string } {
   return { code: JSON_RPC_ERRORS.internalError, message: record.message ?? 'Subscribe failed' }
 }
 
-export async function handleEventsList(requestId: string | number): Promise<JsonRpcResponse> {
+export function handleEventsList(requestId: string | number): JsonRpcResponse {
   return jsonRpcResult(requestId, { events: MCP_EVENT_CATALOG })
+}
+
+function orgIdFromUnsubscribeParams(params: Record<string, unknown>): string {
+  if (typeof params.org_id === 'string')
+    return params.org_id
+  const args = params.arguments
+  if (args && typeof args === 'object' && !Array.isArray(args)) {
+    const orgId = (args as Record<string, unknown>).org_id
+    return typeof orgId === 'string' ? orgId : ''
+  }
+  return ''
 }
 
 export async function handleEventsSubscribe(
@@ -73,13 +84,13 @@ export async function handleEventsSubscribe(
     const result = await upsertMcpEventSubscription(
       c,
       {
-        name: String(params.name ?? ''),
+        name: typeof params.name === 'string' ? params.name : '',
         arguments: (params.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments))
           ? params.arguments as Record<string, unknown>
           : {},
         delivery: {
-          mode: String(deliveryRecord.mode ?? 'webhook'),
-          url: String(deliveryRecord.url ?? ''),
+          mode: typeof deliveryRecord.mode === 'string' ? deliveryRecord.mode : 'webhook',
+          url: typeof deliveryRecord.url === 'string' ? deliveryRecord.url : '',
           secret: typeof deliveryRecord.secret === 'string' ? deliveryRecord.secret : undefined,
         },
         ttlMs: typeof params.ttlMs === 'number' ? params.ttlMs : undefined,
@@ -117,11 +128,7 @@ export async function handleEventsUnsubscribe(
     return jsonRpcError(requestId, JSON_RPC_ERRORS.internalError, 'API key missing RBAC identity')
 
   const subscriptionId = typeof params.id === 'string' ? params.id : ''
-  const orgId = typeof params.org_id === 'string'
-    ? params.org_id
-    : (params.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments)
-      ? String((params.arguments as Record<string, unknown>).org_id ?? '')
-      : '')
+  const orgId = orgIdFromUnsubscribeParams(params)
 
   if (!subscriptionId || !orgId)
     return jsonRpcError(requestId, JSON_RPC_ERRORS.invalidParams, 'id and org_id are required')
