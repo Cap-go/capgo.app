@@ -156,7 +156,8 @@ describe('release fetch reliability', () => {
     expect((await app.request('https://api.example.com/public-github')).status).toBe(200)
     expect(fetchMock).toHaveBeenCalledTimes(5)
     for (const [url, options] of fetchMock.mock.calls) {
-      if (url.includes('api.github.com') && !url.includes('/Cap-go/'))
+      const parsed = new URL(url)
+      if (parsed.hostname === 'api.github.com' && !parsed.pathname.startsWith('/repos/Cap-go/'))
         expect(options.headers).not.toHaveProperty('Authorization')
     }
   })
@@ -187,19 +188,53 @@ describe('release fetch reliability', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('preserves partial history when anonymous pagination hits a rate limit', async () => {
-    fetchMock.mockResolvedValueOnce(Response.json(Array.from({ length: 100 }, (_, i) => ({ tag_name: `8.1.${i}`, body: notes }))))
-    fetchMock.mockResolvedValueOnce(Response.json({}, { status: 429 }))
-    const response = await app.request('https://api.example.com/releases')
+  it.each(['network', 'server', 'rate-limit'])('does not cache partial history after a later page has a %s failure', async (failure) => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({ tag_name: `8.1.${i}`, body: notes }))
+    const request = () => app.request('https://api.example.com/releases', {}, { CHANNEL_SELF_STORE: kv })
+    fetchMock.mockResolvedValueOnce(Response.json(firstPage))
+    if (failure === 'network')
+      fetchMock.mockRejectedValueOnce(new Error('Connection failed'))
+    else
+      fetchMock.mockResolvedValueOnce(Response.json({}, { status: failure === 'server' ? 500 : 429 }))
+    const response = await request()
     const payload = await response.json() as { truncated: boolean, releases: unknown[] }
     expect(payload.truncated).toBe(true)
     expect(payload.releases).toHaveLength(100)
     expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(kv.put).not.toHaveBeenCalled()
+    expect([...edge.keys()].some(key => new URL(key).pathname === '/private/changelog/releases')).toBe(false)
+
+    // Recovery must be visible before the normal 15-minute release TTL expires.
+    clock.mockReturnValue(now + 61_000)
+    fetchMock.mockResolvedValueOnce(Response.json(firstPage))
+    fetchMock.mockResolvedValueOnce(Response.json([{ tag_name: '8.0.0', body: notes }]))
+    const recovered = await (await request()).json() as { truncated: boolean, releases: unknown[] }
+    expect(recovered.truncated).toBe(false)
+    expect(recovered.releases).toHaveLength(101)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(kv.put).toHaveBeenCalledOnce()
+    edge.clear()
+    expect(await (await request()).json()).toEqual(recovered)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('shares successful history truncated only by the page limit', async () => {
+    fetchMock.mockImplementation(async () => Response.json(Array.from({ length: 100 }, (_, i) => ({ tag_name: `8.1.${i}`, body: notes }))))
+    const request = () => app.request('https://api.example.com/releases', {}, { CHANNEL_SELF_STORE: kv })
+    const payload = await (await request()).json()
+    expect(payload).toMatchObject({ truncated: true })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(kv.put).toHaveBeenCalledOnce()
+    edge.clear()
+    expect(await (await request()).json()).toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
   it('does not cache an empty success when the CHANGELOG fallback is rate limited', async () => {
     fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes('registry.npmjs.org'))
+      if (new URL(url).hostname === 'registry.npmjs.org')
         return Response.json({ name: '@capacitor/camera', version: '8.1.0', repository: 'https://github.com/ionic-team/capacitor-camera' })
       return url.includes('/contents/') ? Response.json({}, { status: 429 }) : Response.json([])
     })
@@ -267,16 +302,21 @@ describe('public dependency sources', () => {
 
   it('uses and caches CHANGELOG.md when a plugin has no GitHub Releases', async () => {
     fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes('registry.npmjs.org'))
+      if (new URL(url).hostname === 'registry.npmjs.org')
         return Response.json({ name: '@capacitor/camera', version: '8.1.0', repository: { url: 'git+https://github.com/ionic-team/capacitor-camera.git' } })
       if (url.includes('/contents/'))
         return new Response('## [8.1.0] (2026-11-01)\n### Bug Fixes\n* Fix Android startup crash')
       return Response.json([])
     })
-    const response = await app.request('https://api.example.com/plugin-releases')
-    expect(await response.json()).toMatchObject({ releases: [{ version: '8.1.0', sections: [{ type: 'fixed', items: ['Fix Android startup crash'] }] }] })
-    await app.request('https://api.example.com/plugin-releases')
+    const request = () => app.request('https://api.example.com/plugin-releases', {}, { CHANNEL_SELF_STORE: kv })
+    const payload = await (await request()).json()
+    expect(payload).toMatchObject({ truncated: true, releases: [{ version: '8.1.0', sections: [{ type: 'fixed', items: ['Fix Android startup crash'] }] }] })
+    expect(kv.put).toHaveBeenCalledOnce()
+    await request()
     expect(fetchMock).toHaveBeenCalledTimes(3)
+    edge.clear()
+    expect(await (await request()).json()).toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledTimes(4) // npm metadata is fetched again, release notes come from KV
     expect(ai.run).not.toHaveBeenCalled()
   })
 

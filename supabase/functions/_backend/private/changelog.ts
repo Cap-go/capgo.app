@@ -64,6 +64,10 @@ interface ReleasesPayload {
   truncated: boolean
 }
 
+interface ReleasesFetchResult extends ReleasesPayload {
+  fetchFailed?: true
+}
+
 function githubHeaders(c: Context, authenticated = true) {
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github+json',
@@ -77,7 +81,7 @@ function githubHeaders(c: Context, authenticated = true) {
 }
 
 /** Read bounded release history, preserving partial results if later pages fail or hit a rate limit. */
-async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Promise<ReleasesPayload> {
+async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Promise<ReleasesFetchResult> {
   const maxPages = (source.tagPrefix || source.monorepo) ? MAX_PAGES_SHARED_REPO : MAX_PAGES_SINGLE_REPO
   const raw: unknown[] = []
   let truncated = false
@@ -91,14 +95,14 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
     if (!response) {
       // Network failure on a later page: partial history beats an error page.
       if (raw.length)
-        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
+        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true, fetchFailed: true }
       throw quickError(502, 'changelog_fetch_failed', 'Could not load release notes', { repo: source.repo })
     }
     if (response.status === 404)
       throw quickError(404, 'changelog_repo_not_found', 'No releases found for this product', { repo: source.repo })
     if (response.status === 429 && !headers.Authorization) {
       if (raw.length)
-        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
+        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true, fetchFailed: true }
       throw quickError(429, 'changelog_rate_limited', 'Release notes are temporarily rate limited', { retryAfterSeconds: Number(response.headers.get('retry-after')) })
     }
     if (!response.ok) {
@@ -119,7 +123,7 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
       })
       // Partial history beats an error page: keep what earlier pages returned.
       if (raw.length)
-        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true }
+        return { releases: normalizeReleases(raw as never[], source.tagPrefix, source.packageName, source.monorepo), truncated: true, fetchFailed: true }
       throw quickError(502, 'changelog_fetch_failed', 'Could not load release notes', { repo: source.repo, status: response.status })
     }
     const pageItems = await response.json() as unknown[]
@@ -168,14 +172,16 @@ async function fetchReleasesFromGithub(c: Context, source: ChangelogSource): Pro
 
 /** Reuse public release notes across users and locations before making any quota-limited GitHub calls. */
 export async function getReleases(c: Context<MiddlewareKeyVariables>, source: ChangelogSource): Promise<ReleasesPayload> {
-  return cachedChangelog(c, {
+  const { releases, truncated } = await cachedChangelog<ReleasesFetchResult>(c, {
     path: RELEASES_CACHE_PATH,
-    params: { owner: source.owner ?? GITHUB_ORG, repo: source.repo, prefix: source.tagPrefix, package: source.packageName ?? '', monorepo: source.monorepo ? '1' : '0', directory: source.directory ?? '', v: '2' },
+    params: { owner: source.owner ?? GITHUB_ORG, repo: source.repo, prefix: source.tagPrefix, package: source.packageName ?? '', monorepo: source.monorepo ? '1' : '0', directory: source.directory ?? '', v: '3' },
     ttl: RELEASES_TTL_SECONDS,
     // Release notes are public and shared by every user and Cloudflare location.
     persistent: true,
+    shouldCache: result => !result.fetchFailed,
     load: () => fetchReleasesFromGithub(c, source),
   })
+  return { releases, truncated }
 }
 
 interface NpmSearchResponse {

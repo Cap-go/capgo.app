@@ -27,7 +27,9 @@ export async function fetchAnonymousGithub(c: Context, url: string, headers: Rec
     return response
 
   const reset = exhausted ? Number(response.headers.get('x-ratelimit-reset')) * 1000 : 0
-  const retryAt = retryAfter === null ? 0 : /^\d+$/.test(retryAfter) ? Date.now() + Number(retryAfter) * 1000 : Date.parse(retryAfter)
+  let retryAt = 0
+  if (retryAfter !== null)
+    retryAt = /^\d+$/.test(retryAfter) ? Date.now() + Number(retryAfter) * 1000 : Date.parse(retryAfter)
   const deadline = Math.max(Date.now() + 60_000, Number.isFinite(reset) ? reset : 0, Number.isFinite(retryAt) ? retryAt : 0)
   const ttl = Math.ceil((deadline - Date.now()) / 1000)
   // Share backoff across repositories and isolates in the serving location.
