@@ -779,6 +779,11 @@ BEGIN
     (NOW(), '00000000-0000-0000-0000-000000000005', '1.0.0', 'com.stats.app', 'android', '4.15.3', '11', '1.0.0', 'stats-test-device', 't', 'f'),
     (NOW(), '00000000-0000-0000-0000-000000000006', '1.0.0', 'com.demo.app', 'electron', '7.0.0', 'Linux 5.15', '1.0.0', 'electron-test-device', 't', 'f');
 
+    INSERT INTO public.webhooks (id, org_id, name, url, secret, enabled, events, created_at, updated_at, created_by, delivery_version, source, expires_at, mcp_event, mcp_arguments, mcp_verified_at)
+    VALUES
+      ('d7820000-0000-4000-8000-0000000000a1'::uuid, '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid, 'CI bundle audit', 'https://hooks.example.com/capgo/console/demo', 'whsec_demo_console_webhook_000000000000000', true, ARRAY['app_versions']::text[], NOW() - interval '30 days', NOW() - interval '1 day', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'standard', 'console', NULL, NULL, NULL, NULL),
+      ('d7820000-0000-4000-8000-0000000000b1'::uuid, '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid, 'MCP · bundle.uploaded · 046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'https://hooks.example.com/capgo/mcp/demo', 'whsec_demo_mcp_events_0000000000000000', true, ARRAY['bundle.uploaded']::text[], NOW() - interval '2 hours', NOW() - interval '30 minutes', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'standard', 'mcp', NOW() + interval '20 hours', 'bundle.uploaded', pg_catalog.jsonb_build_object('org_id', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'app_id', 'com.demo.app'), NOW() - interval '2 hours');
+
     -- Drop replicated orgs but keet the the seed ones
     DELETE from "public"."orgs" where POSITION('organization' in orgs.name)=1;
     PERFORM setval('public.apikeys_id_seq', 113, true);
@@ -1273,6 +1278,7 @@ DECLARE
   v_ci_key text := 'acde0000-0000-4000-8000-00000000c1c1';
   v_webhook_releases uuid := 'acde0000-0000-4000-8000-0000000000b1'::uuid;
   v_webhook_analytics uuid := 'acde0000-0000-4000-8000-0000000000b2'::uuid;
+  v_webhook_mcp uuid := 'acde0000-0000-4000-8000-0000000000b3'::uuid;
 BEGIN
   PERFORM pg_catalog.set_config('capgo.seed_channel_targets', 'true', true);
   SET LOCAL client_min_messages = WARNING;
@@ -1629,10 +1635,11 @@ BEGIN
   -- ----------------------------------------------------------------
   -- Webhooks (inserted after the audit rows so seeding does not queue deliveries)
   -- ----------------------------------------------------------------
-  INSERT INTO public.webhooks (id, org_id, name, url, secret, enabled, events, created_at, updated_at, created_by, delivery_version)
+  INSERT INTO public.webhooks (id, org_id, name, url, secret, enabled, events, created_at, updated_at, created_by, delivery_version, source, expires_at, mcp_event, mcp_arguments, mcp_verified_at)
   VALUES
-    (v_webhook_releases, v_org, 'Release notes to Slack', 'https://hooks.acme-mobile.example.com/capgo/releases', 'whsec_demo_acme_releases_0000000000000000', true, ARRAY['app_versions'], pg_catalog.now() - interval '90 days', pg_catalog.now() - interval '30 days', v_admin, 'standard'),
-    (v_webhook_analytics, v_org, 'Warehouse sync (paused)', 'https://etl.acme-mobile.example.com/ingest/capgo', 'whsec_demo_acme_warehouse_000000000000000', false, ARRAY['apps', 'org_users', 'orgs'], pg_catalog.now() - interval '200 days', pg_catalog.now() - interval '12 days', v_owner, 'legacy');
+    (v_webhook_releases, v_org, 'Release notes to Slack', 'https://hooks.acme-mobile.example.com/capgo/releases', 'whsec_demo_acme_releases_0000000000000000', true, ARRAY['app_versions'], pg_catalog.now() - interval '90 days', pg_catalog.now() - interval '30 days', v_admin, 'standard', 'console', NULL, NULL, NULL, NULL),
+    (v_webhook_analytics, v_org, 'Warehouse sync (paused)', 'https://etl.acme-mobile.example.com/ingest/capgo', 'whsec_demo_acme_warehouse_000000000000000', false, ARRAY['apps', 'org_users', 'orgs'], pg_catalog.now() - interval '200 days', pg_catalog.now() - interval '12 days', v_owner, 'legacy', 'console', NULL, NULL, NULL, NULL),
+    (v_webhook_mcp, v_org, 'MCP · bundle.deployed · ' || v_org::text, 'https://agent-hooks.example.com/capgo/mcp/demo', 'whsec_demo_acme_mcp_events_0000000000000000', true, ARRAY['bundle.deployed'], pg_catalog.now() - interval '2 hours', pg_catalog.now() - interval '30 minutes', v_admin, 'standard', 'mcp', pg_catalog.now() + interval '20 hours', 'bundle.deployed', pg_catalog.jsonb_build_object('org_id', v_org, 'app_id', v_apps[1]), pg_catalog.now() - interval '2 hours');
 
   INSERT INTO public.webhook_deliveries (webhook_id, org_id, audit_log_id, event_type, status, request_payload, response_status, response_body, response_headers, attempt_count, max_attempts, next_retry_at, created_at, completed_at, duration_ms, delivery_version)
   SELECT v_webhook_releases, v_org, al.id, al.table_name || '.' || al.operation,

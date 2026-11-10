@@ -157,6 +157,8 @@ RATE_LIMIT_FAILED_AUTH=999999
 RATE_LIMIT_CHANNEL_SELF_IP=999999
 # Like the Supabase test runtime, finish request work before assertions run.
 CAPGO_PREVENT_BACKGROUND_FUNCTIONS=true
+# MCP Events integration tests subscribe to loopback challenge URLs.
+CAPGO_ALLOW_LOCAL_WEBHOOK_URLS=true
 ENV_EOF
 
 for s3_var in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_REGION; do

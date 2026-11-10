@@ -1,5 +1,8 @@
+import type { Context } from 'hono'
 import { z } from 'zod'
 import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.ts'
+import { MCP_EVENT_CATALOG, MCP_EVENT_NAMES, unsubscribeMcpEvent, upsertMcpEventSubscription } from '../utils/mcp_events.ts'
+import { handleCapgoListEventSubscriptions, loadApikeyRbacId, mcpSubscribeInputFromTool } from './events_rpc.ts'
 import { guidanceForError } from './error_guidance.ts'
 
 /**
@@ -41,6 +44,7 @@ export interface McpToolContext {
   caller: McpCaller
   /** The caller's own API key, for tools that hand a ready-to-run CLI command back to the agent. */
   apikey?: string
+  hono?: Context
 }
 
 export interface McpToolResult {
@@ -1195,6 +1199,99 @@ const webhookTools: McpTool[] = [
   }),
 ]
 
+const mcpEventName = z.enum(MCP_EVENT_NAMES)
+
+const mcpEventTools: McpTool[] = [
+  {
+    name: 'capgo_list_event_types',
+    title: 'List MCP event types',
+    description: 'List Capgo MCP Events with argument and payload schemas.',
+    inputSchema: z.object({}) as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'List MCP event types', ...READ },
+    run: async () => textResult({ events: MCP_EVENT_CATALOG }),
+  },
+  {
+    name: 'capgo_subscribe_events',
+    title: 'Subscribe to MCP events',
+    description: 'Subscribe to Capgo MCP Events over webhook delivery. Generates a whsec_ secret when omitted and returns it once.',
+    inputSchema: z.object({
+      name: mcpEventName,
+      orgId,
+      url: z.string().url(),
+      secret: z.string().optional(),
+      app_id: appId.optional(),
+      channel: z.string().min(1).optional(),
+      ttlMs: z.number().int().min(60_000).max(24 * 60 * 60 * 1000).optional(),
+    }) as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Subscribe to MCP events', ...EXTERNAL },
+    run: async (input, ctx) => {
+      if (!ctx.hono)
+        return textResult({ error: 'missing_context', message: 'Server context unavailable' }, true)
+      const rbacId = await loadApikeyRbacId(ctx.hono, ctx.caller.apikeyId)
+      if (!rbacId)
+        return textResult({ error: 'missing_rbac', message: 'API key missing RBAC identity' }, true)
+      const data = input as {
+        name: typeof MCP_EVENT_NAMES[number]
+        orgId: string
+        url: string
+        secret?: string
+        app_id?: string
+        channel?: string
+        ttlMs?: number
+      }
+      try {
+        const result = await upsertMcpEventSubscription(
+          ctx.hono,
+          mcpSubscribeInputFromTool(data),
+          { userId: ctx.caller.userId, apikeyId: ctx.caller.apikeyId, rbacId, echoSecret: true },
+        )
+        return textResult(result)
+      }
+      catch (error) {
+        return textResult({ error: 'subscribe_failed', message: error instanceof Error ? error.message : String(error) }, true)
+      }
+    },
+  },
+  {
+    name: 'capgo_list_event_subscriptions',
+    title: 'List MCP event subscriptions',
+    description: 'List active MCP event webhook subscriptions for an organization.',
+    inputSchema: z.object({ orgId }) as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'List MCP event subscriptions', ...READ },
+    run: async (input, ctx) => {
+      if (!ctx.hono)
+        return textResult({ error: 'missing_context', message: 'Server context unavailable' }, true)
+      try {
+        const orgId = String((input as { orgId: string }).orgId)
+        const rows = await handleCapgoListEventSubscriptions(ctx.hono, ctx, orgId)
+        return textResult(rows)
+      }
+      catch (error) {
+        return textResult({ error: 'list_failed', message: error instanceof Error ? error.message : String(error) }, true)
+      }
+    },
+  },
+  {
+    name: 'capgo_unsubscribe_events',
+    title: 'Unsubscribe MCP events',
+    description: 'Delete an MCP event subscription by id.',
+    inputSchema: z.object({ orgId, subscriptionId: z.string().uuid() }) as unknown as z.ZodObject<z.ZodRawShape>,
+    annotations: { title: 'Unsubscribe MCP events', ...DESTRUCTIVE },
+    run: async (input, ctx) => {
+      if (!ctx.hono)
+        return textResult({ error: 'missing_context', message: 'Server context unavailable' }, true)
+      const rbacId = await loadApikeyRbacId(ctx.hono, ctx.caller.apikeyId)
+      if (!rbacId)
+        return textResult({ error: 'missing_rbac', message: 'API key missing RBAC identity' }, true)
+      const data = input as { orgId: string, subscriptionId: string }
+      const deleted = await unsubscribeMcpEvent(ctx.hono, data.subscriptionId, data.orgId, ctx.caller.userId, rbacId)
+      if (!deleted)
+        return textResult({ error: 'not_found', message: 'Subscription not found' }, true)
+      return textResult({ id: data.subscriptionId, unsubscribed: true })
+    },
+  },
+]
+
 // ---------------------------------------------------------------------------
 // Push notifications
 // ---------------------------------------------------------------------------
@@ -1322,6 +1419,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...statsTools,
   ...buildTools,
   ...webhookTools,
+  ...mcpEventTools,
   ...notificationTools,
   ...docsTools,
 ]

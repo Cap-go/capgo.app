@@ -32,6 +32,23 @@ The local server (`npx @capgo/cli@latest mcp`) still exists. Use it for tasks th
 8. The client exchanges the code and its `code_verifier` at `/mcp/oauth/token`. The `access_token` it receives is that API key. `expires_in` is set when an org policy makes the key expire.
 9. To revoke access, delete the key on the API keys page or call `/mcp/oauth/revoke` (RFC 7009).
 
+## MCP Events
+
+The hosted server implements the MCP Events extension (`events/list`, `events/subscribe`, `events/unsubscribe`). Subscriptions create rows in `public.webhooks` with `source = mcp`, reuse the existing webhook delivery queue, and sign deliveries as Standard Webhooks with `webhook-id`, `webhook-timestamp`, `webhook-signature`, and `X-MCP-Subscription-Id`.
+
+Event catalog:
+
+| Event | When it fires |
+| --- | --- |
+| `build.succeeded` | Native build reaches succeeded |
+| `build.failed` | Native build fails or times out (`failure_category` includes `timeout`) |
+| `bundle.uploaded` | New bundle version inserted (`app_versions` INSERT) |
+| `bundle.deployed` | Channel `version` changes on `channels` UPDATE |
+
+Default subscription TTL is 24 hours. Refresh by calling `events/subscribe` again before `refreshBefore`. Each organization may hold up to 25 active MCP subscriptions.
+
+Tool wrappers for clients without protocol support: `capgo_list_event_types`, `capgo_subscribe_events`, `capgo_list_event_subscriptions`, `capgo_unsubscribe_events`.
+
 ## Tools
 
 The hosted server has about 50 tools. They cover:

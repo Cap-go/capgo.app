@@ -1,5 +1,7 @@
+import type { Context } from 'hono'
 import type { McpTool, McpToolContext, McpToolResult } from './tools.ts'
 import { z } from 'zod'
+import { handleEventsList, handleEventsSubscribe, handleEventsUnsubscribe } from './events_rpc.ts'
 import { version } from '../utils/version.ts'
 import { GUIDANCE_KEY, guidanceForError } from './error_guidance.ts'
 import { MAX_RESULT_CHARS, MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './tools.ts'
@@ -14,7 +16,8 @@ export const SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, '2025-06-18
 
 export const SERVER_INSTRUCTIONS = 'Capgo Cloud MCP server: manage Capacitor live updates (OTA). '
   + 'List organizations and apps, inspect bundles, channels and devices, deploy a bundle by updating a channel, '
-  + 'run progressive rollouts, read statistics and Observe health data, follow native builds, and manage webhooks and push notifications. '
+  + 'run progressive rollouts, read statistics and Observe health data, follow native builds, manage webhooks and push notifications, '
+  + 'and subscribe to MCP Events (build.succeeded, build.failed, bundle.uploaded, bundle.deployed) with events/subscribe or capgo_subscribe_events. '
   + 'Search the docs with capgo_search_docs. Start with capgo_whoami and capgo_list_apps. To upload a bundle: package it offline with npx @capgo/cli@latest bundle zip --for-upload --json (no login), call capgo_prepare_bundle_upload, PUT the zip to the returned signed URL, then call capgo_complete_bundle_upload. To run a native build: package the native project with npx @capgo/cli@latest build zip --json, call capgo_request_build, PUT the archive to the signed URL, then capgo_start_build. Signing credentials are stored per app (capgo_prepare_build_credentials_upload) and never pass through the chat. '
   + 'Always confirm destructive actions (delete tools) and push notifications with the user first.'
 
@@ -50,7 +53,7 @@ export function jsonRpcError(id: JsonRpcId, code: number, message: string, data?
   return { jsonrpc: '2.0', id, error: data === undefined ? { code, message } : { code, message, data } }
 }
 
-function jsonRpcResult(id: JsonRpcId, result: unknown): JsonRpcResponse {
+export function jsonRpcResult(id: JsonRpcId, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id, result }
 }
 
@@ -156,7 +159,7 @@ async function callTool(params: Record<string, unknown>, ctx: McpToolContext): P
 /**
  * Handle one JSON-RPC message. Returns null for notifications and responses (nothing to send back).
  */
-export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext): Promise<JsonRpcResponse | null> {
+export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext, hono?: Context): Promise<JsonRpcResponse | null> {
   if (!message || typeof message !== 'object' || Array.isArray(message))
     return jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Invalid JSON-RPC message')
 
@@ -179,7 +182,10 @@ export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext
     case 'initialize':
       return jsonRpcResult(requestId, {
         protocolVersion: negotiateProtocolVersion(paramsObject.protocolVersion),
-        capabilities: { tools: { listChanged: false } },
+        capabilities: {
+          tools: { listChanged: false },
+          events: { list: true, subscribe: true, unsubscribe: true },
+        },
         serverInfo: {
           name: 'capgo',
           title: 'Capgo',
@@ -204,7 +210,19 @@ export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext
       return jsonRpcResult(requestId, { resourceTemplates: [] })
     case 'prompts/list':
       return jsonRpcResult(requestId, { prompts: [] })
+    case 'events/list':
+      return handleEventsList(requestId)
+    case 'events/subscribe': {
+      if (!hono)
+        return jsonRpcError(requestId, JSON_RPC_ERRORS.internalError, 'Events require server context')
+      return handleEventsSubscribe(hono, ctx, requestId, paramsObject, false)
+    }
+    case 'events/unsubscribe': {
+      if (!hono)
+        return jsonRpcError(requestId, JSON_RPC_ERRORS.internalError, 'Events require server context')
+      return handleEventsUnsubscribe(hono, ctx, requestId, paramsObject)
+    }
     default:
-      return jsonRpcError(requestId, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${method}. This server supports initialize, ping, tools/list and tools/call.`)
+      return jsonRpcError(requestId, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${method}. This server supports initialize, ping, tools/list, tools/call, events/list, events/subscribe and events/unsubscribe.`)
   }
 }
