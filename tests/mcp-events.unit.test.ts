@@ -58,5 +58,6 @@ describe('mcp events mapping', () => {
   it('exposes subscription defaults', () => {
     expect(MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG).toBe(25)
     expect(MCP_EVENT_DEFAULT_TTL_MS).toBe(24 * 60 * 60 * 1000)
+    expect(MCP_EVENT_DEFAULT_TTL_MS).toBeGreaterThan(60_000)
   })
 })
