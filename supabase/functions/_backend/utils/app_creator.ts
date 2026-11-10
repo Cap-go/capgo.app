@@ -46,6 +46,9 @@ export function buildAppCreatorEventDetails(onboarding: unknown): Record<string,
  * without a recorded creator (service-side inserts).
  */
 export function buildAppCreatedTrackingIdentity(onboarding: unknown, orgId: string): { user_id: string, source: string } {
-  const source = isRecord(onboarding) && typeof onboarding.source === 'string' ? onboarding.source : 'unknown'
+  // applyAppOnboardingPatch moves `source` under `setup`; older rows keep it at the top level.
+  const setupSource = isRecord(onboarding) && isRecord(onboarding.setup) ? onboarding.setup.source : undefined
+  const legacySource = isRecord(onboarding) ? onboarding.source : undefined
+  const source = typeof setupSource === 'string' ? setupSource : typeof legacySource === 'string' ? legacySource : 'unknown'
   return { user_id: getAppCreatorUserId(onboarding) ?? orgId, source }
 }

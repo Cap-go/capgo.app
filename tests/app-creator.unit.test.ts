@@ -45,6 +45,8 @@ describe('app creator metadata', () => {
 
   it.concurrent('attributes App Created to the creator user with its creation source', () => {
     const orgId = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
+    expect(buildAppCreatedTrackingIdentity({ created_by_user_id: creatorUserId, setup: { source: 'cli' } }, orgId))
+      .toEqual({ user_id: creatorUserId, source: 'cli' })
     expect(buildAppCreatedTrackingIdentity({ created_by_user_id: creatorUserId, source: 'ai' }, orgId))
       .toEqual({ user_id: creatorUserId, source: 'ai' })
     expect(buildAppCreatedTrackingIdentity(null, orgId)).toEqual({ user_id: orgId, source: 'unknown' })
