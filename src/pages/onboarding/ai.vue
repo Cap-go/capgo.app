@@ -11,7 +11,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconShieldCheck from '~icons/lucide/shield-check'
 import AppOnboardingHeader from '~/components/dashboard/AppOnboardingHeader.vue'
 import AppOnboardingPageFrame from '~/components/dashboard/AppOnboardingPageFrame.vue'
-import { developmentEnvironmentOptions } from '~/components/dashboard/onboardingDevelopmentEnvironmentOptions'
+import { builderSetupAssistants, developmentEnvironmentOptions } from '~/components/dashboard/onboardingDevelopmentEnvironmentOptions'
 import { useSetupMethodPreference } from '~/composables/useSetupMethodPreference'
 import { createDefaultApiKey, findUsablePlainApiKey, shareInFlightApiKeyLoad } from '~/services/apikeys'
 import { buildAiOnboardingPrompt } from '~/services/cliAiPrompt'
@@ -384,6 +384,18 @@ onBeforeUnmount(() => {
                 :class="{ 'select-all': revealKey }"
                 data-test="onboarding-ai-prompt"
               >{{ promptPreview || '…' }}</pre>
+
+              <div class="space-y-2" data-test="onboarding-ai-prompt-where">
+                <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {{ t('ai-onboarding-prompt-where') }}
+                </p>
+                <ul class="flex flex-wrap gap-2">
+                  <li v-for="tool in builderSetupAssistants" :key="tool.client" class="d-badge d-badge-outline h-auto gap-1.5 border-slate-200 py-1 text-xs text-slate-700 dark:border-white/15 dark:text-slate-200">
+                    <img v-if="tool.icon" :src="tool.icon" alt="" class="h-3.5 w-3.5 object-contain dark:brightness-0 dark:invert">
+                    {{ tool.name }}
+                  </li>
+                </ul>
+              </div>
 
               <button
                 type="button"
