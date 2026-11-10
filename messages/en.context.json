@@ -3972,6 +3972,8 @@
   "webhook-mcp-event": "Used in Capgo web console areas: pages/settings/organization. Role: UI label for the subscribed MCP event name. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "webhook-mcp-expires-at": "Used in Capgo web console areas: pages/settings/organization. Role: UI label for MCP subscription expiry. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "webhook-mcp-managed-hint": "Used in Capgo web console areas: pages/settings/organization. Role: helper text that MCP subscriptions are managed via MCP Events. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "webhook-mcp-unverified": "Used in Capgo web console areas: pages/settings/organization. Role: short UI label for MCP webhook rows that failed verification. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "webhook-mcp-unverified-hint": "Used in Capgo web console areas: pages/settings/organization. Role: helper text that unverified MCP subscriptions do not receive events. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "webhook-name": "Used in Capgo web console areas: components. Role: short UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "webhook-name-placeholder": "Used in Capgo web console areas: components. Role: input placeholder. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "webhook-test-failed": "Used in Capgo web console areas: pages/settings/organization. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
