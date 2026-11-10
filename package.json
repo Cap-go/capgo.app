@@ -386,7 +386,7 @@
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
     "@types/semver": "^7.7.1",
-    "@typescript/native": "npm:typescript@7.1.0-beta",
+    "@typescript/native": "npm:typescript@7.1.0-dev.20261109.1",
     "@vitejs/plugin-vue": "6.0.8",
     "@vitest/coverage-v8": "^4.1.10",
     "@vitest/ui": "^4.1.10",
