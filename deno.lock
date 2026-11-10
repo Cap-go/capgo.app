@@ -141,14 +141,14 @@
     "npm:@iconify-json/simple-icons@^1.2.91": "1.2.93",
     "npm:@iconify/json@^2.2.504": "2.2.519",
     "npm:@inkjs/ui@2": "2.0.0_ink@7.1.1_@types+react@19.2.18_react@19.2.8",
-    "npm:@intlify/unplugin-vue-i18n@^11.2.4": "11.2.5_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_vue-i18n@11.4.9__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-dom@3.5.40_typescript@7.1.0-beta",
+    "npm:@intlify/unplugin-vue-i18n@^11.2.4": "11.2.5_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_vue-i18n@11.4.9_@vue+compiler-dom@3.5.40_typescript@7.1.0-beta",
     "npm:@jsr/bradenmacdonald__s3-lite-client@0.9.6": "0.9.6",
     "npm:@jsr/sauber__table@*": "0.1.0",
     "npm:@jsr/std__semver@1.0.8": "1.0.8",
     "npm:@manypkg/tools@^2.1.2": "2.1.2",
     "npm:@modelcontextprotocol/client@^2.0.0-beta.5": "2.0.0",
     "npm:@modelcontextprotocol/server@^2.0.0-beta.5": "2.0.0",
-    "npm:@pinia/colada@1.4.8": "1.4.8_pinia@4.0.2__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
+    "npm:@pinia/colada@1.4.8": "1.4.8_pinia@4.0.2_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
     "npm:@playwright/test@1.61.1": "1.61.1",
     "npm:@rrweb/types@^2.1.1": "2.1.1",
     "npm:@sinonjs/fake-timers@15.4.0": "15.4.0",
@@ -176,7 +176,7 @@
     "npm:@types/ws@^8.18.1": "8.18.1",
     "npm:@typescript/typescript6@6.0.2": "6.0.2",
     "npm:@vercel/ncc@~0.44.1": "0.44.1",
-    "npm:@vitejs/plugin-vue@6.0.8": "6.0.8_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
+    "npm:@vitejs/plugin-vue@6.0.10": "6.0.10_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta",
     "npm:@vitest/coverage-v8@^4.1.10": "4.1.11_vitest@4.1.11_@types+node@26.2.0_@vitest+ui@4.1.11_happy-dom@21.0.4_vite@8.1.5",
     "npm:@vitest/ui@^4.1.10": "4.1.11_vitest@4.1.11_@types+node@26.2.0_@vitest+coverage-v8@4.1.11_happy-dom@21.0.4_vite@8.1.5",
     "npm:@vue/compiler-dom@3.5.40": "3.5.40",
@@ -253,20 +253,20 @@
     "npm:tus-js-client@^4.3.1": "4.3.1",
     "npm:typescript@6.0.3": "6.0.3",
     "npm:typescript@7.1.0-beta": "7.1.0-beta",
-    "npm:unplugin-auto-import@21": "21.0.0_@vueuse+core@14.3.0__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta",
+    "npm:unplugin-auto-import@21": "21.0.0_@vueuse+core@14.3.0_typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta",
     "npm:unplugin-icons@23.0.1": "23.0.1_@vue+compiler-sfc@3.5.44",
     "npm:unplugin-vue-components@^32.1.0": "32.1.0_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
     "npm:unplugin-vue-macros@^2.14.5": "2.14.5_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
     "npm:vite-plugin-devtools-json@^1.1.0": "1.1.0_vite@8.1.5_@types+node@26.2.0_sass@1.101.3",
     "npm:vite-plugin-environment@1.1.3": "1.1.3_vite@8.1.5_@types+node@26.2.0_sass@1.101.3",
     "npm:vite-plugin-vue-devtools@^8.1.5": "8.2.1_vite@8.1.5_typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta",
-    "npm:vite-plugin-vue-layouts@0.11.0": "0.11.0_vite@8.0.14_vue@3.5.44__typescript@7.1.0-beta_vue-router@5.0.7__@pinia+colada@1.4.8___pinia@3.0.4____typescript@6.0.3____vue@3.5.44_____typescript@6.0.3___vue@3.5.44____typescript@7.1.0-beta___typescript@7.1.0-beta__@vue+compiler-sfc@3.5.44__pinia@3.0.4___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@pinia+colada@1.4.8__pinia@3.0.4___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_typescript@7.1.0-beta",
+    "npm:vite-plugin-vue-layouts@0.11.0": "0.11.0_vite@8.0.14_vue@3.5.44__typescript@7.1.0-beta_vue-router@5.0.7_@pinia+colada@1.4.8__pinia@3.0.4__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_typescript@7.1.0-beta",
     "npm:vite@8.1.5": "8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3_yaml@2.9.0",
     "npm:vitest@^4.1.10": "4.1.11_@types+node@26.2.0_@vitest+coverage-v8@4.1.11_@vitest+ui@4.1.11_happy-dom@21.0.4_vite@8.1.5",
     "npm:vue-chartjs@^5.3.4": "5.3.4_chart.js@4.5.1_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
     "npm:vue-demi@0.14.10": "0.14.10_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
     "npm:vue-i18n@^11.4.7": "11.4.9_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
-    "npm:vue-router@^5.2.0": "5.2.0_@pinia+colada@1.4.8__pinia@4.0.2___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@4.0.2__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
+    "npm:vue-router@^5.2.0": "5.2.0_@pinia+colada@1.4.8__pinia@4.0.2__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@4.0.2_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
     "npm:vue-sonner@^2.0.9": "2.0.9",
     "npm:vue-tsc@3.3.11": "3.3.11_typescript@6.0.3",
     "npm:vue@3.5.44": "3.5.44_typescript@7.1.0-beta",
@@ -2638,7 +2638,7 @@
     "@intlify/shared@11.4.9": {
       "integrity": "sha512-4qMBu3D64EN5KbkAj9Mv3TFjiPHtKG/YNd5LU5bpb0DZMR+bKh9/uGNx2GovzxWn2Wnyh5uvEhbPR718EVSkCw=="
     },
-    "@intlify/unplugin-vue-i18n@11.2.5_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_vue-i18n@11.4.9__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-dom@3.5.40_typescript@7.1.0-beta": {
+    "@intlify/unplugin-vue-i18n@11.2.5_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_vue-i18n@11.4.9_@vue+compiler-dom@3.5.40_typescript@7.1.0-beta": {
       "integrity": "sha512-wLpS0cZTNAzaNL/STjjwSFhLunuoARKzEJh7jM/G00A40cVH+GEPhdo/WsvnesPvQVoN6JfjI/mGXwDNnTbvhg==",
       "dependencies": [
         "@eslint-community/eslint-utils",
@@ -2662,7 +2662,7 @@
         "vue-i18n"
       ]
     },
-    "@intlify/vue-i18n-extensions@8.0.0_@intlify+shared@11.4.9_@vue+compiler-dom@3.5.40_vue@3.5.44__typescript@7.1.0-beta_vue-i18n@11.4.9__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_typescript@7.1.0-beta": {
+    "@intlify/vue-i18n-extensions@8.0.0_@intlify+shared@11.4.9_@vue+compiler-dom@3.5.40_vue@3.5.44__typescript@7.1.0-beta_vue-i18n@11.4.9_typescript@7.1.0-beta": {
       "integrity": "sha512-w0+70CvTmuqbskWfzeYhn0IXxllr6mU+IeM2MU0M+j9OW64jkrvqY+pYFWrUnIIC9bEdij3NICruicwd5EgUuQ==",
       "dependencies": [
         "@babel/parser@7.29.12",
@@ -3485,15 +3485,14 @@
       ],
       "scripts": true
     },
-    "@pinia/colada@1.4.8_pinia@3.0.4__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
+    "@pinia/colada@1.4.8_pinia@3.0.4_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
       "integrity": "sha512-WkfCM0Z2GF2zW0uzaMWfRs5OcIViMMou6zTeZ8gtvaJfdPDsmDWVgx4la+BzWWQuvBiDuH4Bm9R8/T50EpmgBQ==",
       "dependencies": [
         "nostics",
-        "pinia@3.0.4_typescript@6.0.3_vue@3.5.44__typescript@6.0.3",
         "vue@3.5.44_typescript@7.1.0-beta"
       ]
     },
-    "@pinia/colada@1.4.8_pinia@4.0.2__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
+    "@pinia/colada@1.4.8_pinia@4.0.2_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
       "integrity": "sha512-WkfCM0Z2GF2zW0uzaMWfRs5OcIViMMou6zTeZ8gtvaJfdPDsmDWVgx4la+BzWWQuvBiDuH4Bm9R8/T50EpmgBQ==",
       "dependencies": [
         "nostics",
@@ -4397,8 +4396,8 @@
       "integrity": "sha512-cUjIE5P2YY1n+Kt9rFIazMMpGoPn1Fic04rOmTkElMkiDP5oszGfERMpo2shVkFKDL7rVppdM2pqJKC59shQWQ==",
       "bin": true
     },
-    "@vitejs/plugin-vue@6.0.8_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
-      "integrity": "sha512-0ZjgOg7oO6farnNGup7yvoM/YXZV84OZxHAwtflItNa/6zzQyVb5LNxyea3FEKEX2XlagIKzrlH7wwxkKgtiew==",
+    "@vitejs/plugin-vue@6.0.10_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta": {
+      "integrity": "sha512-b80aUQh3n+qEzzZm5oQp3rT2QImeCx58K6eFl/RkJ3d65KW0kTuv5lNsLRVAjbW9YRUpo/wzmvzMgV34bTAItA==",
       "dependencies": [
         "@rolldown/pluginutils",
         "vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3_yaml@2.9.0",
@@ -4637,7 +4636,7 @@
         "vue@3.5.44_typescript@7.1.0-beta"
       ]
     },
-    "@vue-macros/define-models@1.3.5_@vueuse+core@14.3.0__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta": {
+    "@vue-macros/define-models@1.3.5_@vueuse+core@14.3.0_typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta": {
       "integrity": "sha512-XFUG498vLmzavLHYmZdiFKT+cN5bYDuVEOfG4hsVAdOoflGqBcRhZmnr9b2M/Y90olULq8AZY7xSnWx9Vqyerw==",
       "dependencies": [
         "@vue-macros/common@1.16.1_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
@@ -4666,7 +4665,7 @@
         "vue@3.5.44_typescript@7.1.0-beta"
       ]
     },
-    "@vue-macros/define-props@4.0.6_@vue-macros+reactivity-transform@1.1.6__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
+    "@vue-macros/define-props@4.0.6_@vue-macros+reactivity-transform@1.1.6_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
       "integrity": "sha512-cfFg84z9/qa0HNpkubERQOcBBkLo2Y9RpI8BXq/tl4gceuR6++ycIgqZZMSxoaLdet0VnDv+CMRz3yHGVSClKw==",
       "dependencies": [
         "@vue-macros/common@1.16.1_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
@@ -8975,7 +8974,7 @@
     "universalify@2.0.1": {
       "integrity": "sha512-gptHNQghINnc/vTGIk0SOFGFNXw7JVrlRUtConJRlvaw6DuX0wO5Jeko9sWrMBhh+PsYAZ7oXAiOnf/UKogyiw=="
     },
-    "unplugin-auto-import@21.0.0_@vueuse+core@14.3.0__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta": {
+    "unplugin-auto-import@21.0.0_@vueuse+core@14.3.0_typescript@7.1.0-beta_vue@3.5.44__typescript@7.1.0-beta": {
       "integrity": "sha512-vWuC8SwqJmxZFYwPojhOhOXDb5xFhNNcEVb9K/RFkyk/3VnfaOjzitWN7v+8DEKpMjSsY2AEGXNgt6I0yQrhRQ==",
       "dependencies": [
         "@vueuse/core",
@@ -9220,14 +9219,14 @@
         "vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3_yaml@2.9.0"
       ]
     },
-    "vite-plugin-vue-layouts@0.11.0_vite@8.0.14_vue@3.5.44__typescript@7.1.0-beta_vue-router@5.0.7__@pinia+colada@1.4.8___pinia@3.0.4____typescript@6.0.3____vue@3.5.44_____typescript@6.0.3___vue@3.5.44____typescript@7.1.0-beta___typescript@7.1.0-beta__@vue+compiler-sfc@3.5.44__pinia@3.0.4___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@pinia+colada@1.4.8__pinia@3.0.4___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_typescript@7.1.0-beta": {
+    "vite-plugin-vue-layouts@0.11.0_vite@8.0.14_vue@3.5.44__typescript@7.1.0-beta_vue-router@5.0.7_@pinia+colada@1.4.8__pinia@3.0.4__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_typescript@7.1.0-beta": {
       "integrity": "sha512-uh6NW7lt+aOXujK4eHfiNbeo55K9OTuB7fnv+5RVc4OBn/cZull6ThXdYH03JzKanUfgt6QZ37NbbtJ0og59qw==",
       "dependencies": [
         "debug",
         "fast-glob",
         "vite@8.0.14_@types+node@26.2.0_sass@1.101.3_yaml@2.9.0",
         "vue@3.5.44_typescript@7.1.0-beta",
-        "vue-router@5.0.7_@pinia+colada@1.4.8__pinia@3.0.4___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@3.0.4__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta"
+        "vue-router@5.0.7_@pinia+colada@1.4.8__pinia@3.0.4__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@3.0.4_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta"
       ]
     },
     "vite@8.0.14_@types+node@26.2.0_sass@1.101.3_yaml@2.9.0": {
@@ -9349,10 +9348,10 @@
         "vue@3.5.44_typescript@7.1.0-beta"
       ]
     },
-    "vue-router@5.0.7_@pinia+colada@1.4.8__pinia@3.0.4___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@3.0.4__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
+    "vue-router@5.0.7_@pinia+colada@1.4.8__pinia@3.0.4__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@3.0.4_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
       "integrity": "sha512-dqfk8kvRbCutmCOCj/XLDqDEYxc1wBdAOGLuVy5M93ifYMsBd5fIjfaPN4tQAbxr5IprdBDIox1gr4wYyOx/SA==",
       "dependencies": [
-        "@pinia/colada@1.4.8_pinia@3.0.4__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
+        "@pinia/colada@1.4.8_pinia@3.0.4_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
         "@vue/compiler-sfc",
         "ast-walker-scope@0.8.3",
         "chokidar",
@@ -9369,16 +9368,16 @@
         "yaml"
       ],
       "optionalPeers": [
-        "@pinia/colada@1.4.8_pinia@3.0.4__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
+        "@pinia/colada@1.4.8_pinia@3.0.4_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
         "@vue/compiler-sfc",
         "pinia@3.0.4_typescript@6.0.3_vue@3.5.44__typescript@6.0.3"
       ]
     },
-    "vue-router@5.2.0_@pinia+colada@1.4.8__pinia@4.0.2___typescript@6.0.3___vue@3.5.44____typescript@6.0.3__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@4.0.2__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
+    "vue-router@5.2.0_@pinia+colada@1.4.8__pinia@4.0.2__vue@3.5.44___typescript@7.1.0-beta__typescript@7.1.0-beta_@vue+compiler-sfc@3.5.44_pinia@4.0.2_vite@8.1.5_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta": {
       "integrity": "sha512-QAC5i0LEb1GLG0LXDQmHu8L7FX12j0KwU/JTKmLQUJMrn04gQdKP6Du+p0QwpHb3iy71vBlqnHQ8WAfOSAWhqw==",
       "dependencies": [
         "@babel/generator@8.0.0",
-        "@pinia/colada@1.4.8_pinia@4.0.2__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
+        "@pinia/colada@1.4.8_pinia@4.0.2_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
         "@vue-macros/common@3.1.4_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
         "@vue/compiler-sfc",
         "@vue/devtools-api@8.2.1",
@@ -9402,7 +9401,7 @@
         "yaml"
       ],
       "optionalPeers": [
-        "@pinia/colada@1.4.8_pinia@4.0.2__typescript@6.0.3__vue@3.5.44___typescript@6.0.3_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
+        "@pinia/colada@1.4.8_pinia@4.0.2_vue@3.5.44__typescript@7.1.0-beta_typescript@7.1.0-beta",
         "@vue/compiler-sfc",
         "pinia@4.0.2_typescript@6.0.3_vue@3.5.44__typescript@6.0.3",
         "vite@8.1.5_@types+node@26.2.0_jiti@2.7.0_sass@1.101.3_yaml@2.9.0"
@@ -9867,7 +9866,7 @@
         "npm:@types/pg@^8.20.0",
         "npm:@types/semver@^7.7.1",
         "npm:@typescript/typescript6@6.0.2",
-        "npm:@vitejs/plugin-vue@6.0.8",
+        "npm:@vitejs/plugin-vue@6.0.10",
         "npm:@vitest/coverage-v8@^4.1.10",
         "npm:@vitest/ui@^4.1.10",
         "npm:@vue/compiler-sfc@3.5.44",
