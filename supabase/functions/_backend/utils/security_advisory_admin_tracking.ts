@@ -68,8 +68,7 @@ const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
         (
           SELECT COUNT(*)::int
           FROM public.apps a
-          WHERE COALESCE(a.deleted, false) = false
-            AND a.owner_org IN (SELECT org_id FROM opted_orgs)
+          WHERE a.owner_org IN (SELECT org_id FROM opted_orgs)
         ) AS apps_in_opted_in_orgs`
 
 function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow[] {
@@ -100,8 +99,7 @@ async function loadOptInSummaryAndAppIds(client: PgClient): Promise<{
     client,
     `SELECT a.app_id
        FROM public.apps a
-       WHERE COALESCE(a.deleted, false) = false
-       ORDER BY a.stats_updated_at DESC NULLS LAST, a.app_id
+       ORDER BY a.updated_at DESC NULLS LAST, a.app_id
        LIMIT $1`,
     [MAX_ADOPTION_APPS],
   )

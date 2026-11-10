@@ -80,6 +80,9 @@ onMounted(() => {
           {{ t('admin-security-updates-patches-title') }}
         </h2>
         <table class="table w-full">
+          <caption class="sr-only">
+            {{ t('admin-security-updates-patches-title') }}
+          </caption>
           <thead>
             <tr>
               <th scope="col">
