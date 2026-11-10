@@ -1,3 +1,4 @@
+-- Ordered after 20261110144000_mcp_events_webhooks on main.
 ALTER TABLE public.webhooks
   ADD COLUMN IF NOT EXISTS mcp_spike_last_fired_at timestamp with time zone;
 

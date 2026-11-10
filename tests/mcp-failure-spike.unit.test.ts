@@ -12,8 +12,15 @@ import { dispatchMcpEventToWebhook, MCP_EVENT_CATALOG } from '../supabase/functi
 import {
   evaluateMcpFailureSpikeSubscriptionFromMetrics,
   evaluateMcpFailureSpikeSubscriptions,
+  gatherFailureSpikeMetrics,
   type McpFailureSpikeWebhookRow,
 } from '../supabase/functions/_backend/utils/mcp_failure_spike_runner.ts'
+
+vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
+  readStatsVersion: vi.fn(),
+  readStatsInsights: vi.fn(),
+}))
+import { readStatsInsights, readStatsVersion } from '../supabase/functions/_backend/utils/stats.ts'
 
 vi.mock('../supabase/functions/_backend/utils/mcp_events.ts', async importOriginal => {
   const actual = await importOriginal<typeof import('../supabase/functions/_backend/utils/mcp_events.ts')>()
@@ -206,6 +213,36 @@ describe('evaluateMcpFailureSpikeSubscriptions app owner', () => {
     expect(result).toEqual({ fired: false, reason: 'app_owner_mismatch' })
     expect(dispatchMcpEventToWebhook).not.toHaveBeenCalled()
     expect(query).not.toHaveBeenCalled()
+  })
+})
+
+describe('gatherFailureSpikeMetrics checks', () => {
+  const c = { get: () => undefined } as unknown as Context
+  const now = new Date('2026-11-10T12:00:00.000Z')
+
+  it('counts install, fail, and noNew from insights when channel is omitted', async () => {
+    vi.mocked(readStatsVersion).mockResolvedValueOnce([
+      { version_name: '2.0.0', install: 5, fail: 3 },
+    ])
+    vi.mocked(readStatsInsights).mockImplementation(async (_c, params) => {
+      const actions = 'actions' in params ? params.actions : []
+      if (actions.includes('noNew')) {
+        return {
+          actions: [
+            { action: 'install', total: 10 },
+            { action: 'fail', total: 4 },
+            { action: 'noNew', total: 80 },
+            { action: 'get', total: 999 },
+          ],
+        } as Awaited<ReturnType<typeof readStatsInsights>>
+      }
+      return { actions: [] } as Awaited<ReturnType<typeof readStatsInsights>>
+    })
+
+    const metrics = await gatherFailureSpikeMetrics(c, 'com.demo.app', undefined, 15, now)
+    expect(metrics.checks).toBe(94)
+    expect(metrics.failures).toBe(3)
+    expect(metrics.version).toBe('2.0.0')
   })
 })
 

@@ -45,6 +45,7 @@ export function formatFailureSpikeValidationError(error: z.ZodError): string {
   return error.issues.map(issue => `${issue.path.join('.') || 'arguments'}: ${issue.message}`).join('; ')
 }
 
+/** Merge subscription arguments with Balanced recommended defaults. */
 export function resolveFailureSpikeThresholds(
   args: Record<string, unknown>,
 ): McpFailureSpikeThresholds {
@@ -61,6 +62,7 @@ export function resolveFailureSpikeThresholds(
   }
 }
 
+/** Decide whether observed failures in a window exceed subscription thresholds and cooldown. */
 export function evaluateFailureSpike(input: {
   failures: number
   checks: number

@@ -25,6 +25,9 @@ export type FailureSpikeMetrics = {
   windowEnd: string
 }
 
+const UPDATE_CHECK_INSIGHT_ACTIONS = ['install', 'fail', 'noNew'] as const
+
+/** Load windowed install/fail counters and up-to-date checks for spike evaluation. */
 export async function gatherFailureSpikeMetrics(
   c: Context,
   appId: string,
@@ -44,11 +47,26 @@ export async function gatherFailureSpikeMetrics(
   for (const row of versionStats) {
     const install = Number(row.install ?? 0)
     const fail = Number(row.fail ?? 0)
-    checks += install + fail
     failures += fail
+    if (channelName) {
+      checks += install + fail
+    }
     if (install > maxInstall) {
       maxInstall = install
       version = row.version_name
+    }
+  }
+
+  if (!channelName) {
+    const checkInsights = await readStatsInsights(c, {
+      app_id: appId,
+      start_date: start,
+      end_date: end,
+      actions: [...UPDATE_CHECK_INSIGHT_ACTIONS],
+    })
+    for (const entry of checkInsights.actions) {
+      if ((UPDATE_CHECK_INSIGHT_ACTIONS as readonly string[]).includes(entry.action))
+        checks += entry.total
     }
   }
 
@@ -72,6 +90,7 @@ export async function gatherFailureSpikeMetrics(
   return { checks, failures, version, topFailureActionCodes, windowStart: start, windowEnd: end }
 }
 
+/** Evaluate one webhook subscription; optional metricsOverride skips a stats read. */
 export async function evaluateMcpFailureSpikeSubscriptions(
   c: Context,
   pg: PgClient,

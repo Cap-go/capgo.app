@@ -143,9 +143,19 @@ app.post('/', middlewareAPISecret, async (c) => {
 
     let checked = 0
     let fired = 0
+    let skippedGroups = 0
     const metricsCache = new Map<string, FailureSpikeMetrics>()
+    const tickSeed = Math.floor(now.getTime() / (5 * 60 * 1000))
+    const startOffset = groups.length > 0 ? tickSeed % groups.length : 0
+    const rotatedGroups = groups.length > 0
+      ? [...groups.slice(startOffset), ...groups.slice(0, startOffset)]
+      : []
 
-    await runWithDeadline(groups, async (group) => {
+    await runWithDeadline(rotatedGroups, async (group) => {
+      if (Date.now() >= deadline) {
+        skippedGroups += 1
+        return
+      }
       const key = metricsGroupKey(group.appId, group.channel, group.windowMinutes)
       let metrics = metricsCache.get(key)
       if (!metrics) {
@@ -198,8 +208,10 @@ app.post('/', middlewareAPISecret, async (c) => {
       checked,
       fired,
       groups: groups.length,
+      skippedGroups,
+      startOffset,
     })
-    return c.json({ ...BRES, checked, fired })
+    return c.json({ ...BRES, checked, fired, skipped_groups: skippedGroups })
   }
   finally {
     closeClient(c, pg)
