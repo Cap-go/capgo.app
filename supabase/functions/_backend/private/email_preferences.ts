@@ -18,6 +18,7 @@ export const PUBLIC_EMAIL_PREFERENCE_KEYS = [
   'usage_limit',
   'credit_usage',
   'onboarding',
+  'trial_usage_recap',
   'builder_onboarding',
   'weekly_stats',
   'monthly_stats',

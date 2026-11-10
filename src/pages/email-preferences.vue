@@ -14,6 +14,7 @@ const PUBLIC_EMAIL_PREFERENCE_KEYS = [
   'usage_limit',
   'credit_usage',
   'onboarding',
+  'trial_usage_recap',
   'builder_onboarding',
   'weekly_stats',
   'monthly_stats',
@@ -50,7 +51,7 @@ const PREFERENCE_SECTIONS: {
   },
   {
     titleKey: 'notifications-onboarding',
-    keys: ['onboarding', 'builder_onboarding'],
+    keys: ['onboarding', 'trial_usage_recap', 'builder_onboarding'],
   },
 ]
 
@@ -58,6 +59,7 @@ const PREFERENCE_LABEL_KEYS: Record<PublicEmailPreferenceKey, string> = {
   usage_limit: 'notifications-usage-limit',
   credit_usage: 'notifications-credit-usage',
   onboarding: 'notifications-onboarding-emails',
+  trial_usage_recap: 'notifications-trial-usage-recap',
   builder_onboarding: 'notifications-builder-onboarding',
   weekly_stats: 'notifications-weekly-stats',
   monthly_stats: 'notifications-monthly-stats',
@@ -74,6 +76,7 @@ const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
   usage_limit: 'notifications-usage-limit-desc',
   credit_usage: 'notifications-credit-usage-desc',
   onboarding: 'notifications-onboarding-emails-desc',
+  trial_usage_recap: 'notifications-trial-usage-recap-desc',
   builder_onboarding: 'notifications-builder-onboarding-desc',
   weekly_stats: 'notifications-weekly-stats-desc',
   monthly_stats: 'notifications-monthly-stats-desc',

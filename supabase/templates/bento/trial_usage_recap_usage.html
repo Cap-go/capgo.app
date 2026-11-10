@@ -1,0 +1,101 @@
+<!-- Bento events: org:trial_usage_recap, org:trial_end_usage_recap -->
+<!-- email_variant: usage -->
+<!-- Subject: Your Capgo trial recap (ends {{ event.details.trial_end_date_label }}) -->
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0;padding:24px 0;background-color:#f4f6f8;font-family:Helvetica,Arial,sans-serif;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;">
+        <tr>
+          <td style="padding:28px 28px 8px 28px;color:#0f172a;font-size:20px;font-weight:700;line-height:1.3;">
+            {% if event.details.kind == 'trial_usage_recap' %}
+              Three days left on your Capgo trial
+            {% else %}
+              Your Capgo trial ends soon
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 28px 16px 28px;color:#475569;font-size:15px;line-height:1.55;">
+            Here is what your organization has done so far in this trial. Trial access ends on
+            <strong>{{ event.details.trial_end_date_label }}</strong> (UTC calendar date).
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 28px 8px 28px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;">
+              {% if event.details.show_successful_updates %}
+              <tr>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Successful update installs</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.successful_updates }}</td>
+              </tr>
+              {% endif %}
+              {% if event.details.show_peak_mau %}
+              <tr>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Peak active devices in one day</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.peak_daily_mau }}</td>
+              </tr>
+              {% endif %}
+              {% if event.details.show_bandwidth %}
+              <tr>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Update bandwidth served</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.bandwidth_human }}</td>
+              </tr>
+              {% endif %}
+              {% if event.details.show_bundles_uploaded %}
+              <tr>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Bundles uploaded</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.bundles_uploaded }}</td>
+              </tr>
+              {% endif %}
+              {% if event.details.show_deploy_count %}
+              <tr>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Bundle deploys to channels</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.deploy_count }}</td>
+              </tr>
+              {% endif %}
+              {% if event.details.show_native_builds %}
+              <tr>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Native cloud builds started</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.native_builds_run }}</td>
+              </tr>
+              {% endif %}
+              {% if event.details.show_apps_count %}
+              <tr>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;font-weight:600;">Apps</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.apps_count }}</td>
+              </tr>
+              {% endif %}
+              {% if event.details.show_channels_count %}
+              <tr>
+                <td style="padding:14px 16px;color:#0f172a;font-size:15px;font-weight:600;">Channels</td>
+                <td style="padding:14px 16px;color:#0f172a;font-size:15px;text-align:right;">{{ event.details.channels_count }}</td>
+              </tr>
+              {% endif %}
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 28px 12px 28px;color:#64748b;font-size:12px;line-height:1.45;">
+            Counts cover your org from creation through the last full day before your trial end date (UTC), using the same usage tables as the console.
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 28px 28px 28px;">
+            <a href="{{ event.details.plans_url }}/" style="display:inline-block;background-color:#119eff;color:#0f172a;text-decoration:none;font-weight:700;font-size:15px;padding:12px 20px;border-radius:8px;">
+              Choose a plan
+            </a>
+            {% if event.details.show_pay_as_you_go %}
+            <p style="margin:16px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">
+              Under 500 active devices in a day: you can stay on pay as you go credits. Open Usage to add credits, then pick what you need on the Plans page.
+            </p>
+            <p style="margin:8px 0 0 0;">
+              <a href="{{ event.details.usage_url }}/" style="color:#119eff;font-weight:600;text-decoration:underline;font-size:14px;">Open Usage</a>
+            </p>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
