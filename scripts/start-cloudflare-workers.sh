@@ -168,9 +168,11 @@ for s3_var in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_REGION; do
   fi
 done
 
+WRANGLER_DEV="${ROOT_DIR}/scripts/wrangler-dev-compat.sh"
+
 # Start API worker on its isolated port.
 echo -e "${GREEN}Starting API worker on port ${CLOUDFLARE_API_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/api" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_API_PORT}" --inspector-port "${API_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
+(cd "${ROOT_DIR}/cloudflare_workers/api" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_API_PORT}" --inspector-port "${API_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 API_PID=$!
 
 # Wait a bit for the first worker to start.
@@ -178,7 +180,7 @@ sleep 3
 
 # Start Plugin worker on its isolated port.
 echo -e "${GREEN}Starting Plugin worker on port ${CLOUDFLARE_PLUGIN_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/plugin" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_PLUGIN_PORT}" --inspector-port "${PLUGIN_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
+(cd "${ROOT_DIR}/cloudflare_workers/plugin" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_PLUGIN_PORT}" --inspector-port "${PLUGIN_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 PLUGIN_PID=$!
 
 # Wait a bit for the second worker to start.
@@ -186,7 +188,7 @@ sleep 3
 
 # Start Files worker on its isolated port.
 echo -e "${GREEN}Starting Files worker on port ${CLOUDFLARE_FILES_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/files" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_FILES_PORT}" --inspector-port "${FILES_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
+(cd "${ROOT_DIR}/cloudflare_workers/files" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_FILES_PORT}" --inspector-port "${FILES_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 FILES_PID=$!
 
 echo -e "${GREEN}All workers started!${NC}"

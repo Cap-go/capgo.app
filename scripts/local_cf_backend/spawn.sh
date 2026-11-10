@@ -3,6 +3,9 @@
 # This script is NOT memory safe
 # It's NOT supposed to be used in production!!!
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+
 # Function to exit with error message
 error_exit() {
     echo "$1" >&2
@@ -10,11 +13,13 @@ error_exit() {
 }
 
 # Check if the file exists
-ENV_FILE="./internal/cloudflare/.env.local"
+ENV_FILE="${REPO_ROOT}/internal/cloudflare/.env.local"
 [ ! -f "$ENV_FILE" ] && error_exit "File not found: $ENV_FILE"
 
-# Prepare the base arguments
-ARGS=("bunx" "wrangler" "dev" "--port" "7777")
+cd "$REPO_ROOT" || error_exit "cannot cd to repo root"
+
+# Compat date for local wrangler dev: see scripts/wrangler-dev-compat.sh
+ARGS=("bash" "scripts/wrangler-dev-compat.sh" "-c" "cloudflare_workers/api/wrangler.jsonc" "--port" "7777")
 
 # Read the file line by line
 while IFS= read -r line || [ -n "$line" ]; do

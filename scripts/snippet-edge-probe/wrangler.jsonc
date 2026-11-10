@@ -3,7 +3,7 @@
   // Not part of any deploy pipeline: created and deleted by run.ts.
   "name": "capgo-snippet-edge-probe",
   "main": "./origin-worker.ts",
-  "compatibility_date": "2026-04-21",
+  "compatibility_date": "2026-11-17",
   "workers_dev": false,
   "routes": [
     {

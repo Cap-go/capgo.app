@@ -1280,7 +1280,7 @@ npx @capgo/cli@latest account set --first-name Ada --last-name Lovelace
 | **--no-notifications** | <code>boolean</code> | Disable all email notifications |
 | **--newsletter** | <code>boolean</code> | Subscribe to the newsletter |
 | **--no-newsletter** | <code>boolean</code> | Unsubscribe from the newsletter |
-| **--email-preference** | <code>string</code> | Email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, onboarding, builder_onboarding, bundle_incompatible, cli_realtime_feed |
+| **--email-preference** | <code>string</code> | Email notification toggle (repeatable), e.g. --email-preference weekly_stats=false. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, onboarding, builder_onboarding, bundle_incompatible, cli_realtime_feed, security_updates |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 | **--files-host** | <code>string</code> | Custom Capgo files API URL when it differs from --api-host (env: CAPGO_FILES_HOST) |
