@@ -8,6 +8,7 @@ import Toggle from '~/components/Toggle.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { parseEmailPreferencesQuery } from '~/utils/emailPreferencesIdentity'
+import { buildPublicEmailOptOutPreferences, defaultPublicEmailFormPreferences } from '~/utils/publicEmailPreferenceOptOut'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const PUBLIC_EMAIL_PREFERENCE_KEYS = [
@@ -111,9 +112,7 @@ const captchaToken = ref('')
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
 const preferences = reactive<Record<PublicEmailPreferenceKey, boolean>>(
-  Object.fromEntries(
-    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, key !== 'security_updates']),
-  ) as Record<PublicEmailPreferenceKey, boolean>,
+  defaultPublicEmailFormPreferences(PUBLIC_EMAIL_PREFERENCE_KEYS) as Record<PublicEmailPreferenceKey, boolean>,
 )
 
 const emailLooksValid = computed(() => {
@@ -185,10 +184,10 @@ async function savePreferences() {
   isSaving.value = true
   isSaved.value = false
   try {
-    const optOutPreferences = Object.fromEntries(
-      PUBLIC_EMAIL_PREFERENCE_KEYS
-        .filter(key => unsubscribeAll.value || preferences[key] === false)
-        .map(key => [key, false]),
+    const optOutPreferences = buildPublicEmailOptOutPreferences(
+      preferences,
+      unsubscribeAll.value,
+      PUBLIC_EMAIL_PREFERENCE_KEYS,
     )
 
     const { data, error } = await invokeCapgoApi<{ status?: string }>('private/email_preferences', {
