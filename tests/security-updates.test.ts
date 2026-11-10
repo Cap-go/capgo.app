@@ -134,7 +134,9 @@ describe('[GET] /private/security_updates/feed reported package sourcing', () =>
     const cli = data.items.find(item => item.package === '@capgo/cli')
     expect(cli?.current_version).toBe('2.1.0')
     expect(cli?.status).toBe('patched')
-    const ios = data.items.find(item => item.package === '@capacitor/ios')
-    expect(ios?.current_version).toBe('6.2.0')
+    // Fixture advisories cover core/cli only; core unknown proves production native metadata drove matching.
+    const coreItems = data.items.filter(item => item.package === '@capacitor/core')
+    expect(coreItems.length).toBeGreaterThan(0)
+    expect(coreItems.every(item => item.status === 'unknown')).toBe(true)
   })
 })
