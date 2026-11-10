@@ -5,7 +5,7 @@ import { parsePluginStatePointer } from '../supabase/functions/_backend/plugin_r
 /** Provider stand-ins preserve atomic ETag preconditions and snapshot reads. */
 export function publicationProviders() {
   const values = new Map<string, { body: string, metadata: unknown }>()
-  const objects = new Map<string, { body: string, etag: string }>()
+  const objects = new Map<string, { body: string, etag: string, customMetadata?: Record<string, string> }>()
   let revision = 0
   const namespace = {
     get: vi.fn(async (key: string) => {
@@ -33,18 +33,20 @@ export function publicationProviders() {
       const object = objects.get(key)
       return object ? { etag: object.etag, json: async () => JSON.parse(object.body) } : null
     }),
-    put: vi.fn(async (key: string, body: string, options: { onlyIf: R2Conditional, httpMetadata: { contentType: string } }) => {
+    put: vi.fn(async (key: string, body: string, options: { onlyIf: R2Conditional, httpMetadata: { contentType: string }, customMetadata?: Record<string, string> }) => {
       const previous = objects.get(key)
       if (options.onlyIf.etagMatches !== undefined && previous?.etag !== options.onlyIf.etagMatches)
         return null
       if (options.onlyIf.etagDoesNotMatch === '*' && previous)
         return null
-      const object = { body, etag: `etag-${++revision}` }
+      const object = { body, etag: `etag-${++revision}`, customMetadata: options.customMetadata }
       objects.set(key, object)
       return object
     }),
     list: vi.fn(async (options: R2ListOptions) => ({
-      objects: [...objects.keys()].filter(key => key.startsWith(options.prefix ?? '')).map(key => ({ key })),
+      objects: [...objects].filter(([key]) => key.startsWith(options.prefix ?? '')).map(([key, object]) => ({
+        key, etag: object.etag, customMetadata: options.include?.includes('customMetadata') ? object.customMetadata : undefined,
+      })),
       truncated: false,
     })),
   }

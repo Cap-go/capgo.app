@@ -335,6 +335,12 @@ export async function comparePluginStateChannelSequence(fixture: PluginStateFixt
 }
 
 export async function runPluginStateBenchmark(samples = 40) {
+  assertLocal(CLOUDFLARE_API_URL)
+  assertLocal(CLOUDFLARE_PLUGIN_URL)
+  assertLocal(POSTGRES_URL)
+  const [sync] = await executeSQL<{ enabled: boolean }>('SELECT public.plugin_state_sync_enabled() AS enabled')
+  if (sync?.enabled !== true)
+    throw new Error('Plugin state benchmark requires CAPGO_PLUGIN_STATE_SYNC_ENABLED in local Vault. Enable sync or run the strict KV test setup documented in docs/plugin-state-kv.md before benchmarking.')
   const fixture = await createPluginStateFixture()
   try {
     await syncPluginState([fixture.appId])

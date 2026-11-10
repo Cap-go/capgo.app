@@ -171,17 +171,20 @@ describe('plugin KV sync queue contracts', () => {
     // this file. Use a distinct direct client for the second producer.
     const producer = new Client({ connectionString: POSTGRES_URL })
     await producer.connect()
+    const leaseToken = randomUUID()
     try {
       await client.query('BEGIN')
       await client.query('DELETE FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])
       await client.query('DELETE FROM public.plugin_state_sync_cooldowns WHERE app_id = $1', [APP_ID])
       await client.query(`SELECT set_config('capgo.plugin_state_wake_sent', 'on', true)`)
       await client.query(`SELECT public.notify_plugin_state_sync('app', ARRAY[$1]::text[])`, [APP_ID])
-      await client.query(`UPDATE public.plugin_state_sync_pending SET due_at = '-infinity' WHERE app_id = $1`, [APP_ID])
+      // Lease this fixture before committing it. A global claimer must never
+      // be able to consume the row between our COMMIT and the second producer.
+      const leased = await client.query(`UPDATE public.plugin_state_sync_pending
+        SET lease_token = $2::uuid, leased_until = clock_timestamp() + interval '2 minutes', attempts = 1
+        WHERE app_id = $1 RETURNING id`, [APP_ID, leaseToken])
+      expect(leased.rows).toHaveLength(1)
       await client.query('COMMIT')
-      const { rows: claims } = await client.query<{ result: Claim }>('SELECT public.claim_plugin_state_sync(1) AS result')
-      const first = claims[0].result
-      expect(first.apps?.map(app => app.app_id)).toEqual([APP_ID])
 
       await producer.query('BEGIN')
       await producer.query(`SET LOCAL statement_timeout = 2000`)
@@ -192,9 +195,9 @@ describe('plugin KV sync queue contracts', () => {
         SELECT producer_xid::text, lease_token FROM public.plugin_state_sync_pending WHERE app_id = $1 ORDER BY id`, [APP_ID])
       expect(pending).toHaveLength(2)
       expect(pending[0].producer_xid).not.toBe(pending[1].producer_xid)
-      expect(pending[0].lease_token).toBe(first.lease_token)
+      expect(pending[0].lease_token).toBe(leaseToken)
       expect(pending[1].lease_token).toBeNull()
-      await ack(first.lease_token!)
+      await ack(leaseToken)
       const { rows: retained } = await client.query<{ producer_xid: string }>(`
         SELECT producer_xid::text FROM public.plugin_state_sync_pending WHERE app_id = $1`, [APP_ID])
       expect(retained).toEqual([{ producer_xid: pending[1].producer_xid }])

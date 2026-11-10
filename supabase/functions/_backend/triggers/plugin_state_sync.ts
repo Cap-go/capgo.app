@@ -205,9 +205,12 @@ interface KvStore {
 }
 interface PointerStore {
   get: (key: string) => Promise<{ etag: string, json: () => Promise<unknown> } | null>
-  put: (key: string, value: string, options: { onlyIf: R2Conditional, httpMetadata: { contentType: string } }) => Promise<unknown | null>
-  list: (options: R2ListOptions) => Promise<{ objects: { key: string }[], truncated: boolean, cursor?: string }>
+  put: (key: string, value: string, options: { onlyIf: R2Conditional, httpMetadata: { contentType: string }, customMetadata?: Record<string, string> }) => Promise<unknown | null>
+  list: (options: R2ListOptions) => Promise<{ objects: { key: string, etag?: string, customMetadata?: Record<string, string> }[], truncated: boolean, cursor?: string }>
 }
+
+interface PublicationPrecondition { generation: string, etag: string }
+interface ListedPointer { name: string, etag?: string, generation?: string }
 
 function reserveProviderOperation(budget: PublicationBudget) {
   if (budget.remaining <= 0)
@@ -227,11 +230,15 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
     const object = await pointers.get(key)
     return object ? { value: parsePluginStatePointer(await object.json()), etag: object.etag } : null
   }
-  async function publish(key: string, value: unknown, deleted: boolean) {
+  async function readPrecondition(key: string): Promise<PublicationPrecondition | null> {
+    const pointer = await readPointer(key)
+    return pointer ? { generation: pointer.value.generation, etag: pointer.etag } : null
+  }
+  async function publish(key: string, value: unknown, deleted: boolean, listed?: PublicationPrecondition) {
     if (written.has(key))
       return
-    let previous = await readPointer(key)
-    if (previous && BigInt(previous.value.generation) >= BigInt(generation)) {
+    let previous = listed ?? await readPrecondition(key)
+    if (previous && BigInt(previous.generation) >= BigInt(generation)) {
       written.add(key)
       return
     }
@@ -247,13 +254,17 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
       const object = await pointers.put(key, JSON.stringify({ f: 1, generation, kvKey }), {
         onlyIf: previous ? { etagMatches: previous.etag } : { etagDoesNotMatch: '*' },
         httpMetadata: { contentType: 'application/json' },
+        // R2 writes this metadata atomically with the pointer body. Cleanup
+        // can use a strong listing's generation and ETag as its first CAS
+        // precondition, without a separate GET for every historical key.
+        customMetadata: { generation },
       })
       if (object) {
         written.add(key)
         return
       }
-      previous = await readPointer(key)
-      if (previous && BigInt(previous.value.generation) >= BigInt(generation)) {
+      previous = await readPrecondition(key)
+      if (previous && BigInt(previous.generation) >= BigInt(generation)) {
         written.add(key)
         return
       }
@@ -281,16 +292,26 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
     },
     async list(options: { prefix: string, cursor?: string, limit: number }) {
       reserve()
-      const listed = await pointers.list(options)
+      const listed = await pointers.list({ ...options, include: ['customMetadata'] })
       if (listed.truncated && !listed.cursor)
         throw new Error('plugin state pointer listing has no continuation cursor')
       return {
-        keys: listed.objects.map(object => ({ name: object.key })),
+        keys: listed.objects.map((object): ListedPointer => ({
+          name: object.key,
+          etag: object.etag,
+          generation: isPluginStateGeneration(object.customMetadata?.generation) ? object.customMetadata.generation : undefined,
+        })),
         list_complete: !listed.truncated,
         cursor: listed.cursor ?? '',
       }
     },
     delete: (key: string) => publish(key, null, true),
+    deleteListed: (pointer: ListedPointer) => {
+      const known = pointer.etag && isPluginStateGeneration(pointer.generation)
+        ? { etag: pointer.etag, generation: pointer.generation }
+        : undefined
+      return publish(pointer.name, null, true, known)
+    },
     putJson: (key: string, value: unknown) => publish(key, value, false),
   }
 }
@@ -597,20 +618,20 @@ function parseCursor(ref: string): FullSyncCursor {
   return { p: 'versions', after: null }
 }
 
-/** Decodes the names of listed keys (hashed long keys cannot be decoded and are left alone). */
-function listedNames(keys: { name: string }[], prefix: string) {
-  return keys
-    .map(key => key.name.slice(prefix.length))
-    .filter(rest => rest !== '' && !rest.startsWith('#'))
-    .map((rest) => {
-      try {
-        return decodeURIComponent(rest)
-      }
-      catch {
-        return null
-      }
-    })
-    .filter((name): name is string => name !== null)
+/** Keep each bounded listing entry with its decoded source identity. Hashed
+ * long keys cannot be decoded and are left alone, as before. */
+function listedReferences(keys: ListedPointer[], prefix: string) {
+  return keys.flatMap((pointer) => {
+    const rest = pointer.name.slice(prefix.length)
+    if (!rest || rest.startsWith('#'))
+      return []
+    try {
+      return [{ pointer, ref: decodeURIComponent(rest) }]
+    }
+    catch {
+      return []
+    }
+  })
 }
 
 /**
@@ -652,22 +673,24 @@ async function fullSync(source: SourceReader, store: SyncStore, appId: string, r
       case 'clean_versions': {
         const prefix = await pluginStateVersionKeyPrefix(appId)
         const listed = await store.list({ prefix, cursor: cursor.cursor ?? undefined, limit: KV_LIST_LIMIT })
-        const names = listedNames(listed.keys, prefix)
+        const references = listedReferences(listed.keys, prefix)
+        const names = references.map(entry => entry.ref)
         const kept = exists && names.length > 0
           ? new Set((await sourceRows<{ name: string }>(source, sql`SELECT av.name FROM public.app_versions av WHERE av.app_id = ${appId} AND av.name = ANY (${sql.param(names)}::text[])`)).map(row => row.name))
           : new Set<string>()
-        await runLimited(names.filter(name => !kept.has(name)), KV_CONCURRENCY, async name => store.delete(await pluginStateVersionKey(appId, name)))
+        await runLimited(references.filter(entry => !kept.has(entry.ref)), KV_CONCURRENCY, entry => store.deleteListed(entry.pointer))
         cursor = listed.list_complete ? { p: 'clean_devices', cursor: null } : { p: 'clean_versions', cursor: listed.cursor }
         break
       }
       case 'clean_devices': {
         const prefix = await pluginStateDeviceKeyPrefix(appId)
         const listed = await store.list({ prefix, cursor: cursor.cursor ?? undefined, limit: KV_LIST_LIMIT })
-        const deviceIds = listedNames(listed.keys, prefix)
+        const references = listedReferences(listed.keys, prefix)
+        const deviceIds = references.map(entry => entry.ref)
         const kept = exists && deviceIds.length > 0
           ? new Set((await sourceRows<{ device_id: string }>(source, sql`SELECT cd.device_id FROM public.channel_devices cd WHERE cd.app_id = ${appId} AND cd.device_id = ANY (${sql.param(deviceIds)}::text[])`)).map(row => row.device_id))
           : new Set<string>()
-        await runLimited(deviceIds.filter(deviceId => !kept.has(deviceId)), KV_CONCURRENCY, async deviceId => store.delete(await pluginStateDeviceKey(appId, deviceId)))
+        await runLimited(references.filter(entry => !kept.has(entry.ref)), KV_CONCURRENCY, entry => store.deleteListed(entry.pointer))
         cursor = listed.list_complete ? { p: 'manifests', after: null, revision: null } : { p: 'clean_devices', cursor: listed.cursor }
         break
       }

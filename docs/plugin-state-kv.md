@@ -18,6 +18,8 @@ location. On a miss, the reader gets the logical key's pointer through the R2
 binding, validates its generation and immutable KV key, then reads that exact
 KV value. Popular app and manifest documents can reuse a parsed copy in isolate
 memory only after checking the Cache API's publication-generation revision.
+Pointer lookup and JSON decoding share a 50 ms deadline. A timeout discards
+the late result and falls back to the existing replica path.
 Build timestamps are not cache identities: two publications can have the same
 millisecond timestamp. A successful snapshot request
 opens no SQL connection. A document miss can require both an R2 read and a KV
@@ -176,6 +178,31 @@ with missing or older pointers, and invalid metadata are retained. Pointer
 objects and their deletion markers are not removed by this KV cleanup; they
 also preserve the generation ordering fence.
 
+Full repair still advances an existing tombstone's generation. A paused
+writer can outlive its two-minute lease: an older deletion at generation 1
+must not permit a delayed generation-2 live write after generation-3 cleanup.
+Skipping the tombstone refresh or deleting the pointer after a time grace
+period would reopen that race. Pointer tombstones therefore have no age-based
+expiry in this design.
+
+Pointer writes store generation metadata atomically with their JSON body.
+Cleanup requests that metadata in the strong R2 listing and reuses the listed
+generation and ETag for its first conditional write. This removes one Class B
+GET per key when metadata is available, including tombstones. Legacy or invalid
+metadata uses a GET; an ETag conflict rereads the pointer before retrying, with
+the existing five-attempt ceiling. No generation fence is weakened.
+
+Full cleanup has linear cost in all historical pointer keys, including deleted
+ones. For H absent keys with current metadata it needs H pointer PUTs plus the
+paged listings; conflicts and legacy keys add reads. Every invocation remains
+within the shared 800-operation budget, but storage grows with historical key
+cardinality. Measure that growth and estimate repair costs before large full
+resyncs. Normal daily reconciliation refreshes app documents and does not scan
+fully synced apps' version/device history. The history scan is for initial
+backfill, explicit full repair, or deleted-app cleanup. Safe permanent
+compaction requires a separate namespace or coordinator design that can fence
+every delayed publisher.
+
 R2 can outlive a PostgreSQL restore. Restoring an older sequence while retaining
 newer R2 pointers makes valid restored writes look obsolete. Before restoring,
 turn off plugin KV reads and the Vault sync switch, stop all old writer and GC
@@ -225,7 +252,14 @@ if the problem is in the writer.
 
 Timing logs have `message=plugin_state_request_timing`, the path, method,
 response source, status, Cloudflare colo, duration in milliseconds, and sampling
-basis points. They measure Worker wall time, not network RTT. `X-Plugin-State`
+basis points. Sampled requests also record `r2_pointer_reads`,
+`r2_pointer_ms`, `r2_pointer_timeouts`, `kv_value_reads`, and `kv_value_ms`.
+The durations and operation counts are per-request totals for each provider;
+cache hits contribute zero provider operations. Gate rollout on R2 time,
+timeout rate, and Class B operation counts separately from KV latency and reads,
+including cold documents and replica fallbacks. Keep the KV value `cacheTtl`
+at 30 seconds until negative-lookup caching and propagation are verified.
+These logs measure Worker wall time, not network RTT. `X-Plugin-State`
 identifies KV, misses, errors, and fallbacks; requests rejected before state
 selection need not carry it.
 
@@ -273,6 +307,12 @@ which is validated against each request's clock interval and retry duration.
 The benchmark uses isolated invented fixtures. It reports sample counts and
 latency distributions for existing/new bundle checks, channels, stats, and
 manifest sizes. Cache API eviction is reported separately from warm reads.
+Before creating any fixture, it checks `public.plugin_state_sync_enabled()`.
+A fresh local database must have the Vault secret
+`CAPGO_PLUGIN_STATE_SYNC_ENABLED` enabled first, either through local Vault
+setup or the strict KV test setup shown above. Otherwise the standalone
+benchmark stops with a prerequisite error instead of timing unsynchronized
+state. It does not modify or restore the switch implicitly.
 Local KV itself remains warm. Propagation probes bypass the setup's automatic
 drain and measure from database commit while the writer runs asynchronously.
 The benchmark must pass response parity and KV-source assertions before its
@@ -285,7 +325,7 @@ filled by the KV path expire after 30 seconds.
 
 The worker size baseline was refreshed earlier in this feature. The historical
 unchanged branch base measured 474.43 KiB, gzip 141.80 KiB. The current immutable
-KV/R2 plugin Worker dry build measures 499.84 KiB, gzip 149.26 KiB, and passes
+KV/R2 plugin Worker dry build measures 500.60 KiB, gzip 149.53 KiB, and passes
 the size check. Runtime document validation uses dependency-free predicates to
 avoid adding a schema interpreter to the plugin worker.
 
@@ -295,9 +335,10 @@ deletion, rollouts, and plan changes. Capture their commit times and the first
 matching response in each region. No global latency or savings claim is proven
 by this local test.
 
-The current immutable-KV/R2 local comparison and raw report are in
-[plugin-state-kv-results.md](plugin-state-kv-results.md). Faster warm reads in
-that fixture do not establish equal publication latency: the one observed new
-bundle became visible later through KV/R2. The report retains the earlier
-mutable-publication raw file separately and lists the unmeasured regional and
-replica-fallback cohorts that must pass before increasing rollout.
+The November 10, 2026 immutable-KV/R2 local comparison and raw report are in
+[plugin-state-kv-results.md](plugin-state-kv-results.md). Most request types were
+faster in that fixture, while warm manifest-size maps were essentially unchanged.
+The one observed new bundle became visible later through KV/R2. The report
+retains both November 6 raw files separately and lists the unmeasured regional,
+replica-fallback, timeout, and historical-storage cost gates that must pass
+before increasing rollout.

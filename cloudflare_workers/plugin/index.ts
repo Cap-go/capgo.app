@@ -8,6 +8,7 @@ import { app as latency } from '../../supabase/functions/_backend/plugin_runtime
 import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/public/ok.ts'
 import { createAllCatch, createHono, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
 import { cloudlog } from '../../supabase/functions/_backend/plugin_runtime/utils/logging.ts'
+import { startPluginStateReadMetrics } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts'
 import { parsePluginStateShareBps, pluginStateBucket } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 import { handleSnippetEdgeStatsMessage } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
 import { getEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/utils.ts'
@@ -36,6 +37,7 @@ app.use('*', async (c, next) => {
     return
   }
   const startedAt = performance.now()
+  const reads = startPluginStateReadMetrics(c)
   await next()
   cloudlog({
     requestId: c.get('requestId'),
@@ -47,6 +49,7 @@ app.use('*', async (c, next) => {
     duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
     colo: c.req.raw.cf?.colo ?? null,
     sample_bps: share,
+    ...reads,
   })
 })
 

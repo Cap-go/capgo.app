@@ -59,6 +59,92 @@ describe('plugin state fenced publication', () => {
   })
 })
 
+describe('cleanup listing preconditions', () => {
+  it.concurrent('refreshes a tombstone fence from listing metadata without another GET', async () => {
+    const provider = publicationProviders()
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '1').delete(KEY)
+    provider.pointers.get.mockClear()
+    provider.pointers.put.mockClear()
+    const budget = { remaining: 3 }
+    const cleanup = createPluginStateSyncStore(provider.namespace, provider.pointers, '3', budget)
+    const listed = await cleanup.list({ prefix: 'ps1:v:', limit: 48 })
+    await cleanup.deleteListed(listed.keys[0])
+    expect(provider.pointers.list).toHaveBeenCalledWith({ prefix: 'ps1:v:', limit: 48, include: ['customMetadata'] })
+    expect(provider.pointers.get).not.toHaveBeenCalled()
+    expect(provider.pointers.put).toHaveBeenCalledTimes(1)
+    expect(budget.remaining).toBe(1)
+    const pointer = provider.objects.get(KEY)!
+    expect(JSON.parse(pointer.body)).toMatchObject({ generation: '3', kvKey: null })
+    expect(pointer.customMetadata).toEqual({ generation: '3' })
+  })
+
+  it.concurrent('fences a paused generation newer than the old tombstone after cleanup', async () => {
+    const provider = publicationProviders()
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '1').delete(KEY)
+    const oldImmutable = await pluginStateImmutableKey(KEY, '2')
+    const oldWriteStarted = Promise.withResolvers<void>()
+    const resumeOldWrite = Promise.withResolvers<void>()
+    const write = provider.namespace.put.getMockImplementation()!
+    provider.namespace.put.mockImplementation(async (key, value, options) => {
+      if (key === oldImmutable) {
+        oldWriteStarted.resolve()
+        await resumeOldWrite.promise
+      }
+      await write(key, value, options)
+    })
+    const late = createPluginStateSyncStore(provider.namespace, provider.pointers, '2').putJson(KEY, { id: 2 })
+    await oldWriteStarted.promise
+    const cleanup = createPluginStateSyncStore(provider.namespace, provider.pointers, '3')
+    const listed = await cleanup.list({ prefix: 'ps1:v:', limit: 48 })
+    await cleanup.deleteListed(listed.keys[0])
+    resumeOldWrite.resolve()
+    await late
+    expect(JSON.parse(provider.objects.get(KEY)!.body)).toMatchObject({ generation: '3', kvKey: null })
+    expect(provider.publishedValue(KEY)).toBeNull()
+  })
+
+  it.concurrent.each([undefined, 'invalid', '0', '9223372036854775808'])('reads legacy or invalid generation metadata before deleting: %s', async (generation) => {
+    const provider = publicationProviders()
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '1').delete(KEY)
+    const previous = provider.objects.get(KEY)!
+    provider.objects.set(KEY, { ...previous, customMetadata: generation === undefined ? undefined : { generation } })
+    provider.pointers.get.mockClear()
+    const cleanup = createPluginStateSyncStore(provider.namespace, provider.pointers, '3')
+    const listed = await cleanup.list({ prefix: 'ps1:v:', limit: 48 })
+    await cleanup.deleteListed(listed.keys[0])
+    expect(provider.pointers.get).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(provider.objects.get(KEY)!.body)).toMatchObject({ generation: '3', kvKey: null })
+  })
+
+  it.concurrent('refreshes a stale listing precondition and preserves a newer winner', async () => {
+    const provider = publicationProviders()
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '1').delete(KEY)
+    const cleanup = createPluginStateSyncStore(provider.namespace, provider.pointers, '3')
+    const listed = await cleanup.list({ prefix: 'ps1:v:', limit: 48 })
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '4').putJson(KEY, { id: 4 })
+    provider.pointers.get.mockClear()
+    provider.pointers.put.mockClear()
+    await cleanup.deleteListed(listed.keys[0])
+    expect(provider.pointers.get).toHaveBeenCalledTimes(1)
+    expect(provider.pointers.put).toHaveBeenCalledTimes(1)
+    expect(provider.publishedValue(KEY)).toEqual({ id: 4 })
+  })
+
+  it.concurrent('retries a stale listing ETag when the competing generation is older than cleanup', async () => {
+    const provider = publicationProviders()
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '1').delete(KEY)
+    const cleanup = createPluginStateSyncStore(provider.namespace, provider.pointers, '3')
+    const listed = await cleanup.list({ prefix: 'ps1:v:', limit: 48 })
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '2').putJson(KEY, { id: 2 })
+    provider.pointers.get.mockClear()
+    provider.pointers.put.mockClear()
+    await cleanup.deleteListed(listed.keys[0])
+    expect(provider.pointers.get).toHaveBeenCalledTimes(1)
+    expect(provider.pointers.put).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(provider.objects.get(KEY)!.body)).toMatchObject({ generation: '3', kvKey: null })
+  })
+})
+
 describe('plugin immutable state garbage collection', () => {
   it.concurrent('deletes obsolete generations after the grace period and retains the current value', async () => {
     const provider = publicationProviders()

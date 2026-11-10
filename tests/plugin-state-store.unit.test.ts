@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resetPluginStateMemory, startPluginStateRequest } from '../supabase/functions/_backend/plugin_runtime/utils/pluginState.ts'
 import { pluginStateAppKey, pluginStateImmutableKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { PluginStateMiss } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateRegistry.ts'
-import { readPublishedPluginState } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts'
+import { R2_POINTER_TIMEOUT_MS, readPublishedPluginState, startPluginStateReadMetrics } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts'
 
 const KEY = 'ps1:a:com.example.publication'
 
@@ -12,9 +12,67 @@ afterEach(() => {
   resetPluginStateMemory()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  vi.useRealTimers()
 })
 
 describe('published plugin state reader', () => {
+  it('falls back on a stalled R2 read and discards an object arriving after the deadline', async () => {
+    vi.useFakeTimers()
+    const pendingObject = Promise.withResolvers<{ json: ReturnType<typeof vi.fn>, body: { cancel: ReturnType<typeof vi.fn> } }>()
+    const get = vi.fn()
+    const json = vi.fn()
+    const cancel = vi.fn(async () => undefined)
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toBeInstanceOf(PluginStateMiss)
+      return c.json(metrics)
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get },
+      PLUGIN_STATE_POINTERS: { get: () => pendingObject.promise },
+    })
+    await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
+    expect(await (await request).json()).toMatchObject({ r2_pointer_reads: 1, r2_pointer_timeouts: 1, kv_value_reads: 0 })
+    pendingObject.resolve({ json, body: { cancel } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(json).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('also bounds an R2 body that stalls after the headers arrive', async () => {
+    vi.useFakeTimers()
+    const get = vi.fn()
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      await expect(readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)).rejects.toBeInstanceOf(PluginStateMiss)
+      return c.json({ fallback: true })
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get },
+      PLUGIN_STATE_POINTERS: { get: async () => ({ json: () => new Promise(() => {}) }) },
+    })
+    await vi.advanceTimersByTimeAsync(R2_POINTER_TIMEOUT_MS + 1)
+    expect(await (await request).json()).toEqual({ fallback: true })
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('records R2 and KV operations separately for sampled requests', async () => {
+    const current = await pluginStateImmutableKey(KEY, '2')
+    const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()
+    app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      await readPublishedPluginState(c, c.env.PLUGIN_STATE, KEY)
+      return c.json(metrics)
+    })
+    const response = await app.request('/', undefined, {
+      PLUGIN_STATE: { get: async () => ({ value: 'new' }) },
+      PLUGIN_STATE_POINTERS: { get: async () => ({ json: async () => ({ f: 1, generation: '2', kvKey: current }) }) },
+    })
+    expect(await response.json()).toMatchObject({ r2_pointer_reads: 1, r2_pointer_timeouts: 0, kv_value_reads: 1, r2_pointer_ms: expect.any(Number), kv_value_ms: expect.any(Number) })
+  })
+
   it('replaces parsed memory when a new generation shares the same build timestamp', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
