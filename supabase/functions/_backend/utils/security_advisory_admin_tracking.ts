@@ -1,9 +1,9 @@
 import type { Context } from 'hono'
 import type { Advisory, AdvisoryAffected } from '../../shared/security_advisory.ts'
-import { loadAppReportedPackagesOnClient } from './app_native_packages.ts'
 import type { PgQueryClient } from './pg.ts'
+import { loadAppReportedPackagesOnClient } from './app_native_packages.ts'
 import { closeClient, getPgClient } from './pg.ts'
-import { queryJson, queryJsonOne, servicePrincipal, withRlsTransaction } from './pg_rls.ts'
+import { queryJson, queryJsonOne } from './pg_rls.ts'
 import { loadSecurityAdvisoryBentoEmailStats } from './security_advisory_bento_stats.ts'
 import { loadSecurityAdvisoryFeed, SecurityAdvisoryFeedUnavailableError } from './security_advisory_feed.ts'
 import { matchAppPackagesToAdvisories, resolveAdvisoryStatus } from './security_advisory_matching.ts'
@@ -52,24 +52,6 @@ export interface AdminSecurityUpdatesTrackingResponse {
 
 const MAX_ADOPTION_APPS = 500
 
-function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow[] {
-  const rows: SecurityUpdatePatchRow[] = []
-  for (const advisory of advisories) {
-    for (const affected of advisory.affected) {
-      rows.push({
-        ghsa_id: advisory.ghsa_id,
-        advisory_title: advisory.title,
-        severity: advisory.severity,
-        package: affected.package,
-        affected_range: affected.affected_range,
-        patched_version: affected.patched_version,
-        created_at: advisory.published_at,
-      })
-    }
-  }
-  return rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
-}
-
 const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
         SELECT u.id
         FROM public.users u
@@ -90,14 +72,56 @@ const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
             AND a.owner_org IN (SELECT org_id FROM opted_orgs)
         ) AS apps_in_opted_in_orgs`
 
-async function withServiceRole<T>(c: Context, run: (client: PgQueryClient) => Promise<T>): Promise<T> {
-  const pg = await getPgClient(c)
-  try {
-    return await withRlsTransaction(pg, servicePrincipal, run)
+function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow[] {
+  const rows: SecurityUpdatePatchRow[] = []
+  for (const advisory of advisories) {
+    for (const affected of advisory.affected) {
+      rows.push({
+        ghsa_id: advisory.ghsa_id,
+        advisory_title: advisory.title,
+        severity: advisory.severity,
+        package: affected.package,
+        affected_range: affected.affected_range,
+        patched_version: affected.patched_version,
+        created_at: advisory.published_at,
+      })
+    }
   }
-  finally {
-    closeClient(c, pg)
+  return rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
+}
+
+async function loadOptInSummaryAndAppIds(client: PgQueryClient): Promise<{
+  optIn: SecurityUpdatesOptInSummary
+  appIds: string[]
+}> {
+  const optInRow = await queryJsonOne<SecurityUpdatesOptInSummary>(client, OPT_IN_SUMMARY_SQL)
+  const optIn = optInRow ?? { users_opted_in: 0, orgs_opted_in: 0, apps_in_opted_in_orgs: 0 }
+  const appRows = await queryJson<{ app_id: string }>(
+    client,
+    `SELECT a.app_id
+       FROM public.apps a
+       WHERE COALESCE(a.deleted, false) = false
+       ORDER BY a.stats_updated_at DESC NULLS LAST, a.app_id
+       LIMIT $1`,
+    [MAX_ADOPTION_APPS],
+  )
+  return { optIn, appIds: appRows.map(row => row.app_id) }
+}
+
+async function loadReportedPackagesForApps(
+  client: PgQueryClient,
+  appIds: string[],
+): Promise<Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>> {
+  const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
+  for (const appId of appIds) {
+    try {
+      perAppPackages.set(appId, await loadAppReportedPackagesOnClient(client, appId))
+    }
+    catch {
+      perAppPackages.set(appId, new Map())
+    }
   }
+  return perAppPackages
 }
 
 function summarizeAdoptionForAdvisory(
@@ -145,53 +169,24 @@ function summarizeAdoptionForAdvisory(
   }
 }
 
-async function loadOptInSummaryAndAppIds(c: Context): Promise<{
-  optIn: SecurityUpdatesOptInSummary
-  appIds: string[]
-}> {
-  return await withServiceRole(c, async (client) => {
-    const optInRow = await queryJsonOne<SecurityUpdatesOptInSummary>(client, OPT_IN_SUMMARY_SQL)
-    const optIn = optInRow ?? { users_opted_in: 0, orgs_opted_in: 0, apps_in_opted_in_orgs: 0 }
-    const appRows = await queryJson<{ app_id: string }>(
-      client,
-      `SELECT a.app_id
-       FROM public.apps a
-       WHERE COALESCE(a.deleted, false) = false
-       ORDER BY a.stats_updated_at DESC NULLS LAST, a.app_id
-       LIMIT $1`,
-      [MAX_ADOPTION_APPS],
-    )
-    return { optIn, appIds: appRows.map(row => row.app_id) }
-  })
-}
-
-async function loadReportedPackagesForApps(
-  c: Context,
-  appIds: string[],
-): Promise<Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>> {
-  const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
-  for (const appId of appIds) {
-    const packages = await withServiceRole(c, client => loadAppReportedPackagesOnClient(client, appId))
-    perAppPackages.set(appId, packages)
-  }
-  return perAppPackages
-}
-
 export async function buildAdminSecurityUpdatesTracking(
   c: Context,
 ): Promise<AdminSecurityUpdatesTrackingResponse> {
-  let feed
-  try {
-    feed = await loadSecurityAdvisoryFeed(c)
-  }
-  catch (error) {
-    if (error instanceof SecurityAdvisoryFeedUnavailableError)
-      throw error
-    throw error
-  }
+  const feed = await loadSecurityAdvisoryFeed(c)
 
-  const { optIn, appIds } = await loadOptInSummaryAndAppIds(c)
-  const perAppPackages = await loadReportedPackagesForApps(c, appIds)
+  const pg = await getPgClient(c)
+  let optIn: SecurityUpdatesOptInSummary
+  let appIds: string[]
+  let perAppPackages: Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>
+  try {
+    const loaded = await loadOptInSummaryAndAppIds(pg)
+    optIn = loaded.optIn
+    appIds = loaded.appIds
+    perAppPackages = await loadReportedPackagesForApps(pg, appIds)
+  }
+  finally {
+    closeClient(c, pg)
+  }
 
   const adoptionByAdvisory: Record<string, AdvisoryAdoptionSummary> = {}
   const advisories: SecurityAdvisoryAdminRow[] = []

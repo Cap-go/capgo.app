@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { AdminSecurityUpdatesTrackingResponse } from '../supabase/functions/_backend/utils/security_advisory_admin_tracking.ts'
 import {
+  fetchTestRequest,
   getAuthHeaders,
   getAuthHeadersForCredentials,
   getEndpointUrl,
@@ -15,7 +16,7 @@ describe('[GET] /private/admin_security_updates/tracking', () => {
   })
 
   it.concurrent('rejects unauthenticated requests', async () => {
-    const response = await fetch(getEndpointUrl('/private/admin_security_updates/tracking'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/admin_security_updates/tracking'), {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
     })
@@ -23,7 +24,7 @@ describe('[GET] /private/admin_security_updates/tracking', () => {
   })
 
   it.concurrent('rejects non-platform-admin users', async () => {
-    const response = await fetch(getEndpointUrl('/private/admin_security_updates/tracking'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/admin_security_updates/tracking'), {
       method: 'GET',
       headers: await getAuthHeaders(),
     })
@@ -33,7 +34,7 @@ describe('[GET] /private/admin_security_updates/tracking', () => {
   })
 
   it('returns tracking payload for platform admins', async () => {
-    const response = await fetch(getEndpointUrl('/private/admin_security_updates/tracking'), {
+    const response = await fetchTestRequest(getEndpointUrl('/private/admin_security_updates/tracking'), {
       method: 'GET',
       headers: adminHeaders,
     })
