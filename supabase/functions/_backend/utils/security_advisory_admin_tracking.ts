@@ -1,6 +1,6 @@
 import type { Context } from 'hono'
 import type { Advisory, AdvisoryAffected } from '../../shared/security_advisory.ts'
-import type { PgQueryClient } from './pg.ts'
+import type { PgClient } from './pg.ts'
 import { loadAppReportedPackagesOnClient } from './app_native_packages.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { queryJson, queryJsonOne } from './pg_rls.ts'
@@ -90,7 +90,7 @@ function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow
   return rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
-async function loadOptInSummaryAndAppIds(client: PgQueryClient): Promise<{
+async function loadOptInSummaryAndAppIds(client: PgClient): Promise<{
   optIn: SecurityUpdatesOptInSummary
   appIds: string[]
 }> {
@@ -109,7 +109,7 @@ async function loadOptInSummaryAndAppIds(client: PgQueryClient): Promise<{
 }
 
 async function loadReportedPackagesForApps(
-  client: PgQueryClient,
+  client: PgClient,
   appIds: string[],
 ): Promise<Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>> {
   const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
