@@ -11,7 +11,7 @@ export function buildPublicEmailOptOutPreferences(
   )
 }
 
-/** Default toggles on the public form (all on). Does not reflect stored account prefs. */
+/** Default toggles on the public form (all on). Opt-out saves must not change prefs the user left untouched. */
 export function defaultPublicEmailFormPreferences(keys: readonly string[]): Record<string, boolean> {
   return Object.fromEntries(keys.map(key => [key, true]))
 }
