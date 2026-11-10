@@ -70,21 +70,21 @@ describe('[GET] /private/security_updates/feed reported package sourcing', () =>
          app_id, name, owner_org, deleted, storage_provider, r2_path, checksum,
          native_packages, cli_version, user_id
        )
-       SELECT $1, 'core-placeholder-prod', a.owner_org, false, 'r2',
-         'orgs/' || a.owner_org::text || '/apps/' || $1 || '/core-placeholder-prod.zip',
-         'feedabc1', $2::jsonb, '1.9.0', a.user_id
-       FROM public.apps a WHERE a.app_id = $1
+       SELECT $1::text, 'core-placeholder-prod', a.owner_org, false, 'r2',
+         'orgs/' || a.owner_org::text || '/apps/' || $1::text || '/core-placeholder-prod.zip',
+         'feedabc1', ARRAY[$2::jsonb], '1.9.0', a.user_id
+       FROM public.apps a WHERE a.app_id = $1::text
        ON CONFLICT (name, app_id) DO NOTHING`,
       [appId, iosOnlyPackages],
     )
     const prodRows = await executeSQL<{ id: number }>(
-      `SELECT id FROM public.app_versions WHERE app_id = $1 AND name = 'core-placeholder-prod' LIMIT 1`,
+      `SELECT id FROM public.app_versions WHERE app_id = $1::text AND name = 'core-placeholder-prod' LIMIT 1`,
       [appId],
     )
     const prodVersionId = Number(prodRows[0]?.id)
     await executeSQL(
       `UPDATE public.channels SET version = $1, updated_at = NOW()
-       WHERE app_id = $2 AND name = 'production'`,
+       WHERE app_id = $2::text AND name = 'production'`,
       [prodVersionId, appId],
     )
     await executeSQL(
@@ -92,10 +92,10 @@ describe('[GET] /private/security_updates/feed reported package sourcing', () =>
          app_id, name, owner_org, deleted, storage_provider, r2_path, checksum,
          native_packages, cli_version, user_id
        )
-       SELECT $1, 'cli-latest-upload', a.owner_org, false, 'r2',
-         'orgs/' || a.owner_org::text || '/apps/' || $1 || '/cli-latest-upload.zip',
-         'feedabc2', '[]'::jsonb, '2.1.0', a.user_id
-       FROM public.apps a WHERE a.app_id = $1
+       SELECT $1::text, 'cli-latest-upload', a.owner_org, false, 'r2',
+         'orgs/' || a.owner_org::text || '/apps/' || $1::text || '/cli-latest-upload.zip',
+         'feedabc2', ARRAY[]::jsonb[], '2.1.0', a.user_id
+       FROM public.apps a WHERE a.app_id = $1::text
        ON CONFLICT (name, app_id) DO NOTHING`,
       [appId],
     )
