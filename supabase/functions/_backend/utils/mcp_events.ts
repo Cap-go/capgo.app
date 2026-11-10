@@ -241,7 +241,7 @@ function constantTimeEqual(a: string, b: string): boolean {
     return false
   let diff = 0
   for (let i = 0; i < a.length; i++)
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+    diff |= (a.codePointAt(i) ?? 0) ^ (b.codePointAt(i) ?? 0)
   return diff === 0
 }
 
