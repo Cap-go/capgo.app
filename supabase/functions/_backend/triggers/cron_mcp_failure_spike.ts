@@ -3,7 +3,7 @@ import type {
   McpFailureSpikeWebhookRow,
 } from '../utils/mcp_failure_spike_runner.ts'
 import { BRES, createHono, middlewareAPISecret } from '../utils/hono.ts'
-import { cloudlog, cloudlogErr } from '../utils/logging.ts'
+import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import {
   evaluateMcpFailureSpikeSubscriptions,
@@ -174,7 +174,7 @@ app.post('/', middlewareAPISecret, async (c) => {
             requestId: c.get('requestId'),
             message: 'MCP failure spike evaluation failed',
             webhookId: webhook.id,
-            error,
+            error: serializeError(error),
           })
         }
       }

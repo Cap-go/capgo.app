@@ -155,7 +155,7 @@ describe('failure spike cooldown claim and delivery restore', () => {
   const c = { get: () => undefined } as unknown as Context
 
   const baseWebhook = {
-    id: 1,
+    id: 'd7820000-0000-4000-8000-0000000000c1',
     org_id: baseArgs.org_id,
     name: 'MCP failure spike',
     secret: 'whsec_test_spike_claim_restore',
@@ -179,7 +179,7 @@ describe('failure spike cooldown claim and delivery restore', () => {
     const pg = {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
         if (sql.includes('RETURNING id'))
-          return { rows: claim ? [{ id: 1 }] : [] }
+          return { rows: claim ? [{ id: baseWebhook.id }] : [] }
         if (sql.includes('mcp_spike_last_fired_at = $2::timestamptz WHERE id = $1 AND mcp_spike_last_fired_at = $3')) {
           restores.push(params ?? [])
           return { rows: [] }
@@ -222,6 +222,25 @@ describe('failure spike cooldown claim and delivery restore', () => {
       now,
     )
     expect(result).toEqual({ fired: false, reason: 'delivery_failed' })
+    expect(restores).toHaveLength(1)
+    expect(restores[0]?.[1]).toBe(previousFiredAt)
+  })
+
+  it('restores cooldown when dispatch throws', async () => {
+    vi.mocked(dispatchMcpEventToWebhook).mockReset()
+    vi.mocked(dispatchMcpEventToWebhook).mockRejectedValueOnce(new Error('dispatch exploded'))
+    const previousFiredAt = '2026-11-09T12:00:00.000Z'
+    const { pg, restores } = mockPg(true)
+    const webhook = { ...baseWebhook, mcp_spike_last_fired_at: previousFiredAt }
+    await expect(evaluateMcpFailureSpikeSubscriptionFromMetrics(
+      c,
+      pg,
+      webhook,
+      baseArgs,
+      thresholds,
+      metrics,
+      now,
+    )).rejects.toThrow('dispatch exploded')
     expect(restores).toHaveLength(1)
     expect(restores[0]?.[1]).toBe(previousFiredAt)
   })

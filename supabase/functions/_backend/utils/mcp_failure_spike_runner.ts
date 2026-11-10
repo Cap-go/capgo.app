@@ -13,11 +13,6 @@ import { dispatchMcpEventToWebhook, type McpDeliverableWebhookRow } from './mcp_
 import { readStatsInsights, readStatsVersion } from './stats.ts'
 
 export type McpFailureSpikeWebhookRow = McpDeliverableWebhookRow & {
-  id: number
-  org_id: string
-  secret: string
-  url: string
-  mcp_arguments: Record<string, unknown> | null
   mcp_spike_last_fired_at: string | null
 }
 
