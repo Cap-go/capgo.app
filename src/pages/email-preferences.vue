@@ -112,7 +112,7 @@ const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
 const preferences = reactive<Record<PublicEmailPreferenceKey, boolean>>(
   Object.fromEntries(
-    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, key === 'security_updates' ? false : true]),
+    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, key !== 'security_updates']),
   ) as Record<PublicEmailPreferenceKey, boolean>,
 )
 
@@ -306,8 +306,8 @@ async function savePreferences() {
             <div class="space-y-3">
               <label
                 v-for="key in section.keys"
-                :key="key"
                 :id="key === 'security_updates' ? 'security-updates-email-public' : undefined"
+                :key="key"
                 :data-testid="key === 'security_updates' ? 'security-updates-email-toggle-public' : undefined"
                 class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
               >
