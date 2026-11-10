@@ -17,7 +17,7 @@ type Translate = (key: string, values?: Record<string, string | number>) => stri
 export const creditPricingMetricOrder: CreditMetricType[] = ['mau', 'bandwidth', 'storage', 'build_time']
 
 const creditPricingUnitLabelKeys: Record<CreditMetricType, string> = {
-  mau: 'credits-pricing-unit-per-mau',
+  mau: 'credits-pricing-unit-per-1k-users',
   bandwidth: 'credits-pricing-unit-per-gib',
   storage: 'credits-pricing-unit-per-gib',
   build_time: 'credits-pricing-unit-per-minute',
@@ -90,9 +90,11 @@ export function formatCreditPricingPrice(
   metric: CreditMetricType,
   pricePerUnit: number,
   t: Translate,
+  unitFactor = 1,
 ) {
+  const displayPrice = metric === 'mau' ? (pricePerUnit * 1000) / (unitFactor || 1) : pricePerUnit
   return t('credits-pricing-price', {
-    price: formatCreditPriceValue(pricePerUnit),
+    price: formatCreditPriceValue(displayPrice),
     unit: t(creditPricingUnitLabelKeys[metric]),
   })
 }
@@ -101,8 +103,8 @@ export function formatCreditPricingTierLabel(
   step: Pick<CreditPricingStep, 'type' | 'step_min' | 'step_max' | 'unit_factor'>,
   t: Translate,
 ) {
-  const minUnits = toBilledUnits(step, step.step_min)
-  const maxUnits = toBilledUnits(step, step.step_max)
+  const minUnits = step.type === 'mau' ? step.step_min : toBilledUnits(step, step.step_min)
+  const maxUnits = step.type === 'mau' ? step.step_max : toBilledUnits(step, step.step_max)
   const openEnded = isOpenEndedTier(step)
 
   if (step.step_min === 0) {
