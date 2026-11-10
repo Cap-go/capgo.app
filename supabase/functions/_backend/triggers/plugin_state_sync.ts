@@ -327,6 +327,8 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
     },
     delete: (key: string) => publish(key, null, true),
     deleteListed: (pointer: ListedPointer) => {
+      // Refresh tombstones too: an expired older publisher may still resume.
+      // A matching null digest suppresses purges, not the generation fence.
       const known = pointer.etag && isPluginStateGeneration(pointer.generation)
         ? { etag: pointer.etag, generation: pointer.generation, digest: pointer.digest }
         : undefined

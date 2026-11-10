@@ -80,7 +80,7 @@ describe('published plugin state reader', () => {
     expect(response.headers.get('X-Plugin-State')).toBe('error')
     expect(await response.json()).toMatchObject({ fallback: true, metrics: { r2_pointer_reads: 1, kv_value_reads: 1, kv_value_timeouts: 1 } })
     pending.resolve({ f: 1, app_id: appId, exists: false, built_at: Date.now() })
-    await Promise.resolve()
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(puts).not.toHaveBeenCalled()
   })
 

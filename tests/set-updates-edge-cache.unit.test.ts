@@ -48,7 +48,9 @@ describe('updates-edge-cache:set', () => {
 
   it.each(['PLUGIN_STATE_KV', 'PLUGIN_STATE_KV_AUTHORITATIVE', 'PLUGIN_STATE_KV_STRICT', 'PLUGIN_STATE_TIMING'])('rejects %s from shared bulk uploads without exposing its value', (key) => {
     expect(() => assertNoPluginStateBulkSettings(`OTHER_SETTING=ok\nexport ${key}="on"`)).toThrow('must stay out of shared bulk env files')
-    expect(() => assertNoPluginStateBulkSettings(`OTHER_SETTING=ok\n${key}=private-test-value`)).not.toThrow('private-test-value')
+    const check = () => assertNoPluginStateBulkSettings(`OTHER_SETTING=ok\n${key}=private-test-value`)
+    expect(check).toThrow('must stay out of shared bulk env files')
+    expect(check).not.toThrow('private-test-value')
   })
 
   it('allows ordinary bulk settings and commented rollout examples', () => {
