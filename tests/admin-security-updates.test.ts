@@ -37,7 +37,10 @@ describe('[GET] /private/admin_security_updates/tracking', () => {
       method: 'GET',
       headers: adminHeaders,
     })
-    expect(response.status).toBe(200)
+    if (response.status !== 200) {
+      const errBody = await response.text()
+      throw new Error(`Expected 200, got ${response.status}: ${errBody}`)
+    }
     const data = await response.json() as AdminSecurityUpdatesTrackingResponse
     expect(Array.isArray(data.patches)).toBe(true)
     expect(data.patches.length).toBeGreaterThan(0)

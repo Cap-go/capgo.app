@@ -51,7 +51,6 @@ export interface AdminSecurityUpdatesTrackingResponse {
 }
 
 const MAX_ADOPTION_APPS = 500
-const ADOPTION_CONCURRENCY = 20
 
 function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow[] {
   const rows: SecurityUpdatePatchRow[] = []
@@ -74,7 +73,7 @@ function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow
 const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
         SELECT u.id
         FROM public.users u
-        WHERE COALESCE((u.email_preferences ->> 'security_updates')::boolean, false) = true
+        WHERE u.email_preferences @> '{"security_updates": true}'::jsonb
       ),
       opted_orgs AS (
         SELECT DISTINCT ou.org_id
@@ -90,28 +89,6 @@ const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
           WHERE COALESCE(a.deleted, false) = false
             AND a.owner_org IN (SELECT org_id FROM opted_orgs)
         ) AS apps_in_opted_in_orgs`
-
-async function loadOptInSummary(c: Context): Promise<SecurityUpdatesOptInSummary> {
-  return await withServiceRole(c, async (client) => {
-    const row = await queryJsonOne<SecurityUpdatesOptInSummary>(client, OPT_IN_SUMMARY_SQL)
-    return row ?? { users_opted_in: 0, orgs_opted_in: 0, apps_in_opted_in_orgs: 0 }
-  })
-}
-
-async function loadAdoptionAppIds(c: Context): Promise<string[]> {
-  return await withServiceRole(c, async (client) => {
-    const rows = await queryJson<{ app_id: string }>(
-      client,
-      `SELECT a.app_id
-       FROM public.apps a
-       WHERE COALESCE(a.deleted, false) = false
-       ORDER BY a.stats_updated_at DESC NULLS LAST, a.app_id
-       LIMIT $1`,
-      [MAX_ADOPTION_APPS],
-    )
-    return rows.map(row => row.app_id)
-  })
-}
 
 async function withServiceRole<T>(c: Context, run: (client: PgQueryClient) => Promise<T>): Promise<T> {
   const pg = await getPgClient(c)
@@ -168,21 +145,29 @@ function summarizeAdoptionForAdvisory(
   }
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = []
-  let index = 0
-  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (index < items.length) {
-      const current = index++
-      results[current] = await worker(items[current]!)
-    }
+async function loadOptInAdoptionAndPackages(c: Context): Promise<{
+  optIn: SecurityUpdatesOptInSummary
+  appIds: string[]
+  perAppPackages: Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>
+}> {
+  return await withServiceRole(c, async (client) => {
+    const optInRow = await queryJsonOne<SecurityUpdatesOptInSummary>(client, OPT_IN_SUMMARY_SQL)
+    const optIn = optInRow ?? { users_opted_in: 0, orgs_opted_in: 0, apps_in_opted_in_orgs: 0 }
+    const appRows = await queryJson<{ app_id: string }>(
+      client,
+      `SELECT a.app_id
+       FROM public.apps a
+       WHERE COALESCE(a.deleted, false) = false
+       ORDER BY a.stats_updated_at DESC NULLS LAST, a.app_id
+       LIMIT $1`,
+      [MAX_ADOPTION_APPS],
+    )
+    const appIds = appRows.map(row => row.app_id)
+    const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
+    for (const appId of appIds)
+      perAppPackages.set(appId, await loadAppReportedPackagesOnClient(client, appId))
+    return { optIn, appIds, perAppPackages }
   })
-  await Promise.all(runners)
-  return results
 }
 
 export async function buildAdminSecurityUpdatesTracking(
@@ -198,16 +183,7 @@ export async function buildAdminSecurityUpdatesTracking(
     throw error
   }
 
-  const [optIn, appIds] = await Promise.all([
-    loadOptInSummary(c),
-    loadAdoptionAppIds(c),
-  ])
-
-  const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
-  await mapWithConcurrency(appIds, ADOPTION_CONCURRENCY, async (appId) => {
-    const packages = await withServiceRole(c, client => loadAppReportedPackagesOnClient(client, appId))
-    perAppPackages.set(appId, packages)
-  })
+  const { optIn, appIds, perAppPackages } = await loadOptInAdoptionAndPackages(c)
 
   const adoptionByAdvisory: Record<string, AdvisoryAdoptionSummary> = {}
   const advisories: SecurityAdvisoryAdminRow[] = []
