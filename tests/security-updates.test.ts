@@ -82,11 +82,17 @@ describe('[GET] /private/security_updates/feed reported package sourcing', () =>
       [appId],
     )
     const prodVersionId = Number(prodRows[0]?.id)
-    await executeSQL(
+    if (!Number.isFinite(prodVersionId))
+      throw new Error(`Missing core-placeholder-prod version for ${appId}`)
+    await executeSQL(`SELECT pg_catalog.set_config('capgo.seed_channel_targets', 'true', true)`)
+    const channelUpdates = await executeSQL<{ id: number }>(
       `UPDATE public.channels SET version = $1, updated_at = NOW()
-       WHERE app_id = $2::text AND name = 'production'`,
+       WHERE app_id = $2::text AND name = 'production'
+       RETURNING id`,
       [prodVersionId, appId],
     )
+    if (!channelUpdates[0]?.id)
+      throw new Error(`Failed to point production channel at core-placeholder-prod for ${appId}`)
     await executeSQL(
       `INSERT INTO public.app_versions (
          app_id, name, owner_org, deleted, storage_provider, r2_path, checksum,
