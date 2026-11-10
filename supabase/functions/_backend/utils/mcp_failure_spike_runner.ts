@@ -177,12 +177,12 @@ export async function evaluateMcpFailureSpikeSubscriptionFromMetrics(
   try {
     delivered = await dispatchMcpEventToWebhook(c, webhook, eventName, data)
   }
-  catch {
+  catch (error) {
     await pg.query(
       'UPDATE public.webhooks SET mcp_spike_last_fired_at = $2::timestamptz WHERE id = $1 AND mcp_spike_last_fired_at = $3::timestamptz',
       [webhook.id, previousFiredAt, now.toISOString()],
     )
-    throw
+    throw error
   }
   if (!delivered) {
     await pg.query(
