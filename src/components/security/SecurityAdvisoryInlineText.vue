@@ -19,7 +19,9 @@ defineProps<{
       class="text-azure-600 underline dark:text-azure-400"
       rel="noopener noreferrer"
       target="_blank"
-    >{{ part.text }}</a>
+    >
+      <SecurityAdvisoryInlineText :parts="part.parts" />
+    </a>
     <span v-else>{{ part.text }}</span>
   </template>
 </template>

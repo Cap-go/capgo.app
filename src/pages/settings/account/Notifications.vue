@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useConsole } from '~/services/console'
 import { useDisplayStore } from '~/stores/display'
 import { useMainStore } from '~/stores/main'
+import { defaultAccountEmailPref, resolveAccountEmailPref } from '~/utils/accountEmailPreferenceDefaults'
 // tabs handled by settings layout
 
 const { t } = useI18n()
@@ -36,10 +37,6 @@ interface EmailPreferences {
 
 type EmailPreferenceKey = keyof EmailPreferences
 
-function defaultEmailPref(key: EmailPreferenceKey): boolean {
-  return key !== 'security_updates'
-}
-
 const emailPrefs = computed<EmailPreferences>(() => {
   // email_preferences is a JSONB column added in migration 20251228064121
   const prefs = (main.user as any)?.email_preferences as EmailPreferences | null | undefined
@@ -47,7 +44,7 @@ const emailPrefs = computed<EmailPreferences>(() => {
 })
 
 function getEmailPref(key: EmailPreferenceKey): boolean {
-  return emailPrefs.value[key] ?? defaultEmailPref(key)
+  return resolveAccountEmailPref(emailPrefs.value, key)
 }
 
 async function submitNotif() {
@@ -95,7 +92,7 @@ async function toggleEmailPref(key: EmailPreferenceKey) {
 
   isLoading.value = true
   const currentPrefs = emailPrefs.value
-  const newValue = !(currentPrefs[key] ?? defaultEmailPref(key))
+  const newValue = !resolveAccountEmailPref(currentPrefs, key)
   const updatedPrefs = { ...currentPrefs, [key]: newValue }
 
   // email_preferences is a JSONB column added in migration 20251228064121

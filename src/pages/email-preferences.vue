@@ -111,6 +111,8 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY as string | undefined)
 const captchaToken = ref('')
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
+// Public save is opt-out only and does not load stored prefs. Default every toggle on so
+// an untouched Save does not clear security_updates for users who opted in on Account settings.
 const preferences = reactive<Record<PublicEmailPreferenceKey, boolean>>(
   defaultPublicEmailFormPreferences(PUBLIC_EMAIL_PREFERENCE_KEYS) as Record<PublicEmailPreferenceKey, boolean>,
 )

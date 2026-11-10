@@ -11,8 +11,8 @@ describe('advisoryInlineParts', () => {
     const parts = advisoryInlineParts('[docs](https://capgo.app/security/)')
     expect(parts[0]).toEqual({
       kind: 'link',
-      text: 'docs',
       href: 'https://capgo.app/security/',
+      parts: [{ kind: 'text', text: 'docs' }],
     })
   })
 })

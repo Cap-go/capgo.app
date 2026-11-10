@@ -38,7 +38,8 @@ async function login(page) {
 }
 
 async function capture(name, path, viewport) {
-  const page = await context.newPage({ viewport })
+  const page = await context.newPage()
+  await page.setViewportSize(viewport)
   await login(page)
   await page.goto(`${baseUrl}${path}`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(800)

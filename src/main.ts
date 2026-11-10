@@ -181,6 +181,13 @@ const newRoutes = routes.map((route) => {
   return route
 })
 const router = createRouter({
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition)
+      return savedPosition
+    if (to.hash)
+      return { el: to.hash, top: 0 }
+    return { top: 0 }
+  },
   routes: [
     { path: '/', redirect: '/login' },
     // Canonical apps list route

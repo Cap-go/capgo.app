@@ -21,6 +21,8 @@ const feed = ref<AppAdvisoryFeedResponse | null>(null)
 const items = computed(() => feed.value?.items ?? [])
 const hasItems = computed(() => items.value.length > 0)
 
+let loadGeneration = 0
+
 const feedGeneratedLabel = computed(() => {
   const raw = feed.value?.feed.generated_at
   if (!raw)
@@ -29,6 +31,7 @@ const feedGeneratedLabel = computed(() => {
 })
 
 async function loadFeed() {
+  const generation = ++loadGeneration
   if (!props.appId) {
     feed.value = null
     isLoading.value = false
@@ -38,6 +41,8 @@ async function loadFeed() {
   isLoading.value = true
   loadError.value = null
   const { data, error } = await fetchSecurityUpdatesFeed(props.appId)
+  if (generation !== loadGeneration)
+    return
   if (error) {
     loadError.value = t('security-updates-load-error')
     feed.value = null

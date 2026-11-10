@@ -1,6 +1,6 @@
 import { sanitizeHttpUrl } from '~/utils/sanitize'
 
-export type AdvisoryInlinePart = { kind: 'text' | 'bold' | 'code', text: string } | { kind: 'link', text: string, href: string }
+export type AdvisoryInlinePart = { kind: 'text' | 'bold' | 'code', text: string } | { kind: 'link', href: string, parts: AdvisoryInlinePart[] }
 
 export type AdvisoryMarkdownBlock = { kind: 'heading', parts: AdvisoryInlinePart[] } | { kind: 'paragraph', parts: AdvisoryInlinePart[] } | { kind: 'list', ordered: boolean, items: AdvisoryInlinePart[][] }
 
@@ -50,6 +50,27 @@ function readMarkdownLink(text: string, open: number) {
   return null
 }
 
+function advisoryLinkLabelParts(label: string): AdvisoryInlinePart[] {
+  const parts: AdvisoryInlinePart[] = []
+  const pattern = /\*\*(.+?)\*\*|`([^`]+)`/g
+  let last = 0
+  for (const match of label.matchAll(pattern)) {
+    const index = match.index ?? 0
+    if (index > last)
+      parts.push({ kind: 'text', text: label.slice(last, index) })
+    if (match[1]) {
+      parts.push({ kind: 'bold', text: match[1] })
+    }
+    else if (match[2]) {
+      parts.push({ kind: 'code', text: match[2] })
+    }
+    last = index + match[0].length
+  }
+  if (last < label.length)
+    parts.push({ kind: 'text', text: label.slice(last) })
+  return parts.length ? parts : [{ kind: 'text', text: label }]
+}
+
 function advisoryPlainTextParts(text: string): AdvisoryInlinePart[] {
   const parts: AdvisoryInlinePart[] = []
   let cursor = 0
@@ -71,10 +92,10 @@ function advisoryPlainTextParts(text: string): AdvisoryInlinePart[] {
 
     const safe = sanitizeHttpUrl(link.href)
     if (safe) {
-      parts.push({ kind: 'link', text: link.label, href: safe })
+      parts.push({ kind: 'link', href: safe, parts: advisoryLinkLabelParts(link.label) })
     }
     else {
-      parts.push({ kind: 'text', text: link.label })
+      parts.push(...advisoryLinkLabelParts(link.label))
     }
     cursor = link.end
   }

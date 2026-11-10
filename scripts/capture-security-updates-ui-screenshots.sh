@@ -10,11 +10,35 @@ LOG="${RUN_DIR}/tinbase.log"
 VITE_LOG="${RUN_DIR}/vite.log"
 TINBASE_DIR="${RUN_DIR}/tinbase"
 BACKEND_LOG="${RUN_DIR}/backend.log"
-BASE_REF="${SCREENSHOT_BASE_REF:-origin/cursor/security-updates-backend-dcf9}"
+BASE_REF="${SCREENSHOT_BASE_REF:-origin/main}"
 OUTPUT_DIR="docs/screenshots/security-updates-ui"
+GUARD_PATHS=(
+  "src/pages/settings/account/Notifications.vue"
+  "src/constants/observeTabs.ts"
+  "src/pages/app/[app].observe.security.vue"
+)
 
 mkdir -p "$OUTPUT_DIR"
-stash_message="security-updates-ui-screenshot-stash-$(date +%s)"
+
+assert_clean_worktree_paths() {
+  local path
+  for path in "${GUARD_PATHS[@]}"; do
+    if ! git diff --quiet -- "$path" || ! git diff --cached --quiet -- "$path"; then
+      echo "Refusing to run: uncommitted changes in $path (commit or stash first)." >&2
+      exit 1
+    fi
+  done
+}
+
+stop_vite() {
+  if [[ -n "${VITE_PID:-}" ]] && kill -0 "$VITE_PID" 2>/dev/null; then
+    kill "$VITE_PID" 2>/dev/null || true
+    wait "$VITE_PID" 2>/dev/null || true
+  fi
+  VITE_PID=""
+}
+
+assert_clean_worktree_paths
 
 cleanup() {
   kill "${TINBASE_PID:-}" 2>/dev/null || true
@@ -93,8 +117,7 @@ git checkout "$BASE_REF" -- src/pages/settings/account/Notifications.vue src/con
 start_vite
 sleep 3
 run_playwright_phase before
-kill "$VITE_PID" 2>/dev/null || true
-VITE_PID=""
+stop_vite
 sleep 2
 
 # --- After (PR head UI) ---
