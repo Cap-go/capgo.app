@@ -1,8 +1,9 @@
 import type { Context } from 'hono'
 import type { Advisory, AdvisoryAffected } from '../../shared/security_advisory.ts'
-import { loadAppReportedPackages } from './app_native_packages.ts'
+import { loadAppReportedPackagesOnClient } from './app_native_packages.ts'
+import type { PgQueryClient } from './pg.ts'
 import { closeClient, getPgClient } from './pg.ts'
-import { queryJson, queryJsonOne } from './pg_rls.ts'
+import { queryJson, queryJsonOne, servicePrincipal, withRlsTransaction } from './pg_rls.ts'
 import { loadSecurityAdvisoryBentoEmailStats } from './security_advisory_bento_stats.ts'
 import { loadSecurityAdvisoryFeed, SecurityAdvisoryFeedUnavailableError } from './security_advisory_feed.ts'
 import { matchAppPackagesToAdvisories, resolveAdvisoryStatus } from './security_advisory_matching.ts'
@@ -70,12 +71,7 @@ function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow
   return rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
-async function loadOptInSummary(c: Context): Promise<SecurityUpdatesOptInSummary> {
-  const pg = await getPgClient(c)
-  try {
-    const row = await queryJsonOne<SecurityUpdatesOptInSummary>(
-      pg,
-      `WITH opted_users AS (
+const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
         SELECT u.id
         FROM public.users u
         WHERE COALESCE((u.email_preferences ->> 'security_updates')::boolean, false) = true
@@ -93,20 +89,19 @@ async function loadOptInSummary(c: Context): Promise<SecurityUpdatesOptInSummary
           FROM public.apps a
           WHERE COALESCE(a.deleted, false) = false
             AND a.owner_org IN (SELECT org_id FROM opted_orgs)
-        ) AS apps_in_opted_in_orgs`,
-    )
+        ) AS apps_in_opted_in_orgs`
+
+async function loadOptInSummary(c: Context): Promise<SecurityUpdatesOptInSummary> {
+  return await withServiceRole(c, async (client) => {
+    const row = await queryJsonOne<SecurityUpdatesOptInSummary>(client, OPT_IN_SUMMARY_SQL)
     return row ?? { users_opted_in: 0, orgs_opted_in: 0, apps_in_opted_in_orgs: 0 }
-  }
-  finally {
-    closeClient(c, pg)
-  }
+  })
 }
 
 async function loadAdoptionAppIds(c: Context): Promise<string[]> {
-  const pg = await getPgClient(c)
-  try {
+  return await withServiceRole(c, async (client) => {
     const rows = await queryJson<{ app_id: string }>(
-      pg,
+      client,
       `SELECT a.app_id
        FROM public.apps a
        WHERE COALESCE(a.deleted, false) = false
@@ -115,6 +110,13 @@ async function loadAdoptionAppIds(c: Context): Promise<string[]> {
       [MAX_ADOPTION_APPS],
     )
     return rows.map(row => row.app_id)
+  })
+}
+
+async function withServiceRole<T>(c: Context, run: (client: PgQueryClient) => Promise<T>): Promise<T> {
+  const pg = await getPgClient(c)
+  try {
+    return await withRlsTransaction(pg, servicePrincipal, run)
   }
   finally {
     closeClient(c, pg)
@@ -124,7 +126,7 @@ async function loadAdoptionAppIds(c: Context): Promise<string[]> {
 function summarizeAdoptionForAdvisory(
   advisory: Advisory,
   appIds: string[],
-  perAppPackages: Map<string, Awaited<ReturnType<typeof loadAppReportedPackages>>>,
+  perAppPackages: Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>,
 ): AdvisoryAdoptionSummary {
   let appsPatched = 0
   let appsVulnerable = 0
@@ -201,9 +203,10 @@ export async function buildAdminSecurityUpdatesTracking(
     loadAdoptionAppIds(c),
   ])
 
-  const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackages>>>()
+  const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
   await mapWithConcurrency(appIds, ADOPTION_CONCURRENCY, async (appId) => {
-    perAppPackages.set(appId, await loadAppReportedPackages(c, appId))
+    const packages = await withServiceRole(c, client => loadAppReportedPackagesOnClient(client, appId))
+    perAppPackages.set(appId, packages)
   })
 
   const adoptionByAdvisory: Record<string, AdvisoryAdoptionSummary> = {}

@@ -47,12 +47,12 @@ function withCliVersion(map: Map<string, string>, cliVersion: string | null | un
   return map
 }
 
-async function loadProductionChannelReported(c: Context, appId: string): Promise<ReportedVersionsRow | null> {
-  const pg = await getPgClient(c)
-  try {
-    return await queryJsonOne<ReportedVersionsRow>(
-      pg,
-      `SELECT av.native_packages, av.cli_version
+type ReportedVersionsClient = { query: (queryText: string, values?: unknown[]) => Promise<unknown> }
+
+async function loadProductionChannelReportedOnClient(client: ReportedVersionsClient, appId: string): Promise<ReportedVersionsRow | null> {
+  return await queryJsonOne<ReportedVersionsRow>(
+    client,
+    `SELECT av.native_packages, av.cli_version
        FROM public.channels ch
        INNER JOIN public.app_versions av ON av.id = ch.version
        WHERE ch.app_id = $1
@@ -60,39 +60,46 @@ async function loadProductionChannelReported(c: Context, appId: string): Promise
          AND ch.version IS NOT NULL
          AND COALESCE(av.deleted, false) = false
        LIMIT 1`,
-      [appId],
-    )
+    [appId],
+  )
+}
+
+async function loadProductionChannelReported(c: Context, appId: string): Promise<ReportedVersionsRow | null> {
+  const pg = await getPgClient(c)
+  try {
+    return await loadProductionChannelReportedOnClient(pg, appId)
   }
   finally {
     closeClient(c, pg)
   }
 }
 
-async function loadLatestUploadReported(c: Context, appId: string): Promise<ReportedVersionsRow | null> {
-  const pg = await getPgClient(c)
-  try {
-    const rows = await queryJson<ReportedVersionsRow>(
-      pg,
-      `SELECT av.native_packages, av.cli_version
+async function loadLatestUploadReportedOnClient(client: ReportedVersionsClient, appId: string): Promise<ReportedVersionsRow | null> {
+  const rows = await queryJson<ReportedVersionsRow>(
+    client,
+    `SELECT av.native_packages, av.cli_version
        FROM public.app_versions av
        WHERE av.app_id = $1
          AND COALESCE(av.deleted, false) = false
        ORDER BY av.id DESC
        LIMIT 1`,
-      [appId],
-    )
-    return rows[0] ?? null
+    [appId],
+  )
+  return rows[0] ?? null
+}
+
+async function loadLatestUploadReported(c: Context, appId: string): Promise<ReportedVersionsRow | null> {
+  const pg = await getPgClient(c)
+  try {
+    return await loadLatestUploadReportedOnClient(pg, appId)
   }
   finally {
     closeClient(c, pg)
   }
 }
 
-/** Native and CLI versions already reported on bundles for this app (no new SDK fields). */
-export async function loadAppReportedPackages(c: Context, appId: string): Promise<Map<string, string>> {
-  const production = await loadProductionChannelReported(c, appId)
-  const latest = await loadLatestUploadReported(c, appId)
-  const nativeRow = production ?? latest
+function buildReportedPackageMap(nativeRow: ReportedVersionsRow | null, latestRow: ReportedVersionsRow | null): Map<string, string> {
+  const latest = latestRow
   const map = filterInScopePackages(
     toNativePackageMap(nativeRow?.native_packages as NativePackage[] | null | undefined),
   )
@@ -103,4 +110,20 @@ export async function loadAppReportedPackages(c: Context, appId: string): Promis
   if (!map.has(cliKey))
     map.set(cliKey, '')
   return map
+}
+
+/** Same as loadAppReportedPackages but on an existing query client (for service-role aggregation). */
+export async function loadAppReportedPackagesOnClient(client: ReportedVersionsClient, appId: string): Promise<Map<string, string>> {
+  const production = await loadProductionChannelReportedOnClient(client, appId)
+  const latest = await loadLatestUploadReportedOnClient(client, appId)
+  const nativeRow = production ?? latest
+  return buildReportedPackageMap(nativeRow, latest)
+}
+
+/** Native and CLI versions already reported on bundles for this app (no new SDK fields). */
+export async function loadAppReportedPackages(c: Context, appId: string): Promise<Map<string, string>> {
+  const production = await loadProductionChannelReported(c, appId)
+  const latest = await loadLatestUploadReported(c, appId)
+  const nativeRow = production ?? latest
+  return buildReportedPackageMap(nativeRow, latest)
 }
