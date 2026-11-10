@@ -11,6 +11,7 @@ import {
 import { dispatchMcpEventToWebhook, MCP_EVENT_CATALOG } from '../supabase/functions/_backend/utils/mcp_events.ts'
 import {
   evaluateMcpFailureSpikeSubscriptionFromMetrics,
+  evaluateMcpFailureSpikeSubscriptions,
   type McpFailureSpikeWebhookRow,
 } from '../supabase/functions/_backend/utils/mcp_failure_spike_runner.ts'
 
@@ -138,6 +139,73 @@ describe('mcp failure spike policy', () => {
     const entry = MCP_EVENT_CATALOG.find(event => event.name === 'update.failure_spike')
     expect(entry?.recommendedDefaults).toMatchObject(MCP_FAILURE_SPIKE_RECOMMENDED_DEFAULTS)
     expect(entry?.recommendedDefaultsNote).toContain('device count')
+  })
+})
+
+describe('evaluateMcpFailureSpikeSubscriptions app owner', () => {
+  const now = new Date('2026-11-10T12:00:00.000Z')
+  const metrics = {
+    failures: 20,
+    checks: 100,
+    version: '1.0.0',
+    topFailureActionCodes: [] as { action: string, count: number }[],
+    windowStart: '2026-11-10T11:45:00.000Z',
+    windowEnd: now.toISOString(),
+  }
+  const c = { get: () => undefined } as unknown as Context
+  const spikeWebhook = {
+    id: 'd7820000-0000-4000-8000-0000000000c2',
+    org_id: baseArgs.org_id,
+    name: 'MCP failure spike',
+    secret: 'whsec_test_spike_owner',
+    url: 'https://hooks.example.com/capgo/mcp/spike',
+    enabled: true,
+    events: ['update.failure_spike'],
+    delivery_version: 'standard',
+    created_at: now.toISOString(),
+    created_by: '6aa76066-55ef-4238-ade6-0b32334a4097',
+    updated_at: now.toISOString(),
+    source: 'mcp',
+    mcp_event: 'update.failure_spike',
+    mcp_arguments: baseArgs,
+    mcp_verified_at: now.toISOString(),
+    expires_at: null,
+    mcp_spike_last_fired_at: null,
+  } as unknown as McpFailureSpikeWebhookRow
+
+  it('returns app_owner_mismatch when the app is missing from the owner map', async () => {
+    vi.mocked(dispatchMcpEventToWebhook).mockClear()
+    const query = vi.fn()
+    const pg = { query } as unknown as PgClient
+    const result = await evaluateMcpFailureSpikeSubscriptions(
+      c,
+      pg,
+      spikeWebhook,
+      now,
+      new Map(),
+      metrics,
+    )
+    expect(result).toEqual({ fired: false, reason: 'app_owner_mismatch' })
+    expect(dispatchMcpEventToWebhook).not.toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it('returns app_owner_mismatch when apps.owner_org differs from webhook.org_id', async () => {
+    vi.mocked(dispatchMcpEventToWebhook).mockClear()
+    const query = vi.fn()
+    const pg = { query } as unknown as PgClient
+    const owners = new Map<string, string>([[baseArgs.app_id, 'b1c2d3e4-f5a6-4b70-8c9d-0e1f2a3b4c5d']])
+    const result = await evaluateMcpFailureSpikeSubscriptions(
+      c,
+      pg,
+      spikeWebhook,
+      now,
+      owners,
+      metrics,
+    )
+    expect(result).toEqual({ fired: false, reason: 'app_owner_mismatch' })
+    expect(dispatchMcpEventToWebhook).not.toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalled()
   })
 })
 

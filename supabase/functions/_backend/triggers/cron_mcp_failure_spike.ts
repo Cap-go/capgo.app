@@ -149,8 +149,20 @@ app.post('/', middlewareAPISecret, async (c) => {
       const key = metricsGroupKey(group.appId, group.channel, group.windowMinutes)
       let metrics = metricsCache.get(key)
       if (!metrics) {
-        metrics = await gatherFailureSpikeMetrics(c, group.appId, group.channel, group.windowMinutes, now)
-        metricsCache.set(key, metrics)
+        try {
+          metrics = await gatherFailureSpikeMetrics(c, group.appId, group.channel, group.windowMinutes, now)
+          metricsCache.set(key, metrics)
+        }
+        catch (error) {
+          cloudlogErr({
+            requestId: c.get('requestId'),
+            message: 'MCP failure spike metrics gather failed',
+            appId: group.appId,
+            channel: group.channel ?? null,
+            error: serializeError(error),
+          })
+          return
+        }
       }
 
       for (const webhook of group.webhooks) {
