@@ -8,6 +8,7 @@ import Toggle from '~/components/Toggle.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { parseEmailPreferencesQuery } from '~/utils/emailPreferencesIdentity'
+import { buildPublicEmailOptOutPreferences, defaultPublicEmailFormPreferences } from '~/utils/publicEmailPreferenceOptOut'
 import { safeResetTurnstile } from '~/utils/turnstile'
 
 const PUBLIC_EMAIL_PREFERENCE_KEYS = [
@@ -24,6 +25,7 @@ const PUBLIC_EMAIL_PREFERENCE_KEYS = [
   'device_error',
   'channel_self_rejected',
   'bundle_incompatible',
+  'security_updates',
 ] as const
 
 type PublicEmailPreferenceKey = typeof PUBLIC_EMAIL_PREFERENCE_KEYS[number]
@@ -52,6 +54,10 @@ const PREFERENCE_SECTIONS: {
     titleKey: 'notifications-onboarding',
     keys: ['onboarding', 'builder_onboarding'],
   },
+  {
+    titleKey: 'notifications-security-advisories',
+    keys: ['security_updates'],
+  },
 ]
 
 const PREFERENCE_LABEL_KEYS: Record<PublicEmailPreferenceKey, string> = {
@@ -68,6 +74,7 @@ const PREFERENCE_LABEL_KEYS: Record<PublicEmailPreferenceKey, string> = {
   device_error: 'notifications-device-error',
   channel_self_rejected: 'notifications-channel-self-rejected',
   bundle_incompatible: 'notifications-bundle-incompatible',
+  security_updates: 'notifications-security-updates',
 }
 
 const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
@@ -84,6 +91,7 @@ const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
   device_error: 'notifications-device-error-desc',
   channel_self_rejected: 'notifications-channel-self-rejected-desc',
   bundle_incompatible: 'notifications-bundle-incompatible-desc',
+  security_updates: 'notifications-security-updates-desc',
 }
 
 const { t } = useI18n()
@@ -103,10 +111,10 @@ const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY as string | undefined)
 const captchaToken = ref('')
 const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
+// Public save is opt-out only and does not load stored prefs. Default every toggle on so
+// an untouched Save does not clear security_updates for users who opted in on Account settings.
 const preferences = reactive<Record<PublicEmailPreferenceKey, boolean>>(
-  Object.fromEntries(
-    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, true]),
-  ) as Record<PublicEmailPreferenceKey, boolean>,
+  defaultPublicEmailFormPreferences(PUBLIC_EMAIL_PREFERENCE_KEYS) as Record<PublicEmailPreferenceKey, boolean>,
 )
 
 const emailLooksValid = computed(() => {
@@ -178,10 +186,10 @@ async function savePreferences() {
   isSaving.value = true
   isSaved.value = false
   try {
-    const optOutPreferences = Object.fromEntries(
-      PUBLIC_EMAIL_PREFERENCE_KEYS
-        .filter(key => unsubscribeAll.value || preferences[key] === false)
-        .map(key => [key, false]),
+    const optOutPreferences = buildPublicEmailOptOutPreferences(
+      preferences,
+      unsubscribeAll.value,
+      PUBLIC_EMAIL_PREFERENCE_KEYS,
     )
 
     const { data, error } = await invokeCapgoApi<{ status?: string }>('private/email_preferences', {
@@ -299,7 +307,9 @@ async function savePreferences() {
             <div class="space-y-3">
               <label
                 v-for="key in section.keys"
+                :id="key === 'security_updates' ? 'security-updates-email-public' : undefined"
                 :key="key"
+                :data-testid="key === 'security_updates' ? 'security-updates-email-toggle-public' : undefined"
                 class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
               >
                 <span>
