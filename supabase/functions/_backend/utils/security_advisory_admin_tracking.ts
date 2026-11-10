@@ -5,7 +5,7 @@ import { loadAppReportedPackagesOnClient } from './app_native_packages.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { queryJson, queryJsonOne } from './pg_rls.ts'
 import { loadSecurityAdvisoryBentoEmailStats } from './security_advisory_bento_stats.ts'
-import { loadSecurityAdvisoryFeed, SecurityAdvisoryFeedUnavailableError } from './security_advisory_feed.ts'
+import { loadSecurityAdvisoryFeed } from './security_advisory_feed.ts'
 import { matchAppPackagesToAdvisories, resolveAdvisoryStatus } from './security_advisory_matching.ts'
 
 export interface SecurityUpdatePatchRow {
