@@ -46,7 +46,7 @@ describe('cleanup_expired_mcp_webhooks', () => {
     await pgPool.query(
       `INSERT INTO public.orgs (id, name, management_email, created_by, customer_id)
        VALUES ($1, $2, $3, $4, $5)`,
-      [orgId, 'MCP cleanup org', TEST_EMAIL, USER_ID, customerId],
+      [orgId, `MCP cleanup org ${randomUUID()}`, TEST_EMAIL, USER_ID, customerId],
     )
 
     await pgPool.query(
