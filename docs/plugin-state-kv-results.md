@@ -1,6 +1,6 @@
 # Local immutable KV and R2 comparison
 
-Measured 2026-11-10T04:48:15.307Z at runtime commit `dcd6f5e404`. This run uses local workerd and PostgreSQL, immutable Workers KV values selected by conditional R2 pointers, and the isolated plugin-state Cache API entries. Per-provider timing sampling was explicitly off during the benchmark. The timings predate the subsequent archived-app and explicit-enqueue failure fixes; those failure paths are covered by regression tests, not timed by this run.
+Measured 2026-11-10T04:48:15.307Z at runtime commit `dcd6f5e404`. This run uses local workerd and PostgreSQL, immutable Workers KV values selected by conditional R2 pointers, and the isolated plugin-state Cache API entries. Per-provider timing sampling was explicitly off during the benchmark. The timings predate the subsequent archived-app, repair-backoff and explicit-enqueue fixes; those paths are covered by regression tests, not timed by this run.
 
 Most measured request types were faster through KV/R2 in this local fixture. Warm manifest-size maps were essentially unchanged: p50 was 1.303 ms through KV/R2 versus 1.286 ms through the DB cohort's Cache API fast path. After tag purge, the isolated KV/R2 manifest map was slower than the untagged DB map that remained warm. New bundle visibility also took longer on the KV/R2 path in the single publication observation below. These results do not establish worldwide latency, equal release freshness, or production cost savings. Keep rollout off until regional measurements pass both request-latency and change-visibility gates.
 
@@ -64,9 +64,9 @@ Single operations on independent, fresh devices per mode. Both devices follow th
 
 Local checks after the canary and repair-recovery fixes:
 
-- Strict KV plugin suite: 168 passed, 146 intentionally skipped Cloudflare-inapplicable cases. KV mode rejects escaped SQL reads. Real Worker regressions cover channel promotion and app deletion while the full-repair failure remains archived and no full continuation is pending.
+- Strict KV plugin suite: 170 passed, 146 intentionally skipped Cloudflare-inapplicable cases. KV mode rejects escaped SQL reads. Real Worker regressions cover channel promotion/app deletion during archived repair and forced overrides during full-repair backoff, with both inline state and 501 overrides using per-device keys. The saved cursor, attempt count and incomplete marker remain unchanged during those ordinary updates. Fixture-specific count jobs are cleaned up without touching other tests' work.
 - Fresh-schema PostgreSQL queue and grant contracts: 25 passed, including repair cursors in backoff surviving unrelated ACKs, explicit repair clearing prior completion markers, older ACKs preserving newer reset work, resetting exhausted pending budgets while retaining live leases, pending-only deleted app repair, and atomic enqueue failure.
-- Focused unit checks: 269 passed across 24 files, including conservative purges after a crash before ACK, preventing implicit restarts of archived full scans, and publishing current app snapshots/tombstones without restarting archived work.
+- Focused unit checks: 269 passed across 24 files, including conservative purges after a crash before ACK, preventing implicit full-scan restarts, publishing current app snapshots/tombstones during repair backoff or archived work, and consuming independent full document budgets with distinct keys across requests.
 - Internal script dry runs, backend lint/typecheck, plugin isolation, production API Worker dry build, and plugin size check passed.
 - Snippet build size: 20.85 KB. Plugin Worker dry build: 501.97 KiB, gzip 149.98 KiB.
 - Previously validated disabled-Vault prerequisite: the benchmark rejected startup before fixture creation, and the app count remained unchanged.
@@ -78,7 +78,7 @@ The independent stats-sink unit test verifies both batch events reach the analyt
 
 ## Remaining rollout gates
 
-These measurements include the cache-isolation and writer-liveness implementation at `dcd6f5e404`, before the later archived-app and explicit-enqueue failure fixes. They use local PostgreSQL, not a production replica or Hyperdrive cache. Production trigger/queue wakeup latency is unmeasured: the publication probe manually invokes the writer drain and local purge.
+These measurements include the cache-isolation and writer-liveness implementation at `dcd6f5e404`, before the later archived-app, repair-backoff and explicit-enqueue fixes. They use local PostgreSQL, not a production replica or Hyperdrive cache. Production trigger/queue wakeup latency is unmeasured: the publication probe manually invokes the writer drain and local purge.
 
 The 90%/99% document-cache hit scenarios in the PR body are optimistic assumptions, not forecasts. With a fixed 30-second TTL and a simple Poisson request model, 90% requires about 0.3 requests/second **per document per location**, and 99% requires about 3.3. Many app/location pairs can be much colder even when global traffic is high. Derive the hit distribution from per-location production observations, including invalidations.
 

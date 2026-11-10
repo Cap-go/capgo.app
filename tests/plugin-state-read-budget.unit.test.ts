@@ -45,10 +45,14 @@ describe('plugin state request document budget', () => {
   it('does not share a consumed budget with the next device request', async () => {
     const app = new Hono()
     app.get('/', async (c) => {
-      const result = await withPluginStateDocument(c, 'one-key', async () => true)
-      return c.json({ result })
+      const results = await Promise.all(Array.from({ length: MAX_PLUGIN_STATE_DOCUMENTS }, (_, index) =>
+        withPluginStateDocument(c, `request-${c.req.query('request')}-key-${index}`, async () => true)))
+      return c.json(results)
     })
-    const responses = await Promise.all(Array.from({ length: 20 }, () => app.request('/')))
-    expect(responses.every(response => response.status === 200)).toBe(true)
+    for (let request = 0; request < 3; request++) {
+      const response = await app.request(`/?request=${request}`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(Array.from({ length: MAX_PLUGIN_STATE_DOCUMENTS }, () => true))
+    }
   })
 })

@@ -128,7 +128,7 @@ describe('plugin state same-app reclaim', () => {
     expect(storage.publishedValue(await pluginStateVersionKey('com.test.cooldown', '1.0.0'))).toMatchObject({ id: 100 })
   })
 
-  it('defers a new device job while its full continuation is waiting in backoff', async () => {
+  it('publishes new device state without restarting a full continuation waiting in backoff', async () => {
     const storage = publicationProviders()
     const acks: Statement[] = []
     const dialect = new PgDialect()
@@ -147,11 +147,13 @@ describe('plugin state same-app reclaim', () => {
     const app = new Hono<MiddlewareKeyVariables>()
     app.post('/', async c => c.json(await drainPluginStateSync(c)))
     const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
-    expect(await response.json()).toEqual({ claims: 1, apps: 0, failed: 0 })
-    expect(argument(acks[0], 'p_deferred')).toEqual(['com.test.full-backoff'])
+    expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(argument(acks[0], 'p_done')).toEqual(['com.test.full-backoff'])
+    expect(argument(acks[0], 'p_deferred')).toEqual([])
     expect(argument(acks[0], 'p_continuations')).toBe('{}')
-    expect(storage.namespace.put).not.toHaveBeenCalled()
-    expect(storage.pointers.put).not.toHaveBeenCalled()
+    expect(argument(acks[0], 'p_full_done')).toEqual([])
+    expect(storage.publishedValue(await pluginStateDeviceKey('com.test.full-backoff', 'fixture-device'))).toEqual({ channel_id: null })
+    expect(storage.publishedValue(await pluginStateAppKey('com.test.full-backoff'))).toMatchObject({ exists: false })
   })
 
   it('queues a conservative purge when retrying already-published identical content', async () => {

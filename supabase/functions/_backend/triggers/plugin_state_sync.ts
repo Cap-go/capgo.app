@@ -779,10 +779,6 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     const manifestIds = refsOf('manifest').map(Number).filter(id => Number.isSafeInteger(id) && id > 0)
     const wantsApp = item.jobs.some(job => job.kind === 'app') || deviceIds.length > 0
     const syncStatus = wantsApp && fullJobs.length === 0 ? await readSyncStatus(source, appId) : null
-    // This also applies to repairs of previously completed apps. The old
-    // completion marker must not let newer jobs overtake a cursor in backoff.
-    if (syncStatus?.pending_full)
-      return { appId, ok: false, deferred: true }
     const needsFull = fullJobs.length > 0 || Boolean(syncStatus && !syncStatus.fully_synced && !syncStatus.archived_full)
 
     // Single keys first: they read the database now, so they are never older
@@ -794,10 +790,10 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     if (manifestIds.length > 0)
       await syncManifests(source, store, manifestIds)
 
-    // A failed history scan must not freeze current channels, plan or app
-    // deletion. Publish only the bounded app snapshot; missing independent
-    // dependencies use replicas, without restarting manifest/history work.
-    if (syncStatus?.archived_full) {
+    // A pending or failed history scan must not freeze current overrides,
+    // channels, plan or app deletion. Publish the bounded app snapshot without
+    // restarting that scan; missing independent dependencies use replicas.
+    if (syncStatus?.pending_full || syncStatus?.archived_full) {
       if (wantsApp) {
         const { doc } = await buildAppDoc(source, appId)
         if (doc.exists)

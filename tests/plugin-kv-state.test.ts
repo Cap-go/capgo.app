@@ -11,7 +11,7 @@ import {
   probePluginState,
   syncPluginState,
 } from '../scripts/benchmark-plugin-state.ts'
-import { createAppVersions, executeSQL, insertManifestRows } from './test-utils.ts'
+import { API_SECRET, CLOUDFLARE_API_URL, createAppVersions, executeSQL, insertManifestRows } from './test-utils.ts'
 
 describe.skipIf(process.env.PLUGIN_STATE_KV_TESTS !== 'true')('KV and replica plugin response parity', () => {
   let fixture: PluginStateFixture
@@ -228,4 +228,54 @@ describe.skipIf(process.env.PLUGIN_STATE_KV_TESTS !== 'true')('KV and replica pl
       await syncPluginState()
     }
   }, 60_000)
+
+  it.each(['inline', 'per-device'])('publishes %s overrides during full-repair backoff without losing its cursor', async (mode) => {
+    const isolated = await createPluginStateFixture()
+    try {
+      await executeSQL(`INSERT INTO public.channel_devices (app_id, device_id, channel_id)
+        SELECT app_id, $2, id FROM public.channels WHERE app_id = $1 AND name = 'production'`, [isolated.appId, isolated.base.device_id])
+      if (mode === 'per-device') {
+        await executeSQL(`INSERT INTO public.channel_devices (app_id, device_id, channel_id)
+          SELECT c.app_id, 'backoff-device-' || n, c.id FROM public.channels c
+          CROSS JOIN generate_series(1, 500) AS n WHERE c.app_id = $1 AND c.name = 'production'`, [isolated.appId])
+      }
+      // The scheduler is quiesced: materialize the count that enables forced
+      // override reads on both the replica and KV paths.
+      await executeSQL('UPDATE public.apps SET channel_device_count = $2::integer WHERE app_id = $1', [isolated.appId, mode === 'per-device' ? 501 : 1])
+      await syncPluginState([isolated.appId])
+      const probe = isolated.updateProbe()
+      const before = await comparePluginState(probe)
+      expect(before.kv.body).toMatchObject({ version: isolated.stable.name })
+      const cursor = JSON.stringify({ p: 'devices', after: 'backoff-device-250' })
+      await executeSQL(`INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, due_at, attempts)
+        VALUES ($1, 'full', $2, now() + interval '5 minutes', 1)`, [isolated.appId, cursor])
+      await executeSQL('UPDATE public.plugin_state_sync_apps SET full_synced_at = NULL WHERE app_id = $1', [isolated.appId])
+      await executeSQL(`UPDATE public.channel_devices SET channel_id = (
+        SELECT id FROM public.channels WHERE app_id = $1 AND name = 'beta')
+        WHERE app_id = $1 AND device_id = $2`, [isolated.appId, isolated.base.device_id])
+      // A complete-drain helper would correctly wait for the future cursor.
+      // Run one bounded invocation to process the due override change only.
+      const response = await fetch(`${CLOUDFLARE_API_URL}/triggers/plugin_state_sync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', apisecret: API_SECRET },
+        body: JSON.stringify({ drain: true }),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ failed: 0 })
+      const after = await comparePluginState(probe)
+      expect(after.kv.body).toMatchObject({ version: isolated.next.name })
+      const pending = await executeSQL<{ ref: string, attempts: number }>(`SELECT ref, attempts
+        FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'full'`, [isolated.appId])
+      expect(pending).toEqual([{ ref: cursor, attempts: 1 }])
+      const [sync] = await executeSQL<{ complete: boolean }>('SELECT full_synced_at IS NOT NULL AS complete FROM public.plugin_state_sync_apps WHERE app_id = $1', [isolated.appId])
+      expect(sync.complete).toBe(false)
+    }
+    finally {
+      await executeSQL('DELETE FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = \'full\'', [isolated.appId])
+      await isolated.cleanup()
+      // Leave other tests' deferred counts untouched when removing this
+      // fixture's bulk override rows.
+      await executeSQL('DELETE FROM pgmq.q_channel_device_counts WHERE message ->> \'app_id\' = $1', [isolated.appId])
+      await syncPluginState()
+    }
+  }, 120_000)
 })

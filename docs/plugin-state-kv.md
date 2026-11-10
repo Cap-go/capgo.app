@@ -183,8 +183,11 @@ Each new claim uses a fresh generation and fresh source snapshots. Empty
 claims blocked only by cooldown/lease return a bounded retry delay; the drain
 can reclaim within its remaining 20-second budget instead of waiting solely
 for the periodic tick. A full job is included ahead of ordinary backlog rows,
-and a full job in backoff defers an implicit restart, including repairs of
-previously completed apps. ACK collapses full continuations only when the
+and a full job in backoff blocks an implicit restart, including repairs of
+previously completed apps. Ordinary version/device keys and bounded app
+snapshots still publish, so forced overrides do not wait for that cursor's
+backoff. ACK settles those ordinary jobs without changing the cursor or
+claiming full completion. ACK collapses full continuations only when the
 lease held full work or supplies a continuation; an unrelated acknowledgement
 preserves a cursor in backoff. It persists progress atomically under a live
 lease, preserving newer explicit reset requests. Explicit repair clears the
@@ -200,13 +203,15 @@ Successful, failed, and deferred settlements enforce a per-app cooldown so
 another invocation cannot immediately overwrite the same key. Failed work
 gets at most five leases, then retains its exact key in the repair archive.
 Capacity continuation does not spend the provider failure budget.
-An archived full failure blocks implicit full-scan restarts and app-manifest
-continuations from ordinary changes. App jobs still publish a current app
+A pending full cursor in backoff or an archived full failure blocks implicit
+full-scan restarts and app-manifest continuations from ordinary changes.
+App jobs still publish a current app
 snapshot, including channel/plan changes and deletion tombstones, and individual
 version, device and manifest jobs still publish their keys. The app snapshot
 does not claim newly served manifests were prepared; missing dependencies use
-replicas. No history or manifest scan starts from this failure path. The archive
-remains and a full repair requires an explicit operator request.
+replicas. No history or served-manifest scan starts implicitly from this path.
+The existing cursor or archive remains; an archived full failure requires an
+explicit operator repair.
 
 R2 metadata includes a content digest that excludes the snapshot's `built_at`.
 Unchanged refreshes still write an immutable value and advance the generation
