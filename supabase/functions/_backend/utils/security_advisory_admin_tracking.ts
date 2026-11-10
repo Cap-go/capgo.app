@@ -145,10 +145,9 @@ function summarizeAdoptionForAdvisory(
   }
 }
 
-async function loadOptInAdoptionAndPackages(c: Context): Promise<{
+async function loadOptInSummaryAndAppIds(c: Context): Promise<{
   optIn: SecurityUpdatesOptInSummary
   appIds: string[]
-  perAppPackages: Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>
 }> {
   return await withServiceRole(c, async (client) => {
     const optInRow = await queryJsonOne<SecurityUpdatesOptInSummary>(client, OPT_IN_SUMMARY_SQL)
@@ -162,12 +161,20 @@ async function loadOptInAdoptionAndPackages(c: Context): Promise<{
        LIMIT $1`,
       [MAX_ADOPTION_APPS],
     )
-    const appIds = appRows.map(row => row.app_id)
-    const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
-    for (const appId of appIds)
-      perAppPackages.set(appId, await loadAppReportedPackagesOnClient(client, appId))
-    return { optIn, appIds, perAppPackages }
+    return { optIn, appIds: appRows.map(row => row.app_id) }
   })
+}
+
+async function loadReportedPackagesForApps(
+  c: Context,
+  appIds: string[],
+): Promise<Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>> {
+  const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
+  for (const appId of appIds) {
+    const packages = await withServiceRole(c, client => loadAppReportedPackagesOnClient(client, appId))
+    perAppPackages.set(appId, packages)
+  }
+  return perAppPackages
 }
 
 export async function buildAdminSecurityUpdatesTracking(
@@ -183,7 +190,8 @@ export async function buildAdminSecurityUpdatesTracking(
     throw error
   }
 
-  const { optIn, appIds, perAppPackages } = await loadOptInAdoptionAndPackages(c)
+  const { optIn, appIds } = await loadOptInSummaryAndAppIds(c)
+  const perAppPackages = await loadReportedPackagesForApps(c, appIds)
 
   const adoptionByAdvisory: Record<string, AdvisoryAdoptionSummary> = {}
   const advisories: SecurityAdvisoryAdminRow[] = []
