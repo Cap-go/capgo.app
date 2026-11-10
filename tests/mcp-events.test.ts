@@ -29,6 +29,12 @@ function startChallengeServer() {
         try {
           const parsed = JSON.parse(body) as { type?: string, challenge?: string }
           if (parsed.type === 'verification') {
+            const path = req.url ?? '/'
+            if (path.includes('no-echo')) {
+              res.writeHead(200, { 'content-type': 'application/json' })
+              res.end(JSON.stringify({ ack: true }))
+              return
+            }
             challenge = parsed.challenge ?? null
             res.writeHead(200, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ challenge }))
