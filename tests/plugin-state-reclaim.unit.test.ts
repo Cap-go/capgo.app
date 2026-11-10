@@ -40,7 +40,7 @@ function argument(statement: Statement, name: string) {
 }
 
 describe('plugin state same-app reclaim', () => {
-  it('defers a later same-app claim and writes its fresh value in a new drain', async () => {
+  it('writes a later same-app claim under its own fresh publication generation', async () => {
     const appId = 'com.test.reclaim'
     const bundleName = '1.0.0'
     const dialect = new PgDialect()
@@ -77,23 +77,66 @@ describe('plugin state same-app reclaim', () => {
     })
 
     const first = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
-    expect(await first.json()).toEqual({ claims: 2, apps: 1, failed: 0 })
-    expect(versionReads).toBe(1)
-    expect(put).toHaveBeenCalledTimes(1)
-    expect(storage.publishedValue(await pluginStateVersionKey(appId, bundleName))).toMatchObject({ id: 101 })
-    expect(argument(acks[0], 'p_done')).toEqual([appId])
-    expect(argument(acks[0], 'p_deferred')).toEqual([])
-    expect(argument(acks[1], 'p_done')).toEqual([])
-    expect(argument(acks[1], 'p_failed')).toEqual([])
-    expect(argument(acks[1], 'p_deferred')).toEqual([appId])
-
-    const second = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
-    expect(await second.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(await first.json()).toEqual({ claims: 2, apps: 2, failed: 0 })
     expect(versionReads).toBe(2)
     expect(put).toHaveBeenCalledTimes(2)
     expect(storage.publishedValue(await pluginStateVersionKey(appId, bundleName))).toMatchObject({ id: 202 })
-    expect(argument(acks[2], 'p_done')).toEqual([appId])
-    expect(argument(acks[2], 'p_deferred')).toEqual([])
-    expect(provider.close).toHaveBeenCalledTimes(4)
+    expect(argument(acks[0], 'p_done')).toEqual([appId])
+    expect(argument(acks[0], 'p_deferred')).toEqual([])
+    expect(argument(acks[1], 'p_done')).toEqual([appId])
+    expect(argument(acks[1], 'p_failed')).toEqual([])
+    expect(argument(acks[1], 'p_deferred')).toEqual([])
+    expect(provider.close).toHaveBeenCalledTimes(3)
   })
+  it('retries an empty cooldown claim within the same bounded drain', async () => {
+    const storage = publicationProviders()
+    let claims = 0
+    const dialect = new PgDialect()
+    provider.execute.mockImplementation(async (query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_plugin_state_sync(')) {
+        claims++
+        return { rows: [{ result: claims === 1 ? { status: 'empty', retry_after_ms: 5 } : {
+          status: 'ok', lease_token: 'fixture-lease', generation: '1', has_more: false,
+          apps: [{ app_id: 'com.test.cooldown', jobs: [{ kind: 'version', ref: '1.0.0' }], attempts: 1 }],
+        } }] }
+      }
+      if (statement.sql.includes('FROM public.app_versions av'))
+        return { rows: [{ id: 100, owner_org: 'fixture-org', name: '1.0.0', deleted: false }] }
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c, { budgetMs: 1000 })))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(claims).toBe(2)
+    expect(storage.publishedValue(await pluginStateVersionKey('com.test.cooldown', '1.0.0'))).toMatchObject({ id: 100 })
+  })
+
+  it('defers a new device job while its full continuation is waiting in backoff', async () => {
+    const storage = publicationProviders()
+    const acks: Statement[] = []
+    const dialect = new PgDialect()
+    provider.execute.mockImplementation(async (query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_plugin_state_sync('))
+        return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '1', has_more: false,
+          apps: [{ app_id: 'com.test.full-backoff', jobs: [{ kind: 'device', ref: 'fixture-device' }], attempts: 1 }],
+        } }] }
+      if (statement.sql.includes('FROM public.plugin_state_sync_pending'))
+        return { rows: [{ found: 1 }] }
+      if (statement.sql.includes('public.ack_plugin_state_sync('))
+        acks.push(statement)
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 0, failed: 0 })
+    expect(argument(acks[0], 'p_deferred')).toEqual(['com.test.full-backoff'])
+    expect(argument(acks[0], 'p_continuations')).toBe('{}')
+    expect(storage.namespace.put).not.toHaveBeenCalled()
+    expect(storage.pointers.put).not.toHaveBeenCalled()
+  })
+
 })

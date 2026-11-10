@@ -31,7 +31,7 @@ export function publicationProviders() {
   const pointers = {
     get: vi.fn(async (key: string) => {
       const object = objects.get(key)
-      return object ? { etag: object.etag, json: async () => JSON.parse(object.body) } : null
+      return object ? { etag: object.etag, json: async () => JSON.parse(object.body), customMetadata: object.customMetadata } : null
     }),
     put: vi.fn(async (key: string, body: string, options: { onlyIf: R2Conditional, httpMetadata: { contentType: string }, customMetadata?: Record<string, string> }) => {
       const previous = objects.get(key)

@@ -83,6 +83,17 @@ describe('plugin state rollout', () => {
     expect(new Set(buckets).size).toBeGreaterThan(900)
   })
 
+  it('keeps requests without a device id out of percentage canaries', async () => {
+    const app = new Hono()
+    app.get('/', c => c.json({ selected: shouldUsePluginState(c, APP_ID, '') }))
+    for (const percentage of ['0.1%', '1%', '99.99%']) {
+      vi.stubEnv('PLUGIN_STATE_KV', percentage)
+      expect(await (await app.request('/', undefined, { PLUGIN_STATE: {} })).json()).toEqual({ selected: false })
+    }
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    expect(await (await app.request('/', undefined, { PLUGIN_STATE: {} })).json()).toEqual({ selected: true })
+  })
+
   it('ignores per-request forced modes outside local workers', async () => {
     vi.stubEnv('PLUGIN_STATE_KV', 'off')
     vi.stubEnv('ENV_NAME', 'capgo-prod')
@@ -303,9 +314,9 @@ describe('state read failures and boundaries', () => {
     const cold = await app.request('/', undefined, env)
     expect(await cold.json()).toMatchObject({ totalSize: 200, knownFiles: 1, unknownFiles: 0 })
     expect(get).toHaveBeenCalledTimes(2)
-    const sizeEntry = [...entries].find(([url]) => url.includes('/.manifest-sizes-v2?'))?.[1]
+    const sizeEntry = [...entries].find(([url]) => url.includes('/.plugin-state-manifest-sizes-v1?'))?.[1]
     expect(sizeEntry?.headers.get('Cache-Control')).toBe('public, s-maxage=30')
-    expect(sizeEntry?.headers.get('Cache-Tag')).toBe(`capgo-updates-${APP_ID}`)
+    expect(sizeEntry?.headers.get('Cache-Tag')).toBe(`capgo-plugin-state-${APP_ID}`)
     get.mockImplementation(() => { throw new Error('KV unavailable') })
     const warm = await app.request('/', undefined, env)
     expect(await warm.json()).toMatchObject({ totalSize: 200, knownFiles: 1, unknownFiles: 0 })

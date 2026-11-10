@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { setTimeout } from 'node:timers/promises'
 import { z } from 'zod'
-import { updatesAppCacheTag, updatesVersionsCacheTag } from '../supabase/functions/_backend/plugin_runtime/utils/updatesCacheTag.ts'
+import { pluginStateAppCacheTag, updatesAppCacheTag, updatesVersionsCacheTag } from '../supabase/functions/_backend/plugin_runtime/utils/updatesCacheTag.ts'
 import {
   API_SECRET,
   CLOUDFLARE_API_URL,
@@ -169,7 +169,7 @@ export async function syncPluginState(appIds: string[] = []) {
 
 export async function evictPluginStateCache(appId: string) {
   const response = await localRequest(CLOUDFLARE_PLUGIN_URL, '/cache_purge_local', 'POST', {
-    tags: [updatesAppCacheTag(appId), updatesVersionsCacheTag(appId)],
+    tags: [updatesAppCacheTag(appId), updatesVersionsCacheTag(appId), pluginStateAppCacheTag(appId)],
   }, { apisecret: API_SECRET })
   strictEqual(response.status, 200, 'Local tag purge HTTP status')
 }
@@ -356,8 +356,8 @@ export async function runPluginStateBenchmark(samples = 40) {
         warm.kv.push(result.kv.milliseconds)
       }
       for (let i = 0; i < Math.min(samples, 10); i++) {
-        // Both cohorts must begin after eviction. A single purge before a
-        // pair lets the first response warm shared caches for the second.
+        // Purge tagged entries separately before each cohort. Untagged DB
+        // caches retain their normal TTL; this is not a full-cache cold test.
         const result = await comparePluginState(freshDeviceProbe(probe), i % 2 === 0, () => evictPluginStateCache(fixture.appId))
         evicted.db.push(result.db.milliseconds)
         evicted.kv.push(result.kv.milliseconds)
@@ -387,6 +387,7 @@ export async function runPluginStateBenchmark(samples = 40) {
       limitations: [
         'Local timings do not predict worldwide latency or KV replication lag.',
         'Cache API evictions do not evict the KV service cache or database buffers.',
+        'The tag-purge samples evict only tagged app/version/plugin-state entries. Untagged DB caches, including v1 manifest-size maps, remain warm with their normal TTL.',
         'Propagation is primary COMMIT to observed reply while an independently invoked writer drain and local tag purge run in flight; polling resolution is 25ms plus request time. No writer completion is awaited before polling.',
         'Channel surfing rows are single operations, not latency distributions.',
         'Channel surfing uses independent fresh devices per mode for the same SET/read/DELETE/read sequence; SET always performs its first assignment. Which mode runs first alternates by plugin generation.',

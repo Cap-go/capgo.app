@@ -5,8 +5,8 @@
 //   claim_plugin_state_sync() -> rebuild the KV keys -> ack_plugin_state_sync()
 // The acknowledgement durably queues the edge purge before deleting sync
 // work, so the Cache API copies of the
-// old documents leave every data center (with the purge pipeline's re-purges
-// covering Workers KV propagation).
+// old documents leave every data center. Snapshot purges use an isolated tag
+// and do not repeat the replica-lag ladder or evict the database cohort.
 //
 // Per app, in order: bundle-name keys, device override keys and manifests
 // first, the app document last. The app document is the completion marker the
@@ -37,7 +37,7 @@ import {
 } from '../plugin_runtime/utils/pluginStateFormat.ts'
 import { parsePluginStateApp, parsePluginStatePointer } from '../plugin_runtime/utils/pluginStateValidation.ts'
 import { selectPluginStateChannelListIds, selectPluginStateChannels, selectPluginStateOwner } from '../plugin_runtime/utils/pluginStateSelects.ts'
-import { updatesAppCacheTag, updatesVersionsCacheTag } from '../plugin_runtime/utils/updatesCacheTag.ts'
+import { pluginStateAppCacheTag } from '../plugin_runtime/utils/updatesCacheTag.ts'
 import { versionManifestRowsWithSizeSql } from '../plugin_runtime/utils/version_manifest_sql.ts'
 import { BRES, middlewareAPISecret, parseBody } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
@@ -83,6 +83,7 @@ interface ClaimResult {
   generation?: string
   apps?: ClaimedApp[]
   has_more?: boolean
+  retry_after_ms?: number
 }
 
 interface AppOutcome {
@@ -96,6 +97,7 @@ interface AppOutcome {
   continuation?: string
   /** Bundle-name keys changed (purge the versions tag). */
   versionsChanged?: boolean
+  changed?: boolean
   error?: unknown
   /** No provider failure: release the untouched work when this invocation is full. */
   deferred?: boolean
@@ -204,13 +206,26 @@ interface KvStore {
   }>
 }
 interface PointerStore {
-  get: (key: string) => Promise<{ etag: string, json: () => Promise<unknown> } | null>
+  get: (key: string) => Promise<{ etag: string, json: () => Promise<unknown>, customMetadata?: Record<string, string> } | null>
   put: (key: string, value: string, options: { onlyIf: R2Conditional, httpMetadata: { contentType: string }, customMetadata?: Record<string, string> }) => Promise<unknown | null>
   list: (options: R2ListOptions) => Promise<{ objects: { key: string, etag?: string, customMetadata?: Record<string, string> }[], truncated: boolean, cursor?: string }>
 }
 
-interface PublicationPrecondition { generation: string, etag: string }
-interface ListedPointer { name: string, etag?: string, generation?: string }
+interface PublicationPrecondition { generation: string, etag: string, digest?: string }
+interface ListedPointer { name: string, etag?: string, generation?: string, digest?: string }
+
+/** Ignore the snapshot timestamp, while retaining every response-affecting field. */
+async function publicationDigest(value: unknown) {
+  const content = value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'built_at'))
+    : value
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(content)))
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function pointerDigest(value: string | undefined) {
+  return value && /^[0-9a-f]{64}$/.test(value) ? value : undefined
+}
 
 function reserveProviderOperation(budget: PublicationBudget) {
   if (budget.remaining <= 0)
@@ -224,15 +239,16 @@ function reserveProviderOperation(budget: PublicationBudget) {
  * the old Worker resumes after its lease expired. */
 export function createPluginStateSyncStore(namespace: KvStore, pointers: PointerStore, generation: string, budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }) {
   const written = new Set<string>()
+  let changed = false
   const reserve = () => reserveProviderOperation(budget)
   async function readPointer(key: string) {
     reserve()
     const object = await pointers.get(key)
-    return object ? { value: parsePluginStatePointer(await object.json()), etag: object.etag } : null
+    return object ? { value: parsePluginStatePointer(await object.json()), etag: object.etag, digest: pointerDigest(object.customMetadata?.digest) } : null
   }
   async function readPrecondition(key: string): Promise<PublicationPrecondition | null> {
     const pointer = await readPointer(key)
-    return pointer ? { generation: pointer.value.generation, etag: pointer.etag } : null
+    return pointer ? { generation: pointer.value.generation, etag: pointer.etag, digest: pointer.digest } : null
   }
   async function publish(key: string, value: unknown, deleted: boolean, listed?: PublicationPrecondition) {
     if (written.has(key))
@@ -242,6 +258,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
       written.add(key)
       return
     }
+    const digest = await publicationDigest(deleted ? null : value)
     const kvKey = deleted ? null : await pluginStateImmutableKey(key, generation)
     if (kvKey !== null) {
       reserve()
@@ -257,9 +274,10 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
         // R2 writes this metadata atomically with the pointer body. Cleanup
         // can use a strong listing's generation and ETag as its first CAS
         // precondition, without a separate GET for every historical key.
-        customMetadata: { generation },
+        customMetadata: { generation, digest },
       })
       if (object) {
+        changed ||= previous?.digest !== digest
         written.add(key)
         return
       }
@@ -273,6 +291,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
   }
   return {
     get remaining() { return budget.remaining },
+    get changed() { return changed },
     async getApp(key: string) {
       const pointer = await readPointer(key)
       if (!pointer?.value.kvKey)
@@ -300,6 +319,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
           name: object.key,
           etag: object.etag,
           generation: isPluginStateGeneration(object.customMetadata?.generation) ? object.customMetadata.generation : undefined,
+          digest: pointerDigest(object.customMetadata?.digest),
         })),
         list_complete: !listed.truncated,
         cursor: listed.cursor ?? '',
@@ -308,7 +328,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
     delete: (key: string) => publish(key, null, true),
     deleteListed: (pointer: ListedPointer) => {
       const known = pointer.etag && isPluginStateGeneration(pointer.generation)
-        ? { etag: pointer.etag, generation: pointer.generation }
+        ? { etag: pointer.etag, generation: pointer.generation, digest: pointer.digest }
         : undefined
       return publish(pointer.name, null, true, known)
     },
@@ -754,6 +774,16 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     const deviceIds = refsOf('device')
     const manifestIds = refsOf('manifest').map(Number).filter(id => Number.isSafeInteger(id) && id > 0)
     const wantsApp = item.jobs.some(job => job.kind === 'app') || deviceIds.length > 0
+    const needsFull = fullJobs.length > 0 || (wantsApp && !(await isFullySynced(source, appId)))
+    if (needsFull && fullJobs.length === 0) {
+      const pendingFull = await sourceRows<{ found: number }>(source, sql`
+        SELECT 1 AS found FROM public.plugin_state_sync_pending
+        WHERE app_id = ${appId} AND kind = 'full' LIMIT 1`)
+      // The continuation may be in provider-failure backoff. A newer device
+      // job must not bypass it and restart the full scan from its first key.
+      if (pendingFull.length > 0)
+        return { appId, ok: false, deferred: true }
+    }
 
     // Single keys first: they read the database now, so they are never older
     // than what a concurrent full sync wrote.
@@ -764,7 +794,7 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     if (manifestIds.length > 0)
       await syncManifests(source, store, manifestIds)
 
-    if (fullJobs.length > 0 || (wantsApp && !(await isFullySynced(source, appId)))) {
+    if (needsFull) {
       // A fresh request restarts the full sync; otherwise resume the cursor.
       const ref = fullJobs.length === 0 || fullJobs.some(job => !job.ref) ? '' : fullJobs[0].ref
       const result = await fullSync(source, store, appId, ref, deadline)
@@ -880,9 +910,6 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
     return result
   const budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
-  // A later claim in this invocation must not acknowledge new changes to an
-  // app whose keys the invocation's deduplication set has already written.
-  const processedApps = new Set<string>()
   const source = createPluginStateSourceReader(c, deadline)
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
@@ -898,19 +925,23 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         continue
       }
       busyRetries = 0
-      if (claimed.status !== 'ok' || !claimed.apps?.length || !claimed.lease_token)
+      if (claimed.status !== 'ok' || !claimed.apps?.length || !claimed.lease_token) {
+        const wait = claimed.retry_after_ms
+        if (claimed.status === 'empty' && wait && wait > 0 && Date.now() + wait < deadline) {
+          await new Promise(resolve => setTimeout(resolve, wait))
+          continue
+        }
         break
+      }
       if (!claimed.generation)
         throw new Error('plugin state claim has no publication generation')
-      const store = createPluginStateSyncStore(namespace, pointers, claimed.generation, budget)
       result.claims++
 
       const appDeadline = Math.min(deadline, Date.now() + APP_BUDGET_MS)
       const outcomes = await runLimited(claimed.apps, APP_CONCURRENCY, async (item): Promise<AppOutcome> => {
-        if (processedApps.has(item.app_id))
-          return { appId: item.app_id, ok: false, deferred: true }
-        processedApps.add(item.app_id)
-        return syncApp(source, store, item, appDeadline)
+        const store = createPluginStateSyncStore(namespace, pointers, claimed.generation!, budget)
+        const outcome = await syncApp(source, store, item, appDeadline)
+        return { ...outcome, changed: store.changed }
       })
       const done = outcomes.filter(outcome => outcome.ok)
       const failed = outcomes.filter(outcome => !outcome.ok && !outcome.deferred)
@@ -918,11 +949,9 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       for (const outcome of failed)
         cloudlogErr({ requestId: c.get('requestId'), message: 'plugin state sync failed', app_id: outcome.appId, error: serializeError(outcome.error) })
 
-      // Continuations are queued before the ack, unleased: they survive it.
-      const continuations = done.filter(outcome => outcome.continuation !== undefined)
-      if (continuations.length > 0) {
-        await db.execute(sql`SELECT public.notify_plugin_state_sync('full', ${sql.param(continuations.map(outcome => outcome.appId))}::text[], ${sql.param(continuations.map(outcome => outcome.continuation ?? ''))}::text[])`)
-      }
+      // ACK validates the lease and persists the next cursor atomically. A
+      // stale drain must never enqueue an older continuation after replacement.
+      const continuations = Object.fromEntries(done.filter(outcome => outcome.continuation !== undefined).map(outcome => [outcome.appId, outcome.continuation]))
       await db.execute(sql`SELECT public.ack_plugin_state_sync(
         p_lease_token => ${claimed.lease_token}::uuid,
         p_done => ${sql.param(done.map(outcome => outcome.appId))}::text[],
@@ -931,20 +960,18 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         p_retry_after_seconds => 10,
         p_full_done => ${sql.param(done.filter(outcome => outcome.fullDone && !outcome.removed).map(outcome => outcome.appId))}::text[],
         p_removed => ${sql.param(done.filter(outcome => outcome.removed).map(outcome => outcome.appId))}::text[],
-        p_versions_changed => ${sql.param(done.filter(outcome => outcome.versionsChanged).map(outcome => outcome.appId))}::text[]
+        p_versions_changed => ${sql.param(done.filter(outcome => outcome.versionsChanged).map(outcome => outcome.appId))}::text[],
+        p_changed_apps => ${sql.param(outcomes.filter(outcome => outcome.changed).map(outcome => outcome.appId))}::text[],
+        p_continuations => ${JSON.stringify(continuations)}::jsonb
       )`)
       result.apps += done.length
       result.failed += failed.length
 
-      const appIds = done.map(outcome => outcome.appId)
-      const versionAppIds = done.filter(outcome => outcome.versionsChanged).map(outcome => outcome.appId)
-      if (appIds.length > 0) {
-        // ACK already persisted purge work. Tests can additionally await
-        // immediate invalidation; production wake/tick drains the durable queue.
-        if (options.purgeNow)
-          await purgeUpdatesCacheTags(c, [...appIds.map(updatesAppCacheTag), ...versionAppIds.map(updatesVersionsCacheTag)])
-      }
-      if (!claimed.has_more || deferred.length > 0)
+      const changedApps = outcomes.filter(outcome => outcome.changed).map(outcome => outcome.appId)
+      // The isolated scope never invalidates database/control/snippet caches.
+      if (options.purgeNow && changedApps.length > 0)
+        await purgeUpdatesCacheTags(c, changedApps.map(pluginStateAppCacheTag))
+      if ((!claimed.has_more && Object.keys(continuations).length === 0) || deferred.length > 0)
         break
     }
     if (Date.now() < deadline && budget.remaining >= 3)

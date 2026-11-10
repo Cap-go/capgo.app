@@ -59,6 +59,34 @@ describe('plugin state fenced publication', () => {
   })
 })
 
+describe('semantic publication invalidation', () => {
+  it.concurrent('advances the generation fence without marking an unchanged timestamp-only refresh dirty', async () => {
+    const provider = publicationProviders()
+    const first = createPluginStateSyncStore(provider.namespace, provider.pointers, '1')
+    await first.putJson(KEY, { id: 1, built_at: 100 })
+    expect(first.changed).toBe(true)
+    const refresh = createPluginStateSyncStore(provider.namespace, provider.pointers, '3')
+    await refresh.putJson(KEY, { id: 1, built_at: 200 })
+    expect(refresh.changed).toBe(false)
+    expect(JSON.parse(provider.objects.get(KEY)!.body)).toMatchObject({ generation: '3' })
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '2').putJson(KEY, { id: 2, built_at: 150 })
+    expect(provider.publishedValue(KEY)).toEqual({ id: 1, built_at: 200 })
+    const change = createPluginStateSyncStore(provider.namespace, provider.pointers, '4')
+    await change.putJson(KEY, { id: 2, built_at: 200 })
+    expect(change.changed).toBe(true)
+  })
+
+  it.concurrent('treats legacy digest metadata as dirty while refreshing its fence', async () => {
+    const provider = publicationProviders()
+    await createPluginStateSyncStore(provider.namespace, provider.pointers, '1').putJson(KEY, { id: 1 })
+    const pointer = provider.objects.get(KEY)!
+    provider.objects.set(KEY, { ...pointer, customMetadata: { generation: '1' } })
+    const refresh = createPluginStateSyncStore(provider.namespace, provider.pointers, '2')
+    await refresh.putJson(KEY, { id: 1 })
+    expect(refresh.changed).toBe(true)
+  })
+})
+
 describe('cleanup listing preconditions', () => {
   it.concurrent('refreshes a tombstone fence from listing metadata without another GET', async () => {
     const provider = publicationProviders()
@@ -75,7 +103,7 @@ describe('cleanup listing preconditions', () => {
     expect(budget.remaining).toBe(1)
     const pointer = provider.objects.get(KEY)!
     expect(JSON.parse(pointer.body)).toMatchObject({ generation: '3', kvKey: null })
-    expect(pointer.customMetadata).toEqual({ generation: '3' })
+    expect(pointer.customMetadata).toMatchObject({ generation: '3', digest: expect.stringMatching(/^[0-9a-f]{64}$/) })
   })
 
   it.concurrent('fences a paused generation newer than the old tombstone after cleanup', async () => {

@@ -18,9 +18,8 @@
 --   so one app's changes are always applied in order;
 -- - ack_plugin_state_sync() deletes the rows of synced apps and releases
 --   failed ones at their retry delay, dropping a row after 5 attempts
---   (queue retry budget); exhausted rows move to a repair archive. The tick
---   re-enqueues that recorded work after a day, without losing its key.
--- Every trigger error is logged as a warning. Missing or expired plugin
+--   (queue retry budget); exhausted rows stay archived until explicit repair.
+-- Every trigger error is logged as a warning. Missing or invalid plugin
 -- snapshots fall back to a read replica; no plugin request calls the primary.
 --
 -- Execution model: service_role-only internal RPCs; no new policy or public
@@ -50,6 +49,11 @@
 
 -- Claims allocate a global fencing generation under their short advisory
 -- lock. Values are strings in JSON so bigint precision survives JavaScript.
+ALTER TABLE public.updates_cache_purge_pending
+  DROP CONSTRAINT updates_cache_purge_pending_scope_check;
+ALTER TABLE public.updates_cache_purge_pending
+  ADD CONSTRAINT updates_cache_purge_pending_scope_check CHECK (scope IN ('app', 'versions', 'plugin_state'));
+
 CREATE SEQUENCE public.plugin_state_sync_generation AS bigint;
 ALTER SEQUENCE public.plugin_state_sync_generation OWNER TO postgres;
 REVOKE ALL ON SEQUENCE public.plugin_state_sync_generation FROM PUBLIC, anon, authenticated, service_role;
@@ -83,6 +87,8 @@ CREATE TABLE public.plugin_state_sync_pending (
 );
 CREATE INDEX plugin_state_sync_pending_due_at_idx ON public.plugin_state_sync_pending (due_at);
 CREATE INDEX plugin_state_sync_pending_app_id_idx ON public.plugin_state_sync_pending (app_id);
+CREATE INDEX plugin_state_sync_pending_regular_idx ON public.plugin_state_sync_pending (app_id, id) WHERE kind <> 'full';
+CREATE INDEX plugin_state_sync_pending_full_idx ON public.plugin_state_sync_pending (app_id, (ref = '') DESC, id DESC) WHERE kind = 'full';
 CREATE TABLE public.plugin_state_sync_failed (
   app_id text NOT NULL,
   kind text NOT NULL CHECK (kind IN ('app', 'full', 'device', 'version', 'manifest')),
@@ -92,7 +98,7 @@ CREATE TABLE public.plugin_state_sync_failed (
 );
 CREATE INDEX plugin_state_sync_failed_repair_at_idx ON public.plugin_state_sync_failed (repair_at);
 COMMENT ON TABLE public.plugin_state_sync_failed IS
-  'Exhausted plugin state changes retained for bounded daily repair. Each pending work item still has at most 5 attempts.';
+  'Exhausted plugin state changes retained until explicit full repair. Never automatically reset a failed key retry budget.';
 
 CREATE INDEX plugin_state_sync_pending_lease_idx ON public.plugin_state_sync_pending (lease_token) WHERE lease_token IS NOT NULL;
 COMMENT ON TABLE public.plugin_state_sync_pending IS
@@ -243,14 +249,29 @@ AS $$
 DECLARE
   v_app_ids text[];
 BEGIN
-  SELECT pg_catalog.array_agg(a.app_id::text)
+  SELECT pg_catalog.array_agg(known.app_id ORDER BY known.app_id)
   INTO v_app_ids
-  FROM public.apps a
-  WHERE p_app_ids IS NULL OR a.app_id::text = ANY (p_app_ids);
+  FROM (
+    SELECT a.app_id::text AS app_id FROM public.apps a
+    UNION
+    SELECT s.app_id FROM public.plugin_state_sync_apps s
+    UNION
+    SELECT f.app_id FROM public.plugin_state_sync_failed f
+  ) AS known
+  WHERE p_app_ids IS NULL OR known.app_id = ANY (p_app_ids);
   IF v_app_ids IS NULL THEN
     RETURN 0;
   END IF;
   PERFORM public.notify_plugin_state_sync('full', v_app_ids);
+  -- Explicit repair, unlike the daily tick, is allowed to retry archived
+  -- exact keys. Keep historical/unserved manifest identities in this move.
+  WITH repair AS (
+    DELETE FROM public.plugin_state_sync_failed f WHERE f.app_id = ANY (v_app_ids)
+    RETURNING f.app_id, f.kind, f.ref
+  )
+  INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
+  SELECT app_id, kind, ref FROM repair
+  ON CONFLICT ON CONSTRAINT plugin_state_sync_pending_producer_job_unique DO NOTHING;
   RETURN pg_catalog.cardinality(v_app_ids);
 END;
 $$;
@@ -274,6 +295,7 @@ DECLARE
   v_token uuid := pg_catalog.gen_random_uuid();
   v_apps jsonb;
   v_generation text;
+  v_retry_at timestamptz;
 BEGIN
   -- Claims are serialized: an app is never leased by two drains at once.
   IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('plugin_state_sync_claim')) THEN
@@ -305,14 +327,25 @@ BEGIN
   bounded AS (
     SELECT candidate.id
     FROM picked
-    CROSS JOIN LATERAL (
+    LEFT JOIN LATERAL (
+      -- A fresh full request wins over a continuation. Otherwise resume the
+      -- newest cursor regardless of the device/version backlog before it.
       SELECT p.id
       FROM public.plugin_state_sync_pending p
-      WHERE p.app_id = picked.app_id AND p.due_at <= v_now
-        AND (p.lease_token IS NULL OR p.leased_until <= v_now)
-        AND p.attempts < 5
-      ORDER BY p.id
-      LIMIT 48
+      WHERE p.app_id = picked.app_id AND p.kind = 'full' AND p.due_at <= v_now
+        AND (p.lease_token IS NULL OR p.leased_until <= v_now) AND p.attempts < 5
+      ORDER BY (p.ref = '') DESC, p.id DESC LIMIT 1
+    ) AS full_job ON true
+    CROSS JOIN LATERAL (
+      SELECT full_job.id WHERE full_job.id IS NOT NULL
+      UNION ALL
+      SELECT regular.id FROM (
+        SELECT p.id
+        FROM public.plugin_state_sync_pending p
+        WHERE p.app_id = picked.app_id AND p.kind <> 'full' AND p.due_at <= v_now
+          AND (p.lease_token IS NULL OR p.leased_until <= v_now) AND p.attempts < 5
+        ORDER BY p.id LIMIT CASE WHEN full_job.id IS NULL THEN 48 ELSE 47 END
+      ) AS regular
     ) AS candidate
   ),
   claimed AS (
@@ -320,20 +353,36 @@ BEGIN
     SET lease_token = v_token, leased_until = v_now + v_lease, attempts = p.attempts + 1
     FROM bounded
     WHERE p.id = bounded.id
-    RETURNING p.app_id, p.kind, p.ref, p.attempts
+    RETURNING p.id, p.app_id, p.kind, p.ref, p.attempts
   )
   SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('app_id', grouped.app_id, 'jobs', grouped.jobs, 'attempts', grouped.attempts))
   INTO v_apps
   FROM (
     SELECT claimed.app_id,
-      pg_catalog.jsonb_agg(DISTINCT pg_catalog.jsonb_build_object('kind', claimed.kind, 'ref', claimed.ref)) AS jobs,
+      pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('kind', claimed.kind, 'ref', claimed.ref) ORDER BY claimed.id) AS jobs,
       MAX(claimed.attempts) AS attempts
     FROM claimed
     GROUP BY claimed.app_id
   ) AS grouped;
 
   IF v_apps IS NULL THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'empty');
+    -- A wake can race a lease or its cooldown. Tell this bounded drain when
+    -- it can retry rather than waiting for the next ten-second cron tick.
+    SELECT MIN(GREATEST(candidate.due_at, COALESCE(c.next_write_at, candidate.due_at),
+      COALESCE(busy.until_at, candidate.due_at))) INTO v_retry_at
+    FROM (
+      SELECT p.app_id, p.due_at FROM public.plugin_state_sync_pending p
+      WHERE p.attempts < 5 ORDER BY p.due_at LIMIT 200
+    ) AS candidate
+    LEFT JOIN public.plugin_state_sync_cooldowns c ON c.app_id = candidate.app_id
+    LEFT JOIN LATERAL (
+      SELECT MAX(p.leased_until) AS until_at
+      FROM public.plugin_state_sync_pending p
+      WHERE p.app_id = candidate.app_id AND p.lease_token IS NOT NULL AND p.leased_until > v_now
+    ) AS busy ON true;
+    RETURN pg_catalog.jsonb_build_object('status', 'empty', 'retry_after_ms',
+      CASE WHEN v_retry_at IS NULL THEN NULL
+        ELSE GREATEST(LEAST(CEIL(EXTRACT(epoch FROM (v_retry_at - v_now)) * 1000)::integer, 120000), 1) END);
   END IF;
 
   v_generation := pg_catalog.nextval('public.plugin_state_sync_generation'::pg_catalog.regclass)::text;
@@ -366,7 +415,9 @@ CREATE OR REPLACE FUNCTION public.ack_plugin_state_sync(
   p_full_done text[] DEFAULT '{}',
   p_removed text[] DEFAULT '{}',
   p_deferred text[] DEFAULT '{}',
-  p_versions_changed text[] DEFAULT '{}'
+  p_versions_changed text[] DEFAULT '{}',
+  p_changed_apps text[] DEFAULT NULL,
+  p_continuations jsonb DEFAULT '{}'
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -390,19 +441,14 @@ BEGIN
   -- not call the best-effort notify helper here: its EXCEPTION handler may
   -- swallow insertion errors, which would otherwise lose invalidation work.
   INSERT INTO public.updates_cache_purge_pending (app_id, due_at, initial, scope)
-  SELECT DISTINCT done.app_id, v_now, true, scopes.scope
-  FROM pg_catalog.unnest(COALESCE(p_done, '{}')) AS done (app_id)
-  CROSS JOIN LATERAL (
-    SELECT 'app'::text AS scope
-    UNION ALL
-    SELECT 'versions'::text WHERE done.app_id = ANY (COALESCE(p_versions_changed, '{}'))
-  ) AS scopes
+  SELECT DISTINCT published.app_id, v_now, false, 'plugin_state'
+  FROM pg_catalog.unnest(COALESCE(p_changed_apps, p_done, '{}')) AS published (app_id)
   WHERE EXISTS (
     SELECT 1 FROM public.plugin_state_sync_pending p
-    WHERE p.app_id = done.app_id AND p.lease_token = p_lease_token
+    WHERE p.app_id = published.app_id AND p.lease_token = p_lease_token AND p.leased_until > v_now
   );
 
-  IF pg_catalog.cardinality(COALESCE(p_done, '{}')) > 0 THEN
+  IF FOUND THEN
     BEGIN
       PERFORM public.wake_updates_cache_purge();
     EXCEPTION WHEN OTHERS THEN
@@ -410,8 +456,26 @@ BEGIN
     END;
   END IF;
 
+  -- Collapse old cursors only under the live owning lease. An explicit full
+  -- request committed after this claim survives and restarts from its own
+  -- fresh source snapshot; an expired drain cannot enqueue a stale cursor.
+  WITH settled AS (
+    SELECT DISTINCT p.app_id
+    FROM public.plugin_state_sync_pending p
+    WHERE p.lease_token = p_lease_token AND p.leased_until > v_now AND p.app_id = ANY (COALESCE(p_done, '{}'))
+  )
+  DELETE FROM public.plugin_state_sync_pending p USING settled s
+  WHERE p.app_id = s.app_id AND p.kind = 'full'
+    AND (p.lease_token IS NULL OR p.lease_token = p_lease_token OR p.leased_until <= v_now)
+    AND (p.ref <> '' OR p.lease_token = p_lease_token);
+
   DELETE FROM public.plugin_state_sync_pending
   WHERE lease_token = p_lease_token AND app_id = ANY (COALESCE(p_done, '{}'));
+
+  INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, due_at)
+  SELECT entry.key, 'full', entry.value, v_now + interval '1100 milliseconds'
+  FROM pg_catalog.jsonb_each_text(COALESCE(p_continuations, '{}')) AS entry
+  WHERE entry.key = ANY (COALESCE(p_done, '{}'));
 
   INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at)
   SELECT DISTINCT done.app_id, v_now, CASE WHEN done.app_id = ANY (COALESCE(p_full_done, '{}')) THEN v_now END
@@ -424,9 +488,8 @@ BEGIN
   SET full_synced_at = NULL
   WHERE app_id = ANY (COALESCE(p_removed, '{}'));
 
-  -- Keep the exact failed keys: a full app rebuild alone cannot repair an
-  -- old per-device or unserved-manifest key. Reconciliation retries them as
-  -- new repair work after a day, never a sixth read of the original item.
+  -- Keep exact exhausted keys for explicit repair; daily reconciliation must
+  -- not grant poison work another automatic five attempts.
   INSERT INTO public.plugin_state_sync_failed (app_id, kind, ref, repair_at)
   SELECT app_id, kind, CASE WHEN kind = 'full' THEN '' ELSE ref END, v_now + interval '1 day'
   FROM public.plugin_state_sync_pending
@@ -468,10 +531,10 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[]) TO service_role;
+ALTER FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) TO service_role;
 
 -- GC coordination is one indexed operational row, service-only and never
 -- on a plugin request path. Partial pages resume on the next existing tick.
@@ -555,18 +618,6 @@ BEGIN
   FROM removed
   ON CONFLICT (app_id, kind, ref) DO NOTHING;
 
-  WITH due AS (
-    SELECT app_id, kind, ref FROM public.plugin_state_sync_failed
-    WHERE repair_at <= pg_catalog.now()
-    ORDER BY repair_at LIMIT v_batch FOR UPDATE SKIP LOCKED
-  ), removed AS (
-    DELETE FROM public.plugin_state_sync_failed f USING due d
-    WHERE f.app_id = d.app_id AND f.kind = d.kind AND f.ref = d.ref
-    RETURNING f.app_id, f.kind, f.ref
-  )
-  INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
-  SELECT app_id, kind, ref FROM removed;
-
   SELECT count(*) INTO v_pending
   FROM (SELECT 1 FROM public.plugin_state_sync_pending LIMIT v_max_pending) AS limited;
 
@@ -596,7 +647,8 @@ BEGIN
         WHERE NOT EXISTS (
           SELECT 1 FROM public.plugin_state_sync_apps s
           WHERE s.app_id = candidate AND s.full_synced_at IS NOT NULL
-        );
+        )
+          AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = candidate);
         IF v_ids IS NOT NULL THEN
           PERFORM public.notify_plugin_state_sync('full', v_ids);
         END IF;
@@ -612,6 +664,7 @@ BEGIN
       WHERE s.synced_at < pg_catalog.now() - interval '1 day'
         AND EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = s.app_id)
         AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = s.app_id)
+        AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = s.app_id)
       ORDER BY s.synced_at
       LIMIT v_batch
     ) AS stale;

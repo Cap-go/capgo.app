@@ -6,6 +6,7 @@ import { PluginStateMiss } from './pluginStateRegistry.ts'
 import { parsePluginStatePointer } from './pluginStateValidation.ts'
 
 export const R2_POINTER_TIMEOUT_MS = 50
+export const KV_VALUE_TIMEOUT_MS = 50
 
 interface PluginStateReadMetrics {
   r2_pointer_reads: number
@@ -13,13 +14,14 @@ interface PluginStateReadMetrics {
   r2_pointer_timeouts: number
   kv_value_reads: number
   kv_value_ms: number
+  kv_value_timeouts: number
 }
 
 const readMetrics = new WeakMap<Request, PluginStateReadMetrics>()
 
 /** Allocate provider counters only for requests selected by the timing sample. */
 export function startPluginStateReadMetrics(c: Context): PluginStateReadMetrics {
-  const metrics = { r2_pointer_reads: 0, r2_pointer_ms: 0, r2_pointer_timeouts: 0, kv_value_reads: 0, kv_value_ms: 0 }
+  const metrics = { r2_pointer_reads: 0, r2_pointer_ms: 0, r2_pointer_timeouts: 0, kv_value_reads: 0, kv_value_ms: 0, kv_value_timeouts: 0 }
   readMetrics.set(c.req.raw, metrics)
   return metrics
 }
@@ -78,10 +80,21 @@ export async function readPublishedPluginState(c: Context, store: KVNamespace, l
   if (metrics)
     metrics.kv_value_reads++
   let value: unknown
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    value = await store.get<unknown>(pointer.kvKey, { type: 'json', cacheTtl: 30 })
+    value = await Promise.race([
+      store.get<unknown>(pointer.kvKey, { type: 'json', cacheTtl: 30 }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          if (metrics)
+            metrics.kv_value_timeouts++
+          reject(new PluginStateMiss('published value timed out'))
+        }, KV_VALUE_TIMEOUT_MS)
+      }),
+    ])
   }
   finally {
+    clearTimeout(timer)
     if (metrics)
       metrics.kv_value_ms += performance.now() - startedAt
   }

@@ -16,7 +16,8 @@ import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } f
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { countsAsBundleFailure } from '../utils/legacyDownloadFail.ts'
 import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
-import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, markPluginStateResponse, startPluginStateRequest } from '../utils/pluginState.ts'
+import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, PluginStateMiss, markPluginStateResponse, startPluginStateRequest } from '../utils/pluginState.ts'
+import { MAX_PLUGIN_STATE_DOCUMENTS } from '../utils/pluginStateReadBudget.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetStatsFill } from '../utils/snippetEdgeAnswer.ts'
@@ -449,6 +450,9 @@ async function statsWithPluginState(
       if (parsed.device_id && Number(pluginState.doc.owner?.channel_device_count) > 0)
         devices.add(parsed.device_id)
     }
+    const deviceDocuments = pluginState.doc.overrides === null ? devices.size : 0
+    if (versions.size + deviceDocuments + 1 > MAX_PLUGIN_STATE_DOCUMENTS)
+      throw new PluginStateMiss('stats batch exceeds document budget')
     await Promise.all([
       ...[...versions].map(name => pluginState.versionByName(name)),
       ...[...devices].map(id => pluginState.overrideChannelId(id)),

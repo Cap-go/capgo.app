@@ -32,15 +32,6 @@ export function pluginStateBucket(appId: string, deviceId: string) {
   return (hash >>> 0) % 10_000
 }
 
-export function hasPluginStateStore(c: AnyContext) {
-  return Boolean((c.env as { PLUGIN_STATE?: unknown } | undefined)?.PLUGIN_STATE)
-}
-
-/** Some share of the traffic reads the plugin state: its cache entries must carry purge tags. */
-export function isPluginStateEnabled(c: AnyContext) {
-  return hasPluginStateStore(c) && parsePluginStateShareBps(getEnv(c, 'PLUGIN_STATE_KV')) > 0
-}
-
 /** Tests: a request served from the plugin state must never open a database connection. */
 export function isPluginStateStrict(c: AnyContext) {
   return getEnv(c, 'PLUGIN_STATE_KV_STRICT').trim().toLowerCase() === 'true'

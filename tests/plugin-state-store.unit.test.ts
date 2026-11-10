@@ -58,6 +58,32 @@ describe('published plugin state reader', () => {
     expect(get).not.toHaveBeenCalled()
   })
 
+  it('bounds stalled KV values and never caches a result arriving after fallback', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const pending = Promise.withResolvers<unknown>()
+    const puts = vi.fn()
+    vi.stubGlobal('caches', { open: async () => ({ match: async () => undefined, put: puts }) })
+    const appId = 'com.example.kvdeadline'
+    const key = await pluginStateImmutableKey(await pluginStateAppKey(appId), '2')
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const metrics = startPluginStateReadMetrics(c)
+      const session = await startPluginStateRequest(c, appId, 'device')
+      return c.json({ fallback: session === null, metrics })
+    })
+    const request = app.request('/', undefined, {
+      PLUGIN_STATE: { get: () => pending.promise },
+      PLUGIN_STATE_POINTERS: { get: async () => ({ json: async () => ({ f: 1, generation: '2', kvKey: key }) }) },
+    })
+    const response = await request
+    expect(response.headers.get('X-Plugin-State')).toBe('error')
+    expect(await response.json()).toMatchObject({ fallback: true, metrics: { r2_pointer_reads: 1, kv_value_reads: 1, kv_value_timeouts: 1 } })
+    pending.resolve({ f: 1, app_id: appId, exists: false, built_at: Date.now() })
+    await Promise.resolve()
+    expect(puts).not.toHaveBeenCalled()
+  })
+
   it('records R2 and KV operations separately for sampled requests', async () => {
     const current = await pluginStateImmutableKey(KEY, '2')
     const app = new Hono<{ Bindings: { PLUGIN_STATE: KVNamespace } }>()

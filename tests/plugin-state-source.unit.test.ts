@@ -213,11 +213,12 @@ describe('competing full backfills', () => {
           id: after + index, owner_org: 'fixture-org', name: `v-${String(after + index).padStart(5, '0')}`, deleted: false,
         })) }
       }
-      if (statement.sql.includes("public.notify_plugin_state_sync('full'")) {
-        const refs = statement.params[1]
-        if (!Array.isArray(refs))
-          throw new Error('continuation refs were not sent')
-        continuations.push(...refs)
+      if (statement.sql.includes('public.ack_plugin_state_sync(')) {
+        const match = /p_continuations\s*=>\s*\$(\d+)/.exec(statement.sql)
+        if (!match)
+          throw new Error('continuations were not sent atomically with ACK')
+        const refs = JSON.parse(String(statement.params[Number(match[1]) - 1])) as Record<string, string>
+        continuations.push(...Object.values(refs))
       }
       return { rows: [] }
     })

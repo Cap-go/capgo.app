@@ -1,6 +1,7 @@
 import type { PluginStateAppDoc, PluginStateVersionDoc } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
+import * as postgres from '../supabase/functions/_backend/plugin_runtime/utils/pg.ts'
 import { app as statsApp } from '../supabase/functions/_backend/plugin_runtime/plugins/stats.ts'
 import { pluginStateAppKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
 
@@ -24,6 +25,7 @@ vi.mock('hono/adapter', async (importOriginal) => ({
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
 })
 
 describe('KV stats batch sink writes', () => {
@@ -109,5 +111,46 @@ describe('KV stats batch sink writes', () => {
     expect(usage.map(value => point.parse(value).blobs[0]).sort()).toEqual([getDevice, setDevice])
     expect(devices.map(value => point.parse(value).blobs[0])).toEqual([getDevice, setDevice])
     expect(store.get.mock.calls.map(([key]) => key).sort()).toEqual([...docs.keys()].sort())
+  })
+
+  it('bounds oversized distinct-version batches and falls back before writing any stats', async () => {
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('PLUGIN_STATE_KV_AUTHORITATIVE', 'true')
+    vi.stubGlobal('caches', undefined)
+    const replica = vi.spyOn(postgres, 'getPgClient').mockRejectedValue(new Error('injected replica outage'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const appId = 'com.example.kvstatsbudget'
+    const appKey = await pluginStateAppKey(appId)
+    const appDoc: PluginStateAppDoc = {
+      f: 1, app_id: appId, built_at: Date.now(), exists: true,
+      owner: { owner_org: '00000000-0000-4000-8000-000000000007', block_provider_infra_requests: false, channel_device_count: 0 },
+      plan: { customer_id: null, has_credits: false, stripe: null }, channels: [], overrides: {},
+    }
+    const get = vi.fn(async (key: string) => {
+      if (key === appKey)
+        return appDoc
+      throw new Error('oversized batch attempted per-version state reads')
+    })
+    const sink = vi.fn()
+    const response = await statsApp.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({
+        app_id: appId, device_id: '00000000-0000-4000-8000-000000000012', action: 'get',
+        platform: 'android', version_build: '1.0.0', version_name: `1.2.${i}`,
+        plugin_version: '8.53.0', version_os: '17', is_emulator: false, is_prod: true,
+      }))),
+    }, {
+      PLUGIN_STATE: { get }, PLUGIN_STATE_KV: 'on', CAPGO_PREVENT_BACKGROUND_FUNCTIONS: 'true',
+      APP_LOG: { writeDataPoint: sink }, VERSION_USAGE: { writeDataPoint: sink },
+      DEVICE_INFO: { writeDataPoint: sink }, DEVICE_USAGE: { writeDataPoint: sink },
+    })
+    // Only the external replica was failed: the public handler reached its
+    // existing fallback before recording anything or reading version keys.
+    expect(response.status).toBe(500)
+    expect(replica).toHaveBeenCalledOnce()
+    expect(replica.mock.calls[0][1]).toBe(true)
+    expect(get).toHaveBeenCalledExactlyOnceWith(appKey, { type: 'json', cacheTtl: 30 })
+    expect(sink).not.toHaveBeenCalled()
   })
 })

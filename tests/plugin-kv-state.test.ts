@@ -113,7 +113,28 @@ describe.skipIf(process.env.PLUGIN_STATE_KV_TESTS !== 'true')('KV and replica pl
         WHERE app_id = $1 AND name = 'production'`, [fixture.appId, fixture.stable.id])
       await executeSQL('UPDATE public.app_versions SET deleted = true WHERE id = $1', [version.id])
       await syncPluginState()
-      const retired = await comparePluginState(sizeProbe)
+      // The DB cohort retains its original untagged day-long size map. A KV
+      // publication must evict only the KV cohort's short-lived map, so URL-
+      // scoped cached answers intentionally differ until the DB map expires.
+      const retiredKv = await probePluginState(sizeProbe, 'kv')
+      expect(retiredKv.state).toBe('kv')
+      expect(retiredKv.body).toMatchObject({ totalSize: 0, knownFiles: 0, unknownFiles: 5000 })
+      const cachedDb = await probePluginState(sizeProbe, 'db')
+      expect(cachedDb.state).not.toBe('kv')
+      expect(cachedDb.body).toMatchObject({ totalSize: 12_502_500, knownFiles: 5000, unknownFiles: 0 })
+
+      // Hash-only requests with an explicit version id use fresh lookups on
+      // both paths rather than the URL-scoped size-map cache. Their complete
+      // post-deletion status and JSON must still match.
+      const retired = await comparePluginState({
+        ...sizeProbe,
+        name: 'Fresh retired manifest sizes',
+        body: {
+          ...sizeProbe.body,
+          version_id: version.id,
+          files: result.manifest.map(file => ({ file_name: file.file_name, file_hash: file.file_hash })),
+        },
+      })
       expect(retired.kv.body).toMatchObject({ totalSize: 0, knownFiles: 0, unknownFiles: 5000 })
     }
     finally {

@@ -18,8 +18,11 @@ location. On a miss, the reader gets the logical key's pointer through the R2
 binding, validates its generation and immutable KV key, then reads that exact
 KV value. Popular app and manifest documents can reuse a parsed copy in isolate
 memory only after checking the Cache API's publication-generation revision.
-Pointer lookup and JSON decoding share a 50 ms deadline. A timeout discards
-the late result and falls back to the existing replica path.
+Pointer lookup and JSON decoding share a 50 ms deadline; the subsequent KV
+value read has its own 50 ms deadline. A timeout discards the late result and
+falls back to the existing replica path. Each request may load at most 16
+distinct document keys, with at most four concurrent document loads. Oversized
+stats or manifest-key fanout uses the existing batched replica query instead.
 Build timestamps are not cache identities: two publications can have the same
 millisecond timestamp. A successful snapshot request
 opens no SQL connection. A document miss can require both an R2 read and a KV
@@ -42,8 +45,15 @@ Cloudflare documents that writes and negative lookups can remain stale for
 If R2 points to an immutable value that a location cannot read yet, the reader
 falls back to the replica. The Cache API can retain a previous published value
 until its 30-second TTL or a purge; R2 consistency does not bypass that cache.
-Missing document results have a separate 60-second negative TTL. The existing
-purge pipeline schedules repeated purges.
+Missing document results have a separate 60-second negative TTL. Plugin-state
+entries use their own app tag, separate from DB/control and snippet caches.
+Writer publications purge only that namespace; they do not use the replica-lag
+re-purge ladder. KV-sourced answers must not fill the shared DB read cache or
+teach the snippet answers that can be served outside the KV cohort.
+The snippet must also refuse direct on-prem/plan-response cache learning from
+KV-marked Worker responses; skipping only the snippet fill header is not enough.
+Deploy that snippet guard before enabling any read cohort, while preserving
+all existing DB-sourced snippet cache behavior and response contracts.
 
 Read failures, invalid documents, missing bundle-name keys, and missing manifest
 keys use the existing replica path, including in authoritative app mode.
@@ -88,6 +98,22 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 | `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Leave false during backfill so absent apps use replicas. Enable only after verifying complete coverage. |
 | `PLUGIN_STATE_KV_STRICT` | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session. |
 | `PLUGIN_STATE_TIMING` | Plugin Worker runtime | Off. Accepts the same percentage syntax and samples both response paths. |
+
+Set read/timing shares with the internal per-environment commands:
+
+```sh
+bun run plugin-state:set 0.1% prod_eu --dry-run
+bun run plugin-state:timing 1% prod_eu --dry-run
+```
+
+Remove `--dry-run` only during an authorized rollout. Both commands require
+explicit environment names: they never default to all production regions.
+Keep `PLUGIN_STATE_KV`, its authoritative/strict settings, and
+`PLUGIN_STATE_TIMING` out of the shared `.env.prod`. The production plugin bulk
+upload commands reject those keys rather than overwriting regional canaries.
+The strict flag remains false outside tests; leave authoritative mode false
+during rollout. Requests without a device ID use the DB path under a percentage
+share rather than sampling an entire app as one device.
 
 Both the `PLUGIN_STATE` KV namespace and the `PLUGIN_STATE_POINTERS` R2 bucket
 must match between API and plugin workers in each environment. The pointer
@@ -140,7 +166,13 @@ the same version repeatedly through row triggers without queuing thousands of
 copies. Separate producer transactions always retain separate invalidations,
 including while an earlier change is leased. They do not conflict on this
 transaction-scoped unique index.
-An app processed once in a drain is deferred if it appears again in that drain.
+Each new claim uses a fresh generation and fresh source snapshots. Empty
+claims blocked only by cooldown/lease return a bounded retry delay; the drain
+can reclaim within its remaining 20-second budget instead of waiting solely
+for the periodic tick. A full job is included ahead of ordinary backlog rows,
+and a full job in backoff defers an implicit restart. ACK persists and collapses
+full continuations atomically under a live lease, preserving newer explicit
+reset requests.
 Full sync pages bundle names and device keys by indexed cursors, in pages of
 48, then resumes manifest publication with its own cursor. Cleanup lists at
 most 48 logical pointer keys per page so four apps share the same provider
@@ -151,6 +183,13 @@ Successful, failed, and deferred settlements enforce a per-app cooldown so
 another invocation cannot immediately overwrite the same key. Failed work
 gets at most five leases, then retains its exact key in the repair archive.
 Capacity continuation does not spend the provider failure budget.
+
+R2 metadata includes a content digest that excludes the snapshot's `built_at`.
+Unchanged refreshes still write an immutable value and advance the generation
+fence: skipping that fence could let a delayed writer replace current state.
+Only redundant purges are skipped. Changed full-sync pages conservatively
+purge the isolated KV namespace, without purging DB/control/snippet entries or
+scheduling the existing replica-lag repeat ladder.
 
 The immutable keys avoid repeatedly overwriting one KV key, while the pointer
 comparison enforces publication order. The per-app cooldown remains in place.
@@ -220,40 +259,95 @@ work without replacing higher-generation pointers.
 
 ## Progressive rollout
 
-1. Verify matching namespace and pointer-bucket bindings. Deploy the migration
-   and workers with `PLUGIN_STATE_KV=off`. Enable the
-   Vault sync switch. Run `public.plugin_state_sync_tick()` through internal
-   operations to begin or resume the automatic backfill. Do not change public
-   API or CLI permissions.
-2. Verify that every live app has `full_synced_at`, backfill has finished, due
+1. Verify matching namespace and pointer-bucket bindings. Deploy the snippet's
+   KV learning guard first, then the migration and API/plugin workers with
+   `PLUGIN_STATE_KV=off`. Verify the API understands the isolated purge scope
+   before enabling the writer. Before enabling any writer work,
+   establish primary-load, replica-QPS/result-bytes, purge-rate/queue-depth and
+   existing edge/snippet-hit baselines and stop conditions. Do not change
+   public API or CLI permissions.
+2. Enable the Vault sync switch. Run `public.plugin_state_sync_tick()` through
+   internal operations to begin or resume automatic backfill. Watch those
+   baseline metrics while the writer runs. The read percentage does not limit
+   synchronization/backfill or garbage-collection work. An off deployment still
+   adds statement triggers and configuration checks; do not describe it as an
+   unmeasured zero-cost change.
+3. Verify that every live app has `full_synced_at`, backfill has finished, due
    work drains, no leases are stuck, and the failed-work archive is empty.
    Check pointer publication and immutable-KV reads together, including missing
    dependencies, explicit deletion markers, and manifests marked for replicas.
    Exercise a real bundle publish and channel setting change. Verify sync and
    cache purge success logs.
-3. Enable a small timing sample and `PLUGIN_STATE_KV=1%` for one existing
-   regional worker. Leave authoritative mode false and replicas available.
+4. Enable a small timing sample and `PLUGIN_STATE_KV=0.1%` for one existing
+   regional worker, using an explicit environment target. Leave authoritative
+   and strict modes false and replicas available.
    Compare status, errors, p50/p95/p99 request duration, KV fallbacks, and release
    propagation with the DB cohort in the same region and time window. Include
    pointer-cache misses, cold immutable keys, R2 operation counts, and contention
    failures. Measure apps above 500 forced overrides separately, including
    devices without published per-device pointers. Do not reuse mutable-publication
    benchmark results for this gate.
-4. Raise the share only when both request and change-propagation measurements
+5. Raise the share only when both request and change-propagation measurements
    pass. Repeat across regions. Stable sampling keeps each device in one cohort
    across endpoints. Raise to `on` only after coverage is complete.
-5. Treat removing placement or database infrastructure as a separate measured
+6. Treat removing placement or database infrastructure as a separate measured
    rollout. The current PR keeps both available for rollback.
 
-Set `PLUGIN_STATE_KV=off` to stop new KV sessions immediately. Existing CDN and
-app-status caches keep their existing TTL behavior. Keep the writer running
-while investigating a read-path problem. Turn the Vault switch off separately
-if the problem is in the writer.
+Set `PLUGIN_STATE_KV=off` on every enabled regional Worker to stop new KV
+sessions once the setting has applied. This affects new requests, not in-flight
+ones. Existing CDN and app-status caches keep their TTL behavior. KV responses
+must not have populated shared DB/snippet caches; when upgrading from an older
+experimental revision that could do so, purge those affected caches as part of
+rollback. Keep the writer running while investigating a read-path problem.
+
+### Writer pause and recovery
+
+Turn KV reads off in **every enabled region before** disabling the Vault writer
+switch. While that switch is off, source changes are intentionally not queued.
+Daily app-document reconciliation does not reconstruct all version-name,
+per-device or manifest keys, including deletion markers. Do not turn reads back
+on merely because the writer restarted or the visible queue is empty.
+
+An untracked source gap requires a **fresh KV namespace and fresh pointer
+bucket** before reads resume. A full repair in the old namespace is not enough:
+a hard-deleted historical manifest may no longer have a source row or queued
+reference from which its old pointer can be discovered. Its stale KV value
+could otherwise remain readable indefinitely.
+
+With reads still off, stop old writer invocations and bind every API/plugin
+Worker consistently to the new namespace/bucket pair. Drain old requests and
+purge or let all old plugin-state Cache API entries expire before reads resume.
+Keep old resources quarantined until recovery is verified. Re-enable sync,
+explicitly enqueue a full repair with
+`public.enqueue_plugin_state_full_sync(NULL)`, and wait for its full cursors
+and pending work to drain. Include deleted-app bookkeeping in the repair.
+Fresh missing historical manifest keys correctly use replicas rather than
+requiring an unbounded scan of all historical manifest files.
+
+Verify live and deleted versions, forced-override removals and manifest
+changes made during the pause, plus cache purges and the failed-work archive,
+before restarting a small read cohort. Budget recovery from historical key
+count and measured throughput; it can be expensive. An explicitly recorded
+failed key can be repaired in place when there was no untracked gap, but that
+does not justify reusing the old namespace after an unknown set of changes.
+
+The reader cannot detect every semantically stale but valid document. A
+swallowed enqueue error can miss work just as a writer pause can. An exhausted
+or missing publication is an incident: disable affected KV reads and repair
+from the source. Do not assume that daily app refresh or a successful unrelated
+publication repaired non-app dependencies. Failed archive entries require an
+explicit repair; do not reset poison-job retry budgets automatically each day.
+
+Source snapshots use fresh, bounded internal repeatable-read transactions on
+the primary, after which provider I/O runs with the transaction released. This
+is background publication, not a device request or a request-path Hyperdrive
+cache bypass. Gate primary load before increasing writer/backfill work.
 
 Timing logs have `message=plugin_state_request_timing`, the path, method,
 response source, status, Cloudflare colo, duration in milliseconds, and sampling
 basis points. Sampled requests also record `r2_pointer_reads`,
-`r2_pointer_ms`, `r2_pointer_timeouts`, `kv_value_reads`, and `kv_value_ms`.
+`r2_pointer_ms`, `r2_pointer_timeouts`, `kv_value_reads`, `kv_value_ms`, and
+`kv_value_timeouts`.
 The durations and operation counts are per-request totals for each provider;
 cache hits contribute zero provider operations. Gate rollout on R2 time,
 timeout rate, and Class B operation counts separately from KV latency and reads,
@@ -306,7 +400,9 @@ which is validated against each request's clock interval and retry duration.
 
 The benchmark uses isolated invented fixtures. It reports sample counts and
 latency distributions for existing/new bundle checks, channels, stats, and
-manifest sizes. Cache API eviction is reported separately from warm reads.
+manifest sizes. The cache-tag-purge scenario is reported separately from warm
+reads; it removes tagged entries only. DB caches that are intentionally
+untagged, including the original v1 manifest-size maps, keep their normal TTL.
 Before creating any fixture, it checks `public.plugin_state_sync_enabled()`.
 A fresh local database must have the Vault secret
 `CAPGO_PLUGIN_STATE_SYNC_ENABLED` enabled first, either through local Vault
@@ -318,14 +414,15 @@ drain and measure from database commit while the writer runs asynchronously.
 The benchmark must pass response parity and KV-source assertions before its
 timings can be used.
 
-Complete manifest-size maps retain their existing Cache API fast path. New
-version-2 entries carry purge tags; old untagged entries are not reused. A
-warm request needs neither a database lookup nor a KV document read. Maps
-filled by the KV path expire after 30 seconds.
+Complete DB manifest-size maps retain their existing untagged v1 Cache API
+path and day-long TTL. KV-filled maps use a separate path, the isolated
+plugin-state app tag and a 30-second TTL. A warm DB map request needs neither
+a database lookup nor a KV document read. Selecting a small KV cohort does not
+make DB/control map entries globally purgeable.
 
 The worker size baseline was refreshed earlier in this feature. The historical
 unchanged branch base measured 474.43 KiB, gzip 141.80 KiB. The current immutable
-KV/R2 plugin Worker dry build measures 500.60 KiB, gzip 149.53 KiB, and passes
+KV/R2 plugin Worker dry build measures 501.97 KiB, gzip 149.98 KiB, and passes
 the size check. Runtime document validation uses dependency-free predicates to
 avoid adding a schema interpreter to the plugin worker.
 

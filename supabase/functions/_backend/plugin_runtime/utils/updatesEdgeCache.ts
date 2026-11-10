@@ -1,7 +1,7 @@
 import type { Context } from 'hono'
 import { CacheHelper } from './cache.ts'
 import { withFreshReads } from './hyperdriveFreshRead.ts'
-import { isPluginStateEnabled, isPluginStateServed } from './pluginStateSwitch.ts'
+import { isPluginStateServed } from './pluginStateSwitch.ts'
 import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
@@ -133,10 +133,10 @@ export function getUpdatesEdgeCacheTtlSeconds(c: Context) {
 
 /**
  * Tags to attach to any /updates Cache API entry of this app, or none when
- * neither the edge cache nor the KV plugin state is on (both rely on purges).
+ * the existing edge cache is off. KV state uses its own isolated tags.
  */
 export function updatesCacheTags(c: Context, appId: string) {
-  return isUpdatesEdgeCacheEnabled(c) || isPluginStateEnabled(c) ? [updatesAppCacheTag(appId)] : undefined
+  return isUpdatesEdgeCacheEnabled(c) ? [updatesAppCacheTag(appId)] : undefined
 }
 
 export interface EdgeCacheLookup<T> {

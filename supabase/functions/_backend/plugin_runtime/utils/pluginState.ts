@@ -25,11 +25,12 @@ import {
   evalManifestEntries,
 } from './pluginStateEval.ts'
 import { PLUGIN_STATE_FORMAT, pluginStateAppKey, pluginStateDeviceKey, pluginStateManifestKey, pluginStateVersionKey } from './pluginStateFormat.ts'
+import { withPluginStateDocument } from './pluginStateReadBudget.ts'
 import { bindPluginStateQueries, PluginStateMiss } from './pluginStateRegistry.ts'
 import { readPublishedPluginState } from './pluginStateStore.ts'
 import { isPluginStateStrict, markPluginStateServed, parsePluginStateShareBps, pluginStateBucket, unmarkPluginStateServed } from './pluginStateSwitch.ts'
 import { parsePluginStateApp, parsePluginStateDevice, parsePluginStateManifestStorage, parsePluginStateVersion } from './pluginStateValidation.ts'
-import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
+import { pluginStateAppCacheTag } from './updatesCacheTag.ts'
 import { backgroundTask, getEnv } from './utils.ts'
 
 /**
@@ -52,10 +53,10 @@ import { backgroundTask, getEnv } from './utils.ts'
  * request served from the state.
  */
 
-const APP_CACHE_PATH = '/.plugin-state-app-v1'
-const DEVICE_CACHE_PATH = '/.plugin-state-device-v1'
-const VERSION_CACHE_PATH = '/.plugin-state-version-v1'
-const MANIFEST_CACHE_PATH = '/.plugin-state-manifest-v1'
+const APP_CACHE_PATH = '/.plugin-state-app-v2'
+const DEVICE_CACHE_PATH = '/.plugin-state-device-v2'
+const VERSION_CACHE_PATH = '/.plugin-state-version-v2'
+const MANIFEST_CACHE_PATH = '/.plugin-state-manifest-v2'
 /** A stale KV refill must not be amplified into hours of Cache API staleness. */
 const APP_CACHE_TTL_SECONDS = 30
 const VERSION_CACHE_TTL_SECONDS = 30
@@ -110,7 +111,7 @@ export function shouldUsePluginState(c: AnyContext, appId: string, deviceId: str
   if (forced)
     return forced === 'kv'
   const bps = parsePluginStateShareBps(getEnv(c, 'PLUGIN_STATE_KV'))
-  return bps >= 10_000 || (bps > 0 && pluginStateBucket(appId, deviceId) < bps)
+  return bps >= 10_000 || (bps > 0 && Boolean(deviceId) && pluginStateBucket(appId, deviceId) < bps)
 }
 
 interface CachedDoc<T> {
@@ -161,7 +162,11 @@ interface DocLoadOptions<T> {
  * One document: Cache API (reusing the parsed copy in isolate memory when
  * the entry is the same build), then KV. null: the key is not in KV.
  */
-async function loadDoc<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<T | null> {
+function loadDoc<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<T | null> {
+  return withPluginStateDocument(c, options.kvKey, () => loadDocument(c, store, options))
+}
+
+async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<T | null> {
   const helper = new CacheHelper(c)
   const request = helper.buildRequest(options.cachePath, options.params)
   const cached = await helper.matchResponse(request, { timeoutMs: CACHE_MATCH_TIMEOUT_MS })
@@ -211,7 +216,7 @@ function loadAppDoc(c: AnyContext, store: KVNamespace, appId: string, kvKey: str
     cachePath: APP_CACHE_PATH,
     params: { app_id: appId },
     kvKey,
-    tags: [updatesAppCacheTag(appId)],
+    tags: [pluginStateAppCacheTag(appId)],
     ttlSeconds: APP_CACHE_TTL_SECONDS,
     reuseParsed: true,
     parse: parsePluginStateApp,
@@ -343,7 +348,7 @@ export class PluginStateSession implements PluginStateQueries {
           cachePath: DEVICE_CACHE_PATH,
           params: { app_id: this.appId, device_id: deviceId },
           kvKey,
-          tags: [updatesAppCacheTag(this.appId)],
+          tags: [pluginStateAppCacheTag(this.appId)],
           ttlSeconds: APP_CACHE_TTL_SECONDS,
           parse: parsePluginStateDevice,
         }))
@@ -367,7 +372,7 @@ export class PluginStateSession implements PluginStateQueries {
         cachePath: VERSION_CACHE_PATH,
         params: { app_id: this.appId, name: versionName },
         kvKey,
-        tags: [updatesVersionsCacheTag(this.appId), updatesAppCacheTag(this.appId)],
+        tags: [pluginStateAppCacheTag(this.appId)],
         ttlSeconds: VERSION_CACHE_TTL_SECONDS,
         parse: parsePluginStateVersion,
       })).then((doc) => {
@@ -387,9 +392,9 @@ export class PluginStateSession implements PluginStateQueries {
     if (!pending) {
       pending = loadDoc<PluginStateManifestDoc | PluginStateManifestFallbackDoc>(this.c, this.store, {
         cachePath: MANIFEST_CACHE_PATH,
-        params: { version_id: id },
+        params: { app_id: this.appId, version_id: id },
         kvKey: pluginStateManifestKey(id),
-        tags: [updatesAppCacheTag(this.appId)],
+        tags: [pluginStateAppCacheTag(this.appId)],
         ttlSeconds: MANIFEST_CACHE_TTL_SECONDS,
         reuseParsed: true,
         parse: parsePluginStateManifestStorage,

@@ -25,7 +25,7 @@ import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { makeDevice } from './plugin_parser.ts'
 import { createStatsBandwidth, createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } from './plugin_stats.ts'
 import { getAppOwnerWithEdgeCache } from './pluginEdgeCacheReads.ts'
-import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, markPluginStateResponse, startPluginStateRequest } from './pluginState.ts'
+import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, markPluginStateResponse, shouldUsePluginState, startPluginStateRequest } from './pluginState.ts'
 import { pluginStateQueriesFor } from './pluginStateRegistry.ts'
 import { getClientIP } from './rate_limit.ts'
 import { onPremiseAppResponse } from './rateLimitInfo.ts'
@@ -1062,7 +1062,7 @@ export async function update(c: Context, body: AppInfos) {
     if (providerBlockedResponse)
       return providerBlockedResponse
   }
-  if (appStatus.cacheHit && appStatus.status === 'cloud') {
+  if (appStatus.cacheHit && appStatus.status === 'cloud' && !shouldUsePluginState(c, body.app_id, body.device_id ?? '')) {
     const upToDateResponse = await upToDateFromReadCache(c, body, appStatus)
     if (upToDateResponse)
       return upToDateResponse

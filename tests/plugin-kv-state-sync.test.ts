@@ -37,6 +37,7 @@ interface Claim {
   status: 'ok' | 'empty' | 'busy'
   lease_token?: string
   generation?: string
+  retry_after_ms?: number
   apps?: { app_id: string, jobs: { kind: string, ref: string }[], attempts: number }[]
 }
 
@@ -224,14 +225,106 @@ describe('plugin KV sync queue contracts', () => {
     })
   })
 
+
+  it('prioritizes and advances a full cursor behind more than 48 device jobs', async () => {
+    await inTransaction(async () => {
+      await enqueue(160)
+      const old = JSON.stringify({ p: 'versions', after: 'v-00047' })
+      const current = JSON.stringify({ p: 'versions', after: 'v-00095' })
+      const next = JSON.stringify({ p: 'devices', after: 'device-00047' })
+      await client.query(`INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, due_at)
+        VALUES ($1, 'full', $2, now() - interval '10 years'), ($1, 'full', $3, now() - interval '10 years')`, [APP_ID, old, current])
+      await client.query(`UPDATE public.plugin_state_sync_pending SET lease_token = gen_random_uuid(), leased_until = now() - interval '1 second' WHERE app_id = $1 AND kind = 'full' AND ref = $2`, [APP_ID, old])
+      const first = await claim()
+      const jobs = first.apps?.find(app => app.app_id === APP_ID)?.jobs
+      expect(jobs).toHaveLength(48)
+      expect(jobs?.find(job => job.kind === 'full')?.ref).toBe(current)
+      await client.query(`SELECT public.ack_plugin_state_sync(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_changed_apps => '{}'::text[],
+        p_continuations => jsonb_build_object($2::text, $3::text))`, [first.lease_token, APP_ID, next])
+      const { rows: cursors } = await client.query<{ ref: string }>(`SELECT ref FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'full'`, [APP_ID])
+      expect(cursors).toEqual([{ ref: next }])
+      await client.query(`UPDATE public.plugin_state_sync_cooldowns SET next_write_at = now() - interval '2 seconds' WHERE app_id = $1`, [APP_ID])
+      await client.query(`UPDATE public.plugin_state_sync_pending SET due_at = now() - interval '2 seconds' WHERE app_id = $1 AND kind = 'full'`, [APP_ID])
+      const second = await claim()
+      expect(second.apps?.find(app => app.app_id === APP_ID)?.jobs.find(job => job.kind === 'full')?.ref).toBe(next)
+    })
+  })
+
+  it('retains a fresh explicit full reset while collapsing obsolete continuation rows', async () => {
+    await inTransaction(async () => {
+      const current = JSON.stringify({ p: 'versions', after: 'v-00095' })
+      const next = JSON.stringify({ p: 'devices', after: null })
+      await client.query(`INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, due_at)
+        VALUES ($1, 'full', $2, now() - interval '10 years')`, [APP_ID, current])
+      const first = await claim()
+      await client.query(`SELECT set_config('capgo.plugin_state_wake_sent', 'on', true)`)
+      await client.query(`SELECT public.notify_plugin_state_sync('full', ARRAY[$1]::text[])`, [APP_ID])
+      await client.query(`SELECT public.ack_plugin_state_sync(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_changed_apps => '{}'::text[],
+        p_continuations => jsonb_build_object($2::text, $3::text))`, [first.lease_token, APP_ID, next])
+      await client.query(`UPDATE public.plugin_state_sync_cooldowns SET next_write_at = now() - interval '2 seconds' WHERE app_id = $1`, [APP_ID])
+      await client.query(`UPDATE public.plugin_state_sync_pending SET due_at = now() - interval '2 seconds' WHERE app_id = $1`, [APP_ID])
+      const second = await claim()
+      expect(second.apps?.find(app => app.app_id === APP_ID)?.jobs.find(job => job.kind === 'full')?.ref).toBe('')
+      await client.query(`SELECT public.ack_plugin_state_sync(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_full_done => ARRAY[$2]::text[], p_changed_apps => '{}'::text[])`, [second.lease_token, APP_ID])
+      const { rows: cursors } = await client.query(`SELECT ref FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'full'`, [APP_ID])
+      expect(cursors).toEqual([])
+    })
+  })
+
+  it('does not purge any cache for an unchanged snapshot refresh', async () => {
+    await inTransaction(async () => {
+      await enqueue()
+      const first = await claim()
+      await client.query('DELETE FROM public.updates_cache_purge_pending WHERE app_id = $1', [APP_ID])
+      await client.query(`SELECT public.ack_plugin_state_sync(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_changed_apps => '{}'::text[])`, [first.lease_token, APP_ID])
+      const { rows: purges } = await client.query(`SELECT id FROM public.updates_cache_purge_pending WHERE app_id = $1`, [APP_ID])
+      expect(purges).toEqual([])
+    })
+  })
+
+  it('keeps exhausted keys archived until an explicit full repair retries their exact identities', async () => {
+    await inTransaction(async () => {
+      await client.query(`INSERT INTO public.plugin_state_sync_failed (app_id, kind, ref, repair_at)
+        VALUES ($1, 'manifest', '123456789', now() - interval '2 days'), ($1, 'app', '', now() - interval '2 days')`, [APP_ID])
+      await client.query(`INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at) VALUES ($1, now() - interval '2 days', now() - interval '2 days')`, [APP_ID])
+      await client.query(`CREATE OR REPLACE FUNCTION public.plugin_state_sync_enabled()
+        RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $body$ SELECT true $body$`)
+      await client.query(`SELECT set_config('capgo.plugin_state_wake_sent', 'on', true)`)
+      await client.query('SELECT public.plugin_state_sync_tick()')
+      const { rows: archived } = await client.query(`SELECT kind, ref FROM public.plugin_state_sync_failed WHERE app_id = $1`, [APP_ID])
+      expect(archived).toEqual(expect.arrayContaining([{ kind: 'manifest', ref: '123456789' }, { kind: 'app', ref: '' }]))
+      expect(archived).toHaveLength(2)
+      const { rows: automaticallyRetried } = await client.query(`SELECT ref FROM public.plugin_state_sync_pending WHERE app_id = $1`, [APP_ID])
+      expect(automaticallyRetried).toEqual([])
+      await client.query('SELECT public.enqueue_plugin_state_full_sync(ARRAY[$1]::text[])', [APP_ID])
+      const { rows: repair } = await client.query(`SELECT ref FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = 'manifest'`, [APP_ID])
+      expect(repair).toEqual([{ ref: '123456789' }])
+    })
+  })
+
   it('keeps same-app writes at least one second apart across invocations', async () => {
     await inTransaction(async () => {
       await enqueue()
       const first = await claim()
       await ack(first.lease_token!)
       await enqueue()
+      const cooldown = await client.query<{ remaining_ms: number }>(`SELECT
+        EXTRACT(epoch FROM (next_write_at - clock_timestamp())) * 1000 AS remaining_ms
+        FROM public.plugin_state_sync_cooldowns WHERE app_id = $1`, [APP_ID])
+      expect(Number(cooldown.rows[0].remaining_ms)).toBeGreaterThan(0)
+      expect(Number(cooldown.rows[0].remaining_ms)).toBeLessThanOrEqual(1100)
       const second = await claim()
       expect(second.apps?.some(app => app.app_id === APP_ID) ?? false).toBe(false)
+      // Other parallel fixtures may be eligible. Retry metadata is returned
+      // only when the global claim is empty, not when it leases another app.
+      if (second.status === 'empty') {
+        expect(second.retry_after_ms).toBeGreaterThan(0)
+        expect(second.retry_after_ms).toBeLessThanOrEqual(120000)
+      }
       await client.query(`UPDATE public.plugin_state_sync_cooldowns SET next_write_at = now() - interval '2 seconds' WHERE app_id = $1`, [APP_ID])
       const third = await claim()
       expect(third.apps?.find(app => app.app_id === APP_ID)?.jobs).toHaveLength(1)
@@ -271,7 +364,7 @@ describe('plugin KV sync queue contracts', () => {
       await client.query(`UPDATE public.plugin_state_sync_pending SET leased_until = now() - interval '1 second' WHERE app_id = $1`, [APP_ID])
       const replacement = await claim()
       expect(BigInt(replacement.generation!)).toBeGreaterThan(BigInt(first.generation!))
-      await ack(first.lease_token!)
+      await client.query(`SELECT public.ack_plugin_state_sync(p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_continuations => jsonb_build_object($2::text, 'stale-cursor'))`, [first.lease_token, APP_ID])
       const { rows: pending } = await client.query<{ lease_token: string }>('SELECT lease_token FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])
       expect(pending).toEqual([{ lease_token: replacement.lease_token }])
       const { rows: bookkeeping } = await client.query('SELECT app_id FROM public.plugin_state_sync_apps WHERE app_id = $1', [APP_ID])
@@ -292,15 +385,15 @@ describe('plugin KV sync queue contracts', () => {
     })
   })
 
-  it('persists both purge scopes atomically with successful sync acknowledgement', async () => {
+  it('persists only isolated snapshot purges without the replica-lag repeat ladder', async () => {
     await inTransaction(async () => {
       await enqueue()
       const first = await claim()
       await client.query('DELETE FROM public.updates_cache_purge_pending WHERE app_id = $1', [APP_ID])
       await client.query(`SELECT public.ack_plugin_state_sync(
         p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_versions_changed => ARRAY[$2]::text[])`, [first.lease_token, APP_ID])
-      const { rows: purges } = await client.query<{ scope: string }>('SELECT scope FROM public.updates_cache_purge_pending WHERE app_id = $1 ORDER BY scope', [APP_ID])
-      expect(purges).toEqual([{ scope: 'app' }, { scope: 'versions' }])
+      const { rows: purges } = await client.query<{ scope: string, initial: boolean }>('SELECT scope, initial FROM public.updates_cache_purge_pending WHERE app_id = $1 ORDER BY scope', [APP_ID])
+      expect(purges).toEqual([{ scope: 'plugin_state', initial: false }])
       const { rows: pending } = await client.query('SELECT id FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])
       expect(pending).toEqual([])
     })
