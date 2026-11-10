@@ -12,7 +12,6 @@ import {
   getWebhookPublicUrlValidationError,
   queueWebhookDelivery,
 } from './webhook.ts'
-import { getPublicHostnameValidationError } from './publicUrl.ts'
 import { checkPermission } from './rbac.ts'
 
 export const MAX_ACTIVE_MCP_SUBSCRIPTIONS_PER_ORG = 25
@@ -388,19 +387,9 @@ export async function upsertMcpEventSubscription(
   if (!secret || !parseWhsecSecret(secret))
     throw Object.assign(new Error('delivery.secret must be a whsec_ secret'), { code: 'invalid_secret' })
 
-  const hostError = await getPublicHostnameValidationError(input.delivery.url, {
-    allowLocalUrls: false,
-    requireDnsResolution: false,
-    messages: {
-      invalidUrl: 'Webhook URL is invalid',
-      publicHost: 'Webhook URL must point to a public host',
-      ipLiteral: 'Webhook URL must use a hostname, not an IP address',
-      https: 'Webhook URL must use HTTPS',
-      dnsResolution: 'Webhook URL host could not be resolved',
-    },
-  })
-  if (hostError)
-    throw Object.assign(new Error(hostError), { code: 'invalid_url' })
+  const urlError = await getWebhookPublicUrlValidationError(c, input.delivery.url)
+  if (urlError)
+    throw Object.assign(new Error(urlError), { code: 'invalid_url' })
 
   const expiresAt = computeExpiresAt(input.ttlMs)
   const subscriptionNameValue = subscriptionName(input.name, args)

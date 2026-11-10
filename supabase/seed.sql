@@ -779,6 +779,11 @@ BEGIN
     (NOW(), '00000000-0000-0000-0000-000000000005', '1.0.0', 'com.stats.app', 'android', '4.15.3', '11', '1.0.0', 'stats-test-device', 't', 'f'),
     (NOW(), '00000000-0000-0000-0000-000000000006', '1.0.0', 'com.demo.app', 'electron', '7.0.0', 'Linux 5.15', '1.0.0', 'electron-test-device', 't', 'f');
 
+    INSERT INTO public.webhooks (id, org_id, name, url, secret, enabled, events, created_at, updated_at, created_by, delivery_version, source, expires_at, mcp_event, mcp_arguments, mcp_verified_at)
+    VALUES
+      ('d7820000-0000-4000-8000-0000000000a1'::uuid, '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid, 'CI bundle audit', 'https://hooks.example.com/capgo/console/demo', 'whsec_demo_console_webhook_000000000000000', true, ARRAY['app_versions']::text[], NOW() - interval '30 days', NOW() - interval '1 day', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'standard', 'console', NULL, NULL, NULL, NULL),
+      ('d7820000-0000-4000-8000-0000000000b1'::uuid, '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid, 'MCP · bundle.uploaded · 046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'https://hooks.example.com/capgo/mcp/demo', 'whsec_demo_mcp_events_0000000000000000', true, ARRAY['bundle.uploaded']::text[], NOW() - interval '2 hours', NOW() - interval '30 minutes', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'standard', 'mcp', NOW() + interval '20 hours', 'bundle.uploaded', pg_catalog.jsonb_build_object('org_id', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'app_id', 'com.demo.app'), NOW() - interval '2 hours');
+
     -- Drop replicated orgs but keet the the seed ones
     DELETE from "public"."orgs" where POSITION('organization' in orgs.name)=1;
     PERFORM setval('public.apikeys_id_seq', 113, true);
