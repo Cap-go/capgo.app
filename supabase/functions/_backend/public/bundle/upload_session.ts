@@ -20,6 +20,7 @@ import { manifestUploadPublicUrl } from '../../private/request_manifest_upload.t
 import { compareNativePackages, summarizeBundleCompatibility } from '../../utils/bundle_compatibility.ts'
 import { BundleUploadTokenError, getBundleUploadSessionSecret, signBundleUploadToken, verifyBundleUploadToken } from '../../utils/bundle_upload_token.ts'
 import { BundleZipError, checksumAlgorithmForUpdater, isCordovaUpdaterPackage, isExactUpdaterVersion, compressDeltaFile, containsAscii, Crc32, extractDeltaPack, findCentralDirectory, hasRootIndexHtml, inflateEntry, isJsEntry, parseCentralDirectory, selectDeltaEntries, sha256Hex, updaterSupportsDelta, walkZipStream, ZIP_TAIL_READ_SIZE } from '../../utils/bundle_zip.ts'
+import { recordCicdDeploy } from '../../utils/cicdDetection.ts'
 import { BRES, quickError, simpleError } from '../../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { MAX_MANIFEST_ENTRIES } from '../../utils/manifest_limits.ts'
@@ -1431,8 +1432,10 @@ export async function completeBundleUpload(c: UploadContext, rawBody: unknown, a
   const claims = await readClaims(c, rawBody, apikey)
   const version = await loadSessionVersion(c, claims)
   const resumed = await resumeChannelAssignments(c, claims, apikey, version)
-  if (resumed)
+  if (resumed) {
+    await recordCicdDeploy(c, { appId: claims.app_id, product: 'ota', apikeyRbacId: apikey.rbac_id })
     return resumed
+  }
   await claimSession(c, claims, version)
 
   const warnings: string[] = []
@@ -1480,6 +1483,8 @@ export async function completeBundleUpload(c: UploadContext, rawBody: unknown, a
       warnings.push(`Cannot delete linked bundle ${linked.version.name}: ${(error as Error)?.message ?? 'unknown error'}`)
     }
   }
+
+  await recordCicdDeploy(c, { appId: claims.app_id, product: 'ota', apikeyRbacId: apikey.rbac_id })
 
   cliStyleEvent(c, claims.owner_org, claims.app_id, 'app', 'App Uploaded', { bundle: claims.version })
   cliStyleEvent(c, claims.owner_org, claims.app_id, 'app', 'Bundle Uploaded', { bundle: claims.version }, true)
