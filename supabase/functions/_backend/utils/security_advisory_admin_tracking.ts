@@ -170,11 +170,17 @@ export async function buildAdminSecurityUpdatesTracking(
   const adoptionByAdvisory: Record<string, AdvisoryAdoptionSummary> = {}
   const advisories: SecurityAdvisoryAdminRow[] = []
 
-  for (const advisory of feed.advisories) {
-    const [email, adoption] = await Promise.all([
-      loadSecurityAdvisoryBentoEmailStats(c, advisory.ghsa_id),
-      Promise.resolve(summarizeAdoptionForAdvisory(advisory, perAppPackages)),
-    ])
+  const advisoryRows = await Promise.all(
+    feed.advisories.map(async (advisory) => {
+      const [email, adoption] = await Promise.all([
+        loadSecurityAdvisoryBentoEmailStats(c, advisory.ghsa_id),
+        Promise.resolve(summarizeAdoptionForAdvisory(advisory, perAppPackages)),
+      ])
+      return { advisory, email, adoption }
+    }),
+  )
+
+  for (const { advisory, email, adoption } of advisoryRows) {
     adoptionByAdvisory[advisory.ghsa_id] = adoption
     advisories.push({
       ghsa_id: advisory.ghsa_id,

@@ -112,10 +112,12 @@ export function buildReportedPackageMap(nativeRow: ReportedVersionsRow | null, l
   return map
 }
 
-interface AppReportedPackagesRow {
+export interface AppReportedPackagesRow {
   app_id: string
+  has_production_channel: boolean
   production_native_packages: unknown
   production_cli_version: string | null
+  has_latest_upload: boolean
   latest_native_packages: unknown
   latest_cli_version: string | null
 }
@@ -143,28 +145,34 @@ latest AS (
 )
 SELECT
   a.app_id,
+  (p.app_id IS NOT NULL) AS has_production_channel,
   p.production_native_packages,
   p.production_cli_version,
+  (l.app_id IS NOT NULL) AS has_latest_upload,
   l.latest_native_packages,
   l.latest_cli_version
 FROM public.apps a
 LEFT JOIN production p ON p.app_id = a.app_id
 LEFT JOIN latest l ON l.app_id = a.app_id`
 
+/** Same production/latest row rules as loadAppReportedPackages, for one catalog SQL row. */
+export function reportedPackageMapFromCatalogRow(row: AppReportedPackagesRow): Map<string, string> {
+  const productionRow = row.has_production_channel
+    ? { native_packages: row.production_native_packages, cli_version: row.production_cli_version }
+    : null
+  const latestRow = row.has_latest_upload
+    ? { native_packages: row.latest_native_packages, cli_version: row.latest_cli_version }
+    : null
+  const nativeRow = productionRow ?? latestRow
+  return buildReportedPackageMap(nativeRow, latestRow)
+}
+
 /** Reported in-scope packages for every app (one catalog query, same rules as loadAppReportedPackages). */
 export async function loadAllAppsReportedPackages(client: ReportedVersionsClient): Promise<Map<string, Map<string, string>>> {
   const rows = await queryJson<AppReportedPackagesRow>(client, ALL_APPS_REPORTED_PACKAGES_SQL)
   const result = new Map<string, Map<string, string>>()
-  for (const row of rows) {
-    const productionRow = row.production_native_packages != null
-      ? { native_packages: row.production_native_packages, cli_version: row.production_cli_version }
-      : null
-    const latestRow = row.latest_native_packages != null
-      ? { native_packages: row.latest_native_packages, cli_version: row.latest_cli_version }
-      : null
-    const nativeRow = productionRow ?? latestRow
-    result.set(row.app_id, buildReportedPackageMap(nativeRow, latestRow))
-  }
+  for (const row of rows)
+    result.set(row.app_id, reportedPackageMapFromCatalogRow(row))
   return result
 }
 
