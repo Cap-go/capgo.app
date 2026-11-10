@@ -86,6 +86,7 @@ export function formatCreditPriceValue(pricePerUnit: number) {
   })
 }
 
+/** Formats a localized display rate per 1,000 users for MAU, or per billed unit for other metrics. */
 export function formatCreditPricingPrice(
   metric: CreditMetricType,
   pricePerUnit: number,
@@ -99,6 +100,7 @@ export function formatCreditPricingPrice(
   })
 }
 
+/** Labels actual user thresholds for MAU and billed-unit thresholds for the other metrics. */
 export function formatCreditPricingTierLabel(
   step: Pick<CreditPricingStep, 'type' | 'step_min' | 'step_max' | 'unit_factor'>,
   t: Translate,
