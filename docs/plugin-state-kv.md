@@ -129,6 +129,13 @@ Internal RPCs are restricted to `service_role`; the migration changes no
 published CLI RPC or existing grant. No new function runs in plugin-request
 RLS or per-device SQL reads.
 
+Repair-status checks run once per claimed app that needs an app document but
+holds no full job, at most four apps per claim. The three existence checks use
+the app primary key, the pending-full app index and the failed-key primary key.
+ACK completion checks likewise run per settled app, rather than per source row.
+Explicit full repair clears completion markers once per selected app; selecting
+all apps is an operator-triggered repair operation, not a device request.
+
 The enqueue trigger runs once per source statement over transition tables,
 including writes reached through authenticated APIs and internal jobs. It
 records changed keys without rebuilding state inside the transaction. Joins
@@ -170,9 +177,13 @@ Each new claim uses a fresh generation and fresh source snapshots. Empty
 claims blocked only by cooldown/lease return a bounded retry delay; the drain
 can reclaim within its remaining 20-second budget instead of waiting solely
 for the periodic tick. A full job is included ahead of ordinary backlog rows,
-and a full job in backoff defers an implicit restart. ACK persists and collapses
-full continuations atomically under a live lease, preserving newer explicit
-reset requests.
+and a full job in backoff defers an implicit restart, including repairs of
+previously completed apps. ACK collapses full continuations only when the
+lease held full work or supplies a continuation; an unrelated acknowledgement
+preserves a cursor in backoff. It persists progress atomically under a live
+lease, preserving newer explicit reset requests. Explicit repair clears the
+old `full_synced_at` marker, and an older ACK cannot restore it while another
+full job or archived full failure remains.
 Full sync pages bundle names and device keys by indexed cursors, in pages of
 48, then resumes manifest publication with its own cursor. Cleanup lists at
 most 48 logical pointer keys per page so four apps share the same provider
@@ -183,13 +194,19 @@ Successful, failed, and deferred settlements enforce a per-app cooldown so
 another invocation cannot immediately overwrite the same key. Failed work
 gets at most five leases, then retains its exact key in the repair archive.
 Capacity continuation does not spend the provider failure budget.
+An archived full failure blocks implicit full-scan restarts and app-manifest
+continuations from ordinary changes. Those changes may still publish their
+individual version, device or manifest keys; a full repair requires an explicit
+operator request.
 
 R2 metadata includes a content digest that excludes the snapshot's `built_at`.
 Unchanged refreshes still write an immutable value and advance the generation
 fence: skipping that fence could let a delayed writer replace current state.
-Only redundant purges are skipped. Changed full-sync pages conservatively
-purge the isolated KV namespace, without purging DB/control/snippet entries or
-scheduling the existing replica-lag repeat ladder.
+Only redundant purges are skipped. Retries and explicit full resets request a
+conservative purge even if the content digest is unchanged: a previous attempt
+may have advanced a pointer without committing its purge. Changed full-sync
+pages also purge the isolated KV namespace, without purging DB/control/snippet
+entries or scheduling the existing replica-lag repeat ladder.
 
 The immutable keys avoid repeatedly overwriting one KV key, while the pointer
 comparison enforces publication order. The per-app cooldown remains in place.
@@ -320,7 +337,10 @@ purge or let all old plugin-state Cache API entries expire before reads resume.
 Keep old resources quarantined until recovery is verified. Re-enable sync,
 explicitly enqueue a full repair with
 `public.enqueue_plugin_state_full_sync(NULL)`, and wait for its full cursors
-and pending work to drain. Include deleted-app bookkeeping in the repair.
+and pending work to drain. The enqueue clears earlier `full_synced_at` markers;
+verify that every live app receives a new completion marker and that no full
+failure remains archived. An empty queue alone does not prove completion.
+Include deleted-app bookkeeping in the repair.
 Fresh missing historical manifest keys correctly use replicas rather than
 requiring an unbounded scan of all historical manifest files.
 

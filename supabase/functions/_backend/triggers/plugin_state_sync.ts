@@ -760,9 +760,13 @@ async function fullSync(source: SourceReader, store: SyncStore, appId: string, r
 
 // ---- Drain --------------------------------------------------------------------
 
-async function isFullySynced(source: SourceReader, appId: string) {
-  const [row] = await sourceRows<{ full_synced_at: string | null }>(source, sql`SELECT s.full_synced_at::text FROM public.plugin_state_sync_apps s WHERE s.app_id = ${appId}`)
-  return Boolean(row?.full_synced_at)
+async function readSyncStatus(source: SourceReader, appId: string) {
+  const [row] = await sourceRows<{ fully_synced: boolean, pending_full: boolean, archived_full: boolean }>(source, sql`
+    SELECT
+      EXISTS (SELECT 1 FROM public.plugin_state_sync_apps WHERE app_id = ${appId} AND full_synced_at IS NOT NULL) AS fully_synced,
+      EXISTS (SELECT 1 FROM public.plugin_state_sync_pending WHERE app_id = ${appId} AND kind = 'full') AS pending_full,
+      EXISTS (SELECT 1 FROM public.plugin_state_sync_failed WHERE app_id = ${appId} AND kind = 'full') AS archived_full`)
+  return row ?? { fully_synced: false, pending_full: false, archived_full: false }
 }
 
 async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp, deadline: number): Promise<AppOutcome> {
@@ -774,16 +778,12 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     const deviceIds = refsOf('device')
     const manifestIds = refsOf('manifest').map(Number).filter(id => Number.isSafeInteger(id) && id > 0)
     const wantsApp = item.jobs.some(job => job.kind === 'app') || deviceIds.length > 0
-    const needsFull = fullJobs.length > 0 || (wantsApp && !(await isFullySynced(source, appId)))
-    if (needsFull && fullJobs.length === 0) {
-      const pendingFull = await sourceRows<{ found: number }>(source, sql`
-        SELECT 1 AS found FROM public.plugin_state_sync_pending
-        WHERE app_id = ${appId} AND kind = 'full' LIMIT 1`)
-      // The continuation may be in provider-failure backoff. A newer device
-      // job must not bypass it and restart the full scan from its first key.
-      if (pendingFull.length > 0)
-        return { appId, ok: false, deferred: true }
-    }
+    const syncStatus = wantsApp && fullJobs.length === 0 ? await readSyncStatus(source, appId) : null
+    // This also applies to repairs of previously completed apps. The old
+    // completion marker must not let newer jobs overtake a cursor in backoff.
+    if (syncStatus?.pending_full)
+      return { appId, ok: false, deferred: true }
+    const needsFull = fullJobs.length > 0 || Boolean(syncStatus && !syncStatus.fully_synced && !syncStatus.archived_full)
 
     // Single keys first: they read the database now, so they are never older
     // than what a concurrent full sync wrote.
@@ -793,6 +793,11 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
       await syncDevices(source, store, appId, deviceIds)
     if (manifestIds.length > 0)
       await syncManifests(source, store, manifestIds)
+
+    // Single-key changes may publish, but must not grant an exhausted full
+    // scan a fresh implicit retry budget or app-manifest continuation.
+    if (syncStatus?.archived_full)
+      return { appId, ok: true, versionsChanged: versionNames.length > 0 }
 
     if (needsFull) {
       // A fresh request restarts the full sync; otherwise resume the cursor.
@@ -941,7 +946,10 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       const outcomes = await runLimited(claimed.apps, APP_CONCURRENCY, async (item): Promise<AppOutcome> => {
         const store = createPluginStateSyncStore(namespace, pointers, claimed.generation!, budget)
         const outcome = await syncApp(source, store, item, appDeadline)
-        return { ...outcome, changed: store.changed }
+        // A prior attempt may have advanced a pointer without committing its
+        // purge. Explicit reset repairs likewise invalidate conservatively.
+        const retryOrReset = item.attempts > 1 || item.jobs.some(job => job.kind === 'full' && job.ref === '')
+        return { ...outcome, changed: store.changed || retryOrReset }
       })
       const done = outcomes.filter(outcome => outcome.ok)
       const failed = outcomes.filter(outcome => !outcome.ok && !outcome.deferred)

@@ -263,6 +263,10 @@ BEGIN
     RETURN 0;
   END IF;
   PERFORM public.notify_plugin_state_sync('full', v_app_ids);
+  -- Prior completion is not evidence that this newly requested repair ran.
+  UPDATE public.plugin_state_sync_apps
+  SET full_synced_at = NULL
+  WHERE app_id = ANY (v_app_ids);
   -- Explicit repair, unlike the daily tick, is allowed to retry archived
   -- exact keys. Keep historical/unserved manifest identities in this move.
   WITH repair AS (
@@ -463,6 +467,7 @@ BEGIN
     SELECT DISTINCT p.app_id
     FROM public.plugin_state_sync_pending p
     WHERE p.lease_token = p_lease_token AND p.leased_until > v_now AND p.app_id = ANY (COALESCE(p_done, '{}'))
+      AND (p.kind = 'full' OR COALESCE(p_continuations, '{}') ? p.app_id)
   )
   DELETE FROM public.plugin_state_sync_pending p USING settled s
   WHERE p.app_id = s.app_id AND p.kind = 'full'
@@ -477,12 +482,21 @@ BEGIN
   FROM pg_catalog.jsonb_each_text(COALESCE(p_continuations, '{}')) AS entry
   WHERE entry.key = ANY (COALESCE(p_done, '{}'));
 
-  INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at)
-  SELECT DISTINCT done.app_id, v_now, CASE WHEN done.app_id = ANY (COALESCE(p_full_done, '{}')) THEN v_now END
+  INSERT INTO public.plugin_state_sync_apps AS synced (app_id, synced_at, full_synced_at)
+  SELECT DISTINCT done.app_id, v_now, CASE
+    WHEN done.app_id = ANY (COALESCE(p_full_done, '{}'))
+      AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = done.app_id AND p.kind = 'full')
+      AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = done.app_id AND f.kind = 'full')
+    THEN v_now END
   FROM pg_catalog.unnest(COALESCE(p_done, '{}')) AS done (app_id)
   ON CONFLICT (app_id) DO UPDATE
   SET synced_at = EXCLUDED.synced_at,
-      full_synced_at = COALESCE(EXCLUDED.full_synced_at, public.plugin_state_sync_apps.full_synced_at);
+      full_synced_at = CASE
+        WHEN EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = synced.app_id AND p.kind = 'full')
+          OR EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = synced.app_id AND f.kind = 'full')
+        THEN NULL
+        ELSE COALESCE(EXCLUDED.full_synced_at, synced.full_synced_at)
+      END;
 
   UPDATE public.plugin_state_sync_apps
   SET full_synced_at = NULL

@@ -274,6 +274,62 @@ describe('plugin KV sync queue contracts', () => {
     })
   })
 
+  it('keeps a repair cursor in backoff when an unrelated device lease is acknowledged', async () => {
+    await inTransaction(async () => {
+      const cursor = JSON.stringify({ p: 'devices', after: 'device-00047' })
+      await client.query(`INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at)
+        VALUES ($1, now(), now())`, [APP_ID])
+      await client.query(`INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, due_at)
+        VALUES ($1, 'full', $2, now() - interval '10 years')`, [APP_ID, cursor])
+      const full = await claim()
+      await client.query(`SELECT public.ack_plugin_state_sync(
+        p_lease_token => $1::uuid, p_done => '{}'::text[], p_failed => ARRAY[$2]::text[],
+        p_changed_apps => '{}'::text[])`, [full.lease_token, APP_ID])
+      await client.query(`UPDATE public.plugin_state_sync_cooldowns SET next_write_at = now() - interval '2 seconds' WHERE app_id = $1`, [APP_ID])
+      await enqueue()
+      const device = await claim()
+      expect(device.apps?.find(app => app.app_id === APP_ID)?.jobs).toEqual([{ kind: 'device', ref: 'sync-test-1' }])
+      await ack(device.lease_token!)
+      const { rows } = await client.query<{ ref: string, attempts: number }>(`SELECT ref, attempts FROM public.plugin_state_sync_pending
+        WHERE app_id = $1 AND kind = 'full' AND due_at > clock_timestamp()`, [APP_ID])
+      expect(rows).toEqual([{ ref: cursor, attempts: 1 }])
+    })
+  })
+
+  it('clears the completed-backfill marker when an explicit repair starts', async () => {
+    await inTransaction(async () => {
+      await client.query(`CREATE OR REPLACE FUNCTION public.plugin_state_sync_enabled()
+        RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $body$ SELECT true $body$`)
+      await client.query(`SELECT set_config('capgo.plugin_state_wake_sent', 'on', true)`)
+      await client.query(`INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at)
+        VALUES ($1, now(), now())`, [APP_ID])
+      await client.query('SELECT public.enqueue_plugin_state_full_sync(ARRAY[$1]::text[])', [APP_ID])
+      const { rows } = await client.query<{ full_synced_at: string | null }>('SELECT full_synced_at FROM public.plugin_state_sync_apps WHERE app_id = $1', [APP_ID])
+      expect(rows).toEqual([{ full_synced_at: null }])
+    })
+  })
+
+  it('does not mark a repair complete if a newer full reset is still pending', async () => {
+    await inTransaction(async () => {
+      await client.query(`CREATE OR REPLACE FUNCTION public.plugin_state_sync_enabled()
+        RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $body$ SELECT true $body$`)
+      await client.query(`SELECT set_config('capgo.plugin_state_wake_sent', 'on', true)`)
+      await client.query(`INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, full_synced_at)
+        VALUES ($1, now(), now())`, [APP_ID])
+      await client.query(`INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref, due_at)
+        VALUES ($1, 'full', $2, now() - interval '10 years')`, [APP_ID, JSON.stringify({ p: 'final', revision: 'fixture' })])
+      const first = await claim()
+      await client.query('SELECT public.enqueue_plugin_state_full_sync(ARRAY[$1]::text[])', [APP_ID])
+      await client.query(`SELECT public.ack_plugin_state_sync(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_full_done => ARRAY[$2]::text[],
+        p_changed_apps => '{}'::text[])`, [first.lease_token, APP_ID])
+      const { rows } = await client.query<{ full_synced_at: string | null }>('SELECT full_synced_at FROM public.plugin_state_sync_apps WHERE app_id = $1', [APP_ID])
+      expect(rows).toEqual([{ full_synced_at: null }])
+      const { rows: pending } = await client.query('SELECT ref FROM public.plugin_state_sync_pending WHERE app_id = $1 AND kind = \'full\'', [APP_ID])
+      expect(pending).toEqual([{ ref: '' }])
+    })
+  })
+
   it('does not purge any cache for an unchanged snapshot refresh', async () => {
     await inTransaction(async () => {
       await enqueue()

@@ -4,8 +4,8 @@ import { PgDialect } from 'drizzle-orm/pg-core'
 import { Hono } from 'hono/tiny'
 import { describe, expect, it, vi } from 'vitest'
 import { publicationProviders } from './plugin-state-publication-fixture.ts'
-import { pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
-import { drainPluginStateSync } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
+import { pluginStateAppKey, pluginStateDeviceKey, pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
+import { createPluginStateSyncStore, drainPluginStateSync } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
 
 const provider = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -123,8 +123,8 @@ describe('plugin state same-app reclaim', () => {
         return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '1', has_more: false,
           apps: [{ app_id: 'com.test.full-backoff', jobs: [{ kind: 'device', ref: 'fixture-device' }], attempts: 1 }],
         } }] }
-      if (statement.sql.includes('FROM public.plugin_state_sync_pending'))
-        return { rows: [{ found: 1 }] }
+      if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
+        return { rows: [{ fully_synced: true, pending_full: true, archived_full: false }] }
       if (statement.sql.includes('public.ack_plugin_state_sync('))
         acks.push(statement)
       return { rows: [] }
@@ -137,6 +137,61 @@ describe('plugin state same-app reclaim', () => {
     expect(argument(acks[0], 'p_continuations')).toBe('{}')
     expect(storage.namespace.put).not.toHaveBeenCalled()
     expect(storage.pointers.put).not.toHaveBeenCalled()
+  })
+
+  it('queues a conservative purge when retrying already-published identical content', async () => {
+    const appId = 'com.test.retry-purge'
+    const storage = publicationProviders()
+    const key = await pluginStateVersionKey(appId, '1.0.0')
+    const value = { id: 100, owner_org: 'fixture-org', deleted: false }
+    await createPluginStateSyncStore(storage.namespace, storage.pointers, '1').putJson(key, value)
+    const acks: Statement[] = []
+    const dialect = new PgDialect()
+    provider.execute.mockImplementation(async (query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_plugin_state_sync('))
+        return { rows: [{ result: { status: 'ok', lease_token: 'retry-lease', generation: '2', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: '1.0.0' }], attempts: 2 }],
+        } }] }
+      if (statement.sql.includes('FROM public.app_versions av'))
+        return { rows: [{ ...value, name: '1.0.0' }] }
+      if (statement.sql.includes('public.ack_plugin_state_sync('))
+        acks.push(statement)
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(storage.publishedValue(key)).toEqual(value)
+    expect(argument(acks[0], 'p_changed_apps')).toEqual([appId])
+  })
+
+  it('publishes only the changed device key while a full scan remains archived', async () => {
+    const appId = 'com.test.archived-full'
+    const storage = publicationProviders()
+    const acks: Statement[] = []
+    const dialect = new PgDialect()
+    provider.execute.mockImplementation(async (query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_plugin_state_sync('))
+        return { rows: [{ result: { status: 'ok', lease_token: 'device-lease', generation: '1', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'device', ref: 'fixture-device' }], attempts: 1 }],
+        } }] }
+      if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
+        return { rows: [{ fully_synced: false, pending_full: false, archived_full: true }] }
+      if (statement.sql.includes('public.ack_plugin_state_sync('))
+        acks.push(statement)
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(storage.publishedValue(await pluginStateDeviceKey(appId, 'fixture-device'))).toEqual({ channel_id: null })
+    expect(storage.objects.has(await pluginStateAppKey(appId))).toBe(false)
+    expect(argument(acks[0], 'p_continuations')).toBe('{}')
+    expect(argument(acks[0], 'p_full_done')).toEqual([])
   })
 
 })
