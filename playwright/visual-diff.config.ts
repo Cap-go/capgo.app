@@ -709,6 +709,69 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   { slug: 'account-settings', path: '/settings/account', auth: true },
   { slug: 'account-notifications', path: '/settings/account/notifications', auth: true },
   {
+    slug: 'security-updates-notifications-desktop',
+    path: '/settings/account/notifications',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 1440, height: 900 })
+      const remindLater = page.getByRole('button', { name: 'Remind me later', exact: true })
+      if (await remindLater.isVisible().catch(() => false))
+        await remindLater.click()
+      const section = page.locator('#security-updates-email')
+      if (await section.isVisible().catch(() => false))
+        await section.scrollIntoViewIfNeeded()
+    },
+  },
+  {
+    slug: 'security-updates-notifications-mobile',
+    path: '/settings/account/notifications',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      const remindLater = page.getByRole('button', { name: 'Remind me later', exact: true })
+      if (await remindLater.isVisible().catch(() => false))
+        await remindLater.click()
+      const section = page.locator('#security-updates-email')
+      if (await section.isVisible().catch(() => false))
+        await section.scrollIntoViewIfNeeded()
+    },
+  },
+  {
+    slug: 'security-updates-observe-desktop',
+    path: '/app/com.demo.app/observe/errors',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 1440, height: 900 })
+      const remindLater = page.getByRole('button', { name: 'Remind me later', exact: true })
+      if (await remindLater.isVisible().catch(() => false))
+        await remindLater.click()
+      const securityTab = page.getByRole('button', { name: /security updates/i })
+      if (await securityTab.isVisible().catch(() => false)) {
+        await securityTab.click()
+        await page.locator('[data-testid="security-updates-feed"]').waitFor({ state: 'visible', timeout: 120_000 })
+        await page.locator('[data-testid="security-advisory-match-card"]').first().waitFor({ state: 'visible', timeout: 120_000 })
+      }
+    },
+  },
+  {
+    slug: 'security-updates-observe-mobile',
+    path: '/app/com.demo.app/observe/errors',
+    auth: true,
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      const remindLater = page.getByRole('button', { name: 'Remind me later', exact: true })
+      if (await remindLater.isVisible().catch(() => false))
+        await remindLater.click()
+      const securityTab = page.getByRole('button', { name: /security updates/i })
+      if (await securityTab.isVisible().catch(() => false)) {
+        await securityTab.scrollIntoViewIfNeeded()
+        await securityTab.click()
+        await page.locator('[data-testid="security-updates-feed"]').waitFor({ state: 'visible', timeout: 120_000 })
+        await page.locator('[data-testid="security-advisory-match-card"]').first().waitFor({ state: 'visible', timeout: 120_000 })
+      }
+    },
+  },
+  {
     slug: 'email-verification-send',
     path: '/resend_email',
     auth: true,
