@@ -292,11 +292,6 @@ export function useAppNavigation(options: { onNavigate?: () => void } = {}) {
         onClick: () => openExternalUrl(ADMIN_DASHBOARD_URL),
         redirect: true,
       })
-      baseTabs.splice(3, 0, {
-        label: 'admin-security-updates',
-        icon: IconShield,
-        key: '/admin/dashboard/security-updates',
-      })
     }
 
     if (main.isAdmin && !spoofed.value) {

@@ -81,9 +81,9 @@ async function countAdvisoryEvents(
     if (cursor)
       query.cursor = cursor
 
-    const response = await bentoGet(c, 'fetch/exports/events', siteUuid, query)
+    const response = await bentoGet(c, 'fetch/exports/events', siteUuid, query, AbortSignal.timeout(10_000))
     if (response == null)
-      return { count: 0, partial: true }
+      return { count, partial: true }
 
     const payload = response as BentoExportPage
     const rows = payload.data ?? []

@@ -553,20 +553,8 @@ export const install: UserModule = ({ router }) => {
   }
 
   router.beforeEach(async (to, from, next) => {
+    // The admin dashboard moved to its own app; send old bookmarks there.
     if (to.path === '/admin' || to.path.startsWith('/admin/')) {
-      const inAppSecurityUpdates = to.path.startsWith('/admin/dashboard/security-updates')
-      if (inAppSecurityUpdates) {
-        const main = useMainStore()
-        await main.resolvePlatformAdminStatus()
-        if (!main.isAdmin) {
-          hideLoader()
-          next({ path: '/dashboard' })
-          return
-        }
-        hideLoader()
-        next()
-        return
-      }
       window.location.replace(ADMIN_DASHBOARD_URL)
       return next(false)
     }

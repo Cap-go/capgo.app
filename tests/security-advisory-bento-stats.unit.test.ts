@@ -62,4 +62,24 @@ describe('loadSecurityAdvisoryBentoEmailStats', () => {
     expect(bentoGet.mock.calls[0]?.[2]).toBe('site-uuid')
     expect(bentoGet.mock.calls[0]?.[3]?.type).toBe(SECURITY_ADVISORY_EMAIL_SENT_EVENT)
   })
+
+  it('keeps partial counts when a later export page fails', async () => {
+    bentoGet
+      .mockResolvedValueOnce({
+        data: [
+          {
+            attributes: {
+              email: 'user@example.com',
+              data: { details: { ghsa_id: 'GHSA-example-0001' } },
+            },
+          },
+        ],
+        meta: { next_cursor: 'cursor-2', truncated: false },
+      })
+      .mockResolvedValueOnce(null)
+
+    const stats = await loadSecurityAdvisoryBentoEmailStats(context(), 'GHSA-example-0001')
+    expect(stats.sent).toBe(1)
+    expect(stats.partial).toBe(true)
+  })
 })

@@ -59,19 +59,6 @@ export interface VisualDiffRoute {
   prepare?: (page: Page) => Promise<void>
 }
 
-async function prepareAdminSecurityUpdatesTracking(
-  page: Page,
-  viewport: { width: number, height: number },
-) {
-  await page.setViewportSize(viewport)
-  await dismissRemindMeLater(page)
-  const root = page.locator('[data-testid="admin-security-updates-page"]')
-  if (process.env.VISUAL_DIFF_PHASE === 'after') {
-    await root.waitFor({ state: 'visible', timeout: 120_000 })
-    await page.locator('table tbody tr').first().waitFor({ state: 'visible', timeout: 120_000 })
-  }
-}
-
 async function prepareOrgWebhooksMcpScreenshot(
   page: Page,
   viewport: { width: number, height: number },
@@ -1178,24 +1165,6 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       if (process.env.VISUAL_DIFF_PHASE !== 'after')
         return
       await page.locator('[data-test="mcp-connect-card"]').waitFor({ state: 'visible', timeout: 30_000 })
-    },
-  },
-  {
-    slug: 'admin-security-updates-tracking-desktop',
-    path: '/admin/dashboard/security-updates',
-    auth: true,
-    authCredentials: { email: 'admin@capgo.app', password: 'adminadmin' },
-    prepare: async (page) => {
-      await prepareAdminSecurityUpdatesTracking(page, { width: 1440, height: 900 })
-    },
-  },
-  {
-    slug: 'admin-security-updates-tracking-mobile',
-    path: '/admin/dashboard/security-updates',
-    auth: true,
-    authCredentials: { email: 'admin@capgo.app', password: 'adminadmin' },
-    prepare: async (page) => {
-      await prepareAdminSecurityUpdatesTracking(page, { width: 390, height: 844 })
     },
   },
 ]

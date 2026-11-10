@@ -177,8 +177,6 @@ The backend is split by responsibility to keep routes clear and access scoped:
 - `supabase/functions/_backend/private/` - **Private API** used internally.
   The console (web UI) uses this heavily for admin/ops workflows. It is not
   publicly accessible. Some UI flows still use the public API where appropriate.
-  Platform admins can open `/admin/dashboard/security-updates/` in the console
-  for security advisory patch, email, and adoption tracking (internal only).
 - `supabase/functions/_backend/plugin_runtime/` - **Plugin API** used by the
   `@capgo/capacitor-updater` plugin running inside apps:
   - `plugins/updates` - device update checks and bundle download flow

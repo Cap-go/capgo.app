@@ -1,12 +1,12 @@
 import type { Context } from 'hono'
 import type { Advisory, AdvisoryAffected } from '../../shared/security_advisory.ts'
-import type { PgClient } from './pg.ts'
-import { loadAppReportedPackagesOnClient } from './app_native_packages.ts'
+import { loadAllAppsReportedPackages } from './app_native_packages.ts'
 import { closeClient, getPgClient } from './pg.ts'
-import { queryJson, queryJsonOne } from './pg_rls.ts'
+import { queryJsonOne } from './pg_rls.ts'
 import { loadSecurityAdvisoryBentoEmailStats } from './security_advisory_bento_stats.ts'
 import { loadSecurityAdvisoryFeed } from './security_advisory_feed.ts'
-import { matchAppPackagesToAdvisories, resolveAdvisoryStatus } from './security_advisory_matching.ts'
+import type { AppAdvisoryMatch } from './security_advisory_matching.ts'
+import { matchAppPackagesToAdvisories } from './security_advisory_matching.ts'
 
 export interface SecurityUpdatePatchRow {
   ghsa_id: string
@@ -38,7 +38,14 @@ export interface AdvisoryAdoptionSummary {
   apps_patched: number
   apps_vulnerable: number
   apps_unknown: number
-  apps_considered: number
+  /** Apps with at least one in-scope package match for this advisory. */
+  apps_relevant: number
+}
+
+export interface AdoptionScope {
+  method: 'bundle_reported_packages'
+  apps_total: number
+  note: string
 }
 
 export interface AdminSecurityUpdatesTrackingResponse {
@@ -48,9 +55,8 @@ export interface AdminSecurityUpdatesTrackingResponse {
   advisories: SecurityAdvisoryAdminRow[]
   opt_in: SecurityUpdatesOptInSummary
   adoption_by_advisory: Record<string, AdvisoryAdoptionSummary>
+  adoption_scope: AdoptionScope
 }
-
-const MAX_ADOPTION_APPS = 500
 
 const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
         SELECT u.id
@@ -71,7 +77,7 @@ const OPT_IN_SUMMARY_SQL = `WITH opted_users AS (
           WHERE a.owner_org IN (SELECT org_id FROM opted_orgs)
         ) AS apps_in_opted_in_orgs`
 
-function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow[] {
+export function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow[] {
   const rows: SecurityUpdatePatchRow[] = []
   for (const advisory of advisories) {
     for (const affected of advisory.affected) {
@@ -89,67 +95,40 @@ function flattenPatches(advisories: readonly Advisory[]): SecurityUpdatePatchRow
   return rows.sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
-async function loadOptInSummaryAndAppIds(client: PgClient): Promise<{
-  optIn: SecurityUpdatesOptInSummary
-  appIds: string[]
-}> {
-  const optInRow = await queryJsonOne<SecurityUpdatesOptInSummary>(client, OPT_IN_SUMMARY_SQL)
-  const optIn = optInRow ?? { users_opted_in: 0, orgs_opted_in: 0, apps_in_opted_in_orgs: 0 }
-  const appRows = await queryJson<{ app_id: string }>(
-    client,
-    `SELECT a.app_id
-       FROM public.apps a
-       ORDER BY a.updated_at DESC NULLS LAST, a.app_id
-       LIMIT $1`,
-    [MAX_ADOPTION_APPS],
-  )
-  return { optIn, appIds: appRows.map(row => row.app_id) }
-}
-
-async function loadReportedPackagesForApps(
-  client: PgClient,
-  appIds: string[],
-): Promise<Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>> {
-  const perAppPackages = new Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>()
-  for (const appId of appIds) {
-    try {
-      perAppPackages.set(appId, await loadAppReportedPackagesOnClient(client, appId))
-    }
-    catch {
-      perAppPackages.set(appId, new Map())
-    }
+async function loadOptInSummary(c: Context) {
+  const pg = await getPgClient(c)
+  try {
+    const row = await queryJsonOne<SecurityUpdatesOptInSummary>(pg, OPT_IN_SUMMARY_SQL)
+    return row ?? { users_opted_in: 0, orgs_opted_in: 0, apps_in_opted_in_orgs: 0 }
   }
-  return perAppPackages
+  finally {
+    closeClient(c, pg)
+  }
 }
 
-function summarizeAdoptionForAdvisory(
+function worstAdoptionStatus(matches: readonly AppAdvisoryMatch[]): 'patched' | 'affected' | 'unknown' {
+  if (matches.some(m => m.status === 'affected'))
+    return 'affected'
+  return matches.some(m => m.status === 'unknown') ? 'unknown' : 'patched'
+}
+
+export function summarizeAdoptionForAdvisory(
   advisory: Advisory,
-  appIds: string[],
-  perAppPackages: Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>,
+  perAppPackages: Map<string, Map<string, string>>,
 ): AdvisoryAdoptionSummary {
   let appsPatched = 0
   let appsVulnerable = 0
   let appsUnknown = 0
+  let appsRelevant = 0
 
-  for (const appId of appIds) {
-    const packages = perAppPackages.get(appId)
-    if (!packages)
-      continue
-
+  for (const packages of perAppPackages.values()) {
     const matches = matchAppPackagesToAdvisories(packages, [advisory])
     if (matches.length === 0)
       continue
 
-    let worst: 'patched' | 'affected' | 'unknown' = 'patched'
-    for (const match of matches) {
-      const status = resolveAdvisoryStatus(match.current_version, match.affected)
-      if (status === 'affected') {
-        worst = 'affected'
-        break
-      }
-      if (status === 'unknown' && worst === 'patched')
-        worst = 'unknown'
-    }
+    appsRelevant++
+
+    const worst = worstAdoptionStatus(matches)
 
     if (worst === 'affected')
       appsVulnerable++
@@ -163,7 +142,7 @@ function summarizeAdoptionForAdvisory(
     apps_patched: appsPatched,
     apps_vulnerable: appsVulnerable,
     apps_unknown: appsUnknown,
-    apps_considered: appIds.length,
+    apps_relevant: appsRelevant,
   }
 }
 
@@ -173,17 +152,20 @@ export async function buildAdminSecurityUpdatesTracking(
   const feed = await loadSecurityAdvisoryFeed(c)
 
   const pg = await getPgClient(c)
-  let optIn: SecurityUpdatesOptInSummary
-  let appIds: string[]
-  let perAppPackages: Map<string, Awaited<ReturnType<typeof loadAppReportedPackagesOnClient>>>
+  let perAppPackages: Map<string, Map<string, string>>
   try {
-    const loaded = await loadOptInSummaryAndAppIds(pg)
-    optIn = loaded.optIn
-    appIds = loaded.appIds
-    perAppPackages = await loadReportedPackagesForApps(pg, appIds)
+    perAppPackages = await loadAllAppsReportedPackages(pg)
   }
   finally {
     closeClient(c, pg)
+  }
+
+  const optIn = await loadOptInSummary(c)
+
+  const adoptionScope: AdoptionScope = {
+    method: 'bundle_reported_packages',
+    apps_total: perAppPackages.size,
+    note: 'Adoption uses production channel bundle native_packages when set, else the latest upload, for every app. GHSA range checks run in the API, not in SQL.',
   }
 
   const adoptionByAdvisory: Record<string, AdvisoryAdoptionSummary> = {}
@@ -192,7 +174,7 @@ export async function buildAdminSecurityUpdatesTracking(
   for (const advisory of feed.advisories) {
     const [email, adoption] = await Promise.all([
       loadSecurityAdvisoryBentoEmailStats(c, advisory.ghsa_id),
-      Promise.resolve(summarizeAdoptionForAdvisory(advisory, appIds, perAppPackages)),
+      Promise.resolve(summarizeAdoptionForAdvisory(advisory, perAppPackages)),
     ])
     adoptionByAdvisory[advisory.ghsa_id] = adoption
     advisories.push({
@@ -213,5 +195,6 @@ export async function buildAdminSecurityUpdatesTracking(
     advisories,
     opt_in: optIn,
     adoption_by_advisory: adoptionByAdvisory,
+    adoption_scope: adoptionScope,
   }
 }

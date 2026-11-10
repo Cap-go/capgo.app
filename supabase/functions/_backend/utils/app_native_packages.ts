@@ -98,7 +98,7 @@ async function loadLatestUploadReported(c: Context, appId: string): Promise<Repo
   }
 }
 
-function buildReportedPackageMap(nativeRow: ReportedVersionsRow | null, latestRow: ReportedVersionsRow | null): Map<string, string> {
+export function buildReportedPackageMap(nativeRow: ReportedVersionsRow | null, latestRow: ReportedVersionsRow | null): Map<string, string> {
   const latest = latestRow
   const map = filterInScopePackages(
     toNativePackageMap(nativeRow?.native_packages as NativePackage[] | null | undefined),
@@ -112,12 +112,60 @@ function buildReportedPackageMap(nativeRow: ReportedVersionsRow | null, latestRo
   return map
 }
 
-/** Same as loadAppReportedPackages but on an existing query client (for service-role aggregation). */
-export async function loadAppReportedPackagesOnClient(client: ReportedVersionsClient, appId: string): Promise<Map<string, string>> {
-  const production = await loadProductionChannelReportedOnClient(client, appId)
-  const latest = await loadLatestUploadReportedOnClient(client, appId)
-  const nativeRow = production ?? latest
-  return buildReportedPackageMap(nativeRow, latest)
+interface AppReportedPackagesRow {
+  app_id: string
+  production_native_packages: unknown
+  production_cli_version: string | null
+  latest_native_packages: unknown
+  latest_cli_version: string | null
+}
+
+const ALL_APPS_REPORTED_PACKAGES_SQL = `WITH production AS (
+  SELECT DISTINCT ON (ch.app_id)
+    ch.app_id,
+    av.native_packages AS production_native_packages,
+    av.cli_version AS production_cli_version
+  FROM public.channels ch
+  INNER JOIN public.app_versions av ON av.id = ch.version
+  WHERE ch.name = 'production'
+    AND ch.version IS NOT NULL
+    AND COALESCE(av.deleted, false) = false
+  ORDER BY ch.app_id, ch.id
+),
+latest AS (
+  SELECT DISTINCT ON (av.app_id)
+    av.app_id,
+    av.native_packages AS latest_native_packages,
+    av.cli_version AS latest_cli_version
+  FROM public.app_versions av
+  WHERE COALESCE(av.deleted, false) = false
+  ORDER BY av.app_id, av.id DESC
+)
+SELECT
+  a.app_id,
+  p.production_native_packages,
+  p.production_cli_version,
+  l.latest_native_packages,
+  l.latest_cli_version
+FROM public.apps a
+LEFT JOIN production p ON p.app_id = a.app_id
+LEFT JOIN latest l ON l.app_id = a.app_id`
+
+/** Reported in-scope packages for every app (one catalog query, same rules as loadAppReportedPackages). */
+export async function loadAllAppsReportedPackages(client: ReportedVersionsClient): Promise<Map<string, Map<string, string>>> {
+  const rows = await queryJson<AppReportedPackagesRow>(client, ALL_APPS_REPORTED_PACKAGES_SQL)
+  const result = new Map<string, Map<string, string>>()
+  for (const row of rows) {
+    const productionRow = row.production_native_packages != null
+      ? { native_packages: row.production_native_packages, cli_version: row.production_cli_version }
+      : null
+    const latestRow = row.latest_native_packages != null
+      ? { native_packages: row.latest_native_packages, cli_version: row.latest_cli_version }
+      : null
+    const nativeRow = productionRow ?? latestRow
+    result.set(row.app_id, buildReportedPackageMap(nativeRow, latestRow))
+  }
+  return result
 }
 
 /** Native and CLI versions already reported on bundles for this app (no new SDK fields). */
