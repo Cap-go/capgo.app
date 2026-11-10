@@ -349,7 +349,7 @@ const accountTools: McpTool[] = [
       format_locale: z.string().max(35).nullable().optional().describe('Locale used to format numbers and dates, e.g. en-US'),
       enable_notifications: z.boolean().optional().describe('Receive product notification emails'),
       opt_for_newsletters: z.boolean().optional().describe('Receive the newsletter'),
-      email_preferences: emailPreferences.optional().describe('Only the personal email toggles to change, e.g. {"weekly_stats":false}. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, bundle_incompatible, cli_realtime_feed, onboarding, builder_onboarding'),
+      email_preferences: emailPreferences.optional().describe('Only the personal email toggles to change, e.g. {"weekly_stats":false}. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, bundle_incompatible, cli_realtime_feed, security_updates, onboarding, builder_onboarding'),
     },
     annotations: DESTRUCTIVE,
     request: input => ({ method: 'PUT', path: '/user', body: compact(input) }),
