@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { devices, type Page } from '@playwright/test'
 import process from 'node:process'
 import { APP_ONBOARDING_OTA_V1_STEP_IDS } from '../src/services/appOnboarding'
 import { BUILDER_STEP_IDS } from '../src/services/builderOnboardingChecklist'
@@ -12,6 +12,26 @@ export interface VisualDiffRoute {
   auth?: boolean
   /** Optional deterministic UI setup before the screenshot is captured. */
   prepare?: (page: Page) => Promise<void>
+}
+
+async function prepareOrgWebhooksMcpScreenshot(
+  page: Page,
+  viewport: { width: number, height: number },
+  mobile = false,
+) {
+  await page.setViewportSize(viewport)
+  if (mobile) {
+    const iphone = devices['iPhone 13']
+    await page.evaluate((ua) => {
+      Object.defineProperty(navigator, 'userAgent', { get: () => ua })
+    }, iphone.userAgent)
+  }
+  await page.goto('/settings/organization/webhooks/')
+  await page.getByRole('heading', { name: 'Webhooks', exact: true }).waitFor({ timeout: 120_000 })
+  await page.locator('table tbody tr').first().waitFor({ state: 'visible', timeout: 120_000 })
+  if (process.env.VISUAL_DIFF_PHASE === 'after') {
+    await page.getByText('MCP', { exact: true }).first().waitFor({ state: 'visible', timeout: 120_000 })
+  }
 }
 
 async function prepareProfileGoalScreenshot(page: Page, completed = false) {
@@ -1025,6 +1045,22 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
       await page.locator('table tbody tr').first().waitFor({ state: 'visible', timeout: 30_000 })
       const hashed = page.getByLabel('Secure key (hidden)').or(page.getByText('Secure key (hidden)'))
       await hashed.first().waitFor({ state: 'visible', timeout: 30_000 })
+    },
+  },
+  {
+    slug: 'org-webhooks-mcp-desktop',
+    path: '/settings/organization/webhooks/',
+    auth: true,
+    prepare: async (page) => {
+      await prepareOrgWebhooksMcpScreenshot(page, { width: 1440, height: 900 })
+    },
+  },
+  {
+    slug: 'org-webhooks-mcp-mobile',
+    path: '/settings/organization/webhooks/',
+    auth: true,
+    prepare: async (page) => {
+      await prepareOrgWebhooksMcpScreenshot(page, { width: 390, height: 844 }, true)
     },
   },
   {
