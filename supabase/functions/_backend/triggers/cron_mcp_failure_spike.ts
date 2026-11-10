@@ -1,4 +1,3 @@
-import type { Context } from 'hono'
 import type { WebhookRow } from '../utils/mcp_failure_spike_runner.ts'
 import { BRES, createHono, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
