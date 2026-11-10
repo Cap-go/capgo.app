@@ -33,6 +33,7 @@ declare module 'vue' {
     AppPageFrame: typeof import('./components/dashboard/AppPageFrame.vue')['default']
     AppPageNotFound: typeof import('./components/dashboard/AppPageNotFound.vue')['default']
     AppSetting: typeof import('./components/dashboard/AppSetting.vue')['default']
+    AppSetupGuides: typeof import('./components/dashboard/AppSetupGuides.vue')['default']
     AppTable: typeof import('./components/tables/AppTable.vue')['default']
     AssistantChat: typeof import('./components/assistant/AssistantChat.vue')['default']
     AssistantSpans: typeof import('./components/assistant/AssistantSpans.vue')['default']

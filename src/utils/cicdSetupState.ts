@@ -18,6 +18,7 @@ export interface CiCdSetupState {
   builderCiProvider: string | null
   keyCreatedAt: string | null
   markedDoneAt: string | null
+  dismissedAt: string | null
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -71,6 +72,7 @@ export function parseCiCdSetupState(onboarding: unknown): CiCdSetupState {
     builderCiProvider: nonEmptyString(cicd.builder_ci_provider),
     keyCreatedAt: nonEmptyString(cicd.key_created_at),
     markedDoneAt: nonEmptyString(cicd.marked_done_at),
+    dismissedAt: nonEmptyString(cicd.dismissed_at),
   }
 }
 
@@ -102,11 +104,11 @@ export function isAppShipping(onboarding: unknown) {
 
 /**
  * Sidebar rule: once Getting started is gone, a shipping app with no CI
- * evidence keeps a "Set up CI/CD" entry until CI uploads or builds once, or the
- * user marks it as already set up.
+ * evidence shows a "Set up CI/CD" entry until CI uploads or builds once, the
+ * user marks it as already set up, or the reminder is dismissed.
  */
 export function shouldShowCiCdNav(onboarding: unknown, gettingStartedVisible: boolean) {
-  return !gettingStartedVisible && isAppShipping(onboarding) && !isCiCdSetupDone(onboarding)
+  return !gettingStartedVisible && isAppShipping(onboarding) && !isCiCdSetupDone(onboarding) && !parseCiCdSetupState(onboarding).dismissedAt
 }
 
 /** Optimistic local copy of what record_app_cicd_setup('marked_done') stores. */
