@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
-const screenshotDir = resolve(process.cwd(), 'docs/pr-screenshots/mcp-webhooks')
+const screenshotDir = resolve(process.cwd(), '.context/playwright-screenshots/mcp-webhooks')
 
 const DEMO_ORG_ID = '046a36ac-e03c-4590-9257-bd6c9dba9ee8'
 const DEMO_USER_ID = '6aa76066-55ef-4238-ade6-0b32334a4097'
