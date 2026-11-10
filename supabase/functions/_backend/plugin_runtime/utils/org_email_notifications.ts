@@ -899,4 +899,5 @@ export async function getOrgAdminMemberEmailsForTags(
 
 export const orgEmailNotificationTestUtils = {
   getEligibleEmailTargets,
+  getEligibleOrgMemberEmails,
 }
