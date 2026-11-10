@@ -20,6 +20,8 @@ vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({
   readStatsVersion: vi.fn(),
   readStatsInsights: vi.fn(),
 }))
+import type { VersionUsage } from '../supabase/functions/_backend/utils/types.ts'
+import { emptyStatsInsights } from '../supabase/functions/_backend/utils/statsInsights.ts'
 import { readStatsInsights, readStatsVersion } from '../supabase/functions/_backend/utils/stats.ts'
 
 vi.mock('../supabase/functions/_backend/utils/mcp_events.ts', async importOriginal => {
@@ -222,21 +224,30 @@ describe('gatherFailureSpikeMetrics checks', () => {
 
   it('counts install, fail, and noNew from insights when channel is omitted', async () => {
     vi.mocked(readStatsVersion).mockResolvedValueOnce([
-      { version_name: '2.0.0', install: 5, fail: 3 },
+      {
+        version_name: '2.0.0',
+        install: 5,
+        fail: 3,
+        app_id: 'com.demo.app',
+        date: now.toISOString(),
+        get: 0,
+        uninstall: 0,
+      } satisfies VersionUsage,
     ])
     vi.mocked(readStatsInsights).mockImplementation(async (_c, params) => {
-      const actions = 'actions' in params ? params.actions : []
-      if (actions.includes('noNew')) {
+      const actionFilter = 'actions' in params && params.actions ? params.actions : []
+      if (actionFilter.includes('noNew')) {
         return {
+          ...emptyStatsInsights(),
           actions: [
-            { action: 'install', total: 10 },
-            { action: 'fail', total: 4 },
-            { action: 'noNew', total: 80 },
-            { action: 'get', total: 999 },
+            { action: 'install', total: 10, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
+            { action: 'fail', total: 4, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
+            { action: 'noNew', total: 80, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
+            { action: 'get', total: 999, device_count: 0, version_count: 0, first_seen: null, last_seen: null, latest_version_name: '', latest_device_id: '' },
           ],
-        } as Awaited<ReturnType<typeof readStatsInsights>>
+        }
       }
-      return { actions: [] } as Awaited<ReturnType<typeof readStatsInsights>>
+      return emptyStatsInsights()
     })
 
     const metrics = await gatherFailureSpikeMetrics(c, 'com.demo.app', undefined, 15, now)
