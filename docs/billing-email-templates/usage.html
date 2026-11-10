@@ -1,8 +1,15 @@
 <!-- Bento subject: Your Capgo usage has reached {{ event.details.threshold | default: 'a plan' }}% -->
 <!-- Replace the shared 50/70/90 percent usage email. Upload manually after backend deployment. -->
+{% assign metric_label = 'one of your plan limits' %}
+{% case event.details.metric %}
+  {% when 'mau' %}{% assign metric_label = 'monthly active users' %}
+  {% when 'build_time' %}{% assign metric_label = 'build time' %}
+  {% when 'storage' %}{% assign metric_label = 'storage' %}
+  {% when 'bandwidth' %}{% assign metric_label = 'bandwidth' %}
+{% endcase %}
 <h1>Your Capgo usage is growing</h1>
 <p>Hi {{ visitor.first_name | default: 'there' }},</p>
-<p>You have reached the {{ event.details.threshold | default: 'current' }}% alert threshold for {{ event.details.metric | default: 'one of your plan limits' }}.</p>
+<p>You have reached the {{ event.details.threshold | default: 'current' }}% alert threshold for {{ metric_label }}.</p>
 <p>Review your usage before reaching the limit. You can upgrade your plan or add usage credits to cover extra usage.</p>
 <p><a href="{{ event.details.plans_url | default: 'https://console.capgo.app/settings/organization/plans' }}">Review plans and usage credits</a></p>
 <p>Already made a change? The console shows your latest plan and usage.</p>
