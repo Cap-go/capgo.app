@@ -44,4 +44,14 @@ describe('ensureCapacitorCorePlaceholder', () => {
     const items = matchAppPackagesToAdvisories(map, fixtureAdvisoryFeedForTests().advisories)
     expect(items.some(item => item.package === '@capacitor/core' && item.status === 'unknown')).toBe(true)
   })
+
+  it('adds blank core when android is reported without core', () => {
+    const map = filterInScopePackages(toNativePackageMap([
+      { name: '@capacitor/android', version: '6.2.0' },
+    ]))
+    ensureCapacitorCorePlaceholder(map)
+    expect(map.get('@capacitor/core')).toBe('')
+    const items = matchAppPackagesToAdvisories(map, fixtureAdvisoryFeedForTests().advisories)
+    expect(items.some(item => item.package === '@capacitor/core' && item.status === 'unknown')).toBe(true)
+  })
 })
