@@ -24,6 +24,8 @@ const STEPS: Record<BuildPlatform, [action: string, logs: string[]][]> = {
   ],
 }
 
+const SETUP_LOGS = ['▸ Preparing the build machine…', '▸ Starting the build…']
+
 const FAILURE_LOGS: Record<BuildPlatform, string[]> = {
   android: ['e: Unresolved reference: BarcodeScanner (MainActivity.kt:14)', 'FAILURE: Build failed with an exception.'],
   ios: ['error: No such module \'BarcodeScanner\' (AppDelegate.swift:3)', '** ARCHIVE FAILED **'],
@@ -50,6 +52,9 @@ export function playBuildDemo(
   onRow({ status: 'pending', started_at: null })
   later(1500, () => onRow({ status: 'running', started_at: null }))
   later(2500, () => onRow({ status: 'running', started_at: new Date().toISOString() }))
+  // Untagged lines (before the first step) land under the build machine row.
+  for (const line of SETUP_LOGS)
+    later(300, () => send({ type: 'log', message: line }))
 
   const steps = STEPS[platform]
   const failAt = demoMode === 'failure' ? steps.length - 2 : -1
@@ -60,7 +65,7 @@ export function playBuildDemo(
       step(action, 'started')
     })
     for (const line of index === failAt ? [...logs.slice(0, 2), ...FAILURE_LOGS[platform]] : logs)
-      later(700, () => send({ type: 'log', message: line }))
+      later(700, () => send({ type: 'log', message: line, step: action }))
     if (index === failAt) {
       later(500, () => {
         step(action, 'failed', Date.now() - started.at)

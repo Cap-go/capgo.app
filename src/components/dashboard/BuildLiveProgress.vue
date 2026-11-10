@@ -6,12 +6,13 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import IconAlert from '~icons/lucide/alert-circle'
 import IconCheckCircle from '~icons/lucide/check-circle-2'
+import IconChevronRight from '~icons/lucide/chevron-right'
 import IconCircle from '~icons/lucide/circle'
 import IconDownload from '~icons/lucide/download'
 import IconLoader from '~icons/lucide/loader-2'
 import IconRotate from '~icons/lucide/rotate-ccw'
 import IconSparkles from '~icons/lucide/sparkles'
-import { applyBuildStreamMessage, buildTimeline, createBuildLiveState, resolveBuildOutcome, stepCopy } from '~/services/buildLiveStream'
+import { applyBuildLogArchive, applyBuildStreamMessage, buildTimeline, createBuildLiveState, resolveBuildOutcome, stepCopy } from '~/services/buildLiveStream'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { buildPreviewQrCodeDataUrl } from '~/services/previewQrCode'
@@ -33,6 +34,8 @@ const POLL_MS = 3000
 const HEARTBEAT_MS = 2000
 const MAX_RECONNECTS = 5
 const LOG_PREVIEW_LINES = 6
+// The builder archives the log when the stream closes, just after the final status.
+const ARCHIVE_RETRY_MS = 3000
 
 const { t } = useI18n()
 const capgo = useConsole()
@@ -41,6 +44,9 @@ const live = ref<BuildLiveState>(createBuildLiveState())
 const now = ref(Date.now())
 const endedAt = ref<number | null>(null)
 const showAllLogs = ref(false)
+// Steps the user expanded or collapsed; others follow their default (failed steps open).
+const openSteps = ref<Record<string, boolean>>({})
+const archiveMissing = ref(false)
 let stopped = false
 let socket: WebSocket | null = null
 let reconnects = 0
@@ -48,6 +54,7 @@ let pollTimer: ReturnType<typeof setInterval> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+let archiveTimer: ReturnType<typeof setTimeout> | undefined
 let stopDemo: (() => void) | undefined
 
 const outcome = computed(() => resolveBuildOutcome(live.value.status, row.value?.status))
@@ -65,7 +72,6 @@ const currentRow = computed(() => timeline.value.rows[timeline.value.current])
 const currentLabel = computed(() => currentRow.value ? rowLabel(currentRow.value.key) : '')
 const queued = computed(() => !outcome.value && (currentRow.value?.key === 'upload' || currentRow.value?.key === 'machine'))
 const errorText = computed(() => row.value?.last_error || live.value.statusMessage || t('build-live-failed-no-error'))
-const logPreview = computed(() => live.value.logs.slice(-LOG_PREVIEW_LINES))
 const qrCode = computed(() => live.value.downloadUrl ? buildPreviewQrCodeDataUrl(live.value.downloadUrl) : '')
 const terminalCommand = computed(() => `npx @capgo/cli@latest build request ${props.appId} --platform ${props.platform}`)
 const jobShort = computed(() => row.value?.builder_job_id ? `${row.value.builder_job_id.slice(0, 12)}…` : '')
@@ -98,6 +104,14 @@ function rowLabel(key: string) {
 function rowWhy(key: string) {
   const copy = stepCopy(key)
   return copy.whyKey ? t(copy.whyKey) : ''
+}
+
+function isStepOpen(r: { key: string, state: string }) {
+  return openSteps.value[r.key] ?? r.state === 'failed'
+}
+
+function toggleStep(r: { key: string, state: string }) {
+  openSteps.value = { ...openSteps.value, [r.key]: !isStepOpen(r) }
 }
 
 function rowTime(r: { state: string, startedAt?: number, durationMs?: number }) {
@@ -189,13 +203,44 @@ async function connectStream(jobId: string) {
   })
 }
 
+// The finished build's full log, per step, from the builder archive (kept 30 days).
+async function loadArchive(jobId: string, retried = false) {
+  const { data, error } = await invokeCapgoApi<{ logs_url?: string, logs_token?: string }>(`build/logs_token/${encodeURIComponent(jobId)}`, { method: 'GET', retries: 0 })
+  if (stopped)
+    return
+  if (error || !data?.logs_url || !data.logs_token) {
+    archiveMissing.value = true
+    return
+  }
+  const baseUrl = data.logs_url.endsWith('/') ? data.logs_url.slice(0, -1) : data.logs_url
+  try {
+    const res = await fetch(`${baseUrl}/archive?token=${encodeURIComponent(data.logs_token)}`)
+    if (res.status === 404 && !retried) {
+      archiveTimer = setTimeout(() => void loadArchive(jobId, true), ARCHIVE_RETRY_MS)
+      return
+    }
+    if (!res.ok)
+      throw new Error(`archive ${res.status}`)
+    const archive: unknown = await res.json()
+    if (stopped)
+      return
+    // The archive has every line the stream may have missed; download links are never archived.
+    live.value = { ...applyBuildLogArchive(createBuildLiveState(), archive), downloadUrl: live.value.downloadUrl }
+  }
+  catch (error) {
+    console.info('Build log archive unavailable', error)
+    archiveMissing.value = true
+  }
+}
+
 async function copyFixPrompt() {
+  const failedRow = timeline.value.rows.find(r => r.state === 'failed')
   const prompt = [
     t('build-live-fix-prompt', { platform: platformLabel.value, app: props.appId }),
     '',
     errorText.value,
     '',
-    ...live.value.logs.slice(-40),
+    ...(failedRow?.logs.length ? failedRow.logs : live.value.logs).slice(-40),
   ].join('\n')
   try {
     await navigator.clipboard.writeText(prompt)
@@ -211,6 +256,7 @@ function stop() {
   stopped = true
   clearInterval(pollTimer)
   clearInterval(clockTimer)
+  clearTimeout(archiveTimer)
   stopDemo?.()
   closeSocket()
 }
@@ -229,8 +275,11 @@ watch(outcome, (value) => {
   clearInterval(pollTimer)
   closeSocket()
   // The stream can finish before the row: one last read picks up last_error/completed_at.
-  if (!props.demo && !stopped)
+  if (!props.demo && !stopped) {
     void fetchRow()
+    if (row.value?.builder_job_id)
+      void loadArchive(row.value.builder_job_id)
+  }
 })
 
 onMounted(async () => {
@@ -362,7 +411,7 @@ onUnmounted(stop)
       </div>
     </section>
 
-    <div v-if="outcome !== 'success'" class="grid gap-6 @3xl:grid-cols-[minmax(0,1fr)_20rem]">
+    <div class="grid gap-6" :class="{ '@3xl:grid-cols-[minmax(0,1fr)_20rem]': outcome !== 'success' }">
       <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60">
         <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-white/10">
           <h3 class="font-semibold text-slate-950 dark:text-white">
@@ -373,6 +422,9 @@ onUnmounted(stop)
           </button>
         </div>
         <pre v-if="showAllLogs" class="max-h-96 overflow-auto bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-300">{{ live.logs.join('\n') }}</pre>
+        <p v-if="outcome && archiveMissing && !live.logs.length" class="border-b border-slate-200 px-5 py-3 text-sm text-slate-500 dark:border-white/10 dark:text-slate-400" data-test="build-live-logs-unavailable">
+          {{ t('build-live-logs-unavailable') }}
+        </p>
         <ol>
           <li
             v-for="r in timeline.rows"
@@ -384,18 +436,34 @@ onUnmounted(stop)
             <IconAlert v-else-if="r.state === 'failed'" class="mt-0.5 h-5 w-5 text-red-500" />
             <IconCircle v-else class="mt-0.5 h-5 w-5 text-slate-300 dark:text-slate-600" />
             <div class="min-w-0">
-              <p class="font-medium" :class="r.state === 'pending' ? 'text-slate-400 dark:text-slate-500' : 'text-slate-900 dark:text-white'">
+              <button
+                v-if="r.logs.length"
+                type="button"
+                class="d-btn d-btn-ghost d-btn-sm -mx-2 h-auto min-h-0 justify-start gap-1 px-2 py-0.5 text-left text-base font-medium text-slate-900 dark:text-white"
+                :aria-expanded="isStepOpen(r)"
+                :data-test="`build-live-step-toggle-${r.key}`"
+                @click="toggleStep(r)"
+              >
+                {{ rowLabel(r.key) }}
+                <IconChevronRight class="h-4 w-4 shrink-0 text-slate-400 transition-transform" :class="{ 'rotate-90': isStepOpen(r) }" />
+              </button>
+              <p v-else class="font-medium" :class="r.state === 'pending' ? 'text-slate-400 dark:text-slate-500' : 'text-slate-900 dark:text-white'">
                 {{ rowLabel(r.key) }}
               </p>
               <p v-if="(r.state === 'running' || r.state === 'failed') && rowWhy(r.key)" class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
                 {{ rowWhy(r.key) }}
               </p>
+              <pre
+                v-if="isStepOpen(r) && r.logs.length"
+                class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-300"
+                :data-test="`build-live-step-logs-${r.key}`"
+              >{{ r.logs.join('\n') }}</pre>
               <div
-                v-if="(r.state === 'running' || r.state === 'failed') && logPreview.length && !showAllLogs"
+                v-else-if="r.state === 'running' && r.logs.length && !showAllLogs"
                 class="mt-2 overflow-hidden rounded-md bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-300"
                 aria-live="polite"
               >
-                <p v-for="(line, i) in logPreview" :key="`${live.lastId}-${i}`" class="truncate">
+                <p v-for="(line, i) in r.logs.slice(-LOG_PREVIEW_LINES)" :key="`${live.lastId}-${i}`" class="truncate">
                   {{ line }}
                 </p>
               </div>
@@ -407,7 +475,7 @@ onUnmounted(stop)
         </ol>
       </section>
 
-      <aside class="h-fit rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60">
+      <aside v-if="outcome !== 'success'" class="h-fit rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-slate-800/60">
         <h3 class="font-semibold text-slate-950 dark:text-white">
           {{ t('build-live-terminal-title') }}
         </h3>
