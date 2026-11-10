@@ -790,7 +790,7 @@ export async function queueWebhookDelivery(
   webhookId: string,
   url: string,
   payload: WebhookDeliveryPayload,
-): Promise<void> {
+): Promise<boolean> {
   const message = {
     function_name: 'webhook_delivery',
     function_type: 'cloudflare',
@@ -814,9 +814,11 @@ export async function queueWebhookDelivery(
       deliveryId,
       webhookId,
     })
+    return true
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error queuing webhook delivery', error: serializeError(error) })
+    return false
   }
   finally {
     closeClient(c, db)

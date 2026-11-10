@@ -256,4 +256,53 @@ describeMcpEvents('mcp events subscriptions', () => {
     const overflowJson = await overflow.json() as { error: { message: string } }
     expect(overflowJson.error.message).toContain('25')
   })
+
+  it('counts a refresh of an inactive subscription against the org cap', async () => {
+    const secret = `whsec_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString('base64')}`
+    const refreshUrl = `${challengeUrl}?cap-refresh=1`
+    for (let i = 0; i < 25; i++) {
+      const response = await mcpEventsCall(orgApiKey, {
+        jsonrpc: '2.0',
+        id: 300 + i,
+        method: 'events/subscribe',
+        params: {
+          name: 'bundle.uploaded',
+          arguments: { org_id: ORG_ID },
+          delivery: { mode: 'webhook', url: i === 0 ? refreshUrl : `${challengeUrl}?cap-fill=${i}`, secret },
+        },
+      })
+      const json = await response.json() as { error?: { message: string } }
+      expect(json.error, `unexpected cap at seed index ${i}`).toBeUndefined()
+    }
+
+    const admin = getSupabaseClient()
+    await admin.from('webhooks').update({ enabled: false }).eq('url', refreshUrl)
+
+    const filler = await mcpEventsCall(orgApiKey, {
+      jsonrpc: '2.0',
+      id: 399,
+      method: 'events/subscribe',
+      params: {
+        name: 'bundle.uploaded',
+        arguments: { org_id: ORG_ID },
+        delivery: { mode: 'webhook', url: `${challengeUrl}?cap-fill=replace`, secret },
+      },
+    })
+    const fillerJson = await filler.json() as { error?: { message: string } }
+    expect(fillerJson.error).toBeUndefined()
+
+    const refresh = await mcpEventsCall(orgApiKey, {
+      jsonrpc: '2.0',
+      id: 400,
+      method: 'events/subscribe',
+      params: {
+        name: 'bundle.uploaded',
+        arguments: { org_id: ORG_ID },
+        delivery: { mode: 'webhook', url: refreshUrl, secret },
+        ttlMs: 60 * 60 * 1000,
+      },
+    })
+    const refreshJson = await refresh.json() as { error?: { message: string } }
+    expect(refreshJson.error?.message).toContain('25')
+  })
 })

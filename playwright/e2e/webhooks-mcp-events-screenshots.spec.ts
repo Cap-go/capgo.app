@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { devices } from '@playwright/test'
 import { expect, test } from '../support/commands'
 import { dismissSupportPrompt } from '../support/dismissSupportPrompt'
 
@@ -60,24 +61,40 @@ test.describe('Webhooks MCP badge screenshots', () => {
     await stubConsoleOnlyWebhooks(page)
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true })).toHaveCount(0)
-    await page.screenshot({ path: resolve(screenshotDir, 'desktop-before.png'), fullPage: true })
+    await page.screenshot({
+      path: resolve(screenshotDir, 'desktop-before.png'),
+      animations: 'disabled',
+    })
 
     await page.unrouteAll({ behavior: 'ignoreErrors' })
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true }).first()).toBeVisible()
-    await page.screenshot({ path: resolve(screenshotDir, 'desktop-after.png'), fullPage: true })
+    await page.screenshot({
+      path: resolve(screenshotDir, 'desktop-after.png'),
+      animations: 'disabled',
+    })
   })
 
   test('mobile before and after MCP badge', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
+    const iphone = devices['iPhone 13']
+    await page.setViewportSize(iphone.viewport)
+    await page.evaluate((ua) => {
+      Object.defineProperty(navigator, 'userAgent', { get: () => ua })
+    }, iphone.userAgent)
     await stubConsoleOnlyWebhooks(page)
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true })).toHaveCount(0)
-    await page.screenshot({ path: resolve(screenshotDir, 'mobile-before.png'), fullPage: true })
+    await page.screenshot({
+      path: resolve(screenshotDir, 'mobile-before.png'),
+      animations: 'disabled',
+    })
 
     await page.unrouteAll({ behavior: 'ignoreErrors' })
     await openWebhooksList(page)
     await expect(page.getByText('MCP', { exact: true }).first()).toBeVisible()
-    await page.screenshot({ path: resolve(screenshotDir, 'mobile-after.png'), fullPage: true })
+    await page.screenshot({
+      path: resolve(screenshotDir, 'mobile-after.png'),
+      animations: 'disabled',
+    })
   })
 })
