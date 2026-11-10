@@ -103,6 +103,11 @@ export function aiGoalToIntent(goal: AiOnboardingGoal): 'ota' | 'builder' | 'bot
   return goal === 'unsure' ? 'exploring' : goal
 }
 
+/** Analytics `intent` property, with the saved value; empty until a goal is chosen. */
+export function aiIntentEventProperties(goal: AiOnboardingGoal | null): { intent?: ReturnType<typeof aiGoalToIntent> } {
+  return goal ? { intent: aiGoalToIntent(goal) } : {}
+}
+
 export function readAiOnboardingGoal(onboarding: Json | unknown): AiOnboardingGoal | null {
   const intent = asObject(onboarding).intent
   if (intent === 'ota' || intent === 'builder' || intent === 'both')

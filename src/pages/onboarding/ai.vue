@@ -22,7 +22,7 @@ import { useMainStore } from '~/stores/main'
 import { isPendingOrganizationInvite, useOrganizationStore } from '~/stores/organization'
 import { onboardingPrimaryButtonClass, onboardingSecondaryButtonClass } from '~/utils/onboardingButtonClasses'
 import { allowOnboardingDashboardExploration, getAppGettingStartedPath, ONBOARDING_DASHBOARD_EXPLORED_EVENT } from '~/utils/onboardingRedirect'
-import { readAiAgentProgress, readAiOnboardingGoal, withOnboardingSetupMode } from '~/utils/onboardingSetupMode'
+import { aiIntentEventProperties, readAiAgentProgress, readAiOnboardingGoal, withOnboardingSetupMode } from '~/utils/onboardingSetupMode'
 
 // Must match AI_ONBOARDING_API_KEY_NAME in the backend agent marker.
 const AI_ONBOARDING_API_KEY_NAME = 'ai-onboarding'
@@ -137,7 +137,7 @@ async function copyPrompt() {
     await navigator.clipboard.writeText(prompt.value)
     copied.value = true
     toast.success(t('copied-to-clipboard'))
-    sendOnboardingEvent('onboarding_ai_setup_prompt_copied', { org_id: organization.value?.gid ?? '' })
+    sendOnboardingEvent('onboarding_ai_setup_prompt_copied', { org_id: organization.value?.gid ?? '', ...aiIntentEventProperties(goal) })
     void rememberSetupMethod('ai')
   }
   catch (error) {
@@ -151,12 +151,9 @@ async function refreshAgentProgress(userId: string) {
   const { data, error } = await capgo.from('users').select('onboarding').eq('id', userId).maybeSingle()
   if (disposed || error || !data)
     return
-  const next = readAiAgentProgress(data.onboarding)
-  if (next.agentConnected && !agentProgress.value.agentConnected)
-    sendOnboardingEvent('onboarding_ai_agent_connected', { org_id: organization.value?.gid ?? '' })
-  if (next.mcpConnected && !agentProgress.value.mcpConnected)
-    sendOnboardingEvent('onboarding_ai_mcp_connected', { org_id: organization.value?.gid ?? '' })
-  agentProgress.value = next
+  // onboarding_ai_agent_connected / onboarding_ai_mcp_connected are sent by the backend when
+  // it writes these markers, so they are counted even after the user leaves this page.
+  agentProgress.value = readAiAgentProgress(data.onboarding)
   // Keep the store current so later onboarding writes compare against the latest row.
   if (main.user?.id === userId)
     main.user = { ...main.user, onboarding: data.onboarding }
@@ -180,7 +177,7 @@ async function checkForApp() {
     return
   detectedApp.value = data[0]
   stopPolling()
-  sendOnboardingEvent('onboarding_ai_app_detected', { org_id: orgId, app_id: data[0].app_id })
+  sendOnboardingEvent('onboarding_ai_app_detected', { org_id: orgId, app_id: data[0].app_id, ...aiIntentEventProperties(goal) })
   // Getting started is where the agent's progress shows live, so go there on our own.
   autoOpenTimer = setTimeout(() => {
     openApp().catch(error => console.error('Failed to open setup progress after AI onboarding', error))
@@ -214,7 +211,7 @@ async function switchToManual() {
     return
   isLeaving.value = true
   try {
-    sendOnboardingEvent('onboarding_ai_switched_to_manual', { org_id: organization.value?.gid ?? '' })
+    sendOnboardingEvent('onboarding_ai_switched_to_manual', { org_id: organization.value?.gid ?? '', ...aiIntentEventProperties(goal) })
     void rememberSetupMethod('manual')
     await rememberManualSetup()
     await router.push('/app/new?mode=manual')
@@ -229,7 +226,7 @@ function reloadPage() {
 }
 
 async function exploreDashboard() {
-  sendOnboardingEvent('onboarding_ai_explore_dashboard', { org_id: organization.value?.gid ?? '' })
+  sendOnboardingEvent('onboarding_ai_explore_dashboard', { org_id: organization.value?.gid ?? '', ...aiIntentEventProperties(goal) })
   // Same signal as the other "explore the dashboard" exits, emitted before granting exploration.
   window.dispatchEvent(new Event(ONBOARDING_DASHBOARD_EXPLORED_EVENT))
   allowOnboardingDashboardExploration(main.user?.id ?? main.auth?.id)
