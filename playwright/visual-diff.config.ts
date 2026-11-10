@@ -754,6 +754,26 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   {
+    slug: 'security-updates-email-preferences-desktop',
+    path: '/email-preferences',
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 1440, height: 900 })
+      const section = page.locator('#security-updates-email-public')
+      if (await section.isVisible().catch(() => false))
+        await section.scrollIntoViewIfNeeded()
+    },
+  },
+  {
+    slug: 'security-updates-email-preferences-mobile',
+    path: '/email-preferences',
+    prepare: async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      const section = page.locator('#security-updates-email-public')
+      if (await section.isVisible().catch(() => false))
+        await section.scrollIntoViewIfNeeded()
+    },
+  },
+  {
     slug: 'security-updates-observe-mobile',
     path: '/app/com.demo.app/observe/errors',
     auth: true,

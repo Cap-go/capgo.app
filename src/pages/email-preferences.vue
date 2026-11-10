@@ -24,6 +24,7 @@ const PUBLIC_EMAIL_PREFERENCE_KEYS = [
   'device_error',
   'channel_self_rejected',
   'bundle_incompatible',
+  'security_updates',
 ] as const
 
 type PublicEmailPreferenceKey = typeof PUBLIC_EMAIL_PREFERENCE_KEYS[number]
@@ -52,6 +53,10 @@ const PREFERENCE_SECTIONS: {
     titleKey: 'notifications-onboarding',
     keys: ['onboarding', 'builder_onboarding'],
   },
+  {
+    titleKey: 'notifications-security-advisories',
+    keys: ['security_updates'],
+  },
 ]
 
 const PREFERENCE_LABEL_KEYS: Record<PublicEmailPreferenceKey, string> = {
@@ -68,6 +73,7 @@ const PREFERENCE_LABEL_KEYS: Record<PublicEmailPreferenceKey, string> = {
   device_error: 'notifications-device-error',
   channel_self_rejected: 'notifications-channel-self-rejected',
   bundle_incompatible: 'notifications-bundle-incompatible',
+  security_updates: 'notifications-security-updates',
 }
 
 const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
@@ -84,6 +90,7 @@ const PREFERENCE_DESC_KEYS: Record<PublicEmailPreferenceKey, string> = {
   device_error: 'notifications-device-error-desc',
   channel_self_rejected: 'notifications-channel-self-rejected-desc',
   bundle_incompatible: 'notifications-bundle-incompatible-desc',
+  security_updates: 'notifications-security-updates-desc',
 }
 
 const { t } = useI18n()
@@ -105,7 +112,7 @@ const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
 
 const preferences = reactive<Record<PublicEmailPreferenceKey, boolean>>(
   Object.fromEntries(
-    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, true]),
+    PUBLIC_EMAIL_PREFERENCE_KEYS.map(key => [key, key === 'security_updates' ? false : true]),
   ) as Record<PublicEmailPreferenceKey, boolean>,
 )
 
@@ -300,6 +307,8 @@ async function savePreferences() {
               <label
                 v-for="key in section.keys"
                 :key="key"
+                :id="key === 'security_updates' ? 'security-updates-email-public' : undefined"
+                :data-testid="key === 'security_updates' ? 'security-updates-email-toggle-public' : undefined"
                 class="flex items-start justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 dark:border-slate-700"
               >
                 <span>
