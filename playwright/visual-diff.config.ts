@@ -5,6 +5,49 @@ import { BUILDER_STEP_IDS } from '../src/services/builderOnboardingChecklist'
 import { consoleQueryFromResponse, consoleQueryJson, consoleQueryMethod, consoleQueryPayload, consoleQueryRows, forwardConsoleQuery, routeConsoleQuery } from './support/consoleQuery'
 
 
+async function dismissRemindMeLater(page: Page) {
+  const remindLater = page.getByRole('button', { name: 'Remind me later', exact: true })
+  if (await remindLater.isVisible().catch(() => false))
+    await remindLater.click()
+}
+
+async function prepareSecurityUpdatesNotificationsSection(page: Page, viewport: { width: number, height: number }) {
+  await page.setViewportSize(viewport)
+  await dismissRemindMeLater(page)
+  const section = page.locator('#security-updates-email')
+  if (process.env.VISUAL_DIFF_PHASE === 'after') {
+    await section.waitFor({ state: 'visible', timeout: 120_000 })
+    await section.scrollIntoViewIfNeeded()
+  }
+  else if (await section.isVisible().catch(() => false)) {
+    await section.scrollIntoViewIfNeeded()
+  }
+}
+
+async function prepareSecurityUpdatesObserveTab(page: Page, viewport: { width: number, height: number }) {
+  await page.setViewportSize(viewport)
+  await dismissRemindMeLater(page)
+  const securityTab = page.getByRole('button', { name: /security updates/i })
+  if (await securityTab.isVisible().catch(() => false)) {
+    await securityTab.scrollIntoViewIfNeeded()
+    await securityTab.click()
+    await page.locator('[data-testid="security-updates-feed"]').waitFor({ state: 'visible', timeout: 120_000 })
+    await page.locator('[data-testid="security-advisory-match-card"]').first().waitFor({ state: 'visible', timeout: 120_000 })
+  }
+}
+
+async function prepareSecurityUpdatesEmailPreferences(page: Page, viewport: { width: number, height: number }) {
+  await page.setViewportSize(viewport)
+  const section = page.locator('#security-updates-email-public')
+  if (process.env.VISUAL_DIFF_PHASE === 'after') {
+    await section.waitFor({ state: 'visible', timeout: 120_000 })
+    await section.scrollIntoViewIfNeeded()
+  }
+  else if (await section.isVisible().catch(() => false)) {
+    await section.scrollIntoViewIfNeeded()
+  }
+}
+
 export interface VisualDiffRoute {
   slug: string
   path: string
@@ -728,6 +771,53 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     },
   },
   { slug: 'account-settings', path: '/settings/account', auth: true },
+  { slug: 'account-notifications', path: '/settings/account/notifications', auth: true },
+  {
+    slug: 'security-updates-notifications-desktop',
+    path: '/settings/account/notifications',
+    auth: true,
+    prepare: async (page) => {
+      await prepareSecurityUpdatesNotificationsSection(page, { width: 1440, height: 900 })
+    },
+  },
+  {
+    slug: 'security-updates-notifications-mobile',
+    path: '/settings/account/notifications',
+    auth: true,
+    prepare: async (page) => {
+      await prepareSecurityUpdatesNotificationsSection(page, { width: 390, height: 844 })
+    },
+  },
+  {
+    slug: 'security-updates-observe-desktop',
+    path: '/app/com.demo.app/observe/errors',
+    auth: true,
+    prepare: async (page) => {
+      await prepareSecurityUpdatesObserveTab(page, { width: 1440, height: 900 })
+    },
+  },
+  {
+    slug: 'security-updates-email-preferences-desktop',
+    path: '/email-preferences',
+    prepare: async (page) => {
+      await prepareSecurityUpdatesEmailPreferences(page, { width: 1440, height: 900 })
+    },
+  },
+  {
+    slug: 'security-updates-email-preferences-mobile',
+    path: '/email-preferences',
+    prepare: async (page) => {
+      await prepareSecurityUpdatesEmailPreferences(page, { width: 390, height: 844 })
+    },
+  },
+  {
+    slug: 'security-updates-observe-mobile',
+    path: '/app/com.demo.app/observe/errors',
+    auth: true,
+    prepare: async (page) => {
+      await prepareSecurityUpdatesObserveTab(page, { width: 390, height: 844 })
+    },
+  },
   {
     slug: 'email-verification-send',
     path: '/resend_email',
