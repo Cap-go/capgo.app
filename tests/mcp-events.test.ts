@@ -258,6 +258,9 @@ describeMcpEvents('mcp events subscriptions', () => {
   })
 
   it('counts a refresh of an inactive subscription against the org cap', async () => {
+    const admin = getSupabaseClient()
+    await admin.from('webhooks').delete().eq('org_id', ORG_ID).eq('source', 'mcp')
+
     const secret = `whsec_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString('base64')}`
     const refreshUrl = `${challengeUrl}?cap-refresh=1`
     for (let i = 0; i < 25; i++) {
@@ -275,7 +278,6 @@ describeMcpEvents('mcp events subscriptions', () => {
       expect(json.error, `unexpected cap at seed index ${i}`).toBeUndefined()
     }
 
-    const admin = getSupabaseClient()
     await admin.from('webhooks').update({ enabled: false }).eq('url', refreshUrl)
 
     const filler = await mcpEventsCall(orgApiKey, {
