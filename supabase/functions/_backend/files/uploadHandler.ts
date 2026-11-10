@@ -44,6 +44,7 @@ import {
   UPLOAD_EXPIRATION_MS,
   UPLOAD_INFO_KEY,
   UPLOAD_OFFSET_KEY,
+  TusClientDisconnectedError,
   WritableStreamBuffer,
   X_CHECKSUM_SHA256,
   X_UPLOAD_HANDLER_RETRYABLE,
@@ -514,23 +515,61 @@ export class UploadHandler extends DurableObject {
       return c.text('Must provide request body', 400)
     }
 
-    const result = await this.appendBody(c, r2Key, c.req.raw.body, currentUploadOffset, uploadInfo)
-    uploadOffset = result.uploadOffset
+    try {
+      const result = await this.appendBody(c, r2Key, c.req.raw.body, currentUploadOffset, uploadInfo)
+      uploadOffset = result.uploadOffset
 
-    const receipt = await this.completedUploadReceipt(c, r2Key, uploadOffset, uploadInfo, result.object)
-    return new Response(null, {
-      status: 204,
-      headers: new Headers({
-        'Upload-Offset': uploadOffset.toString(),
-        'Upload-Expires': (await this.expirationTime()).toString(),
-        'Tus-Resumable': TUS_VERSION,
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': ALLOWED_METHODS,
-        'Access-Control-Allow-Headers': ALLOWED_HEADERS,
-        'Access-Control-Expose-Headers': EXPOSED_HEADERS,
-        ...(receipt ? { [MANIFEST_SIZE_RECEIPT_HEADER]: receipt } : {}),
-      }),
-    })
+      const receipt = await this.completedUploadReceipt(c, r2Key, uploadOffset, uploadInfo, result.object)
+      return new Response(null, {
+        status: 204,
+        headers: new Headers({
+          'Upload-Offset': uploadOffset.toString(),
+          'Upload-Expires': (await this.expirationTime()).toString(),
+          'Tus-Resumable': TUS_VERSION,
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': ALLOWED_METHODS,
+          'Access-Control-Allow-Headers': ALLOWED_HEADERS,
+          'Access-Control-Expose-Headers': EXPOSED_HEADERS,
+          ...(receipt ? { [MANIFEST_SIZE_RECEIPT_HEADER]: receipt } : {}),
+        }),
+      })
+    }
+    catch (error) {
+      if (error instanceof TusClientDisconnectedError) {
+        const storedOffset = await this.ctx.storage.get(UPLOAD_OFFSET_KEY)
+        const offsetAfterAbort = typeof storedOffset === 'number' ? storedOffset : currentUploadOffset
+        const declaredLength = uploadInfo.uploadLength
+        const uploadComplete = declaredLength != null && offsetAfterAbort >= declaredLength
+        if (uploadComplete) {
+          cloudlog({
+            requestId: c.get('requestId'),
+            message: 'TUS PATCH error after declared upload length reached, not treating as client abort',
+            r2Key,
+            uploadOffset: offsetAfterAbort,
+          })
+          throw error
+        }
+        cloudlog({
+          requestId: c.get('requestId'),
+          message: 'TUS PATCH aborted, returning resumable offset',
+          r2Key,
+          uploadOffset: offsetAfterAbort,
+        })
+        return new Response(null, {
+          status: error.status,
+          headers: new Headers({
+            'Upload-Offset': String(offsetAfterAbort),
+            'Upload-Expires': (await this.expirationTime()).toString(),
+            'Tus-Resumable': TUS_VERSION,
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': ALLOWED_METHODS,
+            'Access-Control-Allow-Headers': ALLOWED_HEADERS,
+            'Access-Control-Expose-Headers': EXPOSED_HEADERS,
+          }),
+        })
+      }
+      throw error
+    }
   }
 
   async completedUploadReceipt(c: Context, r2Key: string, uploadOffset: number, uploadInfo: StoredUploadInfo, object: R2Object | null): Promise<string | null> {
@@ -561,8 +600,9 @@ export class UploadHandler extends DurableObject {
     switch (part.kind) {
       case 'intermediate': {
         this.multipart ??= await this.r2CreateMultipartUpload(r2Key, uploadInfo)
+        const uploadedPart = await this.r2UploadPart(c, r2Key, this.parts.length + 1, part.bytes)
         this.parts.push({
-          part: await this.r2UploadPart(r2Key, this.parts.length + 1, part.bytes),
+          part: uploadedPart,
           length: part.bytes.byteLength,
         })
         uploadOffset += part.bytes.byteLength
@@ -590,7 +630,7 @@ export class UploadHandler extends DurableObject {
         }
         else {
           // upload the last part (can be less than the 5mb min part size), then complete the upload
-          const uploadedPart = await this.r2UploadPart(r2Key, this.parts.length + 1, part.bytes)
+          const uploadedPart = await this.r2UploadPart(c, r2Key, this.parts.length + 1, part.bytes)
           this.parts.push({ part: uploadedPart, length: part.bytes.byteLength })
           object = await this.r2CompleteMultipartUpload(c, r2Key, await digester.digest(), checksum)
           uploadOffset += part.bytes.byteLength
@@ -786,12 +826,25 @@ export class UploadHandler extends DurableObject {
     }
   }
 
-  async r2UploadPart(r2Key: string, partIndex: number, bytes: Uint8Array): Promise<R2UploadedPart> {
+  async r2UploadPart(c: Context, r2Key: string, partIndex: number, bytes: Uint8Array): Promise<R2UploadedPart> {
     if (this.multipart == null) {
       throw new UnrecoverableError('cannot call complete multipart with no multipart upload', r2Key)
     }
+    const signal = c.req.raw.signal
     try {
-      return await this.multipart.uploadPart(partIndex, bytes)
+      const uploadPromise = this.multipart.uploadPart(partIndex, bytes)
+      if (signal == null)
+        return await uploadPromise
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (signal.aborted) {
+          reject(new TusClientDisconnectedError())
+          return
+        }
+        signal.addEventListener('abort', () => {
+          reject(new TusClientDisconnectedError())
+        }, { once: true })
+      })
+      return await Promise.race([uploadPromise, abortPromise])
     }
     catch (e) {
       if (isR2MultipartDoesNotExistError(e)) {
