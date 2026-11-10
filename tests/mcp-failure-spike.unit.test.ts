@@ -93,16 +93,31 @@ describe('mcp failure spike policy', () => {
     expect(result.reason).toBe('cooldown')
   })
 
-  it('rejects invalid config', () => {
+  it('rejects failure_rate_percent below the catalog minimum', () => {
+    const parsed = mcpFailureSpikeArgumentsSchema.safeParse({ ...baseArgs, failure_rate_percent: 0 })
+    expect(parsed.success).toBe(false)
+    if (!parsed.success)
+      expect(formatFailureSpikeValidationError(parsed.error)).toContain('failure_rate_percent')
+  })
+
+  it('rejects cooldown shorter than window', () => {
     const parsed = mcpFailureSpikeArgumentsSchema.safeParse({
       ...baseArgs,
-      failure_rate_percent: 0,
       cooldown_minutes: 5,
       window_minutes: 15,
     })
     expect(parsed.success).toBe(false)
     if (!parsed.success)
       expect(formatFailureSpikeValidationError(parsed.error)).toContain('cooldown_minutes')
+  })
+
+  it('accepts cooldown equal to window', () => {
+    const parsed = mcpFailureSpikeArgumentsSchema.safeParse({
+      ...baseArgs,
+      cooldown_minutes: 15,
+      window_minutes: 15,
+    })
+    expect(parsed.success).toBe(true)
   })
 
   it('exposes recommended defaults in the event catalog', () => {

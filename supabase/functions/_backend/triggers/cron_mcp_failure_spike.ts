@@ -15,7 +15,8 @@ import { version } from '../utils/version.ts'
 export const app = createHono('', version)
 
 const SUBSCRIPTION_PAGE_SIZE = 200
-const EVALUATION_BUDGET_MS = 50_000
+// Queue consumer uses a 15s HTTP timeout for cron handlers; stay under it.
+const EVALUATION_BUDGET_MS = 12_000
 const EVALUATION_CONCURRENCY = 8
 const METRICS_KEY_SEP = '\u0001'
 
@@ -161,8 +162,8 @@ app.post('/', middlewareAPISecret, async (c) => {
             pg,
             webhook,
             now,
-            metrics,
             appOwnerOrgByAppId,
+            metrics,
           )
           checked += 1
           if (result.fired)

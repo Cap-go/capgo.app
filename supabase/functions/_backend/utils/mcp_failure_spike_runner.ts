@@ -82,8 +82,8 @@ export async function evaluateMcpFailureSpikeSubscriptions(
   pg: PgClient,
   webhook: McpFailureSpikeWebhookRow,
   now: Date,
+  appOwnerOrgByAppId: ReadonlyMap<string, string>,
   metricsOverride?: FailureSpikeMetrics,
-  appOwnerOrgByAppId?: ReadonlyMap<string, string>,
 ): Promise<{ fired: boolean, reason: string }> {
   const args = (webhook.mcp_arguments && typeof webhook.mcp_arguments === 'object' && !Array.isArray(webhook.mcp_arguments))
     ? webhook.mcp_arguments as Record<string, unknown>
@@ -93,9 +93,9 @@ export async function evaluateMcpFailureSpikeSubscriptions(
   if (!parsed.success)
     return { fired: false, reason: 'invalid_arguments' }
 
-  const ownerOrg = appOwnerOrgByAppId?.get(parsed.data.app_id)
-  if (appOwnerOrgByAppId && (!ownerOrg || ownerOrg !== webhook.org_id))
-    return { fired: false, reason: 'invalid_arguments' }
+  const ownerOrg = appOwnerOrgByAppId.get(parsed.data.app_id)
+  if (!ownerOrg || ownerOrg !== webhook.org_id)
+    return { fired: false, reason: 'app_owner_mismatch' }
 
   const thresholds = resolveFailureSpikeThresholds(args)
   const metrics = metricsOverride ?? await gatherFailureSpikeMetrics(
@@ -173,11 +173,21 @@ export async function evaluateMcpFailureSpikeSubscriptionFromMetrics(
     data.channel = subscriptionArgs.channel
 
   const eventName = 'update.failure_spike' as McpEventName
-  const delivered = await dispatchMcpEventToWebhook(c, webhook, eventName, data)
+  let delivered = false
+  try {
+    delivered = await dispatchMcpEventToWebhook(c, webhook, eventName, data)
+  }
+  catch {
+    await pg.query(
+      'UPDATE public.webhooks SET mcp_spike_last_fired_at = $2::timestamptz WHERE id = $1 AND mcp_spike_last_fired_at = $3::timestamptz',
+      [webhook.id, previousFiredAt, now.toISOString()],
+    )
+    throw
+  }
   if (!delivered) {
     await pg.query(
-      'UPDATE public.webhooks SET mcp_spike_last_fired_at = $2::timestamptz WHERE id = $1',
-      [webhook.id, previousFiredAt],
+      'UPDATE public.webhooks SET mcp_spike_last_fired_at = $2::timestamptz WHERE id = $1 AND mcp_spike_last_fired_at = $3::timestamptz',
+      [webhook.id, previousFiredAt, now.toISOString()],
     )
     return { fired: false, reason: 'delivery_failed' }
   }
