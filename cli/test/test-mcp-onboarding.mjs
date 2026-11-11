@@ -1,6 +1,28 @@
 #!/usr/bin/env node
 /** Headless tests for the MCP-conducted Capgo Builder onboarding engine. */
 import process from 'node:process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const MCP_TEST_APP_ROOT = '/tmp/app'
+const MCP_FIXTURE_SA = join(MCP_TEST_APP_ROOT, 'creds', 'sa.json')
+const MCP_FIXTURE_SA_BAD = join(MCP_TEST_APP_ROOT, 'creds', 'bad.json')
+const MCP_FIXTURE_P8 = join(MCP_TEST_APP_ROOT, 'AuthKey.p8')
+
+function ensureMcpOnboardingFixtureFiles() {
+  mkdirSync(join(MCP_TEST_APP_ROOT, 'creds'), { recursive: true })
+  const saBody = JSON.stringify({
+    type: 'service_account',
+    client_email: 'sa@proj-1.iam.gserviceaccount.com',
+    private_key: '-----BEGIN PRIVATE KEY-----\nK\n-----END PRIVATE KEY-----\n',
+    project_id: 'proj-1',
+    token_uri: 'https://oauth2.googleapis.com/token',
+  })
+  writeFileSync(MCP_FIXTURE_SA, saBody)
+  writeFileSync(MCP_FIXTURE_SA_BAD, saBody)
+  writeFileSync(MCP_FIXTURE_P8, '-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n')
+}
+ensureMcpOnboardingFixtureFiles()
 
 console.log('🧪 Testing MCP Builder onboarding...\n')
 
@@ -985,7 +1007,7 @@ await test('ios: full flow → provide ASC key → granular engine chain → off
   })
   const r1 = await runStart(deps)
   eq(r1.state, 'ios-api-key')
-  const r2 = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  const r2 = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   eq(r2.kind, 'choice')
   eq(r2.state, 'build-ready')
   // The build offer points at start_capgo_build — a runBuild:true is the wrong tool and is rejected.
@@ -1002,7 +1024,7 @@ await test('ios: verifying-key failure → structured error recovery (choice; re
     iosEffectDeps: { verifyApiKey: async () => { throw new Error('cert limit reached') } },
   })
   await runStart(deps)
-  const r = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  const r = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   eq(r.kind, 'choice')
   eq(r.state, 'error')
   ok(/cert limit reached/.test(r.summary), 'summary must surface the failing step message')
@@ -1242,7 +1264,7 @@ await test('Task5: BYO path: serviceAccountJsonPath → validating → build-rea
   }
   deps._setAndroidProgress(keystoreProgress)
   // Submit the SA JSON path — validates OK → saves credentials → build-ready
-  const r = await runAdvance(deps, { serviceAccountJsonPath: '/tmp/sa.json' })
+  const r = await runAdvance(deps, { serviceAccountJsonPath: MCP_FIXTURE_SA })
   eq(r.platform, 'android')
   eq(r.state, 'build-ready', `expected build-ready, got ${r.state}`)
   eq(r.kind, 'choice')
@@ -1285,7 +1307,7 @@ await test('Task5: validation-failed: validateServiceAccountJson → ok:false �
   deps._setAndroidProgress(keystoreProgress)
 
   // Submit SA path → validation fails → sa-json-validation-failed
-  const r = await runAdvance(deps, { serviceAccountJsonPath: '/tmp/bad.json' })
+  const r = await runAdvance(deps, { serviceAccountJsonPath: MCP_FIXTURE_SA_BAD })
   eq(r.platform, 'android')
   eq(r.state, 'sa-json-validation-failed', `expected sa-json-validation-failed, got ${r.state}`)
   eq(r.kind, 'choice')
@@ -1307,7 +1329,7 @@ await test('Task5: validation-failed: saMethodChoice:oauth → google-sign-in ga
     startedAt: new Date().toISOString(),
     serviceAccountForkSeen: true,
     serviceAccountMethod: 'existing',
-    serviceAccountJsonPath: '/tmp/bad.json',
+    serviceAccountJsonPath: MCP_FIXTURE_SA_BAD,
     keystoreMethod: 'generate',
     keystoreAlias: 'release',
     keystoreStorePassword: 'storePw',
@@ -1337,7 +1359,7 @@ await test('Task5: validation-failed: saMethodChoice:retry → back to sa-json-e
     startedAt: new Date().toISOString(),
     serviceAccountForkSeen: true,
     serviceAccountMethod: 'existing',
-    serviceAccountJsonPath: '/tmp/bad.json',
+    serviceAccountJsonPath: MCP_FIXTURE_SA_BAD,
     keystoreMethod: 'generate',
     keystoreAlias: 'release',
     keystoreStorePassword: 'storePw',
@@ -1419,7 +1441,7 @@ await test('FIX1: iOS runBuild → use-start-tool corrective (platform ios); che
 
   // Drive to build-ready
   await runStart(deps)
-  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
 
   // runBuild:true is the wrong tool — engine rejects it and points at start_capgo_build (carrying platform:ios)
   const corrective = await runAdvance(deps, { runBuild: true, platform: 'ios' })
@@ -1442,7 +1464,7 @@ await test('FIX1: iOS checkBuild with no-record → build-waiting carries platfo
     readBuildRecord: async () => null,
   })
   await runStart(deps)
-  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   const waiting = await runAdvance(deps, { checkBuild: true, platform: 'ios' })
   eq(waiting.state, 'build-waiting', `expected build-waiting, got ${waiting.state}`)
   ok(waiting.next && waiting.next.with, 'next.with must exist')
@@ -1469,7 +1491,7 @@ await test('FIX4: buildDoneResult with null outputUrl uses fallback text and has
     }),
   })
   await runStart(deps)
-  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   const result = await runAdvance(deps, { checkBuild: true, platform: 'ios' })
   eq(result.state, 'build-complete')
   ok(result.summary && !result.summary.includes('null'), 'summary must not say "null" when outputUrl is null')

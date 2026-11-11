@@ -23,6 +23,7 @@ import { applyIosInput, iosViewForStep, runIosEffect } from '../ios/flow.js'
 import { applyTailInput, tailViewForStep } from '../tail/flow.js'
 import { clearSession, clearSessionCarried, dropIosCarried, getAppflowProgress, getResumeResolvedFor, getSession, getSessionPlatform, mergeIosCarried, mergeTailCarried, setAppflowGate, setAppflowProgress, setResumeResolvedFor, setSessionPlatform, setTailParked } from './session-state.js'
 import { slimAndroidTailProgress, slimIosTailProgress } from './tail-progress.js'
+import { readScopedMcpCredentialFile } from './scoped-credential-path.js'
 import { brokerBegin, brokerClear, brokerPoll } from './broker-session.js'
 import type { GoogleUserInfo } from '../android/oauth-google.js'
 import { SUPPORT_EMAIL } from '../../../support/contact-support.js'
@@ -3563,6 +3564,7 @@ async function persistAndroidInput(deps: EngineDeps, appId: string, input: Onboa
   }
 
   if (input.serviceAccountJsonPath) {
+    await readScopedMcpCredentialFile(input.serviceAccountJsonPath, 'service-account-json', deps.cwd)
     updated = applyAndroidInput('sa-json-existing-path', updated, {
       step: 'sa-json-existing-path',
       path: input.serviceAccountJsonPath,
@@ -3579,7 +3581,7 @@ async function persistAndroidInput(deps: EngineDeps, appId: string, input: Onboa
     else if (input.saMethodChoice === 'save-anyway') {
       const saPath = updated.serviceAccountJsonPath
       if (saPath) {
-        const bytes = await deps.androidEffectDeps.readFile(saPath)
+        const bytes = await readScopedMcpCredentialFile(saPath, 'service-account-json', deps.cwd)
         const base64 = bytes.toString('base64')
         updated = applyAndroidInput('sa-json-validation-failed', updated, {
           step: 'sa-json-validation-failed',
@@ -3699,8 +3701,11 @@ async function persistIosApiKeyInput(deps: EngineDeps, appId: string, input: Onb
   let updated = progressRaw
   if (!updated.setupMethod)
     updated = applyIosInput('setup-method-select', updated, { step: 'setup-method-select', value: 'create' })
-  if (input.p8Path)
+  if (input.p8Path) {
+    const p8Bytes = await readScopedMcpCredentialFile(input.p8Path, 'p8', deps.cwd)
     updated = applyIosInput('input-p8-path', updated, { step: 'input-p8-path', value: input.p8Path })
+    mergeIosCarried(appId, { p8Content: p8Bytes })
+  }
   if (input.keyId)
     updated = applyIosInput('input-key-id', updated, { step: 'input-key-id', value: input.keyId })
   if (input.issuerId)
@@ -3708,15 +3713,6 @@ async function persistIosApiKeyInput(deps: EngineDeps, appId: string, input: Onb
 
   if (updated !== progressRaw)
     await ios?.saveProgress?.(appId, updated)
-
-  if (input.p8Path && ios?.readFile) {
-    try {
-      mergeIosCarried(appId, { p8Content: await ios.readFile(input.p8Path) })
-    }
-    catch {
-      // Unreadable .p8 — verifying-key re-reads from p8Path and reports.
-    }
-  }
 }
 
 /**

@@ -1,7 +1,7 @@
 // src/build/onboarding/mcp/onboarding-tools.ts
 import { Buffer } from 'node:buffer'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import process from 'node:process'
 import type { CapgoSDK } from '../../../sdk.js'
@@ -23,6 +23,7 @@ import { createCiSecretEntries, detectCiSecretTargets, getCiSecretRepoLabelAsync
 import { defaultExportPath, exportCredentialsToEnv } from '../env-export.js'
 import { generateWorkflow } from '../workflow-generator.js'
 import { writeWorkflowFile } from '../workflow-writer.js'
+import { makeMcpScopedReadFile, readScopedMcpCredentialFile } from './scoped-credential-path.js'
 import { fetchUserInfo, revokeToken, runOAuthFlow, startOAuthFlow } from '../android/oauth-google.js'
 import open from 'open'
 
@@ -112,7 +113,7 @@ function buildAndroidEffectDeps(
     deleteAndroidProgress,
 
     // ── File system ───────────────────────────────────────────────────────────
-    readFile: (path: string) => readFile(path) as Promise<Buffer>,
+    readFile: makeMcpScopedReadFile(cwd),
     copyFile,
 
     // ── OAuth ─────────────────────────────────────────────────────────────────
@@ -241,7 +242,7 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
     const carriedP8 = getSession(appId).iosCarried.p8Content
     let content = carriedP8 ? carriedP8.toString('utf-8') : undefined
     if (!content && prog.p8Path)
-      content = await readFile(prog.p8Path, 'utf-8')
+      content = (await readScopedMcpCredentialFile(prog.p8Path, 'p8', cwd)).toString('utf8')
     if (!content)
       throw new Error('The .p8 key file is unavailable — provide the p8Path again.')
     return generateJwt(prog.keyId, prog.issuerId, content)
@@ -323,7 +324,7 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
       createP12(certificatePem, privateKeyPem, password).p12Base64,
 
     // ── file system ──
-    readFile: (path: string) => readFile(path) as Promise<Buffer>,
+    readFile: makeMcpScopedReadFile(cwd),
     copyFile,
     isMacOS: () => process.platform === 'darwin',
 
