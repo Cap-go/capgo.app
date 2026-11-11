@@ -343,6 +343,7 @@ async function login(form: { email: string, password: string }) {
 
   if (shouldBlockForCaptchaComputed.value) {
     isLoading.value = false
+    formErrors.value = [t('login-captcha-verifying')]
     return
   }
 

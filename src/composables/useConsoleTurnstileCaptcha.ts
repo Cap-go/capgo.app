@@ -83,6 +83,11 @@ export function useConsoleTurnstileCaptcha(captchaKey: Ref<string | undefined>, 
     }
   }, { immediate: true })
 
+  watch(captchaComponent, (widget) => {
+    if (widget && captchaKey.value && isStepEnabled())
+      scheduleCaptchaInitTimeout()
+  })
+
   onBeforeUnmount(() => {
     clearCaptchaInitTimeout()
   })

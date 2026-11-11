@@ -60,6 +60,19 @@ describe('console captcha fallback', () => {
     expect(JSON.parse(String(init.body))).toEqual({ email: 'user@example.com', create_user: false, data: {} })
   })
 
+  it('surfaces upstream rate limits instead of a generic ok', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 429 }))
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
+    })
+    expect(response.status).toBe(429)
+    expect(await response.json()).toMatchObject({
+      moreInfo: { reason: 'captcha_fallback_upstream_rate_limit' },
+    })
+  })
+
   it('never exposes a password grant path on this endpoint', async () => {
     const response = await app.request('http://localhost/', {
       method: 'POST',

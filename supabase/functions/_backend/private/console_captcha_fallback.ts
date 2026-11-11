@@ -56,7 +56,7 @@ function consoleOriginAllowed(c: Context<MiddlewareKeyVariables>, origin: string
       }
     }
     if (allowed.size === 0)
-      return true
+      return false
     return allowed.has(requestOrigin)
   }
   catch {
@@ -134,17 +134,9 @@ app.post('/', async (c) => {
   if (emailLimit.limited)
     return simpleRateLimit({ reason: 'captcha_fallback_email_rate_limit', ...buildRateLimitInfo(emailLimit.resetAt) })
 
+  let response: Response
   try {
-    const response = await relayCaptchaFallbackAuth(c, parsed.data.purpose, email, parsed.data.redirect_to)
-    await recordCaptchaFallbackRequest(c, email)
-    if (!response.ok) {
-      cloudlog({
-        requestId: c.get('requestId'),
-        message: 'captcha fallback auth relay failed',
-        purpose: parsed.data.purpose,
-        status: response.status,
-      })
-    }
+    response = await relayCaptchaFallbackAuth(c, parsed.data.purpose, email, parsed.data.redirect_to)
   }
   catch (error) {
     cloudlog({
@@ -154,6 +146,22 @@ app.post('/', async (c) => {
       error,
     })
     return quickError(502, 'captcha_fallback_failed', 'Unable to send email')
+  }
+
+  if (!response.ok) {
+    if (response.status === 429)
+      return simpleRateLimit({ reason: 'captcha_fallback_upstream_rate_limit', ...buildRateLimitInfo(Date.now() + 3_600_000) })
+    if (response.status >= 500)
+      return quickError(502, 'captcha_fallback_failed', 'Unable to send email')
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'captcha fallback auth relay failed',
+      purpose: parsed.data.purpose,
+      status: response.status,
+    })
+  }
+  else {
+    await recordCaptchaFallbackRequest(c, email)
   }
 
   // Same shape for unknown emails so this is not an existence oracle.

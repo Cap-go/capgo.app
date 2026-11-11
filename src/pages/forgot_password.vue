@@ -346,7 +346,7 @@ watchEffect(() => {
         </div>
 
         <p v-else-if="step === 1 && useCaptchaFallback()" class="text-sm text-slate-600 dark:text-slate-300" data-test="forgot-captcha-fallback">
-          {{ t('captcha-resend-unavailable') }}
+          {{ t('login-captcha-fallback-message') }}
         </p>
 
         <ul v-if="formErrors.length" role="alert" class="mb-1.5">

@@ -405,9 +405,12 @@ async function incrementCaptchaFallbackLimit(
   const cacheHelper = new CacheHelper(c)
   const cacheKey = cacheHelper.buildRequest(path, cachePart)
   const existingData = await cacheHelper.matchJson<RateLimitData>(cacheKey)
-  const resetAt = buildCaptchaFallbackResetAt()
+  const now = Date.now()
+  const resetAt = existingData?.resetAt && existingData.resetAt > now
+    ? existingData.resetAt
+    : buildCaptchaFallbackResetAt()
   const newData: RateLimitData = {
-    count: (existingData?.count ?? 0) + 1,
+    count: (existingData?.resetAt && existingData.resetAt > now ? existingData.count : 0) + 1,
     resetAt,
   }
   await cacheHelper.putJson(cacheKey, newData, getRateLimitWindowSeconds(resetAt, Date.now()))

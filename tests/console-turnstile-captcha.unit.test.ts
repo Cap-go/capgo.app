@@ -29,9 +29,9 @@ describe('consoleTurnstileCaptcha', () => {
     vi.useFakeTimers()
     let token = ''
     const pending = waitForTurnstileToken(() => token, 1000)
-    vi.advanceTimersByTimeAsync(100)
+    await vi.advanceTimersByTimeAsync(50)
     token = 'fresh-token'
-    vi.advanceTimersByTimeAsync(100)
+    await vi.advanceTimersByTimeAsync(50)
     await expect(pending).resolves.toBe('fresh-token')
     vi.useRealTimers()
   })
