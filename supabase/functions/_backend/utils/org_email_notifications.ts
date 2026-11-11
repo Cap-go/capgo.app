@@ -81,6 +81,7 @@ export type EmailPreferenceKey
     | 'bundle_incompatible'
     | 'bundle_incompatible_expected'
     | 'app_too_large'
+    | 'security_updates'
 
 export interface EmailPreferences {
   usage_limit?: boolean
@@ -100,19 +101,35 @@ export interface EmailPreferences {
   bundle_incompatible?: boolean
   bundle_incompatible_expected?: boolean
   app_too_large?: boolean
+  security_updates?: boolean
+}
+
+/** User preferences that default to disabled when absent (opt-in only). */
+export const OPT_IN_EMAIL_PREFERENCE_KEYS = new Set<EmailPreferenceKey>(['security_updates'])
+
+export function isUserEmailPreferenceEnabled(
+  prefs: EmailPreferences,
+  preferenceKey: EmailPreferenceKey,
+): boolean {
+  const prefValue = prefs[preferenceKey]
+  if (OPT_IN_EMAIL_PREFERENCE_KEYS.has(preferenceKey))
+    return prefValue === true
+  return prefValue === undefined ? true : prefValue
 }
 
 /**
  * Which org members receive a notification.
  * - 'admins': org_admin + org_super_admin (org management + usage-credit data; the default).
  * - 'billing': org_super_admin + org_billing_admin (billing/payment actions; the org.update_billing holders).
+ * - 'admins_and_billing': org administrators plus billing administrators (usage alerts).
  * - 'all': every active org-scoped user/group binding, any role.
  */
-export type NotificationAudience = 'admins' | 'billing' | 'all'
+export type NotificationAudience = 'admins' | 'billing' | 'admins_and_billing' | 'all'
 
 const AUDIENCE_ROLE_NAMES: Record<NotificationAudience, string[]> = {
   admins: ['org_admin', 'org_super_admin'],
   billing: ['org_super_admin', 'org_billing_admin'],
+  admins_and_billing: ['org_admin', 'org_super_admin', 'org_billing_admin'],
   // Empty means no role-name filter; collect every org-scoped binding.
   all: [],
 }
@@ -368,8 +385,7 @@ async function getEligibleOrgMemberEmails(
         continue
 
       const prefs = (user.email_preferences as EmailPreferences | null) ?? {}
-      const prefValue = prefs[preferenceKey]
-      const isEnabled = prefValue === undefined ? true : prefValue
+      const isEnabled = isUserEmailPreferenceEnabled(prefs, preferenceKey)
 
       if (isEnabled) {
         emailSet.add(email)
@@ -962,4 +978,5 @@ export async function getOrgAdminMemberEmailsForTags(
 export const orgEmailNotificationTestUtils = {
   AUDIENCE_ROLE_NAMES,
   getEligibleEmailTargets,
+  getEligibleOrgMemberEmails,
 }

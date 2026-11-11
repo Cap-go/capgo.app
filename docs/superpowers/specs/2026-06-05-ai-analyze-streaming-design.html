@@ -91,7 +91,7 @@ sequenceDiagram
     participant API as capgo API<br/>/build/ai_analyze_stream
     participant DB as Postgres<br/>build_requests
     participant B as capgo_builder<br/>Worker
-    participant AI as Workers AI<br/>kimi-k2.6
+    participant AI as Workers AI<br/>deepseek-v4.1-flash-1017
 
     CLI->>API: POST {jobId, appId, logs}<br/>accept: text/event-stream
     API->>API: checkPermission(app.build_native)
@@ -230,7 +230,7 @@ Values staggered so the inner layer always fires before the outer.</p>
   <li><code>env.AI.run(MODEL, { messages, stream: true })</code>; normalize Workers-AI SSE deltas into the §4.1 protocol in a TransformStream (model shape absorbed here — edge fn and CLI stay model-agnostic).</li>
   <li>Pre-stream error responses gain <code>aiStarted</code>.</li>
   <li>Propagate upstream cancellation into the AI stream (output-token waste reduction; best-effort, not a security control).</li>
-  <li><em>Contingency:</em> if kimi-k2.6 rejects <code>stream: true</code>, buffer internally and emit one big <code>chunk</code> + <code>done</code> — protocol unchanged.</li>
+  <li><em>Contingency:</em> if deepseek-v4.1-flash-1017 rejects <code>stream: true</code>, buffer internally and emit one big <code>chunk</code> + <code>done</code> — protocol unchanged.</li>
   <li><code>extractAnalysis()</code> + buffered path deleted at rollout step 4.</li>
 </ul>
 <h3>7.2 capgo edge function</h3>

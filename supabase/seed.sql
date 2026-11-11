@@ -738,15 +738,15 @@ BEGIN
       AND roles.scope_type = public.rbac_scope_app()
     ON CONFLICT DO NOTHING;
 
-    INSERT INTO "public"."app_versions" ("id", "created_at", "app_id", "name", "r2_path", "updated_at", "deleted", "external_url", "checksum", "session_key", "storage_provider", "owner_org", "user_id", "comment", "link") VALUES
-    (3, NOW(), 'com.demo.app', '1.0.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.0.0.zip', NOW(), 'f', NULL, '3885ee49', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app'),
-    (4, NOW(), 'com.demo.app', '1.0.1', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.0.1.zip', NOW(), 'f', NULL, '', NULL, 'r2-direct', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app'),
-    (5, NOW(), 'com.demo.app', '1.361.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.361.0.zip', NOW(), 'f', NULL, '9d4f798a', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app'),
-    (6, NOW(), 'com.demo.app', '1.360.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.360.0.zip', NOW(), 'f', NULL, '44913a9f', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app'),
-    (7, NOW(), 'com.demo.app', '1.359.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.359.0.zip', NOW(), 'f', NULL, '9f74e70a', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app'),
-    (10, NOW(), 'com.demoadmin.app', '1.0.0', 'orgs/22dbad8a-b885-4309-9b3b-a09f8460fb6d/apps/com.demoadmin.app/1.0.0.zip', NOW(), 'f', NULL, 'admin123', NULL, 'r2', '22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a', 'admin app test version', 'https://capgo.app'),
-    (13, NOW(), 'com.stats.app', '1.0.0', 'orgs/b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e/apps/com.stats.app/1.0.0.zip', NOW(), 'f', NULL, 'stats123', NULL, 'r2', 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', 'stats test version', 'https://capgo.app'),
-    (16, now(), 'com.test2.app', '1.0.0', 'orgs/34a8c55d-2d0f-4652-a43f-684c7a9403ac/apps/com.test2.app/1.0.0.zip', now(), 'f', NULL, 'test2123', NULL, 'r2', '34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'test2 app version', 'https://capgo.app');
+    INSERT INTO "public"."app_versions" ("id", "created_at", "app_id", "name", "r2_path", "updated_at", "deleted", "external_url", "checksum", "session_key", "storage_provider", "owner_org", "user_id", "comment", "link", "native_packages", "cli_version") VALUES
+    (3, NOW(), 'com.demo.app', '1.0.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.0.0.zip', NOW(), 'f', NULL, '3885ee49', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app', ARRAY['{"name":"@capacitor/core","version":"6.1.0"}'::jsonb, '{"name":"@capacitor/camera","version":"6.1.0"}'::jsonb, '{"name":"@capgo/capacitor-updater","version":"6.14.9"}'::jsonb], '1.9.0'),
+    (4, NOW(), 'com.demo.app', '1.0.1', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.0.1.zip', NOW(), 'f', NULL, '', NULL, 'r2-direct', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app', NULL, NULL),
+    (5, NOW(), 'com.demo.app', '1.361.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.361.0.zip', NOW(), 'f', NULL, '9d4f798a', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app', NULL, NULL),
+    (6, NOW(), 'com.demo.app', '1.360.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.360.0.zip', NOW(), 'f', NULL, '44913a9f', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app', NULL, NULL),
+    (7, NOW(), 'com.demo.app', '1.359.0', 'orgs/046a36ac-e03c-4590-9257-bd6c9dba9ee8/apps/com.demo.app/1.359.0.zip', NOW(), 'f', NULL, '9f74e70a', NULL, 'r2', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097', 'its a test', 'https://capgo.app', NULL, NULL),
+    (10, NOW(), 'com.demoadmin.app', '1.0.0', 'orgs/22dbad8a-b885-4309-9b3b-a09f8460fb6d/apps/com.demoadmin.app/1.0.0.zip', NOW(), 'f', NULL, 'admin123', NULL, 'r2', '22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a', 'admin app test version', 'https://capgo.app', NULL, NULL),
+    (13, NOW(), 'com.stats.app', '1.0.0', 'orgs/b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e/apps/com.stats.app/1.0.0.zip', NOW(), 'f', NULL, 'stats123', NULL, 'r2', 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d', 'stats test version', 'https://capgo.app', NULL, NULL),
+    (16, now(), 'com.test2.app', '1.0.0', 'orgs/34a8c55d-2d0f-4652-a43f-684c7a9403ac/apps/com.test2.app/1.0.0.zip', now(), 'f', NULL, 'test2123', NULL, 'r2', '34a8c55d-2d0f-4652-a43f-684c7a9403ac', '6f0d1a2e-59ed-4769-b9d7-4d9615b28fe5', 'test2 app version', 'https://capgo.app', NULL, NULL);
 
     INSERT INTO "public"."app_versions_meta" ("id", "created_at", "app_id", "updated_at", "checksum", "size") VALUES
     (3, NOW(), 'com.demo.app', NOW(), '3885ee49', 1012506),
@@ -778,6 +778,11 @@ BEGIN
     (NOW(), '00000000-0000-0000-0000-000000000004', '1.0.0', 'com.demoadmin.app', 'android', '4.15.3', '12', '1.0.0', 'admin-test-device', 't', 'f'),
     (NOW(), '00000000-0000-0000-0000-000000000005', '1.0.0', 'com.stats.app', 'android', '4.15.3', '11', '1.0.0', 'stats-test-device', 't', 'f'),
     (NOW(), '00000000-0000-0000-0000-000000000006', '1.0.0', 'com.demo.app', 'electron', '7.0.0', 'Linux 5.15', '1.0.0', 'electron-test-device', 't', 'f');
+
+    INSERT INTO public.webhooks (id, org_id, name, url, secret, enabled, events, created_at, updated_at, created_by, delivery_version, source, expires_at, mcp_event, mcp_arguments, mcp_verified_at)
+    VALUES
+      ('d7820000-0000-4000-8000-0000000000a1'::uuid, '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid, 'CI bundle audit', 'https://hooks.example.com/capgo/console/demo', 'whsec_demo_console_webhook_000000000000000', true, ARRAY['app_versions']::text[], NOW() - interval '30 days', NOW() - interval '1 day', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'standard', 'console', NULL, NULL, NULL, NULL),
+      ('d7820000-0000-4000-8000-0000000000b1'::uuid, '046a36ac-e03c-4590-9257-bd6c9dba9ee8'::uuid, 'MCP · bundle.uploaded · 046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'https://hooks.example.com/capgo/mcp/demo', 'whsec_demo_mcp_events_0000000000000000', true, ARRAY['bundle.uploaded']::text[], NOW() - interval '2 hours', NOW() - interval '30 minutes', '6aa76066-55ef-4238-ade6-0b32334a4097'::uuid, 'standard', 'mcp', NOW() + interval '20 hours', 'bundle.uploaded', pg_catalog.jsonb_build_object('org_id', '046a36ac-e03c-4590-9257-bd6c9dba9ee8', 'app_id', 'com.demo.app'), NOW() - interval '2 hours');
 
     -- Drop replicated orgs but keet the the seed ones
     DELETE from "public"."orgs" where POSITION('organization' in orgs.name)=1;
@@ -1273,6 +1278,7 @@ DECLARE
   v_ci_key text := 'acde0000-0000-4000-8000-00000000c1c1';
   v_webhook_releases uuid := 'acde0000-0000-4000-8000-0000000000b1'::uuid;
   v_webhook_analytics uuid := 'acde0000-0000-4000-8000-0000000000b2'::uuid;
+  v_webhook_mcp uuid := 'acde0000-0000-4000-8000-0000000000b3'::uuid;
 BEGIN
   PERFORM pg_catalog.set_config('capgo.seed_channel_targets', 'true', true);
   SET LOCAL client_min_messages = WARNING;
@@ -1629,10 +1635,11 @@ BEGIN
   -- ----------------------------------------------------------------
   -- Webhooks (inserted after the audit rows so seeding does not queue deliveries)
   -- ----------------------------------------------------------------
-  INSERT INTO public.webhooks (id, org_id, name, url, secret, enabled, events, created_at, updated_at, created_by, delivery_version)
+  INSERT INTO public.webhooks (id, org_id, name, url, secret, enabled, events, created_at, updated_at, created_by, delivery_version, source, expires_at, mcp_event, mcp_arguments, mcp_verified_at)
   VALUES
-    (v_webhook_releases, v_org, 'Release notes to Slack', 'https://hooks.acme-mobile.example.com/capgo/releases', 'whsec_demo_acme_releases_0000000000000000', true, ARRAY['app_versions'], pg_catalog.now() - interval '90 days', pg_catalog.now() - interval '30 days', v_admin, 'standard'),
-    (v_webhook_analytics, v_org, 'Warehouse sync (paused)', 'https://etl.acme-mobile.example.com/ingest/capgo', 'whsec_demo_acme_warehouse_000000000000000', false, ARRAY['apps', 'org_users', 'orgs'], pg_catalog.now() - interval '200 days', pg_catalog.now() - interval '12 days', v_owner, 'legacy');
+    (v_webhook_releases, v_org, 'Release notes to Slack', 'https://hooks.acme-mobile.example.com/capgo/releases', 'whsec_demo_acme_releases_0000000000000000', true, ARRAY['app_versions'], pg_catalog.now() - interval '90 days', pg_catalog.now() - interval '30 days', v_admin, 'standard', 'console', NULL, NULL, NULL, NULL),
+    (v_webhook_analytics, v_org, 'Warehouse sync (paused)', 'https://etl.acme-mobile.example.com/ingest/capgo', 'whsec_demo_acme_warehouse_000000000000000', false, ARRAY['apps', 'org_users', 'orgs'], pg_catalog.now() - interval '200 days', pg_catalog.now() - interval '12 days', v_owner, 'legacy', 'console', NULL, NULL, NULL, NULL),
+    (v_webhook_mcp, v_org, 'MCP · bundle.deployed · ' || v_org::text, 'https://agent-hooks.example.com/capgo/mcp/demo', 'whsec_demo_acme_mcp_events_0000000000000000', true, ARRAY['bundle.deployed'], pg_catalog.now() - interval '2 hours', pg_catalog.now() - interval '30 minutes', v_admin, 'standard', 'mcp', pg_catalog.now() + interval '20 hours', 'bundle.deployed', pg_catalog.jsonb_build_object('org_id', v_org, 'app_id', v_apps[1]), pg_catalog.now() - interval '2 hours');
 
   INSERT INTO public.webhook_deliveries (webhook_id, org_id, audit_log_id, event_type, status, request_payload, response_status, response_body, response_headers, attempt_count, max_attempts, next_retry_at, created_at, completed_at, duration_ms, delivery_version)
   SELECT v_webhook_releases, v_org, al.id, al.table_name || '.' || al.operation,

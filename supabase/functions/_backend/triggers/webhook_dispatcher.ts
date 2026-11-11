@@ -4,6 +4,7 @@ import { Hono } from 'hono/tiny'
 import { BRES, middlewareAPISecret } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { dispatchMcpEventsFromAudit } from '../utils/mcp_events.ts'
 import {
   buildWebhookDeliveryPayload,
   buildWebhookPayload,
@@ -53,6 +54,8 @@ app.post('/', middlewareAPISecret, async (c) => {
       })
       return c.json(BRES)
     }
+
+    await backgroundTask(c, dispatchMcpEventsFromAudit(c, auditLogData))
 
     // Find all enabled webhooks for this org that subscribe to this table
     const webhooks = await findWebhooksForEvent(c, auditLogData.org_id, auditLogData.table_name)

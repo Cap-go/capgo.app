@@ -1,12 +1,17 @@
+import type { OrganizationApp } from '../../src/stores/organization'
+import type { CiEncryptionBundle } from '../../src/utils/cicdEncryption'
 import type { OnboardingChannelEvent, OnboardingChannelEventProperties } from '../../src/utils/onboardingChannelAnalytics'
 import gsap from 'gsap'
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h, onMounted, ref } from 'vue'
 import { createRouter, createWebHistory, RouterView } from 'vue-router'
+import { Toaster } from 'vue-sonner'
 import AppOnboardingBuilderChecklist from '../../src/components/dashboard/AppOnboardingBuilderChecklist.vue'
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
 import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
+import AppSetupGuides from '../../src/components/dashboard/AppSetupGuides.vue'
+import CiCdSetupGuide from '../../src/components/dashboard/CiCdSetupGuide.vue'
 import ChannelIntroduction from '../../src/components/dashboard/ChannelIntroduction.vue'
 import GettingStartedNav from '../../src/components/dashboard/GettingStartedNav.vue'
 import OnboardingExploreBanner from '../../src/components/dashboard/OnboardingExploreBanner.vue'
@@ -15,6 +20,7 @@ import DialogV2 from '../../src/components/DialogV2.vue'
 import BuildTable from '../../src/components/tables/BuildTable.vue'
 import { i18n } from '../../src/modules/i18n'
 import { install as installOnboardingSetupNavigation } from '../../src/modules/onboarding-setup'
+import CiCdPage from '../../src/pages/app/[app].ci-cd.vue'
 import GettingStartedPage from '../../src/pages/app/[app].getting-started.vue'
 import { BUILDER_STEP_IDS } from '../../src/services/builderOnboardingChecklist'
 import { useConsole } from '../../src/services/console'
@@ -29,8 +35,28 @@ Object.defineProperty(window, 'posthog', { configurable: true, value: { capture:
 const builderIntroView = params.get('view') === 'builder-intro'
 const navigationView = builderIntroView || params.get('view') === 'navigation' || location.pathname.startsWith('/app/') || location.pathname === '/onboarding/app'
 const builderComponentView = params.get('view') === 'builder'
+const cicdView = params.get('view') === 'cicd'
 const assignment = params.get('assignment')
 const previewAppId = 'com.example.onboarding-preview'
+const ownerOrgId = ref('00000000-0000-4000-8000-000000000002')
+interface PreviewChannel {
+  id: number
+  app_id: string
+  name: string
+  public?: boolean
+  allow_device_self_set?: boolean
+  ios?: boolean
+  android?: boolean
+  electron?: boolean
+  version?: number | null
+  current_version?: CiEncryptionBundle | null
+  rollout_enabled?: boolean
+  rollout_version?: number | null
+  rollout_bundle?: CiEncryptionBundle | null
+}
+const initialChannels: PreviewChannel[] = params.get('channel') === '1'
+  ? [{ id: 1, app_id: previewAppId, name: 'staging', public: true, allow_device_self_set: true }]
+  : []
 const savedChannelStatus = params.get('channelStatus')
 const state = {
   version: Number(params.get('version') ?? 3),
@@ -46,10 +72,11 @@ const state = {
   error: false,
   requests: 0,
   polls: [] as Array<{ appId: string, N: number, initial: boolean }>,
-  channels: (params.get('channel') === '1' ? [{ id: 1, app_id: previewAppId, name: 'staging', public: true, allow_device_self_set: true }] : []) as Array<{ id: number, app_id: string, name: string, public?: boolean, allow_device_self_set?: boolean }>,
-  channelError: false,
+  channels: initialChannels,
+  channelError: params.get('channelError') === '1',
   channelRequests: 0,
   channelQueries: [] as string[],
+  channelSelects: [] as string[],
   channelDelayMs: Number(params.get('channelDelay') ?? 0),
   channelPermissions: true,
   channelInsertError: false,
@@ -64,7 +91,55 @@ const state = {
   builderActivated: false,
   skips: [] as string[],
   skipReasons: [] as string[],
+  apikeyCreates: [] as unknown[],
+  apikeyError: params.get('apikeyError'),
+  encryptionError: params.get('encryptionError') === '1',
+  encryptionDelayMs: Number(params.get('encryptionDelay') ?? 0),
+  encryptionQueries: [] as string[],
+  policyError: params.get('policyError') === '1',
+  policyDelayMs: Number(params.get('policyDelay') ?? 0),
+  policyRequired: params.get('policyRequired') === '1',
+  policyQueries: [] as Array<{ appId: string, ownerOrgId: string }>,
+  orgPolicyReads: 0,
+  orgReadDenied: params.get('orgReadDenied') === '1',
+  cicdRegistrationError: params.get('registrationError') === '1',
+  cicdDismissError: false,
+  cicdRestoreError: false,
+  cicdReminderDelayMs: 0,
+  cicdReminderResponses: 0,
+  cicdRegistrationDelayMs: Number(params.get('registrationDelay') ?? 0),
+  cicdStatusDelayMs: 0,
+  cicdStatusRequests: 0,
+  cicdStatusResponses: 0,
+  cicdSidebarRefreshes: [] as Array<string[] | null>,
+  cicdRemoteLedger: null as Record<string, unknown> | null,
+  latestBundles: (params.get('bundle') || params.get('encrypted') === '1' ? [{ name: params.get('bundle') ?? '1.0.0', created_at: '2026-11-06T10:00:00.000Z', key_id: params.get('encrypted') === '1' ? 'MIIB' : null }] : []) as Array<{ name: string | null, created_at: string, key_id: string | null, deleted?: boolean }>,
 }
+// apps.onboarding.cicd, reactive so the sidebar follows the guide's writes.
+const cicdLedger = ref<Record<string, unknown> | undefined>(params.get('cicd') === 'detected'
+  ? { ota_detected_at: '2026-11-06T10:00:00.000Z', detected_via: 'ci', ci_provider: 'GitHub Actions' }
+  : params.get('cicd') === 'marked'
+    ? { marked_done_at: '2026-11-05T10:00:00.000Z' }
+    : undefined)
+const dismissalStorageKey = `onboarding-fixture:cicd-dismissed:${previewAppId}`
+const savedDismissal = sessionStorage.getItem(dismissalStorageKey)
+if (savedDismissal)
+  cicdLedger.value = { ...cicdLedger.value, dismissed_at: savedDismissal }
+const cicdSetupCalls: Array<Record<string, unknown>> = []
+if (cicdView && params.get('defaultChannel') !== '0') {
+  // `defaultChannels=a|b` gives each platform its own default channel.
+  const names = params.get('defaultChannels')?.split('|') ?? [params.get('defaultChannel') ?? 'production']
+  for (const [index, name] of names.entries())
+    state.channels.push({ id: index + 1, app_id: previewAppId, name, public: true, ios: index % 2 === 0, android: index % 2 !== 0, electron: false })
+}
+const privateChannel = params.get('privateChannel')
+const privateChannels = params.get('privateChannels')?.split('|') ?? (privateChannel ? [privateChannel] : [])
+if (cicdView) {
+  for (const name of privateChannels)
+    state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name, public: false, ios: true, android: true, electron: false })
+}
+if (params.get('disabledPublicChannel') === '1')
+  state.channels.push({ id: state.channels.length + 1, app_id: previewAppId, name: 'disabled-public', public: true, ios: false, android: false, electron: false })
 if (params.get('checklistState') === 'completed') {
   for (const id of ['login_cli_mcp', 'add_updater', 'add_code', 'add_channel', 'run_device', 'upload_bundle', 'test_update'])
     state.steps[id] = { status: id === 'add_code' ? 'skipped' : 'done' }
@@ -100,7 +175,7 @@ if (params.get('otaComplete') === '1') {
   state.channels.push({ id: 1, app_id: previewAppId, name: 'staging', public: true })
 }
 const channelEvents: Array<{ event: OnboardingChannelEvent, properties: OnboardingChannelEventProperties }> = []
-const preview = { state, events, copyAiPlacements, channelEvents, gsap, appId: ref(previewAppId), command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
+const preview = { state, cicdLedger, events, copyAiPlacements, channelEvents, cicdSetupCalls, gsap, sidebarApps: ref<OrganizationApp[]>([]), appId: ref(previewAppId), ownerOrgId, command: ref('npx @capgo/cli@latest i [API_KEY]'), hiding: ref(false), selectedOrgId: ref('') }
 const previewUserOnboarding = {
   profile_completed_at: '2026-09-25T00:00:00.000Z',
   abtests: {
@@ -137,8 +212,9 @@ function previewOnboarding() {
   const selectedPath = assignment === 'both-ota' || assignment === 'ota-only' ? 'ota' : 'builder'
   const hasBuilder = state.builderActivated || builderComponentView || assignment === 'builder-only' || assignment === 'both-builder' || assignment === 'both-ota'
   const hasOta = (state.builderActivated && state.version === 3) || assignment === 'ota-only' || assignment === 'both-builder' || assignment === 'both-ota'
+  const cicd = cicdLedger.value ? { cicd: cicdLedger.value } : {}
   if (hasBuilder || hasOta) {
-    return { ...dismissal, features, setup: {
+    return { ...dismissal, ...cicd, features, setup: {
       todo_list_version: 4,
       ...(hasBuilder ? { builder_todo_list_version: '1' } : {}),
       ...(hasOta ? { ota_todo_list_version: '1' } : {}),
@@ -153,7 +229,7 @@ function previewOnboarding() {
       source: params.has('checklistState') ? 'cli' : undefined,
     } }
   }
-  return { ...dismissal, features, setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome, source: params.has('checklistState') ? 'cli' : undefined } }
+  return { ...dismissal, ...cicd, features, setup: { todo_list_version: state.version, steps: state.steps, outcome: state.outcome, source: params.has('checklistState') ? 'cli' : undefined } }
 }
 
 // This isolated component fixture never sends requests to production.
@@ -225,6 +301,82 @@ const fixtureFetch: typeof fetch = async (input, init) => {
   }
   if (url.pathname.endsWith('/build_requests'))
     return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json', 'Content-Range': '*/0' } })
+  if (url.pathname.endsWith('/rpc/get_app_cicd_encryption_policy')) {
+    const args = JSON.parse(String(init?.body))
+    const snapshot = { owner_org: ownerOrgId.value, enforce_encrypted_bundles: state.policyRequired }
+    const error = state.policyError || state.encryptionError
+    const delay = state.policyDelayMs || state.encryptionDelayMs
+    state.policyQueries.push({ appId: args.p_app_id, ownerOrgId: snapshot.owner_org })
+    if (delay)
+      await new Promise(resolve => setTimeout(resolve, delay))
+    const single = new Headers(init?.headers).get('Accept')?.includes('object')
+    return new Response(JSON.stringify(error ? { message: 'App policy unavailable' } : single ? snapshot : [snapshot]), { status: error ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  if (url.pathname.endsWith('/orgs')) {
+    state.orgPolicyReads += 1
+    return new Response(JSON.stringify(state.orgReadDenied ? [] : [{ enforce_encrypted_bundles: state.policyRequired }]), { headers: { 'Content-Type': 'application/json' } })
+  }
+  if (url.pathname.endsWith('/app_versions')) {
+    state.encryptionQueries.push(url.search)
+    if (state.encryptionDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.encryptionDelayMs))
+    let bundles = [...state.latestBundles]
+    if (url.searchParams.get('deleted') === 'eq.false')
+      bundles = bundles.filter(bundle => !bundle.deleted)
+    if (url.searchParams.get('key_id') === 'not.is.null')
+      bundles = bundles.filter(bundle => bundle.key_id !== null)
+    if (url.searchParams.get('order')?.includes('created_at.desc'))
+      bundles.sort((first, second) => second.created_at.localeCompare(first.created_at))
+    if (url.searchParams.has('limit'))
+      bundles = bundles.slice(0, Number(url.searchParams.get('limit')))
+    return new Response(JSON.stringify(state.encryptionError ? { message: 'Encryption unavailable' } : bundles), { status: state.encryptionError ? 503 : 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  // The CI/CD guide creates app-scoped secure keys through the API key endpoint.
+  if (url.pathname.endsWith('/apikey') && method === 'POST') {
+    const body = JSON.parse(String(init?.body))
+    state.apikeyCreates.push(body)
+    if (state.apikeyError)
+      return new Response(JSON.stringify({ error: state.apikeyError }), { status: 403, headers: { 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ key: `cap_ci_preview_key_${state.apikeyCreates.length}`, id: state.apikeyCreates.length, rbac_id: `00000000-0000-4000-8000-${String(state.apikeyCreates.length).padStart(12, '0')}` }), { headers: { 'Content-Type': 'application/json' } })
+  }
+  if (url.pathname.endsWith('/rpc/record_app_cicd_setup')) {
+    const args = JSON.parse(String(init?.body)) as Record<string, unknown>
+    cicdSetupCalls.push(args)
+    if (args.p_event === 'key_created' && state.cicdRegistrationError)
+      return new Response(JSON.stringify({ message: 'CI registration unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+    if ((args.p_event === 'dismissed' && state.cicdDismissError) || (args.p_event === 'restored' && state.cicdRestoreError))
+      return new Response(JSON.stringify({ message: 'CI reminder unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+    const appId = typeof args.p_app_id === 'string' ? args.p_app_id : previewAppId
+    const target = preview.sidebarApps.value.find(app => app.app_id === appId)
+    const onboarding = target?.onboarding && typeof target.onboarding === 'object' && !Array.isArray(target.onboarding) ? target.onboarding : {}
+    const stored = onboarding.cicd
+    let next = appId === previewAppId ? { ...cicdLedger.value } : stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {}
+    const at = '2026-11-06T12:00:00.000Z'
+    if (args.p_event === 'marked_done')
+      next = { ...next, marked_done_at: at }
+    else if (args.p_event === 'dismissed') {
+      next = { ...next, dismissed_at: at }
+      sessionStorage.setItem(`onboarding-fixture:cicd-dismissed:${appId}`, at)
+    }
+    else if (args.p_event === 'restored') {
+      delete next.dismissed_at
+      sessionStorage.removeItem(`onboarding-fixture:cicd-dismissed:${appId}`)
+    }
+    else
+      next = { ...next, keys: [args.p_apikey_rbac_id], key_created_at: at }
+    if (appId === previewAppId)
+      cicdLedger.value = next
+    else
+      preview.sidebarApps.value = preview.sidebarApps.value.map(app => app.app_id === appId ? { ...app, onboarding: { ...onboarding, cicd: next } } : app)
+    const snapshot = appId === previewAppId ? previewOnboarding() : { ...onboarding, cicd: next }
+    if (args.p_event === 'key_created' && state.cicdRegistrationDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdRegistrationDelayMs))
+    if ((args.p_event === 'dismissed' || args.p_event === 'restored') && state.cicdReminderDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdReminderDelayMs))
+    if (args.p_event === 'dismissed' || args.p_event === 'restored')
+      state.cicdReminderResponses += 1
+    return new Response(JSON.stringify(snapshot), { headers: { 'Content-Type': 'application/json' } })
+  }
   if (url.pathname.includes('/rpc/')) {
     return new Response(JSON.stringify(state.channelPermissions), { headers: { 'Content-Type': 'application/json' } })
   }
@@ -246,7 +398,24 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       (!filter || filter === `eq.${channel.app_id}`)
       && (!url.searchParams.get('public') || url.searchParams.get('public') === `eq.${channel.public}`)
       && (!url.searchParams.get('name') || url.searchParams.get('name') === `eq.${channel.name}`)
-    )).slice(0, Number(url.searchParams.get('limit') ?? state.channels.length))
+    )).slice(0, Number(url.searchParams.get('limit') ?? state.channels.length)).map(channel => ({
+      ...channel,
+      version: params.get('productionUnknown') === '1' ? null : channel.version === undefined ? 1 : channel.version,
+      current_version: channel.version === null || params.get('productionUnknown') === '1' ? null : channel.current_version === undefined
+        ? {
+            name: params.get('bundle') ?? '1.0.0',
+            key_id: params.get('sessionKeyOnly') !== '1' && ((params.get('productionEncrypted') ?? params.get('encrypted')) === '1' || params.get('encryptedChannel') === channel.name) ? 'MIIB' : null,
+            session_key: params.get('sessionKeyOnly') === '1' && ((params.get('productionEncrypted') ?? params.get('encrypted')) === '1' || params.get('encryptedChannel') === channel.name) ? 'fixture-encrypted-session-key' : null,
+            deleted: false,
+            deleted_at: null,
+          }
+        : channel.current_version,
+      rollout_enabled: channel.rollout_enabled ?? params.get('rolloutEncrypted') === '1',
+      rollout_version: channel.rollout_version ?? (params.get('rolloutEncrypted') === '1' ? 2 : null),
+      rollout_bundle: channel.rollout_bundle ?? (params.get('rolloutEncrypted') === '1'
+        ? { name: '1.0.1', key_id: params.get('sessionKeyOnly') === '1' ? null : 'ROLLOUT', session_key: params.get('sessionKeyOnly') === '1' ? 'fixture-encrypted-rollout-session-key' : null, deleted: false, deleted_at: null }
+        : null),
+    }))
     const error = state.channelError
     if (state.channelDelayMs > 0)
       await new Promise(resolve => setTimeout(resolve, state.channelDelayMs))
@@ -254,6 +423,15 @@ const fixtureFetch: typeof fetch = async (input, init) => {
       status: error ? 503 : 200,
       headers: { 'Content-Type': 'application/json' },
     })
+  }
+  if (url.pathname.endsWith('/apps')) {
+    state.cicdStatusRequests += 1
+    const snapshot = { ...previewOnboarding(), ...(state.cicdRemoteLedger ? { cicd: state.cicdRemoteLedger } : {}) }
+    if (state.cicdStatusDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdStatusDelayMs))
+    state.cicdStatusResponses += 1
+    if (cicdView)
+      return new Response(JSON.stringify([{ id: '00000000-0000-4000-8000-000000000003', app_id: previewAppId, owner_org: ownerOrgId.value, onboarding: snapshot }]), { headers: { 'Content-Type': 'application/json' } })
   }
   if (params.get('view') === 'flow' || navigationView) {
     if (url.pathname.endsWith('/apps') && params.get('unavailable') === '1')
@@ -290,8 +468,17 @@ window.fetch = async (input, init) => {
   let body = query.kind === 'rpc' ? JSON.stringify(query.args[0]) : undefined
   const headers = new Headers(init?.headers)
   for (const { method: operation, args } of query.operations) {
+    if (query.name === 'channels' && operation === 'select')
+      state.channelSelects.push(String(args[0]))
     if (['eq', 'neq', 'is'].includes(operation)) {
       fixtureURL.searchParams.set(args[0], `${operation}.${args[1]}`)
+    }
+    else if (operation === 'not') {
+      fixtureURL.searchParams.set(args[0], `not.${args[1]}.${args[2]}`)
+    }
+    else if (operation === 'order') {
+      const order = `${args[0]}.${args[1]?.ascending === false ? 'desc' : 'asc'}`
+      fixtureURL.searchParams.set('order', [fixtureURL.searchParams.get('order'), order].filter(Boolean).join(','))
     }
     else if (operation === 'limit') {
       fixtureURL.searchParams.set('limit', String(args[0]))
@@ -334,6 +521,13 @@ const app = createApp(defineComponent({
               })
             : params.get('view') === 'flow'
             ? h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined })
+            : cicdView
+            ? h(CiCdSetupGuide, {
+                appId: preview.appId.value,
+                ownerOrgId: ownerOrgId.value,
+                initialProduct: params.get('product') === 'builder' ? 'builder' : 'ota',
+                initialPlatform: params.get('platform') === 'ios' || params.get('platform') === 'android' ? params.get('platform') as 'ios' | 'android' : undefined,
+              })
             : builderComponentView
               ? h(AppOnboardingBuilderChecklist, {
                   appId: preview.appId.value,
@@ -369,6 +563,7 @@ const app = createApp(defineComponent({
                   }),
       ]),
       h(DialogV2),
+      h(Toaster),
     ])
   },
 }))
@@ -390,7 +585,31 @@ organization.setCurrentOrganization = (orgId) => {
   preview.selectedOrgId.value = selectedOrganization.value.gid
 }
 organization.awaitInitialLoad = async () => true
-organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }] : []
+organization.refreshAppsOnboarding = async (_orgId, options) => {
+  state.cicdStatusRequests += 1
+  state.cicdSidebarRefreshes.push(options ? [...options.appIds] : null)
+  if (state.cicdRemoteLedger) {
+    if (!options || options.appIds.includes(previewAppId))
+      cicdLedger.value = state.cicdRemoteLedger
+    preview.sidebarApps.value = preview.sidebarApps.value.map((app) => {
+      if (options && !options.appIds.includes(app.app_id))
+        return app
+      const onboarding = app.onboarding && typeof app.onboarding === 'object' && !Array.isArray(app.onboarding) ? app.onboarding : {}
+      return { ...app, onboarding: { ...onboarding, cicd: state.cicdRemoteLedger } }
+    })
+  }
+}
+organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }, ...preview.sidebarApps.value] : []
+organization.getAppByAppId = appId => organization.getAppsByOrgId(previewOrganization.gid).find(app => app.app_id === appId)
+organization.updateAppOnboarding = (appId, onboarding) => {
+  if (appId === previewAppId && onboarding && typeof onboarding === 'object' && !Array.isArray(onboarding)) {
+    const cicd = onboarding.cicd
+    cicdLedger.value = cicd && typeof cicd === 'object' && !Array.isArray(cicd) ? { ...cicd } : undefined
+  }
+  else {
+    preview.sidebarApps.value = preview.sidebarApps.value.map(app => app.app_id === appId ? { ...app, onboarding } : app)
+  }
+}
 if (builderIntroView) {
   const builderApp = ref({ app_id: previewAppId, owner_org: previewOrganization.gid, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() })
   organization.getAppByAppId = appId => appId === previewAppId ? builderApp.value as any : undefined
@@ -411,6 +630,8 @@ const router = createRouter({
             return () => h(GettingStartedPage)
           },
         }) },
+        { path: '/app/:app/ci-cd', name: '/app/[app].ci-cd', component: defineComponent({ setup: () => () => h('div', [h(GettingStartedNav), h(CiCdPage)]) }) },
+        { path: '/app/:app/settings', component: defineComponent({ setup: () => () => h('section', [h('h1', 'App settings'), h(GettingStartedNav), h(AppSetupGuides, { appId: previewAppId })]) }) },
         // A resume id renders the setup UI the way Getting started embeds it.
         { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => builderIntroView ? h(BuildTable, { appId: previewAppId }) : h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined }) }) },
       ]

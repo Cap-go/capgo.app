@@ -164,6 +164,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].ci-cd': RouteRecordInfo<
+      '/app/[app].ci-cd',
+      '/app/:app/ci-cd',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].device.[device]': RouteRecordInfo<
       '/app/[app].device.[device]',
       '/app/:app/device/:device',
@@ -230,6 +237,13 @@ declare module 'vue-router/auto-routes' {
     '/app/[app].observe.native': RouteRecordInfo<
       '/app/[app].observe.native',
       '/app/:app/observe/native',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
+    '/app/[app].observe.security': RouteRecordInfo<
+      '/app/[app].observe.security',
+      '/app/:app/observe/security',
       { app: ParamValue<true> },
       { app: ParamValue<false> },
       | never
@@ -780,6 +794,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].ci-cd.vue': {
+      routes:
+        | '/app/[app].ci-cd'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/[app].device.[device].vue': {
       routes:
         | '/app/[app].device.[device]'
@@ -858,6 +880,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/app/[app].observe.native.vue': {
       routes:
         | '/app/[app].observe.native'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
+    'src/pages/app/[app].observe.security.vue': {
+      routes:
+        | '/app/[app].observe.security'
       views:
         | never
       pathParamNames:

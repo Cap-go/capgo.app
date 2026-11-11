@@ -4,6 +4,7 @@ import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
+import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
 import { setApiKeyAuthContext } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
@@ -88,6 +89,7 @@ async function readSseSnapshot(response: Response): Promise<string> {
 
 function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch, token: string) {
   const origin = new URL(c.req.url).origin
+  const ciProvider = readCliCiProvider(c.req.header(CLI_CI_HEADER))
   return async (request: McpApiRequest): Promise<McpApiResponse> => {
     const url = new URL(request.path, origin)
     for (const [key, value] of Object.entries(request.query ?? {})) {
@@ -100,6 +102,8 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
       'user-agent': 'capgo-mcp',
       'x-cli-command': 'mcp',
     })
+    if (ciProvider)
+      headers.set(CLI_CI_HEADER, ciProvider)
     // Keep the caller's IP so per-IP rate limits and logs stay meaningful.
     for (const name of ['cf-connecting-ip', 'x-forwarded-for', 'cf-ipcountry', 'cf-ray']) {
       const value = c.req.header(name)
@@ -199,6 +203,16 @@ export function createMcpApp(dispatch: McpDispatch) {
     }
     setApiKeyAuthContext(c, apikey, token)
 
+    c.set('auth', {
+      userId: apikey.user_id,
+      authType: 'apikey',
+      apikey,
+      jwt: null,
+    })
+    c.set('apikey', apikey)
+    c.set('parentApikey', apikey)
+    c.set('capgkey', token)
+
     const raw = await c.req.text()
     if (raw.length > MAX_BODY_BYTES)
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Request body too large (max 1 MB). Send files through the signed upload URL tools (capgo_prepare_bundle_upload, capgo_request_build) instead of inline.'), 413)
@@ -227,17 +241,14 @@ export function createMcpApp(dispatch: McpDispatch) {
     if (Array.isArray(payload) && (payload.length === 0 || payload.length > MAX_BATCH_MESSAGES))
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)
     const messages = Array.isArray(payload) ? payload : [payload]
-    const responses: JsonRpcResponse[] = []
-    const exchanges: [unknown, JsonRpcResponse | null][] = []
-    for (const message of messages) {
+    const exchanges = await Promise.all(messages.map(async (message) => {
       const method = (message as { method?: unknown } | null)?.method
       if (method === 'tools/call')
         cloudlog({ requestId: c.get('requestId'), message: 'mcp_tool_call', tool: (message as { params?: { name?: unknown } }).params?.name, apikeyId: caller.apikeyId })
-      const response = await handleJsonRpcMessage(message, ctx)
-      exchanges.push([message, response])
-      if (response)
-        responses.push(response)
-    }
+      const response = await handleJsonRpcMessage(message, ctx, c)
+      return [message, response] as [unknown, JsonRpcResponse | null]
+    }))
+    const responses = exchanges.map(([, response]) => response).filter((response): response is JsonRpcResponse => response !== null)
     await backgroundTask(c, trackHostedMcpToolCalls(c, caller, exchanges))
 
     if (responses.length === 0) {

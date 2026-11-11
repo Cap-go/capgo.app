@@ -30,6 +30,10 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   backgroundTask: backgroundTaskMock,
 }))
 
+vi.mock('../supabase/functions/_backend/utils/mcp_events.ts', () => ({
+  dispatchMcpBuildEvent: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { emitBuildTransitionEvent } = await import('../supabase/functions/_backend/utils/build_tracking.ts')
 
 const baseBuild = {
@@ -198,7 +202,7 @@ describe('emitBuildTransitionEvent', () => {
       effectiveBuildTimeSeconds: 9,
     })
 
-    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
+    expect(backgroundTaskMock).toHaveBeenCalledTimes(2)
     expect(sendDiscordAlertMock).not.toHaveBeenCalled()
     resolveEmailLookup({ data: { email: 'developer@example.test' }, error: null })
     await backgroundTaskMock.mock.calls[0][1]
@@ -226,6 +230,6 @@ describe('emitBuildTransitionEvent', () => {
     })
 
     expect(sendDiscordAlertMock).not.toHaveBeenCalled()
-    expect(backgroundTaskMock).not.toHaveBeenCalled()
+    expect(backgroundTaskMock).toHaveBeenCalledTimes(1)
   })
 })

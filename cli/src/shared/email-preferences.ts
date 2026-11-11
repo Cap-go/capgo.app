@@ -21,6 +21,7 @@ export const USER_EMAIL_PREFERENCE_KEYS = [
   ...ORG_EMAIL_PREFERENCE_KEYS,
   'bundle_incompatible',
   'cli_realtime_feed',
+  'security_updates',
 ] as const
 
 export type EmailPreferences = Record<string, boolean>

@@ -102,7 +102,10 @@ export async function put(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
   const pg = await getPgClient(c)
   try {
     // Verify webhook belongs to org
-    const existingWebhook = await pg.query<{ id: string, org_id: string }>('SELECT id, org_id FROM public.webhooks WHERE id = $1', [body.webhookId])
+    const existingWebhook = await pg.query<{ id: string, org_id: string, source: string | null }>(
+      'SELECT id, org_id, source FROM public.webhooks WHERE id = $1',
+      [body.webhookId],
+    )
       .then(result => result.rows[0] ?? null)
       .catch(() => null)
 
@@ -112,6 +115,10 @@ export async function put(c: Context<MiddlewareKeyVariables>, bodyRaw: unknown, 
 
     if (existingWebhook.org_id !== body.orgId) {
       throw simpleError('no_permission', 'Webhook does not belong to this organization', { webhookId: body.webhookId })
+    }
+
+    if (existingWebhook.source === 'mcp') {
+      throw simpleError('cannot_update_mcp_webhook', 'MCP event subscriptions cannot be edited from the console. Delete and recreate the subscription from your MCP client.', { webhookId: body.webhookId })
     }
 
     validateEvents(body.events)

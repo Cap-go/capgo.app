@@ -242,7 +242,7 @@ export async function getBuildStatus(
   let timeoutApplied = false
 
   if (timedOut && builderJob.job.completed_at)
-    timeoutApplied = true
+    timeoutApplied = shouldPersist
   else if (timedOut && shouldPersist)
     timeoutApplied = await cancelTimedOutBuilderJob(c, job_id, buildRequest.app_id)
 

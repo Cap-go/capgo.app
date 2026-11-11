@@ -127,6 +127,19 @@ describe('hosted MCP protocol', () => {
       expect(tool.inputSchema.type).toBe('object')
       expect(tool.inputSchema).not.toHaveProperty('$schema')
       expect(typeof tool.annotations.readOnlyHint).toBe('boolean')
+      expect(typeof tool.annotations.destructiveHint).toBe('boolean')
+      expect(typeof tool.annotations.idempotentHint).toBe('boolean')
+      expect(typeof tool.annotations.openWorldHint).toBe('boolean')
+      expect(typeof tool.annotations.title).toBe('string')
+      expect((tool.annotations.title ?? '').length).toBeGreaterThan(0)
+    }
+  })
+
+  it.concurrent('never marks state-writing tools as read-only', () => {
+    for (const tool of MCP_TOOLS) {
+      const { readOnlyHint, destructiveHint, idempotentHint } = tool.annotations
+      if (destructiveHint || idempotentHint === false)
+        expect(readOnlyHint, tool.name).toBe(false)
     }
   })
 
@@ -148,7 +161,7 @@ describe('hosted MCP protocol', () => {
       idempotentHint: false,
     })
     expect(byName.get('capgo_get_build_status')?.annotations).toMatchObject({
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
       openWorldHint: false,
       idempotentHint: true,
@@ -632,7 +645,15 @@ describe('hosted MCP errors always give a way out', () => {
       [500, '<html>Internal Server Error</html>'],
     ] as const
     // Tools that answer without calling the API (whoami, docs search) are covered separately.
-    const localTools = new Set(['capgo_whoami', 'capgo_search_docs', 'capgo_get_build_status'])
+    const localTools = new Set([
+      'capgo_whoami',
+      'capgo_search_docs',
+      'capgo_get_build_status',
+      'capgo_list_event_types',
+      'capgo_subscribe_events',
+      'capgo_list_event_subscriptions',
+      'capgo_unsubscribe_events',
+    ])
     const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
     for (const tool of tools) {
       const args = sampleArgs(tool.inputSchema)

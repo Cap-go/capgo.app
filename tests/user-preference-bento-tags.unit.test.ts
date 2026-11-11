@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { syncUserPreferenceTags } from '../supabase/functions/_backend/utils/user_preferences.ts'
 
 const syncBentoSubscriberTagsMock = vi.hoisted(() => vi.fn(async () => true))
+const updateBentoFieldsMock = vi.hoisted(() => vi.fn(async () => true))
 const SUPPRESSION_TAG = 'onboarding:first_org_recovery_suppressed'
 
 vi.mock('../supabase/functions/_backend/utils/bento.ts', () => ({
   syncBentoSubscriberTags: syncBentoSubscriberTagsMock,
+  updateBentoFields: updateBentoFieldsMock,
 }))
 
 function createContext() {
@@ -24,6 +26,7 @@ const record = {
 describe('syncUserPreferenceTags email type', () => {
   beforeEach(() => {
     syncBentoSubscriberTagsMock.mockClear()
+    updateBentoFieldsMock.mockClear()
   })
 
   it.each([
@@ -39,6 +42,31 @@ describe('syncUserPreferenceTags email type', () => {
       email,
       segments: [expectedTag],
       deleteSegments: expect.arrayContaining(removedTags),
+    }))
+  })
+
+  it('reapplies security-updates Bento when the email changes but opt-in stays on', async () => {
+    const context = createContext()
+    const securityRecord = {
+      email_preferences: { security_updates: true },
+      enable_notifications: false,
+      opt_for_newsletters: false,
+    } as never
+
+    await syncUserPreferenceTags(
+      context,
+      'developer@company.com',
+      securityRecord,
+      securityRecord,
+      'developer@gmail.com',
+    )
+
+    expect(updateBentoFieldsMock).toHaveBeenCalledWith(context, 'developer@company.com', {
+      security_updates_opt_in: true,
+    })
+    expect(syncBentoSubscriberTagsMock).toHaveBeenCalledWith(context, expect.objectContaining({
+      email: 'developer@company.com',
+      segments: expect.arrayContaining(['security-updates']),
     }))
   })
 
