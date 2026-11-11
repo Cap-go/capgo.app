@@ -19,12 +19,12 @@ const router = useRouter()
 const capgo = useConsole()
 const { t } = useI18n()
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
+const registerCaptcha = useConsoleTurnstileCaptcha(captchaKey)
 const {
   turnstileToken,
-  captchaComponent,
   shouldBlockForCaptcha,
   handleCaptchaUnavailable,
-} = useConsoleTurnstileCaptcha(captchaKey)
+} = registerCaptcha
 const isLoading = ref(false)
 const email = ref('')
 const password = ref('')
@@ -154,7 +154,7 @@ function onSubmit() {
 
         <div v-if="captchaKey" class="md:col-span-2 overflow-hidden">
           <VueTurnstile
-            ref="captchaComponent"
+            :ref="(el) => { registerCaptcha.captchaComponent.value = el as typeof registerCaptcha.captchaComponent.value }"
             v-model="turnstileToken"
             size="flexible"
             :site-key="captchaKey"

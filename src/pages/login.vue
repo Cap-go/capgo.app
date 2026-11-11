@@ -34,15 +34,15 @@ const isLoading = ref(false)
 const isMobile = ref(Capacitor.isNativePlatform())
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const statusAuth: Ref<LoginAuthStatus> = ref('login')
+const loginCaptcha = useConsoleTurnstileCaptcha(captchaKey, { enabled: () => statusAuth.value === 'login' })
 const {
   turnstileToken,
-  captchaComponent,
   shouldBlockForCaptcha,
   useCaptchaFallback,
   handleCaptchaUnavailable,
   resetCaptchaWidget,
   scheduleCaptchaInitTimeout,
-} = useConsoleTurnstileCaptcha(captchaKey, { enabled: () => statusAuth.value === 'login' })
+} = loginCaptcha
 const mfaLoginFactor: Ref<Factor | null> = ref(null)
 const mfaChallengeId: Ref<string> = ref('')
 const mfaCode = ref('')
@@ -1084,7 +1084,7 @@ onMounted(checkLogin)
 
                       <div v-if="!!captchaKey && !useCaptchaFallback()">
                         <VueTurnstile
-                          ref="captchaComponent"
+                          :ref="(el) => { loginCaptcha.captchaComponent.value = el as typeof loginCaptcha.captchaComponent.value }"
                           v-model="turnstileToken"
                           size="flexible"
                           :site-key="captchaKey"

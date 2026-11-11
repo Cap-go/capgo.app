@@ -24,14 +24,14 @@ const dialogStore = useDialogV2Store()
 const step = ref(1)
 const mfaCode = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
+const forgotCaptcha = useConsoleTurnstileCaptcha(captchaKey, { enabled: () => step.value === 1 })
 const {
   turnstileToken,
-  captchaComponent,
   shouldBlockForCaptcha,
   useCaptchaFallback,
   handleCaptchaUnavailable,
   resetCaptchaWidget,
-} = useConsoleTurnstileCaptcha(captchaKey, { enabled: () => step.value === 1 })
+} = forgotCaptcha
 const captchaRecoverRetried = ref(false)
 const recoverFallbackSending = ref(false)
 
@@ -336,7 +336,7 @@ watchEffect(() => {
 
         <div v-if="step === 1 && captchaKey && !useCaptchaFallback()" class="overflow-hidden">
           <VueTurnstile
-            ref="captchaComponent"
+            :ref="(el) => { forgotCaptcha.captchaComponent.value = el as typeof forgotCaptcha.captchaComponent.value }"
             v-model="turnstileToken"
             size="flexible"
             :site-key="captchaKey"
