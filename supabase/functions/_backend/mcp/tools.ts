@@ -946,8 +946,9 @@ const statsTools: McpTool[] = [
   apiTool({
     name: 'capgo_get_account_statistics',
     title: 'Account statistics',
-    description: 'Daily usage summed across every organization of the account.'
-      + ' Returns dated totals for mau, storage, storage_byte_hours, bandwidth and build_time_seconds.',
+    description: 'Daily usage summed across apps accessible to this connection\'s API key; a scoped key may return only part of the account usage.'
+      + ' Returns dated totals for mau, storage, bandwidth and build_time_seconds.'
+      + ' When records share a date, storage_byte_hours is retained from the first record, not summed.',
     input: statsRange,
     annotations: READ,
     request: input => ({ method: 'GET', path: '/statistics/user', query: statsQuery(input) }),
@@ -956,7 +957,7 @@ const statsTools: McpTool[] = [
     name: 'capgo_get_bundle_usage',
     title: 'Bundle adoption',
     description: 'Per-day share of devices on each bundle version (adoption of a release).'
-      + ' Returns date labels, version datasets and the latest version share.',
+      + ' Returns date labels and version datasets in labels and datasets.',
     input: { appId, from: dateString, to: dateString },
     annotations: READ,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/bundle_usage`, query: rest }),
