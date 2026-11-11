@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   sendEmailOtpVerification: vi.fn(),
   verifyEmailOtp: vi.fn(),
   resetCaptcha: vi.fn(),
-  captchaFallback: vi.fn(async () => ({ data: { status: 'ok' }, error: null })),
+  captchaFallback: vi.fn(async (_email: string, _purpose: string) => ({ data: { status: 'ok' }, error: null })),
   toast: { success: vi.fn(), error: vi.fn() },
 }))
 
@@ -38,7 +38,7 @@ vi.mock('~/services/emailOtp', async importOriginal => ({
   verifyEmailOtp: mocks.verifyEmailOtp,
 }))
 vi.mock('~/services/consoleCaptchaFallback', () => ({
-  requestConsoleCaptchaFallbackEmail: (...args: unknown[]) => mocks.captchaFallback(...args),
+  requestConsoleCaptchaFallbackEmail: mocks.captchaFallback,
 }))
 vi.mock('~/components/VueTurnstile.vue', () => ({
   default: defineComponent({
