@@ -952,6 +952,7 @@ export interface CiGuideSelection {
   /** Existing release target chosen when the app has no default channel. */
   productionChannel?: string
   preprodChannel?: string
+  setupMethod?: 'ai' | 'manual'
 }
 
 function selectionKey(userId: string | null | undefined, appId: string) {
@@ -970,6 +971,7 @@ export function loadCiGuideSelection(userId: string | null | undefined, appId: s
       ...(isCiProduct(saved.product) ? { product: saved.product } : {}),
       ...(isCiStrategy(saved.strategy) ? { strategy: saved.strategy } : {}),
       ...(isCiProvider(saved.provider) ? { provider: saved.provider } : {}),
+      ...(saved.setupMethod === 'ai' || saved.setupMethod === 'manual' ? { setupMethod: saved.setupMethod } : {}),
       ...(platforms.length ? { platforms: [...new Set(platforms)] } : {}),
       ...(typeof saved.productionBranch === 'string' ? { productionBranch: normalizeCiBranch(saved.productionBranch, DEFAULT_PRODUCTION_BRANCH) } : {}),
       ...(typeof saved.preprodBranch === 'string' ? { preprodBranch: normalizeCiBranch(saved.preprodBranch, DEFAULT_PREPROD_BRANCH) } : {}),
