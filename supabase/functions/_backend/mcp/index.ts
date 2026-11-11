@@ -5,6 +5,7 @@ import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from '.
 import { accepts } from 'hono/accepts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
+import { parseAccept } from 'hono/utils/accept'
 import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
 import { setApiKeyAuthContext } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -200,12 +201,18 @@ export function createMcpApp(dispatch: McpDispatch) {
       supports: ['text/html'],
       default: 'text/html',
       match: (types) => {
+        // Hono preserves casing. Normalize names, preserving quoted parameter values,
+        // then let its parser apply the same quality rules and ordering to Q as to q.
+        const normalizedTypes = parseAccept(types.map(({ type, params }) => [
+          type.toLowerCase(),
+          ...Object.entries(params).map(([name, value]) => `${name.toLowerCase()}="${value.replace(/["\\]/g, '\\$&')}"`),
+        ].join(';')).join(','))
         // Explicit MCP stream requests retain the stateless transport's 405 response.
-        if (types.some(type => type.type === 'text/event-stream' && type.q > 0))
+        if (normalizedTypes.some(type => type.type === 'text/event-stream' && type.q > 0))
           return 'protocol'
-        const html = types.find(type => type.type === 'text/html')
-          ?? types.find(type => type.type === 'text/*')
-          ?? types.find(type => type.type === '*/*')
+        const html = normalizedTypes.find(type => type.type === 'text/html')
+          ?? normalizedTypes.find(type => type.type === 'text/*')
+          ?? normalizedTypes.find(type => type.type === '*/*')
         return html && html.q > 0 ? 'text/html' : 'protocol'
       },
     })

@@ -71,7 +71,18 @@ describe('hosted MCP discovery', () => {
     expect(card.status).toBe(200)
   })
 
-  it.concurrent.each([undefined, '*/*', 'text/html,application/xhtml+xml,*/*;q=0.8', 'text/event-stream;q=0,text/html'])('serves setup instructions for Accept %s without authentication', async (accept) => {
+  it.concurrent.each([
+    undefined,
+    '*/*',
+    'text/html,application/xhtml+xml,*/*;q=0.8',
+    'text/event-stream;q=0,text/html',
+    'Text/HTML',
+    'text/event-stream;Q=0,text/html',
+    'Text/Event-Stream;Q="0",Text/HTML',
+    'text/event-stream;Q=NaN,text/html',
+    'text/event-stream;Q="\t0",text/html',
+    'text/event-stream;q=0;note="keep;Q=1,Text/HTML",text/html',
+  ])('serves setup instructions for Accept %s without authentication', async (accept) => {
     const response = await apiWorker.fetch(new Request('https://api.capgo.app/mcp', { headers: accept ? { accept } : {} }))
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/html')
@@ -147,7 +158,16 @@ describe('hosted MCP transport', () => {
     expect(response.headers.get('www-authenticate')).toContain('resource_metadata="https://api.capgo.app/.well-known/oauth-protected-resource/mcp"')
   })
 
-  it.concurrent.each(['text/event-stream', 'application/json, text/event-stream', 'text/html, text/event-stream', 'application/json', 'text/html;q=0,*/*'])('preserves protocol GET rejection for Accept %s', async (accept) => {
+  it.concurrent.each([
+    'text/event-stream',
+    'application/json, text/event-stream',
+    'text/html, text/event-stream',
+    'application/json',
+    'text/html;q=0,*/*',
+    'Text/Event-Stream,text/html',
+    'TEXT/EVENT-STREAM;Q=0.1,text/html',
+    'Text/HTML;Q=0,*/*',
+  ])('preserves protocol GET rejection for Accept %s', async (accept) => {
     const response = await apiWorker.fetch(new Request('https://api.capgo.app/mcp', { headers: { accept } }))
     expect(response.status).toBe(405)
     expect(response.headers.get('content-type')).toContain('application/json')
@@ -330,13 +350,13 @@ describe('hosted MCP protocol', () => {
     expect(text).toContain('index.html')
   })
 
-  it.concurrent('maps channel deploys to POST /channel without undefined fields', async () => {
+  it.concurrent.each(['capgo_add_channel', 'capgo_update_channel'])('maps %s deploys to POST /channel without undefined fields', async (name) => {
     const { ctx, calls } = fakeContext()
     await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 5,
       method: 'tools/call',
-      params: { name: 'capgo_update_channel', arguments: { appId: 'com.example.app', channel: 'production', version: '1.2.3' } },
+      params: { name, arguments: { appId: 'com.example.app', channel: 'production', version: '1.2.3' } },
     }, ctx)
     expect(calls).toEqual([{ method: 'POST', path: '/channel', body: { app_id: 'com.example.app', channel: 'production', version: '1.2.3' } }])
   })
