@@ -1,7 +1,7 @@
 import type { McpApiRequest, McpToolContext } from '../supabase/functions/_backend/mcp/tools.ts'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import {
   base64UrlEncode,
@@ -19,6 +19,7 @@ import {
 import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
 import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools, SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
+import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
 
 function fakeContext(response: unknown = { ok: true }) {
   const calls: McpApiRequest[] = []
@@ -200,6 +201,20 @@ describe('hosted MCP protocol', () => {
       expect(tool.inputSchema.type).toBe('object')
       expect(tool.inputSchema).not.toHaveProperty('$schema')
       expect(typeof tool.annotations.readOnlyHint).toBe('boolean')
+      expect(typeof tool.annotations.destructiveHint).toBe('boolean')
+      expect(typeof tool.annotations.idempotentHint).toBe('boolean')
+      expect(typeof tool.annotations.openWorldHint).toBe('boolean')
+      const title = tool.annotations.title
+      expect(typeof title).toBe('string')
+      expect((title as string).length).toBeGreaterThan(0)
+    }
+  })
+
+  it.concurrent('never marks state-writing tools as read-only', () => {
+    for (const tool of MCP_TOOLS) {
+      const { readOnlyHint, destructiveHint, idempotentHint } = tool.annotations
+      if (destructiveHint || idempotentHint === false)
+        expect(readOnlyHint, tool.name).toBe(false)
     }
   })
 
@@ -210,6 +225,66 @@ describe('hosted MCP protocol', () => {
       const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replaceAll(/\bPartial</g, '')
       expect(source, file).not.toMatch(deprecated)
     }
+  })
+
+  it.concurrent('annotates OpenAI-reviewed upload and build tools accurately', () => {
+    const byName = new Map(MCP_TOOLS.map(tool => [tool.name, tool]))
+    expect(byName.get('capgo_prepare_bundle_upload')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+      idempotentHint: false,
+    })
+    expect(byName.get('capgo_get_build_status')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    })
+    expect(byName.get('capgo_prepare_build_credentials_upload')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+      idempotentHint: false,
+    })
+  })
+
+  it.concurrent('polls build status in-process without HTTP persist', async () => {
+    const calls: McpApiRequest[] = []
+    const hono = {
+      get: (key: string) => key === 'requestId' ? 'req-mcp-build-status' : undefined,
+      req: { header: () => undefined },
+    } as any
+    const apikeyRow = { key: 'test-key', user_id: '00000000-0000-0000-0000-000000000001' } as any
+    const spy = vi.spyOn(buildStatus, 'getBuildStatus').mockResolvedValue(
+      new Response(JSON.stringify({ status: 'running', persisted: false }), { status: 200 }),
+    )
+    const ctx: McpToolContext = {
+      call: async (request) => {
+        calls.push(request)
+        return { ok: true, status: 200, data: {} }
+      },
+      caller: { userId: '00000000-0000-0000-0000-000000000001', apikeyId: 42, apikeyName: 'MCP · Test', apikeyExpiresAt: null },
+      hono,
+      apikeyRow,
+    }
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 50,
+      method: 'tools/call',
+      params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
+    }, ctx)
+    const body = JSON.parse((response?.result as { content: Array<{ text: string }> }).content[0].text)
+    expect(response?.error).toBeUndefined()
+    expect(body).toMatchObject({ status: 'running', persisted: false })
+    expect(calls.filter(call => call.path === '/build/status')).toHaveLength(0)
+    expect(spy).toHaveBeenCalledWith(
+      hono,
+      { job_id: 'job-9', app_id: 'com.example.app' },
+      apikeyRow,
+      { hostedMcpReadOnly: true },
+    )
+    spy.mockRestore()
   })
 
   it.concurrent('marks tools that reach systems outside Capgo as open-world', () => {
@@ -648,6 +723,7 @@ describe('hosted MCP errors always give a way out', () => {
     const localTools = new Set([
       'capgo_whoami',
       'capgo_search_docs',
+      'capgo_get_build_status',
       'capgo_list_event_types',
       'capgo_subscribe_events',
       'capgo_list_event_subscriptions',

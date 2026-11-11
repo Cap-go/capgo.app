@@ -6,6 +6,7 @@ import { accepts } from 'hono/accepts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
 import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
+import { setApiKeyAuthContext } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
 import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
@@ -236,6 +237,7 @@ export function createMcpApp(dispatch: McpDispatch) {
       await recordFailedAuth(c)
       return unauthorized(c, 'Invalid or expired Capgo API key: sign in to the Capgo MCP again through OAuth, or create a new key at https://console.capgo.app/apikeys and update the connection', true)
     }
+    setApiKeyAuthContext(c, apikey, token)
 
     c.set('auth', {
       userId: apikey.user_id,
@@ -264,7 +266,13 @@ export function createMcpApp(dispatch: McpDispatch) {
       apikeyName: apikey.name,
       apikeyExpiresAt: apikey.expires_at,
     }
-    const ctx: McpToolContext = { call: createCaller(c, dispatch, token), caller, apikey: token, hono: c }
+    const ctx: McpToolContext = {
+      call: createCaller(c, dispatch, token),
+      caller,
+      apikey: token,
+      hono: c,
+      apikeyRow: apikey,
+    }
 
     if (Array.isArray(payload) && (payload.length === 0 || payload.length > MAX_BATCH_MESSAGES))
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)
