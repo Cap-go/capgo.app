@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { Json } from '~/types/database.types'
 import type { CiEncryptionBundle } from '~/utils/cicdEncryption'
-import type { CiKeySpec, CiPlatform, CiProduct, CiProvider, CiSecretName, CiStrategy } from '~/utils/cicdSetupGuide'
+import type { CiGuideOptions, CiKeySpec, CiPlatform, CiProduct, CiProvider, CiSecretName, CiStrategy } from '~/utils/cicdSetupGuide'
+import type { SetupMethod } from '~/utils/onboardingSetupMode'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -9,6 +10,7 @@ import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import IconArrowLeft from '~icons/lucide/arrow-left'
 import IconArrowRight from '~icons/lucide/arrow-right'
+import IconBot from '~icons/lucide/bot'
 import IconCheck from '~icons/lucide/check'
 import IconFileText from '~icons/lucide/file-text'
 import IconGitBranch from '~icons/lucide/git-branch'
@@ -35,6 +37,7 @@ import { formatDate } from '~/services/date'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
+import { buildCiAiPrompt } from '~/utils/cicdAiPrompt'
 import { ciChannelEncryptionBundles, ciProductionEncryptionEvidence } from '~/utils/cicdEncryption'
 import {
   buildCiPipeline,
@@ -78,6 +81,9 @@ const saved = loadCiGuideSelection(userId.value, props.appId)
 const product = computed(() => props.initialProduct)
 const strategy = ref<CiStrategy>(saved.strategy ?? 'main')
 const provider = ref<CiProvider | null>(saved.provider ?? null)
+const setupMethod = ref<SetupMethod>(saved.product === product.value ? saved.setupMethod ?? 'ai' : 'ai')
+const copiedAiPrompt = ref('')
+const copyingAiPrompt = ref(false)
 const platforms = ref<CiPlatform[]>(props.initialPlatform ? [props.initialPlatform] : saved.platforms ?? [...CI_PLATFORMS])
 const productionBranchInput = ref(saved.productionBranch ?? DEFAULT_PRODUCTION_BRANCH)
 const preprodBranchInput = ref(saved.preprodBranch ?? DEFAULT_PREPROD_BRANCH)
@@ -130,10 +136,10 @@ watch(productionChannel, () => {
 // Never swap in another channel: CI would ship to a channel the user didn't pick.
 const unsupportedChannel = computed(() => productionChannels.value.find(channel => !isCiChannelSupported(channel)))
 const channelUnsupported = computed(() => product.value === 'ota' && unsupportedChannel.value !== undefined)
-const pipeline = computed(() => provider.value && !productionTargetMissing.value && !encryptionChoiceMissing.value && !channelUnsupported.value && !branchesEqual.value
+const guideOptions = computed<CiGuideOptions | null>(() => provider.value && !productionTargetMissing.value && !encryptionChoiceMissing.value && !channelUnsupported.value && !branchesEqual.value
   && !testerChannelInvalid.value && !testerChannelCollision.value
   && (product.value !== 'ota' || (channelStatus.value === 'ready' && encryptionStatus.value === 'ready'))
-  ? buildCiPipeline({
+  ? {
       appId: props.appId,
       product: product.value,
       strategy: strategy.value,
@@ -144,8 +150,11 @@ const pipeline = computed(() => provider.value && !productionTargetMissing.value
       encrypted: encrypted.value,
       productionBranch: productionBranch.value,
       preprodBranch: preprodBranch.value,
-    })
+    }
   : null)
+const pipeline = computed(() => guideOptions.value ? buildCiPipeline(guideOptions.value) : null)
+const aiPrompt = computed(() => guideOptions.value ? buildCiAiPrompt(guideOptions.value) : '')
+const aiPromptCopied = computed(() => !!aiPrompt.value && copiedAiPrompt.value === aiPrompt.value)
 
 const providerIcons: Record<CiProvider, unknown> = {
   github: IconGithub,
@@ -212,11 +221,11 @@ interface KeyRegistration {
   status: 'pending' | 'saving' | 'saved' | 'error'
   appId: string
   rbacId: string
-  selection: { product: CiProduct, strategy: CiStrategy, provider: CiProvider | null }
+  selection: { product: CiProduct, strategy: CiStrategy, provider: CiProvider | null, setup_method: SetupMethod }
 }
 const keyRegistrations = reactive<Partial<Record<CiKeySlot, KeyRegistration>>>({})
 
-watch([product, strategy, provider, platforms, productionBranch, preprodBranch, preprodChannel, selectedProductionChannel], () => {
+watch([product, strategy, provider, platforms, productionBranch, preprodBranch, preprodChannel, selectedProductionChannel, setupMethod], () => {
   if (!provider.value)
     return
   saveCiGuideSelection(userId.value, props.appId, {
@@ -228,6 +237,7 @@ watch([product, strategy, provider, platforms, productionBranch, preprodBranch, 
     preprodBranch: preprodBranch.value,
     preprodChannel: preprodChannel.value,
     productionChannel: selectedProductionChannel.value,
+    setupMethod: setupMethod.value,
   })
 }, { deep: true })
 
@@ -237,6 +247,7 @@ function track(event: string, properties: Record<string, string | number | boole
     org_id: props.ownerOrgId,
     product: product.value,
     strategy: strategy.value,
+    setup_method: setupMethod.value,
     ...(provider.value ? { provider: provider.value } : {}),
     ...properties,
   })
@@ -278,7 +289,7 @@ async function createKey(spec: CiKeySpec) {
   creatingKey[slot] = true
   keyErrors[slot] = undefined
   const appId = props.appId
-  const selection = { product: product.value, strategy: strategy.value, provider: provider.value }
+  const selection = { product: product.value, strategy: strategy.value, provider: provider.value, setup_method: setupMethod.value }
   try {
     const name = `${providerName.value || 'CI'} ${spec.purpose === 'preview' ? 'previews' : 'CI'} (${appId})`
     const { data, error } = await createDefaultApiKey(capgo, name, { appId, appRole: spec.role, hashed: true })
@@ -392,6 +403,18 @@ let statusTimer: ReturnType<typeof setInterval> | undefined
 let statusGeneration = 0
 let onboardingWrites = 0
 let onboardingWriteQueue = Promise.resolve()
+const methodSaving = ref(false)
+const methodSaveError = ref(false)
+let methodWriteGeneration = 0
+type MethodAction = { event: 'method_selected', method: SetupMethod } | { event: 'ai_prompt_copied', method: 'ai' }
+function methodWrite(action: MethodAction) {
+  return {
+    p_app_id: props.appId,
+    p_event: action.event,
+    p_selection: { product: product.value, strategy: strategy.value, ...(provider.value ? { provider: provider.value } : {}), setup_method: action.method },
+  }
+}
+const pendingMethodWrite = ref<ReturnType<typeof methodWrite> | null>(null)
 
 function writeOnboarding(write: () => Promise<void>) {
   onboardingWrites += 1
@@ -404,10 +427,84 @@ function writeOnboarding(write: () => Promise<void>) {
   })
 }
 
+async function saveMethod(args: ReturnType<typeof methodWrite>) {
+  const generation = ++methodWriteGeneration
+  const ownerOrgId = props.ownerOrgId
+  pendingMethodWrite.value = args
+  methodSaveError.value = false
+  methodSaving.value = true
+  try {
+    await writeOnboarding(async () => {
+      if (!guideActive || args.p_app_id !== props.appId || ownerOrgId !== props.ownerOrgId || args.p_selection.product !== product.value)
+        return
+      const { data, error } = await capgo.rpc('record_app_cicd_setup', args)
+      if (error)
+        throw error
+      if (data && guideActive && generation === methodWriteGeneration && args.p_app_id === props.appId && ownerOrgId === props.ownerOrgId && args.p_selection.product === product.value)
+        applyOnboarding(data)
+    })
+    if (generation === methodWriteGeneration)
+      pendingMethodWrite.value = null
+  }
+  catch (error) {
+    console.error('Cannot save CI/CD setup method', error)
+    if (generation === methodWriteGeneration)
+      methodSaveError.value = true
+  }
+  finally {
+    if (generation === methodWriteGeneration)
+      methodSaving.value = false
+  }
+}
+
+function chooseManualSetup() {
+  if (copyingAiPrompt.value)
+    return
+  setupMethod.value = 'manual'
+  track('onboarding_cicd_setup_method_selected', { setup_method: 'manual' })
+  void saveMethod(methodWrite({ event: 'method_selected', method: 'manual' }))
+}
+
+async function copyAiPrompt() {
+  const text = aiPrompt.value
+  if (!text || copyingAiPrompt.value)
+    return
+  const args = methodWrite({ event: 'ai_prompt_copied', method: 'ai' })
+  const ownerOrgId = props.ownerOrgId
+  copyingAiPrompt.value = true
+  try {
+    await navigator.clipboard.writeText(text)
+    if (!guideActive || text !== aiPrompt.value || args.p_app_id !== props.appId || args.p_selection.product !== product.value || ownerOrgId !== props.ownerOrgId)
+      return
+    setupMethod.value = 'ai'
+    copiedAiPrompt.value = text
+    toast.success(t('cicd-guide-ai-copied'))
+    track('onboarding_cicd_setup_method_selected', { ...args.p_selection, setup_method: 'ai' })
+    track('onboarding_cicd_ai_prompt_copied', { ...args.p_selection, setup_method: 'ai' })
+    void saveMethod(args)
+  }
+  catch (error) {
+    console.error('Cannot copy CI/CD AI instructions', error)
+    toast.error(t('cannot-copy'))
+  }
+  finally {
+    copyingAiPrompt.value = false
+  }
+}
+
 function applyOnboarding(value: unknown) {
   onboarding.value = value
   organizationStore.updateAppOnboarding(props.appId, value as Json)
 }
+
+watch([() => props.appId, () => props.ownerOrgId, product], () => {
+  methodWriteGeneration += 1
+  methodSaving.value = false
+  methodSaveError.value = false
+  pendingMethodWrite.value = null
+  copiedAiPrompt.value = ''
+  setupMethod.value = 'ai'
+})
 
 async function refreshStatus() {
   if (onboardingWrites > 0)
@@ -546,6 +643,7 @@ onUnmounted(() => {
   policyRequest += 1
   channelRequest += 1
   statusGeneration += 1
+  methodWriteGeneration += 1
   if (statusTimer)
     clearInterval(statusTimer)
 })
@@ -730,6 +828,57 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       </p>
     </section>
 
+    <section v-if="provider" class="rounded-2xl border border-azure-500/30 bg-azure-500/5 p-5 sm:p-6 dark:border-azure-400/30 dark:bg-azure-500/10" aria-labelledby="cicd-ai-title" data-test="cicd-setup-method">
+      <div class="flex items-start gap-4">
+        <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-azure-500/10 text-sky-700 dark:text-azure-300">
+          <IconBot class="size-6" aria-hidden="true" />
+        </span>
+        <div class="min-w-0 flex-1">
+          <p class="text-xs font-semibold tracking-wide text-sky-700 dark:text-azure-300">
+            {{ t('cicd-guide-ai-eyebrow') }}
+          </p>
+          <h2 id="cicd-ai-title" class="mt-1 text-xl font-semibold leading-7 text-slate-950 dark:text-white">
+            {{ t('cicd-guide-ai-title', { provider: providerName }) }}
+          </h2>
+          <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {{ t('cicd-guide-ai-description') }}
+          </p>
+          <div class="mt-4 flex flex-wrap gap-3">
+            <button type="button" class="d-btn h-auto min-h-11 gap-2 whitespace-normal rounded-lg border-azure-500 bg-azure-500 px-4 py-2 text-sm font-medium text-white shadow-none hover:border-azure-600 hover:bg-azure-600 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-slate-900" :disabled="!aiPrompt || copyingAiPrompt" data-test="cicd-copy-ai" @click="copyAiPrompt">
+              <IconLoader v-if="copyingAiPrompt" class="size-4 shrink-0 motion-safe:animate-spin" aria-hidden="true" />
+              <IconCheck v-else-if="aiPromptCopied" class="size-4 shrink-0" aria-hidden="true" />
+              <IconCopy v-else class="size-4 shrink-0" aria-hidden="true" />
+              {{ t(aiPromptCopied ? 'cicd-guide-ai-copied' : 'cicd-guide-ai-copy') }}
+            </button>
+            <button type="button" :class="secondaryLinkClass" :disabled="copyingAiPrompt" :aria-pressed="setupMethod === 'manual'" aria-controls="cicd-manual-steps" data-test="cicd-setup-manual" @click="chooseManualSetup">
+              <IconFileText class="size-4 shrink-0" aria-hidden="true" />
+              {{ t('cicd-guide-setup-manual') }}
+            </button>
+          </div>
+          <p v-if="aiPromptCopied && setupMethod === 'ai'" role="status" class="mt-3 text-sm leading-6 text-sky-800 dark:text-azure-200" data-test="cicd-ai-next">
+            {{ t('cicd-guide-ai-next') }}
+          </p>
+          <p v-else class="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {{ t(aiPrompt ? 'cicd-guide-ai-note' : 'cicd-guide-ai-settings-pending') }}
+          </p>
+          <details v-if="aiPrompt" class="mt-3 text-sm text-slate-600 dark:text-slate-300" data-test="cicd-ai-preview">
+            <summary class="w-fit cursor-pointer rounded-sm py-2 font-medium underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500">
+              {{ t('cicd-guide-ai-preview') }}
+            </summary>
+            <pre class="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-slate-950 p-4 font-mono text-xs leading-6 text-sky-100" data-test="cicd-ai-prompt">{{ aiPrompt }}</pre>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <div v-if="methodSaveError" role="alert" class="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200" data-test="cicd-method-save-error">
+      <span class="min-w-0 flex-1">{{ t('cicd-guide-method-save-error') }}</span>
+      <button type="button" :class="secondaryLinkClass" :disabled="methodSaving" data-test="cicd-method-retry" @click="pendingMethodWrite && saveMethod(pendingMethodWrite)">
+        <IconRefresh class="size-4" aria-hidden="true" />
+        {{ t('cicd-guide-refresh') }}
+      </button>
+    </div>
+
     <div v-if="provider && product === 'ota' && (channelStatus !== 'ready' || encryptionStatus !== 'ready')" class="space-y-3" aria-live="polite" data-test="cicd-settings-status">
       <template v-for="setting in (['channels', 'encryption'] as const)" :key="setting">
         <div v-if="(setting === 'channels' ? channelStatus : encryptionStatus) !== 'ready'" class="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700 dark:border-white/15 dark:bg-slate-900 dark:text-slate-200" :data-test="`cicd-${setting}-status`">
@@ -768,7 +917,7 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
       </div>
     </section>
 
-    <section v-if="provider && pipeline" aria-labelledby="cicd-steps-title" class="space-y-4" data-test="cicd-steps">
+    <section v-if="provider && pipeline && setupMethod === 'manual'" id="cicd-manual-steps" aria-labelledby="cicd-steps-title" class="space-y-4" data-test="cicd-steps">
       <div>
         <h2 id="cicd-steps-title" class="text-2xl font-semibold tracking-tight text-slate-950 dark:text-white">
           {{ t('cicd-guide-steps-title', { provider: providerName }) }}
@@ -1092,33 +1241,36 @@ const secondaryLinkClass = 'd-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg b
             <p v-if="strategy === 'pull_request'" class="mt-2 max-w-prose text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t(product === 'ota' ? 'cicd-guide-step-verify-preview-ota' : 'cicd-guide-step-verify-preview-builder') }}
             </p>
-            <output class="mt-4 flex flex-wrap items-center gap-3 rounded-xl px-4 py-3 text-sm" :class="detectedAt ? 'bg-emerald-50 dark:bg-emerald-500/10' : 'bg-slate-50 dark:bg-slate-950/60'" aria-live="polite" data-test="cicd-detection">
-              <IconCheck v-if="detectedAt" class="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
-              <IconTriangleAlert v-else-if="statusError" class="h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
-              <IconLoader v-else class="h-4 w-4 shrink-0 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
-              <span class="min-w-0 flex-1 text-slate-700 dark:text-slate-200">
-                <template v-if="detectedAt">{{ detectedLabel }}</template>
-                <template v-else-if="statusError">{{ t('cicd-guide-status-error') }}</template>
-                <template v-else>{{ t(product === 'ota' ? 'cicd-guide-waiting-ota' : 'cicd-guide-waiting-builder') }}</template>
-              </span>
-              <button v-if="!detectedAt" type="button" class="d-btn d-btn-ghost d-btn-sm min-h-9 text-sky-700 dark:text-azure-300" :disabled="statusLoading" data-test="cicd-detection-refresh" @click="refreshStatus">
-                <IconRefresh class="h-4 w-4" :class="{ 'motion-safe:animate-spin': statusLoading }" aria-hidden="true" />
-                {{ t('cicd-guide-refresh') }}
-              </button>
-            </output>
-            <div class="mt-3 flex flex-wrap gap-2">
-              <RouterLink :to="`/app/${encodeURIComponent(appId)}/${product === 'ota' ? 'bundles' : 'builds'}`" :class="secondaryLinkClass">
-                {{ t(product === 'ota' ? 'cicd-guide-open-bundles' : 'cicd-guide-open-builds') }}
-                <IconArrowRight class="h-4 w-4" aria-hidden="true" />
-              </RouterLink>
-              <a :href="docsHref" target="_blank" rel="noopener noreferrer" :class="secondaryLinkClass" data-test="cicd-docs">
-                <IconFileText class="h-4 w-4" aria-hidden="true" />
-                {{ t('cicd-guide-docs') }}
-              </a>
-            </div>
           </div>
         </li>
       </ol>
+    </section>
+
+    <section v-if="provider && pipeline" :aria-label="t('cicd-guide-step-verify-title')" data-test="cicd-progress">
+      <output class="mt-4 flex flex-wrap items-center gap-3 rounded-xl px-4 py-3 text-sm" :class="detectedAt ? 'bg-emerald-50 dark:bg-emerald-500/10' : 'bg-slate-50 dark:bg-slate-950/60'" aria-live="polite" data-test="cicd-detection">
+        <IconCheck v-if="detectedAt" class="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
+        <IconTriangleAlert v-else-if="statusError" class="h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+        <IconLoader v-else class="h-4 w-4 shrink-0 text-slate-400 motion-safe:animate-spin" aria-hidden="true" />
+        <span class="min-w-0 flex-1 text-slate-700 dark:text-slate-200">
+          <template v-if="detectedAt">{{ detectedLabel }}</template>
+          <template v-else-if="statusError">{{ t('cicd-guide-status-error') }}</template>
+          <template v-else>{{ t(product === 'ota' ? 'cicd-guide-waiting-ota' : 'cicd-guide-waiting-builder') }}</template>
+        </span>
+        <button v-if="!detectedAt" type="button" class="d-btn d-btn-ghost d-btn-sm min-h-9 text-sky-700 dark:text-azure-300" :disabled="statusLoading" data-test="cicd-detection-refresh" @click="refreshStatus">
+          <IconRefresh class="h-4 w-4" :class="{ 'motion-safe:animate-spin': statusLoading }" aria-hidden="true" />
+          {{ t('cicd-guide-refresh') }}
+        </button>
+      </output>
+      <div class="mt-3 flex flex-wrap gap-2">
+        <RouterLink :to="`/app/${encodeURIComponent(appId)}/${product === 'ota' ? 'bundles' : 'builds'}`" :class="secondaryLinkClass">
+          {{ t(product === 'ota' ? 'cicd-guide-open-bundles' : 'cicd-guide-open-builds') }}
+          <IconArrowRight class="h-4 w-4" aria-hidden="true" />
+        </RouterLink>
+        <a :href="docsHref" target="_blank" rel="noopener noreferrer" :class="secondaryLinkClass" data-test="cicd-docs">
+          <IconFileText class="h-4 w-4" aria-hidden="true" />
+          {{ t('cicd-guide-docs') }}
+        </a>
+      </div>
     </section>
   </div>
 </template>
