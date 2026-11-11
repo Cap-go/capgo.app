@@ -6,6 +6,7 @@ import { createApp, defineComponent, h, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import messages from '../messages/en.json'
 import ResendEmailPage from '../src/pages/resend_email.vue'
+import { CONSOLE_CAPTCHA_INIT_TIMEOUT_MS } from '../src/utils/consoleTurnstileCaptcha'
 
 const mocks = vi.hoisted(() => ({
   route: { query: {} as Record<string, string> },
@@ -165,7 +166,7 @@ describe('progressive email verification', () => {
     const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {})
     vi.useFakeTimers()
     const container = await mountOtpPage()
-    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
     await nextTick()
     expect(container.textContent).toContain(messages['captcha-unavailable'])
     expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
@@ -403,7 +404,7 @@ describe('email confirmation CAPTCHA', () => {
   it('uses captcha fallback after the CAPTCHA script fails to initialize', async () => {
     vi.useFakeTimers()
     const container = await mountPage()
-    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
     await nextTick()
     expect(container.textContent).toContain(messages['captcha-resend-unavailable'])
     vi.useRealTimers()
@@ -418,7 +419,7 @@ describe('email confirmation CAPTCHA', () => {
     vi.stubGlobal('turnstile', {})
     vi.useFakeTimers()
     const container = await mountPage()
-    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
     await nextTick()
     expect(container.textContent).not.toContain(messages['captcha-resend-unavailable'])
     vi.useRealTimers()
