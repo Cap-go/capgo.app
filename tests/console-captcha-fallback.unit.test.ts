@@ -69,7 +69,7 @@ describe('console captcha fallback', () => {
       body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
     })
     expect(response.status).toBe(503)
-    const payload = await response.json()
+    const payload = await response.json() as { error?: string }
     expect(payload.error).toBe('captcha_fallback_failed')
   })
 
