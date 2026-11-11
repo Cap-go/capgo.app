@@ -10,8 +10,10 @@
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=Cap-go_capgo&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=Cap-go_capgo)
 
 <div align="center">
-  <h2><a href="https://capgo.app/?ref=cli_readme"> ➡️ Get Instant updates for your App with Capgo</a></h2>
-  <h2><a href="https://capgo.app/consulting/?ref=cli_readme"> Missing a feature? We’ll build it for you 💪</a></h2>
+  <p><b>Capgo</b>: the AI-ready platform to build, ship, and maintain Capacitor apps. Ship live updates to your users instantly, without waiting for app store review.</p>
+  <h2><a href="https://capgo.app/register/?ref=cli_readme_v2">➡️ Get started for free</a></h2>
+  <p>14-day unlimited free trial. No credit card required</p>
+  <p><a href="https://capgo.app/consulting/?ref=cli_readme_v2">Missing a feature? We'll build the plugin for you 💪</a></p>
 </div>
 
 Command line tool to manage Capgo apps, bundles, channels, compatibility checks,
