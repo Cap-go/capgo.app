@@ -53,6 +53,8 @@ export interface VisualDiffRoute {
   path: string
   /** When true, logs in as test@capgo.app before visiting the route. */
   auth?: boolean
+  /** Override default visual-diff login credentials. */
+  authCredentials?: { email: string, password: string }
   /** Optional deterministic UI setup before the screenshot is captured. */
   prepare?: (page: Page) => Promise<void>
 }
