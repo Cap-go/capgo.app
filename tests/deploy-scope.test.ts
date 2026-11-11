@@ -9,6 +9,7 @@ import {
 const noBackendDeploys = {
   api: false,
   files: false,
+  gotrue: false,
   plugins: false,
   supabase: false,
   translation: false,
@@ -28,6 +29,7 @@ describe('deploy scope matching', () => {
       scope: {
         api: true,
         files: true,
+        gotrue: true,
         plugins: true,
         supabase: true,
         translation: true,
@@ -48,6 +50,7 @@ describe('deploy scope matching', () => {
     ['the Deno-only plugin stats bridge stays off the Cloudflare plugin deploy', ['supabase/functions/shared/plugin_deno_stats_fallbacks.ts'], { supabase: true }],
     ['the shared preview subdomain helper deploys the files worker', ['supabase/functions/shared/preview-subdomain.ts'], { files: true, supabase: true }],
     ['the shared TUS file utility deploys API and files workers', ['supabase/functions/_backend/files/util.ts'], { api: true, files: true, supabase: true }],
+    ['the GoTrue worker deploys only from its own folder', ['cloudflare_workers/gotrue/wrangler.jsonc'], { gotrue: true }],
     ['package dependency changes deploy Cloudflare workers without forcing Supabase', ['package.json'], { api: true, files: true, plugins: true, translation: true }],
   ] as const)('%s', (_name, files, deploys) => {
     expect(resolveDeployScopeFromFiles([...files])).toEqual({ ...noBackendDeploys, ...deploys })
@@ -102,6 +105,7 @@ describe('deploy scope matching', () => {
       scope: {
         api: false,
         files: false,
+        gotrue: false,
         plugins: true,
         supabase: true,
         translation: false,
@@ -133,6 +137,7 @@ describe('deploy scope matching', () => {
       scope: {
         api: false,
         files: false,
+        gotrue: false,
         plugins: false,
         supabase: false,
         translation: true,
@@ -162,6 +167,7 @@ describe('deploy scope matching', () => {
       scope: {
         api: true,
         files: true,
+        gotrue: true,
         plugins: true,
         supabase: true,
         translation: true,

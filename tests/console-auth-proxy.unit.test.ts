@@ -183,6 +183,65 @@ describe('console auth relay client address forwarding', () => {
   })
 })
 
+describe('console auth relay to our GoTrue (GOTRUE binding)', () => {
+  const goTrueFetch = vi.fn()
+  const bindings = { GOTRUE: { fetch: goTrueFetch } }
+
+  beforeEach(() => {
+    env = FORWARDING_ENV
+    goTrueFetch.mockReset()
+    goTrueFetch.mockResolvedValue(new Response('{"access_token":"t"}', { status: 200, headers: { 'content-type': 'application/json' } }))
+  })
+
+  async function relay(path: string, init: RequestInit = {}) {
+    const response = await app.request(`https://api.example.com/private/console/auth/${path}`, init, bindings)
+    const call = goTrueFetch.mock.calls[0]
+    return { response, url: call ? String(call[0]) : null, headers: call ? new Headers(call[1].headers) : null }
+  }
+
+  it('sends to the binding instead of hosted Supabase, with the Cloudflare address and no API key', async () => {
+    const { response, url, headers } = await relay('token?grant_type=password', {
+      method: 'POST',
+      headers: { 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '198.51.100.4', 'authorization': 'Bearer sb_publishable_x', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'a', password: 'b', gotrue_meta_security: { captcha_token: 'cf-token' } }),
+    })
+    expect(response.status).toBe(200)
+    expect(url).toBe('https://gotrue/token?grant_type=password')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(headers?.get('x-forwarded-for')).toBe('203.0.113.9')
+    expect(headers?.has('apikey')).toBe(false)
+    expect(headers?.has('authorization')).toBe(false)
+    expect(headers?.has('sb-forwarded-for')).toBe(false)
+  })
+
+  it('leaves the CAPTCHA to GoTrue and relays only a user session', async () => {
+    const { headers } = await relay('signup', { method: 'POST', headers: { 'cf-connecting-ip': '203.0.113.9', 'authorization': USER_JWT }, body: '{}' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(headers?.get('authorization')).toBe(USER_JWT)
+  })
+
+  it('relays SAML, JWKS and health endpoints, and accepts large SAML assertions only on the ACS', async () => {
+    for (const path of ['sso/saml/metadata', '.well-known/jwks.json', 'health']) {
+      goTrueFetch.mockClear()
+      const { url } = await relay(path)
+      expect(url, path).toBe(`https://gotrue/${path}`)
+    }
+    const assertion = `SAMLResponse=${'x'.repeat(200 * 1024)}`
+    const acs = await relay('sso/saml/acs', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: assertion })
+    expect(acs.response.status).toBe(200)
+    const tooLarge = await app.request('https://api.example.com/private/console/auth/signup', { method: 'POST', body: assertion }, bindings)
+    expect(tooLarge.status).toBe(413)
+  })
+
+  it('passes GoTrue redirects back to the browser', async () => {
+    goTrueFetch.mockResolvedValueOnce(new Response(null, { status: 303, headers: { location: 'http://localhost:5173/#access_token=x' } }))
+    const { response } = await relay('sso/saml/acs', { method: 'POST', body: 'SAMLResponse=x' })
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('http://localhost:5173/#access_token=x')
+    expect(goTrueFetch.mock.calls[0][1].redirect).toBe('manual')
+  })
+})
+
 describe('captcha-gated routes', () => {
   it('matches the GoTrue routes behind verifyCaptcha', () => {
     const search = (query: string) => new URLSearchParams(query)

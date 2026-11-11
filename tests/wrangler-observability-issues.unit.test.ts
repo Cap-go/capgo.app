@@ -10,8 +10,8 @@ function configPath(worker: string) {
 
 function deployedEnvs(worker: string) {
   const { rawConfig } = experimental_readRawConfig({ config: configPath(worker) })
-  // `local` only runs under wrangler dev; every other env is deployed to Cloudflare.
-  return Object.keys(rawConfig.env ?? {}).filter(env => env !== 'local')
+  // `local*` envs only run under wrangler dev; every other env is deployed to Cloudflare.
+  return Object.keys(rawConfig.env ?? {}).filter(env => !env.startsWith('local'))
 }
 
 describe('wrangler observability', () => {

@@ -1,0 +1,66 @@
+// Self-hosted GoTrue (auth migration, PR 2). No route: only the API Worker's
+// service binding reaches it. Secrets (database URL, signing keys, CAPTCHA and
+// SAML keys) come from internal/cloudflare_gotrue_auth/.env.prod via
+// `bun run deploy:cloudflare_env:gotrue:prod`. Locally, override in .dev.vars.
+{
+  "name": "capgo_gotrue-prod",
+  "main": "./index.ts",
+  "compatibility_date": "2026-11-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "upload_source_maps": true,
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "GoTrue",
+      "image": "./Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 1,
+      // Close to the primary database in London.
+      "constraints": { "regions": ["WEUR"] }
+    }
+  ],
+  "durable_objects": { "bindings": [{ "name": "GOTRUE", "class_name": "GoTrue" }] },
+  "migrations": [{ "tag": "gotrue-v1", "new_sqlite_classes": ["GoTrue"] }],
+  // Mirrors the hosted Supabase Auth settings of the production project.
+  "vars": {
+    "GOTRUE_API_HOST": "0.0.0.0",
+    "PORT": "9999",
+    "GOTRUE_DB_DRIVER": "postgres",
+    "DB_NAMESPACE": "auth_cf",
+    "GOTRUE_DB_MAX_POOL_SIZE": "10",
+    // Test phase: the local console auth relay. PR 3 switches it to https://sb.capgo.app/auth/v1.
+    "API_EXTERNAL_URL": "http://localhost:8787/private/console/auth",
+    "GOTRUE_SITE_URL": "https://console.capgo.app",
+    "GOTRUE_URI_ALLOW_LIST": "http://localhost:5173/onboarding/set_password,http://localhost:5173/forgot_password?step=2,http://localhost:5173/onboarding/verify_email,http://localhost:5173,https://console.capgo.app/onboarding/set_password,https://console.capgo.app/onboarding/verify_email",
+    "GOTRUE_JWT_ISSUER": "https://xvwzpoazmxkqosrdewyv.supabase.co/auth/v1",
+    "GOTRUE_JWT_AUD": "authenticated",
+    // Role of new users (signup.go SetRole) despite GoTrue's deprecation notice; empty breaks auth.role().
+    "GOTRUE_JWT_DEFAULT_GROUP_NAME": "authenticated",
+    "GOTRUE_JWT_ADMIN_ROLES": "service_role",
+    "GOTRUE_JWT_EXP": "604800",
+    "GOTRUE_SESSIONS_SINGLE_PER_USER": "true",
+    "GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL": "10",
+    "GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_REAUTHENTICATION": "true",
+    "GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD": "true",
+    "GOTRUE_SECURITY_CAPTCHA_ENABLED": "true",
+    "GOTRUE_SECURITY_CAPTCHA_PROVIDER": "turnstile",
+    // The relay sets X-Forwarded-For from cf-connecting-ip; clients cannot reach GoTrue directly.
+    "GOTRUE_RATE_LIMIT_HEADER": "X-Forwarded-For",
+    "GOTRUE_RATE_LIMIT_EMAIL_SENT": "2",
+    "GOTRUE_PASSWORD_MIN_LENGTH": "6",
+    "GOTRUE_PASSWORD_HIBP_ENABLED": "true",
+    "GOTRUE_MAILER_AUTOCONFIRM": "true",
+    "GOTRUE_MAILER_OTP_EXP": "3600",
+    "GOTRUE_MAILER_OTP_LENGTH": "6",
+    "GOTRUE_MAILER_NOTIFICATIONS_PASSWORD_CHANGED_ENABLED": "true",
+    "GOTRUE_MAILER_NOTIFICATIONS_EMAIL_CHANGED_ENABLED": "true",
+    "GOTRUE_MAILER_NOTIFICATIONS_MFA_FACTOR_ENROLLED_ENABLED": "true",
+    "GOTRUE_MAILER_NOTIFICATIONS_MFA_FACTOR_UNENROLLED_ENABLED": "true",
+    "GOTRUE_SAML_ENABLED": "true",
+    "GOTRUE_HOOK_SEND_EMAIL_ENABLED": "true",
+    "GOTRUE_HOOK_SEND_EMAIL_URI": "pg-functions://postgres/public/hook_send_email",
+    "GOTRUE_HOOK_BEFORE_USER_CREATED_ENABLED": "true",
+    "GOTRUE_HOOK_BEFORE_USER_CREATED_URI": "pg-functions://postgres/public/hook_before_user_created"
+  }
+}

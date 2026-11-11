@@ -23,9 +23,14 @@ const ALLOWED_PATHS = [
   /^factors$/,
   /^factors\/[\w-]+$/,
   /^factors\/[\w-]+\/(?:challenge|verify)$/,
+  /^sso\/saml\/(?:acs|metadata)$/,
+  /^\.well-known\/jwks\.json$/,
+  /^health$/,
 ]
 
 const MAX_BODY_BYTES = 64 * 1024
+// IdP assertions carry signatures and certificates, well beyond a JSON auth body.
+const SAML_ACS_MAX_BODY_BYTES = 512 * 1024
 // A signed session or anon token. Anything else (no header, `Bearer sb_...`) makes
 // the Supabase gateway substitute the role of the apikey header.
 const JWT_BEARER = /^Bearer [\w-]+\.[\w-]+\.[\w-]+$/
@@ -114,6 +119,20 @@ function relayAuth(c: Context<MiddlewareKeyVariables>): RelayAuth {
   }
 }
 
+// Our self-hosted GoTrue is only reachable through this relay, so it trusts the
+// address set here and checks the CAPTCHA itself. Only a user session is relayed:
+// no API key, so no admin identity ever reaches a public route.
+function goTrueAuth(c: Context<MiddlewareKeyVariables>): RelayAuth {
+  const session = c.req.header('authorization') ?? ''
+  const clientIp = getClientIP(c)
+  return {
+    headers: {
+      ...(JWT_BEARER.test(session) ? { authorization: session } : {}),
+      ...(clientIp === 'unknown' ? {} : { 'x-forwarded-for': clientIp }),
+    },
+  }
+}
+
 function captchaToken(body: ArrayBuffer | undefined): string {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(body))
@@ -153,7 +172,9 @@ app.all('/*', async (c) => {
   if (!path)
     return quickError(404, 'unsupported_auth_endpoint', 'Unsupported auth endpoint')
 
-  const upstream = new URL(`${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`)
+  // Hosted Supabase Auth unless this environment binds our own GoTrue.
+  const goTrue = c.env?.GOTRUE
+  const upstream = new URL(goTrue ? `https://gotrue/${path}` : `${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`)
   upstream.search = new URL(c.req.url).search
 
   const headers = new Headers()
@@ -162,17 +183,18 @@ app.all('/*', async (c) => {
     if (value)
       headers.set(name, value)
   }
-  const auth = relayAuth(c)
+  const auth = goTrue ? goTrueAuth(c) : relayAuth(c)
   for (const [name, value] of Object.entries(auth.headers))
     headers.set(name, value)
 
   let body: ArrayBuffer | undefined
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+    const maxBytes = path === 'sso/saml/acs' ? SAML_ACS_MAX_BODY_BYTES : MAX_BODY_BYTES
     // Refuse declared oversize bodies before buffering anything; the read below bounds the rest.
-    if (Number(c.req.header('content-length') ?? 0) > MAX_BODY_BYTES)
+    if (Number(c.req.header('content-length') ?? 0) > maxBytes)
       return quickError(413, 'auth_request_too_large', 'Auth request too large')
     body = await c.req.arrayBuffer()
-    if (body.byteLength > MAX_BODY_BYTES)
+    if (body.byteLength > maxBytes)
       return quickError(413, 'auth_request_too_large', 'Auth request too large')
   }
 
@@ -185,7 +207,8 @@ app.all('/*', async (c) => {
       return captchaFailed(result.errorCodes.join(', ') || 'invalid captcha_token')
   }
 
-  const response = await fetch(upstream, { method: c.req.method, headers, body, redirect: 'manual' })
+  const init: RequestInit = { method: c.req.method, headers, body, redirect: 'manual' }
+  const response = await (goTrue ? goTrue.fetch(upstream, init) : fetch(upstream, init))
   const responseHeaders = new Headers()
   for (const name of RELAYED_RESPONSE_HEADERS) {
     const value = response.headers.get(name)
