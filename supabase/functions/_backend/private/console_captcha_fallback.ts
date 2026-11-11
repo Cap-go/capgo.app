@@ -134,6 +134,7 @@ app.post('/', async (c) => {
   if (emailLimit.limited)
     return simpleRateLimit({ reason: 'captcha_fallback_email_rate_limit', ...buildRateLimitInfo(emailLimit.resetAt) })
 
+  // Count admitted attempts before relay so quota exhaustion cannot reveal account existence.
   await recordCaptchaFallbackRequest(c, email)
 
   let response: Response
