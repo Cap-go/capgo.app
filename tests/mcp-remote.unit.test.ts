@@ -130,8 +130,9 @@ describe('hosted MCP protocol', () => {
       expect(typeof tool.annotations.destructiveHint).toBe('boolean')
       expect(typeof tool.annotations.idempotentHint).toBe('boolean')
       expect(typeof tool.annotations.openWorldHint).toBe('boolean')
-      expect(typeof tool.annotations.title).toBe('string')
-      expect((tool.annotations.title ?? '').length).toBeGreaterThan(0)
+      const title = tool.annotations.title
+      expect(typeof title).toBe('string')
+      expect((title as string).length).toBeGreaterThan(0)
     }
   })
 
