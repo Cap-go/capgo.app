@@ -47,6 +47,31 @@ function bentoApiUrl(path: string, siteUuid: string, query?: Record<string, stri
   return url
 }
 
+export class BentoApiError extends Error {
+  readonly status: number
+  readonly retryAfterSeconds: number | null
+
+  constructor(status: number, retryAfterSeconds: number | null) {
+    super(`Bento API error: ${status}`)
+    this.status = status
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
+function parseRetryAfterSeconds(header: string | null): number | null {
+  if (!header)
+    return null
+  const trimmed = header.trim()
+  const asNumber = Number(trimmed)
+  if (Number.isFinite(asNumber) && asNumber >= 0)
+    return asNumber
+  const asDate = Date.parse(trimmed)
+  if (!Number.isFinite(asDate))
+    return null
+  const deltaSeconds = Math.ceil((asDate - Date.now()) / 1000)
+  return deltaSeconds > 0 ? deltaSeconds : 0
+}
+
 async function readBentoJson(response: Response) {
   if (!response.ok) {
     try {
@@ -55,7 +80,10 @@ async function readBentoJson(response: Response) {
     catch {
       // Preserve the sanitized status error when stream cleanup fails.
     }
-    throw new Error(`Bento API error: ${response.status}`)
+    const retryAfterSeconds = response.status === 429
+      ? parseRetryAfterSeconds(response.headers.get('Retry-After'))
+      : null
+    throw new BentoApiError(response.status, retryAfterSeconds)
   }
 
   try {

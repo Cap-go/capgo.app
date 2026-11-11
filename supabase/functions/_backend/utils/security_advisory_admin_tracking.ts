@@ -3,7 +3,8 @@ import type { Advisory, AdvisoryAffected, AppAdvisoryMatch } from '../../shared/
 import { loadAllAppsReportedPackages } from './app_native_packages.ts'
 import { closeClient, getPgClient } from './pg.ts'
 import { queryJsonOne } from './pg_rls.ts'
-import { loadSecurityAdvisoryBentoEmailStats } from './security_advisory_bento_stats.ts'
+import type { SecurityAdvisoryBentoEmailStats } from './security_advisory_bento_stats.ts'
+import { loadSecurityAdvisoryBentoEmailStatsBatch } from './security_advisory_bento_stats.ts'
 import { loadSecurityAdvisoryFeed } from './security_advisory_feed.ts'
 import { matchAppPackagesToAdvisories } from './security_advisory_matching.ts'
 
@@ -23,7 +24,7 @@ export interface SecurityAdvisoryAdminRow {
   severity: Advisory['severity']
   published_at: string
   packages: AdvisoryAffected[]
-  email: Awaited<ReturnType<typeof loadSecurityAdvisoryBentoEmailStats>>
+  email: SecurityAdvisoryBentoEmailStats
   adoption: AdvisoryAdoptionSummary
 }
 
@@ -170,15 +171,24 @@ export async function buildAdminSecurityUpdatesTracking(
   const adoptionByAdvisory: Record<string, AdvisoryAdoptionSummary> = {}
   const advisories: SecurityAdvisoryAdminRow[] = []
 
-  const advisoryRows = await Promise.all(
-    feed.advisories.map(async (advisory) => {
-      const [email, adoption] = await Promise.all([
-        loadSecurityAdvisoryBentoEmailStats(c, advisory.ghsa_id),
-        Promise.resolve(summarizeAdoptionForAdvisory(advisory, perAppPackages)),
-      ])
-      return { advisory, email, adoption }
-    }),
+  const emailByGhsa = await loadSecurityAdvisoryBentoEmailStatsBatch(
+    c,
+    feed.advisories.map(advisory => advisory.ghsa_id),
   )
+
+  const advisoryRows = feed.advisories.map((advisory) => {
+    const emailKey = advisory.ghsa_id.trim().toUpperCase()
+    const email = emailByGhsa.get(emailKey) ?? {
+      sent: 0,
+      delivered: 0,
+      opened: 0,
+      opt_outs: 0,
+      bento_configured: true,
+      partial: true,
+    }
+    const adoption = summarizeAdoptionForAdvisory(advisory, perAppPackages)
+    return { advisory, email, adoption }
+  })
 
   for (const { advisory, email, adoption } of advisoryRows) {
     adoptionByAdvisory[advisory.ghsa_id] = adoption
