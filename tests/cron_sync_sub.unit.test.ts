@@ -20,6 +20,7 @@ describe('cron_sync_sub resilience', () => {
     vi.doMock('../supabase/functions/_backend/utils/pg.ts', () => ({
       closeClient: vi.fn(),
       getDrizzleClient: vi.fn((client: { readOnly: boolean }) => ({
+        client,
         execute: vi.fn(async () => {
           if (client.readOnly)
             throw Object.assign(new Error('cannot execute UPDATE in a read-only transaction'), { code: '25006' })
@@ -75,6 +76,44 @@ describe('cron_sync_sub resilience', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ status: 'ok' })
     expect(syncSubscriptionAndEvents).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries pg connection drops on a fresh primary client and closes it', async () => {
+    const connectionDrop = Object.assign(new Error('Failed query: UPDATE public.stripe_info SET mau_exceeded = $1'), {
+      name: 'DrizzleQueryError',
+      cause: new Error('Client has encountered a connection error and is not queryable'),
+    })
+    const syncSubscriptionAndEvents = vi.fn()
+      .mockRejectedValueOnce(connectionDrop)
+      .mockResolvedValueOnce(undefined)
+    const response = await runCronSyncSub(syncSubscriptionAndEvents, 'org-pg-drop')
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ status: 'ok' })
+    expect(syncSubscriptionAndEvents).toHaveBeenCalledTimes(2)
+
+    const { closeClient, getPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+    expect(getPgClient).toHaveBeenCalledTimes(2)
+    const [originalClient, freshClient] = await Promise.all(vi.mocked(getPgClient).mock.results.map(r => r.value))
+    expect(syncSubscriptionAndEvents.mock.calls[0][2].client).toBe(originalClient)
+    expect(syncSubscriptionAndEvents.mock.calls[1][2].client).toBe(freshClient)
+    expect(freshClient).not.toBe(originalClient)
+    expect(closeClient).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(closeClient).mock.calls.map(call => call[1])).toEqual(expect.arrayContaining([originalClient, freshClient]))
+  })
+
+  it('closes every fresh client when pg connection drops persist', async () => {
+    const syncSubscriptionAndEvents = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Connection terminated unexpectedly'), { name: 'DrizzleQueryError' }),
+    )
+    const response = await runCronSyncSub(syncSubscriptionAndEvents, 'org-pg-down')
+
+    expect(response.status).toBe(500)
+    expect(syncSubscriptionAndEvents).toHaveBeenCalledTimes(3)
+
+    const { closeClient, getPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
+    expect(getPgClient).toHaveBeenCalledTimes(3)
+    expect(closeClient).toHaveBeenCalledTimes(3)
   })
 
   it('skips stale cron_sync_sub jobs when the org no longer exists', async () => {
