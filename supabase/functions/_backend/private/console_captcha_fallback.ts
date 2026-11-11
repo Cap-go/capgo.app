@@ -155,19 +155,20 @@ app.post('/', async (c) => {
   if (!parsed.success)
     return quickError(400, 'invalid_body', 'Invalid request body')
 
-  const email = normalizeRateLimitAccountIdentifier(parsed.data.email)
+  const authEmail = parsed.data.email.trim()
+  const quotaEmail = normalizeRateLimitAccountIdentifier(parsed.data.email)
   const ipLimit = await isCaptchaFallbackIpRateLimited(c)
   if (ipLimit.limited)
     return simpleRateLimit({ reason: 'captcha_fallback_ip_rate_limit', ...buildRateLimitInfo(ipLimit.resetAt) })
 
-  const emailLimit = await isCaptchaFallbackEmailRateLimited(c, email)
+  const emailLimit = await isCaptchaFallbackEmailRateLimited(c, quotaEmail)
   if (emailLimit.limited)
     return simpleRateLimit({ reason: 'captcha_fallback_email_rate_limit', ...buildRateLimitInfo(emailLimit.resetAt) })
 
   if (parsed.data.purpose === 'magic_link') {
+    let ssoEnforced = false
     try {
-      if (await isEmailDomainSsoEnforced(c, email))
-        return quickError(403, 'sso_enforced', 'SSO is required for this email domain')
+      ssoEnforced = await isEmailDomainSsoEnforced(c, authEmail)
     }
     catch (error) {
       cloudlog({
@@ -177,14 +178,16 @@ app.post('/', async (c) => {
       })
       return quickError(500, 'query_error', 'Failed to check domain')
     }
+    if (ssoEnforced)
+      return quickError(403, 'sso_enforced', 'SSO is required for this email domain')
   }
 
   // Count admitted attempts before relay so quota exhaustion cannot reveal account existence.
-  await recordCaptchaFallbackRequest(c, email)
+  await recordCaptchaFallbackRequest(c, quotaEmail)
 
   let response: Response
   try {
-    response = await relayCaptchaFallbackAuth(c, parsed.data.purpose, email, parsed.data.redirect_to)
+    response = await relayCaptchaFallbackAuth(c, parsed.data.purpose, authEmail, parsed.data.redirect_to)
   }
   catch (error) {
     cloudlog({

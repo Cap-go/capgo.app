@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { HTTPException } from 'hono/http-exception'
 import * as rateLimitModule from '../supabase/functions/_backend/utils/rate_limit.ts'
 import * as domainEnforcementModule from '../supabase/functions/_backend/private/sso/domain-enforcement.ts'
 import { app } from '../supabase/functions/_backend/private/console_captcha_fallback'
@@ -6,14 +7,25 @@ import { app } from '../supabase/functions/_backend/private/console_captcha_fall
 const fetchMock = vi.fn()
 let env: Record<string, string> = {}
 
-vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => ({
-  ...await importOriginal<typeof import('../supabase/functions/_backend/utils/hono.ts')>(),
-  quickError: (status: number, error: string, message?: string, moreInfo?: Record<string, unknown>) =>
-    Response.json({ error, message, moreInfo }, { status }),
-}))
+vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => {
+  const original = await importOriginal<typeof import('../supabase/functions/_backend/utils/hono.ts')>()
+  return { ...original }
+})
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: (_c: unknown, key: string) => env[key] ?? '',
 }))
+
+app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    const cause = err.cause as { error?: string, message?: string, moreInfo?: Record<string, unknown> } | undefined
+    return c.json({
+      error: cause?.error ?? 'error',
+      message: cause?.message ?? err.message,
+      moreInfo: cause?.moreInfo ?? {},
+    }, err.status)
+  }
+  throw err
+})
 
 beforeEach(() => {
   env = {
@@ -100,6 +112,21 @@ describe('console captcha fallback', () => {
     const payload = await response.json() as { error?: string }
     expect(payload.error).toBe('sso_enforced')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('relays the submitted email to auth while rate limits use normalized quota keys', async () => {
+    const recordSpy = vi.spyOn(rateLimitModule, 'recordCaptchaFallbackRequest')
+    const submitted = 'John.Doe+promo@gmail.com'
+
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({ email: submitted, purpose: 'magic_link' }),
+    })
+    expect(response.status).toBe(200)
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body)).email).toBe(submitted)
+    expect(recordSpy).toHaveBeenCalledWith(expect.anything(), 'johndoe@gmail.com')
   })
 
   it('records quota before relaying to auth', async () => {
