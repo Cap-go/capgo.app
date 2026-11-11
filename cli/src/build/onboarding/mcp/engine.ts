@@ -19,7 +19,7 @@ import { extractDeveloperId } from '../android/play-api.js'
 import { getIosResumeStep } from '../ios/progress.js'
 import { TAIL_INPUT_KEYS, validateIosStepInput, validateStepInput, validateStorePassword, validateTailStepInput } from './step-input.js'
 import { androidViewForStep, applyAndroidInput, applyGoogleSignInBroker, runAndroidEffect } from '../android/flow.js'
-import { applyIosInput, iosViewForStep, runIosEffect } from '../ios/flow.js'
+import { applyIosInput, iosNeedsAscKeyForSave, iosViewForStep, runIosEffect } from '../ios/flow.js'
 import { applyTailInput, tailViewForStep } from '../tail/flow.js'
 import { clearSession, clearSessionCarried, dropIosCarried, getAppflowProgress, getResumeResolvedFor, getSession, getSessionPlatform, mergeIosCarried, mergeTailCarried, setAppflowGate, setAppflowProgress, setResumeResolvedFor, setSessionPlatform, setTailParked } from './session-state.js'
 import { slimAndroidTailProgress, slimIosTailProgress } from './tail-progress.js'
@@ -327,7 +327,7 @@ function iosApiKeyGateResult(facts: PreflightFacts): NextStepResult {
     kind: 'human_gate',
     summary: `Set up iOS signing for "${facts.appId}". I need an App Store Connect API key.`,
     human: {
-      instruction: 'In App Store Connect go to Users and Access, Integrations, App Store Connect API, create a key with App Manager access and download the .p8 (you can only download it once). Then give me the Key ID, the Issuer ID, and the path to the .p8 file. The .p8 stays on your machine — do not paste its contents here.',
+      instruction: `In App Store Connect go to Users and Access, Integrations, App Store Connect API, create a key with App Manager access and download the .p8 (you can only download it once). Copy the .p8 into this project directory, then give me the Key ID, the Issuer ID, and that path. ${MCP_IN_PROJECT_PATH_HINT} Do not paste file contents here.`,
     },
     collect: [
       { field: 'keyId', desc: 'the Key ID shown next to the key' },
@@ -455,7 +455,7 @@ function iosCredentialsFailedResult(facts: PreflightFacts, message: string): Nex
     progress: 25,
     kind: 'human_gate',
     summary: `iOS signing setup failed: ${message}`,
-    human: { instruction: 'This often means the API key lacks access, the .p8 moved, or Apple\'s certificate limit was hit. Provide corrected Key ID / Issuer ID / .p8 path, then continue.' },
+    human: { instruction: `This often means the API key lacks access, the .p8 moved, or Apple's certificate limit was hit. Copy a corrected .p8 into the project if needed. ${MCP_IN_PROJECT_PATH_HINT} Then provide Key ID, Issuer ID, and .p8 path, or continue.` },
     collect: [
       { field: 'keyId', desc: 'the Key ID' },
       { field: 'issuerId', desc: 'the Issuer ID' },
@@ -1277,7 +1277,6 @@ export async function decideIos(
         step,
         kind: 'input',
         title: 'Use a .mobileprovision file from disk.',
-        prompt: 'Absolute path to the .mobileprovision file:',
         collect: ['profilePath'],
       }, facts, ctx)
     }
@@ -1315,7 +1314,8 @@ export async function decideIos(
       // after a server restart re-read them from the persisted p8Path — the
       // same self-heal resolveP8Content performs for verifying-key.
       const readP8 = ios.readMcpP8 ?? ios.readFile
-      if (step === 'saving-credentials' && !session.iosCarried.p8Content && progress.p8Path && readP8)
+      const needsAscKey = iosNeedsAscKeyForSave(progress)
+      if (step === 'saving-credentials' && needsAscKey && !session.iosCarried.p8Content && progress.p8Path && readP8)
         mergeIosCarried(appId, { p8Content: await readP8(progress.p8Path) })
 
       const isTailEffectStep = MCP_TAIL_EFFECT_STEPS.has(step)
@@ -1693,7 +1693,7 @@ export function mapAndroidView(
         ...base,
         kind: 'human_gate',
         summary: 'Point me to your existing Android keystore.',
-        collect: [{ field: 'keystorePath', desc: `path to your keystore inside this project (.jks, .keystore, or .p12 — for example ./credentials/release.jks). ${MCP_IN_PROJECT_PATH_HINT}` }],
+        collect: [{ field: 'keystorePath', desc: `path to your keystore inside this project (.jks, .keystore, or .p12, for example ./credentials/release.jks). ${MCP_IN_PROJECT_PATH_HINT}` }],
         human: { instruction: 'Copy the keystore into the project directory, then give me that path.' },
         next: {
           tool: NEXT_STEP_TOOL,
@@ -3153,12 +3153,12 @@ function mapTailView(
       const defaultPath = renderDeps.defaultExportPath?.(appId, platform) ?? viewCtx.defaultEnvExportPath
       return {
         ...base,
-        summary: `${view.prompt ?? 'Export the credentials as a .env file instead?'}${defaultPath ? ` Default path: ${defaultPath}.` : ''} The file is written locally with 0600 permissions — never commit it.`,
+        summary: `${view.prompt ?? 'Export the credentials as a .env file instead?'}${defaultPath ? ` Default path: ${defaultPath}.` : ''} The file is written locally with 0600 permissions. Never commit it. A custom envExportPath must stay inside the project directory.`,
         ...(defaultPath ? { context: { defaultPath } } : {}),
         next: {
           tool: NEXT_STEP_TOOL,
-          with: { exportEnvAction: '<yes|no>', envExportPath: '<optional custom path with "yes">' },
-          instruction: `Ask the user. To write the .env file call next_step with exportEnvAction "yes"${defaultPath ? ` (defaults to ${defaultPath}; add envExportPath for a custom location)` : ' (add envExportPath for a custom location)'}; "no" finishes without exporting.`,
+          with: { exportEnvAction: '<yes|no>', envExportPath: '<optional in-project path with "yes">' },
+          instruction: `Ask the user. To write the .env file call next_step with exportEnvAction "yes"${defaultPath ? ` (defaults to ${defaultPath}; add envExportPath only for another path inside the project)` : ' (add envExportPath only for a path inside the project)'}. "no" finishes without exporting.`,
           call: `${NEXT_STEP_TOOL}({ exportEnvAction: "yes" })`,
         },
       }

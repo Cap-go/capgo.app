@@ -984,6 +984,17 @@ await test('decideIos: API key inputs present, not verified → granular chain r
   eq(r.state, 'build-ready')
 })
 
+await test('iosNeedsAscKeyForSave: import ad_hoc is false even when p8Path is set', async () => {
+  const { iosNeedsAscKeyForSave } = await import('../src/build/onboarding/ios/flow.ts')
+  const progress = iosProgressFixture({
+    setupMethod: 'import-existing',
+    importDistribution: 'ad_hoc',
+    p8Path: MCP_FIXTURE_P8,
+  })
+  ok(!iosNeedsAscKeyForSave(progress), 'ad_hoc import must not require ASC key at save')
+  ok(iosNeedsAscKeyForSave(iosProgressFixture({ setupMethod: 'import-existing', importDistribution: 'app_store', p8Path: MCP_FIXTURE_P8 })), 'app_store import still needs ASC key')
+})
+
 await test('decideIos: cert + profile markers persisted → saving-credentials tail → offers first build', async () => {
   clearIosSessions()
   const deps = iosDeps()

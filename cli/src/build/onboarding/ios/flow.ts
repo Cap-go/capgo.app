@@ -33,7 +33,6 @@
 import type { Buffer } from 'node:buffer'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { ScopedCredentialPathError } from '../mcp/scoped-credential-path.js'
 import type { AscApp, AscDistributionCert, AscProfileSummary } from '../apple-api.js'
 import type {
   ApiKeyData,
@@ -864,6 +863,12 @@ const TAIL_INPUT_STEPS = new Set<OnboardingStep>([
  * secret .p8 bytes come from the transient `carried.p8Content` (NEVER persisted);
  * the non-secret key/issuer ids come from persisted progress.keyId/issuerId.
  */
+/** Whether saving-credentials must resolve the ASC .p8 (create-new and import app_store). */
+export function iosNeedsAscKeyForSave(progress: OnboardingProgress): boolean {
+  const isImport = progress.setupMethod === 'import-existing'
+  return !isImport || progress.importDistribution === 'app_store'
+}
+
 async function buildIosSavedCredentials(progress: OnboardingProgress, deps: IosEffectDeps): Promise<Record<string, string>> {
   const carried = deps.carried
   const certData = carried?.certData ?? progress.completedSteps.certificateCreated
@@ -914,7 +919,7 @@ async function buildIosSavedCredentials(progress: OnboardingProgress, deps: IosE
   // p8ContentRef. APPLE_KEY_ID / APPLE_ISSUER_ID are non-secret Apple identifiers
   // read from persisted progress.keyId / progress.issuerId (with the
   // apiKeyVerified mirror as the resume-hydrated fallback, matching the TUI refs).
-  const needsAscKey = !isImport || progress.importDistribution === 'app_store'
+  const needsAscKey = iosNeedsAscKeyForSave(progress)
   let keyContent = carried?.p8Content
   // Crash recovery (hostile-review blocker, 2026-06-12): a resume that lost the
   // carried bytes (fresh mount) re-reads the .p8 from the persisted p8Path via
@@ -927,7 +932,7 @@ async function buildIosSavedCredentials(progress: OnboardingProgress, deps: IosE
       keyContent = await readP8(progress.p8Path)
     }
     catch (err) {
-      if (err instanceof ScopedCredentialPathError)
+      if (err instanceof Error && err.name === 'ScopedCredentialPathError')
         throw err
       // Unreadable .p8 (moved/deleted) — fall through to the refuse guard below.
     }
@@ -3099,21 +3104,37 @@ export async function runIosEffect(
           return iosError(progress, msg, 'import-provide-profile-path', { profilePickerOpened: true })
         }
 
-        // All checks pass — synthesize a DiscoveredProfile (preserving the on-disk
-        // path so import-exporting reads the bytes directly) and inject it into the
-        // chosen identity's match so import-pick-profile lists it (app.tsx:1758–1772).
-        const synthesized: DiscoveredProfile = {
-          path: filePath,
-          uuid: detail.uuid,
-          name: detail.name,
-          applicationIdentifier: detail.applicationIdentifier,
-          bundleId: detail.bundleId,
-          teamId: chosenIdentity.teamId,
-          expirationDate: detail.expirationDate,
-          profileType: detail.profileType as DiscoveredProfile['profileType'],
-          certificateSha1s: detail.certificateSha1s,
-          profileEntitlements: detail.profileEntitlements,
-        }
+        // All checks pass: synthesize a DiscoveredProfile. MCP manual-path reads
+        // are scoped and may not be re-read at export time (TOCTOU); carry the bytes
+        // as profileBase64 with an empty path, same as the D2 Apple-API profile arm.
+        // Keychain scan profiles keep a real path and are read at export time.
+        const profileBase64 = bytes.toString('base64')
+        const synthesized = (deps.readMcpMobileprovision
+          ? {
+              path: '',
+              uuid: detail.uuid,
+              name: detail.name,
+              applicationIdentifier: detail.applicationIdentifier,
+              bundleId: detail.bundleId,
+              teamId: chosenIdentity.teamId,
+              expirationDate: detail.expirationDate,
+              profileType: detail.profileType as DiscoveredProfile['profileType'],
+              certificateSha1s: detail.certificateSha1s,
+              profileEntitlements: detail.profileEntitlements,
+              profileBase64,
+            }
+          : {
+              path: filePath,
+              uuid: detail.uuid,
+              name: detail.name,
+              applicationIdentifier: detail.applicationIdentifier,
+              bundleId: detail.bundleId,
+              teamId: chosenIdentity.teamId,
+              expirationDate: detail.expirationDate,
+              profileType: detail.profileType as DiscoveredProfile['profileType'],
+              certificateSha1s: detail.certificateSha1s,
+              profileEntitlements: detail.profileEntitlements,
+            }) as DiscoveredProfile & { profileBase64?: string }
         const matches = deps.carried?.importMatches ?? []
         const injectedMatches = matches.map(m => m.identity.sha1 === chosenIdentity.sha1
           ? { ...m, profiles: [...m.profiles, synthesized] }
@@ -3304,14 +3325,15 @@ export async function runIosEffect(
           teamId: chosenIdentity.teamId,
           p12Base64: exported.base64,
         }
-        // chosenProfile.path empty ⇒ synthesized Apple-API profile carries the
-        // .mobileprovision bytes on the structural cast; otherwise read from disk.
-        // deps.readFile resolves to a Buffer (matching macos-signing's readFile),
-        // so encode it directly — no `Buffer.from` value needed (the module imports
-        // Buffer as a TYPE only, keeping the engine value-import-free).
-        const profileBase64 = chosenProfile.path
-          ? (await deps.readFile!(chosenProfile.path)).toString('base64')
-          : (chosenProfile as DiscoveredProfile & { profileBase64?: string }).profileBase64 || ''
+        // profileBase64 on the structural cast wins (MCP manual-path + D2 Apple-API
+        // profiles). Only Keychain-scanned on-disk profiles (path set, no bytes)
+        // are read at export time via deps.readFile, never a second scoped read.
+        const carriedBytes = (chosenProfile as DiscoveredProfile & { profileBase64?: string }).profileBase64
+        const profileBase64 = carriedBytes
+          ? carriedBytes
+          : chosenProfile.path
+            ? (await deps.readFile!(chosenProfile.path)).toString('base64')
+            : ''
         const profileData: ProfileData = {
           profileId: chosenProfile.uuid,
           profileName: chosenProfile.name,
