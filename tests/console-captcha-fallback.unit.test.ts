@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as rateLimitModule from '../supabase/functions/_backend/utils/rate_limit.ts'
+import * as domainEnforcementModule from '../supabase/functions/_backend/private/sso/domain-enforcement.ts'
 import { app } from '../supabase/functions/_backend/private/console_captcha_fallback'
 
 const fetchMock = vi.fn()
@@ -23,9 +25,13 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
   fetchMock.mockReset()
   fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
+  vi.spyOn(domainEnforcementModule, 'isEmailDomainSsoEnforced').mockResolvedValue(false)
 })
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 describe('console captcha fallback', () => {
   it('rejects without captcha secret configured', async () => {
@@ -36,6 +42,26 @@ describe('console captcha fallback', () => {
       body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
     })
     expect(response.status).toBe(503)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects requests with a missing Origin header', async () => {
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
+    })
+    expect(response.status).toBe(403)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects requests with a disallowed Origin header', async () => {
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
+    })
+    expect(response.status).toBe(403)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -59,6 +85,76 @@ describe('console captcha fallback', () => {
     expect(headers.get('apikey')).toBe('sb_secret_test')
     expect(headers.get('sb-forwarded-for')).toBe('203.0.113.50')
     expect(JSON.parse(String(init.body))).toEqual({ email: 'user@example.com', create_user: false, data: {} })
+  })
+
+  it('refuses magic link when SSO is enforced for the email domain', async () => {
+    vi.mocked(domainEnforcementModule.isEmailDomainSsoEnforced).mockResolvedValueOnce(true)
+
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({ email: 'user@sso-org.com', purpose: 'magic_link' }),
+    })
+
+    expect(response.status).toBe(403)
+    const payload = await response.json() as { error?: string }
+    expect(payload.error).toBe('sso_enforced')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('records quota before relaying to auth', async () => {
+    const recordSpy = vi.spyOn(rateLimitModule, 'recordCaptchaFallbackRequest')
+    const recordOrder: string[] = []
+    recordSpy.mockImplementation(async () => {
+      recordOrder.push('record')
+    })
+    fetchMock.mockImplementation(async () => {
+      recordOrder.push('fetch')
+      return new Response('{}', { status: 200 })
+    })
+
+    await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
+    })
+
+    expect(recordOrder).toEqual(['record', 'fetch'])
+  })
+
+  it('replaces recover redirect_to when origin is not the console webapp', async () => {
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({
+        email: 'user@example.com',
+        purpose: 'recover',
+        redirect_to: 'https://evil.example/steal',
+      }),
+    })
+    expect(response.status).toBe(200)
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(String(url)).toContain('redirect_to=')
+    expect(decodeURIComponent(String(url))).toContain('https://console.capgo.app/forgot_password?step=2')
+    expect(decodeURIComponent(String(url))).not.toContain('evil.example')
+  })
+
+  it('keeps recover redirect_to when origin matches the console webapp', async () => {
+    const allowed = 'https://console.capgo.app/forgot_password?step=2&foo=bar'
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({
+        email: 'user@example.com',
+        purpose: 'recover',
+        redirect_to: allowed,
+      }),
+    })
+    expect(response.status).toBe(200)
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(decodeURIComponent(String(url))).toContain(allowed)
   })
 
   it('returns operational failure for invalid relay credentials', async () => {

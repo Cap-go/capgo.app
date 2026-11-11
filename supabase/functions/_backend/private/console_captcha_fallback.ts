@@ -13,6 +13,7 @@ import {
   recordCaptchaFallbackRequest,
 } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
+import { isEmailDomainSsoEnforced } from './sso/domain-enforcement.ts'
 
 const BRES = { status: 'ok' as const }
 
@@ -31,7 +32,7 @@ function trimTrailingSlashes(value: string) {
 
 function consoleOriginAllowed(c: Context<MiddlewareKeyVariables>, origin: string | undefined): boolean {
   if (!origin)
-    return true
+    return false
   try {
     const requestOrigin = new URL(origin).origin
     const allowed = new Set<string>()
@@ -61,6 +62,34 @@ function consoleOriginAllowed(c: Context<MiddlewareKeyVariables>, origin: string
   }
   catch {
     return false
+  }
+}
+
+function resolveRecoverRedirectTo(c: Context<MiddlewareKeyVariables>, redirectTo?: string): string | undefined {
+  const webapp = getEnv(c, 'WEBAPP_URL').trim()
+  if (!webapp)
+    return undefined
+
+  let webappOrigin: string
+  try {
+    webappOrigin = new URL(webapp).origin
+  }
+  catch {
+    return undefined
+  }
+
+  const defaultRedirect = `${trimTrailingSlashes(webapp)}/forgot_password?step=2`
+  if (!redirectTo)
+    return defaultRedirect
+
+  try {
+    const candidate = new URL(redirectTo)
+    if (candidate.origin !== webappOrigin)
+      return defaultRedirect
+    return candidate.href
+  }
+  catch {
+    return defaultRedirect
   }
 }
 
@@ -95,8 +124,9 @@ async function relayCaptchaFallbackAuth(
   }
   if (purpose === 'recover') {
     const upstream = new URL(`${base}/recover`)
-    if (redirectTo)
-      upstream.searchParams.set('redirect_to', redirectTo)
+    const safeRedirect = resolveRecoverRedirectTo(c, redirectTo)
+    if (safeRedirect)
+      upstream.searchParams.set('redirect_to', safeRedirect)
     return await fetch(upstream, {
       method: 'POST',
       headers,
@@ -133,6 +163,21 @@ app.post('/', async (c) => {
   const emailLimit = await isCaptchaFallbackEmailRateLimited(c, email)
   if (emailLimit.limited)
     return simpleRateLimit({ reason: 'captcha_fallback_email_rate_limit', ...buildRateLimitInfo(emailLimit.resetAt) })
+
+  if (parsed.data.purpose === 'magic_link') {
+    try {
+      if (await isEmailDomainSsoEnforced(c, email))
+        return quickError(403, 'sso_enforced', 'SSO is required for this email domain')
+    }
+    catch (error) {
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'captcha fallback SSO enforcement check failed',
+        error,
+      })
+      return quickError(500, 'query_error', 'Failed to check domain')
+    }
+  }
 
   // Count admitted attempts before relay so quota exhaustion cannot reveal account existence.
   await recordCaptchaFallbackRequest(c, email)

@@ -12,6 +12,7 @@ import { requestConsoleCaptchaFallbackEmail } from '~/services/consoleCaptchaFal
 import { getEmailOtpSendErrorMessage, getRecentEmailOtpVerification, parseEmailOtpSendError, sendEmailOtpVerification, verifyEmailOtp } from '~/services/emailOtp'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
+import { CONSOLE_CAPTCHA_INIT_TIMEOUT_MS } from '~/utils/consoleTurnstileCaptcha'
 import { rules, validateField } from '~/utils/formValidation'
 import { validateRedirectPath } from '~/utils/safeRedirect'
 import { safeResetTurnstile } from '~/utils/turnstile'
@@ -91,7 +92,7 @@ watch(otpCaptchaRef, (widget) => {
   otpCaptchaInitTimeout = setTimeout(() => {
     if (!otpCaptchaToken.value && !(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile)
       handleOtpCaptchaUnavailable()
-  }, 8000)
+  }, CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
 })
 
 watch(otpCaptchaToken, (token) => {
@@ -133,7 +134,7 @@ function scheduleResendCaptchaInitTimeout() {
   resendCaptchaInitTimeout = setTimeout(() => {
     if (!resendCaptchaToken.value && !(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile)
       handleResendCaptchaUnavailable()
-  }, 8000)
+  }, CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
 }
 
 watch(resendCaptchaRef, scheduleResendCaptchaInitTimeout)

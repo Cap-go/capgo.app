@@ -70,8 +70,27 @@ async function hashIdentifier(identifier: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest))
 }
 
+const GMAIL_RATE_LIMIT_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
+
 export function normalizeRateLimitAccountIdentifier(identifier: string): string {
-  return identifier.trim().toLowerCase()
+  const normalized = identifier.trim().toLowerCase()
+  const at = normalized.lastIndexOf('@')
+  if (at <= 0)
+    return normalized
+
+  let local = normalized.slice(0, at)
+  let domain = normalized.slice(at + 1)
+
+  const plus = local.indexOf('+')
+  if (plus >= 0)
+    local = local.slice(0, plus)
+
+  if (GMAIL_RATE_LIMIT_DOMAINS.has(domain)) {
+    local = local.replaceAll('.', '')
+    domain = 'gmail.com'
+  }
+
+  return `${local}@${domain}`
 }
 
 async function getAccountRateLimitKey(identifier: string): Promise<string | null> {
