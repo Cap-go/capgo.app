@@ -190,6 +190,8 @@ export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext
           name: 'capgo',
           title: 'Capgo',
           version,
+          description: 'Manage Capacitor app releases with Capgo: upload and deploy live update bundles, control channels and progressive rollouts, inspect devices and app health, run native builds, manage organizations, webhooks and push notifications, and search documentation.',
+          icons: [{ src: 'https://capgo.app/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'] }],
           websiteUrl: 'https://capgo.app',
         },
         instructions: SERVER_INSTRUCTIONS,

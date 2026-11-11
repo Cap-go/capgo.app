@@ -98,7 +98,19 @@ describe('hosted MCP protocol', () => {
   it.concurrent('negotiates the protocol version on initialize', async () => {
     const { ctx } = fakeContext()
     const latest = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }, ctx)
-    expect(latest?.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'capgo' } })
+    expect(latest?.result).toMatchObject({
+      protocolVersion: '2025-06-18',
+      capabilities: { tools: { listChanged: false }, events: { list: true, subscribe: true, unsubscribe: true } },
+      serverInfo: {
+        name: 'capgo',
+        title: 'Capgo',
+        version: expect.any(String),
+        websiteUrl: 'https://capgo.app',
+        description: expect.stringContaining('upload and deploy live update bundles'),
+        icons: [{ src: 'https://capgo.app/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'] }],
+      },
+      instructions: expect.stringContaining('Start with capgo_whoami and capgo_list_apps'),
+    })
     const unknown = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } }, ctx)
     expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION })
   })
