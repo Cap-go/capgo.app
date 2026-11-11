@@ -66,6 +66,12 @@ native builds, and stats:
 
 Per-agent setup instructions are at [capgo.app/agents](https://capgo.app/agents/).
 
+### Hosted MCP: accurate tool hints and read-only build status
+
+OpenAI and other remote MCP clients rely on tool annotations (`readOnlyHint`, `destructiveHint`) to decide when to ask for confirmation. The hosted server at `https://api.capgo.app/mcp` now documents bundle upload and credentials upload as destructive, and polls native cloud build status through a read-only path that does not sync `build_requests`, record build minutes, cancel timed-out jobs, or emit webhooks. HTTP `/build/status` and the CLI still persist on every poll.
+
+When a hosted MCP poll sees a job still `running` past the app's configured timeout, the payload includes `timeout_exceeded` and `timeout_warning` so agents can call `capgo_cancel_build` or wait for Capgo reconciliation instead of polling indefinitely. See [Capgo MCP docs](https://capgo.app/docs/ai/mcp/). Website documentation updates for hosted build polling are tracked in [Cap-go/website](https://github.com/Cap-go/website) and may lag this repository until published.
+
 ## Features
 
 - ☁️ Cloud / Self hosted Support: Use our [Cloud](https://capgo.app/) to manage
