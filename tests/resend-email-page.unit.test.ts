@@ -6,6 +6,7 @@ import { createApp, defineComponent, h, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import messages from '../messages/en.json'
 import ResendEmailPage from '../src/pages/resend_email.vue'
+import { CONSOLE_CAPTCHA_INIT_TIMEOUT_MS } from '../src/utils/consoleTurnstileCaptcha'
 
 const mocks = vi.hoisted(() => ({
   route: { query: {} as Record<string, string> },
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   sendEmailOtpVerification: vi.fn(),
   verifyEmailOtp: vi.fn(),
   resetCaptcha: vi.fn(),
+  captchaFallback: vi.fn(async (_email: string, _purpose: string) => ({ data: { status: 'ok' }, error: null })),
   toast: { success: vi.fn(), error: vi.fn() },
 }))
 
@@ -35,6 +37,9 @@ vi.mock('~/services/emailOtp', async importOriginal => ({
   getRecentEmailOtpVerification: mocks.getRecentEmailOtpVerification,
   sendEmailOtpVerification: mocks.sendEmailOtpVerification,
   verifyEmailOtp: mocks.verifyEmailOtp,
+}))
+vi.mock('~/services/consoleCaptchaFallback', () => ({
+  requestConsoleCaptchaFallbackEmail: mocks.captchaFallback,
 }))
 vi.mock('~/components/VueTurnstile.vue', () => ({
   default: defineComponent({
@@ -161,7 +166,7 @@ describe('progressive email verification', () => {
     const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {})
     vi.useFakeTimers()
     const container = await mountOtpPage()
-    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
     await nextTick()
     expect(container.textContent).toContain(messages['captcha-unavailable'])
     expect(button(container, messages['email-otp-send-code']).disabled).toBe(true)
@@ -373,15 +378,16 @@ describe('email confirmation CAPTCHA', () => {
     expect(mocks.main.awaitInitialLoad).not.toHaveBeenCalled()
   })
 
-  it('requires CAPTCHA before resending a signup confirmation', async () => {
+  it('blocks resend while Turnstile is still loading', async () => {
     const container = await mountPage()
     await submitResend()
 
-    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['login-captcha-verifying']))
     expect(mocks.resend).not.toHaveBeenCalled()
+    expect(mocks.captchaFallback).not.toHaveBeenCalled()
   })
 
-  it.each(['error', 'unsupported'])('allows the server to handle resend when CAPTCHA emits %s', async (event) => {
+  it.each(['error', 'unsupported'])('uses captcha fallback when CAPTCHA emits %s', async (event) => {
     const container = await mountPage()
     await completeCaptcha(container)
     button(container, `CAPTCHA ${event}`).click()
@@ -391,38 +397,37 @@ describe('email confirmation CAPTCHA', () => {
 
     await submitResend()
     await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledOnce())
-    expect(mocks.resend).toHaveBeenCalledWith({
-      type: 'signup',
-      email: 'confirmation-test@example.com',
-      options: { captchaToken: undefined },
-    })
+    expect(mocks.captchaFallback).toHaveBeenCalledWith('confirmation-test@example.com', 'resend_signup')
+    expect(mocks.resend).not.toHaveBeenCalled()
   })
 
-  it('allows submitting after the CAPTCHA script fails to initialize', async () => {
+  it('uses captcha fallback after the CAPTCHA script fails to initialize', async () => {
     vi.useFakeTimers()
     const container = await mountPage()
-    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
     await nextTick()
     expect(container.textContent).toContain(messages['captcha-resend-unavailable'])
     vi.useRealTimers()
 
     await submitResend()
     await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledOnce())
-    expect(mocks.resend).toHaveBeenCalledWith(expect.objectContaining({ options: { captchaToken: undefined } }))
+    expect(mocks.captchaFallback).toHaveBeenCalledWith('confirmation-test@example.com', 'resend_signup')
+    expect(mocks.resend).not.toHaveBeenCalled()
   })
 
-  it('keeps requiring a challenge once Turnstile has initialized', async () => {
+  it('keeps blocking submit once Turnstile has initialized without a token', async () => {
     vi.stubGlobal('turnstile', {})
     vi.useFakeTimers()
     const container = await mountPage()
-    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(CONSOLE_CAPTCHA_INIT_TIMEOUT_MS)
     await nextTick()
     expect(container.textContent).not.toContain(messages['captcha-resend-unavailable'])
     vi.useRealTimers()
 
     await submitResend()
-    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['login-captcha-verifying']))
     expect(mocks.resend).not.toHaveBeenCalled()
+    expect(mocks.captchaFallback).not.toHaveBeenCalled()
   })
 
   it('restores normal CAPTCHA requirements when an unavailable widget recovers', async () => {
@@ -436,7 +441,7 @@ describe('email confirmation CAPTCHA', () => {
     await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledOnce())
     expect(mocks.resend).toHaveBeenCalledWith(expect.objectContaining({ options: { captchaToken: 'recovered-captcha-token' } }))
     await submitResend()
-    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['login-captcha-verifying']))
     expect(mocks.resend).toHaveBeenCalledOnce()
   })
 
@@ -447,7 +452,7 @@ describe('email confirmation CAPTCHA', () => {
     await nextTick()
     await submitResend()
 
-    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['login-captcha-verifying']))
     expect(mocks.resend).not.toHaveBeenCalled()
   })
 
@@ -477,7 +482,7 @@ describe('email confirmation CAPTCHA', () => {
     expect(mocks.toast.error.mock.invocationCallOrder[0]).toBeLessThan(mocks.resetCaptcha.mock.invocationCallOrder[0])
 
     await submitResend()
-    await vi.waitFor(() => expect(container.textContent).toContain(messages['captcha-required']))
+    await vi.waitFor(() => expect(container.textContent).toContain(messages['login-captcha-verifying']))
     expect(mocks.resend).toHaveBeenCalledOnce()
 
     await completeCaptcha(container, 'retry-captcha-token')
