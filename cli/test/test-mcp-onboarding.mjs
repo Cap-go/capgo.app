@@ -9,6 +9,7 @@ const MCP_TEST_APP_ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-mcp-onb
 const MCP_FIXTURE_SA = join(MCP_TEST_APP_ROOT, 'creds', 'sa.json')
 const MCP_FIXTURE_SA_BAD = join(MCP_TEST_APP_ROOT, 'creds', 'bad.json')
 const MCP_FIXTURE_P8 = join(MCP_TEST_APP_ROOT, 'AuthKey.p8')
+const MCP_FIXTURE_KEYSTORE = join(MCP_TEST_APP_ROOT, 'creds', 'x.p12')
 
 function ensureMcpOnboardingFixtureFiles() {
   mkdirSync(join(MCP_TEST_APP_ROOT, 'creds'), { recursive: true })
@@ -22,12 +23,14 @@ function ensureMcpOnboardingFixtureFiles() {
   writeFileSync(MCP_FIXTURE_SA, saBody)
   writeFileSync(MCP_FIXTURE_SA_BAD, saBody)
   writeFileSync(MCP_FIXTURE_P8, '-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n')
+  writeFileSync(MCP_FIXTURE_KEYSTORE, Buffer.from([0x30, 0x82, 0x01, 0x00]))
 }
 ensureMcpOnboardingFixtureFiles()
 
 console.log('🧪 Testing MCP Builder onboarding...\n')
 
 const { renderResult, ONBOARDING_RULES } = await import('../src/build/onboarding/mcp/contract.ts')
+const { readScopedMcpCredentialFile } = await import('../src/build/onboarding/mcp/scoped-credential-path.ts')
 const { clearAllSessions } = await import('../src/build/onboarding/mcp/session-state.ts')
 
 let pass = 0
@@ -1653,6 +1656,7 @@ function makeKeystorePersistDeps(initialProgress = null) {
     loadAndroidProgress: async (_appId) => _progress,
     deleteAndroidProgress: async () => { _progress = null },
     readFile: async () => Buffer.from('{"type":"service_account"}'),
+    readMcpKeystore: (path) => readScopedMcpCredentialFile(path, 'keystore', MCP_TEST_APP_ROOT),
   }
   const deps = {
     ...minimalFakeDeps(),
@@ -1684,7 +1688,7 @@ await test('A3: persistAndroidInput({ keystoreMethod:"generate" }) → progress.
 })
 
 // A3 test 2: keystorePath is recorded into progress (existing sub-flow)
-await test('A3: persistAndroidInput({ keystorePath:"/tmp/x.p12" }) → progress.keystoreExistingPath==="/tmp/x.p12"', async () => {
+await test('A3: persistAndroidInput({ keystorePath:"creds/x.p12" }) → progress.keystoreExistingPath==="creds/x.p12"', async () => {
   const appId = 'com.test.app'
   const deps = makeKeystorePersistDeps({
     platform: 'android',
@@ -1693,10 +1697,10 @@ await test('A3: persistAndroidInput({ keystorePath:"/tmp/x.p12" }) → progress.
     keystoreMethod: 'existing',
     completedSteps: {},
   })
-  await runAdvance(deps, { keystorePath: '/tmp/x.p12' })
+  await runAdvance(deps, { keystorePath: 'creds/x.p12' })
   const saved = deps._getProgress()
   ok(saved !== null, 'progress must be saved')
-  eq(saved.keystoreExistingPath, '/tmp/x.p12', `expected keystoreExistingPath=/tmp/x.p12, got ${saved.keystoreExistingPath}`)
+  eq(saved.keystoreExistingPath, 'creds/x.p12', `expected keystoreExistingPath=creds/x.p12, got ${saved.keystoreExistingPath}`)
 })
 
 // A3 test 3: keystoreNewAlias is recorded → progress.keystoreAlias via keystore-new-alias handler
@@ -1756,6 +1760,7 @@ function makeRealKeystoreDeps(overrides = {}) {
     readFile: async (path) => {
       return fsReadFile(path)
     },
+    readMcpKeystore: (path) => readScopedMcpCredentialFile(path, 'keystore', tmpDir),
     copyFile: async () => {},
 
     runOAuthFlow: async () => { throw new Error('runOAuthFlow must not be called') },
@@ -1915,12 +1920,12 @@ await test('A4: provide path → drive keystoreMethod:existing with real .p12 �
     keyPassword: storePassword, // same key and store pw (probe succeeds)
     dname: { commonName: 'com.x' },
   })
-  const tmpFile = pathJoin(tmpdir(), `provide-test-${Date.now()}.p12`)
-  await writeFile(tmpFile, ksResult.p12Bytes)
-
   // Use makeRealKeystoreDeps directly — its effectDeps already uses real primitives
   // and a proper in-memory progress store.
   const deps = makeRealKeystoreDeps()
+  await mkdir(deps._tmpDir, { recursive: true })
+  const tmpFile = pathJoin(deps._tmpDir, 'provide-test.p12')
+  await writeFile(tmpFile, ksResult.p12Bytes)
 
   // Turn 0 (contract change, hostile-review 2026-06-12): render keystore-method-select
   // first — it seeds the progress file; the fail-closed gate rejects answers to
@@ -1931,7 +1936,7 @@ await test('A4: provide path → drive keystoreMethod:existing with real .p12 �
   eq(r1.state, 'keystore-existing-path', `expected keystore-existing-path, got ${r1.state}`)
 
   // Turn 2: keystorePath → keystore-existing-store-password
-  const r2 = await runAdvance(deps, { keystorePath: tmpFile })
+  const r2 = await runAdvance(deps, { keystorePath: './provide-test.p12' })
   eq(r2.state, 'keystore-existing-store-password', `expected keystore-existing-store-password, got ${r2.state}`)
 
   // Turn 3: correct store password → effect runs listKeystoreAliases → single alias → keystore-existing-key-password
@@ -1953,11 +1958,11 @@ await test('A4: wrong password → re-prompts keystore-existing-store-password (
     keyPassword: storePassword,
     dname: { commonName: 'com.x' },
   })
-  const tmpFile = pathJoin(tmpdir(), `wrong-pw-test-${Date.now()}.p12`)
-  await writeFile(tmpFile, ksResult.p12Bytes)
-
   // Use makeRealKeystoreDeps directly — real primitives, in-memory progress store.
   const deps = makeRealKeystoreDeps()
+  await mkdir(deps._tmpDir, { recursive: true })
+  const tmpFile = pathJoin(deps._tmpDir, 'wrong-pw-test.p12')
+  await writeFile(tmpFile, ksResult.p12Bytes)
 
   // Turn 0 (contract change, hostile-review 2026-06-12): render keystore-method-select
   // first — it seeds the progress file; the fail-closed gate rejects answers to
@@ -1967,7 +1972,7 @@ await test('A4: wrong password → re-prompts keystore-existing-store-password (
   await runAdvance(deps, { keystoreMethod: 'existing' })
 
   // Turn 2: keystorePath
-  await runAdvance(deps, { keystorePath: tmpFile })
+  await runAdvance(deps, { keystorePath: './wrong-pw-test.p12' })
 
   // Turn 3: WRONG password → listKeystoreAliases returns wrong-password → re-prompt store password
   const r3 = await runAdvance(deps, { keystoreStorePassword: 'WrongPassword!!!' })

@@ -23,7 +23,8 @@ import { applyIosInput, iosViewForStep, runIosEffect } from '../ios/flow.js'
 import { applyTailInput, tailViewForStep } from '../tail/flow.js'
 import { clearSession, clearSessionCarried, dropIosCarried, getAppflowProgress, getResumeResolvedFor, getSession, getSessionPlatform, mergeIosCarried, mergeTailCarried, setAppflowGate, setAppflowProgress, setResumeResolvedFor, setSessionPlatform, setTailParked } from './session-state.js'
 import { slimAndroidTailProgress, slimIosTailProgress } from './tail-progress.js'
-import { readScopedMcpCredentialFile } from './scoped-credential-path.js'
+import { MCP_IN_PROJECT_PATH_HINT, readScopedMcpCredentialFile, ScopedCredentialPathError } from './scoped-credential-path.js'
+import { screenExportPath } from './credentials-manage.js'
 import { brokerBegin, brokerClear, brokerPoll } from './broker-session.js'
 import type { GoogleUserInfo } from '../android/oauth-google.js'
 import { SUPPORT_EMAIL } from '../../../support/contact-support.js'
@@ -331,13 +332,13 @@ function iosApiKeyGateResult(facts: PreflightFacts): NextStepResult {
     collect: [
       { field: 'keyId', desc: 'the Key ID shown next to the key' },
       { field: 'issuerId', desc: 'the Issuer ID at the top of the Keys page' },
-      { field: 'p8Path', desc: 'absolute path to the downloaded .p8 file' },
+      { field: 'p8Path', desc: `path to the .p8 inside this project (for example ./credentials/AuthKey.p8). ${MCP_IN_PROJECT_PATH_HINT}` },
     ],
     next: {
       tool: NEXT_STEP_TOOL,
       with: { keyId: '<keyId>', issuerId: '<issuerId>', p8Path: '<path>' },
-      instruction: 'Collect all three from the user, then call next_step with keyId, issuerId, and p8Path.',
-      call: `${NEXT_STEP_TOOL}({ keyId: "ABC123", issuerId: "1a2b-...", p8Path: "/path/to/AuthKey.p8" })`,
+      instruction: 'Collect all three from the user. They must copy the .p8 into the project directory first, then call next_step with keyId, issuerId, and p8Path.',
+      call: `${NEXT_STEP_TOOL}({ keyId: "ABC123", issuerId: "1a2b-...", p8Path: "./credentials/AuthKey.p8" })`,
     },
     rules: ONBOARDING_RULES,
   }
@@ -458,13 +459,13 @@ function iosCredentialsFailedResult(facts: PreflightFacts, message: string): Nex
     collect: [
       { field: 'keyId', desc: 'the Key ID' },
       { field: 'issuerId', desc: 'the Issuer ID' },
-      { field: 'p8Path', desc: 'absolute path to the .p8 file' },
+      { field: 'p8Path', desc: `path to the .p8 inside this project (for example ./credentials/AuthKey.p8). ${MCP_IN_PROJECT_PATH_HINT}` },
     ],
     next: {
       tool: NEXT_STEP_TOOL,
       with: { keyId: '<keyId>', issuerId: '<issuerId>', p8Path: '<path>' },
-      instruction: 'Collect corrected values from the user, then call next_step with keyId, issuerId, p8Path — or call next_step({}) to retry as-is.',
-      call: `${NEXT_STEP_TOOL}({ keyId: "ABC123", issuerId: "1a2b-...", p8Path: "/path/to/AuthKey.p8" })`,
+      instruction: 'Collect corrected values from the user. The .p8 must live under the project directory, then call next_step with keyId, issuerId, p8Path, or call next_step({}) to retry as-is.',
+      call: `${NEXT_STEP_TOOL}({ keyId: "ABC123", issuerId: "1a2b-...", p8Path: "./credentials/AuthKey.p8" })`,
     },
     rules: ONBOARDING_RULES,
   }
@@ -746,16 +747,16 @@ export function mapIosView(
         kind: 'human_gate',
         summary: view.title ?? 'Use a .mobileprovision file from disk.',
         human: {
-          instruction: 'Locate (or download from the Apple Developer Portal) the .mobileprovision profile for this app, then give me its absolute path. The file stays on your machine.',
+          instruction: `Locate (or download from the Apple Developer Portal) the .mobileprovision profile for this app, copy it into the project directory, then give me that path. ${MCP_IN_PROJECT_PATH_HINT}`,
         },
         collect: [
-          { field: 'profilePath', desc: 'absolute path to the .mobileprovision file' },
+          { field: 'profilePath', desc: 'path to the .mobileprovision inside this project (for example ./credentials/AppStore.mobileprovision)' },
         ],
         next: {
           tool: NEXT_STEP_TOOL,
           with: { profilePath: '<path>' },
-          instruction: 'Ask the user for the absolute path to their .mobileprovision file, then call next_step with profilePath.',
-          call: `${NEXT_STEP_TOOL}({ profilePath: "/path/to/profile.mobileprovision" })`,
+          instruction: 'Ask the user to copy the profile into the project, then call next_step with profilePath.',
+          call: `${NEXT_STEP_TOOL}({ profilePath: "./credentials/AppStore.mobileprovision" })`,
         },
       }
     }
@@ -1169,6 +1170,7 @@ export async function decideIos(
   if (opts?.profilePath !== undefined) {
     // The manual-path arm: the engine effect's openProfilePicker is injected as
     // a one-shot resolving this path (see the effect dispatch below).
+    await readScopedMcpCredentialFile(opts.profilePath, 'mobileprovision', deps.cwd)
     profilePathAnswer = opts.profilePath
     dropIosCarried(appId, ['profilePickerOpened'])
     importAnswered = 'import-provide-profile-path'
@@ -1313,14 +1315,8 @@ export async function decideIos(
       // after a server restart re-read them from the persisted p8Path — the
       // same self-heal resolveP8Content performs for verifying-key.
       const readP8 = ios.readMcpP8 ?? ios.readFile
-      if (step === 'saving-credentials' && !session.iosCarried.p8Content && progress.p8Path && readP8) {
-        try {
-          mergeIosCarried(appId, { p8Content: await readP8(progress.p8Path) })
-        }
-        catch {
-          // Degrade: credentials save without the APPLE_KEY_* fields.
-        }
-      }
+      if (step === 'saving-credentials' && !session.iosCarried.p8Content && progress.p8Path && readP8)
+        mergeIosCarried(appId, { p8Content: await readP8(progress.p8Path) })
 
       const isTailEffectStep = MCP_TAIL_EFFECT_STEPS.has(step)
       // S8 restart fallback: the tail carried (savedCredentials/ciSecretEntries
@@ -1636,15 +1632,15 @@ export function mapAndroidView(
         ...base,
         kind: 'human_gate',
         summary: `Provide the path to your existing Google Play service-account JSON file.`,
-        collect: [{ field: 'serviceAccountJsonPath', desc: 'Absolute path to the Google Play service-account .json file' }],
+        collect: [{ field: 'serviceAccountJsonPath', desc: `path to the service-account .json inside this project (for example ./credentials/play-sa.json). ${MCP_IN_PROJECT_PATH_HINT}` }],
         human: {
-          instruction: 'Give me the path to your Google Play service-account .json key file. The file stays on your machine do not paste its contents here.',
+          instruction: `Copy your Google Play service-account .json into the project directory, then give me that path. Do not paste file contents here.`,
         },
         next: {
           tool: NEXT_STEP_TOOL,
           with: { serviceAccountJsonPath: '<path>' },
-          instruction: 'Ask the user for the service-account .json file path, then call next_step with serviceAccountJsonPath.',
-          call: `${NEXT_STEP_TOOL}({ serviceAccountJsonPath: "/path/to/service-account.json" })`,
+          instruction: 'Ask the user to copy the JSON into the project, then call next_step with serviceAccountJsonPath.',
+          call: `${NEXT_STEP_TOOL}({ serviceAccountJsonPath: "./credentials/play-sa.json" })`,
         },
       }
 
@@ -1697,13 +1693,13 @@ export function mapAndroidView(
         ...base,
         kind: 'human_gate',
         summary: 'Point me to your existing Android keystore.',
-        collect: [{ field: 'keystorePath', desc: 'Absolute path to your keystore (.jks/.keystore/.p12)' }],
-        human: { instruction: 'Give me the absolute path to your keystore file. It stays on your machine.' },
+        collect: [{ field: 'keystorePath', desc: `path to your keystore inside this project (.jks, .keystore, or .p12 — for example ./credentials/release.jks). ${MCP_IN_PROJECT_PATH_HINT}` }],
+        human: { instruction: 'Copy the keystore into the project directory, then give me that path.' },
         next: {
           tool: NEXT_STEP_TOOL,
           with: { keystorePath: '<path>' },
-          instruction: 'Ask for the keystore path, then call next_step with keystorePath.',
-          call: `${NEXT_STEP_TOOL}({ keystorePath: "/path/to/release.jks" })`,
+          instruction: 'Ask the user to copy the keystore into the project, then call next_step with keystorePath.',
+          call: `${NEXT_STEP_TOOL}({ keystorePath: "./credentials/release.jks" })`,
         },
       }
 
@@ -3603,6 +3599,7 @@ async function persistAndroidInput(deps: EngineDeps, appId: string, input: Onboa
   }
 
   if (input.keystorePath) {
+    await readScopedMcpCredentialFile(input.keystorePath, 'keystore', deps.cwd)
     updated = applyAndroidInput('keystore-existing-path', updated, {
       step: 'keystore-existing-path',
       path: input.keystorePath,
@@ -4404,8 +4401,19 @@ async function drive(deps: EngineDeps, input?: OnboardingInput): Promise<NextSte
   }
   if (androidInputPresent) {
     const inputAppId = await deps.getAppId()
-    if (inputAppId)
-      await persistAndroidInput(deps, inputAppId, input!)
+    if (inputAppId) {
+      try {
+        await persistAndroidInput(deps, inputAppId, input!)
+      }
+      catch (err) {
+        if (err instanceof ScopedCredentialPathError) {
+          const facts = await gatherFacts(deps)
+          const corrective = await decideAndroid(facts, deps)
+          return { ...corrective, summary: `${err.message}\n\n${corrective.summary}` }
+        }
+        throw err
+      }
+    }
   }
 
   // ── iOS granular input path (S6a/S6b/S12) ──────────────────────────────────
@@ -4458,8 +4466,19 @@ async function drive(deps: EngineDeps, input?: OnboardingInput): Promise<NextSte
       // (applyIosInput), so progress persists identically — the gate answers
       // (verifyAction / certToRevoke / duplicateProfileAction / errorAction)
       // ride through decideAdvance → decideIos instead (the resolver mechanism).
+      try {
+        if (input!.p8Path !== undefined || input!.keyId !== undefined || input!.issuerId !== undefined)
+          await persistIosApiKeyInput(deps, gateAppId, input!)
+      }
+      catch (err) {
+        if (err instanceof ScopedCredentialPathError) {
+          const facts = await gatherFacts(deps)
+          const corrective = await decideIos(facts, deps)
+          return { ...corrective, summary: `${err.message}\n\n${corrective.summary}` }
+        }
+        throw err
+      }
       if (input!.p8Path !== undefined || input!.keyId !== undefined || input!.issuerId !== undefined) {
-        await persistIosApiKeyInput(deps, gateAppId, input!)
         // Corrected key details while parked on the error screen clear the
         // park (the re-collect arm): the flow resumes from the failing phase
         // with the new values instead of re-rendering the stale error.
@@ -4523,6 +4542,13 @@ async function drive(deps: EngineDeps, input?: OnboardingInput): Promise<NextSte
         const corrective = tailPlatform === 'android' ? await decideAndroid(facts, deps) : await decideIos(facts, deps)
         return { ...corrective, summary: `${check.message}\n\n${corrective.summary}` }
       }
+      if (input!.envExportPath) {
+        const screen = screenExportPath(input!.envExportPath, deps.cwd)
+        if (screen) {
+          const corrective = tailPlatform === 'android' ? await decideAndroid(facts, deps) : await decideIos(facts, deps)
+          return { ...corrective, summary: `${screen}\n\n${corrective.summary}` }
+        }
+      }
       const applied = applyMcpTailAnswer(effectiveStep, input!, tailProgress, parked)
       if (applied.progress !== tailProgress) {
         // A pref was recorded — persist it through the SLIM whitelist writer
@@ -4561,7 +4587,20 @@ async function drive(deps: EngineDeps, input?: OnboardingInput): Promise<NextSte
   for (let i = 0; i < MAX_AUTO_STEPS; i++) {
     const facts = await gatherFacts(deps)
     const progress = facts.appId ? await deps.loadProgress(facts.appId) : null
-    const result = await decideAdvance(facts, progress, input, deps)
+    let result: NextStepResult
+    try {
+      result = await decideAdvance(facts, progress, input, deps)
+    }
+    catch (err) {
+      if (err instanceof ScopedCredentialPathError) {
+        const active = facts.appId ? getSessionPlatform(facts.appId) : undefined
+        const corrective = active === 'android'
+          ? await decideAndroid(facts, deps)
+          : await decideIos(facts, deps)
+        return { ...corrective, summary: `${err.message}\n\n${corrective.summary}` }
+      }
+      throw err
+    }
 
     if (signInProceed && result.platform === 'android' && result.state === 'google-sign-in')
       return decideAndroid(facts, deps, { signInProceed: true, reopenSignIn: Boolean(input?.reopenSignIn), openSignInBrowser: input?.openSignInBrowser, confirmCode: input?.confirmCode })

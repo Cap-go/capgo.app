@@ -33,6 +33,7 @@
 import type { Buffer } from 'node:buffer'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { ScopedCredentialPathError } from '../mcp/scoped-credential-path.js'
 import type { AscApp, AscDistributionCert, AscProfileSummary } from '../apple-api.js'
 import type {
   ApiKeyData,
@@ -416,6 +417,8 @@ export interface IosEffectDeps {
   readFile?: (path: string) => Promise<Buffer>
   /** MCP: scoped .p8 read (optional; TUI uses readFile). */
   readMcpP8?: (path: string) => Promise<Buffer>
+  /** MCP: scoped .mobileprovision read (optional; TUI uses readFile). */
+  readMcpMobileprovision?: (path: string) => Promise<Buffer>
   copyFile?: (src: string, dest: string) => Promise<void>
   /**
    * Open the native .p8 file picker (p8-method-select). Resolves to the chosen
@@ -918,11 +921,14 @@ async function buildIosSavedCredentials(progress: OnboardingProgress, deps: IosE
   // the INJECTED readFile — the same fallback resolveP8Content implements for
   // verifying-key, and what main's bespoke doSaveCredentials did. The engine
   // still performs no raw fs IO of its own.
-  if (needsAscKey && !keyContent && progress.p8Path && deps.readFile) {
+  const readP8 = deps.readMcpP8 ?? deps.readFile
+  if (needsAscKey && !keyContent && progress.p8Path && readP8) {
     try {
-      keyContent = await deps.readFile(progress.p8Path)
+      keyContent = await readP8(progress.p8Path)
     }
-    catch {
+    catch (err) {
+      if (err instanceof ScopedCredentialPathError)
+        throw err
       // Unreadable .p8 (moved/deleted) — fall through to the refuse guard below.
     }
   }
@@ -3057,7 +3063,8 @@ export async function runIosEffect(
         }
 
         // Read + parse. A parse failure routes to error (the TUI's handleError).
-        const bytes = await deps.readFile!(filePath)
+        const readProfile = deps.readMcpMobileprovision ?? deps.readFile
+        const bytes = await readProfile!(filePath)
         let detail: MobileprovisionDetail
         try {
           detail = deps.parseMobileprovisionDetailed!(bytes)

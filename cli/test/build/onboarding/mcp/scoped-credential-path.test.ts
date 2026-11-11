@@ -3,11 +3,13 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  MCP_IN_PROJECT_PATH_HINT,
   MAX_P8_BYTES,
   MAX_SERVICE_ACCOUNT_JSON_BYTES,
   readScopedMcpCredentialFile,
   ScopedCredentialPathError,
 } from '../../../../src/build/onboarding/mcp/scoped-credential-path.ts'
+import { runIosEffect } from '../../../../src/build/onboarding/ios/flow.ts'
 
 const VALID_SA = {
   type: 'service_account',
@@ -53,6 +55,17 @@ describe('readScopedMcpCredentialFile', () => {
     const outsideFile = join(outside, 'leak.json')
     writeFileSync(outsideFile, JSON.stringify(VALID_SA))
     await expect(readScopedMcpCredentialFile(outsideFile, 'service-account-json', root))
+      .rejects.toBeInstanceOf(ScopedCredentialPathError)
+    rmSync(outside, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('rejects a path via a symlinked parent directory', async () => {
+    const root = makeWorkspace()
+    const outside = mkdtempSync(join(tmpdir(), 'capgo-scoped-parent-out-'))
+    writeFileSync(join(outside, 'sa.json'), JSON.stringify(VALID_SA))
+    symlinkSync(outside, join(root, 'linked-dir'))
+    await expect(readScopedMcpCredentialFile('linked-dir/sa.json', 'service-account-json', root))
       .rejects.toBeInstanceOf(ScopedCredentialPathError)
     rmSync(outside, { recursive: true, force: true })
     rmSync(root, { recursive: true, force: true })
@@ -149,6 +162,64 @@ describe('readScopedMcpCredentialFile', () => {
     const msg = (err as Error).message
     expect(msg).toContain(userPath)
     expect(msg).not.toContain(VALID_SA.private_key)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('reads keystore and mobileprovision kinds inside scope', async () => {
+    const root = makeWorkspace()
+    writeFileSync(join(root, 'creds', 'release.jks'), Buffer.from([0x30, 0x82, 0x01, 0x00]))
+    writeFileSync(join(root, 'creds', 'app.mobileprovision'), '<?xml version="1.0"?>')
+    const ks = await readScopedMcpCredentialFile('creds/release.jks', 'keystore', root)
+    expect(ks.length).toBeGreaterThan(0)
+    const prof = await readScopedMcpCredentialFile('creds/app.mobileprovision', 'mobileprovision', root)
+    expect(prof.toString('utf8')).toContain('<?xml')
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('outside-scope rejection mentions copying into the project', async () => {
+    const root = makeWorkspace()
+    const outside = mkdtempSync(join(tmpdir(), 'capgo-scoped-hint-out-'))
+    const p8 = join(outside, 'away.p8')
+    writeFileSync(p8, VALID_P8)
+    await expect(readScopedMcpCredentialFile(p8, 'p8', root))
+      .rejects.toMatchObject({ message: expect.stringContaining(MCP_IN_PROJECT_PATH_HINT) })
+    rmSync(outside, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
+  })
+})
+
+describe('saving-credentials resume uses scoped p8 read', () => {
+  it('rejects out-of-scope progress.p8Path via readMcpP8', async () => {
+    const root = makeWorkspace()
+    const outsideP8 = join(tmpdir(), `capgo-out-p8-${Date.now()}.p8`)
+    writeFileSync(outsideP8, VALID_P8)
+    const progress = {
+      platform: 'ios' as const,
+      appId: 'com.test.app',
+      startedAt: new Date().toISOString(),
+      setupMethod: 'create-new' as const,
+      p8Path: outsideP8,
+      completedSteps: {
+        apiKeyVerified: { keyId: 'K1', issuerId: 'I1' },
+        certificateCreated: { p12Base64: 'YQ==', teamId: 'T1' },
+        profileCreated: { profileBase64: 'Yg==', profileName: 'P' },
+      },
+    }
+    const deps = {
+      carried: {},
+      readMcpP8: (path: string) => readScopedMcpCredentialFile(path, 'p8', root),
+      readFile: async () => { throw new Error('readFile must not be used for MCP p8') },
+      createCiSecretEntries: async () => [],
+      updateSavedCredentials: async () => {},
+      deleteProgress: async () => {},
+      loadProgress: async () => null,
+      loadSavedCredentials: async () => ({}),
+      detectBundleIds: () => [{ bundleId: 'com.test.app', configuration: 'Release' as const }],
+      onLog: () => {},
+    }
+    await expect(runIosEffect('saving-credentials', progress as never, deps as never))
+      .rejects.toBeInstanceOf(ScopedCredentialPathError)
+    rmSync(outsideP8, { force: true })
     rmSync(root, { recursive: true, force: true })
   })
 })

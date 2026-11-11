@@ -1037,6 +1037,8 @@ export interface AndroidEffectDeps {
   readFile: (path: string) => Promise<Buffer>
   /** MCP: scoped service-account JSON read (optional; TUI uses readFile). */
   readMcpServiceAccountJson?: (path: string) => Promise<Buffer>
+  /** MCP: scoped keystore read (optional; TUI uses readFile). */
+  readMcpKeystore?: (path: string) => Promise<Buffer>
   copyFile: (src: string, dest: string) => Promise<void>
 
   // ── OAuth (Task 4) ───────────────────────────────────────────────────────
@@ -1585,7 +1587,8 @@ export async function runAndroidEffect(
     // ── keystore-existing-detecting-alias ─────────────────────────────────
     // app.tsx:903–942
     case 'keystore-existing-detecting-alias': {
-      const bytes = await deps.readFile(progress.keystoreExistingPath!)
+      const readKeystore = deps.readMcpKeystore ?? deps.readFile
+      const bytes = await readKeystore(progress.keystoreExistingPath!)
       const listed = deps.listKeystoreAliases(bytes, progress.keystoreStorePassword!)
 
       if (listed.ok && listed.aliases.length === 1) {
@@ -1643,8 +1646,9 @@ export async function runAndroidEffect(
       }
       // Path 2: attempt PKCS#12 probe with the store password
       else if (progress.keystoreStorePassword && progress.keystoreExistingPath) {
+        const readKeystore = deps.readMcpKeystore ?? deps.readFile
         try {
-          const bytes = await deps.readFile(progress.keystoreExistingPath)
+          const bytes = await readKeystore(progress.keystoreExistingPath)
           const result = deps.tryUnlockPrivateKey(bytes, progress.keystoreStorePassword)
           if (result.ok) {
             resolvedKeyPw = progress.keystoreStorePassword
@@ -1670,7 +1674,8 @@ export async function runAndroidEffect(
         deps.onLog?.('ℹ Key password matches store password — using the same value')
       const keyPw = resolvedKeyPw
       deps.onLog?.('✔ Key password set')
-      const bytes = await deps.readFile(progress.keystoreExistingPath!)
+      const readKeystore = deps.readMcpKeystore ?? deps.readFile
+      const bytes = await readKeystore(progress.keystoreExistingPath!)
       const base64 = bytes.toString('base64')
       const ready: KeystoreReady = {
         keystorePath: progress.keystoreExistingPath!,

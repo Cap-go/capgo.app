@@ -115,6 +115,7 @@ function buildAndroidEffectDeps(
     // ── File system ───────────────────────────────────────────────────────────
     readFile: (path: string) => readFile(path) as Promise<Buffer>,
     readMcpServiceAccountJson: (path: string) => readScopedMcpCredentialFile(path, 'service-account-json', cwd),
+    readMcpKeystore: (path: string) => readScopedMcpCredentialFile(path, 'keystore', cwd),
     copyFile,
 
     // ── OAuth ─────────────────────────────────────────────────────────────────
@@ -327,6 +328,7 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
     // ── file system ──
     readFile: (path: string) => readFile(path) as Promise<Buffer>,
     readMcpP8: (path: string) => readScopedMcpCredentialFile(path, 'p8', cwd),
+    readMcpMobileprovision: (path: string) => readScopedMcpCredentialFile(path, 'mobileprovision', cwd),
     copyFile,
     isMacOS: () => process.platform === 'darwin',
 
