@@ -94,12 +94,10 @@ describe('cron_sync_sub resilience', () => {
 
     const { closeClient, getPgClient } = await import('../supabase/functions/_backend/utils/pg.ts')
     expect(getPgClient).toHaveBeenCalledTimes(2)
-    const [originalClient, freshClient] = await Promise.all(vi.mocked(getPgClient).mock.results.map(r => r.value))
+    const [originalClient, freshClient] = vi.mocked(getPgClient).mock.results.map(r => r.value)
     expect(syncSubscriptionAndEvents.mock.calls[0][2].client).toBe(originalClient)
     expect(syncSubscriptionAndEvents.mock.calls[1][2].client).toBe(freshClient)
-    expect(freshClient).not.toBe(originalClient)
-    expect(closeClient).toHaveBeenCalledTimes(2)
-    expect(vi.mocked(closeClient).mock.calls.map(call => call[1])).toEqual(expect.arrayContaining([originalClient, freshClient]))
+    expect(vi.mocked(closeClient).mock.calls.map(call => call[1])).toEqual([freshClient, originalClient])
   })
 
   it('closes every fresh client when pg connection drops persist', async () => {

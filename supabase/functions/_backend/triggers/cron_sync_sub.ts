@@ -50,23 +50,20 @@ async function syncSubscriptionAndEventsWithRetry(
   orgId: string,
   pgClient: PgClient,
 ) {
-  let freshClient: PgClient | undefined
-  let needsFreshClient = false
+  let client: PgClient | undefined = pgClient
   try {
     const { result, attempts } = await retryWithBackoff(async () => {
       try {
-        if (needsFreshClient) {
-          if (freshClient)
-            closeClient(c, freshClient)
-          freshClient = undefined
-          freshClient = await getPgClient(c, false)
-          needsFreshClient = false
-        }
-        await syncSubscriptionAndEvents(c, orgId, getDrizzleClient(freshClient ?? pgClient))
+        client ??= await getPgClient(c, false)
+        await syncSubscriptionAndEvents(c, orgId, getDrizzleClient(client))
         return { ok: true as const, error: null as unknown }
       }
       catch (error) {
-        needsFreshClient ||= isFreshPgClientRetryError(error)
+        if (isFreshPgClientRetryError(error)) {
+          if (client && client !== pgClient)
+            closeClient(c, client)
+          client = undefined
+        }
         return { ok: false as const, error }
       }
     }, {
@@ -81,8 +78,8 @@ async function syncSubscriptionAndEventsWithRetry(
     return { attempts, error: result.ok ? null : result.error }
   }
   finally {
-    if (freshClient)
-      closeClient(c, freshClient)
+    if (client && client !== pgClient)
+      closeClient(c, client)
   }
 }
 
