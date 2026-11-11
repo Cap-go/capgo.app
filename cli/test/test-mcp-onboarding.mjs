@@ -1,10 +1,36 @@
 #!/usr/bin/env node
 /** Headless tests for the MCP-conducted Capgo Builder onboarding engine. */
 import process from 'node:process'
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const MCP_TEST_APP_ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-mcp-onboarding-')))
+const MCP_FIXTURE_SA = join(MCP_TEST_APP_ROOT, 'creds', 'sa.json')
+const MCP_FIXTURE_SA_BAD = join(MCP_TEST_APP_ROOT, 'creds', 'bad.json')
+const MCP_FIXTURE_P8 = join(MCP_TEST_APP_ROOT, 'AuthKey.p8')
+const MCP_FIXTURE_KEYSTORE = join(MCP_TEST_APP_ROOT, 'creds', 'x.p12')
+
+function ensureMcpOnboardingFixtureFiles() {
+  mkdirSync(join(MCP_TEST_APP_ROOT, 'creds'), { recursive: true })
+  const saBody = JSON.stringify({
+    type: 'service_account',
+    client_email: 'sa@proj-1.iam.gserviceaccount.com',
+    private_key: '-----BEGIN PRIVATE KEY-----\nK\n-----END PRIVATE KEY-----\n',
+    project_id: 'proj-1',
+    token_uri: 'https://oauth2.googleapis.com/token',
+  })
+  writeFileSync(MCP_FIXTURE_SA, saBody)
+  writeFileSync(MCP_FIXTURE_SA_BAD, saBody)
+  writeFileSync(MCP_FIXTURE_P8, '-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n')
+  writeFileSync(MCP_FIXTURE_KEYSTORE, Buffer.from([0x30, 0x82, 0x01, 0x00]))
+}
+ensureMcpOnboardingFixtureFiles()
 
 console.log('🧪 Testing MCP Builder onboarding...\n')
 
 const { renderResult, ONBOARDING_RULES } = await import('../src/build/onboarding/mcp/contract.ts')
+const { readScopedMcpCredentialFile } = await import('../src/build/onboarding/mcp/scoped-credential-path.ts')
 const { clearAllSessions } = await import('../src/build/onboarding/mcp/session-state.ts')
 
 let pass = 0
@@ -49,7 +75,7 @@ const facts = (o = {}) => ({
 // Build a minimal fake deps with no android-specific fields (for non-android tests)
 function minimalFakeDeps(o = {}) {
   return {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['ios', 'android'],
@@ -142,7 +168,7 @@ await test('decideAdvance: platform choice while unauthenticated bounces to logi
 const { gatherFacts, runStart, runAdvance } = await import('../src/build/onboarding/mcp/engine.ts')
 
 const fakeDeps = (o = {}) => ({
-  cwd: '/tmp/app',
+  cwd: MCP_TEST_APP_ROOT,
   hasSavedKey: () => true,
   getAppId: async () => 'com.acme.app',
   detectPlatforms: async () => ['ios'],
@@ -254,7 +280,7 @@ await test('decideAdvance: platform chosen but app not registered → routes bac
 function appPhaseDeps(o = {}) {
   let registered = false
   return {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['ios', 'android'],
@@ -434,7 +460,7 @@ function androidBridgeDeps(overrides = {}) {
   }
 
   const deps = {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['android'],
@@ -892,7 +918,7 @@ function iosDeps(o = {}) {
     ...(iosOverrides || {}),
   }
   return {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['ios'],
@@ -958,6 +984,17 @@ await test('decideIos: API key inputs present, not verified → granular chain r
   eq(r.state, 'build-ready')
 })
 
+await test('iosNeedsAscKeyForSave: import ad_hoc is false even when p8Path is set', async () => {
+  const { iosNeedsAscKeyForSave } = await import('../src/build/onboarding/ios/flow.ts')
+  const progress = iosProgressFixture({
+    setupMethod: 'import-existing',
+    importDistribution: 'ad_hoc',
+    p8Path: MCP_FIXTURE_P8,
+  })
+  ok(!iosNeedsAscKeyForSave(progress), 'ad_hoc import must not require ASC key at save')
+  ok(iosNeedsAscKeyForSave(iosProgressFixture({ setupMethod: 'import-existing', importDistribution: 'app_store', p8Path: MCP_FIXTURE_P8 })), 'app_store import still needs ASC key')
+})
+
 await test('decideIos: cert + profile markers persisted → saving-credentials tail → offers first build', async () => {
   clearIosSessions()
   const deps = iosDeps()
@@ -985,7 +1022,7 @@ await test('ios: full flow → provide ASC key → granular engine chain → off
   })
   const r1 = await runStart(deps)
   eq(r1.state, 'ios-api-key')
-  const r2 = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  const r2 = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   eq(r2.kind, 'choice')
   eq(r2.state, 'build-ready')
   // The build offer points at start_capgo_build — a runBuild:true is the wrong tool and is rejected.
@@ -1002,7 +1039,7 @@ await test('ios: verifying-key failure → structured error recovery (choice; re
     iosEffectDeps: { verifyApiKey: async () => { throw new Error('cert limit reached') } },
   })
   await runStart(deps)
-  const r = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  const r = await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   eq(r.kind, 'choice')
   eq(r.state, 'error')
   ok(/cert limit reached/.test(r.summary), 'summary must surface the failing step message')
@@ -1242,7 +1279,7 @@ await test('Task5: BYO path: serviceAccountJsonPath → validating → build-rea
   }
   deps._setAndroidProgress(keystoreProgress)
   // Submit the SA JSON path — validates OK → saves credentials → build-ready
-  const r = await runAdvance(deps, { serviceAccountJsonPath: '/tmp/sa.json' })
+  const r = await runAdvance(deps, { serviceAccountJsonPath: MCP_FIXTURE_SA })
   eq(r.platform, 'android')
   eq(r.state, 'build-ready', `expected build-ready, got ${r.state}`)
   eq(r.kind, 'choice')
@@ -1285,7 +1322,7 @@ await test('Task5: validation-failed: validateServiceAccountJson → ok:false �
   deps._setAndroidProgress(keystoreProgress)
 
   // Submit SA path → validation fails → sa-json-validation-failed
-  const r = await runAdvance(deps, { serviceAccountJsonPath: '/tmp/bad.json' })
+  const r = await runAdvance(deps, { serviceAccountJsonPath: MCP_FIXTURE_SA_BAD })
   eq(r.platform, 'android')
   eq(r.state, 'sa-json-validation-failed', `expected sa-json-validation-failed, got ${r.state}`)
   eq(r.kind, 'choice')
@@ -1307,7 +1344,7 @@ await test('Task5: validation-failed: saMethodChoice:oauth → google-sign-in ga
     startedAt: new Date().toISOString(),
     serviceAccountForkSeen: true,
     serviceAccountMethod: 'existing',
-    serviceAccountJsonPath: '/tmp/bad.json',
+    serviceAccountJsonPath: MCP_FIXTURE_SA_BAD,
     keystoreMethod: 'generate',
     keystoreAlias: 'release',
     keystoreStorePassword: 'storePw',
@@ -1337,7 +1374,7 @@ await test('Task5: validation-failed: saMethodChoice:retry → back to sa-json-e
     startedAt: new Date().toISOString(),
     serviceAccountForkSeen: true,
     serviceAccountMethod: 'existing',
-    serviceAccountJsonPath: '/tmp/bad.json',
+    serviceAccountJsonPath: MCP_FIXTURE_SA_BAD,
     keystoreMethod: 'generate',
     keystoreAlias: 'release',
     keystoreStorePassword: 'storePw',
@@ -1419,7 +1456,7 @@ await test('FIX1: iOS runBuild → use-start-tool corrective (platform ios); che
 
   // Drive to build-ready
   await runStart(deps)
-  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
 
   // runBuild:true is the wrong tool — engine rejects it and points at start_capgo_build (carrying platform:ios)
   const corrective = await runAdvance(deps, { runBuild: true, platform: 'ios' })
@@ -1442,7 +1479,7 @@ await test('FIX1: iOS checkBuild with no-record → build-waiting carries platfo
     readBuildRecord: async () => null,
   })
   await runStart(deps)
-  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   const waiting = await runAdvance(deps, { checkBuild: true, platform: 'ios' })
   eq(waiting.state, 'build-waiting', `expected build-waiting, got ${waiting.state}`)
   ok(waiting.next && waiting.next.with, 'next.with must exist')
@@ -1469,7 +1506,7 @@ await test('FIX4: buildDoneResult with null outputUrl uses fallback text and has
     }),
   })
   await runStart(deps)
-  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: '/tmp/AuthKey.p8' })
+  await runAdvance(deps, { keyId: 'ABC', issuerId: '1a2b', p8Path: MCP_FIXTURE_P8 })
   const result = await runAdvance(deps, { checkBuild: true, platform: 'ios' })
   eq(result.state, 'build-complete')
   ok(result.summary && !result.summary.includes('null'), 'summary must not say "null" when outputUrl is null')
@@ -1630,6 +1667,7 @@ function makeKeystorePersistDeps(initialProgress = null) {
     loadAndroidProgress: async (_appId) => _progress,
     deleteAndroidProgress: async () => { _progress = null },
     readFile: async () => Buffer.from('{"type":"service_account"}'),
+    readMcpKeystore: (path) => readScopedMcpCredentialFile(path, 'keystore', MCP_TEST_APP_ROOT),
   }
   const deps = {
     ...minimalFakeDeps(),
@@ -1661,7 +1699,7 @@ await test('A3: persistAndroidInput({ keystoreMethod:"generate" }) → progress.
 })
 
 // A3 test 2: keystorePath is recorded into progress (existing sub-flow)
-await test('A3: persistAndroidInput({ keystorePath:"/tmp/x.p12" }) → progress.keystoreExistingPath==="/tmp/x.p12"', async () => {
+await test('A3: persistAndroidInput({ keystorePath:"creds/x.p12" }) → progress.keystoreExistingPath==="creds/x.p12"', async () => {
   const appId = 'com.test.app'
   const deps = makeKeystorePersistDeps({
     platform: 'android',
@@ -1670,10 +1708,10 @@ await test('A3: persistAndroidInput({ keystorePath:"/tmp/x.p12" }) → progress.
     keystoreMethod: 'existing',
     completedSteps: {},
   })
-  await runAdvance(deps, { keystorePath: '/tmp/x.p12' })
+  await runAdvance(deps, { keystorePath: 'creds/x.p12' })
   const saved = deps._getProgress()
   ok(saved !== null, 'progress must be saved')
-  eq(saved.keystoreExistingPath, '/tmp/x.p12', `expected keystoreExistingPath=/tmp/x.p12, got ${saved.keystoreExistingPath}`)
+  eq(saved.keystoreExistingPath, 'creds/x.p12', `expected keystoreExistingPath=creds/x.p12, got ${saved.keystoreExistingPath}`)
 })
 
 // A3 test 3: keystoreNewAlias is recorded → progress.keystoreAlias via keystore-new-alias handler
@@ -1698,7 +1736,6 @@ await test('A3: persistAndroidInput({ keystoreNewAlias:"release" }) → progress
 // and a fake writeKeystoreFile that records what was written.
 // They prove the MCP bridge drives the interactive keystore flow end-to-end.
 
-import { tmpdir } from 'node:os'
 import { writeFile, readFile as fsReadFile, mkdir } from 'node:fs/promises'
 import { join as pathJoin } from 'node:path'
 import { generateKeystore as realGenerateKeystore, listKeystoreAliases as realListKeystoreAliases, tryUnlockPrivateKey as realTryUnlockPrivateKey, generateRandomPassword as realGenerateRandomPassword } from '../src/build/onboarding/android/keystore.ts'
@@ -1734,6 +1771,7 @@ function makeRealKeystoreDeps(overrides = {}) {
     readFile: async (path) => {
       return fsReadFile(path)
     },
+    readMcpKeystore: (path) => readScopedMcpCredentialFile(path, 'keystore', tmpDir),
     copyFile: async () => {},
 
     runOAuthFlow: async () => { throw new Error('runOAuthFlow must not be called') },
@@ -1893,12 +1931,12 @@ await test('A4: provide path → drive keystoreMethod:existing with real .p12 �
     keyPassword: storePassword, // same key and store pw (probe succeeds)
     dname: { commonName: 'com.x' },
   })
-  const tmpFile = pathJoin(tmpdir(), `provide-test-${Date.now()}.p12`)
-  await writeFile(tmpFile, ksResult.p12Bytes)
-
   // Use makeRealKeystoreDeps directly — its effectDeps already uses real primitives
   // and a proper in-memory progress store.
   const deps = makeRealKeystoreDeps()
+  await mkdir(deps._tmpDir, { recursive: true })
+  const tmpFile = pathJoin(deps._tmpDir, 'provide-test.p12')
+  await writeFile(tmpFile, ksResult.p12Bytes)
 
   // Turn 0 (contract change, hostile-review 2026-06-12): render keystore-method-select
   // first — it seeds the progress file; the fail-closed gate rejects answers to
@@ -1909,7 +1947,7 @@ await test('A4: provide path → drive keystoreMethod:existing with real .p12 �
   eq(r1.state, 'keystore-existing-path', `expected keystore-existing-path, got ${r1.state}`)
 
   // Turn 2: keystorePath → keystore-existing-store-password
-  const r2 = await runAdvance(deps, { keystorePath: tmpFile })
+  const r2 = await runAdvance(deps, { keystorePath: './provide-test.p12' })
   eq(r2.state, 'keystore-existing-store-password', `expected keystore-existing-store-password, got ${r2.state}`)
 
   // Turn 3: correct store password → effect runs listKeystoreAliases → single alias → keystore-existing-key-password
@@ -1931,11 +1969,11 @@ await test('A4: wrong password → re-prompts keystore-existing-store-password (
     keyPassword: storePassword,
     dname: { commonName: 'com.x' },
   })
-  const tmpFile = pathJoin(tmpdir(), `wrong-pw-test-${Date.now()}.p12`)
-  await writeFile(tmpFile, ksResult.p12Bytes)
-
   // Use makeRealKeystoreDeps directly — real primitives, in-memory progress store.
   const deps = makeRealKeystoreDeps()
+  await mkdir(deps._tmpDir, { recursive: true })
+  const tmpFile = pathJoin(deps._tmpDir, 'wrong-pw-test.p12')
+  await writeFile(tmpFile, ksResult.p12Bytes)
 
   // Turn 0 (contract change, hostile-review 2026-06-12): render keystore-method-select
   // first — it seeds the progress file; the fail-closed gate rejects answers to
@@ -1945,7 +1983,7 @@ await test('A4: wrong password → re-prompts keystore-existing-store-password (
   await runAdvance(deps, { keystoreMethod: 'existing' })
 
   // Turn 2: keystorePath
-  await runAdvance(deps, { keystorePath: tmpFile })
+  await runAdvance(deps, { keystorePath: './wrong-pw-test.p12' })
 
   // Turn 3: WRONG password → listKeystoreAliases returns wrong-password → re-prompt store password
   const r3 = await runAdvance(deps, { keystoreStorePassword: 'WrongPassword!!!' })
