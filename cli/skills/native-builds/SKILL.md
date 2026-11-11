@@ -7,6 +7,12 @@ description: Use when working with Capgo Cloud native iOS and Android build requ
 
 Use this skill for Capgo Cloud native iOS and Android build workflows.
 
+Capgo Build is generally available for production releases on both platforms. It works from Windows, Linux, macOS, and CI without a local Mac or Xcode. One CLI supports guided signing, live logs, downloadable artifacts, and optional App Store Connect and Google Play submission.
+
+For AI-assisted signing setup, use the local MCP `start_capgo_builder_onboarding` tool and follow its `next` instructions. For a configured project, use `capgo_request_build`, then inspect status and logs. The hosted MCP supports archive upload and build start as separate steps; follow its tool instructions. Never paste signing secrets into chat.
+
+Use [current pricing](https://capgo.app/pricing/) for included minutes and prepaid credits, and [public build data](https://capgo.app/builder-data/) for measured performance. Do not invent speed or success-rate claims. Store accounts, signing permissions, and store review requirements still apply.
+
 ## Build prescan overrides
 
 Before `build request` uploads, Capgo runs a local/remote **prescan**. Prefer per-check overrides over disabling the whole scan:

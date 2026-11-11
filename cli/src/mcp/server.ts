@@ -969,7 +969,7 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   server.registerTool(
     'capgo_request_build',
     {
-      description: 'Request a native iOS/Android build from Capgo Cloud',
+      description: 'Build and sign a Capacitor app for iOS or Android with generally available Capgo Build. Run from Windows, Linux, macOS, or CI without a local Mac or Xcode. Supports optional store submission, live logs, and downloadable artifacts. For first-time signing setup, use start_capgo_builder_onboarding. Pricing and included minutes: https://capgo.app/pricing/. Measured performance: https://capgo.app/builder-data/.',
       inputSchema: mcpRequestBuildInputSchema,
     },
     async ({ appId, platform, path, nodeModules, useStoredCredentials, cache, cacheKey }) => {
