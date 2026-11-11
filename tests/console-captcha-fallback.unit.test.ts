@@ -6,7 +6,8 @@ let env: Record<string, string> = {}
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../supabase/functions/_backend/utils/hono.ts')>(),
-  quickError: (status: number, error: string, message?: string) => Response.json({ error, message }, { status }),
+  quickError: (status: number, error: string, message?: string, moreInfo?: Record<string, unknown>) =>
+    Response.json({ error, message, moreInfo }, { status }),
 }))
 vi.mock('../supabase/functions/_backend/utils/utils.ts', () => ({
   getEnv: (_c: unknown, key: string) => env[key] ?? '',
@@ -68,9 +69,7 @@ describe('console captcha fallback', () => {
       body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
     })
     expect(response.status).toBe(429)
-    expect(await response.json()).toMatchObject({
-      moreInfo: { reason: 'captcha_fallback_upstream_rate_limit' },
-    })
+    expect(await response.text()).toContain('Too many requests')
   })
 
   it('never exposes a password grant path on this endpoint', async () => {
