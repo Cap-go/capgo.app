@@ -416,11 +416,12 @@ async function readCaptchaFallbackLimit(
   return { limited: isLimited, resetAt: data.resetAt }
 }
 
-async function incrementCaptchaFallbackLimit(
+async function incrementCaptchaFallbackLimitAndCheck(
   c: Context,
   path: string,
   cachePart: Record<string, string>,
-): Promise<void> {
+  limit: number,
+): Promise<RateLimitStatus> {
   const cacheHelper = new CacheHelper(c)
   const cacheKey = cacheHelper.buildRequest(path, cachePart)
   const existingData = await cacheHelper.matchJson<RateLimitData>(cacheKey)
@@ -428,11 +429,10 @@ async function incrementCaptchaFallbackLimit(
   const resetAt = existingData?.resetAt && existingData.resetAt > now
     ? existingData.resetAt
     : buildCaptchaFallbackResetAt()
-  const newData: RateLimitData = {
-    count: (existingData?.resetAt && existingData.resetAt > now ? existingData.count : 0) + 1,
-    resetAt,
-  }
-  await cacheHelper.putJson(cacheKey, newData, getRateLimitWindowSeconds(resetAt, Date.now()))
+  const previousCount = existingData?.resetAt && existingData.resetAt > now ? existingData.count : 0
+  const newCount = previousCount + 1
+  await cacheHelper.putJson(cacheKey, { count: newCount, resetAt }, getRateLimitWindowSeconds(resetAt, now))
+  return { limited: newCount > limit, resetAt }
 }
 
 /**
@@ -453,11 +453,34 @@ export async function isCaptchaFallbackEmailRateLimited(c: Context, email: strin
   return await readCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_EMAIL_PATH, { email: accountKey }, DEFAULT_CAPTCHA_FALLBACK_EMAIL_LIMIT)
 }
 
-export async function recordCaptchaFallbackRequest(c: Context, email: string): Promise<void> {
-  const ip = getClientIP(c)
-  if (ip !== 'unknown')
-    await incrementCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_IP_PATH, { ip })
-  const accountKey = await getAccountRateLimitKey(email)
-  if (accountKey)
-    await incrementCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_EMAIL_PATH, { email: accountKey })
+export type CaptchaFallbackReserveResult = RateLimitStatus & {
+  reason?: 'captcha_fallback_ip_rate_limit' | 'captcha_fallback_email_rate_limit'
 }
+
+/** Reserve one attempt: increment cache counters first, then compare to the limit (no separate read-then-write admission). */
+export async function reserveCaptchaFallbackQuota(c: Context, email: string): Promise<CaptchaFallbackReserveResult> {
+  const ip = getClientIP(c)
+  if (ip !== 'unknown') {
+    const ipStatus = await incrementCaptchaFallbackLimitAndCheck(
+      c,
+      CAPTCHA_FALLBACK_IP_PATH,
+      { ip },
+      DEFAULT_CAPTCHA_FALLBACK_IP_LIMIT,
+    )
+    if (ipStatus.limited)
+      return { ...ipStatus, reason: 'captcha_fallback_ip_rate_limit' }
+  }
+  const accountKey = await getAccountRateLimitKey(email)
+  if (accountKey) {
+    const emailStatus = await incrementCaptchaFallbackLimitAndCheck(
+      c,
+      CAPTCHA_FALLBACK_EMAIL_PATH,
+      { email: accountKey },
+      DEFAULT_CAPTCHA_FALLBACK_EMAIL_LIMIT,
+    )
+    if (emailStatus.limited)
+      return { ...emailStatus, reason: 'captcha_fallback_email_rate_limit' }
+  }
+  return { limited: false }
+}
+

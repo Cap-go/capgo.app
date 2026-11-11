@@ -7,10 +7,8 @@ import { buildRateLimitInfo } from '../utils/rateLimitInfo.ts'
 import { cloudlog } from '../utils/logging.ts'
 import {
   getClientIP,
-  isCaptchaFallbackEmailRateLimited,
-  isCaptchaFallbackIpRateLimited,
   normalizeRateLimitAccountIdentifier,
-  recordCaptchaFallbackRequest,
+  reserveCaptchaFallbackQuota,
 } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
 import { isEmailDomainSsoEnforced } from './sso/domain-enforcement.ts'
@@ -157,13 +155,6 @@ app.post('/', async (c) => {
 
   const authEmail = parsed.data.email.trim()
   const quotaEmail = normalizeRateLimitAccountIdentifier(parsed.data.email)
-  const ipLimit = await isCaptchaFallbackIpRateLimited(c)
-  if (ipLimit.limited)
-    return simpleRateLimit({ reason: 'captcha_fallback_ip_rate_limit', ...buildRateLimitInfo(ipLimit.resetAt) })
-
-  const emailLimit = await isCaptchaFallbackEmailRateLimited(c, quotaEmail)
-  if (emailLimit.limited)
-    return simpleRateLimit({ reason: 'captcha_fallback_email_rate_limit', ...buildRateLimitInfo(emailLimit.resetAt) })
 
   if (parsed.data.purpose === 'magic_link') {
     let ssoEnforced = false
@@ -182,8 +173,9 @@ app.post('/', async (c) => {
       return quickError(403, 'sso_enforced', 'SSO is required for this email domain')
   }
 
-  // Count admitted attempts before relay so quota exhaustion cannot reveal account existence.
-  await recordCaptchaFallbackRequest(c, quotaEmail)
+  const reserved = await reserveCaptchaFallbackQuota(c, quotaEmail)
+  if (reserved.limited)
+    return simpleRateLimit({ reason: reserved.reason ?? 'captcha_fallback_email_rate_limit', ...buildRateLimitInfo(reserved.resetAt) })
 
   let response: Response
   try {

@@ -38,6 +38,7 @@ beforeEach(() => {
   fetchMock.mockReset()
   fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
   vi.spyOn(domainEnforcementModule, 'isEmailDomainSsoEnforced').mockResolvedValue(false)
+  vi.spyOn(rateLimitModule, 'reserveCaptchaFallbackQuota').mockResolvedValue({ limited: false })
 })
 
 afterEach(() => {
@@ -115,7 +116,7 @@ describe('console captcha fallback', () => {
   })
 
   it('relays the submitted email to auth while rate limits use normalized quota keys', async () => {
-    const recordSpy = vi.spyOn(rateLimitModule, 'recordCaptchaFallbackRequest')
+    const recordSpy = vi.spyOn(rateLimitModule, 'reserveCaptchaFallbackQuota')
     const submitted = 'John.Doe+promo@gmail.com'
 
     const response = await app.request('http://localhost/', {
@@ -129,11 +130,12 @@ describe('console captcha fallback', () => {
     expect(recordSpy).toHaveBeenCalledWith(expect.anything(), 'johndoe@gmail.com')
   })
 
-  it('records quota before relaying to auth', async () => {
-    const recordSpy = vi.spyOn(rateLimitModule, 'recordCaptchaFallbackRequest')
+  it('reserves quota before relaying to auth', async () => {
+    const reserveSpy = vi.spyOn(rateLimitModule, 'reserveCaptchaFallbackQuota')
     const recordOrder: string[] = []
-    recordSpy.mockImplementation(async () => {
-      recordOrder.push('record')
+    reserveSpy.mockImplementation(async () => {
+      recordOrder.push('reserve')
+      return { limited: false }
     })
     fetchMock.mockImplementation(async () => {
       recordOrder.push('fetch')
@@ -146,7 +148,7 @@ describe('console captcha fallback', () => {
       body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
     })
 
-    expect(recordOrder).toEqual(['record', 'fetch'])
+    expect(recordOrder).toEqual(['reserve', 'fetch'])
   })
 
   it('replaces recover redirect_to when origin is not the console webapp', async () => {
