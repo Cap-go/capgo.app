@@ -61,6 +61,29 @@ describe('console captcha fallback', () => {
     expect(JSON.parse(String(init.body))).toEqual({ email: 'user@example.com', create_user: false, data: {} })
   })
 
+  it('returns operational failure for invalid relay credentials', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 401 }))
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({ email: 'user@example.com', purpose: 'magic_link' }),
+    })
+    expect(response.status).toBe(503)
+    const payload = await response.json()
+    expect(payload.error).toBe('captcha_fallback_failed')
+  })
+
+  it('still returns ok for other upstream client errors', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 422 }))
+    const response = await app.request('http://localhost/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://console.capgo.app' },
+      body: JSON.stringify({ email: 'unknown@example.com', purpose: 'magic_link' }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ status: 'ok' })
+  })
+
   it('surfaces upstream rate limits instead of a generic ok', async () => {
     fetchMock.mockResolvedValueOnce(new Response('{}', { status: 429 }))
     const response = await app.request('http://localhost/', {

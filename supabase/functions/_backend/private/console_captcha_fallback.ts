@@ -134,6 +134,8 @@ app.post('/', async (c) => {
   if (emailLimit.limited)
     return simpleRateLimit({ reason: 'captcha_fallback_email_rate_limit', ...buildRateLimitInfo(emailLimit.resetAt) })
 
+  await recordCaptchaFallbackRequest(c, email)
+
   let response: Response
   try {
     response = await relayCaptchaFallbackAuth(c, parsed.data.purpose, email, parsed.data.redirect_to)
@@ -151,6 +153,8 @@ app.post('/', async (c) => {
   if (!response.ok) {
     if (response.status === 429)
       return simpleRateLimit({ reason: 'captcha_fallback_upstream_rate_limit', ...buildRateLimitInfo(Date.now() + 3_600_000) })
+    if (response.status === 401 || response.status === 403)
+      return quickError(503, 'captcha_fallback_failed', 'Unable to send email')
     if (response.status >= 500)
       return quickError(502, 'captcha_fallback_failed', 'Unable to send email')
     cloudlog({
@@ -159,9 +163,6 @@ app.post('/', async (c) => {
       purpose: parsed.data.purpose,
       status: response.status,
     })
-  }
-  else {
-    await recordCaptchaFallbackRequest(c, email)
   }
 
   // Same shape for unknown emails so this is not an existence oracle.
