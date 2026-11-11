@@ -8,12 +8,16 @@ import {
   getPMAndCommandForDir,
   groupOutdatedPackagesByPackageJson,
   listOutdatedDependencies,
+  OUTDATED_DEPENDENCIES_ERROR,
   packagesForDoctorUpdateChoice,
   parseDoctorPackageJsonPaths,
   partitionOutdatedDependencies,
   resolveDoctorProjectRoot,
   shellQuotePath,
+  throwOutdatedDependenciesError,
 } from '../src/app/info.ts'
+import { shouldCapturePosthogException } from '../src/posthog.ts'
+import { CliUserError } from '../src/shared/cli-user-error.ts'
 
 console.log('🧪 Testing doctor analytics tags...\n')
 
@@ -204,6 +208,18 @@ assert.equal(
 assert.equal(
   formatDoctorInstallHint('C:\\apps\\mobile', 'npm install @capgo/cli@latest', 'win32'),
   'cd /d "C:\\apps\\mobile" && npm install @capgo/cli@latest',
+)
+
+// Outdated dependencies are an expected doctor result, not a crash: keep the
+// non-zero exit but never open an error tracking issue for it.
+assert.throws(
+  () => throwOutdatedDependenciesError(undefined, [{ name: '@capgo/cli', installed: '1.0.0', latest: '2.0.0' }], true),
+  (error) => {
+    assert.ok(error instanceof CliUserError)
+    assert.equal(error.message, OUTDATED_DEPENDENCIES_ERROR)
+    assert.equal(shouldCapturePosthogException(error), false)
+    return true
+  },
 )
 
 console.log('✅ doctor analytics tags tests passed')
