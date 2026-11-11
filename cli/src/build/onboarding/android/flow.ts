@@ -1035,6 +1035,8 @@ export interface AndroidEffectDeps {
 
   // ── File system (injected so effects can be tested without real FS) ──────
   readFile: (path: string) => Promise<Buffer>
+  /** MCP: scoped service-account JSON read (optional; TUI uses readFile). */
+  readMcpServiceAccountJson?: (path: string) => Promise<Buffer>
   copyFile: (src: string, dest: string) => Promise<void>
 
   // ── OAuth (Task 4) ───────────────────────────────────────────────────────
@@ -1744,7 +1746,8 @@ export async function runAndroidEffect(
     // ── sa-json-validating ────────────────────────────────────────────────
     // app.tsx:835–901
     case 'sa-json-validating': {
-      const jsonBytes = await deps.readFile(progress.serviceAccountJsonPath!)
+      const readSa = deps.readMcpServiceAccountJson ?? deps.readFile
+      const jsonBytes = await readSa(progress.serviceAccountJsonPath!)
       const packageName = progress.completedSteps.androidPackageChosen!.packageName
 
       const result = await deps.validateServiceAccountJson({

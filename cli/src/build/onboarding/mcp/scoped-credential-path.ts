@@ -1,4 +1,5 @@
-import { lstat, readFile, realpath } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, realpath } from 'node:fs/promises'
 import { extname, isAbsolute, resolve, sep } from 'node:path'
 
 /** Google Play service-account JSON keys are small; cap well above typical size. */
@@ -108,26 +109,26 @@ export async function readScopedMcpCredentialFile(
   if (st.size === 0)
     refuse(userPath, 'file is empty')
 
-  const bytes = await readFile(canonicalPath)
-  if (kind === 'service-account-json')
-    assertServiceAccountShape(bytes, userPath)
-  else
-    assertP8Shape(bytes, userPath)
-
-  return bytes
-}
-
-/**
- * MCP onboarding `readFile` dep: credential extensions use scoped validation;
- * other paths keep the legacy direct read (keystore, mobileprovision, etc.).
- */
-export function makeMcpScopedReadFile(scopeRoot: string): (path: string) => Promise<Buffer> {
-  return async (path: string) => {
-    const ext = extname(path).toLowerCase()
-    if (ext === '.json')
-      return readScopedMcpCredentialFile(path, 'service-account-json', scopeRoot)
-    if (ext === '.p8')
-      return readScopedMcpCredentialFile(path, 'p8', scopeRoot)
-    return await readFile(path)
+  const readCap = Math.min(st.size, maxBytes)
+  const handle = await open(canonicalPath, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile())
+      refuse(userPath, 'path must be a regular file')
+    if (opened.size > maxBytes)
+      refuse(userPath, 'file is too large')
+    const bytes = Buffer.alloc(readCap)
+    const { bytesRead } = await handle.read(bytes, 0, readCap, 0)
+    if (bytesRead < readCap)
+      refuse(userPath, 'file not found or not readable')
+    const out = bytes.subarray(0, bytesRead)
+    if (kind === 'service-account-json')
+      assertServiceAccountShape(out, userPath)
+    else
+      assertP8Shape(out, userPath)
+    return out
+  }
+  finally {
+    await handle.close()
   }
 }

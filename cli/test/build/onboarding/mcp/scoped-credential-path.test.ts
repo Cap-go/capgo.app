@@ -123,14 +123,15 @@ describe('readScopedMcpCredentialFile', () => {
 
     const badP8 = join(root, 'creds', 'bad.p8')
     writeFileSync(badP8, `not a key ${SECRET_PAYLOAD}`)
+    let p8Err: unknown
     try {
       await readScopedMcpCredentialFile(badP8, 'p8', root)
     }
     catch (e) {
-      err = e
+      p8Err = e
     }
-    expect(err).toBeInstanceOf(ScopedCredentialPathError)
-    expect((err as Error).message).not.toContain(SECRET_PAYLOAD)
+    expect(p8Err).toBeInstanceOf(ScopedCredentialPathError)
+    expect((p8Err as Error).message).not.toContain(SECRET_PAYLOAD)
     rmSync(root, { recursive: true, force: true })
   })
 

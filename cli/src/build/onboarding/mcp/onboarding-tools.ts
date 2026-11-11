@@ -1,7 +1,7 @@
 // src/build/onboarding/mcp/onboarding-tools.ts
 import { Buffer } from 'node:buffer'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import process from 'node:process'
 import type { CapgoSDK } from '../../../sdk.js'
@@ -23,7 +23,7 @@ import { createCiSecretEntries, detectCiSecretTargets, getCiSecretRepoLabelAsync
 import { defaultExportPath, exportCredentialsToEnv } from '../env-export.js'
 import { generateWorkflow } from '../workflow-generator.js'
 import { writeWorkflowFile } from '../workflow-writer.js'
-import { makeMcpScopedReadFile, readScopedMcpCredentialFile } from './scoped-credential-path.js'
+import { readScopedMcpCredentialFile } from './scoped-credential-path.js'
 import { fetchUserInfo, revokeToken, runOAuthFlow, startOAuthFlow } from '../android/oauth-google.js'
 import open from 'open'
 
@@ -113,7 +113,8 @@ function buildAndroidEffectDeps(
     deleteAndroidProgress,
 
     // ── File system ───────────────────────────────────────────────────────────
-    readFile: makeMcpScopedReadFile(cwd),
+    readFile: (path: string) => readFile(path) as Promise<Buffer>,
+    readMcpServiceAccountJson: (path: string) => readScopedMcpCredentialFile(path, 'service-account-json', cwd),
     copyFile,
 
     // ── OAuth ─────────────────────────────────────────────────────────────────
@@ -324,7 +325,8 @@ function buildIosEffectDeps(cwd: string, getAppIdFn: () => Promise<string | unde
       createP12(certificatePem, privateKeyPem, password).p12Base64,
 
     // ── file system ──
-    readFile: makeMcpScopedReadFile(cwd),
+    readFile: (path: string) => readFile(path) as Promise<Buffer>,
+    readMcpP8: (path: string) => readScopedMcpCredentialFile(path, 'p8', cwd),
     copyFile,
     isMacOS: () => process.platform === 'darwin',
 

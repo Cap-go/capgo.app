@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /** Headless tests for the MCP-conducted Capgo Builder onboarding engine. */
 import process from 'node:process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const MCP_TEST_APP_ROOT = '/tmp/app'
+const MCP_TEST_APP_ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'capgo-mcp-onboarding-')))
 const MCP_FIXTURE_SA = join(MCP_TEST_APP_ROOT, 'creds', 'sa.json')
 const MCP_FIXTURE_SA_BAD = join(MCP_TEST_APP_ROOT, 'creds', 'bad.json')
 const MCP_FIXTURE_P8 = join(MCP_TEST_APP_ROOT, 'AuthKey.p8')
@@ -71,7 +72,7 @@ const facts = (o = {}) => ({
 // Build a minimal fake deps with no android-specific fields (for non-android tests)
 function minimalFakeDeps(o = {}) {
   return {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['ios', 'android'],
@@ -164,7 +165,7 @@ await test('decideAdvance: platform choice while unauthenticated bounces to logi
 const { gatherFacts, runStart, runAdvance } = await import('../src/build/onboarding/mcp/engine.ts')
 
 const fakeDeps = (o = {}) => ({
-  cwd: '/tmp/app',
+  cwd: MCP_TEST_APP_ROOT,
   hasSavedKey: () => true,
   getAppId: async () => 'com.acme.app',
   detectPlatforms: async () => ['ios'],
@@ -276,7 +277,7 @@ await test('decideAdvance: platform chosen but app not registered → routes bac
 function appPhaseDeps(o = {}) {
   let registered = false
   return {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['ios', 'android'],
@@ -456,7 +457,7 @@ function androidBridgeDeps(overrides = {}) {
   }
 
   const deps = {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['android'],
@@ -914,7 +915,7 @@ function iosDeps(o = {}) {
     ...(iosOverrides || {}),
   }
   return {
-    cwd: '/tmp/app',
+    cwd: MCP_TEST_APP_ROOT,
     hasSavedKey: () => true,
     getAppId: async () => 'com.acme.app',
     detectPlatforms: async () => ['ios'],
@@ -1720,7 +1721,6 @@ await test('A3: persistAndroidInput({ keystoreNewAlias:"release" }) → progress
 // and a fake writeKeystoreFile that records what was written.
 // They prove the MCP bridge drives the interactive keystore flow end-to-end.
 
-import { tmpdir } from 'node:os'
 import { writeFile, readFile as fsReadFile, mkdir } from 'node:fs/promises'
 import { join as pathJoin } from 'node:path'
 import { generateKeystore as realGenerateKeystore, listKeystoreAliases as realListKeystoreAliases, tryUnlockPrivateKey as realTryUnlockPrivateKey, generateRandomPassword as realGenerateRandomPassword } from '../src/build/onboarding/android/keystore.ts'

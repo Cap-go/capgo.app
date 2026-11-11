@@ -414,6 +414,8 @@ export interface IosEffectDeps {
 
   // ── file system (injected so effects can be tested without real FS) ──────
   readFile?: (path: string) => Promise<Buffer>
+  /** MCP: scoped .p8 read (optional; TUI uses readFile). */
+  readMcpP8?: (path: string) => Promise<Buffer>
   copyFile?: (src: string, dest: string) => Promise<void>
   /**
    * Open the native .p8 file picker (p8-method-select). Resolves to the chosen
@@ -3419,9 +3421,10 @@ function resolveIosBundleId(progress: OnboardingProgress, deps?: Pick<IosEffectD
 async function resolveP8Content(progress: OnboardingProgress, deps: IosEffectDeps): Promise<Buffer> {
   if (deps.carried?.p8Content)
     return deps.carried.p8Content
-  if (progress.p8Path && deps.readFile) {
+  const readP8 = deps.readMcpP8 ?? deps.readFile
+  if (progress.p8Path && readP8) {
     try {
-      return await deps.readFile(progress.p8Path)
+      return await readP8(progress.p8Path)
     }
     catch (err) {
       deps.onInternalLog?.(`saved .p8 no longer readable, re-prompting: ${err instanceof Error ? err.message : String(err)}`)

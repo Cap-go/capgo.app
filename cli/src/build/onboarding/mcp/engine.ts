@@ -1312,9 +1312,10 @@ export async function decideIos(
       // credential. They ride the process-local session (never persisted);
       // after a server restart re-read them from the persisted p8Path — the
       // same self-heal resolveP8Content performs for verifying-key.
-      if (step === 'saving-credentials' && !session.iosCarried.p8Content && progress.p8Path && ios.readFile) {
+      const readP8 = ios.readMcpP8 ?? ios.readFile
+      if (step === 'saving-credentials' && !session.iosCarried.p8Content && progress.p8Path && readP8) {
         try {
-          mergeIosCarried(appId, { p8Content: await ios.readFile(progress.p8Path) })
+          mergeIosCarried(appId, { p8Content: await readP8(progress.p8Path) })
         }
         catch {
           // Degrade: credentials save without the APPLE_KEY_* fields.
@@ -3701,10 +3702,10 @@ async function persistIosApiKeyInput(deps: EngineDeps, appId: string, input: Onb
   let updated = progressRaw
   if (!updated.setupMethod)
     updated = applyIosInput('setup-method-select', updated, { step: 'setup-method-select', value: 'create' })
+  let pendingP8: Buffer | undefined
   if (input.p8Path) {
-    const p8Bytes = await readScopedMcpCredentialFile(input.p8Path, 'p8', deps.cwd)
+    pendingP8 = await readScopedMcpCredentialFile(input.p8Path, 'p8', deps.cwd)
     updated = applyIosInput('input-p8-path', updated, { step: 'input-p8-path', value: input.p8Path })
-    mergeIosCarried(appId, { p8Content: p8Bytes })
   }
   if (input.keyId)
     updated = applyIosInput('input-key-id', updated, { step: 'input-key-id', value: input.keyId })
@@ -3713,6 +3714,8 @@ async function persistIosApiKeyInput(deps: EngineDeps, appId: string, input: Onb
 
   if (updated !== progressRaw)
     await ios?.saveProgress?.(appId, updated)
+  if (pendingP8)
+    mergeIosCarried(appId, { p8Content: pendingP8 })
 }
 
 /**
