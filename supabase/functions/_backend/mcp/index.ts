@@ -205,7 +205,7 @@ export function createMcpApp(dispatch: McpDispatch) {
         // then let its parser apply the same quality rules and ordering to Q as to q.
         const normalizedTypes = parseAccept(types.map(({ type, params }) => [
           type.toLowerCase(),
-          ...Object.entries(params).map(([name, value]) => `${name.toLowerCase()}="${value.replace(/["\\]/g, '\\$&')}"`),
+          ...Object.entries(params).map(([name, value]) => `${name.toLowerCase()}="${value.replace(/["\\]/g, String.raw`\$&`)}"`),
         ].join(';')).join(','))
         // Explicit MCP stream requests retain the stateless transport's 405 response.
         if (normalizedTypes.some(type => type.type === 'text/event-stream' && type.q > 0))
