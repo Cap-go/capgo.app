@@ -15,6 +15,11 @@ const FAILED_AUTH_PATH = '/rate-limit/failed-auth'
 const FAILED_ACCOUNT_AUTH_PATH = '/rate-limit/failed-auth-account'
 const API_KEY_RATE_LIMIT_PATH = '/rate-limit/apikey'
 const UPLOAD_API_KEY_RATE_LIMIT_PATH = '/rate-limit/apikey-upload'
+const CAPTCHA_FALLBACK_IP_PATH = '/rate-limit/captcha-fallback-ip'
+const CAPTCHA_FALLBACK_EMAIL_PATH = '/rate-limit/captcha-fallback-email'
+const CAPTCHA_FALLBACK_TTL = 60 * 60
+const DEFAULT_CAPTCHA_FALLBACK_IP_LIMIT = 8
+const DEFAULT_CAPTCHA_FALLBACK_EMAIL_LIMIT = 4
 
 interface RateLimitData {
   count: number
@@ -371,4 +376,66 @@ function getAPIKeyRateLimit(c: Context, scope: APIKeyRateLimitScope): number {
       return parsed
   }
   return scope === 'upload' ? DEFAULT_UPLOAD_API_KEY_RATE_LIMIT : DEFAULT_API_KEY_RATE_LIMIT
+}
+
+function buildCaptchaFallbackResetAt() {
+  return Date.now() + CAPTCHA_FALLBACK_TTL * 1000
+}
+
+async function readCaptchaFallbackLimit(
+  c: Context,
+  path: string,
+  cachePart: Record<string, string>,
+  limit: number,
+): Promise<RateLimitStatus> {
+  const cacheHelper = new CacheHelper(c)
+  const cacheKey = cacheHelper.buildRequest(path, cachePart)
+  const data = await cacheHelper.matchJson<RateLimitData>(cacheKey)
+  if (!data)
+    return { limited: false }
+  const isLimited = data.count >= limit
+  return { limited: isLimited, resetAt: data.resetAt }
+}
+
+async function incrementCaptchaFallbackLimit(
+  c: Context,
+  path: string,
+  cachePart: Record<string, string>,
+): Promise<void> {
+  const cacheHelper = new CacheHelper(c)
+  const cacheKey = cacheHelper.buildRequest(path, cachePart)
+  const existingData = await cacheHelper.matchJson<RateLimitData>(cacheKey)
+  const resetAt = buildCaptchaFallbackResetAt()
+  const newData: RateLimitData = {
+    count: (existingData?.count ?? 0) + 1,
+    resetAt,
+  }
+  await cacheHelper.putJson(cacheKey, newData, getRateLimitWindowSeconds(resetAt, Date.now()))
+}
+
+/**
+ * Console Turnstile fallback is only for email proof flows when the widget cannot load.
+ * Stricter than generic failed-auth limits because it skips client Turnstile.
+ */
+export async function isCaptchaFallbackIpRateLimited(c: Context): Promise<RateLimitStatus> {
+  const ip = getClientIP(c)
+  if (ip === 'unknown')
+    return { limited: false }
+  return await readCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_IP_PATH, { ip }, DEFAULT_CAPTCHA_FALLBACK_IP_LIMIT)
+}
+
+export async function isCaptchaFallbackEmailRateLimited(c: Context, email: string): Promise<RateLimitStatus> {
+  const accountKey = await getAccountRateLimitKey(email)
+  if (!accountKey)
+    return { limited: false }
+  return await readCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_EMAIL_PATH, { email: accountKey }, DEFAULT_CAPTCHA_FALLBACK_EMAIL_LIMIT)
+}
+
+export async function recordCaptchaFallbackRequest(c: Context, email: string): Promise<void> {
+  const ip = getClientIP(c)
+  if (ip !== 'unknown')
+    await incrementCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_IP_PATH, { ip })
+  const accountKey = await getAccountRateLimitKey(email)
+  if (accountKey)
+    await incrementCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_EMAIL_PATH, { email: accountKey })
 }

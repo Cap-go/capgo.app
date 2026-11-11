@@ -8,9 +8,12 @@ import IconPassword from '~icons/ph/key'
 import { authGhostButtonClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
 import FormField from '~/components/forms/FormField.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
+import { useConsoleTurnstileCaptcha } from '~/composables/useConsoleTurnstileCaptcha'
 import { useConsole } from '~/services/console'
+import { requestConsoleCaptchaFallbackEmail } from '~/services/consoleCaptchaFallback'
 import { openSupport } from '~/services/support'
 import { useDialogV2Store } from '~/stores/dialogv2'
+import { waitForTurnstileToken } from '~/utils/consoleTurnstileCaptcha'
 import { rules, validateField } from '~/utils/formValidation'
 
 const { t } = useI18n()
@@ -19,10 +22,18 @@ const route = useRoute('/forgot_password')
 const capgo = useConsole()
 const dialogStore = useDialogV2Store()
 const step = ref(1)
-const turnstileToken = ref('')
 const mfaCode = ref('')
-
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
+const {
+  turnstileToken,
+  captchaComponent,
+  shouldBlockForCaptcha,
+  useCaptchaFallback,
+  handleCaptchaUnavailable,
+  resetCaptchaWidget,
+} = useConsoleTurnstileCaptcha(captchaKey, { enabled: () => step.value === 1 })
+const captchaRecoverRetried = ref(false)
+const recoverFallbackSending = ref(false)
 
 const isLoading = ref(false)
 const isLoadingMain = ref(true)
@@ -68,18 +79,65 @@ function finishWithError(message: string, error?: unknown) {
   isLoading.value = false
 }
 
-async function step1(form: { email: string }) {
+async function sendRecoverFallback(email: string) {
   const redirectTo = `${import.meta.env.VITE_APP_URL}/forgot_password?step=2`
-  // console.log('redirect', redirectTo)
-  const { error } = await capgo.auth.resetPasswordForEmail(form.email, { redirectTo, captchaToken: turnstileToken.value })
+  recoverFallbackSending.value = true
+  try {
+    const { error } = await requestConsoleCaptchaFallbackEmail(email, 'recover', redirectTo)
+    if (error) {
+      toast.error(t('email-otp-send-failed'))
+      return
+    }
+    toast.success(t('forgot-check-email'))
+  }
+  finally {
+    recoverFallbackSending.value = false
+    isLoading.value = false
+  }
+}
+
+async function resetPasswordWithCaptcha(email: string) {
+  const redirectTo = `${import.meta.env.VITE_APP_URL}/forgot_password?step=2`
+  return await capgo.auth.resetPasswordForEmail(email, { redirectTo, captchaToken: turnstileToken.value })
+}
+
+async function step1(form: { email: string }) {
+  if (useCaptchaFallback()) {
+    await sendRecoverFallback(form.email)
+    return
+  }
+  if (shouldBlockForCaptcha()) {
+    formErrors.value = [t('login-captcha-verifying')]
+    isLoading.value = false
+    return
+  }
+
+  let { error } = await resetPasswordWithCaptcha(form.email)
+  if (error?.code === 'captcha_failed' && !captchaRecoverRetried.value) {
+    captchaRecoverRetried.value = true
+    resetCaptchaWidget()
+    try {
+      await waitForTurnstileToken(() => turnstileToken.value)
+      ;({ error } = await resetPasswordWithCaptcha(form.email))
+    }
+    catch {
+      toast.error(t('captcha-fail'))
+      formErrors.value = [t('captcha-fail')]
+      isLoading.value = false
+      return
+    }
+  }
+
   if (error) {
     if (error.message.includes('captcha')) {
+      resetCaptchaWidget()
       toast.error(t('captcha-fail'))
     }
     formErrors.value = [error.message]
     console.error('error reset', error)
   }
   else {
+    captchaRecoverRetried.value = false
     toast.success(t('forgot-check-email'))
   }
   isLoading.value = false
@@ -267,9 +325,29 @@ watchEffect(() => {
           />
         </div>
 
-        <div v-if="step === 1 && captchaKey" class="overflow-hidden">
-          <VueTurnstile v-model="turnstileToken" size="flexible" :site-key="captchaKey" />
+        <p
+          v-if="step === 1 && shouldBlockForCaptcha() && !useCaptchaFallback()"
+          role="status"
+          class="text-sm text-slate-600 dark:text-slate-300"
+          data-test="forgot-captcha-verifying"
+        >
+          {{ t('login-captcha-verifying') }}
+        </p>
+
+        <div v-if="step === 1 && captchaKey && !useCaptchaFallback()" class="overflow-hidden">
+          <VueTurnstile
+            ref="captchaComponent"
+            v-model="turnstileToken"
+            size="flexible"
+            :site-key="captchaKey"
+            @error="handleCaptchaUnavailable('Turnstile error', $event)"
+            @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
+          />
         </div>
+
+        <p v-else-if="step === 1 && useCaptchaFallback()" class="text-sm text-slate-600 dark:text-slate-300" data-test="forgot-captcha-fallback">
+          {{ t('captcha-resend-unavailable') }}
+        </p>
 
         <ul v-if="formErrors.length" role="alert" class="mb-1.5">
           <li v-for="error in formErrors" :key="error" class="text-xs text-red-600 dark:text-red-400">
@@ -278,7 +356,13 @@ watchEffect(() => {
         </ul>
 
         <div>
-          <button type="submit" data-test="submit" :disabled="isLoading" :aria-busy="isLoading ? 'true' : 'false'" :class="authPrimaryButtonClass">
+          <button
+            type="submit"
+            data-test="submit"
+            :disabled="isLoading || (step === 1 && shouldBlockForCaptcha())"
+            :aria-busy="isLoading ? 'true' : 'false'"
+            :class="authPrimaryButtonClass"
+          >
             <svg v-if="isLoading" class="inline-block mr-1 h-5 w-5 animate-spin align-middle text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
               <circle
                 class="opacity-25"

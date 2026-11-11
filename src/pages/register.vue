@@ -7,6 +7,7 @@ import IconPassword from '~icons/ph/key'
 import { authGhostButtonClass, authInlineLinkClass, authPanelClass, authPrimaryButtonClass } from '~/components/auth/pageStyles'
 import FormField from '~/components/forms/FormField.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
+import { useConsoleTurnstileCaptcha } from '~/composables/useConsoleTurnstileCaptcha'
 import { getCapgoApiErrorCode } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { FunctionsHttpError } from '~/services/consoleClient'
@@ -17,8 +18,13 @@ import { rules, validateField } from '~/utils/formValidation'
 const router = useRouter()
 const capgo = useConsole()
 const { t } = useI18n()
-const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
+const {
+  turnstileToken,
+  captchaComponent,
+  shouldBlockForCaptcha,
+  handleCaptchaUnavailable,
+} = useConsoleTurnstileCaptcha(captchaKey)
 const isLoading = ref(false)
 const email = ref('')
 const password = ref('')
@@ -43,6 +49,10 @@ if (window.location.host === 'console.capgo.app') {
 async function submit(form: { password: string, email: string }) {
   if (isLoading.value)
     return
+  if (shouldBlockForCaptcha()) {
+    formErrors.value = [t('login-captcha-verifying')]
+    return
+  }
 
   isLoading.value = true
   try {
@@ -138,13 +148,24 @@ function onSubmit() {
           />
         </div>
 
+        <p v-if="shouldBlockForCaptcha()" role="status" class="md:col-span-2 text-sm text-slate-600 dark:text-slate-300" data-test="register-captcha-verifying">
+          {{ t('login-captcha-verifying') }}
+        </p>
+
         <div v-if="captchaKey" class="md:col-span-2 overflow-hidden">
-          <VueTurnstile v-model="turnstileToken" size="flexible" :site-key="captchaKey" />
+          <VueTurnstile
+            ref="captchaComponent"
+            v-model="turnstileToken"
+            size="flexible"
+            :site-key="captchaKey"
+            @error="handleCaptchaUnavailable('Turnstile error', $event)"
+            @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
+          />
         </div>
 
         <div class="md:col-span-2">
           <button
-            :disabled="isLoading"
+            :disabled="isLoading || shouldBlockForCaptcha()"
             type="submit"
             data-test="submit"
             :class="authPrimaryButtonClass"

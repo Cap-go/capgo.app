@@ -17,22 +17,32 @@ import IconPassword from '~icons/ph/key'
 import IconMfa from '~icons/simple-icons/2fas'
 import FormField from '~/components/forms/FormField.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
+import { useConsoleTurnstileCaptcha } from '~/composables/useConsoleTurnstileCaptcha'
 import { autoAuth, defaultApiHost, hashEmail, useConsole } from '~/services/console'
+import { requestConsoleCaptchaFallbackEmail } from '~/services/consoleCaptchaFallback'
 import { hideLoader } from '~/services/loader'
 import { openSupport } from '~/services/support'
 import { isCapgoDomainReferrer, isDirectLoginLanding } from '~/utils/capgoReferrer'
+import { waitForTurnstileToken } from '~/utils/consoleTurnstileCaptcha'
 import { rules, validateField } from '~/utils/formValidation'
 import { getLoginActionVisibility } from '~/utils/loginActions'
 import { validateRedirectPath } from '~/utils/safeRedirect'
-import { safeResetTurnstile } from '~/utils/turnstile'
 
 const route = useRoute('/login')
 const capgo = useConsole()
 const isLoading = ref(false)
 const isMobile = ref(Capacitor.isNativePlatform())
-const turnstileToken = ref('')
 const captchaKey = ref(import.meta.env.VITE_CAPTCHA_KEY)
 const statusAuth: Ref<LoginAuthStatus> = ref('login')
+const {
+  turnstileToken,
+  captchaComponent,
+  shouldBlockForCaptcha,
+  useCaptchaFallback,
+  handleCaptchaUnavailable,
+  resetCaptchaWidget,
+  scheduleCaptchaInitTimeout,
+} = useConsoleTurnstileCaptcha(captchaKey, { enabled: () => statusAuth.value === 'login' })
 const mfaLoginFactor: Ref<Factor | null> = ref(null)
 const mfaChallengeId: Ref<string> = ref('')
 const mfaCode = ref('')
@@ -41,7 +51,9 @@ const querySessionRefreshToken = ref('')
 const hasQuerySession = ref(false)
 const router = useRouter()
 const { t } = useI18n()
-const captchaComponent = ref<InstanceType<typeof VueTurnstile> | null>(null)
+const captchaLoginRetried = ref(false)
+const magicLinkSending = ref(false)
+const magicLinkSent = ref(false)
 
 // Keep email, password, and OTP in one form so password managers can fill them
 // with a single biometric prompt. Password stays hidden until the domain is
@@ -65,8 +77,6 @@ const hasStoredSession = (() => {
 })()
 const showSigningIn = computed(() => hasStoredSession && isCheckingSavedSession.value)
 const profileUnavailable = computed(() => route.query.profile_unavailable === '1')
-const captchaStatus = ref<'disabled' | 'loading' | 'ready' | 'unavailable'>(captchaKey.value ? 'loading' : 'disabled')
-let captchaInitTimeout: ReturnType<typeof setTimeout> | null = null
 let domainCheckTimer: ReturnType<typeof setTimeout> | null = null
 let domainCheckSeq = 0
 
@@ -94,7 +104,8 @@ const autofillPreserveHiddenStyle = {
   overflow: 'hidden',
   pointerEvents: 'none',
 } as const
-const shouldBlockForCaptcha = computed(() => !!captchaKey.value && captchaStatus.value === 'loading' && !turnstileToken.value)
+const shouldBlockForCaptchaComputed = computed(() => shouldBlockForCaptcha())
+const showCaptchaVerifying = computed(() => shouldBlockForCaptchaComputed.value && !useCaptchaFallback())
 const loginHeroChips = computed(() => [
   t('login-chip-live-updates'),
   t('login-chip-release-analytics'),
@@ -171,71 +182,50 @@ function focusLoginEmailInput(attempt = 0) {
   }, attempt === 0 ? 240 : 100)
 }
 
-function clearCaptchaInitTimeout() {
-  if (captchaInitTimeout) {
-    clearTimeout(captchaInitTimeout)
-    captchaInitTimeout = null
-  }
-}
-
-function scheduleCaptchaInitTimeout() {
-  if (!captchaKey.value || !isLoginStep.value) {
-    clearCaptchaInitTimeout()
-    return
-  }
-
-  clearCaptchaInitTimeout()
-  captchaInitTimeout = setTimeout(() => {
-    if (!turnstileToken.value && !(globalThis as typeof globalThis & { turnstile?: unknown }).turnstile) {
-      captchaStatus.value = 'unavailable'
-      console.error('Turnstile failed to initialize')
-    }
-  }, 8000)
-}
-
-function handleCaptchaUnavailable(reason: string, error?: unknown) {
-  captchaStatus.value = 'unavailable'
-  clearCaptchaInitTimeout()
-  console.error(reason, error)
-}
-
-watch(turnstileToken, (token) => {
-  if (!captchaKey.value) {
-    captchaStatus.value = 'disabled'
-    return
-  }
-
-  if (token) {
-    captchaStatus.value = 'ready'
-    clearCaptchaInitTimeout()
-  }
-  else if (isLoginStep.value) {
-    captchaStatus.value = 'loading'
-    scheduleCaptchaInitTimeout()
-  }
-})
-
 watch(statusAuth, (status) => {
-  if (!captchaKey.value) {
-    captchaStatus.value = 'disabled'
-    clearCaptchaInitTimeout()
-    return
-  }
-
-  if (status === 'login') {
-    captchaStatus.value = turnstileToken.value ? 'ready' : 'loading'
+  if (status === 'login')
     scheduleCaptchaInitTimeout()
-  }
-  else {
-    clearCaptchaInitTimeout()
-  }
 }, { immediate: true })
 
 onBeforeUnmount(() => {
-  clearCaptchaInitTimeout()
   if (domainCheckTimer)
     clearTimeout(domainCheckTimer)
 })
+
+async function signInWithPasswordOnce(form: { email: string, password: string }) {
+  return await capgo.auth.signInWithPassword({
+    email: form.email,
+    password: form.password,
+    options: {
+      captchaToken: turnstileToken.value,
+    },
+  })
+}
+
+async function sendMagicLinkFallback() {
+  const email = emailForLogin.value.trim()
+  if (!email || magicLinkSending.value)
+    return
+  if (emailErrors.value.length) {
+    submitted.value = true
+    return
+  }
+
+  magicLinkSending.value = true
+  magicLinkSent.value = false
+  try {
+    const { error } = await requestConsoleCaptchaFallbackEmail(email, 'magic_link')
+    if (error) {
+      toast.error(t('email-otp-send-failed'))
+      return
+    }
+    magicLinkSent.value = true
+    toast.success(t('login-magic-link-sent'))
+  }
+  finally {
+    magicLinkSending.value = false
+  }
+}
 
 async function nextLogin() {
   const redirectTarget = typeof route.query.to === 'string'
@@ -345,13 +335,33 @@ async function login(form: { email: string, password: string }) {
     formErrors.value = [t('used-to-create')]
     return
   }
-  const { error } = await capgo.auth.signInWithPassword({
-    email: form.email,
-    password: form.password,
-    options: {
-      captchaToken: turnstileToken.value,
-    },
-  })
+  if (useCaptchaFallback()) {
+    isLoading.value = false
+    formErrors.value = [t('login-captcha-fallback-required')]
+    return
+  }
+
+  if (shouldBlockForCaptchaComputed.value) {
+    isLoading.value = false
+    return
+  }
+
+  let { error } = await signInWithPasswordOnce(form)
+  if (error?.code === 'captcha_failed' && !captchaLoginRetried.value) {
+    captchaLoginRetried.value = true
+    resetCaptchaWidget()
+    try {
+      await waitForTurnstileToken(() => turnstileToken.value)
+      ;({ error } = await signInWithPasswordOnce(form))
+    }
+    catch {
+      isLoading.value = false
+      toast.error(t('captcha-fail'))
+      formErrors.value = [t('captcha-fail')]
+      return
+    }
+  }
+
   if (error) {
     isLoading.value = false
     const isExpectedAuthError = error.code === 'invalid_credentials'
@@ -359,13 +369,10 @@ async function login(form: { email: string, password: string }) {
     if (!isExpectedAuthError)
       console.error('Login failed', error)
     formErrors.value = [error.message]
-    if (error.code === 'invalid_credentials' || error.message.includes('Invalid login credentials')) {
-      turnstileToken.value = ''
-      safeResetTurnstile(captchaComponent.value)
-    }
+    if (error.code === 'invalid_credentials' || error.message.includes('Invalid login credentials'))
+      resetCaptchaWidget()
     if (error.code === 'captcha_failed' || error.message.includes('captcha')) {
-      turnstileToken.value = ''
-      safeResetTurnstile(captchaComponent.value)
+      resetCaptchaWidget()
       toast.error(t('captcha-fail'))
     }
     else {
@@ -374,6 +381,8 @@ async function login(form: { email: string, password: string }) {
 
     return
   }
+
+  captchaLoginRetried.value = false
 
   if (form.email.endsWith('review@capgo.app') && Capacitor.isNativePlatform()) {
     await checkReviewAccount(form)
@@ -504,6 +513,11 @@ async function handleLoginSubmit(form: { email: string, password: string, code?:
     return
   }
 
+  if (shouldBlockForCaptchaComputed.value) {
+    formErrors.value = [t('login-captcha-verifying')]
+    return
+  }
+
   isLoading.value = true
   const email = form.email.trim()
   emailForLogin.value = email
@@ -524,7 +538,7 @@ async function handleLoginSubmit(form: { email: string, password: string, code?:
 }
 
 async function handleSsoLogin() {
-  if (shouldBlockForCaptcha.value) {
+  if (shouldBlockForCaptchaComputed.value) {
     isLoading.value = false
     return
   }
@@ -554,8 +568,7 @@ async function handleSsoLogin() {
 
     if (error) {
       console.error('SSO login error', error)
-      turnstileToken.value = ''
-      safeResetTurnstile(captchaComponent.value)
+      resetCaptchaWidget()
       if (error.message.includes('captcha')) {
         toast.error(t('captcha-fail'))
       }
@@ -572,8 +585,7 @@ async function handleSsoLogin() {
   }
   catch (err) {
     console.error('SSO login error', err)
-    turnstileToken.value = ''
-    safeResetTurnstile(captchaComponent.value)
+    resetCaptchaWidget()
     toast.error(t('invalid-auth'))
     isLoading.value = false
   }
@@ -1018,7 +1030,7 @@ onMounted(checkLogin)
                         <button
                           type="button"
                           data-test="sso-login"
-                          :disabled="isLoading || shouldBlockForCaptcha || isCheckingSavedSession"
+                          :disabled="isLoading || shouldBlockForCaptchaComputed || isCheckingSavedSession"
                           :aria-busy="isLoading ? 'true' : 'false'"
                           :class="authPrimaryButtonClass"
                           @click="handleSsoLogin"
@@ -1061,7 +1073,16 @@ onMounted(checkLogin)
                         />
                       </div>
 
-                      <div v-if="!!captchaKey">
+                      <p
+                        v-if="showCaptchaVerifying"
+                        role="status"
+                        class="text-sm text-slate-600 dark:text-slate-300"
+                        data-test="login-captcha-verifying"
+                      >
+                        {{ t('login-captcha-verifying') }}
+                      </p>
+
+                      <div v-if="!!captchaKey && !useCaptchaFallback()">
                         <VueTurnstile
                           ref="captchaComponent"
                           v-model="turnstileToken"
@@ -1070,6 +1091,27 @@ onMounted(checkLogin)
                           @error="handleCaptchaUnavailable('Turnstile error', $event)"
                           @unsupported="handleCaptchaUnavailable('Turnstile unsupported')"
                         />
+                      </div>
+
+                      <div
+                        v-else-if="useCaptchaFallback()"
+                        class="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/90 p-4 text-sm text-slate-600 dark:border-slate-600/80 dark:bg-slate-900/60 dark:text-slate-300"
+                        data-test="login-captcha-fallback"
+                      >
+                        <p>{{ t('login-captcha-fallback-message') }}</p>
+                        <p v-if="magicLinkSent" role="status">
+                          {{ t('login-magic-link-sent') }}
+                        </p>
+                        <button
+                          type="button"
+                          data-test="login-magic-link"
+                          :class="authSecondaryButtonClass"
+                          :disabled="magicLinkSending || !emailForLogin.trim()"
+                          :aria-busy="magicLinkSending ? 'true' : 'false'"
+                          @click="sendMagicLinkFallback"
+                        >
+                          {{ magicLinkSending ? t('login-captcha-verifying') : t('login-send-magic-link') }}
+                        </button>
                       </div>
                     </div>
 
@@ -1106,7 +1148,7 @@ onMounted(checkLogin)
                         <button
                           type="submit"
                           data-test="submit"
-                          :disabled="statusAuth === '2fa' || isLoading || shouldBlockForCaptcha || isCheckingSavedSession"
+                          :disabled="statusAuth === '2fa' || isLoading || shouldBlockForCaptchaComputed || isCheckingSavedSession || useCaptchaFallback()"
                           :aria-busy="isLoading ? 'true' : 'false'"
                           :class="authPrimaryButtonClass"
                         >

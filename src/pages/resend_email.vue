@@ -8,6 +8,7 @@ import { authGhostButtonClass, authInsetCardClass, authPanelClass, authPrimaryBu
 import FormField from '~/components/forms/FormField.vue'
 import VueTurnstile from '~/components/VueTurnstile.vue'
 import { useConsole } from '~/services/console'
+import { requestConsoleCaptchaFallbackEmail } from '~/services/consoleCaptchaFallback'
 import { getEmailOtpSendErrorMessage, getRecentEmailOtpVerification, parseEmailOtpSendError, sendEmailOtpVerification, verifyEmailOtp } from '~/services/emailOtp'
 import { openSupport } from '~/services/support'
 import { useMainStore } from '~/stores/main'
@@ -184,8 +185,23 @@ async function submit(form: { email: string }) {
   if (isLoading.value)
     return
 
+  if (resendCaptchaStatus.value === 'unavailable') {
+    isLoading.value = true
+    try {
+      const { error } = await requestConsoleCaptchaFallbackEmail(form.email, 'resend_signup')
+      if (error)
+        showResendError(t('confirm-email-send-failed'))
+      else
+        toast.success(t('confirm-email-sent'))
+    }
+    finally {
+      isLoading.value = false
+    }
+    return
+  }
+
   if (shouldBlockForResendCaptcha.value) {
-    resendFormErrors.value = [t('captcha-required')]
+    resendFormErrors.value = [t('login-captcha-verifying')]
     return
   }
 
