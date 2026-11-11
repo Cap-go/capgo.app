@@ -41,6 +41,7 @@ import { decryptZip } from './bundle/decrypt'
 import { deleteBundle } from './bundle/delete'
 import { encryptZip } from './bundle/encrypt'
 import { listBundle } from './bundle/list'
+import { recommendBundle } from './bundle/recommend'
 import { printReleaseType } from './bundle/releaseType'
 import { handleBundleUploadCommand } from './bundle/upload-command'
 import { zipBundle } from './bundle/zip'
@@ -65,17 +66,17 @@ import { observeCommand } from './observe/command'
 import { startOnboardingChecks } from './onboarding/background'
 import { waitForOnboardingChecks } from './onboarding/background-shutdown'
 import { finishOnboardingCommand } from './onboarding/background-workers'
-import { setNoticeOutputOptions } from './onboarding/setup-notice-policy'
 import { setupDebug } from './onboarding/setup-diagnostics'
+import { setNoticeOutputOptions } from './onboarding/setup-notice-policy'
 import { addOrganization, deleteOrganization, inviteMember, listMembers, listOrganizations, removeMember, setMemberRole, setOrganization } from './organization'
 import { capturePosthogException, getCommandPath, shouldCapturePosthogException } from './posthog'
 import { getPreviewQr } from './preview/qr'
 import { probe } from './probe'
 import { testRunDeviceCommand } from './run/device'
-import { getSimulatorCommand, startSimulatorCommand, stopSimulatorCommand } from './simulator/session'
 import { CliUserError } from './shared/cli-user-error'
 import { ORG_EMAIL_PREFERENCE_KEYS, USER_EMAIL_PREFERENCE_KEYS } from './shared/email-preferences'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
+import { getSimulatorCommand, startSimulatorCommand, stopSimulatorCommand } from './simulator/session'
 import { getAccount, setAccount } from './user/settings'
 import { whoami } from './user/whoami'
 import { formatError, setCapgoHostOverride } from './utils'
@@ -268,6 +269,20 @@ Examples:
 const bundle = program
   .command('bundle')
   .description(`📦 Manage app bundles for deployment in Capgo Cloud, including upload, compatibility checks, and encryption.`)
+
+bundle
+  .command('recommend [appId]')
+  .description('Suggest the next version using Cloudflare AI (active paid subscription required)')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+  .option('--base-version <version>', 'Override the latest Capgo version as the release baseline')
+  .option('--since <ref>', 'Git ref to compare from (defaults to the latest reachable local tag)')
+  .option('--ref <ref>', 'Git ref to compare to (defaults to HEAD locally; required for GitHub)')
+  .option('--repo <owner/repo>', 'Use GitHub comparison history through your authenticated gh CLI')
+  .option('--changelog', 'Also draft a Markdown changelog')
+  .option('--json', 'Print the recommendation as JSON')
+  .option('--dry-run', 'Print local context without sending it to Capgo or AI')
+  .action(recommendBundle)
 
 bundle
   .command('upload [appId]')
