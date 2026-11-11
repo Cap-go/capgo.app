@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
+import { accepts } from 'hono/accepts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
 import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
@@ -10,6 +11,7 @@ import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { MCP_AI_CATALOG, MCP_SERVER_CARD, MCP_SETUP_HTML } from './discovery.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
 import { withPg } from './oauth_shared.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
@@ -34,7 +36,7 @@ const STREAM_MAX_BYTES = 256 * 1024
 
 const mcpCors = cors({
   origin: '*',
-  allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Last-Event-ID', 'capgkey', 'x-api-key'],
   exposeHeaders: ['WWW-Authenticate', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
   maxAge: 86400,
@@ -176,13 +178,47 @@ export function createMcpApp(dispatch: McpDispatch) {
   app.use(`${MCP_PATH}/*`, mcpCors)
   app.route('/', oauthApp)
 
-  // Stateless server: no server-initiated SSE stream and no sessions to terminate.
+  // Serve the current discovery location and the older well-known convention used by crawlers.
+  app.get(`${MCP_PATH}/server-card`, (c) => {
+    c.header('Cache-Control', 'public, max-age=3600')
+    return c.json(MCP_SERVER_CARD, 200, { 'Content-Type': 'application/mcp-server-card+json' })
+  })
+  app.get('/.well-known/mcp/server-card.json', (c) => {
+    c.header('Cache-Control', 'public, max-age=3600')
+    return c.json(MCP_SERVER_CARD, 200, { 'Content-Type': 'application/mcp-server-card+json' })
+  })
+  app.get('/.well-known/ai-catalog.json', (c) => {
+    c.header('Cache-Control', 'public, max-age=3600')
+    return c.json(MCP_AI_CATALOG, 200, { 'Content-Type': 'application/ai-catalog+json' })
+  })
+
   app.get(MCP_PATH, (c) => {
-    c.header('Allow', 'POST, OPTIONS')
+    c.header('Vary', 'Accept')
+    const representation = accepts(c, {
+      header: 'Accept',
+      supports: ['text/html'],
+      default: 'text/html',
+      match: (types) => {
+        // Explicit MCP stream requests retain the stateless transport's 405 response.
+        if (types.some(type => type.type === 'text/event-stream' && type.q > 0))
+          return 'protocol'
+        const html = types.find(type => type.type === 'text/html')
+          ?? types.find(type => type.type === 'text/*')
+          ?? types.find(type => type.type === '*/*')
+        return html && html.q > 0 ? 'text/html' : 'protocol'
+      },
+    })
+    if (representation === 'text/html') {
+      c.header('Cache-Control', 'no-store')
+      return c.html(MCP_SETUP_HTML)
+    }
+    c.header('Cache-Control', 'no-store')
+    c.header('Allow', 'GET, HEAD, POST, OPTIONS')
     return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL https://api.capgo.app/mcp and the HTTP transport.'), 405)
   })
+  // Stateless server: no sessions to terminate.
   app.delete(MCP_PATH, (c) => {
-    c.header('Allow', 'POST, OPTIONS')
+    c.header('Allow', 'GET, HEAD, POST, OPTIONS')
     return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'This server does not use sessions, so there is nothing to close. Keep sending POST requests.'), 405)
   })
 

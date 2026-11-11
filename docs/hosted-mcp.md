@@ -11,6 +11,14 @@ The local server (`npx @capgo/cli@latest mcp`) still exists. Use it for tasks th
 | OAuth (Claude, ChatGPT, Cursor, VS Code, Lovable "OAuth") | The URL `https://api.capgo.app/mcp`. The client discovers login on its own. |
 | Bearer / API key header (Lovable "API key", n8n, scripts) | The URL, plus the header `Authorization: Bearer <Capgo API key>` |
 
+## Public discovery and setup
+
+Opening `https://api.capgo.app/mcp` in a browser shows setup instructions without requiring authentication. GET requests accepting `text/event-stream` still receive `405`: this stateless server does not open a server-initiated stream. JSON-RPC requests continue to use authenticated POST requests.
+
+The server publishes a [Server Card](https://github.com/modelcontextprotocol/ext-server-card) at `/mcp/server-card`, with an alias at `/.well-known/mcp/server-card.json` for crawlers using the older convention. `/.well-known/ai-catalog.json` links to the card. These public, cacheable documents describe the endpoint, transport, supported protocol versions and server identity; tools remain discoverable through authenticated `tools/list`.
+
+The card uses the namespaced discovery identifier `app.capgo/capgo`; the protocol keeps its existing `capgo` name. These discovery documents do not establish marketplace approval or listing in ChatGPT, Claude, Cursor or Muse. Those listings require separate submission and verification with each provider.
+
 ## Login flow (MCP authorization spec 2025-11-25)
 
 1. The client calls `POST /mcp` without a token. The server answers `401` with `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"`.
@@ -51,7 +59,7 @@ Tool wrappers for clients without protocol support: `capgo_list_event_types`, `c
 
 ## Tools
 
-The hosted server has about 50 tools. They cover:
+The hosted server has 75 tools. They cover:
 - account and organizations, including members, audit logs and API keys,
 - apps,
 - bundles,
@@ -63,6 +71,8 @@ The hosted server has about 50 tools. They cover:
 - push notifications.
 
 Each tool is a typed zod schema over an existing public API route. The route is replayed inside the API worker with the caller's API key, so RBAC, rate limits and audit logs behave exactly like the REST API.
+
+Tool results currently contain text blocks, including serialized JSON for API results. They do not return MCP `structuredContent`, so tools do not advertise `outputSchema`. Adding a schema alone would promise a structured result that clients do not receive.
 
 Tool annotations tell clients how careful to be:
 - `readOnlyHint` marks tools that only read data.

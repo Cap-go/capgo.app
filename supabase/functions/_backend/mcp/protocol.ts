@@ -14,6 +14,15 @@ import { MAX_RESULT_CHARS, MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './to
 export const LATEST_PROTOCOL_VERSION = '2025-11-25'
 export const SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, '2025-06-18', '2025-03-26', '2024-11-05'] as const
 
+export const SERVER_INFO = {
+  name: 'capgo',
+  title: 'Capgo',
+  version,
+  description: 'Manage Capacitor app releases with Capgo: upload and deploy live update bundles, control channels and progressive rollouts, inspect devices and app health, run native builds, manage organizations, webhooks and push notifications, and search documentation.',
+  icons: [{ src: 'https://capgo.app/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'] }],
+  websiteUrl: 'https://capgo.app',
+}
+
 export const SERVER_INSTRUCTIONS = 'Capgo Cloud MCP server: manage Capacitor live updates (OTA). '
   + 'List organizations and apps, inspect bundles, channels and devices, deploy a bundle by updating a channel, '
   + 'run progressive rollouts, read statistics and Observe health data, follow native builds, manage webhooks and push notifications, '
@@ -186,14 +195,7 @@ export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext
           tools: { listChanged: false },
           events: { list: true, subscribe: true, unsubscribe: true },
         },
-        serverInfo: {
-          name: 'capgo',
-          title: 'Capgo',
-          version,
-          description: 'Manage Capacitor app releases with Capgo: upload and deploy live update bundles, control channels and progressive rollouts, inspect devices and app health, run native builds, manage organizations, webhooks and push notifications, and search documentation.',
-          icons: [{ src: 'https://capgo.app/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'] }],
-          websiteUrl: 'https://capgo.app',
-        },
+        serverInfo: SERVER_INFO,
         instructions: SERVER_INSTRUCTIONS,
       })
     case 'ping':
