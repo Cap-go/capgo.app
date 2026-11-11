@@ -7,11 +7,13 @@ import { onboardingPlanStops } from '../src/utils/onboardingPlanStops'
 import {
   AI_ONBOARDING_PATH,
   aiGoalToIntent,
+  aiIntentEventProperties,
   aiOnboardingPathFor,
   checklistTaskListMode,
   defaultAiOrganizationName,
   initialChecklistOpen,
   initialOnboardingSetupScreen,
+  manualSetupCliCommand,
   readAiAgentProgress,
   readAiOnboardingGoal,
   readOnboardingSetupMode,
@@ -191,6 +193,12 @@ describe('AI onboarding goal', () => {
     expect(readAiOnboardingGoal({ intent: 'publish' })).toBeNull()
   })
 
+  it.concurrent('adds the saved intent to analytics only once a goal is chosen', () => {
+    expect(aiIntentEventProperties('builder')).toEqual({ intent: 'builder' })
+    expect(aiIntentEventProperties('unsure')).toEqual({ intent: 'exploring' })
+    expect(aiIntentEventProperties(null)).toEqual({})
+  })
+
   it.concurrent('opens the task list for AI setup and hides it for new manual signups only', () => {
     expect(checklistTaskListMode({ setup_mode: 'ai' })).toBe('open')
     expect(checklistTaskListMode({ setup_mode: 'manual' })).toBe('hidden')
@@ -228,6 +236,23 @@ describe('AI onboarding goal', () => {
       expect(prompt).toContain('wait for my confirmation')
     }
     expect(promptFor('both')).toContain('Help me pick the order')
+  })
+})
+
+describe('manual setup CLI command', () => {
+  it.concurrent('runs the Builder setup when the user wants native builds', () => {
+    expect(manualSetupCliCommand({ intent: 'builder' }, 'key-1')).toBe('npx @capgo/cli@latest build init -a key-1')
+    expect(manualSetupCliCommand({ intent: 'publish' }, 'key-1')).toBe('npx @capgo/cli@latest build init -a key-1')
+  })
+
+  it.concurrent('runs the live update init for every other intent', () => {
+    for (const intent of ['ota', 'both', 'exploring', undefined])
+      expect(manualSetupCliCommand({ intent }, 'key-1')).toBe('npx @capgo/cli@latest i key-1')
+    expect(manualSetupCliCommand(null, 'key-1')).toBe('npx @capgo/cli@latest i key-1')
+  })
+
+  it.concurrent('keeps the local API host flag', () => {
+    expect(manualSetupCliCommand({ intent: 'builder' }, 'key-1', ' --api-host http://localhost')).toBe('npx @capgo/cli@latest build init -a key-1 --api-host http://localhost')
   })
 })
 

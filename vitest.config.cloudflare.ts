@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => ({
     // These raw PostgreSQL DDL/RBAC and direct PostgREST tests belong to the backend suite, not concurrent Worker integration tests.
     exclude: [
       'tests/read-replica-schema-catalog.test.ts',
+      'tests/cicd-encryption-policy.test.ts',
       'tests/rbac-permissions.test.ts',
       'tests/private-role-bindings.test.ts',
       'tests/public-rest-unfiltered-rls.test.ts',

@@ -3,6 +3,16 @@ import { expect, test } from '@playwright/test'
 
 const fixture = '/playwright/fixtures/onboarding-setup.html?view=builder'
 
+for (const platform of ['ios', 'android']) {
+  test(`carries Builder and ${platform} into CI/CD setup`, async ({ page }) => {
+    await page.goto(`${fixture}&platform=${platform}`)
+    const toggle = page.locator('[data-test="builder-checklist-toggle"]')
+    if (await toggle.getAttribute('aria-expanded') === 'false')
+      await toggle.click()
+    await expect(page.locator('[data-test="builder-checklist-cicd-link"]')).toHaveAttribute('href', `/app/com.example.onboarding-preview/ci-cd?product=builder&platform=${platform}`)
+  })
+}
+
 async function openBuilderTask(page: Page, id: string) {
   const toggle = page.locator('[data-test="builder-checklist-toggle"]')
   if (await toggle.getAttribute('aria-expanded') === 'false')

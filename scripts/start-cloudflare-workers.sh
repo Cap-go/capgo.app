@@ -155,6 +155,10 @@ S3_REWRITE_LOCAL_ENDPOINT=false
 RATE_LIMIT_API_KEY=999999
 RATE_LIMIT_FAILED_AUTH=999999
 RATE_LIMIT_CHANNEL_SELF_IP=999999
+# Like the Supabase test runtime, finish request work before assertions run.
+CAPGO_PREVENT_BACKGROUND_FUNCTIONS=true
+# MCP Events integration tests subscribe to loopback challenge URLs.
+CAPGO_ALLOW_LOCAL_WEBHOOK_URLS=true
 ENV_EOF
 
 # KV plugin state switches (the KV test job sets PLUGIN_STATE_KV=on).
@@ -171,12 +175,14 @@ for s3_var in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_REGION; do
   fi
 done
 
+WRANGLER_DEV="${ROOT_DIR}/scripts/wrangler-dev-compat.sh"
+
 # Start API worker on its isolated port.
 echo -e "${GREEN}Starting API worker on port ${CLOUDFLARE_API_PORT}...${NC}"
 # The API worker purges the plugin worker's local Cache API after a KV plugin
 # state sync. Only the API worker gets the purge URL: on the plugin worker it
 # would also turn on the snippet edge answer fills.
-(cd "${ROOT_DIR}/cloudflare_workers/api" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_API_PORT}" --inspector-port "${API_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}" --var "UPDATES_CACHE_LOCAL_PURGE_URL:http://127.0.0.1:${CLOUDFLARE_PLUGIN_PORT}/cache_purge_local") &
+(cd "${ROOT_DIR}/cloudflare_workers/api" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_API_PORT}" --inspector-port "${API_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}" --var "UPDATES_CACHE_LOCAL_PURGE_URL:http://127.0.0.1:${CLOUDFLARE_PLUGIN_PORT}/cache_purge_local") &
 API_PID=$!
 
 # Wait a bit for the first worker to start.
@@ -184,7 +190,7 @@ sleep 3
 
 # Start Plugin worker on its isolated port.
 echo -e "${GREEN}Starting Plugin worker on port ${CLOUDFLARE_PLUGIN_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/plugin" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_PLUGIN_PORT}" --inspector-port "${PLUGIN_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
+(cd "${ROOT_DIR}/cloudflare_workers/plugin" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_PLUGIN_PORT}" --inspector-port "${PLUGIN_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 PLUGIN_PID=$!
 
 # Wait a bit for the second worker to start.
@@ -192,7 +198,7 @@ sleep 3
 
 # Start Files worker on its isolated port.
 echo -e "${GREEN}Starting Files worker on port ${CLOUDFLARE_FILES_PORT}...${NC}"
-(cd "${ROOT_DIR}/cloudflare_workers/files" && exec bunx wrangler dev --local -c wrangler.jsonc --port "${CLOUDFLARE_FILES_PORT}" --inspector-port "${FILES_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
+(cd "${ROOT_DIR}/cloudflare_workers/files" && exec bash "${WRANGLER_DEV}" --local -c wrangler.jsonc --port "${CLOUDFLARE_FILES_PORT}" --inspector-port "${FILES_INSPECTOR_PORT}" --env-file="${RUNTIME_ENV_FILE}" --env=local --persist-to "${PERSIST_DIR}") &
 FILES_PID=$!
 
 echo -e "${GREEN}All workers started!${NC}"

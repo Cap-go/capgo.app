@@ -12,7 +12,7 @@ import { getClientDbRegionSB } from './geolocation.ts'
 import { freshQueryArgs } from './hyperdriveFreshRead.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { isDatabaseOriginError, isReadOnlyPgConnectionRetryError } from './pg_errors.ts'
-import { configureTransactionAccessMode, readOnlyStartupOptions, setPgAccessMode } from './pg_transaction_mode.ts'
+import { configureTransactionAccessMode, inheritPgAccessMode, readOnlyStartupOptions, setPgAccessMode } from './pg_transaction_mode.ts'
 import { serializePostgresError, serializePostgresLogValue } from './postgres_error.ts'
 import * as schema from './postgres_schema.ts'
 import { isPluginStateMiss, PluginStateMiss, pluginStateQueriesFor } from './pluginStateRegistry.ts'
@@ -35,6 +35,71 @@ import { completeVersionManifest, versionManifestRowsSql } from './version_manif
  * @see https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/
  */
 export type PluginPgClient = Client | Pool
+
+function pgAbortRace<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
+  if (signal.aborted)
+    return Promise.reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const onAbort = () => {
+      if (settled)
+        return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        if (settled)
+          return
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        if (settled)
+          return
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+/**
+ * `pg` 8.22 does not take `AbortSignal` on `Client` or `Pool` constructors or on `query`
+ * (verified in node_modules/pg). Race read only Hyperdrive queries with request.signal
+ * so disconnect can drop replica work early without cancelling connect or close paths.
+ */
+/** Read replica clients only. Pass `true` when the underlying handle is Hyperdrive (must skip `.end()`). */
+export function wrapPluginReadOnlyClientForRequestSignal(
+  db: PluginPgClient,
+  signal: AbortSignal,
+  underlyingSkipsEnd: boolean,
+): PluginPgClient {
+  const orig = db.query.bind(db) as (...args: unknown[]) => Promise<unknown>
+  const wrapped = new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'query') {
+        return (...args: unknown[]) => {
+          if (signal.aborted)
+            return Promise.reject(Object.assign(new Error('request aborted'), { name: 'AbortError' }))
+          return pgAbortRace(signal, orig(...args) as Promise<unknown>)
+        }
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  }) as PluginPgClient
+  if (underlyingSkipsEnd)
+    skipEndClients.add(wrapped)
+  const source = pgClientSources.get(db)
+  if (source !== undefined)
+    pgClientSources.set(wrapped, source)
+  return wrapped
+}
 
 /** Hyperdrive owns Worker↔origin cleanup; do not call `.end()` on these clients. */
 const skipEndClients = new WeakSet<object>()
@@ -183,6 +248,8 @@ async function queryReplicaLag(c: Context, pool: PluginPgClient): Promise<Replic
     }
   }
   catch (error) {
+    if (error instanceof Error && error.name === 'AbortError')
+      throw error
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error querying replica lag', error })
     return {
       status: 'unknown',
@@ -226,12 +293,36 @@ async function getCachedReplicaLag(c: Context, pool: PluginPgClient): Promise<Re
       await cacheHelper.putJson(cacheRequest, { ...status, expiresAt }, REPLICATION_LAG_CACHE_TTL_SECONDS)
       return status
     })
+    .catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'AbortError') {
+        const mem = getFreshReplicationLagMemoryEntry(cacheKey)
+        if (mem)
+          return mem
+        if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+          const fromDisk: ReplicationLagStatus = {
+            status: cachedEntry.status,
+            max_lag_seconds: cachedEntry.max_lag_seconds,
+          }
+          setReplicationLagMemoryEntry(cacheKey, fromDisk, cachedEntry.expiresAt)
+          return fromDisk
+        }
+      }
+      return {
+        status: 'unknown' as ReplicationStatus,
+        max_lag_seconds: null,
+      }
+    })
     .finally(() => {
       replicationLagInflight.delete(cacheKey)
     })
 
   replicationLagInflight.set(cacheKey, query)
   return query
+}
+
+/** For tests: wrapped read clients skip `.end()` only when the underlying Hyperdrive handle does. */
+export function pluginReadClientSkipsEnd(db: PluginPgClient): boolean {
+  return skipEndClients.has(db)
 }
 
 /** Refresh the cached replica lag status (memory + Cache API) with one probe at most. */
@@ -433,6 +524,7 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   const appName = c.res.headers.get('X-Worker-Source') ?? 'unknown source'
   const dbName = String(c.get('databaseSource') ?? c.res.headers.get('X-Database-Source') ?? 'unknown source')
   const readOnlyOptions = readOnlyStartupOptions(dbName, readOnly)
+  const readAbortSignal = readOnly ? c.get('pluginReadAbortSignal') : undefined
   const isWorkerd = getRuntimeKey() === 'workerd'
   // Match on the actual connection string (not just databaseSource metadata) so the
   // Hyperdrive Client contract cannot silently become Pool+end() if c.set is missed.
@@ -452,7 +544,13 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
     await client.connect()
     skipEndClients.add(client)
     pgClientSources.set(client, dbName)
-    return setPgAccessMode(client, readOnly)
+    const withMode = setPgAccessMode(client, readOnly)
+    if (readAbortSignal && readOnly) {
+      const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal, skipEndClients.has(withMode))
+      inheritPgAccessMode(withMode, wrapped)
+      return wrapped
+    }
+    return withMode
   }
 
   const pool = new Pool({
@@ -486,7 +584,13 @@ export async function getPgClient(c: Context, readOnly = false): Promise<PluginP
   })
 
   pgClientSources.set(pool, dbName)
-  return setPgAccessMode(pool, readOnly)
+  const withMode = setPgAccessMode(pool, readOnly)
+  if (readAbortSignal && readOnly) {
+    const wrapped = wrapPluginReadOnlyClientForRequestSignal(withMode, readAbortSignal, skipEndClients.has(withMode))
+    inheritPgAccessMode(withMode, wrapped)
+    return wrapped
+  }
+  return withMode
 }
 
 /**
@@ -546,7 +650,7 @@ export function createLazyPgClient(c: Context, readOnly = false, options: LazyPg
     }
     inner ??= getPgClient(c, readOnly).then((db) => {
       const source = pgClientSources.get(db)
-      if (source)
+      if (source !== undefined)
         pgClientSources.set(client, source)
       return db
     }, (error: unknown) => {

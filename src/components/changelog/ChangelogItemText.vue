@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { highlightParts, inlineMarkdownParts } from '~/services/changelog'
+import { githubRepoUrl, highlightParts, inlineMarkdownParts } from '~/services/changelog'
 
 // Release notes are markdown from GitHub: render the inline subset they use
 // (bold, code, issue refs) as elements instead of v-html, and mark search hits.
@@ -21,7 +21,7 @@ const parts = computed(() => inlineMarkdownParts(props.text).map(part => ({
     <template v-for="(part, index) in parts" :key="index">
       <a
         v-if="part.kind === 'issue' && repo"
-        :href="`https://github.com/Cap-go/${repo}/issues/${part.number}`"
+        :href="`${githubRepoUrl(repo)}/issues/${part.number}`"
         target="_blank"
         rel="noopener noreferrer"
         class="font-mono text-xs text-slate-500 hover:text-azure-600 hover:underline dark:text-slate-400"

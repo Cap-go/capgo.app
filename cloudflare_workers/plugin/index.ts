@@ -18,6 +18,10 @@ const functionName = 'plugin'
 const app = createHono(functionName, version)
 
 app.use('*', async (c, next) => {
+  const requestSignal = c.req.raw.signal
+  if (requestSignal)
+    c.set('pluginReadAbortSignal', requestSignal)
+
   c.set('skipSupabaseStatsFallback', true)
   c.set('skipSupabaseNotificationWrites', true)
   c.set('queuePluginNotifications', true)

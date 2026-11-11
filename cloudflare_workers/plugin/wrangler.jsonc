@@ -1,7 +1,7 @@
 {
   "name": "capgo_plugin",
   "logpush": true,
-  "compatibility_date": "2026-04-21",
+  "compatibility_date": "2026-11-10",
   "dependencies_instrumentation": {
     "enabled": true
   },
@@ -9,7 +9,8 @@
   "compatibility_flags": [
     "nodejs_compat",
     // "enable_workers_observability_tracing",
-    "nodejs_compat_populate_process_env"
+    "nodejs_compat_populate_process_env",
+    "enable_request_signal"
   ],
   "workers_dev": false,
   "upload_source_maps": true,

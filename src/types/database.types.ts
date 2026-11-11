@@ -738,6 +738,7 @@ export type Database = {
           last_error: string | null
           owner_org: string
           platform: string
+          queue_priority: number | null
           requested_by: string
           runner_wait_seconds: number
           started_at: string | null
@@ -763,6 +764,7 @@ export type Database = {
           last_error?: string | null
           owner_org: string
           platform: string
+          queue_priority?: number | null
           requested_by: string
           runner_wait_seconds?: number
           started_at?: string | null
@@ -788,6 +790,7 @@ export type Database = {
           last_error?: string | null
           owner_org?: string
           platform?: string
+          queue_priority?: number | null
           requested_by?: string
           runner_wait_seconds?: number
           started_at?: string | null
@@ -2888,6 +2891,7 @@ export type Database = {
           mau: number
           name: string
           native_build_concurrency: number
+          native_build_queue_priority: number
           price_m: number
           price_m_id: string
           price_y: number
@@ -2914,6 +2918,7 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          native_build_queue_priority?: number
           price_m?: number
           price_m_id: string
           price_y?: number
@@ -2940,6 +2945,7 @@ export type Database = {
           mau?: number
           name?: string
           native_build_concurrency?: number
+          native_build_queue_priority?: number
           price_m?: number
           price_m_id?: string
           price_y?: number
@@ -4055,10 +4061,15 @@ export type Database = {
           delivery_version: string
           enabled: boolean
           events: string[]
+          expires_at: string | null
           id: string
+          mcp_arguments: Json | null
+          mcp_event: string | null
+          mcp_verified_at: string | null
           name: string
           org_id: string
           secret: string
+          source: string
           updated_at: string
           url: string
         }
@@ -4068,10 +4079,15 @@ export type Database = {
           delivery_version?: string
           enabled?: boolean
           events: string[]
+          expires_at?: string | null
           id?: string
+          mcp_arguments?: Json | null
+          mcp_event?: string | null
+          mcp_verified_at?: string | null
           name: string
           org_id: string
           secret?: string
+          source?: string
           updated_at?: string
           url: string
         }
@@ -4081,10 +4097,15 @@ export type Database = {
           delivery_version?: string
           enabled?: boolean
           events?: string[]
+          expires_at?: string | null
           id?: string
+          mcp_arguments?: Json | null
+          mcp_event?: string | null
+          mcp_verified_at?: string | null
           name?: string
           org_id?: string
           secret?: string
+          source?: string
           updated_at?: string
           url?: string
         }
@@ -4226,6 +4247,7 @@ export type Database = {
         Returns: boolean
       }
       app_has_real_bundle: { Args: { p_app_id: string }; Returns: boolean }
+      app_onboarding_cicd_timestamp: { Args: never; Returns: string }
       app_version_manifest_jsonb_unmigrated: {
         Args: {
           p_manifest: Database["public"]["CompositeTypes"]["manifest_entry"][]
@@ -4791,6 +4813,13 @@ export type Database = {
           role_name: string
         }[]
       }
+      get_app_cicd_encryption_policy: {
+        Args: { p_app_id: string }
+        Returns: {
+          enforce_encrypted_bundles: boolean
+          owner_org: string
+        }[]
+      }
       get_app_metrics:
         | {
             Args: { org_id: string }
@@ -4889,6 +4918,7 @@ export type Database = {
           build_time_unit: number
           mau: number
           native_build_concurrency: number
+          native_build_queue_priority: number
           storage: number
         }[]
       }
@@ -5928,6 +5958,24 @@ export type Database = {
       readable_app_version_ids: { Args: never; Returns: number[] }
       readable_group_ids: { Args: never; Returns: string[] }
       readable_org_customer_ids: { Args: never; Returns: string[] }
+      record_app_cicd_deploy: {
+        Args: {
+          p_apikey_rbac_id: string
+          p_app_id: string
+          p_ci_provider: string
+          p_product: string
+        }
+        Returns: boolean
+      }
+      record_app_cicd_setup: {
+        Args: {
+          p_apikey_rbac_id?: string
+          p_app_id: string
+          p_event: string
+          p_selection?: Json
+        }
+        Returns: Json
+      }
       record_build_time: {
         Args: {
           p_app_id: string

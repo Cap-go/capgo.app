@@ -14,6 +14,7 @@ import { sendEventToTracking } from '../../utils/tracking.ts'
 import { backgroundTask, getEnv } from '../../utils/utils.ts'
 import { assertNativeBuildConcurrencyAvailable, getPlansUpgradeUrl } from './concurrency.ts'
 import { loadStoredBuildCredentials } from './credentials.ts'
+import { resolveOrgNativeBuildQueuePriority } from './queue_priority.ts'
 import { ensureStoredCredentialsPermission } from './stored_credentials_access.ts'
 
 export interface RequestBuildBody {
@@ -60,6 +61,11 @@ export interface RequestBuildResponse {
   upload_url: string // This will be the Capgo proxy URL, not the builder URL directly
   upload_expires_at: string
   status: string
+  /** Plan base queue priority sent to the builder (higher starts sooner). */
+  queue_priority: number
+  /** Derived tier label for CLI and console copy. */
+  queue_priority_tier: 'standard' | 'elevated' | 'high' | 'highest'
+  upgrade_url: string
 }
 
 interface BuilderJobResponse {
@@ -100,6 +106,7 @@ export function buildBuilderPayload(input: {
   buildCredentials: Record<string, string>
   cacheEnabled?: boolean
   cacheKey?: string
+  priority: number
 }) {
   const buildOptions = { ...input.buildOptions }
   delete buildOptions.timeoutSeconds
@@ -109,6 +116,7 @@ export function buildBuilderPayload(input: {
   return {
     // userId carries the org_id (anonymized owner) — kept for backwards compat.
     userId: input.orgId,
+    priority: input.priority,
     // actorUserId is the human user who triggered the build (apikey.user_id). The builder
     // uses it as the PostHog distinct_id so its build events join this same person.
     actorUserId: input.actorUserId,
@@ -407,8 +415,9 @@ async function createBuilderJob(c: Context, input: {
   buildCredentials: Record<string, string>
   cacheEnabled?: boolean
   cacheKey?: string
+  priority: number
 }): Promise<BuilderJobResponse> {
-  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, cacheEnabled, cacheKey } = input
+  const { builderUrl, builderApiKey, orgId, actorUserId, appId, platform, uploadPath, buildOptions, buildCredentials, cacheEnabled, cacheKey, priority } = input
   cloudlog({
     requestId: c.get('requestId'),
     message: 'Calling builder API',
@@ -436,6 +445,7 @@ async function createBuilderJob(c: Context, input: {
         buildCredentials,
         cacheEnabled,
         cacheKey,
+        priority,
       })),
     })
 
@@ -530,6 +540,7 @@ async function persistBuildRequest(c: Context, input: {
   upload_url: string
   upload_expires_at: Date
   uses_stored_credentials: boolean
+  queue_priority: number
 }) {
   const {
     app_id,
@@ -545,6 +556,7 @@ async function persistBuildRequest(c: Context, input: {
     upload_url,
     upload_expires_at,
     uses_stored_credentials,
+    queue_priority,
   } = input
 
   let buildRequestRow: Database['public']['Tables']['build_requests']['Row'] | null = null
@@ -556,8 +568,8 @@ async function persistBuildRequest(c: Context, input: {
       pg,
       `INSERT INTO public.build_requests (
         app_id, owner_org, requested_by, platform, build_mode, build_config, ios_dependency_manager,
-        status, builder_job_id, upload_session_key, upload_path, upload_url, upload_expires_at, uses_stored_credentials
-      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'pending', $8, $9, $10, $11, $12, $13)
+        status, builder_job_id, upload_session_key, upload_path, upload_url, upload_expires_at, uses_stored_credentials, queue_priority
+      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'pending', $8, $9, $10, $11, $12, $13, $14)
       RETURNING *`,
       [
         app_id,
@@ -573,6 +585,7 @@ async function persistBuildRequest(c: Context, input: {
         upload_url,
         upload_expires_at.toISOString(),
         uses_stored_credentials,
+        queue_priority,
       ],
     )
     buildRequestRow = rows[0] ?? null
@@ -683,6 +696,8 @@ export async function requestBuild(
   // Create upload_path BEFORE calling builder so we can pass it
   const upload_session_key = crypto.randomUUID()
   const upload_path = `orgs/${org_id}/apps/${app_id}/native-builds/${upload_session_key}.zip`
+  const queuePriority = await resolveOrgNativeBuildQueuePriority(c, org_id)
+  const upgradeUrl = getPlansUpgradeUrl(c)
   const { builderUrl, builderApiKey } = getBuilderConfig(c)
   const builderJob = await createBuilderJob(c, {
     builderUrl,
@@ -697,6 +712,7 @@ export async function requestBuild(
     buildCredentials: build_credentials,
     cacheEnabled: cache_enabled,
     cacheKey: cache_key,
+    priority: queuePriority.priority,
   })
 
   ensureBuilderUploadUrl(c, builderUrl, builderApiKey, builderJob)
@@ -723,6 +739,7 @@ export async function requestBuild(
     upload_path,
     upload_url,
     upload_expires_at,
+    queue_priority: queuePriority.priority,
     uses_stored_credentials: use_stored_credentials === true,
   })
 
@@ -754,5 +771,8 @@ export async function requestBuild(
     upload_url, // Capgo proxy URL
     upload_expires_at: upload_expires_at.toISOString(),
     status: buildRequestRow.status,
+    queue_priority: queuePriority.priority,
+    queue_priority_tier: queuePriority.tier,
+    upgrade_url: upgradeUrl,
   } satisfies RequestBuildResponse, 200)
 }

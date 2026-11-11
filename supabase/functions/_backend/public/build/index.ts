@@ -10,6 +10,7 @@ import {
   TUS_EXTENSIONS,
   TUS_VERSION,
 } from '../../files/util.ts'
+import { recordCicdDeploy } from '../../utils/cicdDetection.ts'
 import { getBodyOrQuery, honoFactory, simpleError } from '../../utils/hono.ts'
 import { middlewareKey } from '../../utils/hono_middleware.ts'
 import { apikeyPrincipal } from '../../utils/pg_rls.ts'
@@ -65,7 +66,11 @@ app.post('/simulator/:id/stop', middlewareKey(['all', 'write']), async (c) => {
 app.post('/request', middlewareKey(['all', 'write']), async (c) => {
   const body = await getBodyOrQuery<RequestBuildBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return requestBuild(c, body, apikey)
+  const response = await requestBuild(c, body, apikey)
+  // A native build requested from CI completes the CI/CD onboarding step.
+  if (response.ok)
+    await recordCicdDeploy(c, { appId: body?.app_id, product: 'builder', apikeyRbacId: apikey?.rbac_id })
+  return response
 })
 
 // POST /build/start/:jobId - Start a build after uploading bundle
@@ -94,7 +99,7 @@ app.get('/logs/:jobId', middlewareKey(['all', 'read']), async (c) => {
     throw new Error('app_id query parameter is required')
   }
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
-  return streamBuildLogs(c, jobId, appId, apikey)
+  return streamBuildLogs(c, jobId, appId, apikey, c.req.query('snapshot') === 'true')
 })
 
 // POST /build/cancel/:jobId - Cancel a running build
