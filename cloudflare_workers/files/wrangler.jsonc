@@ -159,7 +159,7 @@
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
-          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         }
       ],
       "routes": [
@@ -188,14 +188,14 @@
       "r2_buckets": [
         {
           "binding": "ATTACHMENT_BUCKET",
-          "bucket_name": "capgo",
-          "preview_bucket_name": "capgo"
+          "bucket_name": "capgo-preprod",
+          "preview_bucket_name": "capgo-preprod"
         }
       ],
       "analytics_engine_datasets": [
         {
           "binding": "BANDWIDTH_USAGE",
-          "dataset": "bandwidth_usage"
+          "dataset": "bandwidth_usage_preprod"
         }
       ],
       "durable_objects": {
