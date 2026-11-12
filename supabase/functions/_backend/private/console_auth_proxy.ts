@@ -140,6 +140,36 @@ function goTrueAuth(c: Context<MiddlewareKeyVariables>): RelayAuth {
   }
 }
 
+async function readAuthBody(c: Context, maxBytes: number): Promise<ArrayBuffer | undefined> {
+  const declared = Number(c.req.header('content-length') ?? 0)
+  if (declared > maxBytes)
+    return undefined
+  const stream = c.req.raw.body
+  if (!stream)
+    return undefined
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done)
+      break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {})
+      return undefined
+    }
+    chunks.push(value)
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes.buffer
+}
+
 function captchaToken(body: ArrayBuffer | undefined): string {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(body))
@@ -196,11 +226,8 @@ app.all('/*', async (c) => {
   let body: ArrayBuffer | undefined
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
     const maxBytes = goTrue && path === 'sso/saml/acs' ? SAML_ACS_MAX_BODY_BYTES : MAX_BODY_BYTES
-    // Refuse declared oversize bodies before buffering anything; the read below bounds the rest.
-    if (Number(c.req.header('content-length') ?? 0) > maxBytes)
-      return quickError(413, 'auth_request_too_large', 'Auth request too large')
-    body = await c.req.arrayBuffer()
-    if (body.byteLength > maxBytes)
+    body = await readAuthBody(c, maxBytes)
+    if (body === undefined && c.req.raw.body)
       return quickError(413, 'auth_request_too_large', 'Auth request too large')
   }
 

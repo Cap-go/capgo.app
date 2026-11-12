@@ -37,7 +37,12 @@ export class GoTrue extends Container<Env> {
   }
 
   private ensureContainerEnv() {
-    this.envReady ??= this.applyCaptchaSecret()
+    if (!this.envReady) {
+      this.envReady = this.applyCaptchaSecret().catch((error) => {
+        this.envReady = undefined
+        throw error
+      })
+    }
     return this.envReady
   }
 
