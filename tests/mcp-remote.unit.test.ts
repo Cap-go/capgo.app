@@ -17,6 +17,7 @@ import {
   verifyPkceS256,
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
 import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
+import { LATEST_LEGACY_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
 import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
@@ -103,7 +104,7 @@ describe('hosted MCP protocol', () => {
       protocolVersion: '2025-06-18',
       capabilities: { tools: { listChanged: false }, events: { list: true, subscribe: true, unsubscribe: true } },
       serverInfo: {
-        name: 'capgo',
+        name: 'app.capgo/capgo',
         title: 'Capgo',
         version: expect.any(String),
         websiteUrl: 'https://capgo.app',
@@ -113,7 +114,7 @@ describe('hosted MCP protocol', () => {
       instructions: expect.stringContaining('Start with capgo_whoami and capgo_list_apps'),
     })
     const unknown = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } }, ctx)
-    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION })
+    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_LEGACY_PROTOCOL_VERSION })
   })
 
   it.concurrent('does not answer notifications', async () => {
@@ -661,6 +662,8 @@ describe('hosted MCP errors always give a way out', () => {
     const localTools = new Set([
       'capgo_whoami',
       'capgo_search_docs',
+      'capgo_list_skills',
+      'capgo_get_skill',
       'capgo_get_build_status',
       'capgo_list_event_types',
       'capgo_subscribe_events',
