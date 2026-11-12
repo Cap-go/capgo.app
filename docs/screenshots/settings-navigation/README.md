@@ -1,7 +1,10 @@
 # Separate account and organization settings
 
 The shared Account / Organization tab row is removed. Each section now starts
-with its own tabs, with a link to the other section beside them. Existing URLs,
+with its own tabs, with a link to the other section beside them on desktop.
+On mobile web, the link sits beside the page title instead of the billing badge,
+leaving the full width for scrolling tabs. Other pages keep their billing badge.
+Native chrome keeps its existing in-content shortcut. Existing URLs,
 sidebar/profile entry points, and nested Team / Billing destinations are preserved.
 
 Screenshots use the real settings layout, general pages, sidebar and navbar,

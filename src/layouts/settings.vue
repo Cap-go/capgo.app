@@ -11,6 +11,7 @@ import IconBilling from '~icons/mingcute/bill-fill'
 import FailedCard from '~/components/FailedCard.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import Tabs from '~/components/Tabs.vue'
+import { isNativeChromeEnabled } from '~/composables/useNativeChrome'
 import { accountTabs } from '~/constants/accountTabs'
 import { organizationTabs as baseOrgTabs } from '~/constants/organizationTabs'
 import { stripeEnabled } from '~/services/console'
@@ -245,7 +246,8 @@ function handleSecondary(val: string) {
       />
       <RouterLink
         :to="isOrganizationSettings ? '/settings/account' : '/settings/organization'"
-        class="inline-flex shrink-0 items-center gap-2 min-h-[38px] px-3 mt-1 mr-1 text-sm font-medium rounded-md text-slate-500 hover:text-blue-600 hover:bg-blue-100/70 dark:text-slate-400 dark:hover:text-blue-300 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        class="shrink-0 items-center gap-2 min-h-[38px] px-3 mt-1 mr-1 text-sm font-medium rounded-md text-slate-500 hover:text-blue-600 hover:bg-blue-100/70 dark:text-slate-400 dark:hover:text-blue-300 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        :class="isNativeChromeEnabled ? 'inline-flex' : 'hidden lg:inline-flex'"
         data-test="settings-switch-section"
       >
         <component :is="isOrganizationSettings ? IconUser : IconBuilding" class="w-5 h-5" aria-hidden="true" />
