@@ -13,7 +13,8 @@ import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
 import { backgroundTask } from '../utils/utils.ts'
-import { MCP_AI_CATALOG, MCP_SERVER_CARD, MCP_SETUP_HTML } from './discovery.ts'
+import { createMcpDiscoveryApp, mcpSetupPage } from './discovery.ts'
+import { isModernRequest, modernErrorStatus, record, validateModernHttpRequest } from './modern_protocol.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
 import { withPg } from './oauth_shared.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
@@ -39,8 +40,8 @@ const STREAM_MAX_BYTES = 256 * 1024
 const mcpCors = cors({
   origin: '*',
   allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Last-Event-ID', 'capgkey', 'x-api-key'],
-  exposeHeaders: ['WWW-Authenticate', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'If-None-Match', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Mcp-Method', 'Mcp-Name', 'Last-Event-ID', 'capgkey', 'x-api-key'],
+  exposeHeaders: ['WWW-Authenticate', 'ETag', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
   maxAge: 86400,
 })
 
@@ -58,7 +59,15 @@ function unauthorized(c: Context<MiddlewareKeyVariables>, description: string, i
   if (invalidToken)
     params.unshift('error="invalid_token"', `error_description="${description}"`)
   c.header('WWW-Authenticate', `Bearer ${params.join(', ')}`)
-  return c.json(jsonRpcError(null, -32001, description), 401)
+  return c.json(transportError(c, -32001, description), 401)
+}
+
+function transportError(c: Context, code: number, message: string): JsonRpcResponse {
+  const error = jsonRpcError(null, code, message)
+  if (!isModernRequest(undefined, c.req.header('MCP-Protocol-Version')))
+    return error
+  const { id: _id, ...withoutId } = error
+  return withoutId
 }
 
 async function readSseSnapshot(response: Response): Promise<string> {
@@ -141,7 +150,7 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
  */
 export function hostedMcpToolEvent(message: unknown, response: JsonRpcResponse | null | undefined, userId: string) {
   const msg = message as { method?: unknown, params?: { name?: unknown } } | null
-  if (msg?.method !== 'tools/call' || !response || response.id === null)
+  if (msg?.method !== 'tools/call' || !response || response.id == null)
     return null
   const toolName = typeof msg.params?.name === 'string' ? msg.params.name.slice(0, 100) : 'unknown'
   const result = response.result as { isError?: unknown } | undefined
@@ -176,64 +185,58 @@ export function createMcpApp(dispatch: McpDispatch) {
   const app = new Hono<MiddlewareKeyVariables>()
 
   app.use('/.well-known/*', mcpCors)
+  app.use('/mcp.json', mcpCors)
   app.use(`${MCP_PATH}`, mcpCors)
   app.use(`${MCP_PATH}/*`, mcpCors)
   app.route('/', oauthApp)
+  app.route('/', createMcpDiscoveryApp())
 
-  // Serve the current discovery location and the older well-known convention used by crawlers.
-  app.get(`${MCP_PATH}/server-card`, (c) => {
-    c.header('Cache-Control', 'public, max-age=3600')
-    return c.json(MCP_SERVER_CARD, 200, { 'Content-Type': 'application/mcp-server-card+json' })
-  })
-  app.get('/.well-known/mcp/server-card.json', (c) => {
-    c.header('Cache-Control', 'public, max-age=3600')
-    return c.json(MCP_SERVER_CARD, 200, { 'Content-Type': 'application/mcp-server-card+json' })
-  })
-  app.get('/.well-known/ai-catalog.json', (c) => {
-    c.header('Cache-Control', 'public, max-age=3600')
-    return c.json(MCP_AI_CATALOG, 200, { 'Content-Type': 'application/ai-catalog+json' })
-  })
-
+  // Stateless server: no server-initiated SSE stream and no sessions to terminate.
   app.get(MCP_PATH, (c) => {
-    c.header('Vary', 'Accept')
+    c.header('Vary', 'Accept', { append: true })
+    c.header('Cache-Control', 'no-store')
     const representation = accepts(c, {
       header: 'Accept',
-      supports: ['text/html'],
+      supports: ['text/html', 'text/event-stream', 'application/json'],
       default: 'text/html',
-      match: (types) => {
+      match: (types, config) => {
         // Hono preserves casing. Normalize names, preserving quoted parameter values,
         // then let its parser apply the same quality rules and ordering to Q as to q.
-        const normalizedTypes = parseAccept(types.map(({ type, params }) => [
+        const accepted = parseAccept(types.map(({ type, params }) => [
           type.toLowerCase(),
           ...Object.entries(params).map(([name, value]) => `${name.toLowerCase()}="${value.replace(/["\\]/g, String.raw`\$&`)}"`),
         ].join(';')).join(','))
-        // Explicit MCP stream requests retain the stateless transport's 405 response.
-        if (normalizedTypes.some(type => type.type === 'text/event-stream' && type.q > 0))
-          return 'protocol'
-        const html = normalizedTypes.find(type => type.type === 'text/html')
-          ?? normalizedTypes.find(type => type.type === 'text/*')
-          ?? normalizedTypes.find(type => type.type === '*/*')
-        return html && html.q > 0 ? 'text/html' : 'protocol'
+        const matches = config.supports.flatMap((type) => {
+          // The most specific range sets the quality, including explicit q=0 exclusions.
+          const ranges = [type, `${type.split('/')[0]}/*`, '*/*']
+          for (const [specificity, range] of ranges.entries()) {
+            const index = accepted.findIndex(accept => accept.type.toLowerCase() === range)
+            if (index !== -1)
+              return [{ type, q: accepted[index].q, specificity, index }]
+          }
+          return []
+        })
+        matches.sort((a, b) => b.q - a.q || a.specificity - b.specificity || a.index - b.index)
+        const preferred = matches[0]
+        if (!preferred)
+          return config.default
+        return preferred.q > 0 ? preferred.type : ''
       },
     })
-    if (representation === 'text/html') {
-      c.header('Cache-Control', 'no-store')
-      return c.html(MCP_SETUP_HTML)
-    }
-    c.header('Cache-Control', 'no-store')
-    c.header('Allow', 'GET, HEAD, POST, OPTIONS')
+    if (representation === 'text/html')
+      return mcpSetupPage(c)
+    c.header('Allow', 'POST, OPTIONS')
     return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL https://api.capgo.app/mcp and the HTTP transport.'), 405)
   })
-  // Stateless server: no sessions to terminate.
   app.delete(MCP_PATH, (c) => {
-    c.header('Allow', 'GET, HEAD, POST, OPTIONS')
+    c.header('Allow', 'POST, OPTIONS')
     return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'This server does not use sessions, so there is nothing to close. Keep sending POST requests.'), 405)
   })
 
   app.post(MCP_PATH, async (c) => {
     const ipLimit = await isIPRateLimited(c)
     if (ipLimit.limited)
-      return c.json(jsonRpcError(null, -32002, 'Too many failed authentication attempts from this IP. Wait 15 minutes, then reconnect the Capgo MCP with a valid API key (create one at https://console.capgo.app/apikeys) or sign in again through OAuth.'), 429)
+      return c.json(transportError(c, isModernRequest(undefined, c.req.header('MCP-Protocol-Version')) ? -1 : -32002, 'Too many failed authentication attempts from this IP. Wait 15 minutes, then reconnect the Capgo MCP with a valid API key (create one at https://console.capgo.app/apikeys) or sign in again through OAuth.'), 429)
 
     const token = extractToken(c)
     if (!token)
@@ -258,13 +261,23 @@ export function createMcpApp(dispatch: McpDispatch) {
 
     const raw = await c.req.text()
     if (raw.length > MAX_BODY_BYTES)
-      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Request body too large (max 1 MB). Send files through the signed upload URL tools (capgo_prepare_bundle_upload, capgo_request_build) instead of inline.'), 413)
+      return c.json(transportError(c, JSON_RPC_ERRORS.invalidRequest, 'Request body too large (max 1 MB). Send files through the signed upload URL tools (capgo_prepare_bundle_upload, capgo_request_build) instead of inline.'), 413)
     let payload: unknown
     try {
       payload = JSON.parse(raw)
     }
     catch {
-      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.parseError, 'Parse error: the body must be one JSON-RPC 2.0 message (or a small batch) in valid JSON.'), 400)
+      return c.json(transportError(c, JSON_RPC_ERRORS.parseError, 'Parse error: the body must be one JSON-RPC 2.0 message (or a small batch) in valid JSON.'), 400)
+    }
+
+    const modern = isModernRequest(payload, c.req.header('MCP-Protocol-Version'))
+      || (Array.isArray(payload) && payload.some(message => isModernRequest(message)))
+    if (modern) {
+      const error = validateModernHttpRequest(payload, c.req.raw.headers)
+      if (error) {
+        const id = record(payload)?.id
+        return c.json({ jsonrpc: '2.0', ...(typeof id === 'string' || (typeof id === 'number' && Number.isInteger(id)) ? { id } : {}), error }, modernErrorStatus(error.code))
+      }
     }
 
     const caller: McpCaller = {
@@ -298,7 +311,9 @@ export function createMcpApp(dispatch: McpDispatch) {
       // Notifications / responses only: the Streamable HTTP transport mandates 202 with no body.
       return c.body(null, 202)
     }
-    return c.json(Array.isArray(payload) ? responses : responses[0])
+    const response = Array.isArray(payload) ? responses : responses[0]
+    const error = modern ? responses[0]?.error : undefined
+    return c.json(response, error ? modernErrorStatus(error.code) : 200)
   })
 
   return app

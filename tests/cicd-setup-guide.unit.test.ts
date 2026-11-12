@@ -805,6 +805,19 @@ describe('CI/CD guide selection storage', () => {
     expect(loadCiGuideSelection(null, appId)).toEqual({})
   })
 
+  it.each(['ai', 'manual'] as const)('remembers the explicit %s setup choice', (setupMethod) => {
+    saveCiGuideSelection('user-1', appId, { product: 'ota', strategy: 'main', provider: 'github', platforms: ['ios'], productionBranch: 'main', preprodBranch: 'preprod', setupMethod })
+    expect(loadCiGuideSelection('user-1', appId).setupMethod).toBe(setupMethod)
+    expect(loadCiGuideSelection('user-2', appId).setupMethod).toBeUndefined()
+  })
+
+  it('ignores malformed stored setup methods', () => {
+    for (const setupMethod of ['automated', '', null, true, { method: 'ai' }]) {
+      localStorage.setItem(`capgo:cicd-guide:user-1:${appId}`, JSON.stringify({ setupMethod }))
+      expect(loadCiGuideSelection('user-1', appId).setupMethod).toBeUndefined()
+    }
+  })
+
   it('remembers a valid custom tester channel and drops unsupported stored names', () => {
     saveCiGuideSelection('user-1', appId, { product: 'ota', strategy: 'main_preprod', provider: 'github', platforms: ['ios'], productionBranch: 'main', preprodBranch: 'preprod', preprodChannel: 'ci-testers' })
     expect(loadCiGuideSelection('user-1', appId).preprodChannel).toBe('ci-testers')

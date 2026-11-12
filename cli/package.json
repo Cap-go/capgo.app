@@ -1,7 +1,7 @@
 {
   "name": "@capgo/cli",
   "type": "module",
-  "version": "8.104.1",
+  "version": "8.105.0",
   "description": "A CLI to upload to capgo servers",
   "author": "Martin martin@capgo.app",
   "license": "Apache 2.0",
@@ -156,7 +156,7 @@
     "test:prompt-preferences": "bun test/test-prompt-preferences.mjs",
     "test:esm-sdk": "node test/test-sdk-esm.mjs",
     "test:auth-session": "bun test/test-auth-session.mjs && bun test/test-auth-session-bad-key.mjs",
-    "test:mcp": "node test/test-mcp.mjs",
+    "test:mcp": "node test/test-mcp.mjs && node test/test-mcp-skills.mjs",
     "test:mcp-no-key-handshake": "node test/test-mcp-no-key-handshake.mjs",
     "test:version-detection": "node test/test-get-installed-version.mjs",
     "test:version-detection:setup": "./test/fixtures/setup-test-projects.sh",
