@@ -188,6 +188,23 @@ export function createMcpApp(dispatch: McpDispatch) {
       header: 'Accept',
       supports: ['text/html', 'text/event-stream', 'application/json'],
       default: 'text/html',
+      match: (accepted, config) => {
+        const matches = config.supports.flatMap((type) => {
+          // The most specific range sets the quality, including explicit q=0 exclusions.
+          const ranges = [type, `${type.split('/')[0]}/*`, '*/*']
+          for (const [specificity, range] of ranges.entries()) {
+            const index = accepted.findIndex(accept => accept.type.toLowerCase() === range)
+            if (index !== -1)
+              return [{ type, q: accepted[index].q, specificity, index }]
+          }
+          return []
+        })
+        matches.sort((a, b) => b.q - a.q || a.specificity - b.specificity || a.index - b.index)
+        const preferred = matches[0]
+        if (!preferred)
+          return config.default
+        return preferred.q > 0 ? preferred.type : ''
+      },
     })
     if (representation === 'text/html')
       return mcpSetupPage(c)

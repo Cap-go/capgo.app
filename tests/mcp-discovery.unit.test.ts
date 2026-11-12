@@ -91,7 +91,17 @@ describe('public MCP discovery', () => {
 })
 
 describe('MCP setup page and transport', () => {
-  it.concurrent.each([undefined, '*/*', 'text/html,application/xhtml+xml', 'text/html;q=1,application/json;q=0.5'])('shows setup instructions for Accept %s', async (accept) => {
+  it.concurrent.each([
+    undefined,
+    '*/*',
+    'text/html,application/xhtml+xml',
+    'text/html;q=1,application/json;q=0.5',
+    'text/*',
+    'text/*;q=1, application/json;q=0.5',
+    'application/json;q=0.5, text/*;q=1',
+    '*/*;q=1, application/json;q=0.5, text/event-stream;q=0.5',
+    'text/*;q=0, text/html;q=1, application/json;q=0.5',
+  ])('shows setup instructions for Accept %s', async (accept) => {
     const response = await request('/mcp?token=do-not-reflect', { headers: accept ? { accept } : {} })
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/html')
@@ -105,7 +115,19 @@ describe('MCP setup page and transport', () => {
     expect(body).not.toContain('<script')
   })
 
-  it.concurrent.each(['text/event-stream', 'application/json', 'application/json, text/event-stream'])('keeps GET transport requests unsupported for %s', async (accept) => {
+  it.concurrent.each([
+    'text/event-stream',
+    'application/json',
+    'application/json, text/event-stream',
+    'application/*;q=1, text/html;q=0.5',
+    'text/*;q=0.5, application/json;q=1',
+    'text/*;q=1, text/html;q=0, application/json;q=0.5',
+    'text/*;q=0, */*;q=1',
+    'text/event-stream, */*',
+    'application/json, */*',
+    'text/html;q=0',
+    '*/*;q=0',
+  ])('keeps GET transport requests unsupported for %s', async (accept) => {
     const response = await request('/mcp', { headers: { accept } })
     expect(response.status).toBe(405)
     expect(response.headers.get('allow')).toBe('POST, OPTIONS')
