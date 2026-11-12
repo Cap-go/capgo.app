@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, reactive, ref, toRef } from 'vue'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import OrganizationOnboarding from '../src/pages/onboarding/organization.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   uploadOrgLogoFile: vi.fn().mockRejectedValue(new Error('storage failed')),
   replace: vi.fn(async () => undefined),
   fetchOrganizations: vi.fn(async (): Promise<void> => undefined),
+  loadOnboardingAppDraft: vi.fn((): { appName: string, appId: string } | null => ({ appName: 'Example App', appId: 'com.example.app' })),
 }))
 
 vi.mock('pinia', () => ({ storeToRefs: (store: any) => ({ currentOrganization: toRef(store, 'currentOrganization') }) }))
@@ -43,12 +45,13 @@ vi.mock('~/stores/organization', () => {
 })
 vi.mock('~/utils/onboardingAppDraft', () => ({
   clearOnboardingAppDraft: vi.fn(),
-  loadOnboardingAppDraft: () => ({ appName: 'Example App', appId: 'com.example.app' }),
+  loadOnboardingAppDraft: mocks.loadOnboardingAppDraft,
 }))
 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.fetchOrganizations.mockReset().mockResolvedValue(undefined)
+  mocks.loadOnboardingAppDraft.mockReset().mockReturnValue({ appName: 'Example App', appId: 'com.example.app' })
 })
 afterEach(() => vi.unstubAllGlobals())
 
@@ -59,6 +62,56 @@ async function flushPromises() {
 }
 
 describe('organization onboarding initialization and logo import', () => {
+  it('allows retry when a guard aborts the app setup redirect', async () => {
+    mocks.loadOnboardingAppDraft.mockReturnValue(null)
+    const history = createMemoryHistory()
+    const router = createRouter({
+      history,
+      routes: [
+        { path: '/onboarding/organization', component: { template: '<div />' } },
+        { path: '/onboarding/app', component: { template: '<div />' } },
+      ],
+    })
+    await router.push('/onboarding/organization')
+    let allowNavigation = false
+    router.beforeEach(() => allowNavigation)
+    vi.stubGlobal('useRoute', () => router.currentRoute.value)
+    vi.stubGlobal('useRouter', () => router)
+    vi.stubGlobal('useTemplateRef', () => ref(null))
+    const container = document.createElement('div')
+    const app = createApp(OrganizationOnboarding)
+    app.config.warnHandler = () => undefined
+    app.mount(container)
+    try {
+      await vi.waitFor(() => {
+        expect(container.querySelector('[data-test="onboarding-organization-load-error"]')).not.toBeNull()
+      })
+      expect(router.currentRoute.value.path).toBe('/onboarding/organization')
+
+      container.querySelector<HTMLButtonElement>('[data-test="onboarding-organization-retry"]')!.click()
+      await nextTick()
+      expect(container.querySelector('[data-test="onboarding-organization-load-error"]')).toBeNull()
+      await vi.waitFor(() => {
+        expect(container.querySelector('[data-test="onboarding-organization-load-error"]')).not.toBeNull()
+      })
+      expect(mocks.fetchOrganizations).toHaveBeenCalledTimes(2)
+      expect(router.currentRoute.value.path).toBe('/onboarding/organization')
+
+      allowNavigation = true
+      container.querySelector<HTMLButtonElement>('[data-test="onboarding-organization-retry"]')!.click()
+      await vi.waitFor(() => {
+        expect(router.currentRoute.value.path).toBe('/onboarding/app')
+      })
+      expect(container.querySelector('[data-test="onboarding-organization-load-error"]')).toBeNull()
+      expect(mocks.fetchOrganizations).toHaveBeenCalledTimes(3)
+      expect(mocks.invokeCapgoApi).not.toHaveBeenCalled()
+    }
+    finally {
+      app.unmount()
+      history.destroy()
+    }
+  })
+
   it.each([
     { pendingFetch: 1, failures: 0 },
     { pendingFetch: 2, failures: 0 },

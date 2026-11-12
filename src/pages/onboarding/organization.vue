@@ -2,6 +2,7 @@
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { isNavigationFailure } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconArrowRight from '~icons/lucide/arrow-right'
 import IconCheck from '~icons/lucide/check'
@@ -692,7 +693,9 @@ async function initializeOrganization() {
 
     appDraft.value = loadOnboardingAppDraft(main.user?.id ?? main.auth?.id)
     if (!appDraft.value && !isAdditionalOrgFlow.value && typeof route.query.org !== 'string') {
-      await router.replace('/onboarding/app')
+      const failure = await router.replace('/onboarding/app')
+      if (isNavigationFailure(failure))
+        initializationState.value = 'failed'
       return
     }
 
