@@ -15,7 +15,7 @@ export const MCP_SKILL_SOURCES = [
   'cli/skills/usage',
 ] as const
 
-const output = 'supabase/functions/_backend/mcp/skills.generated.json'
+const output = 'cli/src/mcp/skills.generated.json'
 const mimeTypes: Record<string, string> = {
   '.md': 'text/markdown', '.txt': 'text/plain', '.json': 'application/json',
   '.yaml': 'application/yaml', '.yml': 'application/yaml', '.ts': 'text/plain',

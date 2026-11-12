@@ -263,13 +263,18 @@ else {
     }
   })
 
-  await test('every registered tool accepts projectDir and cwd, including tools without inputs and both onboarding flows', async () => {
+  await test('every app tool accepts projectDir and cwd, including tools without inputs and both onboarding flows', async () => {
     await withServer(undefined, async (client) => {
       const { tools } = await client.listTools()
       ok(tools.some(tool => tool.name === 'capgo_list_apps'), 'account tools must be registered')
       ok(tools.some(tool => tool.name === 'start_capgo_builder_onboarding'), 'builder tools must be registered')
       ok(tools.some(tool => tool.name === 'start_capgo_live_update_onboarding'), 'live-update tools must be registered')
       for (const tool of tools) {
+        if (['capgo_list_skills', 'capgo_get_skill'].includes(tool.name)) {
+          eq(tool.inputSchema.properties.projectDir, undefined, `${tool.name} must work independently of a project`)
+          eq(tool.inputSchema.properties.cwd, undefined, `${tool.name} must not select a project`)
+          continue
+        }
         eq(tool.inputSchema.properties.projectDir.type, 'string', `${tool.name} must accept projectDir`)
         eq(tool.inputSchema.properties.cwd.type, 'string', `${tool.name} must accept cwd`)
       }
