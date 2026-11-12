@@ -675,7 +675,7 @@ const appTools: McpTool[] = [
       ios_store_url: z.string().nullable().optional().describe('App Store listing URL for this app. Use null to clear it.'),
       android_store_url: z.string().nullable().optional().describe('Google Play listing URL for this app. Use null to clear it.'),
     },
-    annotations: DESTRUCTIVE,
+    annotations: { ...DESTRUCTIVE, openWorldHint: true },
     request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: `/app/${enc(id)}`, body: compact(rest) }),
   }),
   apiTool({
@@ -1280,7 +1280,7 @@ const webhookTools: McpTool[] = [
       events: webhookEvents.optional().describe('Capgo database resources whose changes should trigger webhook deliveries.'),
       enabled: z.boolean().optional().describe('Enable or disable event delivery to this webhook.'),
     },
-    annotations: DESTRUCTIVE,
+    annotations: { ...DESTRUCTIVE, openWorldHint: true },
     request: input => ({ method: 'PUT', path: '/webhooks', body: compact(input) }),
   }),
   apiTool({
@@ -1480,7 +1480,7 @@ const notificationTools: McpTool[] = [
       channel: z.string().nullable().optional().describe('Channel name to check; omitted or null uses the app push update channel setting.'),
       limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this update check.'),
     },
-    annotations: EXTERNAL,
+    annotations: { ...EXTERNAL, destructiveHint: true },
     request: input => ({ method: 'POST', path: '/notifications/update-check', body: compact(input) }),
   }),
   apiTool({
