@@ -2,9 +2,9 @@ import { z } from 'zod'
 
 export const skillSchema = z.object({
   uri: z.string().describe('Exact skill or file URI from the catalog; pass unchanged to a read tool.'),
-  frontmatter: z.object({ name: z.string().describe('Unique skill name.'), description: z.string().describe('When this guide is useful.') }).catchall(z.unknown()),
-  resources: z.array(z.object({ uri: z.string().describe('Exact skill or file URI from the catalog; pass unchanged to a read tool.'), digest: z.string().describe('sha256 digest of the exact file bytes.'), size: z.number().int().nonnegative().describe('File size in bytes.') })),
-})
+  frontmatter: z.object({ name: z.string().describe('Unique skill name.'), description: z.string().describe('When this guide is useful.') }).catchall(z.unknown()).describe('Skill name, purpose and any additional guide metadata from its frontmatter.'),
+  resources: z.array(z.object({ uri: z.string().describe('Exact skill or file URI from the catalog; pass unchanged to a read tool.'), digest: z.string().describe('sha256 digest of the exact file bytes.'), size: z.number().int().nonnegative().describe('File size in bytes.') })).describe('Files belonging to this skill, with exact read URIs and integrity digests.'),
+}).describe('Workflow guide metadata and file manifest; read the guide URI to load its instructions.')
 export const skillContentSchema = z.object({
   uri: z.string().describe('Exact skill or file URI from the catalog; pass unchanged to a read tool.'),
   mimeType: z.string().describe('MIME type of this resource.'),

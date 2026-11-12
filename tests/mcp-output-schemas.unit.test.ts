@@ -435,11 +435,46 @@ function context(payload: unknown): McpToolContext {
   }
 }
 
+function hasOutputDescription(value: unknown): boolean {
+  const schema = z.record(z.string(), z.unknown()).parse(value)
+  if (typeof schema.description === 'string' && schema.description.trim())
+    return true
+  // Zod can keep a nullable field's description on its non-null union branch.
+  const branches = Array.isArray(schema.anyOf) ? schema.anyOf : []
+  const values = branches.filter(
+    (branch) => z.record(z.string(), z.unknown()).parse(branch).type !== 'null',
+  )
+  return values.length > 0 && values.every(hasOutputDescription)
+}
+
+function missingOutputDescriptions(value: unknown, path = '#'): string[] {
+  if (!value || typeof value !== 'object') return []
+  if (Array.isArray(value))
+    return value.flatMap((item, index) =>
+      missingOutputDescriptions(item, `${path}/${index}`),
+    )
+  const node = z.record(z.string(), z.unknown()).parse(value)
+  const properties =
+    node.properties && typeof node.properties === 'object'
+      ? z.record(z.string(), z.unknown()).parse(node.properties)
+      : {}
+  const missing = Object.entries(properties).flatMap(([name, property]) =>
+    hasOutputDescription(property) ? [] : [`${path}/properties/${name}`],
+  )
+  return [
+    ...missing,
+    ...Object.entries(node).flatMap(([name, child]) =>
+      missingOutputDescriptions(child, `${path}/${name}`),
+    ),
+  ]
+}
+
 describe('every hosted MCP tool has a usable output contract', () => {
   it('publishes a non-empty object output schema for the entire catalog', () => {
     expect(MCP_TOOLS.map((tool) => tool.name).sort()).toEqual(
       Object.keys(MCP_OUTPUT_SCHEMAS).sort(),
     )
+    const missingDescriptions: string[] = []
     for (const entry of listTools()) {
       const tool = z
         .object({
@@ -456,7 +491,13 @@ describe('every hosted MCP tool has a usable output contract', () => {
         Object.keys(tool.outputSchema.properties).length,
         tool.name,
       ).toBeGreaterThan(0)
+      missingDescriptions.push(
+        ...missingOutputDescriptions(tool.outputSchema).map(
+          (path) => `${tool.name}: ${path}`,
+        ),
+      )
     }
+    expect(missingDescriptions).toEqual([])
   })
 
   it.concurrent.each(Object.entries(payloads))(
@@ -480,6 +521,35 @@ describe('every hosted MCP tool has a usable output contract', () => {
         tool.outputSchema.safeParse(result.structuredContent).success,
         name,
       ).toBe(true)
+    },
+  )
+
+  it.concurrent.each(['capgo_request_build', 'capgo_get_build_upload_url'])(
+    'preserves upload instructions for %s when the builder omits its optional size limit',
+    async (name) => {
+      const { max_bytes: _maxBytes, ...upload } = signed
+      const ctx = context({ job_id: signed.job_id })
+      ctx.call = async (request) => ({
+        ok: true,
+        status: 200,
+        data: request.path.startsWith('/build/upload_url/')
+          ? upload
+          : { job_id: signed.job_id },
+      })
+      const result = await MCP_TOOLS_BY_NAME.get(name)!.run(
+        { appId, job_id: signed.job_id, platform: 'ios' },
+        ctx,
+      )
+      expect(result.isError).not.toBe(true)
+      expect(result.structuredContent).toMatchObject(
+        name === 'capgo_request_build'
+          ? {
+              job_id: signed.job_id,
+              upload,
+              next_step: expect.stringContaining('capgo_start_build'),
+            }
+          : { data: upload },
+      )
     },
   )
 

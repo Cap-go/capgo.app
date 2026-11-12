@@ -175,7 +175,7 @@ describe('hosted MCP protocol', () => {
       idempotentHint: false,
     })
     expect(byName.get('capgo_get_build_status')?.annotations).toMatchObject({
-      readOnlyHint: false,
+      readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
       idempotentHint: true,
