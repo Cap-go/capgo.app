@@ -15,12 +15,24 @@ console → API relay /private/console/auth/* → GOTRUE service binding
 - Worker: `cloudflare_workers/gotrue/` (Dockerfile, `index.ts`, `wrangler.jsonc`).
 - Non-secret settings: `vars` in `cloudflare_workers/gotrue/wrangler.jsonc`, mirroring the hosted Auth config.
 - Relay: `supabase/functions/_backend/private/console_auth_proxy.ts` sends to GoTrue when the `GOTRUE` binding exists, otherwise to hosted Supabase (unchanged).
-- Grants: `supabase/migrations/20261111123000_gotrue_cf_auth_hooks.sql` lets `gotrue_cf` call the two Postgres auth hooks.
+- Grants: `supabase/migrations/20261112230000_gotrue_cf_auth_hooks.sql` lets `gotrue_cf` call the two Postgres auth hooks.
 
 GoTrue reads its database namespace from `DB_NAMESPACE` (not `GOTRUE_DB_NAMESPACE`).
 With the wrong name it silently uses `auth`.
 
-## Secrets: `internal/cloudflare_gotrue_auth/.env.prod`
+## Secrets
+
+### Turnstile (`CAPTCHA_SECRET_KEY` Secrets Store)
+
+The GoTrue Worker binds `CAPTCHA_SECRET_KEY` from the account `default_secrets_store`
+(`cloudflare_workers/gotrue/wrangler.jsonc`). It must be the same Turnstile secret the
+API Worker uses (`CAPTCHA_SECRET_KEY` / `CLOUDFLARE_TURNSTILE_SECRET_KEY` on
+`capgo_api-prod`). Do not push a copy with `deploy:cloudflare_env:gotrue:prod`.
+
+Before first deploy, create or confirm the `CAPTCHA_SECRET_KEY` store secret (workers scope)
+if it is not there yet. The container maps it to `GOTRUE_SECURITY_CAPTCHA_SECRET`.
+
+### `internal/cloudflare_gotrue_auth/.env.prod`
 
 Not in the repository yet. Encrypt it with git-secret like `internal/cloudflare/`,
 then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
@@ -33,7 +45,6 @@ then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
 - `GOTRUE_JWT_KEYS`: JSON array with the ES256 private JWK (`kid` = the standby key
   in the hosted JWKS), so the API accepts our tokens.
 - `GOTRUE_SAML_PRIVATE_KEY`: base64 DER RSA private key.
-- `GOTRUE_SECURITY_CAPTCHA_SECRET`: Turnstile secret.
 
 Before GoTrue first connects, change the `gotrue_cf` password from the Supabase
 SQL editor with a SCRAM verifier, never the plaintext (statements are logged):

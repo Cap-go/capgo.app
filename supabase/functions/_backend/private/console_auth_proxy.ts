@@ -9,7 +9,7 @@ import { getEnv } from '../utils/utils.ts'
 // same GoTrue requests here and this route relays them (see relayAuth for the
 // credentials). Only the user-facing endpoints are reachable; admin and generate-link
 // endpoints are not, so this is never more than what the browser could already do.
-const ALLOWED_PATHS = [
+const HOSTED_ALLOWED_PATHS = [
   /^token$/,
   /^signup$/,
   /^logout$/,
@@ -23,6 +23,10 @@ const ALLOWED_PATHS = [
   /^factors$/,
   /^factors\/[\w-]+$/,
   /^factors\/[\w-]+\/(?:challenge|verify)$/,
+]
+
+// Self-hosted GoTrue only; hosted Supabase Auth does not expose these on the public relay.
+const GOTRUE_ONLY_ALLOWED_PATHS = [
   /^sso\/saml\/(?:acs|metadata)$/,
   /^\.well-known\/jwks\.json$/,
   /^health$/,
@@ -47,12 +51,15 @@ function trimTrailingSlashes(value: string) {
   return value.slice(0, end)
 }
 
-export function consoleAuthPath(requestPath: string): string | null {
+export function consoleAuthPath(requestPath: string, goTrueRelay = false): string | null {
   const index = requestPath.indexOf(MOUNT)
   if (index < 0)
     return null
   const path = trimTrailingSlashes(requestPath.slice(index + MOUNT.length))
-  return ALLOWED_PATHS.some(pattern => pattern.test(path)) ? path : null
+  const patterns = goTrueRelay
+    ? [...HOSTED_ALLOWED_PATHS, ...GOTRUE_ONLY_ALLOWED_PATHS]
+    : HOSTED_ALLOWED_PATHS
+  return patterns.some(pattern => pattern.test(path)) ? path : null
 }
 
 // GoTrue routes behind its CAPTCHA gate (internal/api/api.go, isIgnoreCaptchaRoute).
@@ -124,11 +131,11 @@ function relayAuth(c: Context<MiddlewareKeyVariables>): RelayAuth {
 // no API key, so no admin identity ever reaches a public route.
 function goTrueAuth(c: Context<MiddlewareKeyVariables>): RelayAuth {
   const session = c.req.header('authorization') ?? ''
-  const clientIp = getClientIP(c)
+  const cfClientIp = c.req.header('cf-connecting-ip')
   return {
     headers: {
       ...(JWT_BEARER.test(session) ? { authorization: session } : {}),
-      ...(clientIp === 'unknown' ? {} : { 'x-forwarded-for': clientIp }),
+      ...(cfClientIp ? { 'x-forwarded-for': cfClientIp } : {}),
     },
   }
 }
@@ -168,12 +175,11 @@ async function verifyTurnstile(captcha: NonNullable<RelayAuth['captcha']>, token
 export const app = new Hono<MiddlewareKeyVariables>()
 
 app.all('/*', async (c) => {
-  const path = consoleAuthPath(c.req.path)
-  if (!path)
-    return quickError(404, 'unsupported_auth_endpoint', 'Unsupported auth endpoint')
-
   // Hosted Supabase Auth unless this environment binds our own GoTrue.
   const goTrue = c.env?.GOTRUE
+  const path = consoleAuthPath(c.req.path, !!goTrue)
+  if (!path)
+    return quickError(404, 'unsupported_auth_endpoint', 'Unsupported auth endpoint')
   const upstream = new URL(goTrue ? `https://gotrue/${path}` : `${trimTrailingSlashes(getEnv(c, 'SUPABASE_URL'))}/auth/v1/${path}`)
   upstream.search = new URL(c.req.url).search
 
@@ -189,7 +195,7 @@ app.all('/*', async (c) => {
 
   let body: ArrayBuffer | undefined
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
-    const maxBytes = path === 'sso/saml/acs' ? SAML_ACS_MAX_BODY_BYTES : MAX_BODY_BYTES
+    const maxBytes = goTrue && path === 'sso/saml/acs' ? SAML_ACS_MAX_BODY_BYTES : MAX_BODY_BYTES
     // Refuse declared oversize bodies before buffering anything; the read below bounds the rest.
     if (Number(c.req.header('content-length') ?? 0) > maxBytes)
       return quickError(413, 'auth_request_too_large', 'Auth request too large')

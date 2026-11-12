@@ -75,6 +75,16 @@ describe('console auth relay', () => {
     expect(consoleAuthPath('/private/console/auth/admin/users')).toBeNull()
   })
 
+  it('blocks self-hosted GoTrue routes when the GOTRUE binding is missing', async () => {
+    for (const path of ['health', '.well-known/jwks.json', 'sso/saml/metadata', 'sso/saml/acs']) {
+      const response = await app.request(`https://api.example.com/private/console/auth/${path}`, { method: 'POST' })
+      expect(response.status, path).toBe(404)
+      expect(consoleAuthPath(`/private/console/auth/${path}`), path).toBeNull()
+      expect(consoleAuthPath(`/private/console/auth/${path}`, true), path).toBe(path)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('rejects oversized bodies before contacting the auth provider', async () => {
     const response = await app.request('https://api.example.com/private/console/auth/signup', { method: 'POST', body: 'x'.repeat(70 * 1024) })
     expect(response.status).toBe(413)
@@ -198,6 +208,13 @@ describe('console auth relay to our GoTrue (GOTRUE binding)', () => {
     const call = goTrueFetch.mock.calls[0]
     return { response, url: call ? String(call[0]) : null, headers: call ? new Headers(call[1].headers) : null }
   }
+
+  it('only forwards cf-connecting-ip to GoTrue, never client x-forwarded-for', async () => {
+    const { headers } = await relay('user', { headers: { 'x-forwarded-for': '198.51.100.4' } })
+    expect(headers?.has('x-forwarded-for')).toBe(false)
+    const trusted = await relay('user', { headers: { 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '198.51.100.4' } })
+    expect(trusted.headers?.get('x-forwarded-for')).toBe('203.0.113.9')
+  })
 
   it('sends to the binding instead of hosted Supabase, with the Cloudflare address and no API key', async () => {
     const { response, url, headers } = await relay('token?grant_type=password', {
