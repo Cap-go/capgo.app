@@ -280,10 +280,10 @@ function logOutdatedDependencyTable(outdated: OutdatedDependency[]) {
     log.warn(`   ${dep.name}: ${dep.installed} → ${dep.latest}`)
 }
 
-function throwOutdatedDependenciesError(packageJson: string | undefined, outdated: OutdatedDependency[], silent: boolean) {
+export function throwOutdatedDependenciesError(packageJson: string | undefined, outdated: OutdatedDependency[], silent: boolean) {
   if (!silent && outdated.length > 0)
     log.info(`Run:\n${buildOutdatedInstallCommandsForDoctor(packageJson, outdated)}`)
-  throw new Error(OUTDATED_DEPENDENCIES_ERROR)
+  throw new CliUserError(OUTDATED_DEPENDENCIES_ERROR)
 }
 
 async function promptDoctorUpdateChoice(capgo: OutdatedDependency[], other: OutdatedDependency[]): Promise<DoctorUpdateChoice> {
