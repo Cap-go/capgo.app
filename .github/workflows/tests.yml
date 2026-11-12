@@ -408,7 +408,7 @@ jobs:
         # Keep startup and functions serve on the same original image repositories.
         run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
-        # Finish image extraction before dependency installation and database startup.
+        # Finish image extraction before installing dependencies or starting the database.
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
@@ -424,7 +424,6 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      # Keep dependency extraction separate from Docker/database startup.
       - name: Install dependencies
         run: bun install
       - name: Run Supabase Start

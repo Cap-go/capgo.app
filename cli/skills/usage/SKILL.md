@@ -131,3 +131,7 @@ npx @capgo/cli@latest app list --filter-by-org-id YOUR_ORG_ID --show-org --show-
 npx @capgo/cli@latest get-qr com.example.app --channel production
 npx @capgo/cli@latest star-all
 ```
+
+## Hosted MCP result contracts
+
+Every hosted account tool publishes an output schema. Read successful API payloads from `structuredContent.data`; other hosted tools return the object described by their output schema. Legacy text remains available. Check `isError` before using a result. A result-size error calls for pagination or narrower filters; inspect current state before retrying a write. This describes the hosted server, not every local CLI tool.
