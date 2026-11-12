@@ -42,7 +42,7 @@ describe('[POST] /private/console/query', () => {
       const result = await inserted.json() as { error: unknown, data: { id: string, country: string } }
       expect(result).toMatchObject({ error: null, data: { id: userId, country: process.env.USE_CLOUDFLARE_WORKERS === 'true' ? expect.stringMatching(/^[A-Z]{2}$/) : 'BR' } })
 
-      payload.operations[0] = { method: 'upsert', args: [{ id: userId, email }] }
+      payload.operations[0] = { method: 'upsert', args: [{ id: userId, email }, { onConflict: 'id' }] }
       const updated = await query(payload, { ...headers, 'cf-ipcountry': 'US' })
       expect(await updated.json()).toMatchObject({ error: null, data: { id: userId, country: result.data.country } })
     }
