@@ -137,6 +137,8 @@ jobs:
             notifications:
               - 'packages/capacitor-notifications/**'
             capgo:
+              - 'skills/**'
+              - 'cli/skills/**'
               - 'aliproxy/**'
               - 'android/**'
               - 'assets/**'
