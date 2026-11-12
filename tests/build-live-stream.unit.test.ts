@@ -3,7 +3,6 @@ import {
   applyBuildStreamMessage,
   buildTimeline,
   createBuildLiveState,
-  LOG_TAIL_LIMIT,
   resolveBuildOutcome,
   stepCopy,
 } from '../src/services/buildLiveStream'
@@ -17,18 +16,16 @@ function step(id: number, action: string, status: string, extra: Record<string, 
 }
 
 describe('applyBuildStreamMessage', () => {
-  it('keeps a bounded log tail and tracks the last id', () => {
-    const lines = Array.from({ length: LOG_TAIL_LIMIT + 5 }, (_, i) => ({ type: 'log', id: i + 1, message: `line ${i}` }))
-    const state = feed(lines)
-    expect(state.logs).toHaveLength(LOG_TAIL_LIMIT)
-    expect(state.logs.at(-1)).toBe(`line ${LOG_TAIL_LIMIT + 4}`)
-    expect(state.lastId).toBe(LOG_TAIL_LIMIT + 5)
+  it('ignores build output lines but tracks the last id', () => {
+    const state = feed([{ type: 'log', id: 1, message: 'line' }, { type: 'log', id: 2, message: 'line' }])
+    expect(state).not.toHaveProperty('logs')
+    expect(state.lastId).toBe(2)
   })
 
   it('ignores replayed ids, heartbeats and malformed payloads', () => {
     const state = feed([
-      { type: 'log', id: 1, message: 'a' },
-      { type: 'log', id: 1, message: 'a' },
+      { type: 'status', id: 1, status: 'running' },
+      { type: 'status', id: 1, status: 'failed' },
       { type: 'heartbeat_response', status: 'ok' },
       null,
       'garbage',
@@ -36,14 +33,14 @@ describe('applyBuildStreamMessage', () => {
       { type: 'status', id: 3 },
       { type: 'custom_msg', id: 4, kind: 'step', data: { action: 42, status: 'started' } },
     ])
-    expect(state.logs).toEqual(['a'])
     expect(state.steps).toEqual([])
-    expect(state.status).toBeNull()
+    expect(state.status).toBe('running')
   })
 
   it('expands batch_messages', () => {
-    const state = feed([{ type: 'batch_messages', messages: [{ type: 'log', id: 1, message: 'a' }, { type: 'log', id: 2, message: 'b' }] }])
-    expect(state.logs).toEqual(['a', 'b'])
+    const state = feed([{ type: 'batch_messages', messages: [step(1, 'android_sdk_setup', 'started'), { type: 'status', id: 2, status: 'running' }] }])
+    expect(state.steps).toHaveLength(1)
+    expect(state.status).toBe('running')
     expect(state.lastId).toBe(2)
   })
 
@@ -69,15 +66,13 @@ describe('applyBuildStreamMessage', () => {
       .toBeNull()
   })
 
-  it('records status and ignores logs after a terminal status', () => {
+  it('records status and its message', () => {
     const state = feed([
       { type: 'status', id: 1, status: 'RUNNING' },
       { type: 'status', id: 2, status: 'failed', message: 'Gradle failed' },
-      { type: 'log', id: 3, message: 'cleanup' },
     ])
     expect(state.status).toBe('failed')
     expect(state.statusMessage).toBe('Gradle failed')
-    expect(state.logs).toEqual([])
   })
 })
 

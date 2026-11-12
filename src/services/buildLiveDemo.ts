@@ -6,27 +6,27 @@ import type { BuildPlatform } from '~/services/buildLiveStream'
 type DemoMode = 'success' | 'store' | 'failure'
 interface DemoRow { status: string, started_at: string | null }
 
-const STEPS: Record<BuildPlatform, [action: string, logs: string[]][]> = {
+const STEPS: Record<BuildPlatform, string[]> = {
   android: [
-    ['project_bundle_download', ['Downloading project archive (12.4 MB)', 'Extracted 1 284 files']],
-    ['build_cache_restore', ['No cache yet for this app: first build']],
-    ['android_sdk_setup', ['Installing platforms;android-35', 'Installing build-tools;35.0.0']],
-    ['android_signing_prepare', ['Keystore loaded · alias release']],
-    ['android_aab_build', ['> Task :app:preBuild', '> Task :capacitor-android:compileReleaseJavaWithJavac', '> Task :app:mergeReleaseResources', '> Task :app:minifyReleaseWithR8', '> Task :app:bundleRelease', 'BUILD SUCCESSFUL in 3m 32s']],
-    ['google_play_upload', ['Uploading app-release.aab to the internal track', 'Upload complete']],
+    'project_bundle_download',
+    'build_cache_restore',
+    'android_sdk_setup',
+    'android_signing_prepare',
+    'android_aab_build',
+    'google_play_upload',
   ],
   ios: [
-    ['project_bundle_download', ['Downloading project archive (18.1 MB)', 'Extracted 2 031 files']],
-    ['ios_dependencies_install', ['$ pod install', 'Pod installation complete! 14 pods installed.']],
-    ['ios_signing_setup', ['Certificate imported into a temporary keychain', 'Provisioning profile installed']],
-    ['ios_archive_build', ['▸ Compiling AppDelegate.swift', '▸ Linking App', '▸ Signing App.app', '** ARCHIVE SUCCEEDED **']],
-    ['testflight_upload', ['Uploading App.ipa to App Store Connect', 'Upload complete']],
+    'project_bundle_download',
+    'ios_dependencies_install',
+    'ios_signing_setup',
+    'ios_archive_build',
+    'testflight_upload',
   ],
 }
 
-const FAILURE_LOGS: Record<BuildPlatform, string[]> = {
-  android: ['e: Unresolved reference: BarcodeScanner (MainActivity.kt:14)', 'FAILURE: Build failed with an exception.'],
-  ios: ['error: No such module \'BarcodeScanner\' (AppDelegate.swift:3)', '** ARCHIVE FAILED **'],
+const FAILURE_MESSAGE: Record<BuildPlatform, string> = {
+  android: 'e: Unresolved reference: BarcodeScanner (MainActivity.kt:14)',
+  ios: 'error: No such module \'BarcodeScanner\' (AppDelegate.swift:3)',
 }
 
 export function playBuildDemo(
@@ -53,22 +53,20 @@ export function playBuildDemo(
 
   const steps = STEPS[platform]
   const failAt = demoMode === 'failure' ? steps.length - 2 : -1
-  for (const [index, [action, logs]] of steps.entries()) {
+  for (const [index, action] of steps.entries()) {
     const started = { at: 0 }
     later(600, () => {
       started.at = Date.now()
       step(action, 'started')
     })
-    for (const line of index === failAt ? [...logs.slice(0, 2), ...FAILURE_LOGS[platform]] : logs)
-      later(700, () => send({ type: 'log', message: line }))
     if (index === failAt) {
-      later(500, () => {
+      later(2000, () => {
         step(action, 'failed', Date.now() - started.at)
-        send({ type: 'status', status: 'failed', message: FAILURE_LOGS[platform][0] })
+        send({ type: 'status', status: 'failed', message: FAILURE_MESSAGE[platform] })
       })
       break
     }
-    later(500, () => step(action, 'succeeded', Date.now() - started.at))
+    later(2000, () => step(action, 'succeeded', Date.now() - started.at))
   }
   if (demoMode !== 'failure') {
     if (demoMode === 'success')

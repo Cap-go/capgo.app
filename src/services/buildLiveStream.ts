@@ -18,7 +18,6 @@ export interface BuildLiveState {
   status: string | null
   statusMessage: string | null
   steps: LiveStep[]
-  logs: string[]
   downloadUrl: string | null
 }
 
@@ -28,8 +27,6 @@ interface TimelineRow {
   startedAt?: number
   durationMs?: number
 }
-
-export const LOG_TAIL_LIMIT = 200
 
 const SUCCESS_STATUSES = new Set(['succeeded', 'released'])
 const FAILURE_STATUSES = new Set(['failed', 'expired', 'cancelled', 'canceled'])
@@ -72,7 +69,7 @@ export function stepCopy(action: string): { labelKey: string | null, whyKey: str
 }
 
 export function createBuildLiveState(): BuildLiveState {
-  return { lastId: 0, status: null, statusMessage: null, steps: [], logs: [], downloadUrl: null }
+  return { lastId: 0, status: null, statusMessage: null, steps: [], downloadUrl: null }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -111,11 +108,6 @@ function applyStep(state: BuildLiveState, data: Record<string, unknown>): BuildL
 }
 
 function applyEntry(state: BuildLiveState, entry: Record<string, unknown>): BuildLiveState {
-  if (entry.type === 'log' && typeof entry.message === 'string') {
-    if (isTerminal(state.status))
-      return state
-    return { ...state, logs: [...state.logs, entry.message].slice(-LOG_TAIL_LIMIT) }
-  }
   if (entry.type === 'status' && typeof entry.status === 'string') {
     const statusMessage = typeof entry.message === 'string' ? entry.message : state.statusMessage
     return { ...state, status: entry.status.toLowerCase(), statusMessage }

@@ -32,7 +32,6 @@ const emit = defineEmits<{ retry: [], done: [] }>()
 const POLL_MS = 3000
 const HEARTBEAT_MS = 2000
 const MAX_RECONNECTS = 5
-const LOG_PREVIEW_LINES = 6
 
 const { t } = useI18n()
 const capgo = useConsole()
@@ -40,7 +39,6 @@ const row = ref<BuildRow | null>(null)
 const live = ref<BuildLiveState>(createBuildLiveState())
 const now = ref(Date.now())
 const endedAt = ref<number | null>(null)
-const showAllLogs = ref(false)
 let stopped = false
 let socket: WebSocket | null = null
 let reconnects = 0
@@ -65,7 +63,6 @@ const currentRow = computed(() => timeline.value.rows[timeline.value.current])
 const currentLabel = computed(() => currentRow.value ? rowLabel(currentRow.value.key) : '')
 const queued = computed(() => !outcome.value && (currentRow.value?.key === 'upload' || currentRow.value?.key === 'machine'))
 const errorText = computed(() => row.value?.last_error || live.value.statusMessage || t('build-live-failed-no-error'))
-const logPreview = computed(() => live.value.logs.slice(-LOG_PREVIEW_LINES))
 const qrCode = computed(() => live.value.downloadUrl ? buildPreviewQrCodeDataUrl(live.value.downloadUrl) : '')
 const terminalCommand = computed(() => `npx @capgo/cli@latest build request ${props.appId} --platform ${props.platform}`)
 const jobShort = computed(() => row.value?.builder_job_id ? `${row.value.builder_job_id.slice(0, 12)}…` : '')
@@ -194,8 +191,6 @@ async function copyFixPrompt() {
     t('build-live-fix-prompt', { platform: platformLabel.value, app: props.appId }),
     '',
     errorText.value,
-    '',
-    ...live.value.logs.slice(-40),
   ].join('\n')
   try {
     await navigator.clipboard.writeText(prompt)
@@ -368,11 +363,7 @@ onUnmounted(stop)
           <h3 class="font-semibold text-slate-950 dark:text-white">
             {{ t('build-live-steps-title') }}
           </h3>
-          <button v-if="live.logs.length" type="button" class="d-btn d-btn-ghost d-btn-xs" @click="showAllLogs = !showAllLogs">
-            {{ showAllLogs ? t('build-live-hide-logs') : t('build-live-show-logs') }}
-          </button>
         </div>
-        <pre v-if="showAllLogs" class="max-h-96 overflow-auto bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-300">{{ live.logs.join('\n') }}</pre>
         <ol>
           <li
             v-for="r in timeline.rows"
@@ -390,15 +381,6 @@ onUnmounted(stop)
               <p v-if="(r.state === 'running' || r.state === 'failed') && rowWhy(r.key)" class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
                 {{ rowWhy(r.key) }}
               </p>
-              <div
-                v-if="(r.state === 'running' || r.state === 'failed') && logPreview.length && !showAllLogs"
-                class="mt-2 overflow-hidden rounded-md bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-300"
-                aria-live="polite"
-              >
-                <p v-for="(line, i) in logPreview" :key="`${live.lastId}-${i}`" class="truncate">
-                  {{ line }}
-                </p>
-              </div>
             </div>
             <span class="text-sm tabular-nums" :class="r.state === 'running' ? 'text-azure-500' : 'text-slate-500 dark:text-slate-400'">
               {{ rowTime(r) }}
