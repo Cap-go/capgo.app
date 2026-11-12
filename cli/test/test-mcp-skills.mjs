@@ -73,12 +73,16 @@ async function checkCatalog(session, modern) {
   }
   const listed = await rpc('tools/call', { name: 'capgo_list_skills', arguments: {} })
   assert.equal(listed.isError, undefined)
-  assert.deepEqual(listed.structuredContent.skills, catalog.skills)
+  const advertised = listed.structuredContent.skills
+  assert.deepEqual(advertised.map(skill => skill.frontmatter.name), ['check-update-health', 'native-builds', 'organization-management', 'ship-live-update', 'usage'])
+  assert.ok(new Set(advertised.map(skill => skill.frontmatter.name)).size <= 5)
+  for (const skill of advertised)
+    assert.deepEqual(skill, catalog.skills.find(entry => entry.uri === skill.uri))
   assert.deepEqual(JSON.parse(listed.content[0].text), listed.structuredContent)
   const resources = (await rpc('resources/list')).resources
   assert.deepEqual(resources.map(resource => resource.uri), catalog.skills.map(skill => skill.uri))
   if (modern)
-    assert.deepEqual((await rpc('skills/list')).skills, catalog.skills)
+    assert.deepEqual((await rpc('skills/list')).skills, advertised)
 
   for (const skill of catalog.skills) {
     if (modern)

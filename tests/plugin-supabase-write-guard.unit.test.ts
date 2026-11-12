@@ -148,9 +148,8 @@ describe('plugin Supabase write policy', () => {
     for (const envName of ['prod', 'alpha'])
       expect(getHyperdriveId(apiWrangler, envName, 'HYPERDRIVE_CAPGO_DIRECT_EU')).toBe('ae1fe6178b564adc9fc9a71ccc769a35')
 
-    const preprodDirectId = getHyperdriveId(apiWrangler, 'preprod', 'HYPERDRIVE_CAPGO_DIRECT_EU')
-    expect(preprodDirectId).toBeTruthy()
-    expect(preprodDirectId).not.toBe(getHyperdriveId(apiWrangler, 'prod', 'HYPERDRIVE_CAPGO_DIRECT_EU'))
+    expect(getHyperdriveId(apiWrangler, 'preprod', 'HYPERDRIVE_CAPGO_DIRECT_EU')).toBe('2fc2676ee13f42c388b250d01d416433')
+    expect(getHyperdriveId(apiWrangler, 'preprod', 'HYPERDRIVE_CAPGO_DIRECT_EU')).not.toBe(getHyperdriveId(apiWrangler, 'prod', 'HYPERDRIVE_CAPGO_DIRECT_EU'))
 
     for (const envName of Object.keys(pluginWrangler.env))
       expect(getHyperdriveId(pluginWrangler, envName, 'HYPERDRIVE_CAPGO_DIRECT_EU')).toBeUndefined()
