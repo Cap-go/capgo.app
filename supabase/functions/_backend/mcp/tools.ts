@@ -1121,7 +1121,7 @@ const requestBuildTool: McpTool = {
   name: 'capgo_request_build',
   outputSchema: MCP_OUTPUT_SCHEMAS.capgo_request_build,
   title: 'Request native build',
-  description: 'Step 1 of 3 to run a native cloud build without a logged-in CLI. Uses the signing credentials stored for this app (see capgo_get_build_credentials), so it requires app admin rights (app.update_settings) on the app, not only build rights. '
+  description: 'Capgo Build is generally available for production iOS and Android Capacitor releases. Build and sign from any machine without a local Mac or Xcode, with optional store submission. Step 1 of 3 to run a native cloud build without a logged-in CLI. Uses the signing credentials stored for this app (see capgo_get_build_credentials), so it requires app admin rights (app.update_settings) on the app, not only build rights. '
     + 'First, change into the absolute local Capacitor app directory (not the workspace root or MCP server directory) and package the native project offline: `npx @capgo/cli@latest build zip <appId> --platform <ios|android> --json`, and pass its build_options and ios_dependency_manager here. '
     + 'Returns a job_id and a signed URL. Step 2: `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<upload_url>"`. Step 3: capgo_start_build. Builds use build minutes.'
     + ' The result contains job_id, upload details and next_step. If URL creation fails after requesting a job, the error retains job_id so the agent can retry upload setup or cancel it.',

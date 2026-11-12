@@ -15,6 +15,10 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - `native-builds`: native cloud build request and build-credential workflows.
 - `organization-management`: organization, account, and deprecated organisation-alias workflows.
 
+## MCP skill discovery
+
+Both MCP servers advertise five workflow guides: `check-update-health`, `ship-live-update`, `native-builds`, `organization-management`, and `usage`. The detailed CLI guides remain available through `resources/list` and `capgo_get_skill` at `skill://capgo/observe/SKILL.md` and `skill://capgo/release-management/SKILL.md`. Read the appropriate guide before using its commands.
+
 ## Shared invocation rules
 
 - Prefer `npx @capgo/cli@latest ...` in user-facing examples in this repo.

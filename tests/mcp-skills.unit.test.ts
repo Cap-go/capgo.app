@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import { buildMcpSkillCatalog, MCP_SKILL_SOURCES } from '../scripts/generate-mcp-skills.ts'
 import { LATEST_LEGACY_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { CLIENT_CAPABILITIES_META, PROTOCOL_VERSION_META } from '../supabase/functions/_backend/mcp/modern_protocol.ts'
 import { handleJsonRpcMessage, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import catalog from '../cli/src/mcp/skills.generated.json'
-import { getSkill, listSkills, readSkillResource, SKILLS_EXTENSION } from '../supabase/functions/_backend/mcp/skills.ts'
+import { getSkill, listSkills, readSkillResource, skillSchema, SKILLS_EXTENSION } from '../supabase/functions/_backend/mcp/skills.ts'
 import { MCP_TOOLS_BY_NAME } from '../supabase/functions/_backend/mcp/tools.ts'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -29,10 +30,10 @@ const rpc = (method: string, params: Record<string, unknown> = {}, modern = true
 describe('published skill catalog', () => {
   it('matches the public sources; regenerate with bun run generate:mcp-skills after editing a skill', async () => {
     expect(await buildMcpSkillCatalog(root)).toEqual(catalog)
-    expect(listSkills()).toHaveLength(7)
+    expect(listSkills()).toHaveLength(5)
   })
 
-  it.concurrent.each(listSkills())('serves exact source bytes and digests for $frontmatter.name', async (skill) => {
+  it.concurrent.each(catalog.skills)('serves exact source bytes and digests for $frontmatter.name', async (skill) => {
     const source = MCP_SKILL_SOURCES.find(path => path.endsWith(`/${skill.frontmatter.name}`))!
     const sourceBytes = await readFile(join(root, source, 'SKILL.md'))
     expect(readSkillResource(skill.uri)?.text).toBe(Buffer.from(sourceBytes).toString('utf8'))
@@ -69,6 +70,16 @@ describe('published skill catalog', () => {
 })
 
 describe('skills over MCP', () => {
+  it.concurrent('advertises at most five unique skill names in one complete catalog', async () => {
+    const response = await rpc('skills/list')
+    const { skills } = z.object({ skills: skillSchema.array() }).parse(response?.result)
+    const names = skills.map(skill => skill.frontmatter.name)
+    expect(new Set(names).size).toBeLessThanOrEqual(5)
+    expect(names).toEqual(['check-update-health', 'native-builds', 'organization-management', 'ship-live-update', 'usage'])
+    expect(response?.result).toHaveProperty('resultType', 'complete')
+    expect(response?.result).not.toHaveProperty('nextCursor')
+  })
+
   it.concurrent('discovers capabilities and returns manifests without loading instructions', async () => {
     const discovery = await rpc('server/discover')
     expect(discovery?.result).toMatchObject({
@@ -98,7 +109,7 @@ describe('skills over MCP', () => {
     expect((await rpc('skills/list', { _meta: { ...meta, [PROTOCOL_VERSION_META]: '2099-01-01' } }))?.error).toMatchObject({
       code: -32022, data: { requested: '2099-01-01', supported: expect.arrayContaining([LATEST_PROTOCOL_VERSION]) },
     })
-    expect((await rpc('skills/list', { cursor: 'invalid' }))?.error?.code).toBe(-32602)
+    expect((await rpc('skills/list', { cursor: 'invalid' }))?.error).toMatchObject({ code: -32602, message: 'Invalid cursor: this catalog is returned in one page.' })
   })
 
   it.concurrent('preserves legacy initialization and resource response shapes', async () => {
