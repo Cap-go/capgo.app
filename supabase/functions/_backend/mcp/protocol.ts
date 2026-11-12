@@ -2,8 +2,8 @@ import type { Context } from 'hono'
 import type { McpTool, McpToolContext, McpToolResult } from './tools.ts'
 import { z } from 'zod'
 import { handleEventsList, handleEventsSubscribe, handleEventsUnsubscribe } from './events_rpc.ts'
-import { version } from '../utils/version.ts'
 import { GUIDANCE_KEY, guidanceForError } from './error_guidance.ts'
+import { LATEST_PROTOCOL_VERSION, MCP_SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from './metadata.ts'
 import { MAX_RESULT_CHARS, MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './tools.ts'
 
 /**
@@ -11,8 +11,7 @@ import { MAX_RESULT_CHARS, MCP_TOOLS, MCP_TOOLS_BY_NAME, textResult } from './to
  * No session state is kept between requests, so any worker isolate can serve any call.
  */
 
-export const LATEST_PROTOCOL_VERSION = '2025-11-25'
-export const SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, '2025-06-18', '2025-03-26', '2024-11-05'] as const
+export { LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './metadata.ts'
 
 export const SERVER_INSTRUCTIONS = 'Capgo Cloud MCP server: manage Capacitor live updates (OTA). '
   + 'List organizations and apps, inspect bundles, channels and devices, deploy a bundle by updating a channel, '
@@ -186,14 +185,7 @@ export async function handleJsonRpcMessage(message: unknown, ctx: McpToolContext
           tools: { listChanged: false },
           events: { list: true, subscribe: true, unsubscribe: true },
         },
-        serverInfo: {
-          name: 'capgo',
-          title: 'Capgo',
-          version,
-          description: 'Manage Capacitor app releases with Capgo: upload and deploy live update bundles, control channels and progressive rollouts, inspect devices and app health, run native builds, manage organizations, webhooks and push notifications, and search documentation.',
-          icons: [{ src: 'https://capgo.app/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'] }],
-          websiteUrl: 'https://capgo.app',
-        },
+        serverInfo: MCP_SERVER_INFO,
         instructions: SERVER_INSTRUCTIONS,
       })
     case 'ping':
