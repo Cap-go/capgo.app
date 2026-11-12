@@ -2,7 +2,6 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
-import { accepts } from 'hono/accepts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
 import { parseAccept } from 'hono/utils/accept'
@@ -195,38 +194,25 @@ export function createMcpApp(dispatch: McpDispatch) {
   app.get(MCP_PATH, (c) => {
     c.header('Vary', 'Accept', { append: true })
     c.header('Cache-Control', 'no-store')
-    const representation = accepts(c, {
-      header: 'Accept',
-      supports: ['text/html', 'text/event-stream', 'application/json'],
-      default: 'text/html',
-      match: (types, config) => {
-        // Hono preserves casing. Normalize names, preserving quoted parameter values,
-        // then let its parser apply the same quality rules and ordering to Q as to q.
-        const accepted = parseAccept(types.map(({ type, params }) => [
-          type.toLowerCase(),
-          ...Object.entries(params).map(([name, value]) => {
-            const escapedValue = value.replace(/["\\]/g, String.raw`\$&`)
-            return `${name.toLowerCase()}="${escapedValue}"`
-          }),
-        ].join(';')).join(','))
-        const matches = config.supports.flatMap((type) => {
-          // The most specific range sets the quality, including explicit q=0 exclusions.
-          const ranges = [type, `${type.split('/')[0]}/*`, '*/*']
-          for (const [specificity, range] of ranges.entries()) {
-            const index = accepted.findIndex(accept => accept.type.toLowerCase() === range)
-            if (index !== -1)
-              return [{ type, q: accepted[index].q, specificity, index }]
-          }
-          return []
-        })
-        matches.sort((a, b) => b.q - a.q || a.specificity - b.specificity || a.index - b.index)
-        const preferred = matches[0]
-        if (!preferred)
-          return config.default
-        return preferred.q > 0 ? preferred.type : ''
-      },
+    // Normalize Q before Hono sorts ranges, retaining header order for quality ties.
+    // Skip quoted strings so parameter values (including escaped quotes) stay intact.
+    const accepted = parseAccept((c.req.header('Accept') ?? '').replace(
+      /"(?:[^"\\]|\\.)*"|;\s*Q(?=\s*=)/g,
+      value => value.startsWith('"') ? value : value.toLowerCase(),
+    ))
+    const matches = ['text/html', 'text/event-stream', 'application/json'].flatMap((type) => {
+      // The most specific range sets the quality, including explicit q=0 exclusions.
+      const ranges = [type, `${type.split('/')[0]}/*`, '*/*']
+      for (const [specificity, range] of ranges.entries()) {
+        const index = accepted.findIndex(accept => accept.type.toLowerCase() === range)
+        if (index !== -1)
+          return [{ type, q: accepted[index].q, specificity, index }]
+      }
+      return []
     })
-    if (representation === 'text/html')
+    matches.sort((a, b) => b.q - a.q || a.specificity - b.specificity || a.index - b.index)
+    const preferred = matches[0]
+    if (!preferred || (preferred.q > 0 && preferred.type === 'text/html'))
       return mcpSetupPage(c)
     c.header('Allow', 'POST, OPTIONS')
     return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL https://api.capgo.app/mcp and the HTTP transport.'), 405)
