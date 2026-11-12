@@ -1621,7 +1621,8 @@ Build native iOS and Android apps with Capgo Cloud.
 Capgo Build is generally available for production iOS and Android releases.
 Build, sign, and submit Capacitor apps from Windows, Linux, macOS, CI, or an AI coding agent. No local Mac or Xcode required.
 One CLI covers 2 native platforms, guided signing setup, live build logs, and optional App Store Connect and Google Play submission.
-For AI-assisted setup, run npx @capgo/cli@latest mcp and start with start_capgo_builder_onboarding.
+For AI-assisted setup, configure your agent's MCP client to launch npx @capgo/cli@latest mcp, then ask it to call start_capgo_builder_onboarding.
+Client configuration: https://capgo.app/docs/cli/reference/mcp/
 Build minutes are included in Capgo plans; extra minutes use prepaid credits. Current pricing: https://capgo.app/pricing/
 Measured build times and methodology: https://capgo.app/builder-data/
 Setup and requirements: https://capgo.app/docs/builder/
@@ -2571,6 +2572,8 @@ Selected tools exposed via MCP:
   - capgo_get_account_id, capgo_get_account, capgo_update_account, capgo_doctor, capgo_get_stats, capgo_observe
   - capgo_request_build, capgo_get_build_status, capgo_get_build_logs, capgo_generate_encryption_keys
   - capgo_search_docs, capgo_set_project_dir
+  - capgo_list_skills, capgo_get_skill
+The CLI bundles the same public skills catalog as the hosted MCP at release time. Use capgo_list_skills to discover workflow guides and capgo_get_skill to read one; resourceUri selects a supporting file from its manifest. These reads work offline without login or a selected project. MCP 2026-07-28 clients can use the skills extension (skills/list and skills/get); both modern and legacy clients can use resources/list and resources/read. Reading a skill does not run it or authorize its actions. Update the CLI to receive newer skill content.
 The project directory follows the client's MCP roots (the agent's workspace), so a global
 install works from any folder. Clients without roots can call capgo_set_project_dir.
 Workspace roots with exactly one Capacitor app automatically select that app, including

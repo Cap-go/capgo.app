@@ -9,7 +9,7 @@ import { buildMcpSkillCatalog, MCP_SKILL_SOURCES } from '../scripts/generate-mcp
 import { LATEST_LEGACY_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { CLIENT_CAPABILITIES_META, PROTOCOL_VERSION_META } from '../supabase/functions/_backend/mcp/modern_protocol.ts'
 import { handleJsonRpcMessage, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
-import catalog from '../supabase/functions/_backend/mcp/skills.generated.json'
+import catalog from '../cli/src/mcp/skills.generated.json'
 import { getSkill, listSkills, readSkillResource, SKILLS_EXTENSION } from '../supabase/functions/_backend/mcp/skills.ts'
 import { MCP_TOOLS_BY_NAME } from '../supabase/functions/_backend/mcp/tools.ts'
 
@@ -108,7 +108,7 @@ describe('skills over MCP', () => {
     expect(init?.result).not.toHaveProperty('capabilities.extensions')
     expect((await rpc('initialize', { protocolVersion: LATEST_PROTOCOL_VERSION }, false))?.result).toMatchObject({ protocolVersion: LATEST_LEGACY_PROTOCOL_VERSION })
     const listing = await rpc('resources/list', {}, false)
-    expect((listing?.result as { resources: unknown[] }).resources).toHaveLength(7)
+    expect(listing?.result).toHaveProperty('resources.length', 7)
     const content = (await rpc('resources/read', { uri: skillUri }, false))?.result
     expect(content).toEqual({ contents: [readSkillResource(skillUri)] })
     expect((await rpc('prompts/list', {}, false))?.result).toEqual({ prompts: [] })

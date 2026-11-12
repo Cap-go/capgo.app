@@ -1,8 +1,9 @@
+import type { ProtocolEra } from '@modelcontextprotocol/server'
 import type { SDKResult } from '../schemas/sdk'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { McpServer } from '@modelcontextprotocol/server'
-import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
+import { serveStdio, StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import { z } from 'zod'
 import pack from '../../package.json'
 import { enableApiInstrumentation, setInvocationSource, trackMcpServerStarted, withMcpToolTracking } from '../analytics/track'
@@ -53,6 +54,7 @@ import { withCwd } from '../build/cwd'
 import { registerLiveUpdateTools } from '../init/mcp/live-update-tools'
 import { withErrorGuidance, withGuidedErrorResults } from './error-guidance'
 import { buildServerInstructions } from './instructions'
+import { registerSkillTools } from './skills'
 import { installMcpStdoutGuard } from './stdout-guard'
 import { createProjectDirQueue, describeProjectDir, pickProjectDirFromRoots, resolveProjectDirInput, resolveProjectDirOptions } from './project-dir'
 
@@ -105,6 +107,41 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   // line land on stdout and corrupt the initialize handshake.
   const transportStdout = installMcpStdoutGuard()
 
+  setInvocationSource('mcp')
+  enableApiInstrumentation()
+
+  const transport = new StdioServerTransport(process.stdin, transportStdout)
+  const send = transport.send.bind(transport)
+  transport.send = (message: Parameters<typeof send>[0]) => send(withGuidedErrorResults(message))
+  const close = transport.close.bind(transport)
+  transport.close = async () => {
+    try {
+      await close()
+    }
+    finally {
+      restoreConfigWriteTarget()
+    }
+  }
+  const start = transport.start.bind(transport)
+  const started = new Promise<void>((resolve, reject) => {
+    transport.start = async () => {
+      try {
+        await start()
+        resolve()
+      }
+      catch (error) {
+        reject(error)
+        throw error
+      }
+    }
+  })
+  // The SDK preserves legacy initialize/roots while also accepting modern discovery.
+  serveStdio(({ era }) => createMcpServer(era), { transport })
+  await started
+  trackMcpServerStarted(Boolean(findSavedKeySilent()))
+}
+
+function createMcpServer(era: ProtocolEra): McpServer {
   // Computed once: gates BOTH the onboarding-tool registration (below) and the
   // onboarding steer appended to the server instructions, so we never advertise a
   // start_capgo_builder_onboarding tool we didn't actually register.
@@ -115,8 +152,8 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
     { instructions: buildServerInstructions({ onboardingEnabled, liveUpdateEnabled }) },
   )
 
-  setInvocationSource('mcp')
-  enableApiInstrumentation()
+  // Public catalog reads do not need credentials, a project or the CWD queue.
+  registerSkillTools(server, era)
 
   // Project directory: the server reads the user's project (capacitor config, package.json,
   // native folders, ./.capgo) from process.cwd(). A user-scoped install is spawned from the
@@ -217,6 +254,9 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   function refreshSdkForProject(): void {
     sdk = new CapgoSDK({})
   }
+  // Modern clients do not send notifications/initialized or use the legacy roots API.
+  if (era === 'modern')
+    projectDirSync = syncProjectDirFromRoots()
 
   server.registerTool(
     'capgo_set_project_dir',
@@ -969,7 +1009,11 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   server.registerTool(
     'capgo_request_build',
     {
-      description: 'Build and sign a Capacitor app for iOS or Android with generally available Capgo Build. Run from Windows, Linux, macOS, or CI without a local Mac or Xcode. Supports optional store submission, live logs, and downloadable artifacts. For first-time signing setup, use start_capgo_builder_onboarding. Pricing and included minutes: https://capgo.app/pricing/. Measured performance: https://capgo.app/builder-data/.',
+      description: 'Build and sign a Capacitor app for iOS or Android with generally available Capgo Build. Run from Windows, Linux, macOS, or CI without a local Mac or Xcode. Supports optional store submission, live logs, and downloadable artifacts. '
+        + (onboardingEnabled
+          ? 'For first-time signing setup, use start_capgo_builder_onboarding. '
+          : 'For first-time signing setup, run npx @capgo/cli@latest build init in a terminal in your Capacitor project. ')
+        + 'Pricing and included minutes: https://capgo.app/pricing/. Measured performance: https://capgo.app/builder-data/.',
       inputSchema: mcpRequestBuildInputSchema,
     },
     async ({ appId, platform, path, nodeModules, useStoredCredentials, cache, cacheKey }) => {
@@ -1129,17 +1173,5 @@ async function startMcpServerInternal(restoreConfigWriteTarget: () => void): Pro
   if (liveUpdateEnabled)
     registerLiveUpdateTools(server, () => sdk) // live accessor: honors login/logout and project switches
 
-  // Start the server with stdio transport. The stdout guard installed at the top of this
-  // function already routed ambient stdout (stray clack/console output from any tool or
-  // dependency) to stderr, so only JSON-RPC frames reach the real stdout a strict client
-  // reads; otherwise the transport drops ("Transport closed"). Keep the config target
-  // for this server's lifetime because tool calls happen after the CLI action completes.
-  const transport = new StdioServerTransport(process.stdin, transportStdout)
-  // Last safety net: error results the SDK builds before a handler runs (invalid arguments,
-  // output validation) also leave the agent a way out.
-  const send = transport.send.bind(transport)
-  transport.send = (message: Parameters<typeof send>[0]) => send(withGuidedErrorResults(message))
-  transport.onclose = restoreConfigWriteTarget
-  await server.connect(transport)
-  trackMcpServerStarted(Boolean(savedApiKey))
+  return server
 }
