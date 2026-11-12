@@ -76,7 +76,7 @@ export function listTools(): unknown[] {
         title: tool.title,
         description: tool.description,
         inputSchema: toolJsonSchema(tool.inputSchema, 'input'),
-        ...(tool.outputSchema ? { outputSchema: toolJsonSchema(tool.outputSchema, 'output') } : {}),
+        outputSchema: toolJsonSchema(tool.outputSchema, 'output'),
         annotations: tool.annotations,
       }
       toolListCache.set(tool.name, entry)

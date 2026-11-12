@@ -1790,6 +1790,7 @@ Selected tools exposed via MCP:
   - capgo_search_docs, capgo_set_project_dir
   - capgo_list_skills, capgo_get_skill
 
+Hosted account tools all publish outputSchema. Successful HTTP API results are also returned as structuredContent.data; the text content preserves the original API JSON for older clients. Non-HTTP tools return the object described by their own outputSchema. Errors use isError=true with guidance, and oversized results require pagination or narrower filters.
 The CLI bundles the same public skills catalog as the hosted MCP at release time. Use capgo_list_skills to discover workflow guides and capgo_get_skill to read one; resourceUri selects a supporting file from its manifest. These reads work offline without login or a selected project. MCP 2026-07-28 clients can use the skills extension (skills/list and skills/get); both modern and legacy clients can use resources/list and resources/read. Reading a skill does not run it or authorize its actions. Update the CLI to receive newer skill content.
 
 The project directory follows the client's MCP roots (the agent's workspace), so a global
