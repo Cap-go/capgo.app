@@ -16,6 +16,85 @@ afterEach(() => {
 })
 
 describe('published plugin state reader', () => {
+  it('cancels a stalled cached body and reads the current publication instead', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    vi.useFakeTimers()
+    const appId = 'com.example.cached-body-deadline'
+    const key = await pluginStateImmutableKey(await pluginStateAppKey(appId), '2')
+    const cancel = vi.fn(() => new Promise<void>(() => {}))
+    const cached = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"v":')) },
+      cancel,
+    }), { headers: { 'X-Plugin-State-Revision': '1' } })
+    vi.stubGlobal('caches', { open: async () => ({ match: async () => cached, put: vi.fn() }) })
+    const getValue = vi.fn(async () => ({ f: 1, app_id: appId, built_at: 2, exists: false }))
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const session = await startPluginStateRequest(c, appId, 'device')
+      return c.json({ builtAt: session?.doc.built_at })
+    })
+    const response = app.request('/', undefined, {
+      PLUGIN_STATE: { get: getValue },
+      PLUGIN_STATE_POINTERS: { get: async () => ({ json: async () => ({ f: 1, generation: '2', kvKey: key }) }) },
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await (await response).json()).toEqual({ builtAt: 2 })
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(getValue).toHaveBeenCalledOnce()
+    expect(cached.body?.locked).toBe(false)
+  })
+
+  it('decodes a cached body split across UTF-8 character boundaries', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    const appId = 'com.example.cached-utf8'
+    const body = new TextEncoder().encode(JSON.stringify({ v: { f: 1, app_id: appId, built_at: 1, exists: false, note: 'é' } }))
+    const split = body.indexOf(0xC3) + 1
+    vi.stubGlobal('caches', { open: async () => ({ match: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(body.slice(0, split))
+        controller.enqueue(body.slice(split))
+        controller.close()
+      },
+    })) }) })
+    const getValue = vi.fn()
+    const app = new Hono()
+    app.get('/', async (c) => c.json({ exists: (await startPluginStateRequest(c, appId, 'device'))?.exists }))
+    expect(await (await app.request('/', undefined, { PLUGIN_STATE: { get: getValue } })).json()).toEqual({ exists: false })
+    expect(getValue).not.toHaveBeenCalled()
+  })
+
+  it('does not await stalled body cancellation when reusing parsed memory', async () => {
+    vi.stubEnv('PLUGIN_STATE_KV', 'on')
+    vi.stubEnv('CAPGO_PREVENT_BACKGROUND_FUNCTIONS', 'true')
+    const appId = 'com.example.cached-memory-cancel'
+    const key = await pluginStateImmutableKey(await pluginStateAppKey(appId), '1')
+    const doc = { f: 1, app_id: appId, built_at: 1, exists: false }
+    const cancel = vi.fn(() => new Promise<void>(() => {}))
+    let cached = false
+    vi.stubGlobal('caches', { open: async () => ({
+      match: async () => cached ? new Response(new ReadableStream({ cancel }), { headers: { 'X-Plugin-State-Revision': '1' } }) : undefined,
+      put: async () => { cached = true },
+    }) })
+    const getValue = vi.fn(async () => doc)
+    const bindings = {
+      PLUGIN_STATE: { get: getValue },
+      PLUGIN_STATE_POINTERS: { get: async () => ({ json: async () => ({ f: 1, generation: '1', kvKey: key }) }) },
+    }
+    const app = new Hono()
+    app.get('/', async c => c.json({ exists: (await startPluginStateRequest(c, appId, 'device'))?.exists }))
+    expect(await (await app.request('/', undefined, bindings)).json()).toEqual({ exists: false })
+    vi.useFakeTimers()
+    const response = Promise.race([
+      app.request('/', undefined, bindings),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('memory reuse stalled')), 1000)),
+    ])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await (await response).json()).toEqual({ exists: false })
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(getValue).toHaveBeenCalledOnce()
+  })
+
   it.each(['true', 'false'])('falls back for cold and cached unpublished apps with authoritative mode %s', async (authoritative) => {
     vi.stubEnv('PLUGIN_STATE_KV', 'on')
     vi.stubEnv('PLUGIN_STATE_KV_AUTHORITATIVE', authoritative)

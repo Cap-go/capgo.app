@@ -97,6 +97,7 @@ describe('plugin state same-app reclaim', () => {
     expect(put).toHaveBeenCalledTimes(2)
     expect(storage.publishedValue(await pluginStateVersionKey(appId, bundleName))).toMatchObject({ id: 202 })
     expect(argument(acks[0], 'p_done')).toEqual([appId])
+    expect(argument(acks[0], 'p_app_published')).toEqual([])
     expect(argument(acks[0], 'p_deferred')).toEqual([])
     expect(argument(acks[1], 'p_done')).toEqual([appId])
     expect(argument(acks[1], 'p_failed')).toEqual([])
@@ -154,6 +155,7 @@ describe('plugin state same-app reclaim', () => {
     expect(argument(acks[0], 'p_full_done')).toEqual([])
     expect(storage.publishedValue(await pluginStateDeviceKey('com.test.full-backoff', 'fixture-device'))).toEqual({ channel_id: null })
     expect(storage.publishedValue(await pluginStateAppKey('com.test.full-backoff'))).toMatchObject({ exists: false })
+    expect(argument(acks[0], 'p_app_published')).toEqual(['com.test.full-backoff'])
   })
 
   it('queues a conservative purge when retrying already-published identical content', async () => {
@@ -182,6 +184,35 @@ describe('plugin state same-app reclaim', () => {
     expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
     expect(storage.publishedValue(key)).toEqual(value)
     expect(argument(acks[0], 'p_changed_apps')).toEqual([appId])
+  })
+
+  it('does not report app publication when a newer generation fences the write', async () => {
+    const appId = 'com.test.fenced-app-publication'
+    const storage = publicationProviders()
+    const key = await pluginStateAppKey(appId)
+    await createPluginStateSyncStore(storage.namespace, storage.pointers, '2').putJson(key, {
+      f: 1, app_id: appId, built_at: 2, exists: false,
+    })
+    const dialect = new PgDialect()
+    const acks: Statement[] = []
+    provider.execute.mockImplementation(async (query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_plugin_state_sync('))
+        return { rows: [{ result: { status: 'ok', lease_token: 'old-lease', generation: '1', has_more: false,
+          apps: [{ app_id: appId, jobs: [{ kind: 'app', ref: '' }], attempts: 1 }],
+        } }] }
+      if (statement.sql.includes('FROM public.plugin_state_sync_apps'))
+        return { rows: [{ fully_synced: false, pending_full: false, archived_full: true }] }
+      if (statement.sql.includes('public.ack_plugin_state_sync('))
+        acks.push(statement)
+      return { rows: [] }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
+    expect(argument(acks[0], 'p_app_published')).toEqual([])
+    expect(storage.publishedValue(key)).toMatchObject({ built_at: 2 })
   })
 
   it('publishes a device removal and current app tombstone while a full scan remains archived', async () => {
@@ -260,6 +291,7 @@ describe('plugin state same-app reclaim', () => {
     expect(argument(acks[0], 'p_done')).toEqual([appId])
     expect(argument(acks[0], 'p_continuations')).toBe('{}')
     expect(argument(acks[0], 'p_full_done')).toEqual([])
+    expect(argument(acks[0], 'p_app_published')).toEqual([appId])
     expect(statements.some(statement => statement.includes('version_files') || statement.includes('public.manifest'))).toBe(false)
     expect(storage.pointers.list).not.toHaveBeenCalled()
   })

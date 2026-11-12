@@ -89,6 +89,7 @@ interface ClaimResult {
 interface AppOutcome {
   appId: string
   ok: boolean
+  appPublished?: boolean
   /** A full sync finished (the app document is complete). */
   fullDone?: boolean
   /** The app no longer exists (tombstone written). */
@@ -239,6 +240,7 @@ function reserveProviderOperation(budget: PublicationBudget) {
  * the old Worker resumes after its lease expired. */
 export function createPluginStateSyncStore(namespace: KvStore, pointers: PointerStore, generation: string, budget: PublicationBudget = { remaining: PROVIDER_OPERATION_BUDGET }) {
   const written = new Set<string>()
+  const published = new Set<string>()
   let changed = false
   const reserve = () => reserveProviderOperation(budget)
   async function readPointer(key: string) {
@@ -279,6 +281,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
       if (object) {
         changed ||= previous?.digest !== digest
         written.add(key)
+        published.add(key)
         return
       }
       previous = await readPrecondition(key)
@@ -292,6 +295,7 @@ export function createPluginStateSyncStore(namespace: KvStore, pointers: Pointer
   return {
     get remaining() { return budget.remaining },
     get changed() { return changed },
+    hasPublished: (key: string) => published.has(key),
     async getApp(key: string) {
       const pointer = await readPointer(key)
       if (!pointer?.value.kvKey)
@@ -955,7 +959,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         // A prior attempt may have advanced a pointer without committing its
         // purge. Explicit reset repairs likewise invalidate conservatively.
         const retryOrReset = item.attempts > 1 || item.jobs.some(job => job.kind === 'full' && job.ref === '')
-        return { ...outcome, changed: store.changed || retryOrReset }
+        return { ...outcome, appPublished: store.hasPublished(await pluginStateAppKey(item.app_id)), changed: store.changed || retryOrReset }
       })
       const done = outcomes.filter(outcome => outcome.ok)
       const failed = outcomes.filter(outcome => !outcome.ok && !outcome.deferred)
@@ -976,7 +980,8 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         p_removed => ${sql.param(done.filter(outcome => outcome.removed).map(outcome => outcome.appId))}::text[],
         p_versions_changed => ${sql.param(done.filter(outcome => outcome.versionsChanged).map(outcome => outcome.appId))}::text[],
         p_changed_apps => ${sql.param(outcomes.filter(outcome => outcome.changed).map(outcome => outcome.appId))}::text[],
-        p_continuations => ${JSON.stringify(continuations)}::jsonb
+        p_continuations => ${JSON.stringify(continuations)}::jsonb,
+        p_app_published => ${sql.param(done.filter(outcome => outcome.appPublished).map(outcome => outcome.appId))}::text[]
       )`)
       result.apps += done.length
       result.failed += failed.length

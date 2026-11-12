@@ -181,6 +181,23 @@ describe('plugin state storage and selection boundaries', () => {
     }
   })
 
+  it.each([null, 1, 999])('requires a per-device override channel to exist in the app snapshot (%s)', async (channelId) => {
+    const appKey = await pluginStateAppKey(APP_ID)
+    const app = new Hono()
+    app.get('/', async (c) => {
+      const session = await startPluginStateRequest(c, APP_ID, 'device')
+      if (channelId === 999)
+        await expect(session?.overrideChannelId('device')).rejects.toBeInstanceOf(PluginStateMiss)
+      else
+        expect(await session?.overrideChannelId('device')).toBe(channelId)
+      return c.json({ done: true })
+    })
+    const response = await app.request('/', undefined, {
+      PLUGIN_STATE: { get: (key: string) => key === appKey ? { ...appDoc(), overrides: null } : { channel_id: channelId } },
+    })
+    expect(response.status).toBe(200)
+  })
+
   it('does not load an unused fallback manifest when all requested files are version scoped', async () => {
     const appKey = await pluginStateAppKey(APP_ID)
     const read = vi.fn((key: string) => key === appKey ? appDoc() : key === pluginStateManifestKey(11) ? manifest({ sizes: [['a', '10']] }) : key === pluginStateManifestKey(12) ? manifest({ version_id: 12, sizes: [['b', '20']] }) : null)

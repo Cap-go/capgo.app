@@ -18,7 +18,10 @@ location. On a miss, the reader gets the logical key's pointer through the R2
 binding, validates its generation and immutable KV key, then reads that exact
 KV value. Popular app and manifest documents can reuse a parsed copy in isolate
 memory only after checking the Cache API's publication-generation revision.
-Pointer lookup and JSON decoding share a 50 ms deadline; the subsequent KV
+Cache lookup and cached-body streaming each have their own 50 ms deadline.
+A stalled body is cancelled without waiting for cancellation to finish, and
+the reader tries the current publication instead. Pointer lookup and JSON
+decoding share a 50 ms deadline; the subsequent KV
 value read has its own 50 ms deadline. A timeout discards the late result and
 falls back to the existing replica path. Each request may load at most 16
 distinct document keys, with at most four concurrent document loads. Oversized
@@ -197,6 +200,12 @@ preserves a cursor in backoff. It persists progress atomically under a live
 lease, preserving newer explicit reset requests. Explicit repair clears the
 old `full_synced_at` marker, and an older ACK cannot restore it while another
 full job or archived full failure remains.
+Backfill pending rows and cursor advancement commit together; an enqueue
+failure leaves the cursor unchanged. Daily app reconciliation uses
+`app_synced_at`, updated only after a successful app-document publication and
+live-lease ACK. Version, device or manifest writes alone do not postpone that
+refresh. An app snapshot missing the channel named by a per-device override
+falls back to the replica until the documents agree.
 Full sync pages bundle names and device keys by indexed cursors, in pages of
 48, then resumes manifest publication with its own cursor. Cleanup lists at
 most 48 logical pointer keys per page so four apps share the same provider

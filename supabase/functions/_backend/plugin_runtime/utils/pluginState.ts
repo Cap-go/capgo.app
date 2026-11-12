@@ -64,6 +64,7 @@ const MANIFEST_CACHE_TTL_SECONDS = 30
 const NEGATIVE_CACHE_TTL_SECONDS = 60
 /** App documents can be large: allow more than the default 20ms Cache API read. */
 const CACHE_MATCH_TIMEOUT_MS = 50
+const CACHE_BODY_TIMEOUT_MS = 50
 const CACHE_PUT_TIMEOUT_MS = 200
 const REVISION_HEADER = 'X-Plugin-State-Revision'
 const MEMORY_MAX_ENTRIES = 256
@@ -169,6 +170,45 @@ function loadDocWithRevision<T>(c: AnyContext, store: KVNamespace, options: DocL
   return withPluginStateDocument(c, options.kvKey, () => loadDocument(c, store, options))
 }
 
+async function readCachedEnvelope(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader()
+  if (!reader)
+    throw new Error('Cached plugin state has no body')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const read = async () => {
+    const decoder = new TextDecoder()
+    const chunks: string[] = []
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done)
+          break
+        chunks.push(decoder.decode(value, { stream: true }))
+      }
+      chunks.push(decoder.decode())
+      const envelope: unknown = JSON.parse(chunks.join(''))
+      return envelope
+    }
+    finally {
+      reader.releaseLock()
+    }
+  }
+  try {
+    return await Promise.race([
+      read(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          void reader.cancel().catch(() => undefined)
+          reject(new Error('Cached plugin state body timed out'))
+        }, CACHE_BODY_TIMEOUT_MS)
+      }),
+    ])
+  }
+  finally {
+    clearTimeout(timer)
+  }
+}
+
 async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLoadOptions<T>): Promise<CachedDoc<T>> {
   const helper = new CacheHelper(c)
   const request = helper.buildRequest(options.cachePath, options.params)
@@ -177,11 +217,11 @@ async function loadDocument<T>(c: AnyContext, store: KVNamespace, options: DocLo
     const revision = cached.headers.get(REVISION_HEADER)
     const remembered = options.reuseParsed ? memory.get(request.url) as CachedDoc<T> | undefined : undefined
     if (remembered && revision && remembered.revision === revision) {
-      await cached.body?.cancel().catch(() => undefined)
+      void cached.body?.cancel().catch(() => undefined)
       return remembered
     }
     try {
-      const envelope: unknown = await cached.json()
+      const envelope = await readCachedEnvelope(cached)
       if (!envelope || typeof envelope !== 'object' || !('v' in envelope))
         throw new Error('Invalid cached plugin state envelope')
       const value = envelope.v === null ? null : options.parse(envelope.v)
@@ -358,7 +398,10 @@ export class PluginStateSession implements PluginStateQueries {
         .then((value) => {
           if (value === null)
             throw new PluginStateMiss('device override not synced')
-          return parsePluginStateDevice(value).channel_id
+          const channelId = value.channel_id
+          if (channelId !== null && !this.doc.channels?.some(row => row.channels.id === channelId))
+            throw new PluginStateMiss('device override channel not synced')
+          return channelId
         })
         .catch(() => { throw new PluginStateMiss('device override unavailable or invalid') })
       this.overrides.set(deviceId, pending)

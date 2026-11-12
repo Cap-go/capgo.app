@@ -131,6 +131,55 @@ describe('plugin KV sync queue contracts', () => {
     })
   })
 
+  it('keeps the backfill cursor unchanged when durable enqueue fails', async () => {
+    await inTransaction(async () => {
+      const after = APP_ID.slice(0, -1)
+      await client.query(`CREATE OR REPLACE FUNCTION public.plugin_state_sync_enabled()
+        RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $body$ SELECT true $body$`)
+      await client.query(`SELECT set_config('capgo.test.backfill_app', $1, true)`, [APP_ID])
+      await client.query(`CREATE FUNCTION pg_temp.reject_backfill_enqueue() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = '' AS $body$ BEGIN
+          IF NEW.app_id = pg_catalog.current_setting('capgo.test.backfill_app', true) THEN
+            RAISE EXCEPTION 'test backfill enqueue failure';
+          END IF;
+          RETURN NEW;
+        END $body$`)
+      await client.query(`CREATE TRIGGER reject_backfill_enqueue BEFORE INSERT ON public.plugin_state_sync_pending
+        FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_backfill_enqueue()`)
+      await client.query(`UPDATE public.plugin_state_sync_state SET backfill_after = $1, backfill_done_at = NULL WHERE id`, [after])
+      await client.query('SAVEPOINT before_tick')
+      await expect(client.query('SELECT public.plugin_state_sync_tick()')).rejects.toThrow('test backfill enqueue failure')
+      await client.query('ROLLBACK TO SAVEPOINT before_tick')
+      const { rows } = await client.query<{ backfill_after: string }>('SELECT backfill_after FROM public.plugin_state_sync_state WHERE id')
+      expect(rows[0].backfill_after).toBe(after)
+      expect((await client.query('SELECT id FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])).rows).toEqual([])
+    })
+  })
+
+  it.each(['unpublished', 'stale', 'published'])('bases daily refresh on app-document publication after other key writes (%s)', async (state) => {
+    await inTransaction(async () => {
+      await client.query(`CREATE OR REPLACE FUNCTION public.plugin_state_sync_enabled()
+        RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $body$ SELECT true $body$`)
+      await client.query(`CREATE OR REPLACE FUNCTION public.wake_plugin_state_sync()
+        RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $body$ SELECT $body$`)
+      await client.query('UPDATE public.plugin_state_sync_state SET backfill_done_at = now() WHERE id')
+      await client.query(`INSERT INTO public.plugin_state_sync_apps (app_id, synced_at, app_synced_at, full_synced_at)
+        VALUES ($1, now() - interval '2 days', CASE WHEN $2 THEN NULL ELSE now() - interval '2 days' END, now())`, [APP_ID, state === 'unpublished'])
+      await enqueue()
+      const leased = await claim()
+      await client.query(`SELECT public.ack_plugin_state_sync(p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[],
+        p_app_published => $3::text[], p_changed_apps => '{}'::text[])`, [leased.lease_token, APP_ID, state === 'published' ? [APP_ID] : []])
+      const { rows } = await client.query<{ key_fresh: boolean, app_fresh: boolean | null }>(`
+        SELECT synced_at > now() - interval '1 hour' AS key_fresh,
+          app_synced_at > now() - interval '1 hour' AS app_fresh
+        FROM public.plugin_state_sync_apps WHERE app_id = $1`, [APP_ID])
+      expect(rows).toEqual([{ key_fresh: true, app_fresh: state === 'unpublished' ? null : state === 'published' }])
+      await client.query('SELECT public.plugin_state_sync_tick()')
+      const pending = await client.query<{ kind: string }>('SELECT kind FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])
+      expect(pending.rows).toEqual(state === 'published' ? [] : [{ kind: 'app' }])
+    })
+  })
+
   it('deduplicates long identifiers without exceeding the B-tree key limit', async () => {
     await inTransaction(async () => {
       const longRef = 'manifest-cursor-'.repeat(1000)
@@ -551,6 +600,7 @@ describe('plugin KV sync queue contracts', () => {
       FROM unnest(ARRAY['anon', 'authenticated']) AS role_name
       CROSS JOIN unnest(ARRAY[
         'public.claim_plugin_state_sync(integer)',
+        'public.ack_plugin_state_sync(uuid,text[],text[],integer,text[],text[],text[],text[],text[],jsonb,text[])',
         'public.enqueue_plugin_state_full_sync(text[])',
         'public.plugin_state_sync_tick()',
         'public.claim_plugin_state_gc()',

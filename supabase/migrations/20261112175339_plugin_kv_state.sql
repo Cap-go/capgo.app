@@ -108,11 +108,13 @@ COMMENT ON TABLE public.plugin_state_sync_pending IS
 CREATE TABLE public.plugin_state_sync_apps (
   app_id text PRIMARY KEY,
   synced_at timestamptz NOT NULL,
+  app_synced_at timestamptz,
   full_synced_at timestamptz
 );
 CREATE INDEX plugin_state_sync_apps_synced_at_idx ON public.plugin_state_sync_apps (synced_at);
+CREATE INDEX plugin_state_sync_apps_app_synced_at_idx ON public.plugin_state_sync_apps (app_synced_at NULLS FIRST);
 COMMENT ON TABLE public.plugin_state_sync_apps IS
-  'Apps whose plugin KV state was written, with the time of the last write and of the last full sync.';
+  'Apps whose plugin KV state was written, with separate times for any key, the app document, and the last full sync.';
 
 -- Lease settlement is a cooldown even when only part of an app's writes
 -- succeeded. Keep it separate from successful-sync/backfill bookkeeping.
@@ -443,7 +445,8 @@ CREATE OR REPLACE FUNCTION public.ack_plugin_state_sync(
   p_deferred text[] DEFAULT '{}',
   p_versions_changed text[] DEFAULT '{}',
   p_changed_apps text[] DEFAULT NULL,
-  p_continuations jsonb DEFAULT '{}'
+  p_continuations jsonb DEFAULT '{}',
+  p_app_published text[] DEFAULT '{}'
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -504,8 +507,8 @@ BEGIN
   FROM pg_catalog.jsonb_each_text(COALESCE(p_continuations, '{}')) AS entry
   WHERE entry.key = ANY (COALESCE(p_done, '{}'));
 
-  INSERT INTO public.plugin_state_sync_apps AS synced (app_id, synced_at, full_synced_at)
-  SELECT DISTINCT done.app_id, v_now, CASE
+  INSERT INTO public.plugin_state_sync_apps AS synced (app_id, synced_at, app_synced_at, full_synced_at)
+  SELECT DISTINCT done.app_id, v_now, CASE WHEN done.app_id = ANY (COALESCE(p_app_published, '{}')) THEN v_now END, CASE
     WHEN done.app_id = ANY (COALESCE(p_full_done, '{}'))
       AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = done.app_id AND p.kind = 'full')
       AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = done.app_id AND f.kind = 'full')
@@ -513,6 +516,7 @@ BEGIN
   FROM pg_catalog.unnest(COALESCE(p_done, '{}')) AS done (app_id)
   ON CONFLICT (app_id) DO UPDATE
   SET synced_at = EXCLUDED.synced_at,
+      app_synced_at = COALESCE(EXCLUDED.app_synced_at, synced.app_synced_at),
       full_synced_at = CASE
         WHEN EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = synced.app_id AND p.kind = 'full')
           OR EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = synced.app_id AND f.kind = 'full')
@@ -567,10 +571,10 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) FROM anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb) TO service_role;
+ALTER FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb, text[]) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb, text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb, text[]) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_plugin_state_sync(uuid, text[], text[], integer, text[], text[], text[], text[], text[], jsonb, text[]) TO service_role;
 
 -- GC coordination is one indexed operational row, service-only and never
 -- on a plugin request path. Partial pages resume on the next existing tick.
@@ -686,7 +690,11 @@ BEGIN
         )
           AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = candidate);
         IF v_ids IS NOT NULL THEN
-          PERFORM public.notify_plugin_state_sync('full', v_ids);
+          -- Durable enqueue and cursor advancement must succeed together;
+          -- the business-write notification helper swallows insert errors.
+          INSERT INTO public.plugin_state_sync_pending (app_id, kind, ref)
+          SELECT selected.app_id, 'full', '' FROM pg_catalog.unnest(v_ids) AS selected (app_id)
+          ON CONFLICT ON CONSTRAINT plugin_state_sync_pending_producer_job_unique DO NOTHING;
         END IF;
         UPDATE public.plugin_state_sync_state SET backfill_after = v_last WHERE id;
       END IF;
@@ -697,11 +705,11 @@ BEGIN
     FROM (
       SELECT s.app_id
       FROM public.plugin_state_sync_apps s
-      WHERE s.synced_at < pg_catalog.now() - interval '1 day'
+      WHERE (s.app_synced_at IS NULL OR s.app_synced_at < pg_catalog.now() - interval '1 day')
         AND EXISTS (SELECT 1 FROM public.apps a WHERE a.app_id = s.app_id)
         AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_pending p WHERE p.app_id = s.app_id)
         AND NOT EXISTS (SELECT 1 FROM public.plugin_state_sync_failed f WHERE f.app_id = s.app_id)
-      ORDER BY s.synced_at
+      ORDER BY s.app_synced_at NULLS FIRST
       LIMIT v_batch
     ) AS stale;
     IF v_ids IS NOT NULL THEN
