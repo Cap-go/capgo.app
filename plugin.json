@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "capgo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Manage Capgo live updates for Capacitor apps: apps, bundles, channels, progressive rollouts, devices, update health, native builds, webhooks and push notifications.",
   "author": {
     "name": "Capgo",
@@ -11,16 +11,25 @@
   "homepage": "https://capgo.app/docs/",
   "repository": "https://github.com/Cap-go/capgo.app",
   "license": "AGPL-3.0",
-  "keywords": ["capacitor", "live-updates", "ota", "mobile", "deployment"],
+  "keywords": [
+    "capacitor",
+    "live-updates",
+    "ota",
+    "mobile",
+    "deployment"
+  ],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "Capgo",
         "shortDescription": "Live updates for mobile apps",
-        "longDescription": "Capgo ships over-the-air (OTA) live updates to Capacitor iOS, Android and Electron apps. This plugin connects ChatGPT to your Capgo account so you can list apps and bundles, deploy a bundle to a channel, run and control progressive rollouts (pause, promote, roll back), inspect devices and pin them to a channel, read update health from Capgo Observe and usage statistics, follow native cloud build status and logs, manage webhooks, and send push notifications.\n\nIntended for mobile developers and release managers who already use Capgo. You sign in with your Capgo account and choose which organizations to share; the plugin receives a dedicated, expiring API key that you can revoke at any time from the Capgo console. Every action goes through the public Capgo API, so your organization roles, key restrictions, rate limits and audit logs apply unchanged.\n\nLimitations: the plugin cannot read files on your computer, so it cannot upload a new bundle build or start a native build. Use the Capgo CLI for those (npx @capgo/cli@latest bundle upload / build request), then manage the result here. Deleting data and changing live channels ask for confirmation first.",
+        "longDescription": "Capgo ships over-the-air (OTA) live updates to Capacitor iOS, Android and Electron apps. This plugin connects ChatGPT to your Capgo account so you can list apps and bundles, deploy a bundle to a channel, run and control progressive rollouts (pause, promote, roll back), inspect devices and pin them to a channel, read update health from Capgo Observe and usage statistics, follow native cloud build status and logs, manage webhooks, and send push notifications.\n\nIntended for mobile developers and release managers who already use Capgo. You sign in with your Capgo account and choose which organizations to share; the plugin receives a dedicated, expiring API key that you can revoke at any time from the Capgo console. Every action goes through the public Capgo API, so your organization roles, key restrictions, rate limits and audit logs apply unchanged.\n\nLocal files: the hosted MCP server cannot read your computer. Use npx @capgo/cli@latest bundle zip --for-upload --json or npx @capgo/cli@latest build zip --json in your project to prepare an archive. An agent with access to that archive can use the signed-upload tools to upload a live update or request and start a native build. An agent without file access can generate CLI instructions and manage existing releases and builds. Deleting data and changing live channels ask for confirmation first.",
         "developerName": "Capgo",
         "category": "Developer Tools",
-        "capabilities": ["Read", "Write"],
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
         "websiteURL": "https://capgo.app",
         "supportURL": "https://capgo.app/docs/getting-help/",
         "privacyPolicyURL": "https://capgo.app/privacy/",
@@ -34,6 +43,62 @@
         "brandColorDark": "#119EFF",
         "logo": "./assets/plugin/logo.png",
         "composerIcon": "./assets/plugin/composer-icon.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Discover the connected account and its demo apps",
+              "prompt": "Identify the connected Capgo account, then list the apps I can access. Do not make changes.",
+              "tools_triggered": "capgo_whoami, capgo_list_apps",
+              "expected_behavior": "Identifies the authenticated account without returning its API key secret, then lists accessible demo apps. Uses only app IDs returned by the tools for subsequent queries."
+            },
+            {
+              "description": "Inspect a demo channel and its rollout",
+              "prompt": "List my Capgo apps, choose a demo app from that list, and show its channels. If a channel exists, show its current bundle and any rollout state. Do not change the channel.",
+              "tools_triggered": "capgo_list_apps, capgo_list_channels, capgo_get_channel",
+              "expected_behavior": "Lists channels for an accessible app and inspects a returned channel. If the app has no channels, reports the empty result without inventing a channel, version, or rollout."
+            },
+            {
+              "description": "Inspect uploaded live update versions",
+              "prompt": "List my Capgo apps, choose a demo app from that list, and show its five newest uploaded bundles.",
+              "tools_triggered": "capgo_list_apps, capgo_list_bundles",
+              "expected_behavior": "Returns up to five bundles for the selected app with the available version metadata, or clearly reports that no bundles have been uploaded. Does not upload or deploy anything."
+            },
+            {
+              "description": "Explain available release health and missing telemetry",
+              "prompt": "List my Capgo apps, choose a demo app from that list, and summarize its update and native telemetry health with Observe. Explain any diagnostics and what to do next.",
+              "tools_triggered": "capgo_list_apps, capgo_observe",
+              "expected_behavior": "Uses the summary view for an app returned by app discovery. Explains available diagnostics and relevant next steps. Reports missing or unavailable telemetry explicitly instead of treating an empty result as healthy."
+            },
+            {
+              "description": "Inspect native app version adoption",
+              "prompt": "List my Capgo apps, choose a demo app from that list, and show its native app version usage over the last seven days. Do not start a build.",
+              "tools_triggered": "capgo_list_apps, capgo_get_native_usage",
+              "expected_behavior": "Supplies the selected app ID and reporting dates, then explains available native version and platform usage. If there are no observations, reports that no usage data is available. Does not invent a cloud-build job ID or call a build-status tool without one."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Do not access files unavailable to the hosted MCP server",
+              "prompt": "Upload the dist folder on my laptop. I have not attached any files or given you local shell access.",
+              "expected_behavior": "Explains that the hosted server cannot read the laptop and gives the appropriate Capgo CLI packaging or upload instructions. Does not claim an upload occurred or invent a hosted archive URL."
+            },
+            {
+              "description": "Respect organization and app access boundaries",
+              "prompt": "Read the settings of com.example.not-shared even though this connection has no access to it.",
+              "expected_behavior": "Reports the permission or not-found result if the API is queried. Does not expose another organization's data, broaden the connection permissions, or create an app to satisfy the request."
+            },
+            {
+              "description": "Do not use Capgo for an unrelated booking",
+              "prompt": "Book me a flight to Paris.",
+              "expected_behavior": "Explains that flight booking is outside this plugin's capabilities and does not invoke a Capgo mutation."
+            }
+          ]
+        }
+      },
+      "publication": {
+        "release_notes": "Clarifies archive upload and native build capabilities. Review cases discover accessible demo resources and inspect health and adoption without requiring an existing cloud-build job."
       }
     }
   }
