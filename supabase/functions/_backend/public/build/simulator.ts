@@ -55,12 +55,46 @@ export function simulatorCommandRpc(input: { command: string, x?: number, y?: nu
     flags.bundleId = input.bundleId
     body.app = input.bundleId
   }
+  const positionals: unknown[] = input.command === 'tap' ? [String(input.x), String(input.y)] : []
   return {
     jsonrpc: '2.0' as const,
     id: 1,
     method: 'agent_device.command' as const,
-    params: { command: input.command, positionals: [] as unknown[], flags, input: body },
+    params: { command: input.command, positionals, flags, input: body },
   }
+}
+
+export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done)
+        break
+      if (!value)
+        continue
+      if (total + value.byteLength > maxBytes) {
+        await reader.cancel()
+        throw new Error('too-large')
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+  }
+  finally {
+    reader.releaseLock()
+  }
+  if (total === 0)
+    throw new Error('empty')
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
 }
 
 const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
@@ -514,20 +548,8 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
     throw quickError(502, 'simulator_unavailable', payload?.error?.message || `Simulator request failed (${response.status})`, { app_id: appId }, undefined, { alert: false })
   }
   let image: string | undefined
-  if (rpc.params.command === 'screenshot') {
-    const shot = await fetch(simulatorDeviceUrl(row.url, 'agent-device/artifacts/screen.jpg'), {
-      headers: { Authorization: `Bearer ${accessKey}` },
-      signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
-    })
-    if (shot.ok) {
-      const bytes = new Uint8Array(await shot.arrayBuffer())
-      if (bytes.byteLength > 0 && bytes.byteLength <= SIMULATOR_SCREENSHOT_MAX_BYTES)
-        image = bytesToBase64(bytes)
-    }
-    else {
-      await shot.body?.cancel()
-    }
-  }
+  if (rpc.params.command === 'screenshot')
+    image = await simulatorScreenshot(row.url, accessKey, appId)
   return c.json({
     data: {
       id: row.id,
@@ -536,6 +558,29 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
       ...(image ? { image_base64: image, image_media_type: 'image/jpeg' } : {}),
     },
   })
+}
+
+async function simulatorScreenshot(sessionUrl: string, accessKey: string, appId: string) {
+  const shot = await fetch(simulatorDeviceUrl(sessionUrl, 'agent-device/artifacts/screen.jpg'), {
+    headers: { Authorization: `Bearer ${accessKey}` },
+    signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
+  })
+  const length = Number(shot.headers.get('content-length'))
+  if (!shot.ok || !shot.body) {
+    await shot.body?.cancel()
+    throw quickError(502, 'simulator_unavailable', 'The simulator did not return a screenshot.', { app_id: appId }, undefined, { alert: false })
+  }
+  if (Number.isFinite(length) && length > SIMULATOR_SCREENSHOT_MAX_BYTES) {
+    await shot.body.cancel()
+    throw quickError(502, 'simulator_unavailable', 'The screenshot is too large.', { app_id: appId }, undefined, { alert: false })
+  }
+  try {
+    return bytesToBase64(await readCappedBytes(shot.body, SIMULATOR_SCREENSHOT_MAX_BYTES))
+  }
+  catch (error) {
+    const tooLarge = error instanceof Error && error.message === 'too-large'
+    throw quickError(502, 'simulator_unavailable', tooLarge ? 'The screenshot is too large.' : 'The simulator did not return a screenshot.', { app_id: appId }, error, { alert: false })
+  }
 }
 
 async function stopRemoteDevice(c: Context, emulatorId: string, sessionId: string, rowId: string): Promise<number> {

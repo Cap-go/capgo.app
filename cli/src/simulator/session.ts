@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs'
 import { stdout } from 'node:process'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
@@ -151,9 +152,35 @@ export function simulatorMcpContent(payload: SimulatorPayload) {
   return { content }
 }
 
+export function simulatorCommandTextOutput(payload: SimulatorPayload): { text: string, screenshot?: { name: string, base64: string } } {
+  const data = payload.data
+  if (data?.image_base64) {
+    const name = `simulator-${data.id ?? 'screenshot'}.jpg`
+    return { text: `${name}\n`, screenshot: { name, base64: data.image_base64 } }
+  }
+  if (data?.result !== undefined)
+    return { text: `${JSON.stringify(data.result, null, 2)}\n` }
+  return { text: simulatorTextOutput(data) }
+}
+
+export function simulatorStartOptions(options: SimulatorCommandOptions & { buildJob?: string }): SimulatorCommandOptions {
+  return { ...options, buildJobId: options.buildJobId ?? options.buildJob }
+}
+
 async function callSimulator(command: 'start' | 'stop' | 'get' | 'command', appId: string, sessionId: string | undefined, options: SimulatorCommandOptions) {
   const payload = await executeSimulator(command, appId, sessionId, options)
-  stdout.write(options.json ? `${JSON.stringify(payload)}\n` : simulatorTextOutput(payload.data))
+  if (options.json) {
+    stdout.write(`${JSON.stringify(payload)}\n`)
+    return
+  }
+  if (command === 'command') {
+    const output = simulatorCommandTextOutput(payload)
+    if (output.screenshot)
+      writeFileSync(output.screenshot.name, Buffer.from(output.screenshot.base64, 'base64'))
+    stdout.write(output.text)
+    return
+  }
+  stdout.write(simulatorTextOutput(payload.data))
 }
 
 export function simulatorTextOutput(data: { id?: string, url?: string, status?: string } | undefined) {
@@ -163,10 +190,10 @@ export function simulatorTextOutput(data: { id?: string, url?: string, status?: 
   return `${data?.status ?? 'ok'}\n`
 }
 
-export function startSimulatorCommand(appId: string | undefined, options: SimulatorCommandOptions) {
+export function startSimulatorCommand(appId: string | undefined, options: SimulatorCommandOptions & { buildJob?: string }) {
   if (!appId)
     fail('app id is required')
-  return callSimulator('start', appId, undefined, options)
+  return callSimulator('start', appId, undefined, simulatorStartOptions(options))
 }
 
 export function stopSimulatorCommand(sessionId: string | undefined, appId: string | undefined, options: SimulatorCommandOptions) {

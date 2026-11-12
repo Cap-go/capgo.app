@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
+import { canFinishSimulatorStop, emulatorSessionCreateBody, isSimulatorSessionId, multipartIpaStream, readCappedBytes, SAVED_IPA_MAX_BYTES, savedIpaContentLength, simulatorBillableSeconds, simulatorBillingInstant, simulatorCommandRpc, simulatorCreateWasInterrupted, simulatorDeviceUrl, simulatorHostStopIsFinal, simulatorRequestFields, simulatorUsageEnd, startupFailureKeepsSlot } from '../supabase/functions/_backend/public/build/simulator.ts'
 
 describe('simulator sessions', () => {
   it('asks the device host for one session tied to the Capgo org', () => {
@@ -35,10 +35,29 @@ describe('simulator sessions', () => {
     expect(simulatorDeviceUrl('https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111', 'agent-device/rpc')).toBe('https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/agent-device/rpc')
     expect(simulatorCommandRpc({ command: 'tap', x: 0.5, y: 0.25 })).toMatchObject({
       method: 'agent_device.command',
-      params: { command: 'tap', flags: { x: 0.5, y: 0.25 }, input: { x: 0.5, y: 0.25 } },
+      params: { command: 'tap', positionals: ['0.5', '0.25'], flags: { x: 0.5, y: 0.25 }, input: { x: 0.5, y: 0.25 } },
     })
     expect(simulatorCommandRpc({ command: 'open', bundleId: 'app.capgo.capdemo' }).params.flags).toEqual({ bundleId: 'app.capgo.capdemo' })
-    expect(simulatorCommandRpc({ command: 'screenshot' }).params.command).toBe('screenshot')
+    expect(simulatorCommandRpc({ command: 'screenshot' }).params).toMatchObject({ command: 'screenshot', positionals: [] })
+  })
+
+  it('stops reading a screenshot once it passes the byte cap', async () => {
+    const chunk = new Uint8Array([1, 2, 3])
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk)
+        controller.enqueue(chunk)
+        controller.close()
+      },
+    })
+    await expect(readCappedBytes(stream, 4)).rejects.toThrow('too-large')
+    const small = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk)
+        controller.close()
+      },
+    })
+    await expect(readCappedBytes(small, 4)).resolves.toEqual(chunk)
   })
 
   it('rejects a request that is not the simulator contract', () => {

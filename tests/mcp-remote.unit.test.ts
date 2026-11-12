@@ -815,30 +815,37 @@ describe('hosted MCP tool analytics', () => {
 })
 
 describe('hosted simulator MCP', () => {
-  it('sends a tap to the owned simulator session and returns the screen image', async () => {
-    const { ctx, calls } = fakeContext({
+  it('sends a tap and returns a screenshot image from a screenshot command', async () => {
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    const tool = MCP_TOOLS.find(entry => entry.name === 'capgo_simulator_command')
+    const tap = fakeContext({ data: { id: sessionId, command: 'tap', result: { x: 0.5, y: 0.2 } } })
+    await tool!.run({
+      appId: 'ee.forgr.capgo',
+      session_id: sessionId,
+      command: 'tap',
+      x: 0.5,
+      y: 0.2,
+    }, tap.ctx)
+    expect(tap.calls[0]).toMatchObject({
+      method: 'POST',
+      path: `/build/simulator/${sessionId}/command`,
+      body: { app_id: 'ee.forgr.capgo', command: 'tap', x: 0.5, y: 0.2 },
+    })
+    const shot = fakeContext({
       data: {
-        id: '11111111-1111-4111-8111-111111111111',
+        id: sessionId,
         command: 'screenshot',
         result: { width: 402, height: 874 },
         image_base64: 'aW1n',
         image_media_type: 'image/jpeg',
       },
     })
-    const tool = MCP_TOOLS.find(entry => entry.name === 'capgo_simulator_command')
     const result = await tool!.run({
       appId: 'ee.forgr.capgo',
-      session_id: '11111111-1111-4111-8111-111111111111',
-      command: 'tap',
-      x: 0.5,
-      y: 0.2,
-    }, ctx)
-    expect(calls[0]).toMatchObject({
-      method: 'POST',
-      path: '/build/simulator/11111111-1111-4111-8111-111111111111/command',
-      body: { app_id: 'ee.forgr.capgo', command: 'tap', x: 0.5, y: 0.2 },
-    })
-    expect(result.content[0]).toMatchObject({ type: 'text' })
+      session_id: sessionId,
+      command: 'screenshot',
+    }, shot.ctx)
+    expect(shot.calls[0]?.body).toMatchObject({ command: 'screenshot' })
     expect(result.content[0] && 'text' in result.content[0] ? result.content[0].text : '').not.toContain('aW1n')
     expect(result.content[1]).toEqual({ type: 'image', data: 'aW1n', mimeType: 'image/jpeg' })
   })
