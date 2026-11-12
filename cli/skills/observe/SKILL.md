@@ -26,7 +26,7 @@ Flags where supported by the selected view: `-a, --apikey`, `--days` (`1`, `3`, 
 
 ## MCP
 
-Call `capgo_observe` with `view=summary` first. Follow `findings[].next`. Use `view=device` and `deviceId` for the timeline.
+On the hosted MCP at `https://api.capgo.app/mcp`, call `capgo_observe` with `view=summary` first. Follow `findings[].next`. Use `view=device` and `deviceId` for the timeline.
 
 ## Views
 

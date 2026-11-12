@@ -63,47 +63,32 @@ try {
   }
 
   const toolNames = new Set(tools.map(tool => tool.name))
+  // Architectural boundary: every registered tool needs local files, credentials,
+  // a local process, or a persisted onboarding session. Cloud APIs live on hosted MCP.
   const requiredTools = [
-    'capgo_list_apps',
-    'capgo_upload_bundle',
-    'capgo_update_channel',
-    'capgo_get_stats',
-    'capgo_observe',
-    'capgo_login',
-    'capgo_whoami',
-    'capgo_logout',
-    'start_capgo_builder_onboarding',
-    'capgo_builder_onboarding_next_step',
-    'start_capgo_live_update_onboarding',
-    'capgo_update_app',
-    'capgo_update_organization',
-    'capgo_delete_organization',
-    'capgo_list_organization_members',
-    'capgo_invite_organization_member',
-    'capgo_update_organization_member_role',
-    'capgo_remove_organization_member',
-    'capgo_get_account',
-    'capgo_update_account',
-    'capgo_search_docs',
+    'capgo_set_project_dir', 'capgo_upload_bundle', 'capgo_check_compatibility',
+    'capgo_doctor', 'capgo_probe', 'capgo_generate_encryption_keys',
+    'capgo_request_build', 'capgo_login', 'capgo_whoami', 'capgo_logout',
+    'capgo_star_repository', 'capgo_star_all_repositories',
+    'start_capgo_builder_onboarding', 'capgo_builder_onboarding_next_step', 'capgo_builder_onboarding_explain',
+    'start_capgo_live_update_onboarding', 'capgo_live_update_onboarding_next_step', 'capgo_live_update_onboarding_explain',
+    'start_capgo_build', 'capgo_build_wait', 'capgo_build_logs', 'cancel_capgo_build',
+    'capgo_builder_credentials_manage',
   ]
   const missing = requiredTools.filter(name => !toolNames.has(name))
   if (missing.length > 0) {
     throw new Error(`Missing MCP tools: ${missing.join(', ')}`)
   }
 
-  // Settings available in the web dashboard must stay reachable through the MCP tools.
-  const requiredToolFields = {
-    capgo_update_app: ['preview', 'buildTimeoutMinutes', 'exposeMetadata', 'allowDeviceCustomId', 'blockProviderInfraRequests', 'iosStoreUrl', 'androidStoreUrl', 'defaultUploadChannel', 'defaultDownloadChannel', 'disableDownloadChannels'],
-    capgo_update_channel: ['electron', 'pause', 'resume', 'updatePackage'],
-    capgo_update_organization: ['website', 'enforce2fa', 'passwordPolicy', 'enforceEncryptedBundles', 'requiredEncryptionKey', 'emailPreferences'],
-    capgo_update_account: ['firstName', 'lastName', 'country', 'discordUsername', 'formatLocale', 'notifications', 'newsletter', 'emailPreferences'],
-  }
-  for (const [toolName, fields] of Object.entries(requiredToolFields)) {
-    const tool = tools.find(entry => entry.name === toolName)
-    const properties = Object.keys(tool?.inputSchema?.properties ?? {})
-    const missingFields = fields.filter(field => !properties.includes(field))
-    if (missingFields.length > 0)
-      throw new Error(`${toolName} is missing input fields: ${missingFields.join(', ')}`)
+  const unexpected = tools.filter(tool => !requiredTools.includes(tool.name))
+  if (unexpected.length)
+    throw new Error(`Unexpected local MCP tools: ${unexpected.map(tool => tool.name).join(', ')}`)
+
+  for (const tool of tools) {
+    for (const field of ['projectDir', 'cwd']) {
+      if (tool.inputSchema.properties[field]?.type !== 'string')
+        throw new Error(`${tool.name} must support local project selection through ${field}`)
+    }
   }
 
   for (const pattern of ciPathPatterns) {

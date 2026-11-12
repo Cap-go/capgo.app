@@ -23,6 +23,10 @@ The API host also publishes public, cacheable discovery documents:
 
 The card, `server/discover` and legacy `initialize` share the server identity `app.capgo/capgo` and version. The card lists both modern and legacy protocol versions. Cards contain public connection metadata only; tools, resources and skills are listed through authenticated MCP requests. Discovery uses the configured canonical API origin, like OAuth protected-resource metadata, and supports ETag revalidation.
 
+## Local companion
+
+Use `npx @capgo/cli@latest mcp` alongside this server for local project files, uploads, signing credentials and onboarding. Cloud management, monitoring, docs and skill discovery stay on the hosted server. Configure and authorize the two connections separately; see [local MCP responsibilities and migration](local-mcp.md).
+
 ## Skills
 
 The hosted server publishes seven public workflow guides from this repository: `check-update-health`, `ship-live-update`, `native-builds`, `observe`, `organization-management`, `release-management` and `usage`.
@@ -53,7 +57,7 @@ Existing clients keep the `initialize` flow and their original response shapes. 
 
 `scripts/generate-mcp-skills.ts` explicitly lists the published directories under `skills/` and `cli/skills/`. It includes all files in each selected directory, refuses symlinks, preserves UTF-8 content and frontmatter, and hashes the original bytes. It never scans a user's installed skills or the CLI's `_artifacts` folder. Review every file in a directory before adding it to the public catalog.
 
-After editing a published skill, run `bun run generate:mcp-skills` and commit `cli/src/mcp/skills.generated.json`. Run `bun run check:mcp-skills` to check for drift. The unit suite also compares the generated artifact against the source files. The CLI MCP bundles this same catalog at release time and exposes the same skills methods, resources and compatibility tools. Runtime reads use only the bundled catalog, with no network or database access. CLI users receive catalog updates in a new CLI release.
+After editing a published skill, run `bun run generate:mcp-skills` and commit `supabase/functions/_backend/mcp/skills.generated.json`. Run `bun run check:mcp-skills` to check for drift. The unit suite also compares the generated artifact against the source files. Only the hosted MCP exposes this catalog. Runtime reads use the bundled catalog, with no network or database access. The CLI package still ships its Intent skill files, but does not duplicate MCP skill tools or resources.
 
 ## Login flow (MCP authorization spec 2025-11-25)
 
