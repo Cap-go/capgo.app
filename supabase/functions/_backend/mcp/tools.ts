@@ -1674,7 +1674,9 @@ const docsTools: McpTool[] = [
       const { query, limit } = input as { query: string, limit?: number }
       try {
         const results = await searchCapgoDocs(query, limit)
-        return textResult({ results, ...(!results.length ? { message: `No documentation matches "${query}". Try broader terms.` } : {}) })
+        const payload = { results, ...(!results.length ? { message: `No documentation matches "${query}". Try broader terms.` } : {}) }
+        const result = textResult(results.length ? results : payload)
+        return result.isError ? result : { ...result, structuredContent: payload }
       }
       catch (error) {
         return textResult({

@@ -648,6 +648,16 @@ describe('every hosted MCP tool has a usable output contract', () => {
     expect(result.structuredContent).toEqual({ data: [app] })
   })
 
+  it.concurrent('preserves documentation search array text while adding a typed result object', async () => {
+    const result = await MCP_TOOLS_BY_NAME.get('capgo_search_docs')!.run(
+      { query: 'live updates' },
+      context(null),
+    )
+    expect(result.isError).not.toBe(true)
+    expect(JSON.parse(result.content[0].text)).toEqual([docsPage])
+    expect(result.structuredContent).toEqual({ results: [docsPage] })
+  })
+
   it('turns malformed upstream data into an actionable error without exposing response values', async () => {
     const result = await MCP_TOOLS_BY_NAME.get('capgo_get_account')!.run(
       {},
