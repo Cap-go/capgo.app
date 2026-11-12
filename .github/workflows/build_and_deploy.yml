@@ -114,6 +114,20 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
       - name: Apply Supabase Migrations
         run: supabase db push
+      - name: Setup Google Cloud CLI
+        if: env.SUPA_ENV == 'PROD'
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Compare primary publication to read-replica subscription
+        if: env.SUPA_ENV == 'PROD'
+        env:
+          GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
+        run: |
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
+          gcloud auth activate-service-account --key-file="$credentials_file"
+          bun scripts/sync-read-replica-schema.ts --check-subscription-publication
       - name: Update functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
