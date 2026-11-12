@@ -29,21 +29,21 @@ try {
 
   // success path
   let requests = stubFetch()
-  const okHandler = withMcpToolTracking('capgo_list_apps', async () => ({ content: [{ type: 'text', text: 'ok' }] }))
+  const okHandler = withMcpToolTracking('capgo_doctor', async () => ({ content: [{ type: 'text', text: 'ok' }] }))
   const okResult = await okHandler({})
   await flushAnalytics()
   assert.equal(okResult.content[0].text, 'ok', 'wrapper returns the original result')
   let body = JSON.parse(findEvent(requests).init.body)
   assert.equal(body.event, 'MCP Tool Invoked')
   assert.equal(body.channel, 'mcp')
-  assert.equal(body.tags.tool_name, 'capgo_list_apps')
+  assert.equal(body.tags.tool_name, 'capgo_doctor')
   assert.equal(body.tags.success, true)
   assert.equal(body.nonPersonTags.invocation_source, 'mcp')
   assert.equal(typeof body.tags.duration_ms, 'number')
 
   // isError result path
   requests = stubFetch()
-  const errHandler = withMcpToolTracking('capgo_add_app', async () => ({ content: [{ type: 'text', text: 'bad' }], isError: true }))
+  const errHandler = withMcpToolTracking('capgo_check_compatibility', async () => ({ content: [{ type: 'text', text: 'bad' }], isError: true }))
   await errHandler({})
   await flushAnalytics()
   body = JSON.parse(findEvent(requests).init.body)

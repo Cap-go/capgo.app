@@ -47,24 +47,24 @@ assert.equal(explained.split(GUIDANCE_HEADING).length, 2)
 assert.equal(explainError(explained), explained)
 
 // Safety net: error results get guidance, throws become guided error results, successes pass through.
-const errorResult = await withErrorGuidance('capgo_list_apps', async () => ({ content: [{ type: 'text', text: 'Missing API key' }], isError: true }))()
+const errorResult = await withErrorGuidance('capgo_upload_bundle', async () => ({ content: [{ type: 'text', text: 'Missing API key' }], isError: true }))()
 assert.equal(errorResult.isError, true)
 assert.match(errorResult.content[0].text, /How to fix \(authentication\)/)
 assert.match(errorResult.content[0].text, /capgo_login/)
 
-const thrown = await withErrorGuidance('capgo_list_apps', async () => { throw new Error('socket hang up') })()
+const thrown = await withErrorGuidance('capgo_upload_bundle', async () => { throw new Error('socket hang up') })()
 assert.equal(thrown.isError, true)
-assert.match(thrown.content[0].text, /capgo_list_apps failed: socket hang up/)
+assert.match(thrown.content[0].text, /capgo_upload_bundle failed: socket hang up/)
 assert.match(thrown.content[0].text, /How to fix \(network\)/)
 
-const empty = await withErrorGuidance('capgo_list_apps', async () => ({ content: [], isError: true }))()
+const empty = await withErrorGuidance('capgo_upload_bundle', async () => ({ content: [], isError: true }))()
 assert.match(empty.content[0].text, /How to fix/)
 
 const success = { content: [{ type: 'text', text: 'ok' }] }
-assert.equal(await withErrorGuidance('capgo_list_apps', async () => success)(), success)
+assert.equal(await withErrorGuidance('capgo_upload_bundle', async () => success)(), success)
 
 // Transport net: SDK-built validation errors get guidance; other messages are untouched.
-const sdkError = { jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'Input validation error: Invalid arguments for tool capgo_list_channels: appId: Invalid input: expected string, received undefined' }], isError: true } }
+const sdkError = { jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'Input validation error: Invalid arguments for tool capgo_check_compatibility: appId: Invalid input: expected string, received undefined' }], isError: true } }
 const guidedSdkError = withGuidedErrorResults(sdkError)
 assert.match(guidedSdkError.result.content[0].text, /How to fix \(fix_input\)/)
 const notification = { jsonrpc: '2.0', method: 'notifications/progress', params: {} }
@@ -78,6 +78,9 @@ const unknownTool = withGuidedErrorResults({ jsonrpc: '2.0', id: 5, error: { cod
 assert.match(unknownTool.error.message, /How to fix \(not_found\)/)
 assert.match(unknownTool.error.message, /tools\/list/)
 assert.equal(unknownTool.error.code, -32602)
+assert.match(unknownTool.error.message, /https:\/\/api\.capgo\.app\/mcp/)
+assert.match(unknownTool.error.message, /authorize.*separately/)
+assert.match(unknownTool.error.message, /do not blindly replay/)
 assert.equal(withGuidedErrorResults(unknownTool), unknownTool)
 
 console.log('✅ MCP error guidance tests passed')

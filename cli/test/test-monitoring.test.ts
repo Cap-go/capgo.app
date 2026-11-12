@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { fetchBuildMonitor } from '../src/build/monitor'
 import { fetchObserve } from '../src/observe/api'
-import { mcpBuildMonitorInputSchema, mcpObserveInputSchema } from '../src/mcp/tool-schemas'
 
 const originalFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = originalFetch })
@@ -40,11 +39,6 @@ describe('AI monitoring requests', () => {
     await fetchBuildMonitor('status', options)
     expect(new URL(calls[1].url).pathname).toBe('/build/status')
     expect(new URL(calls[1].url).searchParams.get('app_id')).toBe(options.appId)
-  })
-  test('MCP schemas expose monitoring fields but omit hosts and credentials', () => {
-    expect(mcpObserveInputSchema.parse({ appId: 'com.example.app', view: 'release', channelId: 42, apiHost: 'https://example.com' })).toEqual({ appId: 'com.example.app', view: 'release', channelId: 42 })
-    expect(mcpBuildMonitorInputSchema.parse({ appId: 'com.example.app', job_id: 'cloud-job', cursor: 7, apikey: 'secret' })).toEqual({ appId: 'com.example.app', job_id: 'cloud-job', cursor: 7 })
-    expect(mcpBuildMonitorInputSchema.safeParse({ appId: 'com.example.app', job_id: 'job', cursor: -1 }).success).toBe(false)
   })
 })
 

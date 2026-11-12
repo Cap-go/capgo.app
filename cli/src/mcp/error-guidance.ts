@@ -44,7 +44,7 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
     kind,
     nextSteps: [
       ...steps,
-      'Search the docs with capgo_search_docs for the feature or error you hit to learn more.',
+      'Search documentation with capgo_search_docs on the hosted MCP at https://api.capgo.app/mcp, or read https://capgo.app/docs/.',
       supportStep(tool),
     ],
   })
@@ -52,8 +52,8 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
   // The SDK rejects unknown or disabled tools before any handler runs ("Tool capgo_x not found").
   if (/^(mcp error -?\d+: )?tool \S+ (not found|disabled)/.test(text)) {
     return withEscape('not_found', [
-      'This tool is not registered on the Capgo MCP server (or is disabled). Do not retry the same name.',
-      'Call tools/list to see the available Capgo tools, then call the right one. Tool names start with capgo_.',
+      'This tool is not registered on the local Capgo MCP server (or is disabled). Do not retry it here.',
+      'Call tools/list for local project tools. For cloud management, Observe, cloud build monitoring, docs and skills, connect and authorize the hosted MCP at https://api.capgo.app/mcp separately, then inspect its tools/list. Tool names and inputs may differ; do not blindly replay this call.',
     ])
   }
 
@@ -74,7 +74,7 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
   if (has(text, ['need_plan', 'plan_upgrade', 'upgrade your plan', 'upgrade plan', 'plan limit', 'trial_plan', 'trial plan', 'trial ended', 'trial has ended', 'missing_payment_method', 'payment method', 'over limit', 'quota'])) {
     return withEscape('plan_limit', [
       'The organization\'s plan or billing state does not allow this action. Retrying will not help.',
-      `Check usage with capgo_get_stats, then ask the user whether to upgrade or fix billing at ${CONSOLE}/settings/organization/plans.`,
+      `Check organization usage in the console, then ask the user whether to upgrade or fix billing at ${CONSOLE}/settings/organization/plans.`,
     ])
   }
 
@@ -87,7 +87,7 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
   if (has(text, ['not_authorized', 'not authorized', 'no_permission', 'no permission', 'permission denied', 'permission_denied', 'access denied', 'access_denied', 'cannot_access', 'forbidden', ' 403', 'insufficient'])) {
     return withEscape('permission', [
       'The saved API key or its user does not have the role needed for this organization or app. Retrying will not help.',
-      'Check what this key can reach with capgo_whoami and capgo_list_apps, and make sure the app ID belongs to it.',
+      'Inspect the local key with capgo_whoami and check its app access in the console. The hosted MCP has separate authorization and may use a different key.',
       `If the user needs more rights, an organization admin can change their role at ${CONSOLE}/settings/organization/members, or the user can create a key with access at ${CONSOLE}/apikeys and call capgo_login with it.`,
     ])
   }
@@ -110,7 +110,7 @@ export function guidanceForError(message: string, tool?: string): ErrorGuidance 
   if (has(text, ['not found', 'not_found', 'cannot find', 'cannot_find', 'does not exist', 'no such', ' 404', 'enoent'])) {
     return withEscape('not_found', [
       'Something you referenced does not exist or this key cannot see it. Do not guess names or IDs.',
-      'List the real ones (capgo_list_apps, capgo_list_channels, capgo_list_bundles) or check the file path, then call the tool again.',
+      'For cloud IDs, use the matching list tool on the hosted MCP at https://api.capgo.app/mcp. For local files, check the path in the selected project. Then correct the input and retry.',
       'If the user expects it to exist, ask them which account or organization owns it.',
     ])
   }

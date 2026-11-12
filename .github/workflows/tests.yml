@@ -139,8 +139,6 @@ jobs:
             capgo:
               - 'skills/**'
               - 'cli/skills/**'
-              - 'cli/src/mcp/skill-catalog.ts'
-              - 'cli/src/mcp/skills.generated.json'
               - 'aliproxy/**'
               - 'android/**'
               - 'assets/**'

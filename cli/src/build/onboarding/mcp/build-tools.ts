@@ -236,7 +236,7 @@ export function registerBuildTools(
   server.registerTool(
     'start_capgo_build',
     {
-      description: 'Start the first cloud build for this app on the given platform. The build runs in Capgo\'s cloud and takes a few minutes; this returns immediately with a job_id you use to track it. Idempotent — if a build for this app and platform is already running, it returns that same job_id instead of starting another.',
+      description: 'Launch a local CLI child process to package and upload this project for its first cloud build. Returns a process-local job_id for capgo_build_wait and capgo_build_logs, not a hosted cloud job ID. Idempotent — if a build for this app and platform is already running in this session, it returns that same job_id instead of starting another.',
       inputSchema: startCapgoBuildInputSchema,
     },
     async (args: { platform: Platform }) => {
@@ -252,7 +252,7 @@ export function registerBuildTools(
   server.registerTool(
     'capgo_build_wait',
     {
-      description: 'Wait for a running cloud build to finish. Blocks for up to timeout_seconds and returns the moment the build completes, fails, or is cancelled; if it\'s still building when the time is up, it returns status "running" — call this again to keep waiting. This is the main way to make progress on a build.',
+      description: 'Wait for the local build process started by start_capgo_build to finish. Use its process-local job_id, not a cloud job ID. Blocks for up to timeout_seconds and returns when the process completes, fails, or is cancelled; if still running, call again to keep waiting.',
       inputSchema: capgoBuildWaitInputSchema,
     },
     async (args: { job_id: string, timeout_seconds?: number }) => {
@@ -264,7 +264,7 @@ export function registerBuildTools(
   server.registerTool(
     'capgo_build_logs',
     {
-      description: 'Fetch new build log output since cursor, to summarize progress or explain a failure. Returns the new text, the next cursor, and whether the log is complete. The user can already watch the full live logs locally — use this only when you need to read the logs yourself. Logs may contain sensitive build output: summarize, don\'t paste them verbatim.',
+      description: 'Read the local log file for a build process started by start_capgo_build, using its process-local job_id. Returns new text since cursor, the next cursor, and whether the log is complete. For CI or other cloud jobs, use the hosted capgo_get_build_logs. Logs may contain sensitive build output: summarize, don\'t paste them verbatim.',
       inputSchema: capgoBuildLogsInputSchema,
     },
     async (args: { job_id: string, cursor?: number }) => {
@@ -279,7 +279,7 @@ export function registerBuildTools(
   server.registerTool(
     'cancel_capgo_build',
     {
-      description: 'Cancel a running cloud build. Stops watching the build locally and returns. Only use this if the user explicitly asks to stop the build.',
+      description: 'Stop the local build process and watcher started by start_capgo_build. A cloud build already submitted may continue; cancelling it requires the hosted capgo_cancel_build with its cloud job ID. Only use this if the user explicitly asks to stop the build.',
       inputSchema: cancelCapgoBuildInputSchema,
     },
     async (args: { job_id: string }) => {

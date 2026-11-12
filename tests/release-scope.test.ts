@@ -19,12 +19,6 @@ function gitStub(responses: Record<string, string>, calls: string[][] = []) {
 }
 
 describe('release scope matching', () => {
-  it.concurrent.each(['cli/src/mcp/skill-catalog.ts', 'cli/src/mcp/skills.generated.json'])('releases both skill consumers for %s', (file) => {
-    expect(matchesComponent('capgo', [file])).toBe(true)
-    expect(matchesComponent('cli', [file])).toBe(true)
-    expect(matchesComponent('notifications', [file])).toBe(false)
-  })
-
   it.concurrent.each([
     ['release infrastructure', [
       '.github/workflows/tests.yml',

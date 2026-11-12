@@ -4,9 +4,9 @@
  */
 export function buildServerInstructions(opts: { onboardingEnabled: boolean, liveUpdateEnabled: boolean }): string {
   const base
-    = 'Capgo MCP: apps, bundles, channels, Observe (capgo_observe, summary first), '
-    + 'builds, docs (capgo_search_docs), skills (capgo_list_skills, capgo_get_skill). capgo_login if needed. '
-    + 'App tools accept projectDir or cwd: the absolute app path; or use capgo_set_project_dir. Check @capacitor/core. MCP Events: https://api.capgo.app/mcp/.'
+    = 'Local Capgo MCP: diagnostics, uploads, signing and onboarding. '
+    + 'Use https://api.capgo.app/mcp for cloud management, Observe, cloud build monitoring, docs and skills. Connect and authorize it separately. '
+    + 'Local tools accept projectDir or cwd: the absolute app path; or use capgo_set_project_dir. Check @capacitor/core. capgo_login saves local credentials.'
 
   const parts = [base]
   if (opts.onboardingEnabled) {

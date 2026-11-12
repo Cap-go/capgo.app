@@ -18,7 +18,7 @@ for (const [name, schema] of Object.entries(schemas)) {
   for (const field of blocked)
     assert.ok(!(field in shape), `${name} must not accept ${field}`)
 }
-assert.ok(checked.includes('mcpUpdateAppInputSchema'), 'update app schema is checked')
-assert.ok(checked.includes('mcpUpdateOrganizationInputSchema'), 'update organization schema is checked')
-assert.ok(checked.includes('mcpObserveInputSchema'), 'observe schema is checked')
+assert.ok(checked.includes('mcpUploadBundleInputSchema'), 'upload bundle schema is checked')
+assert.ok(checked.includes('mcpRequestBuildInputSchema'), 'request build schema is checked')
+assert.ok(checked.includes('mcpCheckCompatibilityInputSchema'), 'compatibility schema is checked')
 console.log(`MCP input schemas drop host fields (${checked.length} schemas checked)`)

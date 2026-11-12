@@ -9,7 +9,7 @@ import { buildMcpSkillCatalog, MCP_SKILL_SOURCES } from '../scripts/generate-mcp
 import { LATEST_LEGACY_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { CLIENT_CAPABILITIES_META, PROTOCOL_VERSION_META } from '../supabase/functions/_backend/mcp/modern_protocol.ts'
 import { handleJsonRpcMessage, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
-import catalog from '../cli/src/mcp/skills.generated.json'
+import catalog from '../supabase/functions/_backend/mcp/skills.generated.json'
 import { getSkill, listSkills, readSkillResource, SKILLS_EXTENSION } from '../supabase/functions/_backend/mcp/skills.ts'
 import { MCP_TOOLS_BY_NAME } from '../supabase/functions/_backend/mcp/tools.ts'
 
