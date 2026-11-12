@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import { createMcpApp } from '../supabase/functions/_backend/mcp/index.ts'
 import { LATEST_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
+import { skillSchema } from '../supabase/functions/_backend/mcp/skills.ts'
 import { CLIENT_CAPABILITIES_META, PROTOCOL_VERSION_META } from '../supabase/functions/_backend/mcp/modern_protocol.ts'
 
 vi.mock('../supabase/functions/_backend/utils/rate_limit.ts', () => ({ isIPRateLimited: async () => ({ limited: false }), recordFailedAuth: async () => {} }))
@@ -35,6 +37,19 @@ function request(method: string, params: Record<string, unknown> = {}, overrides
 }
 
 describe('authenticated skills transport', () => {
+  it.concurrent('publishes one complete catalog with no more than five unique skill names', async () => {
+    const { app, dispatch } = setup()
+    const response = await app.request('/mcp', request('skills/list'))
+    expect(response.status).toBe(200)
+    const payload = z.object({ result: z.object({ resultType: z.literal('complete'), skills: skillSchema.array() }).passthrough() }).parse(await response.json())
+    const { skills } = payload.result
+    expect(skills).toHaveLength(5)
+    expect(new Set(skills.map(skill => skill.frontmatter.name)).size).toBeLessThanOrEqual(5)
+    expect(payload.result.resultType).toBe('complete')
+    expect(payload.result).not.toHaveProperty('nextCursor')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
   it.concurrent('discovers, lists, gets and reads a skill without initializing or dispatching an API request', async () => {
     const { app, dispatch } = setup()
     for (const [method, params] of [
