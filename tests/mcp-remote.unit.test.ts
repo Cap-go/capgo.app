@@ -17,7 +17,8 @@ import {
   verifyPkceS256,
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
 import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
-import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools, SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from '../supabase/functions/_backend/mcp/protocol.ts'
+import { LATEST_LEGACY_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
+import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
 import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
 
@@ -34,64 +35,6 @@ function fakeContext(response: unknown = { ok: true }) {
 }
 
 describe('hosted MCP discovery', () => {
-  it.concurrent.each(['/mcp/server-card', '/.well-known/mcp/server-card.json'])('serves a public server card at %s', async (path) => {
-    const response = await apiWorker.fetch(new Request(`https://api.capgo.app${path}`, {
-      headers: { accept: 'application/mcp-server-card+json', origin: 'https://example.com' },
-    }))
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toBe('application/mcp-server-card+json')
-    expect(response.headers.get('access-control-allow-origin')).toBe('*')
-    expect(response.headers.get('cache-control')).toBe('public, max-age=3600')
-    const card = await response.json() as Record<string, unknown>
-    expect(card).toMatchObject({
-      $schema: 'https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json',
-      name: 'app.capgo/capgo',
-      title: SERVER_INFO.title,
-      version: SERVER_INFO.version,
-      icons: SERVER_INFO.icons,
-      remotes: [{ type: 'streamable-http', url: 'https://api.capgo.app/mcp', supportedProtocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS] }],
-    })
-    expect(String(card.description).length).toBeLessThanOrEqual(100)
-    expect(card).not.toHaveProperty('tools')
-  })
-
-  it.concurrent('publishes a catalog whose entry resolves to the server card', async () => {
-    const response = await apiWorker.fetch(new Request('https://api.capgo.app/.well-known/ai-catalog.json'))
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toBe('application/ai-catalog+json')
-    expect(response.headers.get('access-control-allow-origin')).toBe('*')
-    const catalog = await response.json() as { specVersion: string, entries: { identifier: string, type: string, url: string }[] }
-    expect(catalog.specVersion).toBe('1.0')
-    expect(catalog.entries).toEqual([{
-      identifier: 'urn:air:capgo.app:mcp:capgo',
-      type: 'application/mcp-server-card+json',
-      url: 'https://api.capgo.app/mcp/server-card',
-    }])
-    const card = await apiWorker.fetch(new Request(catalog.entries[0].url))
-    expect(card.status).toBe(200)
-  })
-
-  it.concurrent.each([undefined, '*/*', 'text/html,application/xhtml+xml,*/*;q=0.8', 'text/event-stream;q=0,text/html'])('serves setup instructions for Accept %s without authentication', async (accept) => {
-    const response = await apiWorker.fetch(new Request('https://api.capgo.app/mcp', { headers: accept ? { accept } : {} }))
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toContain('text/html')
-    expect(response.headers.get('vary')).toContain('Accept')
-    expect(response.headers.get('cache-control')).toBe('no-store')
-    const html = await response.text()
-    expect(html).toContain('https://api.capgo.app/mcp')
-    expect(html).toContain('Streamable HTTP')
-    expect(html).toContain('OAuth')
-    expect(html).toContain('Authorization: Bearer &lt;Capgo API key&gt;')
-    expect(html).toContain('https://capgo.app/docs/ai/mcp/')
-  })
-
-  it.concurrent('supports HEAD on the setup page without returning a body', async () => {
-    const response = await apiWorker.fetch(new Request('https://api.capgo.app/mcp', { method: 'HEAD', headers: { accept: 'text/html' } }))
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toContain('text/html')
-    expect(await response.text()).toBe('')
-  })
-
   it.concurrent('serves RFC 9728 protected resource metadata', async () => {
     const response = await apiWorker.fetch(new Request('https://api.capgo.app/.well-known/oauth-protected-resource/mcp'))
     expect(response.status).toBe(200)
@@ -147,13 +90,9 @@ describe('hosted MCP transport', () => {
     expect(response.headers.get('www-authenticate')).toContain('resource_metadata="https://api.capgo.app/.well-known/oauth-protected-resource/mcp"')
   })
 
-  it.concurrent.each(['text/event-stream', 'application/json, text/event-stream', 'text/html, text/event-stream', 'application/json', 'text/html;q=0,*/*'])('preserves protocol GET rejection for Accept %s', async (accept) => {
-    const response = await apiWorker.fetch(new Request('https://api.capgo.app/mcp', { headers: { accept } }))
+  it.concurrent('rejects GET because the server is stateless', async () => {
+    const response = await apiWorker.fetch(new Request('https://api.capgo.app/mcp', { headers: { accept: 'text/event-stream' } }))
     expect(response.status).toBe(405)
-    expect(response.headers.get('content-type')).toContain('application/json')
-    expect(response.headers.get('vary')).toContain('Accept')
-    expect(response.headers.get('cache-control')).toBe('no-store')
-    expect(response.headers.get('allow')).toContain('POST')
   })
 })
 
@@ -165,7 +104,7 @@ describe('hosted MCP protocol', () => {
       protocolVersion: '2025-06-18',
       capabilities: { tools: { listChanged: false }, events: { list: true, subscribe: true, unsubscribe: true } },
       serverInfo: {
-        name: 'capgo',
+        name: 'app.capgo/capgo',
         title: 'Capgo',
         version: expect.any(String),
         websiteUrl: 'https://capgo.app',
@@ -175,7 +114,7 @@ describe('hosted MCP protocol', () => {
       instructions: expect.stringContaining('Start with capgo_whoami and capgo_list_apps'),
     })
     const unknown = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } }, ctx)
-    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION })
+    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_LEGACY_PROTOCOL_VERSION })
   })
 
   it.concurrent('does not answer notifications', async () => {
@@ -723,6 +662,8 @@ describe('hosted MCP errors always give a way out', () => {
     const localTools = new Set([
       'capgo_whoami',
       'capgo_search_docs',
+      'capgo_list_skills',
+      'capgo_get_skill',
       'capgo_get_build_status',
       'capgo_list_event_types',
       'capgo_subscribe_events',

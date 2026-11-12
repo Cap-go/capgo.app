@@ -124,7 +124,7 @@ describe.skipIf(!USE_CLOUDFLARE)('hosted MCP OAuth flow', () => {
 
     const init = await mcp(tokenJson.access_token, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'vitest', version: '1' } } })
     expect(init.status).toBe(200)
-    await expect(init.json()).resolves.toMatchObject({ result: { serverInfo: { name: 'capgo' } } })
+    await expect(init.json()).resolves.toMatchObject({ result: { serverInfo: { name: 'app.capgo/capgo' } } })
 
     const whoami = await mcp(tokenJson.access_token, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'capgo_whoami', arguments: {} } })
     expect(JSON.stringify(await whoami.json())).toContain(USER_ID)

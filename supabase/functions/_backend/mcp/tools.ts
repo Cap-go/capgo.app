@@ -7,6 +7,7 @@ import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.t
 import { MCP_EVENT_CATALOG, MCP_EVENT_NAMES, unsubscribeMcpEvent, upsertMcpEventSubscription } from '../utils/mcp_events.ts'
 import { handleCapgoListEventSubscriptions, loadApikeyRbacId, mcpSubscribeInputFromTool } from './events_rpc.ts'
 import { guidanceForError } from './error_guidance.ts'
+import { getSkill, listSkills, readSkillResource, skillContentSchema, skillSchema } from './skills.ts'
 
 /**
  * Hosted Capgo MCP tools.
@@ -54,6 +55,7 @@ export interface McpToolContext {
 
 export interface McpToolResult {
   content: Array<{ type: 'text', text: string }>
+  structuredContent?: Record<string, unknown>
   isError?: boolean
 }
 
@@ -70,6 +72,7 @@ export interface McpTool {
   title: string
   description: string
   inputSchema: z.ZodObject<z.ZodRawShape>
+  outputSchema?: z.ZodObject<z.ZodRawShape>
   annotations: McpToolAnnotations
   run: (input: Record<string, unknown>, ctx: McpToolContext) => Promise<McpToolResult>
 }
@@ -679,7 +682,7 @@ const appTools: McpTool[] = [
       ios_store_url: z.string().nullable().optional().describe('App Store listing URL for this app. Use null to clear it.'),
       android_store_url: z.string().nullable().optional().describe('Google Play listing URL for this app. Use null to clear it.'),
     },
-    annotations: DESTRUCTIVE,
+    annotations: { ...DESTRUCTIVE, openWorldHint: true },
     request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: `/app/${enc(id)}`, body: compact(rest) }),
   }),
   apiTool({
@@ -1292,7 +1295,7 @@ const webhookTools: McpTool[] = [
       events: webhookEvents.optional().describe('Replace the resources whose changes trigger deliveries; omitted keeps the existing event selection.'),
       enabled: z.boolean().optional().describe('Enable or disable delivery; omitted keeps the current state.'),
     },
-    annotations: DESTRUCTIVE,
+    annotations: { ...DESTRUCTIVE, openWorldHint: true },
     request: input => ({ method: 'PUT', path: '/webhooks', body: compact(input) }),
   }),
   apiTool({
@@ -1493,7 +1496,7 @@ const notificationTools: McpTool[] = [
       channel: z.string().nullable().optional().describe('Channel name to check; omitted or null uses the app push update channel setting.'),
       limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this update check; omit to process the entire matching audience.'),
     },
-    annotations: EXTERNAL,
+    annotations: { ...EXTERNAL, destructiveHint: true },
     request: input => ({ method: 'POST', path: '/notifications/update-check', body: compact(input) }),
   }),
   apiTool({
@@ -1520,6 +1523,39 @@ const notificationTools: McpTool[] = [
 // Documentation
 // ---------------------------------------------------------------------------
 const docsTools: McpTool[] = [
+  {
+    name: 'capgo_list_skills',
+    title: 'List Capgo skills',
+    description: 'Discover public Capgo workflow guides for releases, update health, native builds, organizations and CLI usage. Returns skill URIs, frontmatter and file manifests with SHA-256 digests; does not load the instructions. Read the relevant guide with capgo_get_skill before using its workflow. Some guides require a local CLI or project filesystem.',
+    inputSchema: z.object({}),
+    outputSchema: z.object({ skills: z.array(skillSchema) }),
+    annotations: { title: 'List Capgo skills', ...READ },
+    run: async () => {
+      const result = { skills: listSkills() }
+      return { ...textResult(result), structuredContent: result }
+    },
+  },
+  {
+    name: 'capgo_get_skill',
+    title: 'Read Capgo skill',
+    description: 'Read a public Capgo workflow guide or one of its supporting files. Returns the skill metadata and the requested file content. Reading instructions does not execute the workflow, grant permissions or bypass confirmation for actions.',
+    inputSchema: z.object({
+      uri: z.string().min(1).describe('Skill URI from capgo_list_skills, identifying its SKILL.md.'),
+      resourceUri: z.string().min(1).optional().describe('Supporting file URI from this skill\'s resources manifest. Omit to read SKILL.md.'),
+    }),
+    outputSchema: z.object({ skill: skillSchema, contents: z.array(skillContentSchema) }),
+    annotations: { title: 'Read Capgo skill', ...READ },
+    run: async (input) => {
+      const { uri, resourceUri } = input as { uri: string, resourceUri?: string }
+      const skill = getSkill(uri)
+      const fileUri = resourceUri ?? uri
+      const content = skill?.resources.some(file => file.uri === fileUri) ? readSkillResource(fileUri) : undefined
+      if (!skill || !content)
+        return textResult({ error: 'skill_not_found', message: 'Use a skill URI from capgo_list_skills and a file URI from that skill\'s resources manifest.' }, true)
+      const result = { skill, contents: [content] }
+      return { ...textResult(result), structuredContent: result }
+    },
+  },
   {
     name: 'capgo_search_docs',
     title: 'Search Capgo docs',
