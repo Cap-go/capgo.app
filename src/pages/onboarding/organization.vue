@@ -75,7 +75,7 @@ watch(() => main.user?.discord_username, (value) => {
     discordUsername.value = value
 })
 const createdOrgId = ref('')
-const isInitializing = ref(true)
+const initializationState = ref<'pending' | 'loading' | 'failed' | 'ready'>('pending')
 const isSubmitting = ref(false)
 const isUploadingLogo = ref(false)
 const isLoadingWebsitePreview = ref(false)
@@ -172,7 +172,7 @@ const websiteHostname = computed(() => {
 const importedLogoUrl = computed(() => websitePreview.value?.icon ?? '')
 const canShowOrgDetails = computed(() => mode.value !== null)
 const canCreateOrganization = computed(() => {
-  if (!main.auth || isInitializing.value || isSubmitting.value || isLoadingWebsitePreview.value || !mode.value)
+  if (!main.auth || initializationState.value !== 'ready' || isSubmitting.value || isLoadingWebsitePreview.value || !mode.value)
     return false
 
   return !!orgNameInput.value.trim() && !!selectedUserCountStop.value
@@ -398,7 +398,7 @@ async function saveSupportUsernames() {
 }
 
 async function createOrganization() {
-  if (isInitializing.value || isSubmitting.value || !main.auth)
+  if (initializationState.value !== 'ready' || isSubmitting.value || !main.auth)
     return
 
   if (!mode.value) {
@@ -674,29 +674,41 @@ function applyAppDraftDefaults() {
     orgNameInput.value = appDraft.value.appName
 }
 
-onMounted(async () => {
-  if (!main.auth) {
-    await router.replace('/login?to=/onboarding/app')
+async function initializeOrganization() {
+  if (initializationState.value === 'loading' || initializationState.value === 'ready')
     return
+
+  initializationState.value = 'loading'
+  try {
+    if (!main.auth) {
+      await router.replace('/login?to=/onboarding/app')
+      return
+    }
+
+    await organizationStore.fetchOrganizations()
+    isAdditionalOrgFlow.value = typeof route.query.source === 'string'
+      ? route.query.source === 'org-switcher'
+      : organizationStore.organizations.some(org => !org.role.includes('invite'))
+
+    appDraft.value = loadOnboardingAppDraft(main.user?.id ?? main.auth?.id)
+    if (!appDraft.value && !isAdditionalOrgFlow.value && typeof route.query.org !== 'string') {
+      await router.replace('/onboarding/app')
+      return
+    }
+
+    displayStore.NavTitle = t('organization-onboarding-title')
+    displayStore.defaultBack = appDraft.value ? '/onboarding/app' : '/apps'
+    await hydrateOnboardingFromQuery()
+    applyAppDraftDefaults()
+    initializationState.value = 'ready'
   }
-
-  await organizationStore.fetchOrganizations()
-  isAdditionalOrgFlow.value = typeof route.query.source === 'string'
-    ? route.query.source === 'org-switcher'
-    : organizationStore.organizations.some(org => !org.role.includes('invite'))
-
-  appDraft.value = loadOnboardingAppDraft(main.user?.id ?? main.auth?.id)
-  if (!appDraft.value && !isAdditionalOrgFlow.value && typeof route.query.org !== 'string') {
-    await router.replace('/onboarding/app')
-    return
+  catch (error) {
+    console.error('Failed to initialize organization onboarding', error)
+    initializationState.value = 'failed'
   }
+}
 
-  displayStore.NavTitle = t('organization-onboarding-title')
-  displayStore.defaultBack = appDraft.value ? '/onboarding/app' : '/apps'
-  await hydrateOnboardingFromQuery()
-  applyAppDraftDefaults()
-  isInitializing.value = false
-})
+onMounted(initializeOrganization)
 
 onUnmounted(() => {
   if (selectedLogoPreview.value)
@@ -788,6 +800,13 @@ onUnmounted(() => {
             </div>
           </nav>
         </header>
+
+        <div v-if="initializationState === 'failed'" role="alert" class="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300" data-test="onboarding-organization-load-error">
+          {{ t('organization-onboarding-load-failed') }}
+          <button type="button" class="ml-2 min-h-11 font-semibold underline" data-test="onboarding-organization-retry" @click="initializeOrganization">
+            {{ t('retry') }}
+          </button>
+        </div>
 
         <div v-if="step === 'details'" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 dark:border-white/15 dark:bg-slate-900/95">
           <div class="space-y-6">

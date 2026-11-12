@@ -58,14 +58,25 @@ async function flushPromises() {
   await nextTick()
 }
 
-describe('organization onboarding logo import', () => {
-  it.each([1, 2])('waits for initialization fetch %i before allowing organization creation', async (pendingFetch) => {
+describe('organization onboarding initialization and logo import', () => {
+  it.each([
+    { pendingFetch: 1, failures: 0 },
+    { pendingFetch: 2, failures: 0 },
+    { pendingFetch: 1, failures: 1 },
+    { pendingFetch: 2, failures: 1 },
+    { pendingFetch: 1, failures: 2 },
+    { pendingFetch: 2, failures: 2 },
+  ])('waits for fetch $pendingFetch after $failures failures before allowing creation', async ({ pendingFetch, failures }) => {
     let finishInitialization!: () => void
     const pending = new Promise<void>((resolve) => {
       finishInitialization = resolve
     })
-    for (let index = 1; index < pendingFetch; index++)
-      mocks.fetchOrganizations.mockResolvedValueOnce(undefined)
+    for (let attempt = 0; attempt <= failures; attempt++) {
+      for (let index = 1; index < pendingFetch; index++)
+        mocks.fetchOrganizations.mockResolvedValueOnce(undefined)
+      if (attempt < failures)
+        mocks.fetchOrganizations.mockRejectedValueOnce(new Error('Organization fetch failed'))
+    }
     mocks.fetchOrganizations.mockReturnValueOnce(pending)
 
     const route = reactive({ query: { source: 'org-switcher' } as Record<string, string> })
@@ -83,6 +94,8 @@ describe('organization onboarding logo import', () => {
     const container = document.createElement('div')
     const app = createApp(OrganizationOnboarding)
     app.config.warnHandler = () => undefined
+    const unhandledError = vi.fn()
+    app.config.errorHandler = unhandledError
     app.mount(container)
     try {
       await flushPromises()
@@ -103,6 +116,21 @@ describe('organization onboarding logo import', () => {
       create.click()
       await flushPromises()
       expect(mocks.invokeCapgoApi).not.toHaveBeenCalled()
+
+      for (let attempt = 0; attempt < failures; attempt++) {
+        const error = container.querySelector('[data-test="onboarding-organization-load-error"]')
+        expect(error?.getAttribute('role')).toBe('alert')
+        expect(error?.textContent).toContain('organization-onboarding-load-failed')
+        const retry = container.querySelector<HTMLButtonElement>('[data-test="onboarding-organization-retry"]')!
+        retry.click()
+        retry.click()
+        await flushPromises()
+        expect(mocks.fetchOrganizations).toHaveBeenCalledTimes((attempt + 2) * pendingFetch)
+        expect(create.disabled).toBe(true)
+        expect(mocks.invokeCapgoApi).not.toHaveBeenCalled()
+      }
+      expect(container.querySelector('[data-test="onboarding-organization-load-error"]')).toBeNull()
+      expect(unhandledError).not.toHaveBeenCalled()
 
       finishInitialization()
       await flushPromises()
