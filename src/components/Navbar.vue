@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
+import IconBuilding from '~icons/heroicons/building-office'
+import IconUser from '~icons/heroicons/user'
 import IconPanelLeft from '~icons/lucide/panel-left'
 import IconMenu from '~icons/material-symbols/menu-rounded'
 import { useDisplayStore } from '~/stores/display'
@@ -23,6 +25,14 @@ const displayStore = useDisplayStore()
 const { t } = useI18n()
 const showNavTitle = computed(() => displayStore.NavTitle && displayStore.pathTitle.length === 0)
 const route = useRoute()
+const settingsLink = computed(() => {
+  const path = route.path
+  if (path.startsWith('/settings/account'))
+    return { to: '/settings/organization', label: 'organization', icon: IconBuilding }
+  if (path.startsWith('/settings/organization') || path === '/billing' || path.startsWith('/billing/'))
+    return { to: '/settings/account', label: 'account', icon: IconUser }
+  return null
+})
 // Settings sub-pages have a parent crumb ("Organization") plus their own title
 // ("Members"). Render that title as the current crumb instead of a dangling "/".
 // Scoped to settings, where every page sets NavTitle, so a stale title never leaks.
@@ -118,7 +128,7 @@ const mobileTitle = computed(() => {
         </div>
 
         <!-- Centered title on mobile -->
-        <div class="flex-1 px-4 text-center lg:hidden">
+        <div class="min-w-0 flex-1 px-2 text-center lg:hidden">
           <div class="font-bold truncate dark:text-white first-letter:uppercase">
             {{ mobileTitle }}
           </div>
@@ -129,9 +139,18 @@ const mobileTitle = computed(() => {
           <Banner desktop />
         </div>
 
-        <!-- Mobile banner in navbar -->
-        <div class="lg:hidden">
-          <Banner desktop />
+        <!-- Keep the settings shortcut out of the scrollable mobile tab row. -->
+        <div class="shrink-0 lg:hidden">
+          <RouterLink
+            v-if="settingsLink"
+            :to="settingsLink.to"
+            class="inline-flex items-center gap-1.5 min-h-11 px-2 text-sm font-medium rounded-md text-blue-600 hover:bg-blue-100/70 dark:text-blue-300 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            data-test="settings-switch-section"
+          >
+            <component :is="settingsLink.icon" class="w-4 h-4" aria-hidden="true" />
+            {{ t(settingsLink.label) }}
+          </RouterLink>
+          <Banner v-else desktop />
         </div>
       </div>
     </div>

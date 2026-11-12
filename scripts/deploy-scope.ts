@@ -31,9 +31,14 @@ const backendUtilityMatchers = [
   /^supabase\/functions\/_backend\/utils\//,
 ]
 
+const mcpCatalogMatchers = [
+  /^cli\/src\/mcp\/(skill-catalog\.ts|skills\.generated\.json)$/,
+]
+
 export const deployMatchers: Record<DeployTarget, RegExp[]> = {
   supabase: [
     ...backendDependencyMatchers,
+    ...mcpCatalogMatchers,
     /^supabase\/config\.toml$/,
     /^supabase\/functions\//,
     /^supabase\/migrations\//,
@@ -45,6 +50,7 @@ export const deployMatchers: Record<DeployTarget, RegExp[]> = {
   ],
   api: [
     ...workerDependencyMatchers,
+    ...mcpCatalogMatchers,
     ...backendDependencyMatchers,
     ...backendUtilityMatchers,
     /^cloudflare_workers\/api\//,

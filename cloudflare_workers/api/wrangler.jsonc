@@ -176,35 +176,35 @@
       "analytics_engine_datasets": [
         {
           "binding": "DEVICE_USAGE",
-          "dataset": "device_usage"
+          "dataset": "device_usage_preprod"
         },
         {
           "binding": "BANDWIDTH_USAGE",
-          "dataset": "bandwidth_usage"
+          "dataset": "bandwidth_usage_preprod"
         },
         {
           "binding": "VERSION_USAGE",
-          "dataset": "version_usage"
+          "dataset": "version_usage_preprod"
         },
         {
           "binding": "APP_LOG",
-          "dataset": "app_log"
+          "dataset": "app_log_preprod"
         },
         {
           "binding": "APP_LOG_EXTERNAL",
-          "dataset": "app_log_external"
+          "dataset": "app_log_external_preprod"
         },
         {
           "binding": "DEVICE_INFO",
-          "dataset": "device_info"
+          "dataset": "device_info_preprod"
         },
         {
           "binding": "NOTIFICATION_REGISTRY",
-          "dataset": "notification_registry"
+          "dataset": "notification_registry_preprod"
         },
         {
           "binding": "NOTIFICATION_EVENTS",
-          "dataset": "notification_events"
+          "dataset": "notification_events_preprod"
         }
       ],
       "d1_databases": [
@@ -246,7 +246,7 @@
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
-          "id": "ae1fe6178b564adc9fc9a71ccc769a35"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         }
       ]
     },

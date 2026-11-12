@@ -221,7 +221,7 @@ const creditPricingSections = computed(() =>
       .filter(step => step.type === metric)
       .map(step => ({
         label: formatCreditPricingTierLabel(step, t),
-        price: formatCreditPricingPrice(metric, step.price_per_unit, t),
+        price: formatCreditPricingPrice(metric, step.price_per_unit, t, step.unit_factor),
       }))
 
     if (!tiers.length)
@@ -1187,12 +1187,12 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
                 <div
                   v-for="tier in section.tiers"
                   :key="tier.label"
-                  class="flex items-baseline justify-between rounded-lg bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:bg-gray-900/60 dark:text-gray-300"
+                  class="flex items-baseline justify-between gap-3 rounded-lg bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:bg-gray-900/60 dark:text-gray-300"
                 >
                   <dt class="font-medium text-gray-700 dark:text-gray-200">
                     {{ tier.label }}
                   </dt>
-                  <dd class="font-semibold text-gray-900 dark:text-white">
+                  <dd class="shrink-0 text-right font-semibold text-gray-900 dark:text-white">
                     {{ tier.price }}
                   </dd>
                 </div>
@@ -1200,6 +1200,9 @@ watch(() => currentOrganization.value?.gid, async (newOrgId: string | undefined,
             </div>
           </div>
           <div class="space-y-2 text-center text-xs text-gray-500 dark:text-gray-400">
+            <p>
+              {{ t('credits-pricing-mau-unit-note') }}
+            </p>
             <p>
               {{ creditPricingFootnote }}
             </p>

@@ -13,6 +13,7 @@ import { cloudlogErr } from '../utils/logging.ts'
 import { runConsoleQuery } from './console_query_run.ts'
 import { getStorageAllowedOrigins, normalizeImagePath } from '../utils/storage.ts'
 import { app as consoleAuthProxy } from './console_auth_proxy.ts'
+import { app as consoleCaptchaFallback } from './console_captcha_fallback.ts'
 
 // The console records PostgREST builder calls and runs them here as the caller's
 // Postgres role, so the browser never talks to Supabase for table or RPC data.
@@ -46,6 +47,7 @@ export function isUserSessionToken(authorization: string): boolean {
 export const app = new Hono<MiddlewareKeyVariables>()
 app.use('*', useCors)
 app.route('/auth', consoleAuthProxy)
+app.route('/captcha_fallback', consoleCaptchaFallback)
 
 app.post('/query', async (c) => {
   const parsed = querySchema.safeParse(await parseBody(c))

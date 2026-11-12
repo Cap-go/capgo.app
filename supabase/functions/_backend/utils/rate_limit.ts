@@ -15,6 +15,11 @@ const FAILED_AUTH_PATH = '/rate-limit/failed-auth'
 const FAILED_ACCOUNT_AUTH_PATH = '/rate-limit/failed-auth-account'
 const API_KEY_RATE_LIMIT_PATH = '/rate-limit/apikey'
 const UPLOAD_API_KEY_RATE_LIMIT_PATH = '/rate-limit/apikey-upload'
+const CAPTCHA_FALLBACK_IP_PATH = '/rate-limit/captcha-fallback-ip'
+const CAPTCHA_FALLBACK_EMAIL_PATH = '/rate-limit/captcha-fallback-email'
+const CAPTCHA_FALLBACK_TTL = 60 * 60
+const DEFAULT_CAPTCHA_FALLBACK_IP_LIMIT = 8
+const DEFAULT_CAPTCHA_FALLBACK_EMAIL_LIMIT = 4
 
 interface RateLimitData {
   count: number
@@ -65,8 +70,27 @@ async function hashIdentifier(identifier: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest))
 }
 
+const GMAIL_RATE_LIMIT_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
+
 export function normalizeRateLimitAccountIdentifier(identifier: string): string {
-  return identifier.trim().toLowerCase()
+  const normalized = identifier.trim().toLowerCase()
+  const at = normalized.lastIndexOf('@')
+  if (at <= 0)
+    return normalized
+
+  let local = normalized.slice(0, at)
+  let domain = normalized.slice(at + 1)
+
+  const plus = local.indexOf('+')
+  if (plus >= 0)
+    local = local.slice(0, plus)
+
+  if (GMAIL_RATE_LIMIT_DOMAINS.has(domain)) {
+    local = local.replaceAll('.', '')
+    domain = 'gmail.com'
+  }
+
+  return `${local}@${domain}`
 }
 
 async function getAccountRateLimitKey(identifier: string): Promise<string | null> {
@@ -372,3 +396,91 @@ function getAPIKeyRateLimit(c: Context, scope: APIKeyRateLimitScope): number {
   }
   return scope === 'upload' ? DEFAULT_UPLOAD_API_KEY_RATE_LIMIT : DEFAULT_API_KEY_RATE_LIMIT
 }
+
+function buildCaptchaFallbackResetAt() {
+  return Date.now() + CAPTCHA_FALLBACK_TTL * 1000
+}
+
+async function readCaptchaFallbackLimit(
+  c: Context,
+  path: string,
+  cachePart: Record<string, string>,
+  limit: number,
+): Promise<RateLimitStatus> {
+  const cacheHelper = new CacheHelper(c)
+  const cacheKey = cacheHelper.buildRequest(path, cachePart)
+  const data = await cacheHelper.matchJson<RateLimitData>(cacheKey)
+  if (!data)
+    return { limited: false }
+  const isLimited = data.count >= limit
+  return { limited: isLimited, resetAt: data.resetAt }
+}
+
+async function incrementCaptchaFallbackLimitAndCheck(
+  c: Context,
+  path: string,
+  cachePart: Record<string, string>,
+  limit: number,
+): Promise<RateLimitStatus> {
+  const cacheHelper = new CacheHelper(c)
+  const cacheKey = cacheHelper.buildRequest(path, cachePart)
+  const existingData = await cacheHelper.matchJson<RateLimitData>(cacheKey)
+  const now = Date.now()
+  const resetAt = existingData?.resetAt && existingData.resetAt > now
+    ? existingData.resetAt
+    : buildCaptchaFallbackResetAt()
+  const previousCount = existingData?.resetAt && existingData.resetAt > now ? existingData.count : 0
+  const newCount = previousCount + 1
+  await cacheHelper.putJson(cacheKey, { count: newCount, resetAt }, getRateLimitWindowSeconds(resetAt, now))
+  return { limited: newCount > limit, resetAt }
+}
+
+/**
+ * Console Turnstile fallback is only for email proof flows when the widget cannot load.
+ * Stricter than generic failed-auth limits because it skips client Turnstile.
+ */
+export async function isCaptchaFallbackIpRateLimited(c: Context): Promise<RateLimitStatus> {
+  const ip = getClientIP(c)
+  if (ip === 'unknown')
+    return { limited: false }
+  return await readCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_IP_PATH, { ip }, DEFAULT_CAPTCHA_FALLBACK_IP_LIMIT)
+}
+
+export async function isCaptchaFallbackEmailRateLimited(c: Context, email: string): Promise<RateLimitStatus> {
+  const accountKey = await getAccountRateLimitKey(email)
+  if (!accountKey)
+    return { limited: false }
+  return await readCaptchaFallbackLimit(c, CAPTCHA_FALLBACK_EMAIL_PATH, { email: accountKey }, DEFAULT_CAPTCHA_FALLBACK_EMAIL_LIMIT)
+}
+
+export type CaptchaFallbackReserveResult = RateLimitStatus & {
+  reason?: 'captcha_fallback_ip_rate_limit' | 'captcha_fallback_email_rate_limit'
+}
+
+/** Reserve one attempt: increment cache counters first, then compare to the limit (no separate read-then-write admission). */
+export async function reserveCaptchaFallbackQuota(c: Context, email: string): Promise<CaptchaFallbackReserveResult> {
+  const ip = getClientIP(c)
+  if (ip !== 'unknown') {
+    const ipStatus = await incrementCaptchaFallbackLimitAndCheck(
+      c,
+      CAPTCHA_FALLBACK_IP_PATH,
+      { ip },
+      DEFAULT_CAPTCHA_FALLBACK_IP_LIMIT,
+    )
+    if (ipStatus.limited)
+      return { ...ipStatus, reason: 'captcha_fallback_ip_rate_limit' }
+  }
+  const accountKey = await getAccountRateLimitKey(email)
+  if (accountKey) {
+    const emailStatus = await incrementCaptchaFallbackLimitAndCheck(
+      c,
+      CAPTCHA_FALLBACK_EMAIL_PATH,
+      { email: accountKey },
+      DEFAULT_CAPTCHA_FALLBACK_EMAIL_LIMIT,
+    )
+    if (emailStatus.limited)
+      return { ...emailStatus, reason: 'captcha_fallback_email_rate_limit' }
+  }
+  return { limited: false }
+}
+
