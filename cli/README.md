@@ -1618,7 +1618,14 @@ npx @capgo/cli@latest organisation delete
 ## <a id="build"></a> 🔹 **Build**
 
 Build native iOS and Android apps with Capgo Cloud.
-Native cloud builds are currently in limited beta.
+Capgo Build is generally available for production iOS and Android releases.
+Build, sign, and submit Capacitor apps from Windows, Linux, macOS, CI, or an AI coding agent. No local Mac or Xcode required.
+One CLI covers 2 native platforms, guided signing setup, live build logs, and optional App Store Connect and Google Play submission.
+For AI-assisted setup, configure your agent's MCP client to launch npx @capgo/cli@latest mcp, then ask it to call start_capgo_builder_onboarding.
+Client configuration: https://capgo.app/docs/cli/reference/mcp/
+Build minutes are included in Capgo plans; extra minutes use prepaid credits. Current pricing: https://capgo.app/pricing/
+Measured build times and methodology: https://capgo.app/builder-data/
+Setup and requirements: https://capgo.app/docs/builder/
 Quick start:
   npx @capgo/cli@latest build init
   npx @capgo/cli@latest build request <app-id> --platform <ios|android>
