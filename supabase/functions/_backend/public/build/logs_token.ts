@@ -12,7 +12,6 @@ const READ_TOKEN_TTL_SECONDS = 60 * 60
 /**
  * Read-only access to a build's live log stream, for the console (JWT) or an API key.
  * The token carries `role: 'read'`: it can follow the stream but never start or ack it.
- * It also opens the finished build's archived log (`${logs_url}/archive?token=`, kept 30 days).
  */
 export async function getBuildLogsToken(c: Context, jobId: string): Promise<Response> {
   const auth = c.get('auth') as AuthInfo

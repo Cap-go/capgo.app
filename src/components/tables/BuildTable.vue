@@ -75,18 +75,6 @@ function closeSteps() {
   showSteps.value = false
 }
 
-// A build opened from the table: its steps and logs (live while it runs, archived for 30 days after).
-const viewedBuild = ref<{ id: string, platform: 'ios' | 'android' } | null>(null)
-
-function viewBuild(elem: Element) {
-  viewedBuild.value = { id: elem.id, platform: elem.platform === 'android' ? 'android' : 'ios' }
-}
-
-function retryViewedBuild() {
-  viewedBuild.value = null
-  addOne()
-}
-
 function addOne() {
   showSteps.value = true
 }
@@ -493,24 +481,8 @@ columns.value = [
     label: t('status'),
     key: 'status',
     mobile: true,
-    class: 'whitespace-nowrap',
+    class: 'truncate max-w-24',
     displayFunction: (elem: Element) => elem.status,
-    renderFunction: (elem: Element) => {
-      if (!elem.builder_job_id)
-        return h('span', elem.status)
-      return h('div', { class: 'flex items-center gap-2' }, [
-        h('span', elem.status),
-        h('button', {
-          'type': 'button',
-          'class': 'd-btn d-btn-ghost d-btn-xs shrink-0',
-          'data-test': 'build-view-logs',
-          'onClick': (event: Event) => {
-            event.stopPropagation()
-            viewBuild(elem)
-          },
-        }, t('build-live-view-logs')),
-      ])
-    },
   },
   {
     label: t('error'),
@@ -589,15 +561,6 @@ watch(showSetupFlow, (newValue) => {
       :can-close="(totalAllBuilds ?? 0) > 0"
       @done="onboardingDone"
       @close-step="closeSteps()"
-    />
-    <BuildLiveProgress
-      v-else-if="viewedBuild"
-      :key="viewedBuild.id"
-      :app-id="props.appId"
-      :build-id="viewedBuild.id"
-      :platform="viewedBuild.platform"
-      @done="viewedBuild = null"
-      @retry="retryViewedBuild"
     />
     <div v-else class="flex flex-col overflow-hidden overflow-y-auto bg-white border shadow-sm md:rounded-xl border-slate-200 dark:bg-slate-800/60 dark:border-white/10">
       <DataTable

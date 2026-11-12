@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyBuildLogArchive,
   applyBuildStreamMessage,
   buildTimeline,
   createBuildLiveState,
   LOG_TAIL_LIMIT,
   resolveBuildOutcome,
-  STEP_LOG_LIMIT,
   stepCopy,
-  TOTAL_STEP_LOG_LIMIT,
 } from '../src/services/buildLiveStream'
 
 function feed(messages: unknown[]) {
@@ -81,83 +78,6 @@ describe('applyBuildStreamMessage', () => {
     expect(state.status).toBe('failed')
     expect(state.statusMessage).toBe('Gradle failed')
     expect(state.logs).toEqual([])
-  })
-})
-
-describe('per-step logs', () => {
-  it('groups lines by the step the builder tagged, untagged ones under the machine row', () => {
-    const state = feed([
-      { type: 'log', id: 1, message: '▸ Preparing…' },
-      step(2, 'android_aab_build', 'started'),
-      { type: 'log', id: 3, message: '> Task :app:bundleRelease', step: 'android_aab_build' },
-      step(4, 'google_play_upload', 'started'),
-      // Arrives after the next step started: the tag, not the arrival time, decides.
-      { type: 'log', id: 5, message: 'BUILD SUCCESSFUL', step: 'android_aab_build' },
-      { type: 'log', id: 6, message: 'Uploading', step: 'google_play_upload' },
-    ])
-    const { rows } = buildTimeline({ live: state, dbStatus: 'running', machineStarted: true, platform: 'android' })
-    const logs = Object.fromEntries(rows.map(r => [r.key, r.logs]))
-    expect(logs.machine).toEqual(['▸ Preparing…'])
-    expect(logs.android_aab_build).toEqual(['> Task :app:bundleRelease', 'BUILD SUCCESSFUL'])
-    expect(logs.google_play_upload).toEqual(['Uploading'])
-    expect(logs.android_sdk_setup).toEqual([])
-    expect(state.logs).toHaveLength(4)
-  })
-
-  it('puts every line under the build row when the builder sends no steps', () => {
-    const state = feed([{ type: 'log', id: 1, message: 'a' }, { type: 'log', id: 2, message: 'b' }])
-    const { rows } = buildTimeline({ live: state, dbStatus: 'running', machineStarted: true, platform: 'ios' })
-    expect(rows.find(r => r.key === 'build')?.logs).toEqual(['a', 'b'])
-    expect(rows.find(r => r.key === 'machine')?.logs).toEqual([])
-  })
-
-  it('caps each step, then the total, dropping the earliest step first', () => {
-    const lines = (step: string, count: number, from: number) =>
-      Array.from({ length: count }, (_, i) => ({ type: 'log', id: from + i, message: `${step} ${i}`, step }))
-    const one = feed(lines('a', STEP_LOG_LIMIT + 10, 1))
-    expect(one.stepLogs.a).toHaveLength(STEP_LOG_LIMIT)
-    expect(one.stepLogs.a.at(-1)).toBe(`a ${STEP_LOG_LIMIT + 9}`)
-
-    const steps = Math.ceil(TOTAL_STEP_LOG_LIMIT / STEP_LOG_LIMIT) + 2
-    const many = feed(Array.from({ length: steps }, (_, s) => lines(`s${s}`, STEP_LOG_LIMIT, s * 1000 + 1)).flat())
-    const total = Object.values(many.stepLogs).reduce((sum, l) => sum + l.length, 0)
-    expect(total).toBe(TOTAL_STEP_LOG_LIMIT)
-    expect(many.stepLogs.s0).toEqual([])
-    expect(many.stepLogs[`s${steps - 1}`]).toHaveLength(STEP_LOG_LIMIT)
-  })
-})
-
-describe('applyBuildLogArchive', () => {
-  it('renders an archived build like the live one, whatever the ids', () => {
-    const archive = {
-      job_id: 'job_x',
-      truncated_lines: 0,
-      steps: [
-        step(2, 'android_aab_build', 'started'),
-        step(9, 'android_aab_build', 'failed', { duration_ms: 5_000 }),
-      ],
-      entries: [
-        { id: 1, type: 'log', message: '▸ Preparing…' },
-        { id: 3, type: 'log', message: 'e: Unresolved reference', step: 'android_aab_build' },
-        { type: 'log', message: '… 12 log lines not kept (build log too long) …', step: 'android_aab_build' },
-        { id: 10, type: 'status', status: 'failed', message: 'Build failed' },
-      ],
-    }
-    const state = applyBuildLogArchive(createBuildLiveState(), archive)
-    expect(state.status).toBe('failed')
-    expect(state.statusMessage).toBe('Build failed')
-    const { rows } = buildTimeline({ live: state, dbStatus: 'failed', machineStarted: true, platform: 'android' })
-    const failed = rows.find(r => r.state === 'failed')
-    expect(failed?.key).toBe('android_aab_build')
-    expect(failed?.durationMs).toBe(5_000)
-    expect(failed?.logs).toEqual(['e: Unresolved reference', '… 12 log lines not kept (build log too long) …'])
-    expect(rows.find(r => r.key === 'machine')?.logs).toEqual(['▸ Preparing…'])
-  })
-
-  it('ignores malformed archives', () => {
-    const empty = createBuildLiveState()
-    expect(applyBuildLogArchive(empty, null)).toBe(empty)
-    expect(applyBuildLogArchive(empty, { steps: 'x', entries: [null, 3] })).toEqual(empty)
   })
 })
 

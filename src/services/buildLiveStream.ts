@@ -19,8 +19,6 @@ export interface BuildLiveState {
   statusMessage: string | null
   steps: LiveStep[]
   logs: string[]
-  // Lines per step action, tagged by the builder; untagged lines (before the first step) under SETUP_LOGS.
-  stepLogs: Record<string, string[]>
   downloadUrl: string | null
 }
 
@@ -29,13 +27,9 @@ interface TimelineRow {
   state: RowState
   startedAt?: number
   durationMs?: number
-  logs: string[]
 }
 
 export const LOG_TAIL_LIMIT = 200
-export const STEP_LOG_LIMIT = 200
-export const TOTAL_STEP_LOG_LIMIT = 2000
-const SETUP_LOGS = 'setup'
 
 const SUCCESS_STATUSES = new Set(['succeeded', 'released'])
 const FAILURE_STATUSES = new Set(['failed', 'expired', 'cancelled', 'canceled'])
@@ -78,7 +72,7 @@ export function stepCopy(action: string): { labelKey: string | null, whyKey: str
 }
 
 export function createBuildLiveState(): BuildLiveState {
-  return { lastId: 0, status: null, statusMessage: null, steps: [], logs: [], stepLogs: {}, downloadUrl: null }
+  return { lastId: 0, status: null, statusMessage: null, steps: [], logs: [], downloadUrl: null }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -116,30 +110,11 @@ function applyStep(state: BuildLiveState, data: Record<string, unknown>): BuildL
   return { ...state, steps: state.steps.map(s => s === existing ? updated : s) }
 }
 
-// Keeps the last STEP_LOG_LIMIT lines of each step and, past TOTAL_STEP_LOG_LIMIT, drops the earliest step's lines first.
-function addStepLog(stepLogs: Record<string, string[]>, step: string, line: string): Record<string, string[]> {
-  const next = { ...stepLogs, [step]: [...(stepLogs[step] ?? []), line].slice(-STEP_LOG_LIMIT) }
-  let total = Object.values(next).reduce((sum, lines) => sum + lines.length, 0)
-  for (const key of Object.keys(next)) {
-    if (total <= TOTAL_STEP_LOG_LIMIT)
-      break
-    const drop = Math.min(next[key].length, total - TOTAL_STEP_LOG_LIMIT)
-    next[key] = next[key].slice(drop)
-    total -= drop
-  }
-  return next
-}
-
 function applyEntry(state: BuildLiveState, entry: Record<string, unknown>): BuildLiveState {
   if (entry.type === 'log' && typeof entry.message === 'string') {
     if (isTerminal(state.status))
       return state
-    const step = typeof entry.step === 'string' && entry.step ? entry.step : SETUP_LOGS
-    return {
-      ...state,
-      logs: [...state.logs, entry.message].slice(-LOG_TAIL_LIMIT),
-      stepLogs: addStepLog(state.stepLogs, step, entry.message),
-    }
+    return { ...state, logs: [...state.logs, entry.message].slice(-LOG_TAIL_LIMIT) }
   }
   if (entry.type === 'status' && typeof entry.status === 'string') {
     const statusMessage = typeof entry.message === 'string' ? entry.message : state.statusMessage
@@ -168,24 +143,6 @@ export function applyBuildStreamMessage(state: BuildLiveState, raw: unknown): Bu
   return id === null ? next : { ...next, lastId: id }
 }
 
-/**
- * Folds a finished build's archive (builder GET /build_logs_direct/:jobId/archive) into the same
- * state as the live stream: steps first, then the lines and status in order.
- */
-export function applyBuildLogArchive(state: BuildLiveState, archive: unknown): BuildLiveState {
-  if (!isRecord(archive))
-    return state
-  const steps = Array.isArray(archive.steps) ? archive.steps : []
-  const entries = Array.isArray(archive.entries) ? archive.entries : []
-  // Ids are not needed (the archive is applied once, in order); dropping them skips the replay dedupe.
-  return [...steps, ...entries].reduce((acc: BuildLiveState, entry: unknown) => {
-    if (!isRecord(entry))
-      return acc
-    const { id: _id, ...rest } = entry
-    return applyEntry(acc, rest)
-  }, state)
-}
-
 function machineState(uploading: boolean, onMachine: boolean): RowState {
   if (uploading)
     return 'pending'
@@ -198,13 +155,12 @@ function stepRows(live: BuildLiveState, platform: BuildPlatform, running: boolea
     state: s.status === 'succeeded' ? 'done' : s.status,
     startedAt: s.startedAt,
     durationMs: s.durationMs,
-    logs: live.stepLogs[s.action] ?? [],
   }))
   // Upcoming milestones only make sense while the build still runs.
   if (running) {
     const seen = new Set(live.steps.map(s => s.action))
     for (const action of PLATFORM_MILESTONES[platform].filter(a => !seen.has(a)))
-      rows.push({ key: action, state: 'pending', logs: [] })
+      rows.push({ key: action, state: 'pending' })
   }
   return rows
 }
@@ -247,13 +203,10 @@ export function buildTimeline(input: {
   const hasSteps = live.steps.length > 0
   const uploading = dbStatus === 'pending' && !hasSteps
   const onMachine = machineStarted || hasSteps
-  // Lines from before the first step (machine setup) sit under the machine row; without step events
-  // (older builder) every line is untagged and sits under the single build row.
-  const setupLogs = live.stepLogs[SETUP_LOGS] ?? []
   const rows: TimelineRow[] = [
-    { key: 'upload', state: uploading ? 'running' : 'done', logs: [] },
-    { key: 'machine', state: machineState(uploading, onMachine), logs: hasSteps ? setupLogs : [] },
-    ...(hasSteps ? stepRows(live, platform, !outcome) : [{ key: 'build', state: onMachine ? 'running' : 'pending', logs: setupLogs } as TimelineRow]),
+    { key: 'upload', state: uploading ? 'running' : 'done' },
+    { key: 'machine', state: machineState(uploading, onMachine) },
+    ...(hasSteps ? stepRows(live, platform, !outcome) : [{ key: 'build', state: onMachine ? 'running' : 'pending' } as TimelineRow]),
   ]
   applyOutcome(rows, outcome)
   const progress = rows.filter(r => r.state === 'done').length / rows.length
