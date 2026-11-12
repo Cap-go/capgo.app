@@ -2,9 +2,10 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { html } from 'hono/html'
 import { Hono } from 'hono/tiny'
+import { API_CONTENT_SECURITY_POLICY } from '../utils/hono.ts'
 import { MCP_SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from './metadata.ts'
 import { getApiOrigin, getResourceUrl, MCP_PATH } from './oauth_shared.ts'
-import { sha256Hex } from './oauth_utils.ts'
+import { randomToken, sha256Hex } from './oauth_utils.ts'
 
 const CARD_TYPE = 'application/mcp-server-card+json'
 const DOCS_URL = 'https://capgo.app/docs/ai/mcp/'
@@ -64,7 +65,9 @@ export function createMcpDiscoveryApp() {
 export function mcpSetupPage(c: Context) {
   const endpoint = getResourceUrl(c)
   const config = JSON.stringify({ mcpServers: { capgo: { url: endpoint } } }, null, 2)
+  const styleNonce = randomToken()
   c.header('Cache-Control', 'no-store')
+  c.header('Content-Security-Policy', API_CONTENT_SECURITY_POLICY.replace('style-src \'none\'', `style-src 'nonce-${styleNonce}'`))
   return c.html(html`<!doctype html>
 <html lang="en">
 <head>
@@ -74,7 +77,7 @@ export function mcpSetupPage(c: Context) {
   <title>Connect to Capgo MCP</title>
   <link rel="icon" href="https://capgo.app/favicon.svg" type="image/svg+xml">
   <link rel="alternate" type="application/mcp-server-card+json" href="${endpoint}/server-card">
-  <style>
+  <style nonce="${styleNonce}">
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
     body { max-width: 48rem; margin: 4rem auto; padding: 0 1.5rem; }
     h1, h2 { line-height: 1.2; }
