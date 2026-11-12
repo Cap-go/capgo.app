@@ -19,9 +19,11 @@ const projectKey = 'example-project-telemetry-key'
 const notifications = new EventEmitter()
 const requests = []
 let blockedEvents
-const withTimeout = promise => Promise.race([
+const operationTimeoutMs = 15_000
+const blockedToolResultTimeoutMs = 4_000
+const withTimeout = (promise, ms = operationTimeoutMs) => Promise.race([
   promise,
-  new Promise((_, reject) => setTimeout(() => reject(new Error('MCP operation timed out')), 5000).unref()),
+  new Promise((_, reject) => setTimeout(() => reject(new Error('MCP operation timed out')), ms).unref()),
 ])
 const server = createServer(async (request, response) => {
   let body = ''
@@ -125,7 +127,7 @@ try {
       blockedEvents = new Promise(resolve => { releaseEvent = resolve })
       try {
         const event = once(notifications, 'capgo_whoami', { signal: AbortSignal.timeout(5000) })
-        const result = await withTimeout(client.callTool({ name: 'capgo_whoami', arguments: {} }))
+        const result = await withTimeout(client.callTool({ name: 'capgo_whoami', arguments: {} }), blockedToolResultTimeoutMs)
         const [record] = await event
         assert.ok(!result.isError, JSON.stringify(result))
         assert.equal(record.apikey, projectKey, 'tool returns without awaiting the telemetry HTTP response')
