@@ -13,7 +13,7 @@ import IconLoader from '~icons/lucide/loader-2'
 import IconRotate from '~icons/lucide/rotate-ccw'
 import IconSparkles from '~icons/lucide/sparkles'
 import { applyBuildLogArchive, applyBuildStreamMessage, buildTimeline, createBuildLiveState, resolveBuildOutcome, stepCopy } from '~/services/buildLiveStream'
-import { getCapgoApiErrorName, invokeCapgoApi } from '~/services/capgoApi'
+import { invokeCapgoApi } from '~/services/capgoApi'
 import { useConsole } from '~/services/console'
 import { buildPreviewQrCodeDataUrl } from '~/services/previewQrCode'
 
@@ -47,7 +47,6 @@ const showAllLogs = ref(false)
 // Steps the user expanded or collapsed; others follow their default (failed steps open).
 const openSteps = ref<Record<string, boolean>>({})
 const archiveMissing = ref(false)
-const archiveForbidden = ref(false)
 let stopped = false
 let socket: WebSocket | null = null
 let reconnects = 0
@@ -210,8 +209,6 @@ async function loadArchive(jobId: string, retried = false) {
   if (stopped)
     return
   if (error || !data?.logs_url || !data.logs_token) {
-    // No read_logs permission: say so instead of "expired".
-    archiveForbidden.value = (await getCapgoApiErrorName(error)) === 'unauthorized'
     archiveMissing.value = true
     return
   }
@@ -426,7 +423,7 @@ onUnmounted(stop)
         </div>
         <pre v-if="showAllLogs" class="max-h-96 overflow-auto bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-300">{{ live.logs.join('\n') }}</pre>
         <p v-if="outcome && archiveMissing && !live.logs.length" class="border-b border-slate-200 px-5 py-3 text-sm text-slate-500 dark:border-white/10 dark:text-slate-400" data-test="build-live-logs-unavailable">
-          {{ archiveForbidden ? t('build-live-logs-forbidden') : t('build-live-logs-unavailable') }}
+          {{ t('build-live-logs-unavailable') }}
         </p>
         <ol>
           <li
