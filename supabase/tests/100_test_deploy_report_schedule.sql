@@ -182,7 +182,8 @@ SELECT ok(
 );
 SELECT ok(
     (SELECT bool_and(
-        payload ->> 'type' = 'deploy_install_stats'
+        payload ->> 'type' = 'deploy_install_stats_v2'
+        AND payload ->> 'reportClaimedAt' IS NOT null
         AND payload ->> 'versionName' = '1.0.0'
         AND payload ->> 'channelName' = 'production'
         AND payload ->> 'platform' = 'ios'

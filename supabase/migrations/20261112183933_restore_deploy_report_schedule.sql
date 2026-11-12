@@ -57,7 +57,7 @@ BEGIN
         )
         SELECT
             dh.id, dh.app_id, dh.version_id, dh.deployed_at, dh.owner_org,
-            dh.channel_id, e.channel_platform, o.management_email,
+            dh.channel_id, dh.install_stats_email_sent_at, e.channel_platform, o.management_email,
             c.name AS channel_name, v.name AS version_name, a.name AS app_name
         FROM claimed dh
         JOIN eligible e ON e.id = dh.id
@@ -73,8 +73,10 @@ BEGIN
                 'email', report.management_email,
                 'orgId', report.owner_org,
                 'appId', report.app_id,
-                'type', 'deploy_install_stats',
+                -- Older workers reject this job rather than send an unchecked report.
+                'type', 'deploy_install_stats_v2',
                 'deployId', report.id,
+                'reportClaimedAt', report.install_stats_email_sent_at,
                 'versionId', report.version_id,
                 'versionName', report.version_name,
                 'channelId', report.channel_id,
