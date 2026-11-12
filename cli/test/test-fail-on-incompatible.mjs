@@ -342,6 +342,39 @@ await test('a forbidden channel write is not captured', () => assert.rejects(
   error => shouldCapturePosthogException(error) === false,
 ))
 
+await test('a channel trigger denial is not captured', () => assert.rejects(
+  throwChannelWriteError(httpError(400, { error: 'cannot_set_bundle_to_channel', moreInfo: { error: 'PERMISSION_DENIED_CHANNEL_PROMOTE_BUNDLE' } }), true),
+  (error) => {
+    assert.equal(error.message, 'API key is not allowed to set this channel')
+    assert.equal(shouldCapturePosthogException(error), false)
+    return true
+  },
+))
+
+await test('another API rejection of a channel write is not captured and keeps the API reason', () => assert.rejects(
+  throwChannelWriteError(httpError(400, { error: 'missing_stable_version', message: 'Cannot set rollout target without a stable bundle' }), true),
+  (error) => {
+    assert.equal(error.message, 'Cannot set channel: missing_stable_version | Cannot set rollout target without a stable bundle')
+    assert.equal(shouldCapturePosthogException(error), false)
+    return true
+  },
+))
+
+await test('a channel update package mismatch is not captured', () => assert.rejects(
+  throwChannelWriteError(httpError(400, { error: 'channel_zip_required', message: 'This channel requires a zip package' }), true),
+  error => shouldCapturePosthogException(error) === false,
+))
+
+await test('an unexpected database error on a channel write is captured', () => assert.rejects(
+  throwChannelWriteError(httpError(400, { error: 'cannot_set_bundle_to_channel', moreInfo: { error: 'Channel update affected 0 rows' } }), true),
+  error => shouldCapturePosthogException(error),
+))
+
+await test('a rate-limited channel write is captured', () => assert.rejects(
+  throwChannelWriteError(httpError(429, { error: 'too_many_requests' }), true),
+  error => shouldCapturePosthogException(error),
+))
+
 await test('a network failure on a channel write is captured', () => {
   const cause = new TypeError('fetch failed')
   return assert.rejects(
