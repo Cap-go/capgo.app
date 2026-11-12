@@ -624,6 +624,23 @@ describe('every hosted MCP tool has a usable output contract', () => {
     })
   })
 
+  it.concurrent('preserves a failed webhook test without an HTTP response', async () => {
+    const payload = {
+      success: false,
+      duration_ms: 100,
+      response_preview: 'Error: Webhook delivery failed',
+      delivery_id: 'example-delivery',
+      message: 'Test webhook delivery failed',
+    }
+    const result = await MCP_TOOLS_BY_NAME.get('capgo_test_webhook')!.run(
+      { orgId, webhookId: '22222222-2222-4222-8222-222222222222' },
+      context(payload),
+    )
+    expect(result.isError).not.toBe(true)
+    expect(result.structuredContent).toEqual({ data: payload })
+    expect(JSON.parse(result.content[0].text)).toEqual(payload)
+  })
+
   it('preserves legacy API text while adding a typed data envelope', async () => {
     const tool = MCP_TOOLS_BY_NAME.get('capgo_list_apps')!
     const result = await tool.run({}, context([app]))

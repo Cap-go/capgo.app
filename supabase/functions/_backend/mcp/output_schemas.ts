@@ -2093,13 +2093,14 @@ export const MCP_OUTPUT_SCHEMAS = {
       status: z
         .number()
         .nullable()
+        .optional()
         .describe(
-          'Receiver HTTP status when a response was received; null means no HTTP response.',
+          'Receiver HTTP status when a response was received; omitted or null when no HTTP response was received.',
         ),
       duration_ms: z
         .number()
         .describe(
-          'Measured operation duration in milliseconds; null means unavailable.',
+          'Time spent attempting delivery in milliseconds, including unsuccessful attempts.',
         ),
       response_preview: z
         .string()
