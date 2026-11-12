@@ -210,8 +210,9 @@ describe('console auth relay to our GoTrue (GOTRUE binding)', () => {
   }
 
   it('only forwards cf-connecting-ip to GoTrue, never client x-forwarded-for', async () => {
-    const { headers } = await relay('user', { headers: { 'x-forwarded-for': '198.51.100.4' } })
-    expect(headers?.has('x-forwarded-for')).toBe(false)
+    const spoofed = await relay('user', { headers: { 'x-forwarded-for': '198.51.100.4' } })
+    expect(spoofed.headers?.has('x-forwarded-for')).toBe(false)
+    goTrueFetch.mockClear()
     const trusted = await relay('user', { headers: { 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '198.51.100.4' } })
     expect(trusted.headers?.get('x-forwarded-for')).toBe('203.0.113.9')
   })
