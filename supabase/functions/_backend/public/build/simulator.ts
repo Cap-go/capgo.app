@@ -15,6 +15,10 @@ export interface SimulatorBody {
   platform?: string
   name?: string
   build_job_id?: string
+  command?: string
+  x?: number
+  y?: number
+  bundle_id?: string
 }
 
 export interface EmulatorSessionData {
@@ -22,6 +26,41 @@ export interface EmulatorSessionData {
   url: string
   status?: string
   remoteConfig?: unknown
+}
+
+export const SIMULATOR_DEVICE_COMMANDS = ['devices', 'screenshot', 'snapshot', 'home', 'lock', 'tap', 'open'] as const
+const SIMULATOR_SCREENSHOT_MAX_BYTES = 1_500_000
+
+export function simulatorDeviceUrl(sessionUrl: string, path: string): string {
+  const base = sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`
+  return new URL(path.replace(/^\//, ''), base).href
+}
+
+export function simulatorCommandRpc(input: { command: string, x?: number, y?: number, bundleId?: string }) {
+  if (!(SIMULATOR_DEVICE_COMMANDS as readonly string[]).includes(input.command))
+    throw simpleError('invalid_request', 'command must be devices, screenshot, snapshot, home, lock, tap, or open.')
+  if (input.command === 'tap' && (!Number.isFinite(input.x) || !Number.isFinite(input.y)))
+    throw simpleError('invalid_request', 'tap requires x and y.')
+  if (input.command === 'open' && !input.bundleId)
+    throw simpleError('invalid_request', 'open requires bundle_id.')
+  const flags: Record<string, unknown> = {}
+  const body: Record<string, unknown> = {}
+  if (input.command === 'tap') {
+    flags.x = input.x
+    flags.y = input.y
+    body.x = input.x
+    body.y = input.y
+  }
+  if (input.command === 'open') {
+    flags.bundleId = input.bundleId
+    body.app = input.bundleId
+  }
+  return {
+    jsonrpc: '2.0' as const,
+    id: 1,
+    method: 'agent_device.command' as const,
+    params: { command: input.command, positionals: [] as unknown[], flags, input: body },
+  }
 }
 
 const DEFAULT_SIMULATOR_ORIGIN = 'https://ios-emulator.capgo.app'
@@ -416,6 +455,7 @@ async function recordStartupFailure(c: Context, slotId: string, emulatorId: stri
 export async function readSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
   const appId = requireAppId(body.app_id)
   const { row } = await ownedSession(c, principal, userId, appId, sessionId)
+  const remoteConfig = await simulatorRemoteConfig(c, row)
   return c.json({
     data: {
       id: row.id,
@@ -423,6 +463,77 @@ export async function readSimulator(c: Context, sessionId: string, body: Simulat
       status: row.status,
       platform: row.platform,
       kind: 'simulator',
+      ...(remoteConfig ? { remoteConfig } : {}),
+    },
+  })
+}
+
+async function simulatorRemoteConfig(c: Context, row: SimulatorRow) {
+  if (row.status !== 'in-progress' || !row.emulator_id)
+    return null
+  try {
+    const { accessKey, origin } = simulatorConfig(c)
+    const found = await postEmulator(origin, accessKey, `/v2/device-run-sessions/${row.emulator_id}`, 'GET')
+    return found.data?.remoteConfig ?? null
+  }
+  catch {
+    return null
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+  return btoa(binary)
+}
+
+export async function commandSimulator(c: Context, sessionId: string, body: SimulatorBody, userId: string, principal: RlsPrincipal) {
+  const appId = requireAppId(body.app_id)
+  const rpc = simulatorCommandRpc({
+    command: typeof body.command === 'string' ? body.command : '',
+    x: body.x,
+    y: body.y,
+    bundleId: typeof body.bundle_id === 'string' ? body.bundle_id.trim() : undefined,
+  })
+  const { row } = await ownedSession(c, principal, userId, appId, sessionId)
+  if (row.status !== 'in-progress' || !row.url)
+    throw simpleError('invalid_request', 'This simulator is not running.')
+  const { accessKey } = simulatorConfig(c)
+  const response = await fetch(simulatorDeviceUrl(row.url, 'agent-device/rpc'), {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(rpc),
+    signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
+  })
+  const payload = await response.json().catch(() => undefined) as { result?: { data?: unknown }, error?: { message?: string } } | undefined
+  if (!response.ok || payload?.error) {
+    throw quickError(502, 'simulator_unavailable', payload?.error?.message || `Simulator request failed (${response.status})`, { app_id: appId }, undefined, { alert: false })
+  }
+  let image: string | undefined
+  if (rpc.params.command === 'screenshot') {
+    const shot = await fetch(simulatorDeviceUrl(row.url, 'agent-device/artifacts/screen.jpg'), {
+      headers: { Authorization: `Bearer ${accessKey}` },
+      signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
+    })
+    if (shot.ok) {
+      const bytes = new Uint8Array(await shot.arrayBuffer())
+      if (bytes.byteLength > 0 && bytes.byteLength <= SIMULATOR_SCREENSHOT_MAX_BYTES)
+        image = bytesToBase64(bytes)
+    }
+    else {
+      await shot.body?.cancel()
+    }
+  }
+  return c.json({
+    data: {
+      id: row.id,
+      command: rpc.params.command,
+      result: payload?.result?.data ?? null,
+      ...(image ? { image_base64: image, image_media_type: 'image/jpeg' } : {}),
     },
   })
 }

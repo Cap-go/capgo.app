@@ -24,6 +24,17 @@ describe('simulator CLI requests', () => {
       url: 'https://api.capgo.app/build/simulator/session-1/stop',
       body: { app_id: 'ee.forgr.capgo' },
     })
+    expect(simulatorApiRequest('https://api.capgo.app', 'command', {
+      appId: 'ee.forgr.capgo',
+      id: 'session-1',
+      deviceCommand: 'tap',
+      x: 0.5,
+      y: 0.2,
+    })).toEqual({
+      method: 'POST',
+      url: 'https://api.capgo.app/build/simulator/session-1/command',
+      body: { app_id: 'ee.forgr.capgo', command: 'tap', x: 0.5, y: 0.2 },
+    })
   })
 
   it('prints the session id before the URL', () => {

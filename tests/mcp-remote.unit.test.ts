@@ -813,3 +813,33 @@ describe('hosted MCP tool analytics', () => {
     expect(hostedMcpToolEvent({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'capgo_list_apps' } }, null, 'user-1')).toBeNull()
   })
 })
+
+describe('hosted simulator MCP', () => {
+  it('sends a tap to the owned simulator session and returns the screen image', async () => {
+    const { ctx, calls } = fakeContext({
+      data: {
+        id: '11111111-1111-4111-8111-111111111111',
+        command: 'screenshot',
+        result: { width: 402, height: 874 },
+        image_base64: 'aW1n',
+        image_media_type: 'image/jpeg',
+      },
+    })
+    const tool = MCP_TOOLS.find(entry => entry.name === 'capgo_simulator_command')
+    const result = await tool!.run({
+      appId: 'ee.forgr.capgo',
+      session_id: '11111111-1111-4111-8111-111111111111',
+      command: 'tap',
+      x: 0.5,
+      y: 0.2,
+    }, ctx)
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/build/simulator/11111111-1111-4111-8111-111111111111/command',
+      body: { app_id: 'ee.forgr.capgo', command: 'tap', x: 0.5, y: 0.2 },
+    })
+    expect(result.content[0]).toMatchObject({ type: 'text' })
+    expect(result.content[0] && 'text' in result.content[0] ? result.content[0].text : '').not.toContain('aW1n')
+    expect(result.content[1]).toEqual({ type: 'image', data: 'aW1n', mimeType: 'image/jpeg' })
+  })
+})

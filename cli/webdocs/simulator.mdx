@@ -23,6 +23,7 @@ Start an iOS or Android simulator and print its session URL.
 | -------------- | ------------- | -------------------- |
 | **-p** | <code>string</code> | ios or android |
 | **-n** | <code>string</code> | Session name |
+| **--build-job** | <code>string</code> | Saved iOS build job to install into the simulator |
 | **--json** | <code>boolean</code> | Print the session JSON |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
@@ -40,6 +41,25 @@ Read one simulator session.
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+### <a id="simulator-command"></a> 🔹 **Command**
+
+```bash
+npx @capgo/cli@latest simulator command
+```
+
+Send one agent-device command to a running simulator: devices, screenshot, snapshot, home, lock, tap, or open.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--x** | <code>number</code> | Tap x. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--y** | <code>number</code> | Tap y. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--bundle-id** | <code>string</code> | Bundle id for open |
+| **--json** | <code>boolean</code> | Print the command JSON |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 

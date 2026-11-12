@@ -100,7 +100,7 @@ export function negotiateProtocolVersion(requested: unknown): string {
 export function withErrorGuidance(result: McpToolResult, tool: string): McpToolResult {
   if (!result.isError)
     return result
-  const text = result.content.map(part => part.text).join('\n')
+  const text = result.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n')
   let body: unknown
   try {
     body = JSON.parse(text)

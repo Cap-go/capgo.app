@@ -31,20 +31,49 @@ export interface SimulatorCommandOptions {
   platform?: string
   name?: string
   json?: boolean
+  buildJobId?: string
+  deviceCommand?: string
+  x?: number
+  y?: number
+  bundleId?: string
 }
 
-export function simulatorApiRequest(host: string, command: 'start' | 'stop' | 'get', input: {
+export interface SimulatorPayload {
+  data?: {
+    id?: string
+    url?: string
+    status?: string
+    kind?: string
+    remoteConfig?: unknown
+    image_base64?: string
+    image_media_type?: string
+    command?: string
+    result?: unknown
+  }
+}
+
+export function simulatorApiRequest(host: string, command: 'start' | 'stop' | 'get' | 'command', input: {
   appId: string
   platform?: string
   name?: string
   id?: string
+  buildJobId?: string
+  deviceCommand?: string
+  x?: number
+  y?: number
+  bundleId?: string
 }) {
   const base = host.replace(/\/$/, '')
   if (command === 'start') {
     return {
       method: 'POST' as const,
       url: `${base}/build/simulator`,
-      body: { app_id: input.appId, platform: input.platform, name: input.name },
+      body: {
+        app_id: input.appId,
+        platform: input.platform,
+        name: input.name,
+        ...(input.buildJobId ? { build_job_id: input.buildJobId } : {}),
+      },
     }
   }
   if (!input.id)
@@ -56,6 +85,19 @@ export function simulatorApiRequest(host: string, command: 'start' | 'stop' | 'g
       body: { app_id: input.appId },
     }
   }
+  if (command === 'command') {
+    return {
+      method: 'POST' as const,
+      url: `${base}/build/simulator/${input.id}/command`,
+      body: {
+        app_id: input.appId,
+        command: input.deviceCommand,
+        ...(input.x !== undefined ? { x: input.x } : {}),
+        ...(input.y !== undefined ? { y: input.y } : {}),
+        ...(input.bundleId ? { bundle_id: input.bundleId } : {}),
+      },
+    }
+  }
   return {
     method: 'GET' as const,
     url: `${base}/build/simulator/${input.id}?app_id=${encodeURIComponent(input.appId)}`,
@@ -63,7 +105,7 @@ export function simulatorApiRequest(host: string, command: 'start' | 'stop' | 'g
   }
 }
 
-async function callSimulator(command: 'start' | 'stop' | 'get', appId: string, sessionId: string | undefined, options: SimulatorCommandOptions) {
+export async function executeSimulator(command: 'start' | 'stop' | 'get' | 'command', appId: string, sessionId: string | undefined, options: SimulatorCommandOptions): Promise<SimulatorPayload> {
   const platform = options.platform ?? 'ios'
   if (platform !== 'ios' && platform !== 'android')
     fail('--platform must be ios or android')
@@ -71,7 +113,17 @@ async function callSimulator(command: 'start' | 'stop' | 'get', appId: string, s
   if (!apikey)
     fail('Missing API key. Pass --apikey or run capgo login.')
   const { apiHost } = await resolveCapgoApiHosts(options.apiHost)
-  const request = simulatorApiRequest(apiHost, command, { appId, platform, name: options.name, id: sessionId })
+  const request = simulatorApiRequest(apiHost, command, {
+    appId,
+    platform,
+    name: options.name,
+    id: sessionId,
+    buildJobId: options.buildJobId,
+    deviceCommand: options.deviceCommand,
+    x: options.x,
+    y: options.y,
+    bundleId: options.bundleId,
+  })
   const response = await fetch(request.url, {
     method: request.method,
     headers: buildCliRequestHeaders({
@@ -83,7 +135,24 @@ async function callSimulator(command: 'start' | 'stop' | 'get', appId: string, s
   const text = await response.text()
   if (!response.ok)
     fail(simulatorErrorText(text, response.status))
-  const payload = text ? JSON.parse(text) as { data?: { id?: string, url?: string, status?: string, kind?: string } } : {}
+  return text ? JSON.parse(text) as SimulatorPayload : {}
+}
+
+export function simulatorMcpContent(payload: SimulatorPayload) {
+  const image = payload.data?.image_base64
+  const data = payload.data ? { ...payload.data } : undefined
+  if (data)
+    delete data.image_base64
+  const content: Array<{ type: 'text', text: string } | { type: 'image', data: string, mimeType: string }> = [
+    { type: 'text', text: JSON.stringify({ ...payload, data }, null, 2) },
+  ]
+  if (image)
+    content.push({ type: 'image', data: image, mimeType: payload.data?.image_media_type || 'image/jpeg' })
+  return { content }
+}
+
+async function callSimulator(command: 'start' | 'stop' | 'get' | 'command', appId: string, sessionId: string | undefined, options: SimulatorCommandOptions) {
+  const payload = await executeSimulator(command, appId, sessionId, options)
   stdout.write(options.json ? `${JSON.stringify(payload)}\n` : simulatorTextOutput(payload.data))
 }
 
@@ -110,4 +179,10 @@ export function getSimulatorCommand(sessionId: string | undefined, appId: string
   if (!sessionId || !appId)
     fail('session id and app id are required')
   return callSimulator('get', appId, sessionId, options)
+}
+
+export function sendSimulatorCommand(deviceCommand: string | undefined, sessionId: string | undefined, appId: string | undefined, options: SimulatorCommandOptions) {
+  if (!deviceCommand || !sessionId || !appId)
+    fail('command, session id and app id are required')
+  return callSimulator('command', appId, sessionId, { ...options, deviceCommand })
 }
