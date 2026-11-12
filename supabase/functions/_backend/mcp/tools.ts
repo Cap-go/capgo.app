@@ -829,26 +829,29 @@ const channelTools: McpTool[] = [
     annotations: READ,
     request: input => ({ method: 'GET', path: '/channel', query: { app_id: input.appId, channel: input.channel } }),
   }),
-  apiTool({
-    name: 'capgo_add_channel',
-    title: 'Create channel',
-    description: 'Create a channel (or update it if it already exists).'
-      + ' Supplied settings overwrite an existing channel; setting version changes the bundle offered to eligible devices. Confirm the deployment target first.'
+  ...[
+    {
+      name: 'capgo_add_channel',
+      title: 'Create channel',
+      description: 'Create a channel (or update it if it already exists).'
+        + ' Supplied settings overwrite an existing channel; setting version changes the bundle offered to eligible devices. Confirm the deployment target first.',
+      channelDescription: 'Channel name, e.g. production or beta',
+    },
+    {
+      name: 'capgo_update_channel',
+      title: 'Update channel',
+      description: 'Change channel settings or deploy a bundle to it by setting version. For progressive rollouts use capgo_update_channel_rollout.'
+        + ' This endpoint also creates the named channel if absent. Changing version changes the bundle offered to eligible devices; confirm the target first.',
+      channelDescription: 'Channel name from capgo_list_channels for this app.',
+    },
+  ].map(({ channelDescription, ...spec }) => apiTool({
+    ...spec,
+    description: spec.description
       + ' Requires channel settings permission for an existing channel or app.create_channel for a new one. Making a channel public changes default update routing and requires app.update_settings; assigning a bundle also requires promotion permission.',
-    input: { appId, channel: z.string().min(1).describe('Channel name, e.g. production or beta'), ...channelSettings },
+    input: { appId, channel: z.string().min(1).describe(channelDescription), ...channelSettings },
     annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/channel', body: compact({ app_id: id, ...rest }) }),
-  }),
-  apiTool({
-    name: 'capgo_update_channel',
-    title: 'Update channel',
-    description: 'Change channel settings or deploy a bundle to it by setting version. For progressive rollouts use capgo_update_channel_rollout.'
-      + ' This endpoint also creates the named channel if absent. Changing version changes the bundle offered to eligible devices; confirm the target first.'
-      + ' Requires channel settings permission for an existing channel or app.create_channel for a new one. Making a channel public changes default update routing and requires app.update_settings; assigning a bundle also requires promotion permission.',
-    input: { appId, channel: z.string().min(1).describe('Channel name from capgo_list_channels for this app.'), ...channelSettings },
-    annotations: DESTRUCTIVE,
-    request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/channel', body: compact({ app_id: id, ...rest }) }),
-  }),
+  })),
   apiTool({
     name: 'capgo_update_channel_rollout',
     title: 'Update channel progressive rollout',

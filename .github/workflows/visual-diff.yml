@@ -101,7 +101,7 @@ jobs:
           retention-days: 14
 
       - name: Comment visual diff summary on PR
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/github-script@v8
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
