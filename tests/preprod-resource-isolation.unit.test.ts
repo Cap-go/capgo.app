@@ -1,19 +1,13 @@
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import type { Unstable_Config } from 'wrangler'
 import { unstable_readConfig } from 'wrangler'
-import { z } from 'zod'
 
-const resourceConfig = z.object({
-  hyperdrive: z.array(z.object({ binding: z.string(), id: z.string() })),
-  analytics_engine_datasets: z.array(z.object({ binding: z.string(), dataset: z.string() })),
-  r2_buckets: z.array(z.object({ binding: z.string(), bucket_name: z.string() })),
-})
-
-function config(worker: string, env: string) {
-  return resourceConfig.parse(unstable_readConfig({
+function config(worker: string, env: string): Unstable_Config {
+  return unstable_readConfig({
     config: fileURLToPath(new URL(`../cloudflare_workers/${worker}/wrangler.jsonc`, import.meta.url)),
     env,
-  }))
+  })
 }
 
 describe('preprod resource isolation', () => {
