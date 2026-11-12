@@ -11,6 +11,18 @@ The local server (`npx @capgo/cli@latest mcp`) still exists. Use it for tasks th
 | OAuth (Claude, ChatGPT, Cursor, VS Code, Lovable "OAuth") | The URL `https://api.capgo.app/mcp`. The client discovers login on its own. |
 | Bearer / API key header (Lovable "API key", n8n, scripts) | The URL, plus the header `Authorization: Bearer <Capgo API key>` |
 
+## Public setup and discovery
+
+Opening `https://api.capgo.app/mcp` in a browser shows setup instructions without signing in. Requests preferring JSON or an SSE stream still receive `405`; authenticated MCP calls use `POST`.
+
+The API host also publishes public, cacheable discovery documents:
+
+- `/mcp/server-card`: the [SEP-2127 Server Card](https://modelcontextprotocol.io/seps/2127-mcp-server-cards), with the `application/mcp-server-card+json` media type. `/.well-known/mcp/server-card.json` serves the same card for older scanners.
+- `/.well-known/ai-catalog.json`: an AI Catalog pointing to the card.
+- `/.well-known/mcp.json` and `/mcp.json`: MCP Registry manifests declaring the remote endpoint.
+
+The card and `initialize` share the server identity `app.capgo/capgo`, version and supported protocol versions. Cards contain public connection metadata only; tools and their schemas are listed through authenticated MCP requests. Discovery uses the configured canonical API origin, like OAuth protected-resource metadata, and supports ETag revalidation.
+
 ## Login flow (MCP authorization spec 2025-11-25)
 
 1. The client calls `POST /mcp` without a token. The server answers `401` with `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"`.

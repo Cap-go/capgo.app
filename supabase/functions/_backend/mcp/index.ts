@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
+import { accepts } from 'hono/accepts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
 import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
@@ -11,6 +12,7 @@ import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
 import { backgroundTask } from '../utils/utils.ts'
+import { createMcpDiscoveryApp, mcpSetupPage } from './discovery.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
 import { withPg } from './oauth_shared.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
@@ -36,8 +38,8 @@ const STREAM_MAX_BYTES = 256 * 1024
 const mcpCors = cors({
   origin: '*',
   allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Last-Event-ID', 'capgkey', 'x-api-key'],
-  exposeHeaders: ['WWW-Authenticate', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'If-None-Match', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Last-Event-ID', 'capgkey', 'x-api-key'],
+  exposeHeaders: ['WWW-Authenticate', 'ETag', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
   maxAge: 86400,
 })
 
@@ -173,12 +175,39 @@ export function createMcpApp(dispatch: McpDispatch) {
   const app = new Hono<MiddlewareKeyVariables>()
 
   app.use('/.well-known/*', mcpCors)
+  app.use('/mcp.json', mcpCors)
   app.use(`${MCP_PATH}`, mcpCors)
   app.use(`${MCP_PATH}/*`, mcpCors)
   app.route('/', oauthApp)
+  app.route('/', createMcpDiscoveryApp())
 
   // Stateless server: no server-initiated SSE stream and no sessions to terminate.
   app.get(MCP_PATH, (c) => {
+    c.header('Vary', 'Accept', { append: true })
+    const representation = accepts(c, {
+      header: 'Accept',
+      supports: ['text/html', 'text/event-stream', 'application/json'],
+      default: 'text/html',
+      match: (accepted, config) => {
+        const matches = config.supports.flatMap((type) => {
+          // The most specific range sets the quality, including explicit q=0 exclusions.
+          const ranges = [type, `${type.split('/')[0]}/*`, '*/*']
+          for (const [specificity, range] of ranges.entries()) {
+            const index = accepted.findIndex(accept => accept.type.toLowerCase() === range)
+            if (index !== -1)
+              return [{ type, q: accepted[index].q, specificity, index }]
+          }
+          return []
+        })
+        matches.sort((a, b) => b.q - a.q || a.specificity - b.specificity || a.index - b.index)
+        const preferred = matches[0]
+        if (!preferred)
+          return config.default
+        return preferred.q > 0 ? preferred.type : ''
+      },
+    })
+    if (representation === 'text/html')
+      return mcpSetupPage(c)
     c.header('Allow', 'POST, OPTIONS')
     return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL https://api.capgo.app/mcp and the HTTP transport.'), 405)
   })

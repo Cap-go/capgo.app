@@ -103,7 +103,7 @@ describe('hosted MCP protocol', () => {
       protocolVersion: '2025-06-18',
       capabilities: { tools: { listChanged: false }, events: { list: true, subscribe: true, unsubscribe: true } },
       serverInfo: {
-        name: 'capgo',
+        name: 'app.capgo/capgo',
         title: 'Capgo',
         version: expect.any(String),
         websiteUrl: 'https://capgo.app',
