@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.39.3",
+  "version": "22.42.1",
   "private": true,
   "workspaces": [
     "cli",
@@ -9,6 +9,8 @@
   ],
   "license": "GPL-3.0",
   "scripts": {
+    "generate:mcp-skills": "bun scripts/generate-mcp-skills.ts",
+    "check:mcp-skills": "bun scripts/generate-mcp-skills.ts --check",
     "build:snippet": "bun scripts/snippet/build-snippet.ts",
     "check:snippet": "bun scripts/snippet/build-snippet.ts --check",
     "readreplicate:setup-source": "bash read_replicate/replicate_setup_source.sh",

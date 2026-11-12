@@ -7,6 +7,7 @@ import { DOCS_SEARCH_MAX_RESULTS, searchCapgoDocs } from '../utils/docs_search.t
 import { MCP_EVENT_CATALOG, MCP_EVENT_NAMES, unsubscribeMcpEvent, upsertMcpEventSubscription } from '../utils/mcp_events.ts'
 import { handleCapgoListEventSubscriptions, loadApikeyRbacId, mcpSubscribeInputFromTool } from './events_rpc.ts'
 import { guidanceForError } from './error_guidance.ts'
+import { getSkill, listSkills, readSkillResource, skillContentSchema, skillSchema } from './skills.ts'
 
 /**
  * Hosted Capgo MCP tools.
@@ -54,6 +55,7 @@ export interface McpToolContext {
 
 export interface McpToolResult {
   content: Array<{ type: 'text', text: string }>
+  structuredContent?: Record<string, unknown>
   isError?: boolean
 }
 
@@ -70,6 +72,7 @@ export interface McpTool {
   title: string
   description: string
   inputSchema: z.ZodObject<z.ZodRawShape>
+  outputSchema?: z.ZodObject<z.ZodRawShape>
   annotations: McpToolAnnotations
   run: (input: Record<string, unknown>, ctx: McpToolContext) => Promise<McpToolResult>
 }
@@ -675,7 +678,7 @@ const appTools: McpTool[] = [
       ios_store_url: z.string().nullable().optional().describe('App Store listing URL for this app. Use null to clear it.'),
       android_store_url: z.string().nullable().optional().describe('Google Play listing URL for this app. Use null to clear it.'),
     },
-    annotations: DESTRUCTIVE,
+    annotations: { ...DESTRUCTIVE, openWorldHint: true },
     request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: `/app/${enc(id)}`, body: compact(rest) }),
   }),
   apiTool({
@@ -1027,7 +1030,7 @@ const platform = z.enum(['ios', 'android']).describe('Native platform to build o
 const requestBuildTool: McpTool = {
   name: 'capgo_request_build',
   title: 'Request native build',
-  description: 'Step 1 of 3 to run a native cloud build without a logged-in CLI. Uses the signing credentials stored for this app (see capgo_get_build_credentials), so it requires app admin rights (app.update_settings) on the app, not only build rights. '
+  description: 'Capgo Build is generally available for production iOS and Android Capacitor releases. Build and sign from any machine without a local Mac or Xcode, with optional store submission. Step 1 of 3 to run a native cloud build without a logged-in CLI. Uses the signing credentials stored for this app (see capgo_get_build_credentials), so it requires app admin rights (app.update_settings) on the app, not only build rights. '
     + 'First, change into the absolute local Capacitor app directory (not the workspace root or MCP server directory) and package the native project offline: `npx @capgo/cli@latest build zip <appId> --platform <ios|android> --json`, and pass its build_options and ios_dependency_manager here. '
     + 'Returns a job_id and a signed URL. Step 2: `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<upload_url>"`. Step 3: capgo_start_build. Builds use build minutes.'
     + ' The result contains job_id, upload details and next_step. If URL creation fails after requesting a job, the error retains job_id so the agent can retry upload setup or cancel it.',
@@ -1280,7 +1283,7 @@ const webhookTools: McpTool[] = [
       events: webhookEvents.optional().describe('Capgo database resources whose changes should trigger webhook deliveries.'),
       enabled: z.boolean().optional().describe('Enable or disable event delivery to this webhook.'),
     },
-    annotations: DESTRUCTIVE,
+    annotations: { ...DESTRUCTIVE, openWorldHint: true },
     request: input => ({ method: 'PUT', path: '/webhooks', body: compact(input) }),
   }),
   apiTool({
@@ -1480,7 +1483,7 @@ const notificationTools: McpTool[] = [
       channel: z.string().nullable().optional().describe('Channel name to check; omitted or null uses the app push update channel setting.'),
       limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this update check.'),
     },
-    annotations: EXTERNAL,
+    annotations: { ...EXTERNAL, destructiveHint: true },
     request: input => ({ method: 'POST', path: '/notifications/update-check', body: compact(input) }),
   }),
   apiTool({
@@ -1507,6 +1510,39 @@ const notificationTools: McpTool[] = [
 // Documentation
 // ---------------------------------------------------------------------------
 const docsTools: McpTool[] = [
+  {
+    name: 'capgo_list_skills',
+    title: 'List Capgo skills',
+    description: 'Discover public Capgo workflow guides for releases, update health, native builds, organizations and CLI usage. Returns skill URIs, frontmatter and file manifests with SHA-256 digests; does not load the instructions. Read the relevant guide with capgo_get_skill before using its workflow. Some guides require a local CLI or project filesystem.',
+    inputSchema: z.object({}),
+    outputSchema: z.object({ skills: z.array(skillSchema) }),
+    annotations: { title: 'List Capgo skills', ...READ },
+    run: async () => {
+      const result = { skills: listSkills() }
+      return { ...textResult(result), structuredContent: result }
+    },
+  },
+  {
+    name: 'capgo_get_skill',
+    title: 'Read Capgo skill',
+    description: 'Read a public Capgo workflow guide or one of its supporting files. Returns the skill metadata and the requested file content. Reading instructions does not execute the workflow, grant permissions or bypass confirmation for actions.',
+    inputSchema: z.object({
+      uri: z.string().min(1).describe('Skill URI from capgo_list_skills, identifying its SKILL.md.'),
+      resourceUri: z.string().min(1).optional().describe('Supporting file URI from this skill\'s resources manifest. Omit to read SKILL.md.'),
+    }),
+    outputSchema: z.object({ skill: skillSchema, contents: z.array(skillContentSchema) }),
+    annotations: { title: 'Read Capgo skill', ...READ },
+    run: async (input) => {
+      const { uri, resourceUri } = input as { uri: string, resourceUri?: string }
+      const skill = getSkill(uri)
+      const fileUri = resourceUri ?? uri
+      const content = skill?.resources.some(file => file.uri === fileUri) ? readSkillResource(fileUri) : undefined
+      if (!skill || !content)
+        return textResult({ error: 'skill_not_found', message: 'Use a skill URI from capgo_list_skills and a file URI from that skill\'s resources manifest.' }, true)
+      const result = { skill, contents: [content] }
+      return { ...textResult(result), structuredContent: result }
+    },
+  },
   {
     name: 'capgo_search_docs',
     title: 'Search Capgo docs',

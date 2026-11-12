@@ -1,7 +1,7 @@
 import type { SQL } from 'drizzle-orm'
 import type { Context } from 'hono'
 import type { JWTClaims } from '../utils/hono.ts'
-import type { PgQueryClient } from '../utils/pg.ts'
+import type { PgClient, PgQueryClient } from '../utils/pg.ts'
 import type { ConsoleQueryRequest, ConsoleQueryResult, QueryCatalog, QueryColumn, QueryForeignKey, QueryFunction } from './console_query_sql.ts'
 import { sql } from 'drizzle-orm'
 import { escapeLiteral } from 'pg'
@@ -125,7 +125,7 @@ export function catalogFromPayload(row: CatalogQueryRow): QueryCatalog {
   return { columns: columnMap, foreignKeys: row.foreign_keys ?? [], functions }
 }
 
-async function readCatalog(client: PgQueryClient): Promise<QueryCatalog> {
+async function readCatalog(client: PgClient): Promise<QueryCatalog> {
   const result = await client.query<CatalogQueryRow>(CATALOG_SQL, [[...CONSOLE_RPCS]])
   const row = result.rows[0]
   if (!row)
@@ -133,7 +133,7 @@ async function readCatalog(client: PgQueryClient): Promise<QueryCatalog> {
   return catalogFromPayload(row)
 }
 
-function loadCatalog(client: PgQueryClient): Promise<QueryCatalog> {
+function loadCatalog(client: PgClient): Promise<QueryCatalog> {
   // Schema changes show up after the next isolate. A failed read is not cached.
   if (!catalogTask) {
     catalogTask = readCatalog(client).catch((error: unknown) => {
@@ -333,17 +333,11 @@ export async function runConsoleQuery(c: Context, request: ConsoleQueryRequest, 
   // user-facing checks must read. Fail closed if the role cannot be assumed.
   const setupSql = consoleRoleSetupSql(session)
   try {
-    // The catalog read must run as the login role, before SET LOCAL ROLE.
-    // A warm isolate already has it, so the role switch shares the BEGIN round trip.
-    if (catalogTask) {
-      const compiled = compileConsoleQuery(await catalogTask, request)
-      return await withPgTransaction(pool, client => executeCompiled(client, compiled), { appendSql: setupSql })
-    }
-    return await withPgTransaction(pool, async (client) => {
-      const compiled = compileConsoleQuery(await loadCatalog(client), request)
-      await client.query(setupSql)
-      return executeCompiled(client, compiled)
-    })
+    // Load metadata before BEGIN so cold isolates can share Hyperdrive's query
+    // cache. Only schema metadata uses the login role; user queries still run
+    // inside the transaction with the caller's role and claims for RLS.
+    const compiled = compileConsoleQuery(await loadCatalog(pool), request)
+    return await withPgTransaction(pool, client => executeCompiled(client, compiled), { appendSql: setupSql })
   }
   catch (error) {
     if (error instanceof ConsoleQueryRollback)

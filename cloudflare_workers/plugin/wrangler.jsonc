@@ -978,61 +978,62 @@
       "analytics_engine_datasets": [
         {
           "binding": "DEVICE_USAGE",
-          "dataset": "device_usage"
+          "dataset": "device_usage_preprod"
         },
         {
           "binding": "BANDWIDTH_USAGE",
-          "dataset": "bandwidth_usage"
+          "dataset": "bandwidth_usage_preprod"
         },
         {
           "binding": "VERSION_USAGE",
-          "dataset": "version_usage"
+          "dataset": "version_usage_preprod"
         },
         {
           "binding": "APP_LOG",
-          "dataset": "app_log"
+          "dataset": "app_log_preprod"
         },
         {
           "binding": "APP_LOG_EXTERNAL",
-          "dataset": "app_log_external"
+          "dataset": "app_log_external_preprod"
         }
       ],
+      // Dev-only exception: read bindings use the separate capgo-dev primary via caching Hyperdrive.
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_READ_NA",
-          "id": "a09d6932219c4a6a918fe6fdad5565ae"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_EU",
-          "id": "d5aae8be75f446868352110502fa9a1e"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_SA",
-          "id": "f874494b5d7b45ff82fd79778a6b2c7f"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_OC",
-          "id": "01688f6b86784166abdfa4105f58933f"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_AS_JAPAN",
-          "id": "a67b33ba7ef54219978ec56eca5096e1"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_AS_INDIA",
-          "id": "7f6e8255a9124531b1b07f11fdc257a7"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_HK",
-          "id": "f9b9990c5ee34327947299bd5e70d273"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_AF",
-          "id": "339dcaae4c204d808903a6dc6fa372d0"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         },
         {
           "binding": "HYPERDRIVE_CAPGO_READ_ME",
-          "id": "0efae3d612984c16b030f1447e269442"
+          "id": "2fc2676ee13f42c388b250d01d416433"
         }
       ],
       "placement": {
