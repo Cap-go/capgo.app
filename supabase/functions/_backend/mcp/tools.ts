@@ -92,11 +92,13 @@ export function textResult(value: unknown, isError = false): McpToolResult {
   }
   if (isError)
     return { content: [{ type: 'text', text }], isError: true }
-  const structuredContent = Array.isArray(value)
-    ? { items: value }
-    : value !== null && typeof value === 'object'
-      ? z.record(z.string(), z.unknown()).parse(value)
-      : { value }
+  let structuredContent: Record<string, unknown>
+  if (Array.isArray(value))
+    structuredContent = { items: value }
+  else if (value !== null && typeof value === 'object')
+    structuredContent = z.record(z.string(), z.unknown()).parse(value)
+  else
+    structuredContent = { value }
   return { content: [{ type: 'text', text }], structuredContent }
 }
 

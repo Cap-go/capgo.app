@@ -19,13 +19,16 @@ import {
   MCP_TOOLS_BY_NAME,
 } from '../supabase/functions/_backend/mcp/tools.ts'
 import { MCP_EVENT_CATALOG } from '../supabase/functions/_backend/utils/mcp_events.ts'
+import { getBuildStatus } from '../supabase/functions/_backend/public/build/status.ts'
 
 vi.mock('../supabase/functions/_backend/utils/docs_search.ts', () => ({
   DOCS_SEARCH_MAX_RESULTS: 20,
   searchCapgoDocs: async () => [docsPage],
 }))
 vi.mock('../supabase/functions/_backend/public/build/status.ts', () => ({
-  getBuildStatus: async () => Response.json(payloads.capgo_get_build_status),
+  getBuildStatus: vi.fn(async () =>
+    Response.json(payloads.capgo_get_build_status),
+  ),
 }))
 vi.mock(
   '../supabase/functions/_backend/utils/mcp_events.ts',
@@ -337,6 +340,7 @@ const payloads = {
     status: 'running',
     diagnostic,
     persisted: false,
+    started_at: 1794391200000,
     completed_at: null,
     timeout_exceeded: true,
     timeout_warning: 'Inspect before cancelling',
@@ -552,6 +556,32 @@ describe('every hosted MCP tool has a usable output contract', () => {
       )
     },
   )
+
+  it.each([
+    { status: 'queued', started_at: null, completed_at: null },
+    { status: 'running', started_at: 1794391200000, completed_at: null },
+    {
+      status: 'succeeded',
+      started_at: 1794391200000,
+      completed_at: 1794391260000,
+    },
+    {
+      status: 'failed',
+      started_at: 1794391200000,
+      completed_at: 1794391260000,
+      error: 'Example compiler failure',
+    },
+  ])('preserves builder timestamps for a $status native job', async (state) => {
+    const payload = { job_id: signed.job_id, persisted: false, ...state }
+    vi.mocked(getBuildStatus).mockResolvedValueOnce(Response.json(payload))
+    const result = await MCP_TOOLS_BY_NAME.get('capgo_get_build_status')!.run(
+      { appId, job_id: signed.job_id },
+      context(null),
+    )
+    expect(result.isError).not.toBe(true)
+    expect(result.structuredContent).toEqual(payload)
+    expect(JSON.parse(result.content[0].text)).toEqual(payload)
+  })
 
   it('validates skipped and ready-to-upload bundle preparation branches', async () => {
     const tool = MCP_TOOLS_BY_NAME.get('capgo_prepare_bundle_upload')!

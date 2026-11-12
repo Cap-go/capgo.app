@@ -920,7 +920,7 @@ const usageDay = z
     get: z
       .number()
       .optional()
-      .describe('Download GET request count represented by this usage bucket.'),
+      .describe('Reported device get activity counted in this usage bucket.'),
   })
   .passthrough()
 const usage = z.union([
@@ -959,7 +959,7 @@ const versionUsage = z
             data: z
               .array(z.number())
               .describe(
-                'Usage values aligned by index with labels; label identifies the represented version.',
+                'Daily share of observed devices as percentages on a 0 to 100 scale, aligned by index with labels; label identifies the version.',
               ),
             metaCounts: z
               .array(z.number())
@@ -975,13 +975,19 @@ const versionUsage = z
       .object({
         name: z
           .string()
-          .describe('Newest version represented by the usage response.'),
+          .describe(
+            'Version with the largest reported share on the most recent day with observations; empty when no activity is available.',
+          ),
         percentage: z
           .string()
-          .describe('Percentage formatted to one decimal place.'),
+          .describe(
+            'Device share on a 0 to 100 scale, formatted to one decimal place; zero when no activity is available.',
+          ),
       })
       .optional()
-      .describe('Newest version and its observed usage share when available.'),
+      .describe(
+        'Leading version on the most recent day with observed activity and its share; this does not identify the newest uploaded release.',
+      ),
   })
   .passthrough()
 const signedUpload = z
@@ -1025,15 +1031,19 @@ const buildStatus = z
       .nullable()
       .optional()
       .describe('Builder runner details when a runner is assigned.'),
-    started_at: timestamp
+    started_at: z
+      .number()
+      .nullable()
       .optional()
       .describe(
-        'When the builder began the job, as an ISO timestamp; null means not started or unavailable.',
+        'When the builder began the job, as Unix epoch milliseconds; null means not started or unavailable.',
       ),
-    completed_at: timestamp
+    completed_at: z
+      .number()
+      .nullable()
       .optional()
       .describe(
-        'When the builder finished the job, as an ISO timestamp; null means not completed or unavailable.',
+        'When the builder finished the job, as Unix epoch milliseconds; null means not completed or unavailable.',
       ),
     runner_wait_seconds: z
       .number()
