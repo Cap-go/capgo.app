@@ -5,13 +5,15 @@ import { computedAsync } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import IconBuilding from '~icons/heroicons/building-office'
+import IconUser from '~icons/heroicons/user'
 import IconBilling from '~icons/mingcute/bill-fill'
 import FailedCard from '~/components/FailedCard.vue'
 import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import Tabs from '~/components/Tabs.vue'
+import { isNativeChromeEnabled } from '~/composables/useNativeChrome'
 import { accountTabs } from '~/constants/accountTabs'
 import { organizationTabs as baseOrgTabs } from '~/constants/organizationTabs'
-import { settingsTabs } from '~/constants/settingsTabs'
 import { stripeEnabled } from '~/services/console'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
@@ -174,32 +176,30 @@ watchEffect(() => {
   organizationTabs.value = tabs.filter(tab => !tab.children || tab.children.length > 0)
 })
 
-const activePrimary = computed(() => {
+const isOrganizationSettings = computed(() => {
   const path = route.path
-  if (path.startsWith('/settings/organization') || path === '/billing' || path.startsWith('/billing/'))
-    return '/settings/organization'
-  return '/settings/account'
+  return path.startsWith('/settings/organization') || path === '/billing' || path.startsWith('/billing/')
+})
+
+const primaryTabs = computed(() => {
+  return isOrganizationSettings.value ? organizationTabs.value : accountTabs
+})
+
+const activePrimary = computed(() => {
+  return findActiveTabKey(primaryTabs.value, route.path) ?? primaryTabs.value[0]?.key
+})
+
+const activePrimaryTab = computed(() => {
+  return primaryTabs.value.find(tab => tab.key === activePrimary.value)
 })
 
 const secondaryTabs = computed(() => {
-  return activePrimary.value === '/settings/organization' ? organizationTabs.value : accountTabs
-})
-
-const activeSecondary = computed(() => {
-  return findActiveTabKey(secondaryTabs.value, route.path) ?? secondaryTabs.value[0]?.key
-})
-
-const activeSecondaryTab = computed(() => {
-  return secondaryTabs.value.find(tab => tab.key === activeSecondary.value)
-})
-
-const tertiaryTabs = computed(() => {
-  const children = activeSecondaryTab.value?.children ?? []
+  const children = activePrimaryTab.value?.children ?? []
   return children.length > 1 ? children : []
 })
 
-const activeTertiary = computed(() => {
-  return findActiveChildKey(activeSecondaryTab.value, route.path)
+const activeSecondary = computed(() => {
+  return findActiveChildKey(activePrimaryTab.value, route.path)
 })
 
 function activateTab(tab: Tab | undefined) {
@@ -213,12 +213,7 @@ function activateTab(tab: Tab | undefined) {
 }
 
 function handlePrimary(val: string) {
-  // Clicking primary switches to the root of that section
-  router.push(val === '/settings/organization' ? '/settings/organization' : '/settings/account')
-}
-
-function handleSecondary(val: string) {
-  const tab = secondaryTabs.value.find(t => t.key === val)
+  const tab = primaryTabs.value.find(t => t.key === val)
   if (!tab)
     return
   if (tab.children?.length) {
@@ -230,26 +225,35 @@ function handleSecondary(val: string) {
   activateTab(tab)
 }
 
-function handleTertiary(val: string) {
-  const tab = tertiaryTabs.value.find(t => t.key === val)
+function handleSecondary(val: string) {
+  const tab = secondaryTabs.value.find(t => t.key === val)
   activateTab(tab)
 }
 </script>
 
 <template>
   <div class="flex flex-col flex-1 h-full min-h-0 overflow-hidden">
-    <Tabs
-      :tabs="settingsTabs"
-      :active-tab="activePrimary"
-      :secondary-tabs="shouldBlockContent ? [] : secondaryTabs"
-      :secondary-active-tab="activeSecondary"
-      :tertiary-tabs="shouldBlockContent ? [] : tertiaryTabs"
-      :tertiary-active-tab="activeTertiary"
-      no-wrap
-      @update:active-tab="handlePrimary"
-      @update:secondary-active-tab="handleSecondary"
-      @update:tertiary-active-tab="handleTertiary"
-    />
+    <div class="flex items-start gap-2" data-test="settings-navigation">
+      <Tabs
+        class="flex-1 !w-auto !shrink min-w-0"
+        :tabs="shouldBlockContent ? [] : primaryTabs"
+        :active-tab="activePrimary"
+        :secondary-tabs="shouldBlockContent ? [] : secondaryTabs"
+        :secondary-active-tab="activeSecondary"
+        no-wrap
+        @update:active-tab="handlePrimary"
+        @update:secondary-active-tab="handleSecondary"
+      />
+      <RouterLink
+        :to="isOrganizationSettings ? '/settings/account' : '/settings/organization'"
+        class="shrink-0 items-center gap-2 min-h-[38px] px-3 mt-1 mr-1 text-sm font-medium rounded-md text-slate-500 hover:text-blue-600 hover:bg-blue-100/70 dark:text-slate-400 dark:hover:text-blue-300 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        :class="isNativeChromeEnabled ? 'inline-flex' : 'hidden lg:inline-flex'"
+        data-test="settings-switch-section"
+      >
+        <component :is="isOrganizationSettings ? IconUser : IconBuilding" class="w-5 h-5" aria-hidden="true" />
+        {{ t(isOrganizationSettings ? 'account' : 'organization') }}
+      </RouterLink>
+    </div>
     <main class="flex relative flex-1 w-full min-h-0 mt-0 overflow-hidden bg-blue-50 dark:bg-slate-800/40">
       <div
         data-native-scroll
