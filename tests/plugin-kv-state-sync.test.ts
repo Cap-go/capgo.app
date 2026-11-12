@@ -42,8 +42,14 @@ interface Claim {
 }
 
 async function claim() {
-  const { rows } = await client.query<{ result: Claim }>('SELECT public.claim_plugin_state_sync(200) AS result')
-  return rows[0].result
+  // A busy lock returns before leasing work or spending a queue attempt.
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const { rows } = await client.query<{ result: Claim }>('SELECT public.claim_plugin_state_sync(200) AS result')
+    if (rows[0].result.status !== 'busy')
+      return rows[0].result
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error('Plugin state claim lock stayed busy after 40 polls')
 }
 
 async function ack(token: string) {
@@ -272,6 +278,33 @@ describe('plugin KV sync queue contracts', () => {
       const { rows } = await client.query<{ count: string }>('SELECT count(*) FROM public.plugin_state_sync_pending WHERE app_id = $1', [APP_ID])
       expect(Number(rows[0].count)).toBe(112)
     })
+  })
+
+  it('waits for a concurrent claim lock without spending queue attempts', async () => {
+    const blocker = new Client({ connectionString: POSTGRES_URL })
+    await blocker.connect()
+    try {
+      await inTransaction(async () => {
+        await enqueue()
+        await blocker.query('BEGIN')
+        await blocker.query('SET LOCAL statement_timeout = 2000')
+        await blocker.query(`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('plugin_state_sync_claim'))`)
+        const [result] = await Promise.all([
+          claim(),
+          (async () => {
+            await new Promise(resolve => setTimeout(resolve, 100))
+            await blocker.query('COMMIT')
+          })(),
+        ])
+        expect(result.status).toBe('ok')
+        expect(result.apps?.find(app => app.app_id === APP_ID)?.attempts).toBe(1)
+        expect(result.lease_token).toBeTypeOf('string')
+      })
+    }
+    finally {
+      await blocker.query('ROLLBACK')
+      await blocker.end()
+    }
   })
 
 
