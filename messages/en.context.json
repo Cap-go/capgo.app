@@ -3139,6 +3139,7 @@
   "organization-onboarding-invite-subtitle": "Used in Capgo web console areas: components/dashboard. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-invite-success-state": "Used in Capgo web console areas: components/dashboard. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-invite-title": "Used in Capgo web console areas: components/dashboard. Role: section or dialog title. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
+  "organization-onboarding-load-failed": "Used in Capgo web console areas: pages/onboarding. Role: toast or status message. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-logo-alt": "Used in Capgo web console areas: pages/onboarding. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-logo-helper": "Used in Capgo web console areas: pages/onboarding. Role: UI sentence. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",
   "organization-onboarding-logo-preview-alt": "Used in Capgo web console areas: pages/onboarding. Role: UI label. Translate for UI; keep Capgo product names, code, and placeholders unchanged.",

@@ -299,7 +299,7 @@ const bundleUploadTools: McpTool[] = [
       native_packages: z.array(nativePackage).optional().describe('native_packages printed by bundle zip --for-upload --json; without it the native compatibility check cannot run'),
       updater_version: z.string().optional().describe('Installed @capgo/capacitor-updater version printed by bundle zip --for-upload --json (selects checksum format and delta features)'),
       updater_package: z.string().optional().describe('Updater package name printed by bundle zip, for Cordova projects'),
-      checksum_algorithm: z.enum(['sha256', 'crc32']).optional().describe('Checksum method from the CLI packaging output; copy it with checksum so Capgo verifies the archive using the same method.'),
+      checksum_algorithm: z.enum(['sha256', 'crc32']).optional().describe('Checksum method from the CLI packaging output; copy it with checksum. Capgo verifies the archive checksum only for unencrypted bundles; encrypted uploads retain the supplied checksum without inspecting the archive.'),
       size_bytes: z.number().int().positive().optional().describe('Zip archive size in bytes, from size_bytes in the CLI packaging output.'),
       cli_version: z.string().optional().describe('Version of the CLI that packaged the archive, from cli_version in its output.'),
       delta: z.boolean().optional().describe('Also publish the per-file manifest for delta updates. Capgo builds it from the zip; encrypted bundles need delta_pack'),
@@ -695,10 +695,10 @@ const appTools: McpTool[] = [
   }),
   apiTool({
     name: 'capgo_create_demo_app',
-    title: 'Create demo app',
-    description: 'Create a demo app pre-filled with sample bundles, channels and devices to explore Capgo.'
+    title: 'Seed demo app data',
+    description: 'Seed sample bundles, channels and devices into an existing app whose onboarding is incomplete. This does not create an app. Pass appId to choose the target; if omitted, the most recently created pending app in the organization is selected. The request fails if no eligible app exists.'
       + ' Returns status, app_id, name and a completion message so the app can be inspected with capgo_get_app.',
-    input: { orgId, appId: appId.optional() },
+    input: { orgId, appId: appId.optional().describe('Existing app_id with incomplete onboarding, from capgo_list_apps. Omit to seed the most recently created pending app in the organization.') },
     annotations: WRITE,
     request: input => ({ method: 'POST', path: '/app/demo', body: compact({ owner_org: input.orgId, app_id: input.appId }) }),
   }),
@@ -862,15 +862,15 @@ const channelTools: McpTool[] = [
       appId,
       channel: z.string().min(1).describe('Channel name from capgo_list_channels for this app.'),
       rolloutVersion: z.union([z.string(), z.number().int()]).nullable().optional().describe('Bundle name or id from capgo_list_bundles to offer as the rollout target. Omit to keep the existing target unless promoting, rolling back or disabling the rollout; advancing requires a new target.'),
-      rolloutPercentage: z.number().min(0).max(100).optional().describe('Percentage of eligible devices assigned the rollout bundle. Omitted uses rolloutPercentageBps if supplied; otherwise keeps the current share except when promotion or rollback resets it.'),
-      rolloutPercentageBps: z.number().int().min(0).max(10000).optional().describe('Rollout share in basis points (100 = 1%). If omitted, rolloutPercentage is used; if both are omitted, the existing share is unchanged.'),
+      rolloutPercentage: z.number().min(0).max(100).optional().describe('Percentage of eligible devices assigned the rollout bundle. rolloutPercentageBps takes precedence when both are supplied. If neither is supplied, the current share is retained, including when advanceRollout starts a new target. promoteToStable and rollback reset the share to zero.'),
+      rolloutPercentageBps: z.number().int().min(0).max(10000).optional().describe('Rollout share in basis points (100 = 1%); takes precedence over rolloutPercentage. If omitted, rolloutPercentage is used. If neither is supplied, the current share is retained, including when advanceRollout starts a new target. promoteToStable and rollback reset the share to zero.'),
       rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional().describe('Seconds devices keep their rollout assignment. Omit to retain the channel setting.'),
       rolloutEnabled: z.boolean().optional().describe('Enable or disable the progressive rollout on this channel.'),
       rolloutPaused: z.boolean().optional().describe('Pause or resume the progressive rollout.'),
       rolloutPauseReason: z.string().nullable().optional().describe('Explanation to record for a paused rollout; null clears it.'),
       promoteToStable: z.boolean().optional().describe('Make the rollout bundle the channel bundle for everyone'),
       rollback: z.boolean().optional().describe('Cancel the rollout; everyone stays on the channel bundle'),
-      advanceRollout: z.boolean().optional().describe('Promote the current rollout to stable and start rolling out rolloutVersion'),
+      advanceRollout: z.boolean().optional().describe('Promote the current rollout to stable and start rolling out rolloutVersion. When both percentage fields are omitted, the new target starts at the current rollout share.'),
       autoPauseEnabled: z.boolean().optional().describe('Enable automatic evaluation of rollout failures.'),
       autoPauseWindowMinutes: z.number().int().min(1).max(10080).optional().describe('Lookback window in minutes for evaluating rollout failures.'),
       autoPauseFailureRateBps: z.number().int().min(0).max(10000).nullable().optional().describe('Failure rate threshold in basis points (100 = 1%)'),
@@ -954,7 +954,7 @@ const deviceTools: McpTool[] = [
 // ---------------------------------------------------------------------------
 const statsRange = {
   from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'),
-  to: dateString.describe('End of the usage reporting period, e.g. 2026-01-31 or an ISO timestamp.'),
+  to: dateString.describe('For date-only inputs, exclusive end date; use 2026-02-01 to include January 31. ISO timestamps are also accepted.'),
   noAccumulate: z.boolean().optional().describe('Return daily values instead of cumulative totals; omitted or false returns accumulated usage.'),
 }
 
@@ -1001,7 +1001,7 @@ const statsTools: McpTool[] = [
     title: 'Bundle adoption',
     description: 'Per-day share of devices on each bundle version (adoption of a release).'
       + ' Returns date labels and version datasets in labels and datasets.',
-    input: { appId, from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'), to: dateString.describe('End of the usage reporting period, e.g. 2026-01-31 or an ISO timestamp.') },
+    input: { appId, from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'), to: dateString.describe('For date-only inputs, inclusive end date; use 2026-01-31 to include January 31. ISO timestamps are also accepted.') },
     annotations: READ,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/bundle_usage`, query: rest }),
   }),
@@ -1010,7 +1010,7 @@ const statsTools: McpTool[] = [
     title: 'Native version usage',
     description: 'Native app versions and platforms used by devices.'
       + ' Returns date labels, version datasets, latest version share, active-device summaries and daily platform activity.',
-    input: { appId, from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'), to: dateString.describe('End of the usage reporting period, e.g. 2026-01-31 or an ISO timestamp.') },
+    input: { appId, from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'), to: dateString.describe('For date-only inputs, inclusive end date; use 2026-01-31 to include January 31. ISO timestamps are also accepted.') },
     annotations: READ,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/native_usage`, query: rest }),
   }),
@@ -1023,11 +1023,11 @@ const statsTools: McpTool[] = [
       view: z.enum(['summary', 'metrics', 'events', 'device', 'versions', 'routes', 'logs', 'errors', 'release']).optional().describe('Health view to inspect. Omit to start with summary; choose device for a timeline or release for deployment health.'),
       source: z.enum(['native', 'updater', 'all']).optional().describe('For logs, errors, device (default all)'),
       channelId: z.number().int().positive().optional().describe('Channel id from capgo_list_channels for the release view; omitted selects the app default channel.'),
-      days: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(30)]).optional().describe('Health reporting lookback in days; omitted uses 7.'),
+      days: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(30)]).optional().describe('Health reporting lookback in days; omitted uses 7. Ignored for view=release, which uses a release-based window capped at 72 hours.'),
       action: z.string().optional().describe('Filter events by stats action, e.g. update_fail'),
       deviceId: z.string().optional().describe('Updater device_id from capgo_list_devices to inspect or filter by.'),
       versionName: z.string().optional().describe('Bundle version name from capgo_list_bundles to inspect or filter by.'),
-      sort: z.enum(['slowest', 'fastest', 'newest', 'oldest']).optional().describe('Order sampled events or logs by measured duration (slowest/fastest) or event time (newest/oldest). Summary and release views do not use this ordering.'),
+      sort: z.enum(['slowest', 'fastest', 'newest', 'oldest']).optional().describe('Order samples in metrics, routes, logs and errors by measured duration (slowest/fastest) or event time (newest/oldest). Device always uses oldest; summary, events, versions and release ignore this setting.'),
       limit: z.number().int().min(1).max(100).optional().describe('Maximum records requested for the selected view.'),
     },
     annotations: READ,
