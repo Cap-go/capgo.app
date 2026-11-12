@@ -1,8 +1,9 @@
+import type { Unstable_Config } from 'wrangler'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { unstable_readConfig } from 'wrangler'
 
-function config(worker: string, env: string) {
+function config(worker: string, env: string): Unstable_Config {
   return unstable_readConfig({
     config: fileURLToPath(new URL(`../cloudflare_workers/${worker}/wrangler.jsonc`, import.meta.url)),
     env,
