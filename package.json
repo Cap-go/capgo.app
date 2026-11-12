@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.42.1",
+  "version": "22.43.0",
   "private": true,
   "workspaces": [
     "cli",
@@ -370,7 +370,7 @@
     "@capacitor/core": "^8.5.2",
     "@capgo/cli": "workspace:*",
     "@cloudflare/workers-types": "5.20261001.1",
-    "@codspeed/vitest-plugin": "^5.7.1",
+    "@codspeed/vitest-plugin": "^6.1.1",
     "@e18e/eslint-plugin": "0.5.1",
     "@eslint-community/eslint-plugin-eslint-comments": "4.7.2",
     "@iconify-json/simple-icons": "^1.2.91",
