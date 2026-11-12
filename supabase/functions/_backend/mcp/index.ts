@@ -204,7 +204,10 @@ export function createMcpApp(dispatch: McpDispatch) {
         // then let its parser apply the same quality rules and ordering to Q as to q.
         const accepted = parseAccept(types.map(({ type, params }) => [
           type.toLowerCase(),
-          ...Object.entries(params).map(([name, value]) => `${name.toLowerCase()}="${value.replace(/["\\]/g, String.raw`\$&`)}"`),
+          ...Object.entries(params).map(([name, value]) => {
+            const escapedValue = value.replace(/["\\]/g, String.raw`\$&`)
+            return `${name.toLowerCase()}="${escapedValue}"`
+          }),
         ].join(';')).join(','))
         const matches = config.supports.flatMap((type) => {
           // The most specific range sets the quality, including explicit q=0 exclusions.
