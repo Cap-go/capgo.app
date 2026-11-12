@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import assert from 'node:assert/strict'
 import process from 'node:process'
 
 console.log('🧪 Testing MCP server instructions...\n')
@@ -27,7 +28,7 @@ await test('all four variants describe Capgo and stay under 512 chars', async ()
     const text = buildServerInstructions(opts)
     ok(/capgo/i.test(text))
     ok(text.includes('@capacitor/core'))
-    ok(text.includes('https://api.capgo.app/mcp'))
+    assert.deepEqual(text.match(/https?:\/\/\S+/g), ['https://api.capgo.app/mcp'])
     ok(text.includes('Connect and authorize it separately'))
     ok(text.includes('Local tools accept projectDir or cwd: the absolute app path'))
     ok(text.length <= MAX_LEN, `len ${text.length} for ${JSON.stringify(opts)}`)
