@@ -69,6 +69,7 @@ export async function generateLogStreamToken(
   userId: string,
   appId: string,
   jwtSecret: string,
+  options: { role?: 'read', ttlSeconds?: number } = {},
 ): Promise<string> {
   const nowInSeconds = Math.floor(Date.now() / 1000)
   return signHs256Jwt({
@@ -78,7 +79,9 @@ export async function generateLogStreamToken(
     aud: 'build-logs',
     sub: userId,
     iat: nowInSeconds,
-    exp: nowInSeconds + (4 * 60 * 60),
+    exp: nowInSeconds + (options.ttlSeconds ?? 4 * 60 * 60),
+    // A read token only follows the stream: the builder refuses /start and acks with it.
+    ...(options.role ? { role: options.role } : {}),
   }, jwtSecret)
 }
 

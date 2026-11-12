@@ -5,7 +5,7 @@ import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
 import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconEye from '~icons/heroicons/eye'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
@@ -36,7 +36,9 @@ const isMobile = Capacitor.isNativePlatform()
 const dialogStore = useDialogV2Store()
 const offset = 20
 const search = ref('')
-const showSteps = ref(false)
+// Dev-only: `?buildDemo=` opens the live build page with a scripted build (see StepsBuild).
+const buildDemo = import.meta.env.DEV && !!useRoute().query.buildDemo
+const showSteps = ref(buildDemo)
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const elements = ref<Element[]>([])
 const buildDurations = ref<Record<string, number>>({})
@@ -537,7 +539,7 @@ watch(showSetupFlow, (newValue) => {
 <template>
   <div>
     <AppOnboardingFlow
-      v-if="totalAllBuilds === 0 && hasBuilderChecklist"
+      v-if="!buildDemo && totalAllBuilds === 0 && hasBuilderChecklist"
       :key="props.appId"
       :setup-app-id="props.appId"
       initial-checklist-path="builder"
@@ -546,7 +548,7 @@ watch(showSetupFlow, (newValue) => {
       onboarding
     />
     <BuilderIntroduction
-      v-else-if="totalAllBuilds === 0 && canEnableBuilder"
+      v-else-if="!buildDemo && totalAllBuilds === 0 && canEnableBuilder"
       :key="props.appId"
       :app-id="props.appId"
       :entitlement="builderEntitlement"

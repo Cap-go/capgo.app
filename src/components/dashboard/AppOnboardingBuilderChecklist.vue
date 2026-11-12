@@ -3,6 +3,7 @@ import type { BuilderPlatform, BuilderStepStatus } from '~/services/builderOnboa
 import type { ChecklistTaskListMode } from '~/utils/onboardingSetupMode'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
 import IconCopy from '~icons/ion/copy-outline'
 import IconArrowRight from '~icons/lucide/arrow-right'
@@ -17,12 +18,14 @@ import IconAndroid from '~icons/mdi/android'
 import IconApple from '~icons/mdi/apple'
 import { isOpenOnboardingStepStatus } from '~/services/appOnboarding'
 import { BUILDER_STEP_IDS, parseBuilderOnboarding } from '~/services/builderOnboardingChecklist'
+import { resolveBuildOutcome } from '~/services/buildLiveStream'
 import { useConsole } from '~/services/console'
 import { resolveDualChecklistResume } from '~/utils/dualOnboardingChecklists'
 import { initialChecklistOpen } from '~/utils/onboardingSetupMode'
 import { skipOnboardingStep } from '~/utils/onboardingSkipStep'
 import AppOnboardingBuilderAiSetup from './AppOnboardingBuilderAiSetup.vue'
 import AppOnboardingSkipStep from './AppOnboardingSkipStep.vue'
+import BuildLiveProgress from './BuildLiveProgress.vue'
 
 const props = withDefaults(defineProps<{
   appId: string
@@ -68,6 +71,15 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined
 let refreshGeneration = 0
 let hasLoadedPlatform = false
 let hasInteractedWithPlatform = false
+const BUILD_STEP_ID = 'successful_cloud_build'
+// Dev-only scripted build: `?buildDemo=success|store|failure[&platform=android]`.
+const route = useRoute()
+const buildDemo = import.meta.env.DEV && typeof route.query.buildDemo === 'string' ? route.query.buildDemo : undefined
+// Builds followed live in the build step, per platform: running ones, or any requested since this page opened.
+const sessionStartedAt = Date.now()
+const liveBuildIds = ref<Partial<Record<BuilderPlatform, string>>>({})
+// Retry hides a failed build so the step instructions come back until the next build.
+const dismissedBuildIds = ref<string[]>([])
 
 watch(() => props.initialOnboarding, (value) => {
   onboarding.value = parseBuilderOnboarding(value)
@@ -80,6 +92,8 @@ watch(() => props.appId, () => {
   selectedIds.value = {}
   hasLoadedPlatform = false
   hasInteractedWithPlatform = false
+  liveBuildIds.value = {}
+  dismissedBuildIds.value = []
   void refreshOnboarding()
 })
 
@@ -107,6 +121,13 @@ const skipping = ref(false)
 const completed = computed(() => steps.value.length > 0
   && steps.value.every(step => step.status === 'done' || step.status === 'skipped')
   && steps.value.at(-1)?.status === 'done')
+const liveBuildId = computed(() => {
+  const platform = viewedPlatform.value
+  if (!platform || selectedStep.value?.id !== BUILD_STEP_ID)
+    return null
+  const id = buildDemo ? 'demo' : liveBuildIds.value[platform]
+  return id && !dismissedBuildIds.value.includes(id) ? id : null
+})
 const platformCommand = computed(() => viewedPlatform.value && props.command ? `${props.command} --platform ${viewedPlatform.value}` : '')
 const cicdGuidePath = computed(() => {
   const query = new URLSearchParams({ product: 'builder', ...(viewedPlatform.value ? { platform: viewedPlatform.value } : {}) })
@@ -151,13 +172,51 @@ async function refreshOnboarding() {
   }
 }
 
+async function refreshLatestBuild() {
+  const platform = viewedPlatform.value
+  const appId = props.appId
+  if (!platform || buildDemo || props.active === false)
+    return
+  const { data, error } = await capgo
+    .from('build_requests')
+    .select('id, status, created_at')
+    .eq('app_id', appId)
+    .eq('platform', platform)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const latest = data?.[0]
+  if (error || !latest || appId !== props.appId)
+    return
+  const running = !resolveBuildOutcome(null, latest.status)
+  if (running || Date.parse(latest.created_at) >= sessionStartedAt)
+    liveBuildIds.value = { ...liveBuildIds.value, [platform]: latest.id }
+}
+
 onMounted(() => {
+  if (buildDemo) {
+    const demoPlatform = route.query.platform
+    if (demoPlatform === 'ios' || demoPlatform === 'android') {
+      hasInteractedWithPlatform = true
+      viewedPlatform.value = demoPlatform
+    }
+  }
   void refreshOnboarding()
+  void refreshLatestBuild()
   refreshTimer = setInterval(() => {
-    if (document.visibilityState === 'visible' && props.active !== false && !completed.value)
-      void refreshOnboarding()
+    if (document.visibilityState !== 'visible' || props.active === false || completed.value)
+      return
+    void refreshOnboarding()
+    void refreshLatestBuild()
   }, 5000)
 })
+
+watch(viewedPlatform, () => void refreshLatestBuild())
+
+// The demo opens straight on the build step.
+watch(viewedPlatform, (platform) => {
+  if (buildDemo && platform)
+    selectedIds.value[platform] = BUILD_STEP_ID
+}, { immediate: true })
 
 onUnmounted(() => {
   if (refreshTimer)
@@ -336,6 +395,17 @@ function statusLabel(status: BuilderStepStatus) {
 
         <div class="flex min-w-0 flex-col px-5 py-6 sm:p-8" data-test="builder-checklist-instructions">
           <template v-if="completed">
+            <BuildLiveProgress
+              v-if="liveBuildId && viewedPlatform"
+              :key="liveBuildId"
+              class="mb-8"
+              embedded
+              :app-id="appId"
+              :build-id="liveBuildId"
+              :platform="viewedPlatform"
+              :demo="buildDemo"
+              @retry="dismissedBuildIds.push(liveBuildId)"
+            />
             <IconCheck class="mb-4 h-8 w-8 text-emerald-600" aria-hidden="true" />
             <h2 class="text-2xl font-semibold text-slate-950 dark:text-white">
               {{ t('builder-checklist-complete-title') }}
@@ -394,7 +464,18 @@ function statusLabel(status: BuilderStepStatus) {
               {{ t('builder-checklist-follow-terminal') }}
             </p>
 
-            <output class="mt-7 block border-t border-slate-200 py-5 text-sm dark:border-white/15" aria-live="polite" aria-atomic="true">
+            <BuildLiveProgress
+              v-if="liveBuildId"
+              :key="liveBuildId"
+              class="mt-7"
+              embedded
+              :app-id="appId"
+              :build-id="liveBuildId"
+              :platform="viewedPlatform"
+              :demo="buildDemo"
+              @retry="dismissedBuildIds.push(liveBuildId)"
+            />
+            <output v-else class="mt-7 block border-t border-slate-200 py-5 text-sm dark:border-white/15" aria-live="polite" aria-atomic="true">
               <span class="flex items-center gap-3 font-medium text-slate-800 dark:text-slate-200">
                 <IconInfo v-if="refreshError" class="h-5 w-5 text-amber-600" aria-hidden="true" />
                 <IconCheck v-else-if="selectedStep.status === 'done'" class="h-5 w-5 text-emerald-600" aria-hidden="true" />
@@ -407,7 +488,7 @@ function statusLabel(status: BuilderStepStatus) {
               <button v-if="refreshError" type="button" class="d-btn d-btn-ghost mt-2 min-h-11 text-sky-700 dark:text-azure-300" @click="refreshOnboarding">{{ t('setup-checklist-retry') }}</button>
             </output>
 
-            <AppOnboardingSkipStep v-if="canSkipSelected" :key="`${viewedPlatform}-${selectedStep.id}`" test-id="builder-checklist" :skipping="skipping" @skip="skipSelectedStep" />
+            <AppOnboardingSkipStep v-if="canSkipSelected && !liveBuildId" :key="`${viewedPlatform}-${selectedStep.id}`" test-id="builder-checklist" :skipping="skipping" @skip="skipSelectedStep" />
 
             <div class="mt-auto flex flex-wrap items-stretch gap-2 pt-4" data-test="builder-checklist-task-actions">
               <button v-if="currentStep && currentStep.id !== selectedStep.id" type="button" class="d-btn d-btn-ghost h-auto min-h-11 gap-2 rounded-lg border-slate-200 bg-transparent px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-100 hover:text-slate-950 focus-visible:ring-2 focus-visible:ring-azure-500 focus-visible:ring-offset-2 dark:border-white/15 dark:text-slate-300 dark:hover:border-white/25 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:ring-offset-slate-900 min-w-0 max-w-full shrink whitespace-normal" @click="selectStep(currentStep.id)">
