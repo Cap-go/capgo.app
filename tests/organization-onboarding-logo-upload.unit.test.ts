@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, reactive, ref, toRef } from 'vue'
 import OrganizationOnboarding from '../src/pages/onboarding/organization.vue'
 
@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     : { data: { id: 'org-created' }, error: null }),
   uploadOrgLogoFile: vi.fn().mockRejectedValue(new Error('storage failed')),
   replace: vi.fn(async () => undefined),
+  fetchOrganizations: vi.fn(async (): Promise<void> => undefined),
 }))
 
 vi.mock('pinia', () => ({ storeToRefs: (store: any) => ({ currentOrganization: toRef(store, 'currentOrganization') }) }))
@@ -17,6 +18,7 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('vue-sonner', () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }))
 vi.mock('~/components/dashboard/InviteTeammateModal.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('~/components/dashboard/OnboardingSupportUsernames.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('~/components/dashboard/BillingRegionChoice.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('~/services/capgoApi', () => ({ getCapgoApiErrorCode: vi.fn(), invokeCapgoApi: mocks.invokeCapgoApi }))
 vi.mock('~/services/formatLocale', () => ({ formatNumberValue: (value: number) => String(value) }))
 vi.mock('~/services/onboardingAppCreate', () => ({ createOnboardingAppFromDraft: vi.fn() }))
@@ -36,7 +38,7 @@ vi.mock('~/stores/main', () => ({
   }),
 }))
 vi.mock('~/stores/organization', () => {
-  const store = reactive({ currentOrganization: null, organizations: [], fetchOrganizations: vi.fn(), setCurrentOrganization: vi.fn() })
+  const store = reactive({ currentOrganization: null, organizations: [], fetchOrganizations: mocks.fetchOrganizations, setCurrentOrganization: vi.fn() })
   return { useOrganizationStore: () => store }
 })
 vi.mock('~/utils/onboardingAppDraft', () => ({
@@ -44,6 +46,10 @@ vi.mock('~/utils/onboardingAppDraft', () => ({
   loadOnboardingAppDraft: () => ({ appName: 'Example App', appId: 'com.example.app' }),
 }))
 
+beforeEach(() => {
+  vi.clearAllMocks()
+  mocks.fetchOrganizations.mockReset().mockResolvedValue(undefined)
+})
 afterEach(() => vi.unstubAllGlobals())
 
 async function flushPromises() {
@@ -53,6 +59,68 @@ async function flushPromises() {
 }
 
 describe('organization onboarding logo import', () => {
+  it.each([1, 2])('waits for initialization fetch %i before allowing organization creation', async (pendingFetch) => {
+    let finishInitialization!: () => void
+    const pending = new Promise<void>((resolve) => {
+      finishInitialization = resolve
+    })
+    for (let index = 1; index < pendingFetch; index++)
+      mocks.fetchOrganizations.mockResolvedValueOnce(undefined)
+    mocks.fetchOrganizations.mockReturnValueOnce(pending)
+
+    const route = reactive({ query: { source: 'org-switcher' } as Record<string, string> })
+    vi.stubGlobal('useRoute', () => route)
+    vi.stubGlobal('useRouter', () => ({
+      back: vi.fn(),
+      push: vi.fn(),
+      replace: async (location: { query: Record<string, string> }) => {
+        mocks.replace()
+        route.query = location.query
+        await nextTick()
+      },
+    }))
+    vi.stubGlobal('useTemplateRef', () => ref(null))
+    const container = document.createElement('div')
+    const app = createApp(OrganizationOnboarding)
+    app.config.warnHandler = () => undefined
+    app.mount(container)
+    try {
+      await flushPromises()
+      expect(mocks.fetchOrganizations).toHaveBeenCalledTimes(pendingFetch)
+      container.querySelector<HTMLElement>('[data-test="onboarding-intent-ota"]')!.click()
+      await nextTick()
+      container.querySelector<HTMLElement>('[data-test="onboarding-mode-name"]')!.click()
+      await nextTick()
+      const name = container.querySelector<HTMLInputElement>('[data-test="onboarding-org-name"]')!
+      name.value = 'Example Company'
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+      container.querySelector<HTMLInputElement>('[data-test="onboarding-estimated-users-option"] input')!
+        .dispatchEvent(new Event('change', { bubbles: true }))
+      await nextTick()
+
+      const create = container.querySelector<HTMLButtonElement>('[data-test="onboarding-create-org"]')!
+      expect(create.disabled).toBe(true)
+      create.click()
+      await flushPromises()
+      expect(mocks.invokeCapgoApi).not.toHaveBeenCalled()
+
+      finishInitialization()
+      await flushPromises()
+      expect(create.disabled).toBe(false)
+      create.click()
+      await flushPromises()
+
+      expect(mocks.invokeCapgoApi.mock.calls.filter(([path]) => path === 'organization')).toHaveLength(1)
+      expect(route.query).toMatchObject({ org: 'org-created', step: 'logo' })
+      expect(container.querySelector('[data-test="onboarding-logo-action"]')).not.toBeNull()
+    }
+    finally {
+      finishInitialization()
+      await flushPromises()
+      app.unmount()
+    }
+  })
+
   it('keeps the created organization and opens manual logo setup when upload fails', async () => {
     vi.stubGlobal('useRoute', () => ({ query: {} }))
     vi.stubGlobal('useRouter', () => ({ back: vi.fn(), push: vi.fn(), replace: mocks.replace }))

@@ -75,6 +75,7 @@ watch(() => main.user?.discord_username, (value) => {
     discordUsername.value = value
 })
 const createdOrgId = ref('')
+const isInitializing = ref(true)
 const isSubmitting = ref(false)
 const isUploadingLogo = ref(false)
 const isLoadingWebsitePreview = ref(false)
@@ -171,7 +172,7 @@ const websiteHostname = computed(() => {
 const importedLogoUrl = computed(() => websitePreview.value?.icon ?? '')
 const canShowOrgDetails = computed(() => mode.value !== null)
 const canCreateOrganization = computed(() => {
-  if (!main.auth || isSubmitting.value || isLoadingWebsitePreview.value || !mode.value)
+  if (!main.auth || isInitializing.value || isSubmitting.value || isLoadingWebsitePreview.value || !mode.value)
     return false
 
   return !!orgNameInput.value.trim() && !!selectedUserCountStop.value
@@ -397,7 +398,7 @@ async function saveSupportUsernames() {
 }
 
 async function createOrganization() {
-  if (isSubmitting.value || !main.auth)
+  if (isInitializing.value || isSubmitting.value || !main.auth)
     return
 
   if (!mode.value) {
@@ -694,6 +695,7 @@ onMounted(async () => {
   displayStore.defaultBack = appDraft.value ? '/onboarding/app' : '/apps'
   await hydrateOnboardingFromQuery()
   applyAppDraftDefaults()
+  isInitializing.value = false
 })
 
 onUnmounted(() => {
