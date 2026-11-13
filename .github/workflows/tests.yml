@@ -137,6 +137,10 @@ jobs:
             notifications:
               - 'packages/capacitor-notifications/**'
             capgo:
+              - 'skills/**'
+              - 'cli/skills/**'
+              - 'cli/src/mcp/skill-catalog.ts'
+              - 'cli/src/mcp/skills.generated.json'
               - 'aliproxy/**'
               - 'android/**'
               - 'assets/**'
@@ -404,8 +408,7 @@ jobs:
         # Keep startup and functions serve on the same original image repositories.
         run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
-        # Start pulling while the runner sets up; supabase start reuses in-flight layers.
-        background: true
+        # Finish image extraction before installing dependencies or starting the database.
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
@@ -421,13 +424,18 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - parallel:
-          - name: Install dependencies
-            run: bun install
-          - name: Run Supabase Start
-            env:
-              SUPABASE_CLI_BIN: supabase
-            run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        env:
+          SUPABASE_CLI_BIN: supabase
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Diagnose bootstrap resource failures
+        if: failure()
+        run: |
+          free -m
+          df -h
+          sudo dmesg --ctime | tail -n 120 || true
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
@@ -502,7 +510,7 @@ jobs:
           tail -n 200 "${{ steps.bootstrap_edge_server.outputs.log_path }}" || true
           echo "::endgroup::"
       - name: Upload background service logs
-        if: failure()
+        if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         uses: actions/upload-artifact@v6
         with:
           name: test-backend-background-service-logs-${{ strategy.job-index }}
@@ -560,8 +568,7 @@ jobs:
         # Keep startup and functions serve on the same original image repositories.
         run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
-        # Start pulling while the runner sets up; supabase start reuses in-flight layers.
-        background: true
+        # Finish image extraction before dependency installation and database startup.
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
@@ -577,13 +584,18 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - parallel:
-          - name: Install dependencies
-            run: bun install
-          - name: Run Supabase Start
-            env:
-              SUPABASE_CLI_BIN: supabase
-            run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        env:
+          SUPABASE_CLI_BIN: supabase
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Diagnose bootstrap resource failures
+        if: failure()
+        run: |
+          free -m
+          df -h
+          sudo dmesg --ctime | tail -n 120 || true
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
@@ -630,7 +642,7 @@ jobs:
           tail -n 200 "${{ steps.bootstrap_edge_server.outputs.log_path }}" || true
           echo "::endgroup::"
       - name: Upload background service logs
-        if: failure()
+        if: failure() && steps.bootstrap_edge_server.outputs.log_path != ''
         uses: actions/upload-artifact@v6
         with:
           name: test-backend-plugin-background-service-logs
@@ -715,7 +727,8 @@ jobs:
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y postgresql-client-17
       - name: Run Supabase Start
-        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+        # SQL checks need no default Edge worker; functions serve starts it for the catalog test below.
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector,edge-runtime
       - name: Export isolated Supabase endpoints
         run: |
           bun scripts/supabase-worktree.ts with-env bun -e 'const apiUrl = new URL(process.env.SUPABASE_URL ?? ""); const dbUrl = process.env.SUPABASE_DB_URL ?? ""; if (!apiUrl.host || !dbUrl) throw new Error("Isolated Supabase status is missing API_URL or DB_URL."); console.log(`SUPABASE_FUNCTIONS_HEALTH_URL=http-get://${apiUrl.host}/functions/v1/ok`); console.log(`MAIN_SUPABASE_DB_URL=${dbUrl}`)' >> "$GITHUB_ENV"
@@ -799,8 +812,7 @@ jobs:
         # Keep startup and functions serve on the same original image repositories.
         run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
-        # Start pulling while the runner sets up; supabase start reuses in-flight layers.
-        background: true
+        # Finish image extraction before installing dependencies or starting the database.
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
@@ -816,13 +828,19 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - parallel:
-          - name: Install dependencies
-            run: bun install
-          - name: Run Supabase Start
-            env:
-              SUPABASE_CLI_BIN: supabase
-            run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      # Avoid overlapping dependency extraction with Docker startup on constrained runners.
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        env:
+          SUPABASE_CLI_BIN: supabase
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      - name: Diagnose bootstrap resource failures
+        if: failure()
+        run: |
+          free -m
+          df -h
+          sudo dmesg --ctime | tail -n 120 || true
       - name: Export isolated test endpoints
         run: |
           {
@@ -897,18 +915,34 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    name: Run Cloudflare plugin tests (serial)
+    timeout-minutes: 5
+    name: Run Cloudflare plugin tests (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: db
+            state: db
+            shard: 1/1
+          - name: kv-1
+            state: kv
+            shard: 1/2
+          - name: kv-2
+            state: kv
+            shard: 2/2
     permissions:
       contents: read
     concurrency:
-      group: capgo-local-services-cloudflare-plugin-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
+      group: capgo-local-services-cloudflare-plugin-${{ matrix.name }}-${{ github.event_name }}-${{ github.repository }}-${{ github.sha }}
       cancel-in-progress: false
     env:
-      SUPABASE_WORKTREE_INSTANCE: cloudflare-plugin-${{ github.run_id }}-${{ github.run_attempt }}
+      PLUGIN_STATE_KV: ${{ matrix.state == 'kv' && 'on' || 'off' }}
+      PLUGIN_STATE_KV_AUTHORITATIVE: ${{ matrix.state == 'kv' && 'true' || 'false' }}
+      PLUGIN_STATE_KV_STRICT: ${{ matrix.state == 'kv' && 'true' || 'false' }}
+      SUPABASE_WORKTREE_INSTANCE: cloudflare-plugin-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
       SUPABASE_WORKTREE_PORT_OFFSET: 4800
       CLOUDFLARE_WORKER_PORT_OFFSET: 4800
-      CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-plugin-4800
+      CLOUDFLARE_PERSIST_DIR: .context/cloudflare-workers-${{ github.run_id }}-${{ github.run_attempt }}-plugin-${{ matrix.name }}-4800
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6 # v6
@@ -922,8 +956,7 @@ jobs:
         # Keep startup and functions serve on the same original image repositories.
         run: echo 'SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io' >> "$GITHUB_ENV"
       - name: Pre-pull Supabase images
-        # Start pulling while the runner sets up; supabase start reuses in-flight layers.
-        background: true
+        # Finish image extraction before dependency installation to limit peak runner memory.
         continue-on-error: true
         run: |
           supabase services --workdir . -o json \
@@ -939,13 +972,13 @@ jobs:
         run: ln -sfn supabase/templates templates
       - name: Stop this job's Supabase stack
         run: bun scripts/supabase-worktree.ts stop --no-backup || true
-      - parallel:
-          - name: Install dependencies
-            run: bun install
-          - name: Run Supabase Start
-            env:
-              SUPABASE_CLI_BIN: supabase
-            run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
+      # Installing the monorepo alongside Docker startup can OOM-kill Bun (exit 137).
+      - name: Install dependencies
+        run: bun install
+      - name: Run Supabase Start
+        env:
+          SUPABASE_CLI_BIN: supabase
+        run: bun scripts/supabase-worktree.ts start -x imgproxy,studio,mailpit,realtime,postgres-meta,supavisor,logflare,vector
       - name: Export isolated test endpoints
         run: |
           {
@@ -994,7 +1027,12 @@ jobs:
             sleep "${attempt}"
           done
       - name: Run Cloudflare plugin integration tests (serial)
-        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin
+        run: |
+          if [ "${{ matrix.state }}" = "kv" ]; then
+            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin:kv --shard=${{ matrix.shard }}
+          else
+            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin
+          fi
       - name: Show Cloudflare Worker logs after plugin test failure
         if: failure() && steps.start_cloudflare_workers.outputs.log_path != ''
         run: |
@@ -1005,7 +1043,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: test-cloudflare-plugin-background-service-logs
+          name: test-cloudflare-plugin-${{ matrix.name }}-background-service-logs
           path: |
             ${{ steps.bootstrap_edge_server.outputs.log_path }}
             ${{ steps.start_cloudflare_workers.outputs.log_path }}

@@ -108,6 +108,10 @@ const completed = computed(() => steps.value.length > 0
   && steps.value.every(step => step.status === 'done' || step.status === 'skipped')
   && steps.value.at(-1)?.status === 'done')
 const platformCommand = computed(() => viewedPlatform.value && props.command ? `${props.command} --platform ${viewedPlatform.value}` : '')
+const cicdGuidePath = computed(() => {
+  const query = new URLSearchParams({ product: 'builder', ...(viewedPlatform.value ? { platform: viewedPlatform.value } : {}) })
+  return `/app/${encodeURIComponent(props.appId)}/ci-cd?${query}`
+})
 const guideHref = computed(() => {
   if (viewedPlatform.value === 'android' && selectedStep.value?.id === 'connect_google_play')
     return 'https://capgo.app/docs/cli/reference/build/'
@@ -317,6 +321,17 @@ function statusLabel(status: BuilderStepStatus) {
               </button>
             </li>
           </ol>
+          <div v-if="checklistOpen" class="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-slate-100 px-3 pt-3 dark:border-white/10" data-test="builder-checklist-cicd-step">
+            <p class="min-w-0 text-sm leading-5 text-slate-600 dark:text-slate-300">
+              <span class="font-medium text-slate-500 dark:text-slate-400">{{ t('setup-checklist-optional-next-step') }}</span>
+              <span class="mx-1 text-slate-300 dark:text-slate-600" aria-hidden="true">·</span>
+              <span class="font-medium text-slate-800 dark:text-slate-200">{{ t('builder-checklist-cicd-title') }}</span>
+            </p>
+            <RouterLink :to="cicdGuidePath" class="inline-flex min-h-11 shrink-0 items-center gap-1.5 text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-azure-300" data-test="builder-checklist-cicd-link">
+              <span>{{ t('setup-checklist-cicd-start') }}</span>
+              <IconArrowRight class="h-4 w-4 shrink-0" aria-hidden="true" />
+            </RouterLink>
+          </div>
         </nav>
 
         <div class="flex min-w-0 flex-col px-5 py-6 sm:p-8" data-test="builder-checklist-instructions">
@@ -328,10 +343,15 @@ function statusLabel(status: BuilderStepStatus) {
             <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
               {{ t('builder-checklist-complete-description') }}
             </p>
-            <button type="button" class="d-btn mt-6 min-h-12 self-start d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
-              {{ completionAction || t('setup-checklist-open-app') }}
-              <IconArrowRight class="h-4 w-4" aria-hidden="true" />
-            </button>
+            <div class="mt-6 flex flex-wrap items-center gap-2">
+              <button type="button" class="d-btn min-h-12 d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
+                {{ completionAction || t('setup-checklist-open-app') }}
+                <IconArrowRight class="h-4 w-4" aria-hidden="true" />
+              </button>
+              <RouterLink :to="cicdGuidePath" class="d-btn min-h-12 border-slate-300 bg-white px-4 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200" data-test="builder-checklist-complete-cicd">
+                {{ t('setup-checklist-cicd-complete-action') }}
+              </RouterLink>
+            </div>
           </template>
           <template v-else>
             <p class="text-sm font-medium text-sky-700 dark:text-azure-400">

@@ -2,12 +2,20 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { JsonRpcResponse } from './protocol.ts'
 import type { McpApiRequest, McpApiResponse, McpCaller, McpToolContext } from './tools.ts'
+import { accepts } from 'hono/accepts'
 import { cors } from 'hono/cors'
 import { Hono } from 'hono/tiny'
+import { CLI_CI_HEADER, readCliCiProvider } from '../utils/cicdDetection.ts'
+import { setApiKeyAuthContext } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
+import { trackPosthogEvent } from '../utils/posthog.ts'
 import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { checkKey } from '../utils/supabase.ts'
+import { backgroundTask } from '../utils/utils.ts'
+import { createMcpDiscoveryApp, mcpSetupPage } from './discovery.ts'
+import { isModernRequest, modernErrorStatus, record, validateModernHttpRequest } from './modern_protocol.ts'
 import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
+import { withPg } from './oauth_shared.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
 
 /**
@@ -31,8 +39,8 @@ const STREAM_MAX_BYTES = 256 * 1024
 const mcpCors = cors({
   origin: '*',
   allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Last-Event-ID', 'capgkey', 'x-api-key'],
-  exposeHeaders: ['WWW-Authenticate', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'If-None-Match', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Mcp-Method', 'Mcp-Name', 'Last-Event-ID', 'capgkey', 'x-api-key'],
+  exposeHeaders: ['WWW-Authenticate', 'ETag', 'Mcp-Session-Id', 'Mcp-Protocol-Version'],
   maxAge: 86400,
 })
 
@@ -50,7 +58,15 @@ function unauthorized(c: Context<MiddlewareKeyVariables>, description: string, i
   if (invalidToken)
     params.unshift('error="invalid_token"', `error_description="${description}"`)
   c.header('WWW-Authenticate', `Bearer ${params.join(', ')}`)
-  return c.json(jsonRpcError(null, -32001, description), 401)
+  return c.json(transportError(c, -32001, description), 401)
+}
+
+function transportError(c: Context, code: number, message: string): JsonRpcResponse {
+  const error = jsonRpcError(null, code, message)
+  if (!isModernRequest(undefined, c.req.header('MCP-Protocol-Version')))
+    return error
+  const { id: _id, ...withoutId } = error
+  return withoutId
 }
 
 async function readSseSnapshot(response: Response): Promise<string> {
@@ -84,6 +100,7 @@ async function readSseSnapshot(response: Response): Promise<string> {
 
 function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch, token: string) {
   const origin = new URL(c.req.url).origin
+  const ciProvider = readCliCiProvider(c.req.header(CLI_CI_HEADER))
   return async (request: McpApiRequest): Promise<McpApiResponse> => {
     const url = new URL(request.path, origin)
     for (const [key, value] of Object.entries(request.query ?? {})) {
@@ -96,6 +113,8 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
       'user-agent': 'capgo-mcp',
       'x-cli-command': 'mcp',
     })
+    if (ciProvider)
+      headers.set(CLI_CI_HEADER, ciProvider)
     // Keep the caller's IP so per-IP rate limits and logs stay meaningful.
     for (const name of ['cf-connecting-ip', 'x-forwarded-for', 'cf-ipcountry', 'cf-ray']) {
       const value = c.req.header(name)
@@ -122,16 +141,82 @@ function createCaller(c: Context<MiddlewareKeyVariables>, dispatch: McpDispatch,
   }
 }
 
+/**
+ * PostHog event for one hosted MCP tool call, so hosted usage sits next to the CLI's
+ * `MCP Tool Invoked`. Returns null when no tool ran: notifications get no response, and
+ * requests rejected before dispatch (bad `jsonrpc` or `id`) get an error with `id: null`.
+ * The caller adds `client` (see hostedMcpClient).
+ */
+export function hostedMcpToolEvent(message: unknown, response: JsonRpcResponse | null | undefined, userId: string) {
+  const msg = message as { method?: unknown, params?: { name?: unknown } } | null
+  if (msg?.method !== 'tools/call' || !response || response.id == null)
+    return null
+  const toolName = typeof msg.params?.name === 'string' ? msg.params.name.slice(0, 100) : 'unknown'
+  const result = response.result as { isError?: unknown } | undefined
+  return {
+    channel: 'mcp-hosted',
+    event: 'Hosted MCP Tool Invoked',
+    user_id: userId,
+    setPersonProperties: false,
+    nonPersonTags: { tool_name: toolName, success: !response.error && !result?.isError },
+  }
+}
+
+/** Client name from the OAuth request that minted the key; never the user-editable key name. */
+async function hostedMcpClient(c: Context<MiddlewareKeyVariables>, apikeyId: number): Promise<string> {
+  const { rows } = await withPg(c, pg => pg.query<{ client_name: string }>(
+    'SELECT client_name FROM public.mcp_oauth_requests WHERE apikey_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [apikeyId],
+  ))
+  return rows[0]?.client_name ?? 'api_key'
+}
+
+/** Sends one PostHog event per tool that ran in this HTTP request, tagged with the OAuth client. */
+async function trackHostedMcpToolCalls(c: Context<MiddlewareKeyVariables>, caller: McpCaller, exchanges: [unknown, JsonRpcResponse | null][]) {
+  const events = exchanges.map(([message, response]) => hostedMcpToolEvent(message, response, caller.userId)).filter(event => event !== null)
+  if (events.length === 0)
+    return
+  const client = (await hostedMcpClient(c, caller.apikeyId).catch(() => 'unknown')).slice(0, 100)
+  await Promise.all(events.map(event => trackPosthogEvent(c, { ...event, nonPersonTags: { ...event.nonPersonTags, client } })))
+}
+
 export function createMcpApp(dispatch: McpDispatch) {
   const app = new Hono<MiddlewareKeyVariables>()
 
   app.use('/.well-known/*', mcpCors)
+  app.use('/mcp.json', mcpCors)
   app.use(`${MCP_PATH}`, mcpCors)
   app.use(`${MCP_PATH}/*`, mcpCors)
   app.route('/', oauthApp)
+  app.route('/', createMcpDiscoveryApp())
 
   // Stateless server: no server-initiated SSE stream and no sessions to terminate.
   app.get(MCP_PATH, (c) => {
+    c.header('Vary', 'Accept', { append: true })
+    const representation = accepts(c, {
+      header: 'Accept',
+      supports: ['text/html', 'text/event-stream', 'application/json'],
+      default: 'text/html',
+      match: (accepted, config) => {
+        const matches = config.supports.flatMap((type) => {
+          // The most specific range sets the quality, including explicit q=0 exclusions.
+          const ranges = [type, `${type.split('/')[0]}/*`, '*/*']
+          for (const [specificity, range] of ranges.entries()) {
+            const index = accepted.findIndex(accept => accept.type.toLowerCase() === range)
+            if (index !== -1)
+              return [{ type, q: accepted[index].q, specificity, index }]
+          }
+          return []
+        })
+        matches.sort((a, b) => b.q - a.q || a.specificity - b.specificity || a.index - b.index)
+        const preferred = matches[0]
+        if (!preferred)
+          return config.default
+        return preferred.q > 0 ? preferred.type : ''
+      },
+    })
+    if (representation === 'text/html')
+      return mcpSetupPage(c)
     c.header('Allow', 'POST, OPTIONS')
     return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL https://api.capgo.app/mcp and the HTTP transport.'), 405)
   })
@@ -143,7 +228,7 @@ export function createMcpApp(dispatch: McpDispatch) {
   app.post(MCP_PATH, async (c) => {
     const ipLimit = await isIPRateLimited(c)
     if (ipLimit.limited)
-      return c.json(jsonRpcError(null, -32002, 'Too many failed authentication attempts from this IP. Wait 15 minutes, then reconnect the Capgo MCP with a valid API key (create one at https://console.capgo.app/apikeys) or sign in again through OAuth.'), 429)
+      return c.json(transportError(c, isModernRequest(undefined, c.req.header('MCP-Protocol-Version')) ? -1 : -32002, 'Too many failed authentication attempts from this IP. Wait 15 minutes, then reconnect the Capgo MCP with a valid API key (create one at https://console.capgo.app/apikeys) or sign in again through OAuth.'), 429)
 
     const token = extractToken(c)
     if (!token)
@@ -154,16 +239,37 @@ export function createMcpApp(dispatch: McpDispatch) {
       await recordFailedAuth(c)
       return unauthorized(c, 'Invalid or expired Capgo API key: sign in to the Capgo MCP again through OAuth, or create a new key at https://console.capgo.app/apikeys and update the connection', true)
     }
+    setApiKeyAuthContext(c, apikey, token)
+
+    c.set('auth', {
+      userId: apikey.user_id,
+      authType: 'apikey',
+      apikey,
+      jwt: null,
+    })
+    c.set('apikey', apikey)
+    c.set('parentApikey', apikey)
+    c.set('capgkey', token)
 
     const raw = await c.req.text()
     if (raw.length > MAX_BODY_BYTES)
-      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Request body too large (max 1 MB). Send files through the signed upload URL tools (capgo_prepare_bundle_upload, capgo_request_build) instead of inline.'), 413)
+      return c.json(transportError(c, JSON_RPC_ERRORS.invalidRequest, 'Request body too large (max 1 MB). Send files through the signed upload URL tools (capgo_prepare_bundle_upload, capgo_request_build) instead of inline.'), 413)
     let payload: unknown
     try {
       payload = JSON.parse(raw)
     }
     catch {
-      return c.json(jsonRpcError(null, JSON_RPC_ERRORS.parseError, 'Parse error: the body must be one JSON-RPC 2.0 message (or a small batch) in valid JSON.'), 400)
+      return c.json(transportError(c, JSON_RPC_ERRORS.parseError, 'Parse error: the body must be one JSON-RPC 2.0 message (or a small batch) in valid JSON.'), 400)
+    }
+
+    const modern = isModernRequest(payload, c.req.header('MCP-Protocol-Version'))
+      || (Array.isArray(payload) && payload.some(message => isModernRequest(message)))
+    if (modern) {
+      const error = validateModernHttpRequest(payload, c.req.raw.headers)
+      if (error) {
+        const id = record(payload)?.id
+        return c.json({ jsonrpc: '2.0', ...(typeof id === 'string' || (typeof id === 'number' && Number.isInteger(id)) ? { id } : {}), error }, modernErrorStatus(error.code))
+      }
     }
 
     const caller: McpCaller = {
@@ -172,26 +278,34 @@ export function createMcpApp(dispatch: McpDispatch) {
       apikeyName: apikey.name,
       apikeyExpiresAt: apikey.expires_at,
     }
-    const ctx: McpToolContext = { call: createCaller(c, dispatch, token), caller, apikey: token }
+    const ctx: McpToolContext = {
+      call: createCaller(c, dispatch, token),
+      caller,
+      apikey: token,
+      hono: c,
+      apikeyRow: apikey,
+    }
 
     if (Array.isArray(payload) && (payload.length === 0 || payload.length > MAX_BATCH_MESSAGES))
       return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Batches must contain 1 to ${MAX_BATCH_MESSAGES} messages`), 400)
     const messages = Array.isArray(payload) ? payload : [payload]
-    const responses: JsonRpcResponse[] = []
-    for (const message of messages) {
+    const exchanges = await Promise.all(messages.map(async (message) => {
       const method = (message as { method?: unknown } | null)?.method
       if (method === 'tools/call')
         cloudlog({ requestId: c.get('requestId'), message: 'mcp_tool_call', tool: (message as { params?: { name?: unknown } }).params?.name, apikeyId: caller.apikeyId })
-      const response = await handleJsonRpcMessage(message, ctx)
-      if (response)
-        responses.push(response)
-    }
+      const response = await handleJsonRpcMessage(message, ctx, c)
+      return [message, response] as [unknown, JsonRpcResponse | null]
+    }))
+    const responses = exchanges.map(([, response]) => response).filter((response): response is JsonRpcResponse => response !== null)
+    await backgroundTask(c, trackHostedMcpToolCalls(c, caller, exchanges))
 
     if (responses.length === 0) {
       // Notifications / responses only: the Streamable HTTP transport mandates 202 with no body.
       return c.body(null, 202)
     }
-    return c.json(Array.isArray(payload) ? responses : responses[0])
+    const response = Array.isArray(payload) ? responses : responses[0]
+    const error = modern ? responses[0]?.error : undefined
+    return c.json(response, error ? modernErrorStatus(error.code) : 200)
   })
 
   return app

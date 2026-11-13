@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { brotliDecompressSync, crc32 } from 'node:zlib'
 import AdmZip from 'adm-zip'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { parseCiCdSetupState } from '../src/utils/cicdSetupState.ts'
 import { BASE_URL, getBaseData, getSupabaseClient, headers, postUpdate, resetAndSeedAppData, resetAppData } from './test-utils.ts'
 
 const id = randomUUID()
@@ -18,8 +19,8 @@ function bundleZip(js = 'CapacitorUpdater.notifyAppReady()', extra: Record<strin
   return zip.toBuffer()
 }
 
-async function api(path: string, body: unknown) {
-  const response = await fetch(`${BASE_URL}/bundle/upload/${path}`, { method: 'POST', headers, body: JSON.stringify(body) })
+async function api(path: string, body: unknown, extraHeaders: Record<string, string> = {}) {
+  const response = await fetch(`${BASE_URL}/bundle/upload/${path}`, { method: 'POST', headers: { ...headers, ...extraHeaders }, body: JSON.stringify(body) })
   return { status: response.status, data: await response.json() as any }
 }
 
@@ -75,16 +76,23 @@ describe('bundle upload sessions', () => {
     expect(prepared.data.channels).toEqual([expect.objectContaining({ name: 'production', compatibility: 'compatible' })])
     expect((await versionRow('2.0.0'))?.storage_provider).toBe('r2-direct')
 
-    const early = await api('complete', { upload_token: prepared.data.upload_token })
+    const early = await api('complete', { upload_token: prepared.data.upload_token }, { 'x-cli-ci': 'GitHub Actions' })
     expect(early.status).toBe(409)
     expect(early.data.error).toBe('upload_missing')
     expect((await versionRow('2.0.0'))?.deleted).toBe(false)
+    const readCiState = async () => {
+      const { data } = await getSupabaseClient().from('apps').select('onboarding').eq('app_id', APPNAME).single()
+      return parseCiCdSetupState(data?.onboarding)
+    }
+    expect((await readCiState()).otaDetectedAt).toBeNull()
 
     await putZip(prepared.data.bundle_upload.url, zip)
-    const completed = await api('complete', { upload_token: prepared.data.upload_token })
+    const completed = await api('complete', { upload_token: prepared.data.upload_token }, { 'x-cli-ci': 'GitHub Actions' })
     expect(completed.status).toBe(200)
     expect(completed.data.checksum).toBe(createHash('sha256').update(zip).digest('hex'))
     expect(completed.data.channels_updated).toEqual(['production'])
+    await expect.poll(async () => (await readCiState()).otaDetectedAt).toBeTruthy()
+    expect(await readCiState()).toMatchObject({ otaDetectedVia: 'ci', otaCiProvider: 'GitHub Actions' })
 
     const row = await versionRow('2.0.0')
     expect(row).toMatchObject({ storage_provider: 'r2', checksum: completed.data.checksum, cli_version: '8.95.0' })

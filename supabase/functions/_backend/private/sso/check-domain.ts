@@ -5,6 +5,7 @@ import { CacheHelper } from '../../utils/cache.ts'
 import { createHono, parseBody, quickError, simpleError, useCors } from '../../utils/hono.ts'
 import { cloudlog } from '../../utils/logging.ts'
 import { queryJson, withRlsContext } from '../../utils/pg_rls.ts'
+import { querySsoEnforcementByDomain } from './domain-enforcement.ts'
 import { getClientIP } from '../../utils/rate_limit.ts'
 import { version } from '../../utils/version.ts'
 
@@ -86,7 +87,7 @@ app.post('/', async (c) => {
       { data: enforcementData, error: enforcementError },
       { data: legacyData, error: legacyError },
     ] = await Promise.all([
-      callAsAnon<{ org_id: string, enforce_sso: boolean }>(c, 'SELECT * FROM public.get_sso_enforcement_by_domain(p_domain => $1)', domain),
+      querySsoEnforcementByDomain(c, domain),
       callAsAnon<{ has_sso: boolean, provider_id: string, org_id: string }>(c, 'SELECT * FROM public.check_domain_sso(p_domain => $1)', domain),
     ])
 

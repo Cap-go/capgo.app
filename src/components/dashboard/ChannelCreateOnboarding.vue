@@ -32,6 +32,14 @@ interface SavedChannel {
   allow_device_self_set: boolean
 }
 
+type ChannelCreationState
+  = { kind: 'loading' }
+    | { kind: 'editing' }
+    | { kind: 'blocked' }
+    | { kind: 'load-failed' }
+    | { kind: 'submitting' }
+    | { kind: 'ready' | 'continued', channel: SavedChannel, createdInOnboarding: boolean }
+
 const CHANNEL_NAME_PATTERN = /^[\w.-]+$/
 const suggestedNames = ['production', 'beta', 'development'] as const
 const { t } = useI18n()
@@ -40,14 +48,15 @@ const main = useMainStore()
 const organizationStore = useOrganizationStore()
 const channelName = ref('')
 const allowSelfAssign = ref(true)
-const isInitializing = ref(true)
-const isSubmitting = ref(false)
-const hasRequiredPermissions = ref(false)
+
+const state = ref<ChannelCreationState>({ kind: 'loading' })
+const isInitializing = computed(() => state.value.kind === 'loading')
+const isSubmitting = computed(() => state.value.kind === 'submitting')
+const hasRequiredPermissions = computed(() => state.value.kind === 'editing' || state.value.kind === 'submitting')
+const completedChannel = computed(() => state.value.kind === 'ready' || state.value.kind === 'continued' ? state.value.channel : null)
+const createdInOnboarding = computed(() => (state.value.kind === 'ready' || state.value.kind === 'continued') && state.value.createdInOnboarding)
 const showNameError = ref(false)
 const submitError = ref('')
-const completedChannel = ref<SavedChannel | null>(null)
-const createdInOnboarding = ref(false)
-const hasContinued = ref(false)
 const channelNameSource = ref<'manual' | 'suggestion'>('manual')
 const lastTrackedChannelName = ref('')
 const currentOrganization = computed(() => organizationStore.currentOrganization)
@@ -61,10 +70,7 @@ const channelNameError = computed(() => {
   return ''
 })
 const canSubmit = computed(() => (
-  hasRequiredPermissions.value
-  && !isInitializing.value
-  && !isSubmitting.value
-  && !completedChannel.value
+  state.value.kind === 'editing'
   && !channelNameError.value
 ))
 
@@ -132,11 +138,11 @@ async function loadExistingChannel() {
     throw error
 
   if (data)
-    completedChannel.value = data
+    state.value = { kind: 'ready', channel: data, createdInOnboarding: false }
 }
 
 async function initialize() {
-  isInitializing.value = true
+  state.value = { kind: 'loading' }
   submitError.value = ''
   track('onboarding_channel_stage_viewed')
   track('onboarding_channel_create_initialization_started')
@@ -162,22 +168,20 @@ async function initialize() {
       checkPermissions('app.create_channel', { appId: props.appId }),
       checkPermissions('app.update_settings', { appId: props.appId }),
     ])
-    hasRequiredPermissions.value = canCreateChannel && canUpdateAppSettings
+    state.value = { kind: canCreateChannel && canUpdateAppSettings ? 'editing' : 'blocked' }
     track('onboarding_channel_create_loaded', {
       found_existing_channel: false,
       permission_state: hasRequiredPermissions.value ? 'granted' : 'denied',
     })
   }
   catch (error) {
+    state.value = { kind: 'load-failed' }
     console.error('Cannot prepare onboarding channel creation', error)
     submitError.value = t('channel-create-onboarding-load-error')
     track('onboarding_channel_create_failed', {
       failure_phase: 'initialization',
       failure_reason: 'load_failed',
     })
-  }
-  finally {
-    isInitializing.value = false
   }
 }
 
@@ -232,7 +236,8 @@ async function createChannel() {
     return
   }
 
-  isSubmitting.value = true
+  const submittedSelfAssign = allowSelfAssign.value
+  state.value = { kind: 'submitting' }
   let failurePhase: NonNullable<OnboardingChannelEventProperties['failure_phase']> = 'existing_channel_lookup'
   try {
     const { data: existingChannel, error: existingError } = await capgo
@@ -249,7 +254,7 @@ async function createChannel() {
 
     if (existingChannel) {
       if (existingChannel.public) {
-        completedChannel.value = existingChannel
+        state.value = { kind: 'ready', channel: existingChannel, createdInOnboarding: false }
         track('onboarding_channel_create_existing_detected', {
           allow_device_self_set: existingChannel.allow_device_self_set,
           channel_name_length: existingChannel.name.length,
@@ -279,7 +284,7 @@ async function createChannel() {
         owner_org: currentOrganization.value.gid,
         created_by: main.user.id,
         public: true,
-        allow_device_self_set: allowSelfAssign.value,
+        allow_device_self_set: submittedSelfAssign,
         version: null,
       })
 
@@ -287,14 +292,17 @@ async function createChannel() {
       throw error
 
     // Avoid coupling a successful INSERT to channel-read RLS on the response row.
-    completedChannel.value = {
-      name: normalizedName,
-      public: true,
-      allow_device_self_set: allowSelfAssign.value,
+    state.value = {
+      kind: 'ready',
+      channel: {
+        name: normalizedName,
+        public: true,
+        allow_device_self_set: submittedSelfAssign,
+      },
+      createdInOnboarding: true,
     }
-    createdInOnboarding.value = true
     track('onboarding_channel_create_succeeded', {
-      allow_device_self_set: allowSelfAssign.value,
+      allow_device_self_set: submittedSelfAssign,
       channel_name_length: normalizedName.length,
       channel_name_source: channelNameSource.value,
       created_in_onboarding: true,
@@ -312,14 +320,15 @@ async function createChannel() {
     })
   }
   finally {
-    isSubmitting.value = false
+    if (state.value.kind === 'submitting')
+      state.value = { kind: 'editing' }
   }
 }
 
 function continueOnboarding() {
-  if (!completedChannel.value || hasContinued.value)
+  if (state.value.kind !== 'ready')
     return
-  hasContinued.value = true
+  state.value = { ...state.value, kind: 'continued' }
   track('onboarding_channel_create_continued', {
     allow_device_self_set: completedChannel.value?.allow_device_self_set,
     channel_name_length: completedChannel.value?.name.length,

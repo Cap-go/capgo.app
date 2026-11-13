@@ -1,7 +1,7 @@
 import type { McpApiRequest, McpToolContext } from '../supabase/functions/_backend/mcp/tools.ts'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import {
   base64UrlEncode,
@@ -16,8 +16,11 @@ import {
   sanitizeClientName,
   verifyPkceS256,
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
+import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
+import { LATEST_LEGACY_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
+import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
 
 function fakeContext(response: unknown = { ok: true }) {
   const calls: McpApiRequest[] = []
@@ -97,9 +100,21 @@ describe('hosted MCP protocol', () => {
   it.concurrent('negotiates the protocol version on initialize', async () => {
     const { ctx } = fakeContext()
     const latest = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }, ctx)
-    expect(latest?.result).toMatchObject({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'capgo' } })
+    expect(latest?.result).toMatchObject({
+      protocolVersion: '2025-06-18',
+      capabilities: { tools: { listChanged: false }, events: { list: true, subscribe: true, unsubscribe: true } },
+      serverInfo: {
+        name: 'app.capgo/capgo',
+        title: 'Capgo',
+        version: expect.any(String),
+        websiteUrl: 'https://capgo.app',
+        description: expect.stringContaining('upload and deploy live update bundles'),
+        icons: [{ src: 'https://capgo.app/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'] }],
+      },
+      instructions: expect.stringContaining('Start with capgo_whoami and capgo_list_apps'),
+    })
     const unknown = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } }, ctx)
-    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION })
+    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_LEGACY_PROTOCOL_VERSION })
   })
 
   it.concurrent('does not answer notifications', async () => {
@@ -125,6 +140,20 @@ describe('hosted MCP protocol', () => {
       expect(tool.inputSchema.type).toBe('object')
       expect(tool.inputSchema).not.toHaveProperty('$schema')
       expect(typeof tool.annotations.readOnlyHint).toBe('boolean')
+      expect(typeof tool.annotations.destructiveHint).toBe('boolean')
+      expect(typeof tool.annotations.idempotentHint).toBe('boolean')
+      expect(typeof tool.annotations.openWorldHint).toBe('boolean')
+      const title = tool.annotations.title
+      expect(typeof title).toBe('string')
+      expect((title as string).length).toBeGreaterThan(0)
+    }
+  })
+
+  it.concurrent('never marks state-writing tools as read-only', () => {
+    for (const tool of MCP_TOOLS) {
+      const { readOnlyHint, destructiveHint, idempotentHint } = tool.annotations
+      if (destructiveHint || idempotentHint === false)
+        expect(readOnlyHint, tool.name).toBe(false)
     }
   })
 
@@ -135,6 +164,68 @@ describe('hosted MCP protocol', () => {
       const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replaceAll(/\bPartial</g, '')
       expect(source, file).not.toMatch(deprecated)
     }
+  })
+
+  it.concurrent('annotates OpenAI-reviewed upload and build tools accurately', () => {
+    const byName = new Map(MCP_TOOLS.map(tool => [tool.name, tool]))
+    expect(byName.get('capgo_prepare_bundle_upload')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+      idempotentHint: false,
+    })
+    expect(byName.get('capgo_get_build_status')?.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: true,
+    })
+    expect(byName.get('capgo_prepare_build_credentials_upload')?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
+      idempotentHint: false,
+    })
+  })
+
+  it.concurrent('polls build status in-process without HTTP persist', async () => {
+    const calls: McpApiRequest[] = []
+    const hono = {
+      get: (key: string) => key === 'requestId' ? 'req-mcp-build-status' : undefined,
+      req: { header: () => undefined },
+    } as any
+    const apikeyRow = { key: 'test-key', user_id: '00000000-0000-0000-0000-000000000001' } as any
+    const spy = vi.spyOn(buildStatus, 'getBuildStatus').mockResolvedValue(
+      new Response(JSON.stringify({ job_id: 'job-1', status: 'running', persisted: false }), { status: 200 }),
+    )
+    const ctx: McpToolContext = {
+      call: async (request) => {
+        calls.push(request)
+        return { ok: true, status: 200, data: {} }
+      },
+      caller: { userId: '00000000-0000-0000-0000-000000000001', apikeyId: 42, apikeyName: 'MCP · Test', apikeyExpiresAt: null },
+      hono,
+      apikeyRow,
+    }
+    const response = await handleJsonRpcMessage({
+      jsonrpc: '2.0',
+      id: 50,
+      method: 'tools/call',
+      params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
+    }, ctx)
+    if (!response)
+      throw new Error('Build status tool did not return a JSON-RPC response')
+    const body = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text)
+    expect(response?.error).toBeUndefined()
+    expect(body).toMatchObject({ job_id: 'job-1', status: 'running', persisted: false })
+    expect(calls.filter(call => call.path === '/build/status')).toHaveLength(0)
+    expect(spy).toHaveBeenCalledWith(
+      hono,
+      { job_id: 'job-9', app_id: 'com.example.app' },
+      apikeyRow,
+      { hostedMcpReadOnly: true },
+    )
+    spy.mockRestore()
   })
 
   it.concurrent('marks tools that reach systems outside Capgo as open-world', () => {
@@ -154,7 +245,7 @@ describe('hosted MCP protocol', () => {
   })
 
   it.concurrent('replays tool calls as public API requests', async () => {
-    const { ctx, calls } = fakeContext([{ id: 1, name: '1.0.0' }])
+    const { ctx, calls } = fakeContext([{ id: 1, app_id: 'com.example.app', name: '1.0.0' }])
     const response = await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 4,
@@ -167,7 +258,7 @@ describe('hosted MCP protocol', () => {
   })
 
   it.concurrent('keeps full bundle rows for single-bundle lookups', async () => {
-    const { ctx, calls } = fakeContext([{ id: 1, name: '1.0.0', native_packages: [{ name: '@capacitor/camera', version: '6.0.0' }], manifest: [{ file_name: 'index.html' }] }])
+    const { ctx, calls } = fakeContext([{ id: 1, app_id: 'com.example.app', name: '1.0.0', native_packages: [{ name: '@capacitor/camera', version: '6.0.0' }], manifest: [{ file_name: 'index.html' }] }])
     const response = await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 41,
@@ -175,7 +266,9 @@ describe('hosted MCP protocol', () => {
       params: { name: 'capgo_list_bundles', arguments: { appId: 'com.example.app', version: '1.0.0' } },
     }, ctx)
     expect(calls).toEqual([{ method: 'GET', path: '/bundle', query: { app_id: 'com.example.app', version: '1.0.0' } }])
-    const text = (response?.result as { content: { text: string }[] }).content[0].text
+    if (!response)
+      throw new Error('Bundle lookup tool did not return a JSON-RPC response')
+    const text = (response.result as { content: { text: string }[] }).content[0].text
     expect(text).toContain('@capacitor/camera')
     expect(text).toContain('index.html')
   })
@@ -404,7 +497,7 @@ describe('hosted MCP signed-URL upload and build tools', () => {
         calls.push(request)
         const data = request.path === '/build/request'
           ? { job_id: 'job-1' }
-          : { upload_url: 'https://builder.example/builder_upload_direct_input/x', method: 'PUT' }
+          : { job_id: 'job-1', upload_url: 'https://builder.example/builder_upload_direct_input/x', method: 'PUT', headers: { 'Content-Type': 'application/zip' }, expires_at: '2026-12-01T00:00:00Z', max_bytes: 1000000 }
         return { ok: true, status: 200, data }
       },
       caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
@@ -570,7 +663,17 @@ describe('hosted MCP errors always give a way out', () => {
       [500, '<html>Internal Server Error</html>'],
     ] as const
     // Tools that answer without calling the API (whoami, docs search) are covered separately.
-    const localTools = new Set(['capgo_whoami', 'capgo_search_docs'])
+    const localTools = new Set([
+      'capgo_whoami',
+      'capgo_search_docs',
+      'capgo_list_skills',
+      'capgo_get_skill',
+      'capgo_get_build_status',
+      'capgo_list_event_types',
+      'capgo_subscribe_events',
+      'capgo_list_event_subscriptions',
+      'capgo_unsubscribe_events',
+    ])
     const tools = (listTools() as Array<{ name: string, inputSchema: Record<string, any> }>).filter(tool => !localTools.has(tool.name))
     for (const tool of tools) {
       const args = sampleArgs(tool.inputSchema)
@@ -692,5 +795,25 @@ describe('hosted MCP errors always give a way out', () => {
   it.concurrent('points to tools/list for an unknown tool', async () => {
     const response = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_nope', arguments: {} } }, failingContext(500, null))
     expect(response?.error?.message).toContain('tools/list')
+  })
+})
+
+describe('hosted MCP tool analytics', () => {
+  const call = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capgo_list_apps' } }
+
+  it('builds the event for a successful tool call', () => {
+    const event = hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { content: [] } }, 'user-1')
+    expect(event).toMatchObject({ event: 'Hosted MCP Tool Invoked', user_id: 'user-1', setPersonProperties: false })
+    expect(event?.nonPersonTags).toEqual({ tool_name: 'capgo_list_apps', success: true })
+  })
+
+  it('marks tool errors and JSON-RPC errors as failures', () => {
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, result: { isError: true } }, 'user-1')?.nonPersonTags.success).toBe(false)
+    expect(hostedMcpToolEvent(call, { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad' } }, 'user-1')?.nonPersonTags.success).toBe(false)
+  })
+
+  it('ignores non-tool messages and notifications', () => {
+    expect(hostedMcpToolEvent({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 1, result: {} }, 'user-1')).toBeNull()
+    expect(hostedMcpToolEvent({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'capgo_list_apps' } }, null, 'user-1')).toBeNull()
   })
 })

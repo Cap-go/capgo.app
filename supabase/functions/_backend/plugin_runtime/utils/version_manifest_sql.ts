@@ -73,6 +73,22 @@ export function versionManifestRowsSql(versionId: unknown): SQL<VersionManifestR
     ORDER BY entry.ord`
 }
 
+// versionManifestRowsSql plus each file's size: what the KV plugin state
+// stores per bundle (entries for /updates, sizes for /updates/manifest_size).
+export type VersionManifestRowWithSize = VersionManifestRow & { file_size: number | string | null }
+
+export function versionManifestRowsWithSizeSql(versionId: unknown): SQL<VersionManifestRowWithSize> {
+  return sql<VersionManifestRowWithSize>`SELECT delta_file.file_name, ${deltaFileHash} AS file_hash, ${deltaFileS3Path} AS s3_path, delta_file.file_size, version_size.expected
+    FROM public.version_files AS version_file
+    CROSS JOIN LATERAL (SELECT pg_catalog.cardinality(version_file.file_ids) AS expected OFFSET 0) AS version_size
+    CROSS JOIN LATERAL pg_catalog.unnest(version_file.file_ids) WITH ORDINALITY AS entry (file_id, ord)
+    INNER JOIN public.delta_files AS delta_file ON delta_file.id = entry.file_id
+    ${deltaSessionJoin}
+    WHERE version_file.app_version_id = ${versionId}
+      AND ${deltaSessionVisible}
+    ORDER BY entry.ord`
+}
+
 // Same rule as versionManifestJsonSql: every delta_files row must be visible.
 export function completeVersionManifest(rows: readonly VersionManifestRow[]): VersionManifestJsonRow[] {
   if (rows.length === 0 || rows.length !== Number(rows[0].expected))

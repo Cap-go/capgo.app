@@ -3,7 +3,7 @@ import type { Ref } from 'vue'
 import type { TableColumn } from '../comp_def'
 import type { Database } from '~/types/database.types'
 import { Capacitor } from '@capacitor/core'
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
@@ -11,8 +11,9 @@ import IconEye from '~icons/heroicons/eye'
 import BuilderIntroduction from '~/components/dashboard/BuilderIntroduction.vue'
 import { hasSupportedBuilderTodoList } from '~/services/builderOnboardingChecklist'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useConsole } from '~/services/console'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { formatDate } from '~/services/date'
+import { rememberSimulator, simulatorEpoch } from '~/services/simulatorSessions'
 import { useDialogV2Store } from '~/stores/dialogv2'
 import { useOrganizationStore } from '~/stores/organization'
 
@@ -39,6 +40,10 @@ const showSteps = ref(false)
 const columns: Ref<TableColumn[]> = ref<TableColumn[]>([])
 const elements = ref<Element[]>([])
 const buildDurations = ref<Record<string, number>>({})
+const savedOutputs = ref<Record<string, { url: string, kind: string, expires_at: string }>>({})
+const savedBuildNow = ref(Date.now())
+let savedBuildClock: ReturnType<typeof setInterval> | undefined
+const openingJobs = ref<string[]>([])
 const isLoading = ref(true)
 const currentPage = ref(1)
 const total = ref(0)
@@ -172,6 +177,8 @@ async function getData() {
       toast.error(t('error-fetching-build-durations'))
     elements.value = builds
     total.value = count || 0
+    if (isCurrent())
+      await loadSavedOutputs(builds, isCurrent)
   }
   catch (error) {
     if (!isCurrent())
@@ -318,6 +325,111 @@ function getStatusColor(status: string): string {
   }
 }
 
+async function loadSavedOutputs(builds: Element[], current: () => boolean) {
+  const jobIds = builds.filter(build => build.status === 'succeeded' && build.builder_job_id).map(build => build.builder_job_id as string)
+  if (jobIds.length === 0) {
+    savedOutputs.value = {}
+    return
+  }
+  try {
+    const { data } = await capgo.auth.getSession()
+    const token = data.session?.access_token
+    if (!token)
+      return
+    const response = await fetch(`${defaultApiHost}/private/simulator/outputs?app_id=${encodeURIComponent(props.appId)}&job_ids=${encodeURIComponent(jobIds.join(','))}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!response.ok)
+      return
+    const body = await response.json() as { outputs?: Record<string, { url: string, kind: string, expires_at: string }> }
+    if (current())
+      savedOutputs.value = body.outputs ?? {}
+  }
+  catch {
+    if (current())
+      savedOutputs.value = {}
+  }
+}
+
+function savedBuildIsCurrent(output: { expires_at?: string } | undefined) {
+  if (!output?.expires_at)
+    return false
+  return Date.parse(output.expires_at) > savedBuildNow.value
+}
+
+async function openSavedBuild(jobId: string) {
+  if (openingJobs.value.includes(jobId))
+    return
+  const appId = props.appId
+  const epoch = simulatorEpoch()
+  const output = savedOutputs.value[jobId]
+  const tab = window.open('', '_blank')
+  if (!output?.expires_at || Date.parse(output.expires_at) <= Date.now()) {
+    tab?.close()
+    toast.error(t('saved-build-expired'))
+    return
+  }
+  openingJobs.value = [...openingJobs.value, jobId]
+  try {
+    const { data } = await capgo.auth.getSession()
+    const token = data.session?.access_token
+    if (!token)
+      throw new Error(t('simulator-sign-in'))
+    const response = await fetch(`${defaultApiHost}/private/simulator/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'authorization': `Bearer ${token}` },
+      body: JSON.stringify({ app_id: appId, platform: 'ios', build_job_id: jobId }),
+    })
+    const payload = await response.json() as { message?: string, error?: string, data?: { id?: string, url?: string, install_error?: string | null } }
+    if (!response.ok)
+      throw new Error(payload.message || payload.error || t('simulator-did-not-start'))
+    const url = payload.data?.url || ''
+    if (payload.data?.id && epoch === simulatorEpoch())
+      rememberSimulator(appId, { id: payload.data.id, url })
+    if (url && tab)
+      tab.location.replace(url)
+    else
+      tab?.close()
+    if (payload.data?.install_error)
+      toast.error(payload.data.install_error)
+  }
+  catch (error) {
+    tab?.close()
+    toast.error(error instanceof Error ? error.message : t('simulator-did-not-start'))
+  }
+  finally {
+    openingJobs.value = openingJobs.value.filter(id => id !== jobId)
+  }
+}
+
+function savedBuildCell(elem: Element) {
+  const output = elem.builder_job_id ? savedOutputs.value[elem.builder_job_id] : undefined
+  if (!savedBuildIsCurrent(output))
+    return h('span', { class: 'text-gray-400 dark:text-gray-600' }, '-')
+  const jobId = elem.builder_job_id as string
+  const opening = openingJobs.value.includes(jobId)
+  const children = [
+    h('a', {
+      href: output?.url,
+      target: '_blank',
+      rel: 'noopener',
+      class: 'text-sm font-semibold text-blue-600 dark:text-blue-400',
+    }, t('download-saved-build')),
+  ]
+  if (output?.kind === 'ios_ipa') {
+    children.push(h('button', {
+      type: 'button',
+      class: 'px-2 py-1 text-xs font-semibold rounded-md d-btn d-btn-xs shrink-0',
+      disabled: opening,
+      onClick: (event: Event) => {
+        event.stopPropagation()
+        void openSavedBuild(jobId)
+      },
+    }, opening ? t('simulator-starting') : t('open-in-simulator')))
+  }
+  return h('div', { class: 'flex items-center gap-2' }, children)
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   const safeSeconds = Math.max(0, Math.floor(seconds ?? 0))
   if (safeSeconds < 60)
@@ -382,6 +494,13 @@ columns.value = [
     },
   },
   {
+    label: t('saved-build'),
+    key: 'artifact',
+    mobile: true,
+    class: 'max-w-48',
+    renderFunction: savedBuildCell,
+  },
+  {
     label: t('updated-at'),
     key: 'updated_at',
     class: 'truncate max-w-32',
@@ -398,8 +517,16 @@ watch(props, async () => {
 // renders when the org has no builds yet. watch(props, ...) doesn't fire
 // for the initial value, and DataTable's @reload hook only calls getData().
 onMounted(async () => {
+  savedBuildClock = setInterval(() => {
+    savedBuildNow.value = Date.now()
+  }, 30_000)
   await organizationStore.awaitInitialLoad()
   await reload()
+})
+
+onUnmounted(() => {
+  if (savedBuildClock)
+    clearInterval(savedBuildClock)
 })
 
 watch(showSetupFlow, (newValue) => {

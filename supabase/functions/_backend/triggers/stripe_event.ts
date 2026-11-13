@@ -592,8 +592,26 @@ async function trackBillingBentoEvent(
   }
 
   const billingUrl = getConsoleBillingUrl(c, org.id)
-  const payload = billingUrl ? { billing_url: billingUrl, ...data } : data
-  await Promise.all(emails.map(email => trackBentoEvent(c, email, payload, event)))
+  const payload = {
+    ...data,
+    ...(billingUrl ? { billing_url: billingUrl } : {}),
+    org_id: org.id,
+    billing_account: getWebhookBillingAccount(c),
+    stripe_event_id: c.get('stripeEvent')?.id,
+  }
+  const results = await Promise.allSettled(emails.map(email => trackBentoEvent(c, email, payload, event)))
+  const acceptedCount = results.filter(result => result.status === 'fulfilled' && result.value === true).length
+  if (acceptedCount !== emails.length) {
+    // Stripe must retry rejected/ambiguous submissions. An accepted event is not
+    // proof of inbox delivery; keep provider acceptance explicit in the logs.
+    throw quickError(503, 'stripe_billing_bento_failed', 'Failed to forward billing notification to Bento', {
+      event,
+      billingAccount: getWebhookBillingAccount(c),
+      stripeEventId: c.get('stripeEvent')?.id,
+      recipientCount: emails.length,
+      acceptedCount,
+    })
+  }
   cloudlog({
     requestId: c.get('requestId'),
     message: 'trackBillingBentoEvent',
@@ -601,6 +619,9 @@ async function trackBillingBentoEvent(
     customerId,
     event,
     recipientCount: emails.length,
+    acceptedCount,
+    billingAccount: getWebhookBillingAccount(c),
+    stripeEventId: c.get('stripeEvent')?.id,
   })
 }
 
@@ -1701,20 +1722,6 @@ async function getOrg(c: Context, stripeData: StripeData) {
   return org
 }
 
-async function orgHasActiveUsageCredits(c: Context, orgId: string): Promise<boolean> {
-  try {
-    const data = await withAdminPg(c, async pg => singleRowOrNull((await pg.query<{ has_usage_credits: boolean | null }>(
-      'SELECT has_usage_credits FROM public.orgs WHERE id = $1 LIMIT 2',
-      [orgId],
-    )).rows))
-    return data?.has_usage_credits === true
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'orgHasActiveUsageCredits error', orgId, error })
-    return false
-  }
-}
-
 async function cancelingOrFinished(
   c: Context,
   stripeEvent: Stripe.Event,
@@ -2055,14 +2062,11 @@ async function handleFailedSubscriptionPayment(
     cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment handling', recovery, orgId: org.id })
     return null
   }
-  if (await orgHasActiveUsageCredits(c, org.id)) {
-    cloudlog({ requestId: c.get('requestId'), message: 'Skipping failed payment email because org has active usage credits', orgId: org.id })
-  }
-  else {
-    const openInvoice = await getLatestOpenSubscriptionInvoice(c, stripeData.data.customer_id, getWebhookBillingAccount(c))
-    await trackBillingBentoEvent(c, org, stripeData.data.customer_id, BENTO_FAILED_PAYMENT_EVENT, buildDunningInvoiceBentoData(openInvoice))
-  }
+  // Keep billing state visible in the console even if email delivery must retry.
   await updateStripeInfo(c, stripeData)
+  // Usage credits cover overages, not an unpaid subscription invoice.
+  const openInvoice = await getLatestOpenSubscriptionInvoice(c, stripeData.data.customer_id, getWebhookBillingAccount(c))
+  await trackBillingBentoEvent(c, org, stripeData.data.customer_id, BENTO_FAILED_PAYMENT_EVENT, buildDunningInvoiceBentoData(openInvoice))
   return null
 }
 
@@ -2318,6 +2322,9 @@ async function stripeEventHandler(c: Context<MiddlewareKeyVariablesStripe>) {
   if (stripeEvent.type === 'charge.succeeded') {
     if (getWebhookBillingAccount(c) === 'us')
       await backgroundTask(c, trackUsChargeSucceeded(c, stripeEvent.data.object))
+    // A credit purchase must not stop reminders for an unpaid subscription.
+    if (!await isSubscriptionCharge(getStripe(c, getWebhookBillingAccount(c)), stripeEvent.data.object))
+      return c.json(BRES)
     return handleChargeSucceededStripeEvent(c, org, stripeData)
   }
 

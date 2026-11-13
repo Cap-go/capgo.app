@@ -9,6 +9,7 @@ import type { ChannelDeviceOverrideIds, ChannelDevicePlatform, DeviceWithoutCrea
 import { createClient } from '@supabase/supabase-js'
 import { HTTPException } from 'hono/http-exception'
 import { applyDirectOfferBentoTags, buildBillingPlanBentoTags } from './billing_bento_tags.ts'
+import { buildChannelInsertOrExistingSql, resolveChannelInsert } from './channel_insert.ts'
 import { buildNormalizedDeviceForWrite, hasComparableDeviceChanged, nullableString } from './deviceComparison.ts'
 import { CREATE_DEFAULT_API_KEYS_SQL } from './default_apikeys.ts'
 import { getDirectOfferStatus } from './direct_offer.ts'
@@ -16,7 +17,7 @@ import { quickError, simpleError } from './hono.ts'
 import { cloudlog, cloudlogErr } from './logging.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from './pg.ts'
 import { isTransientPgError } from './pg_errors.ts'
-import { authPrincipal, queryJson, queryJsonOne, withRlsContext } from './pg_rls.ts'
+import { authPrincipal, queryJson, withRlsContext } from './pg_rls.ts'
 import { getPlanPriceInterval } from './plan_price_interval.ts'
 import { getClientIP } from './rate_limit.ts'
 import { emptyStatsInsights, normalizeStatsInsightsResult } from './statsInsights.ts'
@@ -431,6 +432,10 @@ export async function getAppsFromSB(c: Context, referenceDate?: Date): Promise<s
   return Array.from(new Set(apps))
 }
 
+/**
+ * Updates channel `existingChannelId`, or inserts a new channel when it is null.
+ * Throws ChannelAlreadyExistsError when the insert finds the channel already exists.
+ */
 export async function updateOrCreateChannel(
   c: Context,
   update: Database['public']['Tables']['channels']['Insert'],
@@ -450,11 +455,17 @@ export async function updateOrCreateChannel(
 
   const principal = authPrincipal(c, auth)
   if (existingChannelId === null) {
-    const insert = buildInsertSql('public.channels', update)
-    const data = await withRlsContext(c, principal, client => queryJsonOne<{ id: number }>(client, `${insert.text} RETURNING id`, insert.values))
-    if (!data)
-      throw new Error('JSON object requested, multiple (or no) rows returned')
-    return { data, error: null }
+    // The caller's lookup may be a cached "missing"; the insert itself returns the
+    // existing row (ChannelAlreadyExistsError) instead of failing on the unique key.
+    const { columns, values } = definedColumns(update)
+    const insert = buildChannelInsertOrExistingSql(columns, values, update.app_id, update.name)
+    // Resolve inside the transaction: BEFORE INSERT triggers (normalize_public_channel_overlap)
+    // run even when ON CONFLICT skips the row, so the conflict must roll their writes back.
+    const channel = await withRlsContext(c, principal, async (client) => {
+      const result = await client.query(insert.text, insert.values)
+      return resolveChannelInsert(result.rows as Parameters<typeof resolveChannelInsert>[0])
+    })
+    return { data: { id: channel.id }, error: null }
   }
 
   // Keep the original creator immutable. Omitted stable versions are read only
@@ -1393,9 +1404,9 @@ type UsageRpcRows<F extends UsageRpc> = Database['public']['Functions'][F]['Retu
 
 /**
  * Service-role read of a usage RPC's rows as PostgREST JSON. Errors were ignored by these callers
- * (supabase-js `data ?? []`), so they still resolve to no rows; they are logged now.
+ * (supabase-js `data ?? []`). Preserve that fallback unless a caller requires a strict read.
  */
-async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<string, unknown>): Promise<UsageRpcRows<F>> {
+async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<string, unknown>, options: { throwOnError?: boolean } = {}): Promise<UsageRpcRows<F>> {
   const entries = Object.entries(args)
   const namedArgs = entries.map(([name], index) => `${quoteIdent(name)} => $${index + 1}`)
   try {
@@ -1403,6 +1414,8 @@ async function readUsageRpc<F extends UsageRpc>(c: Context, fn: F, args: Record<
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: `Error reading ${fn}`, app_id: args.p_app_id, error })
+    if (options.throwOnError)
+      throw error
     return [] as unknown as UsageRpcRows<F>
   }
 }
@@ -1419,7 +1432,7 @@ export function readStatsStorageSB(c: Context, app_id: string, period_start: str
   return readUsageRpc(c, 'read_storage_usage', { p_app_id: app_id, p_period_start: period_start, p_period_end: period_end })
 }
 
-export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string): Promise<VersionUsage[]> {
+export async function readStatsVersionSB(c: Context, app_id: string, period_start: string, period_end: string, channel?: VersionUsageChannel | string, options: { throwOnError?: boolean } = {}): Promise<VersionUsage[]> {
   const channelId = typeof channel === 'object' && channel ? channel.id : null
   const channelName = typeof channel === 'string' ? channel : channelId ? null : channel?.name
   const args = {
@@ -1429,7 +1442,7 @@ export async function readStatsVersionSB(c: Context, app_id: string, period_star
     ...(channelName ? { p_channel_name: channelName } : {}),
     ...(channelId ? { p_channel_id: channelId } : {}),
   }
-  const data = await readUsageRpc(c, 'read_version_usage', args)
+  const data = await readUsageRpc(c, 'read_version_usage', args, options)
   // Cast to VersionUsage[] - the SQL function returns version_name but auto-generated types are stale
   return data as unknown as VersionUsage[]
 }

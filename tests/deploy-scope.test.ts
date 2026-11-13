@@ -15,6 +15,10 @@ const noBackendDeploys = {
 }
 
 describe('deploy scope matching', () => {
+  it.concurrent.each(['cli/src/mcp/skill-catalog.ts', 'cli/src/mcp/skills.generated.json'])('deploys both hosted skill consumers for %s', (file) => {
+    expect(resolveDeployScopeFromFiles([file])).toEqual({ ...noBackendDeploys, api: true, supabase: true })
+  })
+
   it.concurrent('reports migration changes separately from the Supabase deploy scope', () => {
     expect(hasMigrationChanges(['supabase/migrations/20260910000000_example.sql'])).toBe(true)
     expect(hasMigrationChanges(['supabase/functions/main/index.ts'])).toBe(false)

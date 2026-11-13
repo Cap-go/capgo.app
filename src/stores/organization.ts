@@ -5,6 +5,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { stripeEnabled, useConsole } from '~/services/console'
 import { addUtcDays, normalizeToUtcStartOfDay } from '~/services/date'
+import { clearSimulatorSessions } from '~/services/simulatorSessions'
 import { createSignedImageUrl, getImmediateImageUrl, resolveImagePath } from '~/services/storage'
 import { clearWebsitePaidUserCookie, syncWebsitePaidUserCookieFromOrganizations } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
@@ -54,6 +55,9 @@ type SignedMemberImageCallback = (signedImages: Map<string, string>) => void
 type OrgPermissionFloor = 'org_member' | 'org_billing_admin' | 'org_admin' | 'org_super_admin' | 'owner'
 interface OrganizationFetchOptions {
   loadImages?: boolean
+}
+interface AppOnboardingRefreshOptions {
+  appIds: readonly string[]
 }
 
 // Mapping des rôles RBAC d'organisation vers leurs clés de traduction i18n
@@ -540,33 +544,66 @@ export const useOrganizationStore = defineStore('organization', () => {
   }
 
   let appsOnboardingRefreshGen = 0
+  const appOnboardingRefreshGen = new Map<string, number>()
 
-  const refreshAppsOnboarding = async (orgId?: string) => {
+  const publishRefreshedOnboarding = (refreshedApps: Map<string, OrganizationApp>) => {
+    if (!refreshedApps.size)
+      return
+    // Publish one catalog update per response, rather than copying the maps
+    // and traversing an organization's app list once for every returned row.
+    const nextByAppId = new Map(_appsByAppId.value)
+    const affectedOrgs = new Set<string>()
+    for (const [appId, app] of refreshedApps) {
+      nextByAppId.set(appId, app)
+      affectedOrgs.add(app.owner_org)
+    }
+    const nextByOrgId = new Map(_appsByOrgId.value)
+    for (const id of affectedOrgs)
+      nextByOrgId.set(id, (_appsByOrgId.value.get(id) ?? []).map(app => refreshedApps.get(app.app_id) ?? app))
+    _appsByAppId.value = nextByAppId
+    _appsByOrgId.value = nextByOrgId
+  }
+
+  const refreshAppsOnboarding = async (orgId?: string, options?: AppOnboardingRefreshOptions) => {
     const orgIds = orgId ? [orgId] : Array.from(_appsByOrgId.value.keys())
     if (orgIds.length === 0)
       return
+    const appIds = options
+      ? [...new Set(options.appIds)].filter(appId => orgIds.includes(_appsByAppId.value.get(appId)?.owner_org ?? ''))
+      : orgIds.flatMap(id => (_appsByOrgId.value.get(id) ?? []).map(app => app.app_id))
+    if (!appIds.length)
+      return
 
     const refreshGen = ++appsOnboardingRefreshGen
-    const writeGenSnapshot = new Map(appOnboardingWriteGen)
-    const { data, error } = await capgo
+    const writeGenSnapshot = new Map(appIds.map(appId => [appId, appOnboardingWriteGen.get(appId) ?? 0]))
+    for (const appId of appIds)
+      appOnboardingRefreshGen.set(appId, refreshGen)
+    const query = capgo
       .from('apps')
       .select('app_id, onboarding, need_onboarding')
       .in('owner_org', orgIds)
+    const { data, error } = await (options ? query.in('app_id', appIds) : query)
 
     if (error) {
       console.error('Cannot refresh app onboarding', error)
       return
     }
-    if (refreshGen !== appsOnboardingRefreshGen)
-      return
+    const refreshedApps = new Map<string, OrganizationApp>()
     for (const row of data ?? []) {
+      if (appOnboardingRefreshGen.get(row.app_id) !== refreshGen)
+        continue
       if ((appOnboardingWriteGen.get(row.app_id) ?? 0) !== (writeGenSnapshot.get(row.app_id) ?? 0))
         continue
-      writeAppFields(row.app_id, {
+      const existing = _appsByAppId.value.get(row.app_id)
+      if (!existing || (existing.need_onboarding === row.need_onboarding && JSON.stringify(existing.onboarding) === JSON.stringify(row.onboarding)))
+        continue
+      refreshedApps.set(row.app_id, {
+        ...existing,
         onboarding: row.onboarding,
         need_onboarding: row.need_onboarding,
       })
     }
+    publishRefreshedOnboarding(refreshedApps)
   }
 
   const getCurrentRoleForApp = (appId: string) => {
@@ -660,6 +697,7 @@ export const useOrganizationStore = defineStore('organization', () => {
       const listener = capgo.auth.onAuthStateChange((event: AuthChangeEvent) => {
         if (event === 'SIGNED_OUT') {
           listener.data.subscription.unsubscribe()
+          clearSimulatorSessions()
           clearWebsitePaidUserCookie()
           // Remove all from orgs
           _organizations.value = new Map()

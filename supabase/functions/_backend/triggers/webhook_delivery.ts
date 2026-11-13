@@ -114,6 +114,7 @@ app.post('/', middlewareAPISecret, async (c) => {
     const deliveryVersion = normalizeWebhookDeliveryVersion(delivery.delivery_version ?? webhook.delivery_version)
 
     // Attempt delivery with signature
+    const webhookSource = (webhook as { source?: string }).source ?? 'console'
     const result = await deliverWebhook(
       c,
       deliveryData.delivery_id,
@@ -121,6 +122,7 @@ app.post('/', middlewareAPISecret, async (c) => {
       deliveryData.payload,
       webhook.secret,
       deliveryVersion,
+      webhookSource === 'mcp' ? deliveryData.webhook_id : undefined,
     )
 
     // Update delivery record with result

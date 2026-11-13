@@ -1,0 +1,9 @@
+<!-- Bento subject: Your Capgo plan needs attention -->
+<!-- Replace the shared upgrade email template. Upload manually after backend deployment. -->
+<h1>Your app has outgrown its plan</h1>
+<p>Hi {{ visitor.first_name | default: 'there' }},</p>
+<p>Your organization has usage beyond its {{ event.details.plan_name | default: 'current' }} plan that is not covered by credits.</p>
+<p>Review your usage and choose {{ event.details.best_name | default: 'a larger plan' }}, or add usage credits to cover the extra usage.</p>
+<p><a href="{{ event.details.plans_url | default: 'https://console.capgo.app/settings/organization/plans' }}">Review plans and usage credits</a></p>
+<p>Live updates can be blocked while usage is not covered. If you have already upgraded or added credits, check your current usage in the console.</p>
+<p>If you need help choosing a plan, reply to this email.</p>

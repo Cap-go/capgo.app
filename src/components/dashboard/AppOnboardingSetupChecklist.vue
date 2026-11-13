@@ -71,6 +71,7 @@ const canSkipSelected = computed(() => hasSupportedOtaTodoList(onboarding.value)
 const skipping = ref(false)
 const isFirstStep = computed(() => selectedStep.value.index === 0)
 const guideHref = computed(() => APP_ONBOARDING_STEP_GUIDES[selectedStep.value.id])
+const cicdGuidePath = computed(() => `/app/${encodeURIComponent(props.appId)}/ci-cd?product=ota`)
 const guideLabel = computed(() => isFirstStep.value ? t('setup-checklist-manual-guide') : t('setup-checklist-task-guide', { task: selectedStep.value.title }))
 const waitingMessageKey = computed(() => {
   if (isFirstStep.value)
@@ -228,10 +229,10 @@ function statusLabel(status: string | undefined) {
             <span class="mx-1 text-slate-300 dark:text-slate-600" aria-hidden="true">·</span>
             <span class="font-medium text-slate-800 dark:text-slate-200">{{ t('setup-checklist-cicd-title') }}</span>
           </p>
-          <a href="https://capgo.app/docs/getting-started/cicd-integration/" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-8 shrink-0 items-center gap-1.5 text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-azure-300">
-            <IconFileText class="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>{{ t('setup-checklist-cicd-guide') }}</span>
-          </a>
+          <RouterLink :to="cicdGuidePath" class="inline-flex min-h-8 shrink-0 items-center gap-1.5 text-sm font-medium text-sky-700 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-azure-500 dark:text-azure-300" data-test="setup-checklist-cicd-link">
+            <span>{{ t('setup-checklist-cicd-start') }}</span>
+            <IconArrowRight class="h-4 w-4 shrink-0" aria-hidden="true" />
+          </RouterLink>
         </div>
       </nav>
 
@@ -244,10 +245,15 @@ function statusLabel(status: string | undefined) {
           <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
             {{ t('setup-checklist-complete-description') }}
           </p>
-          <button type="button" class="d-btn mt-4 min-h-11 self-start d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
-            {{ completionAction || t('setup-checklist-open-app') }}
-            <IconArrowRight class="h-4 w-4" aria-hidden="true" />
-          </button>
+          <div class="mt-4 flex flex-wrap items-center gap-2">
+            <button type="button" class="d-btn min-h-11 d-btn-primary" :disabled="hiding || leaving" @click="emit('complete')">
+              {{ completionAction || t('setup-checklist-open-app') }}
+              <IconArrowRight class="h-4 w-4" aria-hidden="true" />
+            </button>
+            <RouterLink :to="cicdGuidePath" class="d-btn min-h-11 border-slate-300 bg-white px-4 text-sm text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-white/20 dark:bg-slate-900 dark:text-slate-200" data-test="setup-checklist-complete-cicd">
+              {{ t('setup-checklist-cicd-complete-action') }}
+            </RouterLink>
+          </div>
         </template>
         <template v-else>
           <p class="text-sm font-medium text-sky-700 dark:text-azure-400">
@@ -349,7 +355,9 @@ function statusLabel(status: string | undefined) {
           <IconLoader v-if="hiding" class="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
           {{ t('app-onboarding-dont-show-again') }}
         </button>
-        <p class="sr-only">{{ t('setup-checklist-hide-description') }}</p>
+        <p class="sr-only">
+          {{ t('setup-checklist-hide-description') }}
+        </p>
         <button
           v-if="!completed"
           type="button"

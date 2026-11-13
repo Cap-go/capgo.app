@@ -2,6 +2,22 @@ export type AiBinding = {
   run: (model: string, input: unknown) => Promise<unknown>
 }
 
+// Hybrid reasoning models think before answering by default. For short structured
+// output the thinking burns the max_tokens budget and leaves the answer empty, so
+// callers disable it for these families (verified against each model's live schema).
+const THINKING_MODEL_PREFIXES = [
+  '@cf/deepseek-ai/deepseek-v4',
+  '@cf/google/gemma-4',
+  '@cf/qwen/qwen3',
+  '@cf/zai-org/glm-',
+]
+
+export function disableThinkingOptions(model: string): { chat_template_kwargs?: { enable_thinking: false } } {
+  return THINKING_MODEL_PREFIXES.some(prefix => model.startsWith(prefix))
+    ? { chat_template_kwargs: { enable_thinking: false } }
+    : {}
+}
+
 export function recordOf(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }

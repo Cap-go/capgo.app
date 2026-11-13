@@ -3,7 +3,9 @@ import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { ObservePeriodDays, ObserveSort, ObserveView } from '../utils/observeQuery.ts'
 import { Hono } from 'hono/tiny'
 import { z } from 'zod'
-import { nativeObserveActions, readNativeObserveStats } from './native_observe_stats.ts'
+import { Constants } from '../utils/supabase.types.ts'
+import { explainDiagnostic } from '../utils/diagnostics.ts'
+import { issueActions, nativeObserveActions, readNativeObserveStats } from './native_observe_stats.ts'
 import { parseBody, simpleError, useCors } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_middleware.ts'
 import { cloudlog } from '../utils/logging.ts'
@@ -29,10 +31,15 @@ import { safeParseSchema } from '../utils/schema_validation.ts'
 import { getRollingStatsPeriod } from '../utils/statsPeriod.ts'
 import { readStats, readStatsInsights } from '../utils/stats.ts'
 
+import { readReleaseLive } from './release_live.ts'
+import { defaultInsightActions } from './stats.ts'
+
 const observeBodySchema = z.object({
   appId: appIdSchema.optional(),
   app_id: appIdSchema.optional(),
   view: z.string().optional(),
+  source: z.enum(['native', 'updater', 'all']).optional(),
+  channelId: z.number().int().positive().optional(),
   days: z.number().optional(),
   action: statsActionSchema.optional(),
   deviceId: deviceIdSchema.optional(),
@@ -104,11 +111,15 @@ async function loadSamples(
   }
 }
 
-function sampleActionsForView(view: ObserveView, action?: string) {
+function sampleActionsForView(view: ObserveView, action?: string, source?: 'native' | 'updater' | 'all') {
   if (action)
     return [action]
-  if (view === 'device')
-    return [...nativeObserveActions]
+  if (view === 'errors') {
+    const updaterIssues = [...new Set([...defaultInsightActions, ...Constants.public.Enums.stats_action.filter(action => !nativeObserveActions.some(native => native === action) && explainDiagnostic(action).classification === 'error')])]
+    return source === 'native' ? [...issueActions] : source === 'updater' ? updaterIssues : [...issueActions, ...updaterIssues]
+  }
+  if (view === 'logs' || view === 'device')
+    return source === 'native' ? [...nativeObserveActions] : source === 'updater' ? Constants.public.Enums.stats_action.filter(action => !nativeObserveActions.some(native => native === action)) : undefined
   if (view === 'routes')
     return ['app_nav', 'webview_page_loaded', 'webview_dom_content_loaded']
   return [...defaultMetricActions]
@@ -178,6 +189,7 @@ async function respondEvents(
     app_id: input.appId,
     period: input.period,
     ...insights,
+    diagnostics: insights.actions.map(row => ({ action: row.action, ...explainDiagnostic(row.action) })),
     agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
     next: deviceTimelineNext(insights.actions[0]?.latest_device_id),
   })
@@ -188,6 +200,7 @@ async function respondSampleView(
   input: {
     appId: string
     view: ObserveView
+    source?: 'native' | 'updater' | 'all'
     period: ReturnType<typeof periodForDays>
     action?: string
     deviceId?: string
@@ -200,13 +213,29 @@ async function respondSampleView(
     appId: input.appId,
     start: input.period.start,
     endExclusive: input.period.end_exclusive,
-    actions: sampleActionsForView(input.view, input.action),
+    actions: sampleActionsForView(input.view, input.action, input.source),
     deviceId: input.deviceId,
     versionName: input.versionName,
     sort: input.view === 'device' ? 'oldest' : input.sort,
     limit: input.view === 'device' ? Math.min(200, Math.max(input.limit, 50)) : input.limit,
   })
-  const { samples, sample_scan } = loaded
+  const { sample_scan } = loaded
+  const samples = loaded.samples.map(sample => ({ ...sample, diagnostic: explainDiagnostic(sample.action, sample.metadata) }))
+
+  if (input.view === 'errors') {
+    const insights = await readStatsInsights(c, {
+      app_id: input.appId, start_date: input.period.start, end_date: input.period.end_exclusive,
+      actions: sampleActionsForView('errors', input.action, input.source),
+      version_name: input.versionName,
+    })
+    return c.json({
+      view: input.view, app_id: input.appId, period: input.period, ...insights, samples, sample_scan,
+      aggregate_scope: { app_id: input.appId, version_name: input.versionName ?? null, device_filter_applied: false, metadata_policy_filter_applied: false },
+      aggregate_caveat: 'Totals are grouped by action. backend_refusal can include policy-coded metadata; inspect sample diagnostics before treating these totals as confirmed failures.',
+      diagnostics: insights.actions.map(row => ({ action: row.action, ...explainDiagnostic(row.action) })),
+      agent_instructions: OBSERVE_AGENT_INSTRUCTIONS,
+    })
+  }
 
   if (input.view === 'routes') {
     return c.json({
@@ -263,7 +292,7 @@ app.post('/', middlewareAuth(), async (c) => {
 
   const viewValue = body.view ?? 'summary'
   if (!isObserveView(viewValue))
-    throw simpleError('invalid_view', 'view must be summary, metrics, events, device, versions, or routes')
+    throw simpleError('invalid_view', 'view must be summary, metrics, events, device, versions, routes, logs, errors, or release')
   const view: ObserveView = viewValue
 
   const days = normalizeObserveDays(body.days)
@@ -286,15 +315,31 @@ app.post('/', middlewareAuth(), async (c) => {
     )
   }
 
+  if (view !== 'release' && body.channelId !== undefined)
+    throw simpleError('invalid_params', 'channelId is only supported for release')
+  if (body.source && !['logs', 'errors', 'device'].includes(view))
+    throw simpleError('invalid_params', 'source is only supported for logs, errors, or device')
+
   if (!(await checkPermission(c, 'app.read', { appId })))
     throw simpleError('app_access_denied', 'You can\'t access this app', { app_id: appId })
 
   cloudlog({ requestId: c.get('requestId'), message: 'post private/observe body', body: { appId, view, days, action, deviceId, versionName, sort, limit } })
+
+  if (!['summary', 'events', 'versions', 'release'].includes(view) && !(await checkPermission(c, 'app.read_logs', { appId })))
+    throw simpleError('app_access_denied', 'You cannot read logs for this app')
+
+  if (view === 'release') {
+    const release = await readReleaseLive(c, appId, body.channelId, versionName)
+    return c.json({ view, app_id: appId, ...release, poll_after_seconds: 60,
+      agent_instructions: 'Activity can lag by about a minute; adoption is cached for five minutes. Null rates mean no data, not success. Compare rollout reach with its target and fallback before suggesting a rollback.',
+      diagnostics: 'failures' in release ? release.failures.map(row => ({ ...row, ...explainDiagnostic(row.action) })) : [],
+    })
+  }
 
   const period = periodForDays(days)
   if (view === 'summary' || view === 'versions')
     return respondSummaryOrVersions(c, { appId, days, view })
   if (view === 'events')
     return respondEvents(c, { appId, period, action, versionName })
-  return respondSampleView(c, { appId, view, period, action, deviceId, versionName, sort, limit })
+  return respondSampleView(c, { appId, view, period, action, deviceId, versionName, sort: body.sort ? sort : (view === 'logs' || view === 'errors') ? 'newest' : sort, limit, source: body.source })
 })

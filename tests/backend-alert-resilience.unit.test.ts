@@ -15,6 +15,22 @@ function createTestContext() {
 }
 
 describe('backend alert resilience helpers', () => {
+  it('creates upload durable object stub with runtime maxRetries 0', async () => {
+    const { filesTestUtils } = await import('../supabase/functions/_backend/files/files.ts')
+    let getArgs: unknown[] | null = null
+    const ns = {
+      idFromName: (name: string) => ({ id: name }),
+      get: (id: unknown, options?: unknown) => {
+        getArgs = [id, options]
+        return { fetch: () => Promise.resolve(new Response()) }
+      },
+    }
+    const stub = filesTestUtils.getAttachmentUploadDurableObjectStub(ns as any, ns.idFromName('test-key') as any)
+    expect(stub).toBeDefined()
+    expect(getArgs).not.toBeNull()
+    expect(getArgs![1]).toEqual(filesTestUtils.DO_STUB_DISABLE_RUNTIME_RETRY)
+  })
+
   it('clears stale thrown errors after a later retry succeeds', async () => {
     const { retryWithBackoff } = await import('../supabase/functions/_backend/utils/retry.ts')
 
