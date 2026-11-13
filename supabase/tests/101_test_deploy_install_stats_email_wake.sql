@@ -13,8 +13,6 @@ WHERE
 CREATE TEMP TABLE dispatch_baseline AS
 SELECT requests FROM cron_email_dispatch_requests;
 
-DELETE FROM pgmq.q_cron_email;
-
 SELECT public.process_deploy_install_stats_email();
 
 SELECT is(
@@ -91,7 +89,8 @@ SELECT public.process_deploy_install_stats_email();
 
 SELECT is(
     (SELECT count(*) FROM pgmq.q_cron_email
-     WHERE message -> 'payload' ->> 'type' = 'deploy_install_stats_v2'),
+     WHERE message -> 'payload' ->> 'type' = 'deploy_install_stats_v2'
+       AND message -> 'payload' ->> 'appId' = (SELECT app_id FROM wake_context)),
     1::bigint,
     'producer queues one deploy report'
 );

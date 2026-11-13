@@ -81,7 +81,11 @@ BEGIN
 
     IF v_sent > 0 THEN
         -- Same dispatch path as function_queue cron tasks (http_dispatch_post).
-        PERFORM public.process_function_queue('cron_email');
+        BEGIN
+            PERFORM public.process_function_queue('cron_email');
+        EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'deploy install stats wake failed: %', SQLERRM;
+        END;
     END IF;
 END;
 $$;
