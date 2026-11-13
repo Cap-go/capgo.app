@@ -1202,6 +1202,18 @@ app.post('/sync', async (c) => {
   return c.json(BRES, 202)
 })
 
+function partitionQueueResultsForAck<T extends { httpResponse: Response }>(results: T[]): { failed: T[], successful: T[] } {
+  const successful: T[] = []
+  const failed: T[] = []
+  for (const result of results) {
+    if (isSuccessfulQueueResult(result))
+      successful.push(result)
+    else
+      failed.push(result)
+  }
+  return { successful, failed }
+}
+
 export const __queueConsumerTestUtils__ = {
   extractErrorDetails,
   extractMessageBody,
@@ -1215,7 +1227,9 @@ export const __queueConsumerTestUtils__ = {
   getQueueMaxReads,
   httpExceptionToQueueResponse,
   getQueueVisibilityTimeout,
+  isSuccessfulQueueResult,
   normalizeQueueFunctionType,
+  partitionQueueResultsForAck,
   prepareQueueHttpBody,
   shouldRunQueueSyncInBackground,
   queueFailureResponse,

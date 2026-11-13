@@ -123,7 +123,7 @@ describe('queue_consumer legacy message compatibility', () => {
   })
 
   it.concurrent('keeps a 950-row manifest batch under Cloudflare subrequest limits', () => {
-    expect(onManifestCreateTestUtils.sizeRetryAttempts).toBe(1)
+    expect(onManifestCreateTestUtils.sizeRetryAttempts).toBe(4)
     expect(s3TestUtils.shouldUseSizeRangeFallback(0, { status: 404 })).toBe(false)
     expect(s3TestUtils.shouldUseSizeRangeFallback(0, { statusCode: 404 })).toBe(false)
     expect(s3TestUtils.shouldUseSizeRangeFallback(0, { code: 'NoSuchKey' })).toBe(false)

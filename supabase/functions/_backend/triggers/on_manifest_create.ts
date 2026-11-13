@@ -9,10 +9,10 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 import { isTransientDatabaseError } from '../utils/pg_errors.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { isRetryablePostgrestResult, retryWithBackoff } from '../utils/retry.ts'
-import { s3 } from '../utils/s3.ts'
+import { isManifestStorageObjectDefinitelyMissing, s3 } from '../utils/s3.ts'
 import { deltaFileS3PathSql, deltaSessionJoinSql } from '../utils/version_manifest_sql.ts'
 
-const SIZE_RETRY_ATTEMPTS = 1
+const SIZE_RETRY_ATTEMPTS = 4
 const SIZE_RETRY_DELAY_MS = 500
 const MANIFEST_UPDATE_RETRY_ATTEMPTS = 3
 const MANIFEST_UPDATE_RETRY_DELAY_MS = 300
@@ -134,8 +134,20 @@ export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, q
     const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, s3Path)
     const size = diagnostics?.size ?? 0
     if (size <= 0) {
+      if (diagnostics && isManifestStorageObjectDefinitelyMissing(diagnostics)) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'delta file storage object missing, acking queue without file_size',
+          id: record.id,
+          s3_path: s3Path,
+          attempts,
+          queue,
+          storageDiagnostics: diagnostics,
+        })
+        return c.json(BRES)
+      }
       cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: s3Path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
-      // Non-2xx keeps the message under the 5-read queue budget.
+      // Non-2xx keeps only this message under the queue retry budget.
       throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: s3Path, storageDiagnostics: diagnostics }, lastError, { alert: false })
     }
 
