@@ -121,22 +121,19 @@ function createAnonymousApiKeyClient(apikey: string) {
   })
 }
 
-describe.sequential('cRITICAL published CLI RPC contract', () => {
+describe('cRITICAL published CLI RPC contract', () => {
   let pool: Pool
   let contract: PublishedCliContractContext
 
   beforeAll(() => {
+    contract = loadPublishedCliContract()
     pool = new Pool({ connectionString: POSTGRES_URL })
+    expect(contract.rpcCalls.length, `No RPC calls extracted from ${contract.rpcSourceTag}`).toBeGreaterThan(0)
   })
 
   afterAll(async () => {
     await pool?.end()
   })
-
-  it('resolves published CLI contract metadata from git and npm', () => {
-    contract = loadPublishedCliContract()
-    expect(contract.rpcCalls.length, `No RPC calls extracted from ${contract.rpcSourceTag}`).toBeGreaterThan(0)
-  }, 120_000)
 
   it.concurrent('keeps anon EXECUTE on every RPC still called by the published CLI', async () => {
     const missing: string[] = []
