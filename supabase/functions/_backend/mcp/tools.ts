@@ -55,8 +55,11 @@ export interface McpToolContext {
   apikeyRow?: Database['public']['Tables']['apikeys']['Row']
 }
 
+export type McpTextContent = { type: 'text', text: string }
+export type McpImageContent = { type: 'image', data: string, mimeType: string }
+
 export interface McpToolResult {
-  content: Array<{ type: 'text', text: string } | { type: 'image', data: string, mimeType: string }>
+  content: [McpTextContent, ...(McpTextContent | McpImageContent)[]]
   structuredContent?: Record<string, unknown>
   isError?: boolean
 }
