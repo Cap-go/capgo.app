@@ -12,6 +12,7 @@ import { createImageToken, downloadImage, imageExists, removeImages, uploadImage
 import { cloudlogErr } from '../utils/logging.ts'
 import { runConsoleQuery } from './console_query_run.ts'
 import { getStorageAllowedOrigins, normalizeImagePath } from '../utils/storage.ts'
+import { defaultUserCountry } from '../utils/user_country.ts'
 import { app as consoleAuthProxy } from './console_auth_proxy.ts'
 import { app as consoleCaptchaFallback } from './console_captcha_fallback.ts'
 
@@ -75,7 +76,7 @@ app.post('/query', async (c) => {
     if (!claims?.sub || claims.role !== 'authenticated') {
       return c.json({ data: null, error: { message: 'Invalid JWT', code: 'PGRST301', details: null }, count: null, status: 401 })
     }
-    return c.json(await runConsoleQuery(c, request, { role: 'authenticated', claims }))
+    return c.json(await runConsoleQuery(c, defaultUserCountry(c, request), { role: 'authenticated', claims }))
   }
   return c.json(await runConsoleQuery(c, request, { role: 'anon' }))
 })

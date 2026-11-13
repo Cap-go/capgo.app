@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import type { DeviceDataCollection } from './deviceDataCollection.ts'
 import { CacheHelper } from './cache.ts'
+import { isPluginStateServed } from './pluginStateSwitch.ts'
 import { DEFAULT_DEVICE_DATA_COLLECTION, parseDeviceDataCollection } from './deviceDataCollection.ts'
 import { updatesCacheTags } from './updatesEdgeCache.ts'
 import { backgroundTask, isStripeConfigured } from './utils.ts'
@@ -75,6 +76,8 @@ export function setAppStatus(
   blockProviderInfraRequests = false,
   deviceDataCollection: DeviceDataCollection = DEFAULT_DEVICE_DATA_COLLECTION,
 ) {
+  if (isPluginStateServed(c))
+    return Promise.resolve()
   return backgroundTask(c, (async () => {
     const cacheEntry = buildAppStatusRequest(c, appId)
     const payload: AppStatusCachePayload = {
