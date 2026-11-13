@@ -16,7 +16,10 @@ export const mcpGetSimulatorInputSchema = z.object({
   session_id: sessionId,
 })
 
-export const mcpStopSimulatorInputSchema = mcpGetSimulatorInputSchema
+export const mcpStopSimulatorInputSchema = z.object({
+  appId,
+  session_id: sessionId,
+})
 
 export const mcpSimulatorCommandInputSchema = z.object({
   appId,
