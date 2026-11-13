@@ -14,11 +14,13 @@
 // build record, and a COMPLETED build hands back to the onboarding
 // `checkBuild` step which reads the record and enters the post-build tail.
 
-import { spawn } from 'node:child_process'
-import { closeSync, mkdirSync, openSync } from 'node:fs'
-import { open, stat } from 'node:fs/promises'
+import { spawn as crossSpawn } from 'cross-spawn'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
-import { dirname } from 'node:path'
+import { open, stat } from 'node:fs/promises'
 import type { McpRegistrar } from '../../../mcp/registrar.js'
 import { cancelCapgoBuildInputSchema, capgoBuildLogsInputSchema, capgoBuildWaitInputSchema, startCapgoBuildInputSchema } from './build-tool-schemas.js'
 import { getLogCapturePath } from '../../../ai/log-capture.js'
@@ -27,6 +29,7 @@ import type { BuildChild, BuildJobDeps, BuildJobResult } from './build-job.js'
 import { buildLogs, cancelBuild, startBuild, waitBuild } from './build-job.js'
 import type { NextStepResult, Platform } from './contract.js'
 import { ONBOARDING_RULES, renderResult } from './contract.js'
+import { resolveInstalledCliEntry } from '../self-update.js'
 
 
 
@@ -37,20 +40,142 @@ function buildLogPath(appId: string, platform: Platform): string {
 }
 
 /**
+ * Resolve the CLI entry script for the running MCP server (same version as this
+ * process, not `@capgo/cli@latest` via npx).
+ */
+export function resolveCurrentCliEntryFromModulePath(modulePath: string, cwd: string): string {
+  // Production `build.mjs` bundles MCP build helpers into dist/index.js, so spawn self.
+  if (/(?:^|[/\\])dist[/\\]index\.js$/i.test(modulePath))
+    return modulePath
+
+  const fromModule = join(dirname(modulePath), '../../../index.js')
+  if (existsSync(fromModule))
+    return fromModule
+
+  try {
+    const require = createRequire(modulePath)
+    const main = require.resolve('@capgo/cli')
+    if (existsSync(main))
+      return main
+  }
+  catch {
+    // fall through to cwd walk
+  }
+
+  const installed = resolveInstalledCliEntry(cwd)
+  if (installed)
+    return installed
+  throw new Error('Could not resolve the running Capgo CLI entry script')
+}
+
+export function resolveCurrentCliEntry(cwd: string): string {
+  return resolveCurrentCliEntryFromModulePath(fileURLToPath(import.meta.url), cwd)
+}
+
+/** Command line used to spawn a cloud build child (tested on win32). */
+export function resolveCapgoBuildSpawnCommand(
+  cwd: string,
+  appId: string,
+  platform: Platform,
+  recordPath: string,
+): { command: string, args: string[] } {
+  const entry = resolveCurrentCliEntry(cwd)
+  return {
+    command: process.execPath,
+    args: [
+      entry,
+      'build',
+      'request',
+      appId,
+      '--platform',
+      platform,
+      '--output-upload',
+      '--output-record',
+      recordPath,
+    ],
+  }
+}
+
+export function quoteSpawnArg(arg: string): string {
+  if (!/[\s"'\\]/.test(arg))
+    return arg
+  return `"${arg.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+}
+
+export function formatSpawnCommand(command: string, args: readonly string[]): string {
+  return [command, ...args.map(quoteSpawnArg)].join(' ')
+}
+
+function recordHasTerminalPayload(recordPath: string): boolean {
+  try {
+    const raw = readFileSync(recordPath, 'utf8').trim()
+    return raw.length > 0
+  }
+  catch {
+    return false
+  }
+}
+
+/**
  * Production build-job deps: spawn the published CLI's `build request` as a
  * tracked background child streaming to a local log file, read/clear the build
  * record, and drain the log file by byte offset. No cloud cancel in v1 (cancel
  * stops the local watcher; the cloud build may still finish — surfaced in the
  * result). All injectable for tests (test-mcp-build-job covers the manager).
  */
-export function buildJobDeps(cwd: string | (() => string)): BuildJobDeps {
+export type ResolveCapgoBuildSpawnCommand = typeof resolveCapgoBuildSpawnCommand
+
+export function buildJobDeps(
+  cwd: string | (() => string),
+  testOverrides?: { resolveSpawnCommand?: ResolveCapgoBuildSpawnCommand },
+): BuildJobDeps {
   const getCwd = typeof cwd === 'function' ? cwd : () => cwd
+  const resolveSpawn = testOverrides?.resolveSpawnCommand ?? resolveCapgoBuildSpawnCommand
   return {
-    spawnBuild: ({ appId, platform, recordPath, logPath }): BuildChild => {
+    spawnBuild: ({ appId, platform, recordPath, logPath, onProcessFailure }): BuildChild => {
       mkdirSync(dirname(logPath), { recursive: true })
-      const fd = openSync(logPath, 'w')
-      const args = ['-y', '@capgo/cli@latest', 'build', 'request', appId, '--platform', platform, '--output-upload', '--output-record', recordPath]
-      const child = spawn('npx', args, { cwd: getCwd(), stdio: ['ignore', fd, fd], detached: false })
+      const buildCwd = getCwd()
+      const notifyFailure = (message: string) => {
+        try {
+          appendFileSync(logPath, `${message}\n`, 'utf8')
+        }
+        catch {
+          // best-effort log append
+        }
+        onProcessFailure?.(message)
+      }
+      const placeholderLine = formatSpawnCommand(process.execPath, [
+        '<capgo-cli-entry>',
+        'build',
+        'request',
+        appId,
+        '--platform',
+        platform,
+        '--output-upload',
+        '--output-record',
+        recordPath,
+      ])
+      let command: string
+      let args: string[]
+      let commandLine: string
+      try {
+        ({ command, args } = resolveSpawn(buildCwd, appId, platform, recordPath))
+        commandLine = formatSpawnCommand(command, args)
+      }
+      catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        commandLine = placeholderLine
+        writeFileSync(logPath, `[capgo] Starting cloud build: ${commandLine} (cwd ${buildCwd})\n`, 'utf8')
+        notifyFailure(`[capgo] Failed to resolve CLI entry: ${message}`)
+        return {
+          pid: -1,
+          kill: () => {},
+          exited: Promise.resolve(null),
+        }
+      }
+      writeFileSync(logPath, `[capgo] Starting cloud build: ${commandLine} (cwd ${buildCwd})\n`, 'utf8')
+      const fd = openSync(logPath, 'a')
+      const child = crossSpawn(command, args, { cwd: buildCwd, stdio: ['ignore', fd, fd], detached: false })
       try {
         closeSync(fd)
       }
@@ -58,8 +183,17 @@ export function buildJobDeps(cwd: string | (() => string)): BuildJobDeps {
         // the child inherited its own dup of the fd; the parent copy is closable
       }
       const exited = new Promise<number | null>((resolve) => {
-        child.once('exit', code => resolve(code))
-        child.once('error', () => resolve(null))
+        child.once('exit', (code) => {
+          if (code !== 0 && code !== null && !recordHasTerminalPayload(recordPath)) {
+            notifyFailure(`[capgo] Build process exited with code ${code} before reaching Capgo`)
+          }
+          resolve(code)
+        })
+        child.once('error', (err) => {
+          const code = 'code' in err && typeof err.code === 'string' ? err.code : ''
+          notifyFailure(`[capgo] Failed to start build process: ${code} ${err.message}`.trim())
+          resolve(null)
+        })
       })
       return {
         pid: child.pid ?? -1,

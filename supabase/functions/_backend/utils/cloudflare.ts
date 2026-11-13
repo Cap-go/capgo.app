@@ -673,6 +673,7 @@ interface StoreApp {
 }
 
 export interface VersionUsageChannelFilterOptions {
+  throwOnError?: boolean
   /**
    * Also match `get` rows written without any channel. /updates only started
    * recording the serving channel on `get` rows recently, so dashboards that
@@ -857,6 +858,8 @@ ORDER BY date`
   }
   catch (e) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'Error reading version usage', error: serializeError(e), query })
+    if (options.throwOnError)
+      throw e
   }
   return []
 }
