@@ -43,30 +43,33 @@ function buildLogPath(appId: string, platform: Platform): string {
  * Resolve the CLI entry script for the running MCP server (same version as this
  * process, not `@capgo/cli@latest` via npx).
  */
-export function resolveCurrentCliEntry(cwd: string): string {
-  try {
-    const require = createRequire(import.meta.url)
-    const pkgJsonPath = require.resolve('@capgo/cli/package.json')
-    const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf-8')) as { bin?: string | Record<string, string> }
-    const binRel = typeof pkg.bin === 'string'
-      ? pkg.bin
-      : pkg.bin?.capgo ?? (pkg.bin ? Object.values(pkg.bin)[0] : undefined)
-    if (binRel) {
-      const entry = join(dirname(pkgJsonPath), binRel)
-      if (existsSync(entry))
-        return entry
-    }
-  }
-  catch {
-    // fall through to module-relative / cwd walk
-  }
-  const fromModule = join(dirname(fileURLToPath(import.meta.url)), '../../../index.js')
+export function resolveCurrentCliEntryFromModulePath(modulePath: string, cwd: string): string {
+  // Production `build.mjs` bundles MCP build helpers into dist/index.js — spawn self.
+  if (/(?:^|[/\\])dist[/\\]index\.js$/i.test(modulePath))
+    return modulePath
+
+  const fromModule = join(dirname(modulePath), '../../../index.js')
   if (existsSync(fromModule))
     return fromModule
+
+  try {
+    const require = createRequire(modulePath)
+    const main = require.resolve('@capgo/cli')
+    if (existsSync(main))
+      return main
+  }
+  catch {
+    // fall through to cwd walk
+  }
+
   const installed = resolveInstalledCliEntry(cwd)
   if (installed)
     return installed
   throw new Error('Could not resolve the running Capgo CLI entry script')
+}
+
+export function resolveCurrentCliEntry(cwd: string): string {
+  return resolveCurrentCliEntryFromModulePath(fileURLToPath(import.meta.url), cwd)
 }
 
 /** Command line used to spawn a cloud build child (tested on win32). */

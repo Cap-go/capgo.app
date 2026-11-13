@@ -7,7 +7,11 @@ import { mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-const { resolveCapgoBuildSpawnCommand, resolveCurrentCliEntry } = await import('../src/build/onboarding/mcp/build-tools.ts')
+const {
+  resolveCapgoBuildSpawnCommand,
+  resolveCurrentCliEntry,
+  resolveCurrentCliEntryFromModulePath,
+} = await import('../src/build/onboarding/mcp/build-tools.ts')
 
 let pass = 0
 let fail = 0
@@ -38,6 +42,12 @@ const cwd = mkdtempSync(join(tmpdir(), 'capgo-mcp-spawn-'))
 test('resolveCurrentCliEntry returns the package bin entry', () => {
   const entry = resolveCurrentCliEntry(cwd)
   ok(entry.includes('index.js') || entry.endsWith('dist/index.js'), `unexpected entry: ${entry}`)
+})
+
+test('resolveCurrentCliEntryFromModulePath uses bundled dist/index.js when inlined', () => {
+  const bundled = join(cwd, 'node_modules', '@capgo', 'cli', 'dist', 'index.js')
+  const entry = resolveCurrentCliEntryFromModulePath(bundled, cwd)
+  eq(entry, bundled)
 })
 
 test('resolveCapgoBuildSpawnCommand uses node execPath, not npx', () => {
