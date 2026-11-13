@@ -1219,12 +1219,14 @@ app.post('/sync', async (c) => {
 })
 
 export const __queueConsumerTestUtils__ = {
+  defaultBatchSize: DEFAULT_BATCH_SIZE,
   extractErrorDetails,
   extractMessageBody,
   getQueueMessageTrace,
   getActionableQueueFailures,
   getManifestRecordFromQueueBody,
   getQueueBatchSize,
+  manifestQueueHttpConcurrency: MANIFEST_QUEUE_HTTP_CONCURRENCY,
   getQueueAckChunkSize,
   getQueueHttpConcurrency,
   getQueueHttpTimeoutMs,

@@ -1,17 +1,12 @@
 import type { Context } from 'hono'
 import type { StorageSizeDiagnostics } from '../supabase/functions/_backend/utils/s3.ts'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { onManifestCreateTestUtils } from '../supabase/functions/_backend/triggers/on_manifest_create.ts'
-import { getManifestStorageCandidateKeys } from '../supabase/functions/_backend/utils/manifest_encoding.ts'
-import {
-  assertDefaultManifestBatchFitsR2Budget,
-  CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET,
-  MANIFEST_QUEUE_INVOCATION_SUBREQUEST_RESERVE,
-  MANIFEST_QUEUE_R2_SUBREQUEST_BUDGET,
-  MANIFEST_SIZE_MAX_CANDIDATE_KEYS,
-  perMessageManifestSizeLookupBudget,
-} from '../supabase/functions/_backend/utils/manifest_size_lookup_budget.ts'
+import { __queueConsumerTestUtils__ } from '../supabase/functions/_backend/triggers/queue_consumer.ts'
+import * as manifestSizeBudget from '../supabase/functions/_backend/utils/manifest_size_lookup_budget.ts'
 import { s3 } from '../supabase/functions/_backend/utils/s3.ts'
+
+const HOMOGENEOUS_BATCH_PATH = 'orgs/org-id/apps/com.test.app/delta/hash_file.js'
 
 function mockManifestQueueContext(perMessageBudget: number): Context {
   const values = new Map<string, unknown>([
@@ -24,8 +19,8 @@ function mockManifestQueueContext(perMessageBudget: number): Context {
   } as unknown as Context
 }
 
-function transientDiagnosticsForPath(s3Path: string): StorageSizeDiagnostics {
-  const keys = getManifestStorageCandidateKeys(s3Path)
+function transientDiagnosticsForCandidateCount(candidateCount: number): StorageSizeDiagnostics {
+  const keys = Array.from({ length: candidateCount }, (_, i) => `${HOMOGENEOUS_BATCH_PATH}#${i}`)
   return {
     bucket: 'capgo',
     candidateKeys: keys,
@@ -37,51 +32,52 @@ function transientDiagnosticsForPath(s3Path: string): StorageSizeDiagnostics {
       usedFallback: true,
     })),
     endpoint: 'https://example.invalid/',
-    fileId: keys[0] ?? s3Path,
+    fileId: keys[0] ?? HOMOGENEOUS_BATCH_PATH,
     selectedCandidateKey: null,
     size: 0,
   }
 }
 
-function manifestTestPath(candidateCount: number): string {
-  return `capgo-manifest-size-test/k/${candidateCount}/file`
-}
-
 describe('manifest size lookup subrequest budget', () => {
-  it('keeps the default 950 batch and 5 paths inside the R2 budget', () => {
-    expect(() => assertDefaultManifestBatchFitsR2Budget(onManifestCreateTestUtils.sizeRetryAttempts)).not.toThrow()
-    const perMessage = perMessageManifestSizeLookupBudget(950)
-    const attempts = Math.min(
-      onManifestCreateTestUtils.sizeRetryAttempts,
-      Math.floor(perMessage / (MANIFEST_SIZE_MAX_CANDIDATE_KEYS * 2)),
-    )
-    const worstR2 = 950 * attempts * MANIFEST_SIZE_MAX_CANDIDATE_KEYS * 2
-    expect(worstR2).toBeLessThanOrEqual(MANIFEST_QUEUE_R2_SUBREQUEST_BUDGET)
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it.concurrent('keeps queue consumer constants aligned with the budget module', () => {
+    expect(__queueConsumerTestUtils__.defaultBatchSize).toBe(manifestSizeBudget.MANIFEST_QUEUE_DEFAULT_BATCH_SIZE)
+    expect(__queueConsumerTestUtils__.manifestQueueHttpConcurrency)
+      .toBe(manifestSizeBudget.MANIFEST_QUEUE_HTTP_CONCURRENCY_SUBREQUESTS)
+    expect(__queueConsumerTestUtils__.getQueueBatchSize('on_manifest_create', 950)).toBe(950)
+    expect(() => manifestSizeBudget.assertDefaultManifestBatchFitsR2Budget(onManifestCreateTestUtils.sizeRetryAttempts))
+      .not.toThrow()
+    expect(manifestSizeBudget.MANIFEST_QUEUE_R2_SUBREQUEST_BUDGET).toBe(9_750)
   })
 
   it('bounds homogeneous R2 usage for every batch size and candidate count', async () => {
     vi.useFakeTimers()
-    const lookup = vi.spyOn(s3, 'getSizeDiagnostics').mockImplementation(async (_c, s3Path) => {
-      return transientDiagnosticsForPath(s3Path)
+    const lookup = vi.spyOn(s3, 'getSizeDiagnostics').mockImplementation(async (_c, _s3Path) => {
+      return transientDiagnosticsForCandidateCount(currentCandidateCount)
     })
+    let currentCandidateCount = 1
+    const countSpy = vi.spyOn(manifestSizeBudget, 'manifestStorageCandidateCount').mockImplementation(() => currentCandidateCount)
 
     try {
       for (let batchSize = 1; batchSize <= 950; batchSize++) {
-        const perMessage = perMessageManifestSizeLookupBudget(batchSize)
+        const perMessage = manifestSizeBudget.perMessageManifestSizeLookupBudget(batchSize)
         for (let candidateCount = 1; candidateCount <= 5; candidateCount++) {
-          const path = manifestTestPath(candidateCount)
-          expect(getManifestStorageCandidateKeys(path)).toHaveLength(candidateCount)
+          currentCandidateCount = candidateCount
           const context = mockManifestQueueContext(perMessage)
-          const pending = onManifestCreateTestUtils.getManifestSizeWithRetry(context, path, 0)
+          const pending = onManifestCreateTestUtils.getManifestSizeWithRetry(context, HOMOGENEOUS_BATCH_PATH, 0)
           await vi.runAllTimersAsync()
           const { spentSubrequests } = await pending
           const invocationR2 = batchSize * spentSubrequests
-          expect(invocationR2 + MANIFEST_QUEUE_INVOCATION_SUBREQUEST_RESERVE)
-            .toBeLessThanOrEqual(CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET)
+          expect(invocationR2 + manifestSizeBudget.MANIFEST_QUEUE_INVOCATION_SUBREQUEST_RESERVE)
+            .toBeLessThanOrEqual(manifestSizeBudget.CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET)
         }
       }
     }
     finally {
+      countSpy.mockRestore()
       lookup.mockRestore()
       vi.useRealTimers()
     }

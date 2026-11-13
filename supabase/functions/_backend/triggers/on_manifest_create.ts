@@ -9,14 +9,7 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 import { isTransientDatabaseError } from '../utils/pg_errors.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { isRetryablePostgrestResult, retryWithBackoff } from '../utils/retry.ts'
-import {
-  assertDefaultManifestBatchFitsR2Budget,
-  estimateManifestSizeLookupSubrequests,
-  MANIFEST_SIZE_MAX_CANDIDATE_KEYS,
-  manifestStorageCandidateCount,
-  maxManifestSizeLookupAttemptsForBudget,
-  worstCaseSubrequestsPerAttemptForCandidateCount,
-} from '../utils/manifest_size_lookup_budget.ts'
+import * as manifestSizeBudget from '../utils/manifest_size_lookup_budget.ts'
 import { isManifestStorageObjectDefinitelyMissing, s3 } from '../utils/s3.ts'
 import { deltaFileS3PathSql, deltaSessionJoinSql } from '../utils/version_manifest_sql.ts'
 
@@ -54,11 +47,11 @@ export async function runManifestSizeLookupWithBudget(
   retryDelayMs = SIZE_RETRY_DELAY_MS,
 ): Promise<ManifestSizeLookupRetryResult> {
   const perMessageBudget = c.get('manifestSizeLookupSubrequestBudgetPerMessage') as number | undefined
-  const effectiveCandidateCount = Math.max(1, Math.min(candidateCount, MANIFEST_SIZE_MAX_CANDIDATE_KEYS))
+  const effectiveCandidateCount = Math.max(1, Math.min(candidateCount, manifestSizeBudget.MANIFEST_SIZE_MAX_CANDIDATE_KEYS))
   const attemptsCap = perMessageBudget === undefined
     ? SIZE_RETRY_ATTEMPTS
-    : maxManifestSizeLookupAttemptsForBudget(perMessageBudget, effectiveCandidateCount, SIZE_RETRY_ATTEMPTS)
-  const perAttemptWorstCase = worstCaseSubrequestsPerAttemptForCandidateCount(effectiveCandidateCount)
+    : manifestSizeBudget.maxManifestSizeLookupAttemptsForBudget(perMessageBudget, effectiveCandidateCount, SIZE_RETRY_ATTEMPTS)
+  const perAttemptWorstCase = manifestSizeBudget.worstCaseSubrequestsPerAttemptForCandidateCount(effectiveCandidateCount)
   let spentSubrequests = 0
 
   const { result, lastError, attempts } = await retryWithBackoff(
@@ -67,7 +60,7 @@ export async function runManifestSizeLookupWithBudget(
       attempts: attemptsCap,
       baseDelayMs: retryDelayMs,
       shouldRetry: (diagnostics) => {
-        spentSubrequests += estimateManifestSizeLookupSubrequests(diagnostics)
+        spentSubrequests += manifestSizeBudget.estimateManifestSizeLookupSubrequests(diagnostics)
         if (diagnostics.size > 0)
           return false
         if (isManifestStorageObjectDefinitelyMissing(diagnostics))
@@ -88,7 +81,7 @@ async function getManifestSizeWithRetry(
   s3Path: string,
   retryDelayMs = SIZE_RETRY_DELAY_MS,
 ): Promise<ManifestSizeLookupRetryResult> {
-  const candidateCount = manifestStorageCandidateCount(s3Path)
+  const candidateCount = manifestSizeBudget.manifestStorageCandidateCount(s3Path)
   return runManifestSizeLookupWithBudget(
     c,
     candidateCount,
@@ -96,8 +89,6 @@ async function getManifestSizeWithRetry(
     retryDelayMs,
   )
 }
-
-assertDefaultManifestBatchFitsR2Budget(SIZE_RETRY_ATTEMPTS)
 
 async function runManifestUpdateWithRetry(
   c: Context,
