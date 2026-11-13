@@ -250,6 +250,9 @@ SELECT is(
     1::bigint,
     'removing a delivered existing-user invite syncs the account email when bento_email was never stored'
 );
+DELETE FROM pgmq.q_send_email
+WHERE message -> 'payload' -> 'org_invitation_bento_sync' ->> 'email'
+    = 'bento-sync-unsynced@example.com';
 
 SET LOCAL lock_timeout = '50ms';
 UPDATE public.tmp_users SET cancelled_at = pg_catalog.now()
