@@ -11,7 +11,7 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 // --- Worker logic imports ---
 import { integerLikeSchema, safeParseSchema } from '../utils/schema_validation.ts'
 import { backgroundTask, getEnv, WAIT_FOR_COMPLETION_HEADER } from '../utils/utils.ts'
-import { CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET, perMessageManifestSizeLookupBudget } from '../utils/manifest_size_lookup_budget.ts'
+import { perMessageManifestSizeLookupBudget } from '../utils/manifest_size_lookup_budget.ts'
 import { skipLegacyManifestSize, updateDeltaFileSize } from './on_manifest_create.ts'
 
 // Define constants
@@ -866,7 +866,7 @@ async function processQueue(c: Context, db: Awaited<ReturnType<typeof getPgClien
   if (queueName === 'on_manifest_create' && messagesToProcess.length > 0) {
     c.set(
       'manifestSizeLookupSubrequestBudgetPerMessage',
-      perMessageManifestSizeLookupBudget(messagesToProcess.length, CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET),
+      perMessageManifestSizeLookupBudget(messagesToProcess.length),
     )
   }
 

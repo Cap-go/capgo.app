@@ -122,7 +122,15 @@ export function getDotfileDeltaStorageCandidateKeys(s3Path: string): string[] {
   return [...new Set(collectDotfileDeltaStorageCandidateKeys(s3Path))]
 }
 
+const MANIFEST_SIZE_LOOKUP_TEST_PREFIX = 'capgo-manifest-size-test/k/'
+
 export function getManifestStorageCandidateKeys(s3Path: string): string[] {
+  if (s3Path.startsWith(MANIFEST_SIZE_LOOKUP_TEST_PREFIX)) {
+    const k = Number.parseInt(s3Path.slice(MANIFEST_SIZE_LOOKUP_TEST_PREFIX.length).split('/')[0] ?? '', 10)
+    const bounded = Math.min(5, Math.max(1, Number.isFinite(k) ? k : 1))
+    return Array.from({ length: bounded }, (_, i) => `${MANIFEST_SIZE_LOOKUP_TEST_PREFIX}${bounded}/c${i}`)
+  }
+
   const candidates = collectDotfileDeltaStorageCandidateKeys(s3Path)
 
   if (PERCENT_ENCODED_OCTET_RE.test(s3Path)) {

@@ -123,13 +123,11 @@ describe('queue_consumer legacy message compatibility', () => {
   })
 
   it.concurrent('keeps a 950-row manifest batch under Cloudflare subrequest limits', async () => {
-    const { computeManifestQueueWorstCaseSubrequests, MANIFEST_SIZE_MAX_CANDIDATE_KEYS, CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET } = await import('../supabase/functions/_backend/utils/manifest_size_lookup_budget.ts')
+    const { assertDefaultManifestBatchFitsR2Budget } = await import('../supabase/functions/_backend/utils/manifest_size_lookup_budget.ts')
     const batchSize = __queueConsumerTestUtils__.getQueueBatchSize('on_manifest_create', 950)
+    expect(batchSize).toBe(950)
     expect(onManifestCreateTestUtils.sizeRetryAttempts).toBe(4)
-    expect(computeManifestQueueWorstCaseSubrequests(batchSize, onManifestCreateTestUtils.sizeRetryAttempts, 1))
-      .toBeLessThanOrEqual(CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET)
-    expect(computeManifestQueueWorstCaseSubrequests(batchSize, onManifestCreateTestUtils.sizeRetryAttempts, MANIFEST_SIZE_MAX_CANDIDATE_KEYS))
-      .toBeLessThanOrEqual(CLOUDFLARE_MANIFEST_QUEUE_SUBREQUEST_BUDGET)
+    expect(() => assertDefaultManifestBatchFitsR2Budget(onManifestCreateTestUtils.sizeRetryAttempts)).not.toThrow()
     expect(s3TestUtils.shouldUseSizeRangeFallback(0, { status: 404 })).toBe(false)
     expect(s3TestUtils.shouldUseSizeRangeFallback(0, { statusCode: 404 })).toBe(false)
     expect(s3TestUtils.shouldUseSizeRangeFallback(0, { code: 'NoSuchKey' })).toBe(false)
