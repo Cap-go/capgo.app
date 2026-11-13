@@ -100,7 +100,7 @@ References: [R2 consistency](https://developers.cloudflare.com/r2/reference/cons
 
 | Setting | Scope | Default and purpose |
 | --- | --- | --- |
-| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | Vault | Disabled. Set to `true` to enqueue changes and run backfill. |
+| `CAPGO_PLUGIN_STATE_SYNC_ENABLED` | `private.settings` | Disabled. Set to `true` to enqueue changes and run backfill. |
 | `PLUGIN_STATE_KV` | Plugin Worker runtime | Off. Accepts `off`, `on`, or a percentage such as `1%`. Sampling is stable by app and device across endpoints. |
 | `PLUGIN_STATE_KV_AUTHORITATIVE` | Plugin Worker runtime | False. Trust published app-deletion pointers only after verifying complete coverage. Unpublished app pointers always use replicas. Leave false during rollout. |
 | `PLUGIN_STATE_KV_STRICT` | Plugin Worker runtime | False. Tests enable it to reject database reads that escape a KV session. |
@@ -288,7 +288,7 @@ every delayed publisher.
 
 R2 can outlive a PostgreSQL restore. Restoring an older sequence while retaining
 newer R2 pointers makes valid restored writes look obsolete. Before restoring,
-turn off plugin KV reads and the Vault sync switch, stop all old writer and GC
+turn off plugin KV reads and the `private.settings` sync switch, stop all old writer and GC
 invocations, and verify none can resume against the retained buckets. Keep
 replicas available during recovery.
 
@@ -310,7 +310,7 @@ work without replacing higher-generation pointers.
    establish primary-load, replica-QPS/result-bytes, purge-rate/queue-depth and
    existing edge/snippet-hit baselines and stop conditions. Do not change
    public API or CLI permissions.
-2. Enable the Vault sync switch. Run `public.plugin_state_sync_tick()` through
+2. Enable the `private.settings` sync switch. Run `public.plugin_state_sync_tick()` through
    internal operations to begin or resume automatic backfill. Watch those
    baseline metrics while the writer runs. The read percentage does not limit
    synchronization/backfill or garbage-collection work. An off deployment still
@@ -355,7 +355,7 @@ rollback. Keep the writer running while investigating a read-path problem.
 
 ### Writer pause and recovery
 
-Turn KV reads off in **every enabled region before** disabling the Vault writer
+Turn KV reads off in **every enabled region before** disabling the `private.settings` writer
 switch. While that switch is off, source changes are intentionally not queued.
 Daily app-document reconciliation does not reconstruct all version-name,
 per-device or manifest keys, including deletion markers. Do not turn reads back
@@ -460,9 +460,9 @@ manifest sizes. The cache-tag-purge scenario is reported separately from warm
 reads; it removes tagged entries only. DB caches that are intentionally
 untagged, including the original v1 manifest-size maps, keep their normal TTL.
 Before creating any fixture, it checks `public.plugin_state_sync_enabled()`.
-A fresh local database must have the Vault secret
-`CAPGO_PLUGIN_STATE_SYNC_ENABLED` enabled first, either through local Vault
-setup or the strict KV test setup shown above. Otherwise the standalone
+A fresh local database must have the `private.settings` switch
+`CAPGO_PLUGIN_STATE_SYNC_ENABLED` enabled first, either directly in
+`private.settings` or the strict KV test setup shown above. Otherwise the standalone
 benchmark stops with a prerequisite error instead of timing unsynchronized
 state. It does not modify or restore the switch implicitly.
 Local KV itself remains warm. Propagation probes bypass the setup's automatic

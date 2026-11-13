@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import {
   executeSQL,
   fetchTestRequest,
@@ -57,7 +58,7 @@ function withRestHeaders(headers: Record<string, string>) {
 }
 
 async function patchOrg(headers: Record<string, string>, body: Record<string, unknown>) {
-  const response = await fetchTestRequest(getEndpointUrl(`/rest/v1/orgs?id=eq.${orgId}`), {
+  const response = await sqlRestRequest(`orgs?id=eq.${orgId}`, {
     method: 'PATCH',
     headers: {
       ...withRestHeaders(headers),

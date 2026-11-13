@@ -70,11 +70,14 @@ const SWITCHES = {
 } as const
 
 async function setSwitch(client: Pick<PoolClient, 'query'>, name: keyof typeof SWITCHES, value: boolean) {
-  await client.query('DELETE FROM vault.secrets WHERE name = $1', [SWITCHES[name]])
-  await client.query('SELECT vault.create_secret($1, $2)', [String(value), SWITCHES[name]])
+  await client.query(
+    `INSERT INTO private.settings (name, value) VALUES ($1, $2)
+     ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`,
+    [SWITCHES[name], String(value)],
+  )
 }
 
-// The Vault switches stay untouched for parallel test files: each case sets
+// The switches stay untouched for parallel test files: each case sets
 // them inside its own transaction and rolls back.
 async function withConfig<T>(settings: Partial<Record<keyof typeof SWITCHES, boolean>>, run: (client: PoolClient) => Promise<T>) {
   const client = await pool.connect()

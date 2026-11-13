@@ -1,14 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { escapeLiteral, Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import {
   createDirectApiKeyWithBindings,
   executeSQL,
-  fetchTestRequest,
   getAuthHeaders,
   POSTGRES_URL,
   SUPABASE_ANON_KEY,
-  SUPABASE_BASE_URL,
   USER_ID,
   USER_ID_2,
   withAnonymousCapgkey,
@@ -41,7 +40,7 @@ async function page(deleted: boolean, offset = 0, identity: 'key' | 'user' | 'an
     ...(identity === 'user' ? authHeaders : {}),
     ...(identity === 'key' ? { capgkey: key } : identity === 'invalid' ? { capgkey: randomUUID() } : {}),
   }
-  const response = await fetchTestRequest(`${SUPABASE_BASE_URL}/rest/v1/app_versions?select=*&app_id=eq.${app}&deleted=eq.${deleted}&order=created_at.desc&limit=5&offset=${offset}`, { headers })
+  const response = await sqlRestRequest(`app_versions?select=*&app_id=eq.${app}&deleted=eq.${deleted}&order=created_at.desc&limit=5&offset=${offset}`, { headers })
   const body = await response.text()
   expect(response.status, body).toBe(200)
   return JSON.parse(body) as Array<{ name: string, app_id: string, deleted: boolean }>

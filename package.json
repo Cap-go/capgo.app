@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.45.1",
+  "version": "22.47.1",
   "private": true,
   "workspaces": [
     "cli",
@@ -32,6 +32,10 @@
     "supabase:db:reset": "bun scripts/supabase-worktree.ts db reset",
     "supabase:functions:serve": "bun scripts/supabase-worktree.ts functions serve",
     "supabase:with-env": "bun scripts/supabase-worktree.ts with-env",
+    "db:up": "bun scripts/local-db.ts up",
+    "db:provision": "bun scripts/local-db.ts provision",
+    "db:url": "bun scripts/local-db.ts url",
+    "db:down": "bun scripts/local-db.ts down",
     "env:hard-setup": "bun run supabase:stop && bun run supabase:start && bun run supabase:db:reset",
     "readreplicate:add-table": "bash read_replicate/replicate_add_table.sh",
     "readreplicate:repair": "bash read_replicate/replicate_repair.sh",

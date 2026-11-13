@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import {
   createOrgOwnedByUser,
   getAuthHeadersForCredentials,
@@ -9,7 +10,6 @@ import {
   POSTGRES_URL,
   setAuthenticatedClaim,
   SUPABASE_ANON_KEY,
-  SUPABASE_BASE_URL,
   USER_ID,
 } from './test-utils.ts'
 
@@ -44,7 +44,7 @@ function restHeaders(extra: Record<string, string>) {
 
 describe('public.users.email follows the auth email', () => {
   it('ignores a client PATCH of the profile email while keeping other profile edits', async () => {
-    const response = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${userId}&select=email,first_name`, {
+    const response = await sqlRestRequest(`users?id=eq.${userId}&select=email,first_name`, {
       method: 'PATCH',
       headers: restHeaders({ Prefer: 'return=representation' }),
       body: JSON.stringify({ email: otherEmail, first_name: 'Renamed' }),
@@ -52,7 +52,7 @@ describe('public.users.email follows the auth email', () => {
     expect(response.status, await response.clone().text()).toBe(200)
     expect(await response.json()).toEqual([{ email: ownEmail, first_name: 'Renamed' }])
 
-    const upsert = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?on_conflict=id&select=email`, {
+    const upsert = await sqlRestRequest(`users?on_conflict=id&select=email`, {
       method: 'POST',
       headers: restHeaders({ Prefer: 'resolution=merge-duplicates,return=representation' }),
       body: JSON.stringify({ id: userId, email: otherEmail }),
@@ -66,7 +66,7 @@ describe('public.users.email follows the auth email', () => {
     // A drifted profile email is realigned even when the client repeats it.
     const { error: driftError } = await getSupabaseClient().from('users').update({ email: otherEmail }).eq('id', userId)
     expect(driftError).toBeNull()
-    const repeat = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?id=eq.${userId}&select=email`, {
+    const repeat = await sqlRestRequest(`users?id=eq.${userId}&select=email`, {
       method: 'PATCH',
       headers: restHeaders({ Prefer: 'return=representation' }),
       body: JSON.stringify({ email: otherEmail }),
@@ -83,7 +83,7 @@ describe('public.users.email follows the auth email', () => {
     const signupId = data.user!.id
     try {
       const signupHeaders = await getAuthHeadersForCredentials(signupEmail, password)
-      const response = await fetch(`${SUPABASE_BASE_URL}/rest/v1/users?select=email`, {
+      const response = await sqlRestRequest(`users?select=email`, {
         method: 'POST',
         headers: { ...signupHeaders, 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
         body: JSON.stringify({ id: signupId, email: otherEmail }),

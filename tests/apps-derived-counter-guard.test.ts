@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import {
   executeSQL,
-  fetchTestRequest,
   getAuthHeaders,
-  getEndpointUrl,
   resetAndSeedAppData,
   resetAppData,
   SUPABASE_ANON_KEY,
@@ -54,7 +53,7 @@ async function parseJson(response: Response) {
 }
 
 async function patchApp(authHeaders: Record<string, string>, body: Record<string, unknown>) {
-  const response = await fetchTestRequest(getEndpointUrl(`/rest/v1/apps?app_id=eq.${APPNAME}`), {
+  const response = await sqlRestRequest(`apps?app_id=eq.${APPNAME}`, {
     method: 'PATCH',
     headers: restHeaders(authHeaders),
     body: JSON.stringify(body),
@@ -104,7 +103,7 @@ describe('apps derived counter guard', () => {
   })
 
   it('app admin cannot seed counters when inserting an app through PostgREST', async () => {
-    const response = await fetchTestRequest(getEndpointUrl('/rest/v1/apps'), {
+    const response = await sqlRestRequest('apps', {
       method: 'POST',
       headers: { ...restHeaders(authHeaders), Prefer: 'return=minimal' },
       body: JSON.stringify({

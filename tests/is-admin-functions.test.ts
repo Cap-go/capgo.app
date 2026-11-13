@@ -14,8 +14,8 @@ describe('is_platform_admin SQL function', () => {
   const getAdminUserId = async (query: QueryFn): Promise<string | undefined> => {
     const adminRows = await query<{ id: string }>(`
       WITH admin_secret AS (
-        SELECT decrypted_secret::jsonb AS value
-        FROM vault.decrypted_secrets
+        SELECT value::jsonb AS value
+        FROM private.settings
         WHERE name = 'admin_users'
         LIMIT 1
       )

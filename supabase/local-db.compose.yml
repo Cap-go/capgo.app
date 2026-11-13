@@ -1,0 +1,18 @@
+# Local Postgres for `bun run db:up` / `db:provision`: the database only, without
+# the Supabase stack. Same image `supabase start` runs (it ships every extension
+# the migrations create), pinned to the tag Supabase CLI 2.109.1 uses.
+# scripts/local-db.ts sets the compose project and port per worktree: one
+# container per worktree, because roles such as gotrue_cf are cluster-wide.
+services:
+  db:
+    image: ${SUPABASE_INTERNAL_IMAGE_REGISTRY:-public.ecr.aws}/supabase/postgres:17.6.1.143
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 127.0.0.1:${CAPGO_LOCAL_DB_PORT:?set by scripts/local-db.ts}:5432
+    healthcheck:
+      # TCP check: the init server only listens on the socket, so this waits for the real start.
+      test: [CMD, pg_isready, -U, postgres, -h, 127.0.0.1]
+      interval: 2s
+      timeout: 5s
+      retries: 90

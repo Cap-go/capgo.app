@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './sql-data-client'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { sqlRestRequest } from './sql-rest-request'
 import { fetchTestRequest, getEndpointUrl, getSupabaseClient, PRODUCT_ID, resetAppData, resetAppDataStats, TEST_EMAIL, USER_ID } from './test-utils.ts'
 
 // Generate unique IDs per test run to avoid conflicts with parallel test runs
@@ -173,7 +174,7 @@ describe('build Time Tracking System', () => {
     const beforeCount = before.count ?? 0
 
     const buildId = `poc_buildtime_${randomUUID()}`
-    const response = await fetch(new URL('/rest/v1/rpc/record_build_time', supabaseUrl), {
+    const response = await sqlRestRequest('rpc/record_build_time', {
       method: 'POST',
       headers: {
         'apikey': supabaseAnonKey,
