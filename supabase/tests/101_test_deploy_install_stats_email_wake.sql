@@ -45,7 +45,7 @@ INSERT INTO public.orgs (id, created_by, name, management_email)
 SELECT
     org_id,
     tests.get_supabase_uid('deploy_wake_user'),
-  'Deploy wake tests',
+    'Deploy wake tests',
     'deploy-wake@example.com'
 FROM wake_context;
 
