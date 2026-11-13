@@ -124,7 +124,7 @@ describe('deploy report atomic send gate', () => {
         $$;
         UPDATE public.deploy_history SET install_stats_email_sent_at = NULL;
       `))
-      const wakeMigration = readFileSync(new URL('../supabase/migrations/20261113011904_deploy_install_stats_email_wake.sql', import.meta.url), 'utf8')
+      const wakeMigration = readFileSync(new URL('../supabase/migrations/20261113112649_deploy_install_stats_email_wake.sql', import.meta.url), 'utf8')
       await db.query(sql(wakeMigration.replaceAll('pgmq.send', 'public.queue_send')))
       await db.query(sql('SELECT public.process_deploy_install_stats_email()'))
       expect((await db.query(sql('SELECT * FROM public.report_queue'))).rows).toHaveLength(1)
