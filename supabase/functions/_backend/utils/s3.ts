@@ -388,11 +388,11 @@ function isSizeCandidateDefinitelyMissing(candidate: SizeKeyDiagnostic): boolean
   if (candidate.finalSize > 0)
     return false
 
-  if (!candidate.head.success)
-    return isSerializedMissingObjectStatus(candidate.head.error?.status)
-
   if (candidate.usedFallback && candidate.range?.status === 404)
     return true
+
+  if (!candidate.head.success)
+    return isSerializedMissingObjectStatus(candidate.head.error?.status)
 
   return false
 }

@@ -26,13 +26,23 @@ export interface RequeueUnsizedDeltaBatchOptions {
   limit?: number
 }
 
+export function buildUnsizedDeltaApplyCheckpointPath(databaseHash: string, createdAfter?: string): string {
+  const filterSuffix = createdAfter
+    ? `-${createHash('sha256').update(createdAfter).digest('hex').slice(0, 12)}`
+    : '-all'
+  return join(tmpdir(), `unsized-delta-requeue-apply-${databaseHash.slice(0, 12)}${filterSuffix}.json`)
+}
+
 export async function requeueUnsizedDeltaBatch(
   client: Pick<Client, 'query'>,
   cursor: UnsizedDeltaRequeueCursor,
   options: RequeueUnsizedDeltaBatchOptions,
 ) {
-  if (cursor.done || (options.limit !== undefined && options.limit <= 0))
-    return { cursor: { ...cursor, done: true }, scanned: 0, requeued: 0 }
+  if (cursor.done)
+    return { cursor, scanned: 0, requeued: 0 }
+
+  if (options.limit !== undefined && options.limit <= 0)
+    return { cursor, scanned: 0, requeued: 0, limit: 0 }
 
   const limit = Math.min(options.batchSize, options.limit ?? options.batchSize)
   const rows = await client.query<{ id: string }>(`
@@ -88,7 +98,7 @@ export async function requeueUnsizedDeltaBatch(
 
   const lastId = rows.rows.at(-1)!.id
   const nextLimit = options.limit === undefined ? undefined : Math.max(0, options.limit - rows.rows.length)
-  const done = rows.rows.length < limit || nextLimit === 0
+  const done = rows.rows.length < limit
   return {
     cursor: { lastId, done },
     scanned: rows.rows.length,
@@ -97,18 +107,20 @@ export async function requeueUnsizedDeltaBatch(
   }
 }
 
-function parseArgs() {
-  const apply = process.argv.includes('--apply')
-  const batchArg = process.argv.find(arg => arg.startsWith('--batch='))
-  const limitArg = process.argv.find(arg => arg.startsWith('--limit='))
-  const createdAfterArg = process.argv.find(arg => arg.startsWith('--created-after='))
+export function parseUnsizedDeltaRequeueArgs(argv = process.argv) {
+  const apply = argv.includes('--apply')
+  const batchArg = argv.find(arg => arg.startsWith('--batch='))
+  const limitArg = argv.find(arg => arg.startsWith('--limit='))
+  const createdAfterArg = argv.find(arg => arg.startsWith('--created-after='))
   const batchSize = Number(batchArg?.split('=')[1] ?? 200)
   const limit = limitArg ? Number(limitArg.split('=')[1]) : undefined
-  const createdAfter = createdAfterArg?.split('=')[1]
+  const createdAfter = createdAfterArg ? createdAfterArg.split('=').slice(1).join('=') : undefined
   if (!Number.isFinite(batchSize) || batchSize <= 0)
     throw new Error('--batch must be a positive number')
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0))
     throw new Error('--limit must be a positive number')
+  if (createdAfterArg !== undefined && !createdAfter)
+    throw new Error('--created-after must not be empty')
   return { apply, batchSize, createdAfter, limit }
 }
 
@@ -117,30 +129,41 @@ async function main() {
   if (!databaseUrl)
     throw new Error('Set SUPABASE_DB_URL explicitly')
 
-  const options = parseArgs()
+  const options = parseUnsizedDeltaRequeueArgs()
   const database = createHash('sha256').update(databaseUrl).digest('hex')
-  const checkpointPath = env.UNSIZED_DELTA_REQUEUE_CHECKPOINT ?? join(tmpdir(), `unsized-delta-requeue-${database.slice(0, 12)}.json`)
+  const checkpointPath = env.UNSIZED_DELTA_REQUEUE_CHECKPOINT
+    ?? buildUnsizedDeltaApplyCheckpointPath(database, options.createdAfter)
   let cursor = INITIAL_UNSIZED_DELTA_REQUEUE_CURSOR
   let limit = options.limit
 
-  try {
-    const saved = JSON.parse(await readFile(checkpointPath, 'utf8'))
-    if (saved.database !== database)
-      throw new Error('Checkpoint belongs to another database')
-    if (typeof saved.cursor?.lastId !== 'string' || !/^\d+$/.test(saved.cursor.lastId) || typeof saved.cursor.done !== 'boolean')
-      throw new Error('Invalid checkpoint cursor')
-    cursor = saved.cursor
-  }
-  catch (error: unknown) {
-    const err = error as { code?: string }
-    if (err.code !== 'ENOENT')
-      throw error
+  if (options.apply) {
+    try {
+      const saved = JSON.parse(await readFile(checkpointPath, 'utf8')) as {
+        createdAfter?: string | null
+        cursor?: UnsizedDeltaRequeueCursor
+        database?: string
+      }
+      if (saved.database !== database)
+        throw new Error('Checkpoint belongs to another database')
+      const savedCreatedAfter = saved.createdAfter ?? null
+      const currentCreatedAfter = options.createdAfter ?? null
+      if (savedCreatedAfter !== currentCreatedAfter)
+        throw new Error('Checkpoint filter does not match --created-after')
+      if (typeof saved.cursor?.lastId !== 'string' || !/^\d+$/.test(saved.cursor.lastId) || typeof saved.cursor.done !== 'boolean')
+        throw new Error('Invalid checkpoint cursor')
+      cursor = saved.cursor
+    }
+    catch (error: unknown) {
+      const err = error as { code?: string }
+      if (err.code !== 'ENOENT')
+        throw error
+    }
   }
 
   const client = new Client({ connectionString: databaseUrl })
   await client.connect()
   try {
-    while (!cursor.done) {
+    while (!cursor.done && (limit === undefined || limit > 0)) {
       const progress = await requeueUnsizedDeltaBatch(client, cursor, {
         apply: options.apply,
         batchSize: options.batchSize,
@@ -150,10 +173,16 @@ async function main() {
       cursor = progress.cursor
       if ('limit' in progress && typeof progress.limit === 'number')
         limit = progress.limit
-      await writeFile(`${checkpointPath}.tmp`, JSON.stringify({ database, cursor }), { mode: 0o600 })
-      await rename(`${checkpointPath}.tmp`, checkpointPath)
+      if (options.apply) {
+        await writeFile(`${checkpointPath}.tmp`, JSON.stringify({
+          createdAfter: options.createdAfter ?? null,
+          cursor,
+          database,
+        }), { mode: 0o600 })
+        await rename(`${checkpointPath}.tmp`, checkpointPath)
+      }
       console.log(JSON.stringify({ ...progress, apply: options.apply }))
-      if (cursor.done)
+      if (cursor.done || (typeof limit === 'number' && limit <= 0))
         break
     }
   }

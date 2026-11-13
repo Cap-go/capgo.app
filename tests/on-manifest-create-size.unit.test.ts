@@ -45,6 +45,21 @@ describe('on_manifest_create size lookup', () => {
 
   it.concurrent('treats definitive storage 404 as terminal missing object', () => {
     expect(s3TestUtils.isManifestStorageObjectDefinitelyMissing(missingDiagnostics())).toBe(true)
+    expect(s3TestUtils.isManifestStorageObjectDefinitelyMissing({
+      bucket: 'capgo',
+      candidateKeys: ['path/file.js'],
+      candidates: [{
+        fileId: 'path/file.js',
+        finalSize: 0,
+        head: { error: { status: 503, message: 'unavailable', name: 'Error', stack: undefined, cause: undefined }, size: 0, success: false },
+        range: { reason: 'head_error', size: 0, status: 404, statusText: 'Not Found' },
+        usedFallback: true,
+      }],
+      endpoint: 'https://example.invalid/',
+      fileId: 'path/file.js',
+      selectedCandidateKey: null,
+      size: 0,
+    })).toBe(true)
     expect(s3TestUtils.isManifestStorageObjectDefinitelyMissing(transientDiagnostics())).toBe(false)
     expect(s3TestUtils.isManifestStorageObjectDefinitelyMissing({
       ...missingDiagnostics(),
