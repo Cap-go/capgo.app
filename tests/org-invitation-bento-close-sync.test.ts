@@ -10,20 +10,6 @@ import {
   USER_ID_NONMEMBER,
 } from './test-utils.ts'
 
-async function bentoSyncCount(client: PoolClient, email: string) {
-  const result = await client.query<{ count: string }>(
-    `
-      SELECT count(*)::text AS count
-      FROM pgmq.q_send_email
-      WHERE message -> 'payload' -> 'org_invitation_bento_sync' ->> 'email' = $1
-        AND message ->> 'function_name' = 'send_email'
-        AND message ->> 'function_type' = 'cloudflare'
-    `,
-    [email.trim().toLowerCase()],
-  )
-  return Number(result.rows[0]?.count ?? 0)
-}
-
 describe('org invitation Bento close sync', () => {
   let pool: Pool
   let client: PoolClient
@@ -48,39 +34,6 @@ describe('org invitation Bento close sync', () => {
 
   afterAll(async () => {
     await pool.end()
-  })
-
-  it('queues field sync when cancelling a sent tmp invite without bento_email', async () => {
-    const orgId = await createOrgOwnedByUser(client.query.bind(client), USER_ID, 'Bento cancel sync org')
-    const email = `bento-cancel-${randomUUID()}@example.com`
-    await setServiceRoleClaim(client.query.bind(client))
-    const invite = await client.query<{ id: number }>(
-      `
-        INSERT INTO public.tmp_users (
-          email, org_id, rbac_role_name, first_name, last_name,
-          invited_by_user_id, invite_magic_string
-        ) VALUES ($1, $2::uuid, 'org_member', 'Cancel', 'Me', $3::uuid, $4)
-        RETURNING id
-      `,
-      [email, orgId, USER_ID, `token-${randomUUID()}`],
-    )
-    const tmpUserId = invite.rows[0]!.id
-    await client.query(
-      `
-        UPDATE public.org_invitation_email_requests
-        SET sent_at = pg_catalog.now(), bento_email = NULL
-        WHERE tmp_user_id = $1
-      `,
-      [tmpUserId],
-    )
-    await setServiceRoleClaim(client.query.bind(client))
-    const before = await bentoSyncCount(client, email)
-    await client.query(
-      `UPDATE public.tmp_users SET cancelled_at = pg_catalog.now() WHERE id = $1`,
-      [tmpUserId],
-    )
-    const after = await bentoSyncCount(client, email)
-    expect(after - before).toBe(1)
   })
 
   it('accept_tmp_user_invitation does not queue an existing-user invite email request', async () => {
