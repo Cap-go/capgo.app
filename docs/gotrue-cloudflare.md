@@ -41,7 +41,7 @@ then push it with `bun run deploy:cloudflare_env:gotrue:prod`.
   `postgres://gotrue_cf.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=verify-full&sslrootcert=/etc/ssl/certs/supabase-ca.crt`.
   Copy the pooler host from the dashboard's Connect dialog. Transaction mode (6543)
   breaks GoTrue's prepared statements.
-- `GOTRUE_JWT_SECRET`: required by GoTrue.
+- `GOTRUE_JWT_SECRET`: hosted Auth HS256 secret, required by GoTrue.
 - `GOTRUE_JWT_KEYS`: JSON array with the ES256 private JWK (`kid` = the standby key
   in the hosted JWKS), so the API accepts our tokens.
 - `GOTRUE_SAML_PRIVATE_KEY`: base64 DER RSA private key.
@@ -85,7 +85,7 @@ All through `http://localhost:8787/private/console/auth`:
 ## After merge: deploy and test against production
 
 CI deploys `capgo_gotrue-prod` on production releases that touch `cloudflare_workers/gotrue/`.
-The CI token needs Containers and Cloudchamber write permissions.
+The CI token needs Containers write, Cloudchamber write, and Account Secrets Store Edit permissions.
 
 1. Change the `gotrue_cf` password (see above), then fill and push `internal/cloudflare_gotrue_auth/.env.prod`.
 2. Run the API locally against the deployed Worker (needs `wrangler login` with Workers rights):
