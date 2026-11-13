@@ -113,11 +113,8 @@ beforeAll(async () => {
   const pool = new Pool({ connectionString: POSTGRES_URL, max: 1 })
   try {
     await pool.query(`
-      SELECT vault.update_secret(id, 'true')
-      FROM vault.secrets WHERE name = 'CAPGO_PLUGIN_STATE_SYNC_ENABLED'`)
-    await pool.query(`
-      SELECT vault.create_secret('true', 'CAPGO_PLUGIN_STATE_SYNC_ENABLED', 'plugin KV state tests')
-      WHERE NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'CAPGO_PLUGIN_STATE_SYNC_ENABLED')`)
+      INSERT INTO private.settings (name, value) VALUES ('CAPGO_PLUGIN_STATE_SYNC_ENABLED', 'true')
+      ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`)
     await pool.query(`
       SELECT public.enqueue_plugin_state_full_sync(ARRAY(
         SELECT a.app_id::text FROM public.apps a
