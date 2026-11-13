@@ -144,6 +144,7 @@ export interface EdgeCacheLookup<T> {
   hit: boolean
   /** Set when the loader failed; distinct from a cached or loaded missing app. */
   lookupFailed?: boolean
+  error?: unknown
 }
 
 async function cachedLookup<T>(

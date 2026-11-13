@@ -9,7 +9,7 @@ import { backgroundTask } from './utils.ts'
 
 const drizzleErrorNames = new Set(['DrizzleError', 'DrizzleQueryError', 'TransactionRollbackError'])
 const filesUploadFunctionNames = new Set(['files', 'TUS handler'])
-const queueRetryHeaderNames = {
+export const queueRetryHeaderNames = {
   maxReads: 'x-capgo-queue-max-reads',
   name: 'x-capgo-queue-name',
   readCount: 'x-capgo-queue-read-count',
