@@ -118,7 +118,7 @@ describe('deploy report atomic send gate', () => {
         LANGUAGE sql SET search_path = '' AS $$
           INSERT INTO public.report_queue VALUES ($2) RETURNING 1::bigint
         $$;
-        CREATE FUNCTION public.process_function_queue(text, integer) RETURNS void
+        CREATE FUNCTION public.process_function_queue(text, integer DEFAULT 950) RETURNS void
         LANGUAGE sql SET search_path = '' AS $$
           INSERT INTO public.wake_log VALUES ($1)
         $$;
