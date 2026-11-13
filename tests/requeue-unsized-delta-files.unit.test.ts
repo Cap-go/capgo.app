@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Client } from 'pg'
 import {
+  buildUnsizedDeltaApplyCheckpointPath,
   INITIAL_UNSIZED_DELTA_REQUEUE_CURSOR,
   parseUnsizedDeltaRequeueArgs,
   requeueUnsizedDeltaBatch,
@@ -9,6 +10,13 @@ import {
 describe('requeue_unsized_delta_files', () => {
   it.concurrent('rejects an empty --created-after value', () => {
     expect(() => parseUnsizedDeltaRequeueArgs(['bun', 'script', '--created-after='])).toThrow('--created-after must not be empty')
+  })
+
+  it.concurrent('uses different apply checkpoints per created-after filter', () => {
+    const dbHash = 'a'.repeat(64)
+    expect(buildUnsizedDeltaApplyCheckpointPath(dbHash)).not.toBe(
+      buildUnsizedDeltaApplyCheckpointPath(dbHash, '2026-11-12T14:18:42Z'),
+    )
   })
 
   it.concurrent('does not mark scan completion when --limit stops the invocation', async () => {
