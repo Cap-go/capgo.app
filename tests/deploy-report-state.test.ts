@@ -107,6 +107,33 @@ describe('deploy report atomic send gate', () => {
     })
   })
 
+  it.concurrent('wakes cron_email only when at least one report is queued', async () => {
+    await fixture(async (db, sql) => {
+      await db.query(sql(`
+        CREATE TABLE public.orgs (id uuid PRIMARY KEY, management_email text);
+        INSERT INTO public.orgs SELECT owner_org, 'report@example.com' FROM public.apps;
+        CREATE TABLE public.report_queue (payload jsonb);
+        CREATE TABLE public.wake_log (queue_name text);
+        CREATE FUNCTION public.queue_send(text, jsonb) RETURNS bigint
+        LANGUAGE sql SET search_path = '' AS $$
+          INSERT INTO public.report_queue VALUES ($2) RETURNING 1::bigint
+        $$;
+        CREATE FUNCTION public.process_function_queue(text, integer DEFAULT 950) RETURNS void
+        LANGUAGE sql SET search_path = '' AS $$
+          INSERT INTO public.wake_log VALUES ($1)
+        $$;
+        UPDATE public.deploy_history SET install_stats_email_sent_at = NULL;
+      `))
+      const wakeMigration = readFileSync(new URL('../supabase/migrations/20261113112649_deploy_install_stats_email_wake.sql', import.meta.url), 'utf8')
+      await db.query(sql(wakeMigration.replaceAll('pgmq.send', 'public.queue_send')))
+      await db.query(sql('SELECT public.process_deploy_install_stats_email()'))
+      expect((await db.query(sql('SELECT * FROM public.report_queue'))).rows).toHaveLength(1)
+      expect((await db.query(sql('SELECT * FROM public.wake_log'))).rows).toEqual([{ queue_name: 'cron_email' }])
+      await db.query(sql('SELECT public.process_deploy_install_stats_email()'))
+      expect((await db.query(sql('SELECT * FROM public.wake_log'))).rows).toHaveLength(1)
+    })
+  })
+
   it.concurrent('rejects a changed analytics window or bundle name', async () => {
     await fixture(async (db, sql, _claim, consume) => {
       await db.query(sql("UPDATE public.app_versions SET name = '2.0.0'"))
