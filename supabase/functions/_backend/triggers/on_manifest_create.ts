@@ -9,10 +9,11 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 import { isTransientDatabaseError } from '../utils/pg_errors.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { isRetryablePostgrestResult, retryWithBackoff } from '../utils/retry.ts'
-import { s3 } from '../utils/s3.ts'
+import * as manifestSizeBudget from '../utils/manifest_size_lookup_budget.ts'
+import { isManifestStorageObjectDefinitelyMissing, s3 } from '../utils/s3.ts'
 import { deltaFileS3PathSql, deltaSessionJoinSql } from '../utils/version_manifest_sql.ts'
 
-const SIZE_RETRY_ATTEMPTS = 1
+const SIZE_RETRY_ATTEMPTS = 4
 const SIZE_RETRY_DELAY_MS = 500
 const MANIFEST_UPDATE_RETRY_ATTEMPTS = 3
 const MANIFEST_UPDATE_RETRY_DELAY_MS = 300
@@ -32,17 +33,61 @@ function getQueueLogMetadata(c: Context): QueueLogMetadata {
     cfId: c.req.header('x-capgo-cf-id') ?? null,
   }
 }
-async function getManifestSizeWithRetry(c: Context, s3Path: string): Promise<{ diagnostics?: Awaited<ReturnType<typeof s3.getSizeDiagnostics>>, lastError?: unknown, attempts: number }> {
+export interface ManifestSizeLookupRetryResult {
+  attempts: number
+  diagnostics?: Awaited<ReturnType<typeof s3.getSizeDiagnostics>>
+  lastError?: unknown
+  spentSubrequests: number
+}
+
+export async function runManifestSizeLookupWithBudget(
+  c: Context,
+  candidateCount: number,
+  lookupSize: (ctx: Context) => Promise<Awaited<ReturnType<typeof s3.getSizeDiagnostics>>>,
+  retryDelayMs = SIZE_RETRY_DELAY_MS,
+): Promise<ManifestSizeLookupRetryResult> {
+  const perMessageBudget = c.get('manifestSizeLookupSubrequestBudgetPerMessage') as number | undefined
+  const effectiveCandidateCount = Math.max(1, Math.min(candidateCount, manifestSizeBudget.MANIFEST_SIZE_MAX_CANDIDATE_KEYS))
+  const attemptsCap = perMessageBudget === undefined
+    ? SIZE_RETRY_ATTEMPTS
+    : manifestSizeBudget.maxManifestSizeLookupAttemptsForBudget(perMessageBudget, effectiveCandidateCount, SIZE_RETRY_ATTEMPTS)
+  const perAttemptWorstCase = manifestSizeBudget.worstCaseSubrequestsPerAttemptForCandidateCount(effectiveCandidateCount)
+  let spentSubrequests = 0
+
   const { result, lastError, attempts } = await retryWithBackoff(
-    () => s3.getSizeDiagnostics(c, s3Path),
+    () => lookupSize(c),
     {
-      attempts: SIZE_RETRY_ATTEMPTS,
-      baseDelayMs: SIZE_RETRY_DELAY_MS,
-      shouldRetry: diagnostics => diagnostics.size <= 0,
+      attempts: attemptsCap,
+      baseDelayMs: retryDelayMs,
+      shouldRetry: (diagnostics) => {
+        spentSubrequests += manifestSizeBudget.estimateManifestSizeLookupSubrequests(diagnostics)
+        if (diagnostics.size > 0)
+          return false
+        if (isManifestStorageObjectDefinitelyMissing(diagnostics))
+          return false
+        if (perMessageBudget !== undefined
+          && spentSubrequests + perAttemptWorstCase > perMessageBudget)
+          return false
+        return diagnostics.size <= 0
+      },
     },
   )
 
-  return { attempts, diagnostics: result, lastError }
+  return { attempts, diagnostics: result, lastError, spentSubrequests }
+}
+
+async function getManifestSizeWithRetry(
+  c: Context,
+  s3Path: string,
+  retryDelayMs = SIZE_RETRY_DELAY_MS,
+): Promise<ManifestSizeLookupRetryResult> {
+  const candidateCount = manifestSizeBudget.manifestStorageCandidateCount(s3Path)
+  return runManifestSizeLookupWithBudget(
+    c,
+    candidateCount,
+    lookupCtx => s3.getSizeDiagnostics(lookupCtx, s3Path),
+    retryDelayMs,
+  )
 }
 
 async function runManifestUpdateWithRetry(
@@ -134,8 +179,20 @@ export async function updateDeltaFileSize(c: Context, record: DeltaFileRecord, q
     const { diagnostics, lastError, attempts } = await getManifestSizeWithRetry(c, s3Path)
     const size = diagnostics?.size ?? 0
     if (size <= 0) {
+      if (diagnostics && isManifestStorageObjectDefinitelyMissing(diagnostics)) {
+        cloudlogErr({
+          requestId: c.get('requestId'),
+          message: 'delta file storage object missing, acking queue without file_size',
+          id: record.id,
+          s3_path: s3Path,
+          attempts,
+          queue,
+          storageDiagnostics: diagnostics,
+        })
+        return c.json(BRES)
+      }
       cloudlogErr({ requestId: c.get('requestId'), message: 'delta file getSize returned 0 after retries', id: record.id, s3_path: s3Path, attempts, queue, error: lastError, storageDiagnostics: diagnostics })
-      // Non-2xx keeps the message under the 5-read queue budget.
+      // Non-2xx keeps only this message under the queue retry budget.
       throw quickError(503, 'manifest_size_not_found', 'Manifest file size metadata was not found', { attempts, id: record.id, queue, s3_path: s3Path, storageDiagnostics: diagnostics }, lastError, { alert: false })
     }
 
@@ -163,6 +220,7 @@ app.post('/', middlewareAPISecret, triggerValidator(['manifest', 'delta_files'],
 })
 
 export const onManifestCreateTestUtils = {
+  getManifestSizeWithRetry,
   isRetryablePostgrestResult,
   runManifestUpdateWithRetry,
   sizeRetryAttempts: SIZE_RETRY_ATTEMPTS,
