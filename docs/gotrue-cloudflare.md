@@ -15,7 +15,7 @@ console → API relay /private/console/auth/* → GOTRUE service binding
 - Worker: `cloudflare_workers/gotrue/` (Dockerfile, `index.ts`, `wrangler.jsonc`).
 - Non-secret settings: `vars` in `cloudflare_workers/gotrue/wrangler.jsonc`, mirroring the hosted Auth config.
 - Relay: `supabase/functions/_backend/private/console_auth_proxy.ts` sends to GoTrue when the `GOTRUE` binding exists, otherwise to hosted Supabase (unchanged).
-- Grants: `supabase/migrations/20261112230000_gotrue_cf_auth_hooks.sql` lets `gotrue_cf` call the two Postgres auth hooks.
+- Grants: `supabase/migrations/20261113124358_gotrue_cf_auth_hooks.sql` lets `gotrue_cf` call the two Postgres auth hooks.
 
 GoTrue reads its database namespace from `DB_NAMESPACE` (not `GOTRUE_DB_NAMESPACE`).
 With the wrong name it silently uses `auth`.
