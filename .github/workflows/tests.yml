@@ -360,6 +360,26 @@ jobs:
       - name: Run DB tests against Tinbase
         run: bash scripts/test-db-tinbase.sh
 
+  test_local_db:
+    needs: changes
+    if: needs.changes.outputs.run_capgo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Provision local Postgres (no Supabase stack)
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6 # v6
+      - name: Setup bun
+        run: bash scripts/setup-bun.sh
+      - name: Start local Postgres
+        run: bun run db:up
+      - name: Provision (bootstrap, migrations, seed)
+        run: bun run db:provision
+      - name: Provision again (must be a no-op)
+        run: bun run db:provision
+
   test_backend:
     needs: changes
     if: needs.changes.outputs.run_capgo == 'true'
@@ -1729,6 +1749,7 @@ jobs:
       - lint_typecheck
       - test_unit
       - test_db
+      - test_local_db
       - test_backend
       - test_backend_plugin
       - test_backend_sql
