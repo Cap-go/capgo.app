@@ -18,7 +18,20 @@ const REST_PATH_ALLOWED: Record<string, string> = {
   'tests/sql-rest-request.ts': 'documents the request shape it replaces',
 }
 
-const SUPABASE_JS_CREATE_CLIENT_ALLOWED = new Set(['tests/sql-data-client.ts'])
+const SUPABASE_JS_CREATE_CLIENT_ALLOWED = new Set(['tests/sql-data-client.ts', 'tests/no-postgrest-in-tests.unit.test.ts'])
+
+const SUPABASE_JS = String.raw`['"]@supabase/supabase-js['"]`
+const SUPABASE_JS_CLIENT_ACCESS = [
+  // import { createClient } / { createClient as x }
+  new RegExp(String.raw`import\s+\{[^}]*\bcreateClient\b[^}]*\}\s+from\s+${SUPABASE_JS}`),
+  // import * as x / import x (default): x.createClient(...)
+  new RegExp(String.raw`import\s+(?!type\b)(?:\*\s+as\s+)?\w+\s+from\s+${SUPABASE_JS}`),
+  new RegExp(String.raw`require\(\s*${SUPABASE_JS}\s*\)`),
+]
+
+function canCreateSupabaseJsClient(source: string): boolean {
+  return SUPABASE_JS_CLIENT_ACCESS.some(pattern => pattern.test(source))
+}
 
 function testFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -43,10 +56,27 @@ describe('tests never rely on PostgREST', () => {
   })
 
   it('no test builds a supabase-js client whose from()/rpc() would reach PostgREST', () => {
-    const valueImport = /import\s+\{[^}]*\bcreateClient\b[^}]*\}\s+from\s+['"]@supabase\/supabase-js['"]/
     const offenders = files
-      .filter(file => !SUPABASE_JS_CREATE_CLIENT_ALLOWED.has(file.name) && valueImport.test(file.source))
+      .filter(file => !SUPABASE_JS_CREATE_CLIENT_ALLOWED.has(file.name) && canCreateSupabaseJsClient(file.source))
       .map(file => file.name)
     expect(offenders).toEqual([])
+  })
+
+  it.each([
+    'import { createClient } from \'@supabase/supabase-js\'',
+    'import { PostgrestError, createClient as make } from "@supabase/supabase-js"',
+    'import * as supabase from \'@supabase/supabase-js\'',
+    'import supabase from \'@supabase/supabase-js\'',
+    'const { createClient } = require(\'@supabase/supabase-js\')',
+  ])('flags %s', (source) => {
+    expect(canCreateSupabaseJsClient(source)).toBe(true)
+  })
+
+  it.each([
+    'import type { SupabaseClient } from \'@supabase/supabase-js\'',
+    'import { PostgrestError } from \'@supabase/supabase-js\'',
+    'import { createClient } from \'./sql-data-client\'',
+  ])('allows %s', (source) => {
+    expect(canCreateSupabaseJsClient(source)).toBe(false)
   })
 })
