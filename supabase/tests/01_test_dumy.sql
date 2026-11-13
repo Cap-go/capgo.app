@@ -5,7 +5,7 @@ BEGIN;
 SELECT plan(1);
 
 -- run your test
-SELECT ok(true, 'test passed');
+SELECT ok(false, 'test passed');
 
 -- check the results of your test
 SELECT *
