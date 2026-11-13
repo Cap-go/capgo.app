@@ -3,7 +3,7 @@
  * MCP cloud-build spawn command resolution (Windows-safe node entry, not npx.cmd).
  */
 import process from 'node:process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -11,6 +11,8 @@ const {
   resolveCapgoBuildSpawnCommand,
   resolveCurrentCliEntry,
   resolveCurrentCliEntryFromModulePath,
+  formatSpawnCommand,
+  buildJobDeps,
 } = await import('../src/build/onboarding/mcp/build-tools.ts')
 
 let pass = 0
@@ -59,6 +61,36 @@ test('resolveCapgoBuildSpawnCommand uses node execPath, not npx', () => {
   eq(args[1], 'build')
   eq(args[2], 'request')
   eq(args[3], 'com.acme.app')
+})
+
+test('formatSpawnCommand quotes arguments that contain spaces', () => {
+  const line = formatSpawnCommand(process.execPath, ['C:\\Program Files\\capgo\\index.js', 'build', 'request'])
+  eq(line, `${process.execPath} "C:\\\\Program Files\\\\capgo\\\\index.js" build request`)
+})
+
+test('spawnBuild writes the start line and resolve error when entry resolution fails', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'capgo-mcp-spawn-fail-'))
+  const logPath = join(dir, 'build.log')
+  const recordPath = join(dir, 'record.json')
+  let failure
+  const deps = buildJobDeps(() => cwd, {
+    resolveSpawnCommand: () => {
+      throw new Error('Could not resolve the running Capgo CLI entry script')
+    },
+  })
+  const child = deps.spawnBuild({
+    appId: 'com.acme.app',
+    platform: 'android',
+    recordPath,
+    logPath,
+    onProcessFailure: (message) => { failure = message },
+  })
+  eq(child.pid, -1)
+  const log = readFileSync(logPath, 'utf8')
+  ok(/Starting cloud build:/.test(log))
+  ok(/Failed to resolve CLI entry:/.test(log))
+  eq(failure, '[capgo] Failed to resolve CLI entry: Could not resolve the running Capgo CLI entry script')
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test('resolveCapgoBuildSpawnCommand on win32 still uses execPath', () => {

@@ -44,7 +44,7 @@ function buildLogPath(appId: string, platform: Platform): string {
  * process, not `@capgo/cli@latest` via npx).
  */
 export function resolveCurrentCliEntryFromModulePath(modulePath: string, cwd: string): string {
-  // Production `build.mjs` bundles MCP build helpers into dist/index.js — spawn self.
+  // Production `build.mjs` bundles MCP build helpers into dist/index.js, so spawn self.
   if (/(?:^|[/\\])dist[/\\]index\.js$/i.test(modulePath))
     return modulePath
 
@@ -96,8 +96,14 @@ export function resolveCapgoBuildSpawnCommand(
   }
 }
 
-function formatSpawnCommand(command: string, args: readonly string[]): string {
-  return [command, ...args].join(' ')
+export function quoteSpawnArg(arg: string): string {
+  if (!/[\s"'\\]/.test(arg))
+    return arg
+  return `"${arg.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+}
+
+export function formatSpawnCommand(command: string, args: readonly string[]): string {
+  return [command, ...args.map(quoteSpawnArg)].join(' ')
 }
 
 function recordHasTerminalPayload(recordPath: string): boolean {
@@ -117,23 +123,18 @@ function recordHasTerminalPayload(recordPath: string): boolean {
  * stops the local watcher; the cloud build may still finish — surfaced in the
  * result). All injectable for tests (test-mcp-build-job covers the manager).
  */
-export function buildJobDeps(cwd: string | (() => string)): BuildJobDeps {
+export type ResolveCapgoBuildSpawnCommand = typeof resolveCapgoBuildSpawnCommand
+
+export function buildJobDeps(
+  cwd: string | (() => string),
+  testOverrides?: { resolveSpawnCommand?: ResolveCapgoBuildSpawnCommand },
+): BuildJobDeps {
   const getCwd = typeof cwd === 'function' ? cwd : () => cwd
+  const resolveSpawn = testOverrides?.resolveSpawnCommand ?? resolveCapgoBuildSpawnCommand
   return {
     spawnBuild: ({ appId, platform, recordPath, logPath, onProcessFailure }): BuildChild => {
       mkdirSync(dirname(logPath), { recursive: true })
       const buildCwd = getCwd()
-      const { command, args } = resolveCapgoBuildSpawnCommand(buildCwd, appId, platform, recordPath)
-      const commandLine = formatSpawnCommand(command, args)
-      writeFileSync(logPath, `[capgo] Starting cloud build: ${commandLine} (cwd ${buildCwd})\n`, 'utf8')
-      const fd = openSync(logPath, 'a')
-      const child = crossSpawn(command, args, { cwd: buildCwd, stdio: ['ignore', fd, fd], detached: false })
-      try {
-        closeSync(fd)
-      }
-      catch {
-        // the child inherited its own dup of the fd; the parent copy is closable
-      }
       const notifyFailure = (message: string) => {
         try {
           appendFileSync(logPath, `${message}\n`, 'utf8')
@@ -142,6 +143,44 @@ export function buildJobDeps(cwd: string | (() => string)): BuildJobDeps {
           // best-effort log append
         }
         onProcessFailure?.(message)
+      }
+      const placeholderLine = formatSpawnCommand(process.execPath, [
+        '<capgo-cli-entry>',
+        'build',
+        'request',
+        appId,
+        '--platform',
+        platform,
+        '--output-upload',
+        '--output-record',
+        recordPath,
+      ])
+      let command: string
+      let args: string[]
+      let commandLine: string
+      try {
+        ({ command, args } = resolveSpawn(buildCwd, appId, platform, recordPath))
+        commandLine = formatSpawnCommand(command, args)
+      }
+      catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        commandLine = placeholderLine
+        writeFileSync(logPath, `[capgo] Starting cloud build: ${commandLine} (cwd ${buildCwd})\n`, 'utf8')
+        notifyFailure(`[capgo] Failed to resolve CLI entry: ${message}`)
+        return {
+          pid: -1,
+          kill: () => {},
+          exited: Promise.resolve(null),
+        }
+      }
+      writeFileSync(logPath, `[capgo] Starting cloud build: ${commandLine} (cwd ${buildCwd})\n`, 'utf8')
+      const fd = openSync(logPath, 'a')
+      const child = crossSpawn(command, args, { cwd: buildCwd, stdio: ['ignore', fd, fd], detached: false })
+      try {
+        closeSync(fd)
+      }
+      catch {
+        // the child inherited its own dup of the fd; the parent copy is closable
       }
       const exited = new Promise<number | null>((resolve) => {
         child.once('exit', (code) => {
