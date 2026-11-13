@@ -94,6 +94,11 @@ When a hosted MCP poll sees a job still `running` past the app's configured time
 - 🌐 **Open Source Backend**: Self install
   [our backend](https://github.com/Cap-go/capgo) in your infra
 
+### Org billing address and tax ID
+
+Org admins can set Stripe billing address and VAT or tax ID in the console under
+Organization settings, Billing without Stripe Customer Portal.
+
 ### Security updates
 
 The Capgo console shows **published** Capacitor security advisories and optional email

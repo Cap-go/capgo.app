@@ -9,6 +9,7 @@ import IconDownload from '~icons/heroicons/arrow-down-tray'
 import IconCard from '~icons/heroicons/credit-card'
 import IconExclamationTriangle from '~icons/heroicons/exclamation-triangle'
 import IconShieldCheck from '~icons/heroicons/shield-check'
+import BillingProfileSection from '~/components/billing/BillingProfileSection.vue'
 import CancelPlanModal from '~/components/billing/CancelPlanModal.vue'
 import CardFormModal from '~/components/billing/CardFormModal.vue'
 import TrialPlanOfferModal from '~/components/billing/TrialPlanOfferModal.vue'
@@ -19,7 +20,7 @@ import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { checkPermissions } from '~/services/permissions'
 import { cancelTrialPlan, formatStripeAmount, getBillingOverview, payOpenInvoice, removeBackupCard, resumeSubscription, scheduleTrialPlan } from '~/services/stripe'
 import { useDisplayStore } from '~/stores/display'
-import { useOrganizationStore } from '~/stores/organization'
+import { isAdminRole, useOrganizationStore } from '~/stores/organization'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -47,6 +48,7 @@ const permissionModal = ref<'org.read_billing' | 'org.update_billing' | null>(nu
 let loadRun = 0
 
 const orgId = computed(() => currentOrganization.value?.gid ?? '')
+const canManageBillingProfile = computed(() => isAdminRole(currentOrganization.value?.role))
 const card = computed(() => overview.value?.card ?? null)
 const backupCard = computed(() => overview.value?.backupCard ?? null)
 // No publishable key: Stripe.js forms are unavailable, server-side actions still work.
@@ -548,6 +550,8 @@ onMounted(async () => {
             </div>
           </section>
         </div>
+
+        <BillingProfileSection v-if="canManageBillingProfile" :org-id="orgId" />
 
         <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-800/60" data-test="billing-invoices">
           <h2 class="border-b border-slate-100 px-5 py-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:border-white/10 dark:text-slate-400">
