@@ -1258,6 +1258,9 @@ export default {
         if (circuit.hasEntry && canSpend(budget, 1, hintReserve + fallbackReserve))
           await cacheDelete(budget, getCircuitBreakerCacheKey(hostname, colo, workerUrl))
         console.log(`Request served by ${workerUrl}`)
+        // A KV canary response must not seed any cache shared with DB/control
+        // devices. Keep rate-limit hints, but never learn its app-wide answers.
+        const canCacheWorkerAnswer = !response.headers.get('X-Plugin-State')?.startsWith('kv')
 
         // Check if this is an on-prem response that should be cached
         if (appId && endpoint) {
@@ -1271,14 +1274,14 @@ export default {
             // served but not cached.
             if (isOnPremResponse(response.status, responseBody) && !response.headers.has(EDGE_IP_LIMIT_HEADER)) {
               console.log(`On-prem detected by ${workerUrl} for ${appId}${fallbackFailure ? ' (after fallback failure, not caching)' : ''}`)
-              if (!fallbackFailure && edgeKey)
+              if (!fallbackFailure && edgeKey && canCacheWorkerAnswer)
                 await setOnPremCache(budget, edgeKey, appId, endpoint, method, responseBody, response.status, response.headers)
               return buildOnPremResponse(appId, responseBody, response.status, response.headers)
             }
 
             if (isPlanUpgradeResponse(response.status, responseBody)) {
               // Cache plan-upgrade responses for a short TTL to reduce burst traffic
-              if (edgeKey)
+              if (edgeKey && canCacheWorkerAnswer)
                 await setPlanUpgradeCache(budget, edgeKey, appId, endpoint, method, responseBody, response.status, response.headers)
 
               const newHeaders = new Headers(response.headers)
@@ -1295,7 +1298,7 @@ export default {
           catch {
             // Response is not JSON or parsing failed - skip on-prem cache check and return original response
           }
-          return await handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, !fallbackFailure)
+          return await handleEdgeHints(budget, response, request, hostname, edgeKey, appId, endpoint, !fallbackFailure && canCacheWorkerAnswer)
         }
 
         return response

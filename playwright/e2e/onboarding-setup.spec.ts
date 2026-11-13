@@ -798,6 +798,76 @@ test.describe('Dashboard exploration and returning to v3 setup', () => {
     })
   }
 
+  test('dismisses the CI/CD reminder per app, persists it after reload and restores it from settings', async ({ page }) => {
+    const dashboard = `/app/${appId}?version=3&otaInstalled=1`
+    await page.goto(dashboard)
+    await page.evaluate(() => {
+      (window as any).onboardingSetupPreview.sidebarApps.value = [{
+        app_id: 'com.example.other-ci-app',
+        owner_org: '00000000-0000-4000-8000-000000000002',
+        name: 'Other app',
+        icon_url: '',
+        need_onboarding: false,
+        onboarding: { getting_started_dismissed_at: '2026-11-01T00:00:00.000Z', features: { ota: { succeeded_at: '2026-11-01T00:00:00.000Z' } } },
+      }]
+    })
+    const primary = page.getByRole('link', { name: 'Set up CI/CD — My Capacitor app', exact: true })
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(2)
+    await page.getByRole('button', { name: /My Capacitor app$/ }).click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(1)
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveAccessibleName('Set up CI/CD — Other app')
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdLedger.value)).not.toHaveProperty('marked_done_at')
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdSetupCalls)).toEqual([{ p_app_id: appId, p_event: 'dismissed' }])
+
+    await page.reload()
+    await expect(primary).toHaveCount(0)
+    await page.goto(`/app/${appId}/settings?version=3&otaInstalled=1`)
+    const restore = page.locator('[data-test="cicd-reminder-restore"]')
+    await expect(restore).toBeVisible()
+    await expect(page.locator('[data-test="getting-started-guide-open"]')).toHaveAttribute('href', `/app/${appId}/getting-started?showChecklist=1`)
+    await restore.click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveAccessibleName('Set up CI/CD — My Capacitor app')
+    await page.reload()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toBeVisible()
+    await page.locator('[data-test="cicd-guide-open"]').click()
+    await expect(page.getByRole('heading', { name: 'Automate live updates with CI/CD' })).toBeVisible()
+  })
+
+  test('keeps a newly opened CI/CD guide visible when an earlier sidebar dismissal finishes', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdReminderDelayMs = 1000 })
+    await page.locator('[data-test="cicd-nav-dismiss"]').click()
+    await page.evaluate(appId => (window as any).onboardingSetupPreview.navigate(`/app/${appId}/ci-cd?product=ota`), appId)
+    await expect(page.locator('[data-test="cicd-guide"]')).toBeVisible()
+    await expect.poll(() => page.evaluate(() => (window as any).onboardingSetupPreview.state.cicdReminderResponses)).toBe(1)
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(page).toHaveURL(`/app/${appId}/ci-cd?product=ota`)
+    await expect(page.locator('[data-test="cicd-guide"]')).toBeVisible()
+  })
+
+  test('keeps the CI/CD reminder available when dismissal fails', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdDismissError = true })
+    await page.locator('[data-test="cicd-nav-dismiss"]').click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toBeVisible()
+    await expect(page.getByText('Could not hide the CI/CD reminder. Please try again.', { exact: true })).toBeVisible()
+    await expect(page.locator('[data-test="cicd-nav-dismiss"]')).toBeEnabled()
+    expect(await page.evaluate(() => (window as any).onboardingSetupPreview.cicdLedger.value)).toBeUndefined()
+  })
+
+  test('keeps the CI/CD reminder dismissed when restoring fails', async ({ page }) => {
+    await page.goto(`/app/${appId}?version=3&otaInstalled=1`)
+    await page.locator('[data-test="cicd-nav-dismiss"]').click()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+    await page.goto(`/app/${appId}/settings?version=3&otaInstalled=1`)
+    await page.evaluate(() => { (window as any).onboardingSetupPreview.state.cicdRestoreError = true })
+    const restore = page.locator('[data-test="cicd-reminder-restore"]')
+    await restore.click()
+    await expect(page.getByText('Could not restore the CI/CD reminder. Please try again.', { exact: true })).toBeVisible()
+    await expect(restore).toBeEnabled()
+    await expect(page.locator('[data-test="cicd-nav-link"]')).toHaveCount(0)
+  })
+
   test('refreshes the sidebar after CI connects while outside the guide', async ({ page }) => {
     await page.clock.install()
     await page.goto(`/app/${appId}?version=3&otaInstalled=1`)

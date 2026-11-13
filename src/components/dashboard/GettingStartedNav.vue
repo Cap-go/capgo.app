@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { OrganizationApp } from '~/stores/organization'
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import IconX from '~icons/lucide/x'
+import { toast } from 'vue-sonner'
+import GettingStartedDismissButton from '~/components/dashboard/GettingStartedDismissButton.vue'
+import { setCiCdReminderDismissed } from '~/services/cicdReminder'
 import { useConsole } from '~/services/console'
 import { useMainStore } from '~/stores/main'
 import { useOrganizationStore } from '~/stores/organization'
@@ -64,6 +66,30 @@ const appEntries = computed(() => {
 })
 const apps = computed(() => appEntries.value.gettingStarted)
 const cicdApps = computed(() => appEntries.value.cicd)
+const dismissingCiCd = reactive(new Set<string>())
+
+async function dismissCiCd(app: OrganizationApp) {
+  const appId = app.app_id
+  if (dismissingCiCd.has(appId))
+    return
+  const startedOnGuide = isCiCdActive(appId)
+  const startingRoute = route.fullPath
+  dismissingCiCd.add(appId)
+  try {
+    const onboarding = await setCiCdReminderDismissed(appId, true)
+    organizationStore.updateAppOnboarding(appId, onboarding)
+    toast.success(t('cicd-reminder-hidden'))
+    if (startedOnGuide && route.fullPath === startingRoute)
+      await router.push(`/app/${encodeURIComponent(appId)}`)
+  }
+  catch (error) {
+    console.error('Cannot dismiss CI/CD reminder', error)
+    toast.error(t('cicd-reminder-dismiss-error'))
+  }
+  finally {
+    dismissingCiCd.delete(appId)
+  }
+}
 
 function appLabel(app: OrganizationApp) {
   return app.name || app.app_id
@@ -210,50 +236,56 @@ onUnmounted(() => {
               {{ t('getting-started') }}
             </span>
           </router-link>
-          <button
+          <GettingStartedDismissButton
             v-if="!props.compact"
-            type="button"
-            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors duration-150 hover:bg-slate-700/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
-            :aria-label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"
-            data-test="getting-started-nav-dismiss"
+            :label="`${t('getting-started-dismiss')} — ${appLabel(app)}`"
+            test-id="getting-started-nav-dismiss"
             @click="dismiss(app, $event)"
-          >
-            <IconX class="size-4" />
-          </button>
+          />
         </div>
       </li>
       <li v-for="app in cicdApps" :key="`cicd-${app.app_id}`">
-        <!-- No dismiss button: this stays until CI ships once or the guide marks it set up. -->
-        <router-link
-          class="d-btn d-btn-ghost flex min-h-11 h-auto w-full min-w-0 items-center justify-start rounded-lg border-none p-0 shadow-none transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
-          :class="isCiCdActive(app.app_id) ? 'bg-azure-500/20 hover:bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20'"
-          :to="cicdLocation(app)"
-          :aria-current="isCiCdActive(app.app_id) ? 'page' : undefined"
-          :aria-label="`${t('setup-checklist-cicd-start')} — ${appLabel(app)}`"
-          :title="`${t('setup-checklist-cicd-start')} — ${appLabel(app)}`"
-          data-test="cicd-nav-link"
+        <div
+          class="flex items-center rounded-lg transition-colors duration-150"
+          :class="isCiCdActive(app.app_id) ? 'bg-azure-500/20' : 'bg-azure-500/10 hover:bg-azure-500/20'"
         >
-          <span class="flex w-12 h-11 shrink-0 items-center justify-center">
-            <img
-              v-if="app.icon_url"
-              :src="app.icon_url"
-              :alt="`${appLabel(app)} icon`"
-              class="size-6 shrink-0 rounded-sm object-cover d-mask d-mask-squircle"
-              width="24"
-              height="24"
-            >
-            <span
-              v-else
-              class="flex size-6 shrink-0 items-center justify-center rounded-sm bg-slate-700 text-[10px] font-semibold text-slate-200 d-mask d-mask-squircle"
-              aria-hidden="true"
-            >
-              {{ acronym(appLabel(app)) }}
+          <router-link
+            class="d-btn d-btn-ghost flex min-h-11 h-auto min-w-0 flex-1 items-center justify-start border-none bg-transparent p-0 shadow-none hover:bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-azure-500"
+            :to="cicdLocation(app)"
+            :aria-current="isCiCdActive(app.app_id) ? 'page' : undefined"
+            :aria-label="`${t('setup-checklist-cicd-start')} — ${appLabel(app)}`"
+            :title="`${t('setup-checklist-cicd-start')} — ${appLabel(app)}`"
+            data-test="cicd-nav-link"
+          >
+            <span class="flex w-12 h-11 shrink-0 items-center justify-center">
+              <img
+                v-if="app.icon_url"
+                :src="app.icon_url"
+                :alt="`${appLabel(app)} icon`"
+                class="size-6 shrink-0 rounded-sm object-cover d-mask d-mask-squircle"
+                width="24"
+                height="24"
+              >
+              <span
+                v-else
+                class="flex size-6 shrink-0 items-center justify-center rounded-sm bg-slate-700 text-[10px] font-semibold text-slate-200 d-mask d-mask-squircle"
+                aria-hidden="true"
+              >
+                {{ acronym(appLabel(app)) }}
+              </span>
             </span>
-          </span>
-          <span class="min-w-0 truncate pr-2 text-sm font-medium text-azure-100 whitespace-nowrap">
-            {{ t('setup-checklist-cicd-start') }}
-          </span>
-        </router-link>
+            <span class="min-w-0 truncate pr-2 text-sm font-medium text-azure-100 whitespace-nowrap">
+              {{ t('setup-checklist-cicd-start') }}
+            </span>
+          </router-link>
+          <GettingStartedDismissButton
+            v-if="!props.compact"
+            :label="`${t('cicd-reminder-dismiss')} — ${appLabel(app)}`"
+            :disabled="dismissingCiCd.has(app.app_id)"
+            test-id="cicd-nav-dismiss"
+            @click="dismissCiCd(app)"
+          />
+        </div>
       </li>
     </ul>
   </div>

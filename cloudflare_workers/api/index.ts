@@ -59,6 +59,8 @@ import { app as stripe_billing } from '../../supabase/functions/_backend/private
 import { app as stripe_checkout } from '../../supabase/functions/_backend/private/stripe_checkout.ts'
 import { app as stripe_past_due } from '../../supabase/functions/_backend/private/stripe_past_due.ts'
 import { app as simulator } from '../../supabase/functions/_backend/private/simulator.ts'
+import { app as adminSecurityUpdates } from '../../supabase/functions/_backend/private/admin_security_updates.ts'
+import { app as securityUpdates } from '../../supabase/functions/_backend/private/security_updates.ts'
 import { app as stripe_portal } from '../../supabase/functions/_backend/private/stripe_portal.ts'
 import { app as update_delivery_stats } from '../../supabase/functions/_backend/private/update_delivery_stats.ts'
 import { app as validate_password_compliance } from '../../supabase/functions/_backend/private/validate_password_compliance.ts'
@@ -115,6 +117,7 @@ import { app as pluginNotifications } from '../../supabase/functions/_backend/tr
 import { app as queue_consumer } from '../../supabase/functions/_backend/triggers/queue_consumer.ts'
 import { app as stripe_event } from '../../supabase/functions/_backend/triggers/stripe_event.ts'
 import { app as stripe_event_us } from '../../supabase/functions/_backend/triggers/stripe_event_us.ts'
+import { app as plugin_state_sync } from '../../supabase/functions/_backend/triggers/plugin_state_sync.ts'
 import { app as updates_cache_purge } from '../../supabase/functions/_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../../supabase/functions/_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../../supabase/functions/_backend/triggers/webhook_dispatcher.ts'
@@ -204,6 +207,8 @@ appPrivate.route('/release_live', release_live)
 appPrivate.route('/stripe_checkout', stripe_checkout)
 appPrivate.route('/stripe_billing', stripe_billing)
 appPrivate.route('/simulator', simulator)
+appPrivate.route('/security_updates', securityUpdates)
+appPrivate.route('/admin_security_updates', adminSecurityUpdates)
 appPrivate.route('/stripe_portal', stripe_portal)
 appPrivate.route('/stripe_past_due', stripe_past_due)
 appPrivate.route('/verify_email_otp', verify_email_otp)
@@ -257,6 +262,8 @@ appTriggers.route('/on_deploy_history_create', on_deploy_history_create)
 appTriggers.route('/stripe_event', stripe_event)
 appTriggers.route('/stripe_event_us', stripe_event_us)
 appTriggers.route('/updates_cache_purge', updates_cache_purge)
+// Writes the KV plugin state (PLUGIN_STATE) from the primary database.
+appTriggers.route('/plugin_state_sync', plugin_state_sync)
 appTriggers.route('/on_organization_create', on_organization_create)
 appTriggers.route('/cron_stat_app', cron_stat_app)
 appTriggers.route('/cron_stat_org', cron_stat_org)

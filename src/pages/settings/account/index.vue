@@ -487,53 +487,64 @@ async function submit(form: { first_name: string, last_name: string, email: stri
     return
   }
   isLoading.value = true
-
-  const updateData: Database['public']['Tables']['users']['Insert'] = {
-    id: main.user?.id,
-    first_name: form.first_name,
-    last_name: form.last_name,
-    email: main.user.email,
-    country: form.country,
-    discord_username: form.discord_username || null,
-    // Keep "follow UI language" (null) unless the user picked a different format.
-    format_locale: !main.user.format_locale && formatLocale === currentFormatLocale ? null : formatLocale,
-  }
-
-  if (main.user?.email !== form.email) {
-    const data = await capgo.auth.updateUser({ email: form.email })
-    // The new address only applies once confirmed; keep showing the current one. The other
-    // fields keep the user's edits until the profile save below returns.
-    accountEmail.value = main.user.email ?? ''
-    accountSubmitted.value = false
-    if (data.error && data.error.name === 'AuthApiError') {
-      isLoading.value = false
-      return toast.error(t('email-already-taken'))
+  try {
+    const updateData: Database['public']['Tables']['users']['Insert'] = {
+      id: main.user?.id,
+      first_name: form.first_name,
+      last_name: form.last_name,
+      email: main.user.email,
+      country: form.country,
+      discord_username: form.discord_username || null,
+      // Keep "follow UI language" (null) unless the user picked a different format.
+      format_locale: !main.user.format_locale && formatLocale === currentFormatLocale ? null : formatLocale,
     }
-    toast.success(t('confirm-new-email-sent'), {
-      duration: 10000,
-    })
-    // public.users.email follows the auth email; it syncs once the change is confirmed.
+
+    if (main.user?.email !== form.email) {
+      const data = await capgo.auth.updateUser({ email: form.email })
+      // The new address only applies once confirmed; keep showing the current one. The other
+      // fields keep the user's edits until the profile save below returns.
+      accountEmail.value = main.user.email ?? ''
+      accountSubmitted.value = false
+      if (data.error && data.error.name === 'AuthApiError') {
+        return toast.error(t('email-already-taken'))
+      }
+      if (data.error) {
+        return toast.error(t('something-went-wrong-try-again-later'))
+      }
+      toast.success(t('confirm-new-email-sent'), {
+        duration: 10000,
+      })
+      // public.users.email follows the auth email; it syncs once the change is confirmed.
+    }
+
+    const { data: usr, error: dbError } = await capgo
+      .from('users')
+      .upsert(updateData, { onConflict: 'id' })
+      .select()
+      .single()
+
+    if (dbError || !usr) {
+      accountFormErrors.value = [t('account-error')]
+      return
+    }
+    else {
+      toast.success(t('account-updated-succ'))
+    }
+    main.user = usr
+    // Show what was actually saved (e.g. trimmed or normalized values).
+    seedAccountForm()
   }
-
-  const { data: usr, error: dbError } = await capgo
-    .from('users')
-    .upsert(updateData, { onConflict: 'id' })
-    .select()
-    .single()
-
-  if (dbError || !usr) {
+  catch (error) {
+    console.error('Account update failed', error)
+    toast.error(t('something-went-wrong-try-again-later'))
+  }
+  finally {
     isLoading.value = false
-    accountFormErrors.value = [t('account-error')]
-    return
   }
-  else {
-    toast.success(t('account-updated-succ'))
-  }
-  main.user = usr
-  // Show what was actually saved (e.g. trimmed or normalized values).
-  seedAccountForm()
-  isLoading.value = false
 }
+
+// Native shells have no sidebar profile menu, so sign out stays on this page there.
+const isNativeApp = Capacitor.isNativePlatform()
 
 async function logOut() {
   dialogStore.openDialog({
@@ -591,7 +602,7 @@ onMounted(async () => {
                   </span>
                 </div>
               </div>
-              <button id="change-org-pic" type="button" class="px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 focus:ring-4 focus:ring-blue-300 border-slate-500 dark:hover:bg-gray-600 dark:focus:ring-blue-800 focus:outline-hidden" @click="presentActionSheet">
+              <button id="change-org-pic" type="button" class="d-btn d-btn-outline" @click="presentActionSheet">
                 {{ t('change') }}
               </button>
             </div>
@@ -738,7 +749,7 @@ onMounted(async () => {
               {{ t('account-id') }}:
             </p>
             <div class="md:ml-6">
-              <button type="button" class="px-3 py-2 text-xs font-medium text-center text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 focus:ring-4 focus:ring-blue-300 border-slate-500 dark:hover:bg-gray-600 dark:focus:ring-blue-800 focus:outline-hidden" @click.prevent="copyAccountId()">
+              <button type="button" class="d-btn d-btn-outline" @click.prevent="copyAccountId()">
                 {{ t('copy-account-id') }}
               </button>
             </div>
@@ -747,38 +758,47 @@ onMounted(async () => {
             <IconVersion /> <span class="pl-2"> {{ version }}</span>
           </div>
           <!-- Panel footer -->
-          <footer>
-            <div class="flex flex-col px-2 py-5 border-t md:px-6 border-slate-300">
-              <div class="flex flex-wrap gap-3 items-center justify-between">
-                <button
-                  type="button"
-                  class="d-btn p-2 text-gray-700 border rounded-lg cursor-pointer dark:text-white hover:bg-gray-100 border-slate-500 dark:hover:bg-gray-600"
-                  @click="logOut()"
-                >
-                  {{ t('sign-out') }}
-                </button>
-                <div class="flex">
-                  <button type="button" class="p-2 text-red-600 border border-red-400 rounded-lg hover:text-white hover:bg-red-600" @click="deleteAccount()">
-                    {{ t('delete-account') }}
-                  </button>
-                  <button
-                    class="ml-3 d-btn d-btn-primary"
-                    type="submit"
-                    color="secondary"
-                    shape="round"
-                  >
-                    <span v-if="!isLoading" class="rounded-4xl">
-                      {{ t('update') }}
-                    </span>
-                    <Spinner v-else size="w-8 h-8" class="px-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
-                  </button>
-                </div>
-              </div>
-            </div>
+          <footer class="flex flex-wrap gap-3">
+            <button type="submit" class="d-btn d-btn-primary min-w-20" :disabled="isLoading">
+              <Spinner v-if="isLoading" size="w-4 h-4" color="fill-gray-100 text-gray-200 dark:text-gray-600" />
+              <span v-else>{{ t('save') }}</span>
+            </button>
+            <button v-if="isNativeApp" type="button" class="d-btn d-btn-outline" data-test="account-sign-out" :disabled="isLoading" @click="logOut()">
+              {{ t('sign-out') }}
+            </button>
           </footer>
         </div>
       </form>
     </div>
+
+    <!-- Danger zone -->
+    <section
+      data-test="account-danger-zone"
+      class="mt-6 bg-white border border-red-300 shadow-sm md:rounded-xl dark:bg-slate-800/60 dark:border-red-500/40"
+      aria-labelledby="account-danger-zone-title"
+    >
+      <header class="px-6 pt-5 pb-4 border-b border-red-200 dark:border-red-500/30">
+        <h3 id="account-danger-zone-title" class="text-lg font-semibold text-red-600 dark:text-red-400">
+          {{ t('danger-zone') }}
+        </h3>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          {{ t('danger-zone-description') }}
+        </p>
+      </header>
+      <div class="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
+        <div class="min-w-0">
+          <p class="font-medium text-slate-800 dark:text-white">
+            {{ t('delete-account') }}
+          </p>
+          <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            {{ t('delete-account-danger-description') }}
+          </p>
+        </div>
+        <button type="button" class="d-btn d-btn-error shrink-0" @click="deleteAccount()">
+          {{ t('delete-account') }}
+        </button>
+      </div>
+    </section>
 
     <!-- Teleport for Organization Deletion Warning -->
     <Teleport v-if="dialogStore.showDialog && dialogStore.dialogOptions?.id === 'delete-account-warning-orgs'" to="#dialog-v2-content" defer>

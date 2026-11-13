@@ -196,7 +196,7 @@ async function getSubkeyId(c: Context) {
  * @param apikey - The row representing the authenticated API key.
  * @param keyString - The raw API key string that was provided.
  */
-function setApiKeyAuthContext(c: Context, apikey: Database['public']['Tables']['apikeys']['Row'], keyString: string) {
+export function setApiKeyAuthContext(c: Context, apikey: Database['public']['Tables']['apikeys']['Row'], keyString: string) {
   c.set('auth', {
     userId: apikey.user_id,
     authType: 'apikey',

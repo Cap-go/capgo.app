@@ -5,10 +5,12 @@ import gsap from 'gsap'
 import { createPinia } from 'pinia'
 import { createApp, defineComponent, h, onMounted, ref } from 'vue'
 import { createRouter, createWebHistory, RouterView } from 'vue-router'
+import { Toaster } from 'vue-sonner'
 import AppOnboardingBuilderChecklist from '../../src/components/dashboard/AppOnboardingBuilderChecklist.vue'
 import AppOnboardingCliSteps from '../../src/components/dashboard/AppOnboardingCliSteps.vue'
 import AppOnboardingFlow from '../../src/components/dashboard/AppOnboardingFlow.vue'
 import AppOnboardingSetupChecklist from '../../src/components/dashboard/AppOnboardingSetupChecklist.vue'
+import AppSetupGuides from '../../src/components/dashboard/AppSetupGuides.vue'
 import CiCdSetupGuide from '../../src/components/dashboard/CiCdSetupGuide.vue'
 import ChannelIntroduction from '../../src/components/dashboard/ChannelIntroduction.vue'
 import GettingStartedNav from '../../src/components/dashboard/GettingStartedNav.vue'
@@ -101,6 +103,13 @@ const state = {
   orgPolicyReads: 0,
   orgReadDenied: params.get('orgReadDenied') === '1',
   cicdRegistrationError: params.get('registrationError') === '1',
+  cicdMethodError: params.get('methodError') === '1',
+  cicdMethodDelayMs: Number(params.get('methodDelay') ?? 0),
+  cicdMethodResponses: 0,
+  cicdDismissError: false,
+  cicdRestoreError: false,
+  cicdReminderDelayMs: 0,
+  cicdReminderResponses: 0,
   cicdRegistrationDelayMs: Number(params.get('registrationDelay') ?? 0),
   cicdStatusDelayMs: 0,
   cicdStatusRequests: 0,
@@ -115,6 +124,10 @@ const cicdLedger = ref<Record<string, unknown> | undefined>(params.get('cicd') =
   : params.get('cicd') === 'marked'
     ? { marked_done_at: '2026-11-05T10:00:00.000Z' }
     : undefined)
+const dismissalStorageKey = `onboarding-fixture:cicd-dismissed:${previewAppId}`
+const savedDismissal = sessionStorage.getItem(dismissalStorageKey)
+if (savedDismissal)
+  cicdLedger.value = { ...cicdLedger.value, dismissed_at: savedDismissal }
 const cicdSetupCalls: Array<Record<string, unknown>> = []
 if (cicdView && params.get('defaultChannel') !== '0') {
   // `defaultChannels=a|b` gives each platform its own default channel.
@@ -334,14 +347,74 @@ const fixtureFetch: typeof fetch = async (input, init) => {
     cicdSetupCalls.push(args)
     if (args.p_event === 'key_created' && state.cicdRegistrationError)
       return new Response(JSON.stringify({ message: 'CI registration unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+    const methodEvent = args.p_event === 'method_selected' || args.p_event === 'ai_prompt_copied'
+    if (methodEvent && state.cicdMethodError)
+      return new Response(JSON.stringify({ message: 'CI setup method unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+    if ((args.p_event === 'dismissed' && state.cicdDismissError) || (args.p_event === 'restored' && state.cicdRestoreError))
+      return new Response(JSON.stringify({ message: 'CI reminder unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+    const appId = typeof args.p_app_id === 'string' ? args.p_app_id : previewAppId
+    const target = preview.sidebarApps.value.find(app => app.app_id === appId)
+    const onboarding = target?.onboarding && typeof target.onboarding === 'object' && !Array.isArray(target.onboarding) ? target.onboarding : {}
+    const stored = onboarding.cicd
+    let next = appId === previewAppId ? { ...cicdLedger.value } : stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {}
     const at = '2026-11-06T12:00:00.000Z'
     if (args.p_event === 'marked_done')
-      cicdLedger.value = { ...cicdLedger.value, marked_done_at: at }
+      next = { ...next, marked_done_at: at }
+    else if (args.p_event === 'dismissed') {
+      next = { ...next, dismissed_at: at }
+      sessionStorage.setItem(`onboarding-fixture:cicd-dismissed:${appId}`, at)
+    }
+    else if (args.p_event === 'restored') {
+      delete next.dismissed_at
+      sessionStorage.removeItem(`onboarding-fixture:cicd-dismissed:${appId}`)
+    }
+    else if (methodEvent) {
+      const selection = args.p_selection
+      if (!selection || typeof selection !== 'object' || Array.isArray(selection)
+        || !('product' in selection) || (selection.product !== 'ota' && selection.product !== 'builder')
+        || !('setup_method' in selection) || (selection.setup_method !== 'manual' && selection.setup_method !== 'ai')
+        || (args.p_event === 'ai_prompt_copied' && selection.setup_method !== 'ai')) {
+        return new Response(JSON.stringify({ message: 'Invalid CI setup method' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+      }
+      const methods: Record<string, unknown> = Object.fromEntries(Object.entries(next.setup_methods && typeof next.setup_methods === 'object' && !Array.isArray(next.setup_methods) ? next.setup_methods : {}))
+      const previous = selection.product in methods ? methods[selection.product] : undefined
+      const previousMethod = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {}
+      next = {
+        ...next,
+        selection,
+        setup_methods: {
+          ...methods,
+          [selection.product]: {
+            ...previousMethod,
+            method: selection.setup_method,
+            selected_at: at,
+            ...(args.p_event === 'ai_prompt_copied' ? { ai_prompt_copied_at: 'ai_prompt_copied_at' in previousMethod ? previousMethod.ai_prompt_copied_at : at } : {}),
+          },
+        },
+      }
+    }
+    else if (args.p_event === 'key_created') {
+      const keys = Array.isArray(next.keys) ? next.keys : []
+      next = { ...next, keys: [...new Set([...keys, args.p_apikey_rbac_id])], key_created_at: at, selection: args.p_selection }
+    }
+    else {
+      return new Response(JSON.stringify({ message: 'Invalid CI setup event' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (appId === previewAppId)
+      cicdLedger.value = next
     else
-      cicdLedger.value = { ...cicdLedger.value, keys: [args.p_apikey_rbac_id], key_created_at: at }
-    const snapshot = previewOnboarding()
+      preview.sidebarApps.value = preview.sidebarApps.value.map(app => app.app_id === appId ? { ...app, onboarding: { ...onboarding, cicd: next } } : app)
+    const snapshot = appId === previewAppId ? previewOnboarding() : { ...onboarding, cicd: next }
     if (args.p_event === 'key_created' && state.cicdRegistrationDelayMs)
       await new Promise(resolve => setTimeout(resolve, state.cicdRegistrationDelayMs))
+    if (methodEvent && state.cicdMethodDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdMethodDelayMs))
+    if (methodEvent)
+      state.cicdMethodResponses += 1
+    if ((args.p_event === 'dismissed' || args.p_event === 'restored') && state.cicdReminderDelayMs)
+      await new Promise(resolve => setTimeout(resolve, state.cicdReminderDelayMs))
+    if (args.p_event === 'dismissed' || args.p_event === 'restored')
+      state.cicdReminderResponses += 1
     return new Response(JSON.stringify(snapshot), { headers: { 'Content-Type': 'application/json' } })
   }
   if (url.pathname.includes('/rpc/')) {
@@ -530,6 +603,7 @@ const app = createApp(defineComponent({
                   }),
       ]),
       h(DialogV2),
+      h(Toaster),
     ])
   },
 }))
@@ -566,6 +640,16 @@ organization.refreshAppsOnboarding = async (_orgId, options) => {
   }
 }
 organization.getAppsByOrgId = orgId => orgId === previewOrganization.gid ? [{ app_id: previewAppId, owner_org: orgId, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() }, ...preview.sidebarApps.value] : []
+organization.getAppByAppId = appId => organization.getAppsByOrgId(previewOrganization.gid).find(app => app.app_id === appId)
+organization.updateAppOnboarding = (appId, onboarding) => {
+  if (appId === previewAppId && onboarding && typeof onboarding === 'object' && !Array.isArray(onboarding)) {
+    const cicd = onboarding.cicd
+    cicdLedger.value = cicd && typeof cicd === 'object' && !Array.isArray(cicd) ? { ...cicd } : undefined
+  }
+  else {
+    preview.sidebarApps.value = preview.sidebarApps.value.map(app => app.app_id === appId ? { ...app, onboarding } : app)
+  }
+}
 if (builderIntroView) {
   const builderApp = ref({ app_id: previewAppId, owner_org: previewOrganization.gid, name: 'My Capacitor app', icon_url: '', need_onboarding: true, onboarding: previewOnboarding() })
   organization.getAppByAppId = appId => appId === previewAppId ? builderApp.value as any : undefined
@@ -587,6 +671,7 @@ const router = createRouter({
           },
         }) },
         { path: '/app/:app/ci-cd', name: '/app/[app].ci-cd', component: defineComponent({ setup: () => () => h('div', [h(GettingStartedNav), h(CiCdPage)]) }) },
+        { path: '/app/:app/settings', component: defineComponent({ setup: () => () => h('section', [h('h1', 'App settings'), h(GettingStartedNav), h(AppSetupGuides, { appId: previewAppId })]) }) },
         // A resume id renders the setup UI the way Getting started embeds it.
         { path: '/:pathMatch(.*)*', component: defineComponent({ setup: () => () => builderIntroView ? h(BuildTable, { appId: previewAppId }) : h(AppOnboardingFlow, { onboarding: true, setupAppId: params.get('resume') ?? undefined }) }) },
       ]

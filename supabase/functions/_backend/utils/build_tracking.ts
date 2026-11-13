@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { dispatchMcpBuildEvent } from './mcp_events.ts'
 import { TERMINAL_BUILD_STATUSES } from './build_timeout.ts'
 import { sendDiscordAlert } from './discord.ts'
 import { cloudlogErr, serializeError } from './logging.ts'
@@ -200,4 +201,23 @@ export async function emitBuildTransitionEvent(c: Context, input: EmitBuildTrans
   const duration = input.effectiveBuildTimeSeconds
   if (transition === 'failed' && input.jobId && duration !== null && duration !== undefined && duration < 10)
     await backgroundTask(c, sendFastBuildFailureAlert(c, input, input.jobId, duration))
+
+  if ((transition === 'succeeded' || transition === 'failed' || transition === 'timed_out') && input.jobId) {
+    const failureCategory = (transition === 'failed' || transition === 'timed_out')
+      ? mapBuildFailureCategory({
+        timeoutApplied: input.timeoutApplied,
+        errorMessage: input.effectiveError ?? null,
+      })
+      : null
+    await backgroundTask(c, dispatchMcpBuildEvent(c, {
+      orgId: input.build.owner_org,
+      appId: input.build.app_id,
+      jobId: input.jobId,
+      platform: input.build.platform,
+      buildMode: input.build.build_mode,
+      durationSeconds: input.effectiveBuildTimeSeconds ?? null,
+      failureCategory,
+      transition: transition === 'succeeded' ? 'succeeded' : 'failed',
+    }))
+  }
 }

@@ -172,6 +172,7 @@ export const users = pgTable('users', {
     device_error: true,
     channel_self_rejected: true,
     cli_realtime_feed: true,
+    security_updates: false,
   }),
   onboarding: jsonb('onboarding').notNull().default({}),
 })

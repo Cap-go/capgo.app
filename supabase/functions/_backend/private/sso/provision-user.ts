@@ -6,6 +6,7 @@ import { createHono, quickError, useCors } from '../../utils/hono.ts'
 import { middlewareAuth } from '../../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr } from '../../utils/logging.ts'
 import { closeClient, getPgClient, withPgTransaction } from '../../utils/pg.ts'
+import { getRequestCountry } from '../../utils/request_country.ts'
 import { supabaseAdmin } from '../../utils/supabase.ts'
 import { version } from '../../utils/version.ts'
 import { mappedAttributes, parseStoredRoleMapping, readAttributeValues, resolveSsoAccess } from './role-mapping.ts'
@@ -19,6 +20,7 @@ interface PublicUserSeed {
   email: string
   first_name: string | null
   last_name: string | null
+  country: string | null
 }
 
 type OrgRoleName
@@ -258,12 +260,13 @@ async function setAuthUserSsoOnly(pgClient: PgExecutor, userId: string, authoriz
   )
 }
 
-function buildPublicUserSeed(userId: string, email: string, userMetadata: Record<string, unknown> | undefined): PublicUserSeed {
+function buildPublicUserSeed(c: Context, userId: string, email: string, userMetadata: Record<string, unknown> | undefined): PublicUserSeed {
   return {
     id: userId,
     email,
     first_name: typeof userMetadata?.first_name === 'string' ? userMetadata.first_name : null,
     last_name: typeof userMetadata?.last_name === 'string' ? userMetadata.last_name : null,
+    country: getRequestCountry(c),
   }
 }
 
@@ -302,9 +305,9 @@ async function ensurePublicUserRowExists(
   if (!existingUser) {
     try {
       await pgPool.query(
-        `insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters)
-        values ($1, $2, $3, $4, true, true)`,
-        [user.id, user.email, user.first_name, user.last_name],
+        `insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters, country)
+        values ($1, $2, $3, $4, true, true, $5)`,
+        [user.id, user.email, user.first_name, user.last_name, user.country],
       )
     }
     catch (insertError) {
@@ -336,13 +339,13 @@ async function ensurePublicUserRowExistsInTransaction(
   try {
     await pgClient.query(
       `
-        insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters)
-        values ($1, $2, $3, $4, true, true)
+        insert into public.users (id, email, first_name, last_name, enable_notifications, opt_for_newsletters, country)
+        values ($1, $2, $3, $4, true, true, $5)
         on conflict (id) do update
         set email = excluded.email
         where public.users.email is distinct from excluded.email
       `,
-      [user.id, user.email, user.first_name, user.last_name],
+      [user.id, user.email, user.first_name, user.last_name, user.country],
     )
   }
   catch (error) {
@@ -790,7 +793,7 @@ app.post('/', async (c: Context<MiddlewareKeyVariables>) => {
     if (!userEmail) {
       return quickError(400, 'no_email', 'User has no email address')
     }
-    const publicUserSeed = buildPublicUserSeed(userId, userEmail, userAuth.user.user_metadata)
+    const publicUserSeed = buildPublicUserSeed(c, userId, userEmail, userAuth.user.user_metadata)
 
     const userDomain = userEmail.split('@')[1]?.toLowerCase().trim()
     if (!userDomain) {

@@ -156,6 +156,11 @@ describe('public email preferences endpoint', () => {
     })).toEqual({ onboarding: false })
   })
 
+  it('accepts security_updates opt-out from the public allowlist', () => {
+    expect(PUBLIC_EMAIL_PREFERENCE_KEYS).toContain('security_updates')
+    expect(sanitizeOptOutPreferences({ security_updates: false })).toEqual({ security_updates: false })
+  })
+
   it('returns ok for unknown emails without creating a user', async () => {
     const response = await postPreferences({
       email: 'nobody@example.com',

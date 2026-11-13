@@ -1,7 +1,7 @@
 {
   "name": "@capgo/cli",
   "type": "module",
-  "version": "8.101.1",
+  "version": "8.106.1",
   "description": "A CLI to upload to capgo servers",
   "author": "Martin martin@capgo.app",
   "license": "Apache 2.0",
@@ -156,7 +156,7 @@
     "test:prompt-preferences": "bun test/test-prompt-preferences.mjs",
     "test:esm-sdk": "node test/test-sdk-esm.mjs",
     "test:auth-session": "bun test/test-auth-session.mjs && bun test/test-auth-session-bad-key.mjs",
-    "test:mcp": "node test/test-mcp.mjs",
+    "test:mcp": "node test/test-mcp.mjs && node test/test-mcp-skills.mjs",
     "test:mcp-no-key-handshake": "node test/test-mcp-no-key-handshake.mjs",
     "test:version-detection": "node test/test-get-installed-version.mjs",
     "test:version-detection:setup": "./test/fixtures/setup-test-projects.sh",
@@ -257,7 +257,7 @@
     "test:android-onboarding-units": "bun test/test-android-gradle.mjs && bun test/test-android-keystore.mjs && bun test/test-android-oauth.mjs && bun test/test-android-play.mjs && bun test/test-android-tui-sequencing.mjs",
     "test:build-credentials-units": "bun test/test-credentials-migration.mjs && bun test/test-provisioning-map-validation.mjs && bun test/test-mobileprovision-parser.mjs",
     "test:onboarding-generators": "bun test/test-diff-utils.mjs && bun test/test-workflow-generator.mjs",
-    "test:mcp-onboarding": "bun test/test-mcp-onboarding.mjs",
+    "test:mcp-onboarding": "bun test ./test/build/onboarding/mcp/scoped-credential-path.test.ts && bun test/test-mcp-onboarding.mjs",
     "test:setup-notices": "bun test ./test/test-setup-notices.mjs ./test/test-setup-progress-request.mjs ./test/test-setup-notice-background.mjs ./test/test-init-completion-notice.mjs && bun test ./test/test-builder-setup-notice.mjs"
   },
   "dependencies": {
