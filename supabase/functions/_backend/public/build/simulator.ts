@@ -81,6 +81,7 @@ export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxByt
   const reader = stream.getReader()
   const chunks: Uint8Array[] = []
   let total = 0
+  let tooLarge = false
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -89,16 +90,20 @@ export async function readCappedBytes(stream: ReadableStream<Uint8Array>, maxByt
       if (!value)
         continue
       if (total + value.byteLength > maxBytes) {
-        await reader.cancel()
-        throw new Error('too-large')
+        tooLarge = true
+        break
       }
       chunks.push(value)
       total += value.byteLength
     }
+    if (tooLarge)
+      await reader.cancel()
   }
   finally {
     reader.releaseLock()
   }
+  if (tooLarge)
+    throw new Error('too-large')
   if (total === 0)
     throw new Error('empty')
   const bytes = new Uint8Array(total)
@@ -533,7 +538,7 @@ async function simulatorRemoteConfig(c: Context, row: SimulatorRow) {
 function bytesToBase64(bytes: Uint8Array) {
   let binary = ''
   for (let index = 0; index < bytes.length; index += 0x8000)
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+    binary += String.fromCodePoint(...bytes.subarray(index, index + 0x8000))
   return btoa(binary)
 }
 
