@@ -80,6 +80,44 @@ async function prepareOrgWebhooksMcpScreenshot(
   }
 }
 
+async function prepareOrgBillingProfileVisual(
+  page: Page,
+  viewport: { width: number, height: number },
+  mobile = false,
+) {
+  await page.setViewportSize(viewport)
+  if (mobile) {
+    const iphone = devices['iPhone 13']
+    await page.evaluate((ua) => {
+      Object.defineProperty(navigator, 'userAgent', { get: () => ua })
+    }, iphone.userAgent)
+  }
+  await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
+    publishableKey: '',
+    card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030 },
+    subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: new Date(Date.now() + 18 * 86400000).toISOString() },
+    invoices: [],
+    openInvoice: null,
+    trialPlan: null,
+  } }))
+  await page.route('**/private/stripe_billing/billing-profile?**', route => route.fulfill({ json: {
+    address: {
+      line1: 'Rua da Praia 10',
+      line2: null,
+      city: 'Funchal',
+      state: null,
+      postalCode: '9000-100',
+      country: 'PT',
+    },
+    taxId: { id: 'txi_visual', type: 'eu_vat', value: 'PT999999990' },
+  } }))
+  await page.reload()
+  if (process.env.VISUAL_DIFF_PHASE === 'after')
+    await page.locator('[data-test="billing-profile"]').waitFor()
+  else
+    await page.locator('[data-test="billing-subscription"]').waitFor()
+}
+
 async function prepareProfileGoalScreenshot(page: Page, completed = false) {
   const assignments = {}
   let profile: Record<string, unknown> | undefined
@@ -669,32 +707,13 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
     slug: 'org-billing-profile',
     path: '/settings/organization/billing',
     auth: true,
-    prepare: async (page) => {
-      await page.route('**/private/stripe_billing/overview', route => route.fulfill({ json: {
-        publishableKey: '',
-        card: { id: 'pm_visual', brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030 },
-        subscription: { status: 'active', cancelAtPeriodEnd: false, cancelAt: null, currentPeriodEnd: new Date(Date.now() + 18 * 86400000).toISOString() },
-        invoices: [],
-        openInvoice: null,
-        trialPlan: null,
-      } }))
-      await page.route('**/private/stripe_billing/billing-profile?**', route => route.fulfill({ json: {
-        address: {
-          line1: 'Rua da Praia 10',
-          line2: null,
-          city: 'Funchal',
-          state: null,
-          postalCode: '9000-100',
-          country: 'PT',
-        },
-        taxId: { id: 'txi_visual', type: 'eu_vat', value: 'PT999999990' },
-      } }))
-      await page.reload()
-      if (process.env.VISUAL_DIFF_PHASE === 'after')
-        await page.locator('[data-test="billing-profile"]').waitFor()
-      else
-        await page.locator('[data-test="billing-subscription"]').waitFor()
-    },
+    prepare: page => prepareOrgBillingProfileVisual(page, { width: 1280, height: 720 }),
+  },
+  {
+    slug: 'org-billing-profile-mobile',
+    path: '/settings/organization/billing',
+    auth: true,
+    prepare: page => prepareOrgBillingProfileVisual(page, { width: 390, height: 844 }, true),
   },
   {
     slug: 'org-billing-trial-plan-start-now',
