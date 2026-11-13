@@ -71,10 +71,10 @@ else {
 
     const missing = runPackageRunnerSync('npx', ['-y', 'noop'], {
       cwd: root,
-      env: { PATH: '' },
+      env: { ...process.env, [pathKey]: join(root, 'empty-path') },
       encoding: 'utf8',
     })
-    assert.ok(missing.error, 'expected spawn error for missing npx on empty PATH')
+    assert.ok(missing.error || missing.status !== 0, 'expected missing npx to fail')
   }
   finally {
     process.env[pathKey] = originalPath

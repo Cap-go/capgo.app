@@ -1356,6 +1356,8 @@ jobs:
         run: bun install --cwd cli/test/test_upload
       - name: Build CLI
         run: bun run cli:build
+      - name: Test CLI runner spawn on Windows
+        run: bun run --cwd cli test:cli-runner-spawn
       - name: Create a zip test
         run: node ./cli/dist/index.js bundle zip --path cli/test/test_upload -n build-${{ matrix.os }}.zip --package-json cli/test/test_upload/package.json
       - name: Upload build.zip artifact
