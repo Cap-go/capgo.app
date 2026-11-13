@@ -162,6 +162,7 @@ async function main() {
 
   const client = new Client({ connectionString: databaseUrl })
   await client.connect()
+  await client.query('SET statement_timeout = \'30s\'')
   try {
     while (!cursor.done && (limit === undefined || limit > 0)) {
       const progress = await requeueUnsizedDeltaBatch(client, cursor, {

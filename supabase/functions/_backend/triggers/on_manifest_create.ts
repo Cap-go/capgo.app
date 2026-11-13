@@ -9,6 +9,11 @@ import { closeClient, getPgClient } from '../utils/pg.ts'
 import { isTransientDatabaseError } from '../utils/pg_errors.ts'
 import { queryJsonOne } from '../utils/pg_rls.ts'
 import { isRetryablePostgrestResult, retryWithBackoff } from '../utils/retry.ts'
+import {
+  estimateManifestSizeLookupSubrequests,
+  maxManifestSizeLookupAttemptsForBudget,
+  worstCaseSubrequestsPerSizeLookupAttempt,
+} from '../utils/manifest_size_lookup_budget.ts'
 import { isManifestStorageObjectDefinitelyMissing, s3 } from '../utils/s3.ts'
 import { deltaFileS3PathSql, deltaSessionJoinSql } from '../utils/version_manifest_sql.ts'
 
@@ -33,12 +38,28 @@ function getQueueLogMetadata(c: Context): QueueLogMetadata {
   }
 }
 async function getManifestSizeWithRetry(c: Context, s3Path: string): Promise<{ diagnostics?: Awaited<ReturnType<typeof s3.getSizeDiagnostics>>, lastError?: unknown, attempts: number }> {
+  const perMessageBudget = c.get('manifestSizeLookupSubrequestBudgetPerMessage')
+  const attemptsCap = perMessageBudget === undefined
+    ? SIZE_RETRY_ATTEMPTS
+    : maxManifestSizeLookupAttemptsForBudget(perMessageBudget, s3Path, SIZE_RETRY_ATTEMPTS)
+  let spentSubrequests = 0
+
   const { result, lastError, attempts } = await retryWithBackoff(
     () => s3.getSizeDiagnostics(c, s3Path),
     {
-      attempts: SIZE_RETRY_ATTEMPTS,
+      attempts: attemptsCap,
       baseDelayMs: SIZE_RETRY_DELAY_MS,
-      shouldRetry: diagnostics => diagnostics.size <= 0,
+      shouldRetry: (diagnostics) => {
+        spentSubrequests += estimateManifestSizeLookupSubrequests(diagnostics)
+        if (diagnostics.size > 0)
+          return false
+        if (isManifestStorageObjectDefinitelyMissing(diagnostics))
+          return false
+        if (perMessageBudget !== undefined
+          && spentSubrequests + worstCaseSubrequestsPerSizeLookupAttempt(s3Path) > perMessageBudget)
+          return false
+        return diagnostics.size <= 0
+      },
     },
   )
 
@@ -175,6 +196,7 @@ app.post('/', middlewareAPISecret, triggerValidator(['manifest', 'delta_files'],
 })
 
 export const onManifestCreateTestUtils = {
+  getManifestSizeWithRetry,
   isRetryablePostgrestResult,
   runManifestUpdateWithRetry,
   sizeRetryAttempts: SIZE_RETRY_ATTEMPTS,
