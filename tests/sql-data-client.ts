@@ -343,6 +343,9 @@ const ORDER_COLUMN = /^[a-z_][a-z0-9_]*$/
 // PostgREST orders a set-returning RPC's rows before paging; the console
 // compiler has no RPC ordering, so .order() is applied around its output.
 function orderRpcRows(request: ConsoleQueryRequest, compile: (request: ConsoleQueryRequest) => CompiledConsoleQuery): CompiledConsoleQuery {
+  // Table reads already compile .order() themselves.
+  if (request.kind !== 'rpc')
+    return compile(request)
   const orders = request.operations.filter(operation => operation.method === 'order')
   const compiled = compile({ ...request, operations: request.operations.filter(operation => operation.method !== 'order') })
   if (!orders.length)
