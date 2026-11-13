@@ -601,7 +601,7 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-function isSuccessfulQueueResult(result: ProcessedQueueMessage): boolean {
+function isSuccessfulQueueResult(result: { httpResponse: Response }): boolean {
   return result.httpResponse.status >= 200 && result.httpResponse.status < 300
 }
 

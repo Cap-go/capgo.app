@@ -10,7 +10,7 @@ function missingDiagnostics(): StorageSizeDiagnostics {
     candidates: [{
       fileId: 'path/file.js',
       finalSize: 0,
-      head: { error: { status: 404, message: 'not found', name: 'Error' }, size: 0, success: false },
+      head: { error: { status: 404, message: 'not found', name: 'Error', stack: undefined, cause: undefined }, size: 0, success: false },
       usedFallback: false,
     }],
     endpoint: 'https://example.invalid/',
