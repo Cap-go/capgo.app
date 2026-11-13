@@ -49,8 +49,12 @@ export interface SqlResponse {
 }
 
 const DEFAULT_DB_URL = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres'
-const POOL_SIZE = 3
-const CONNECT_ATTEMPTS = 8
+// One connection per test worker: PostgREST used to share a small pool across
+// all workers, and the edge runtime needs slots too.
+const POOL_SIZE = 1
+const CONNECT_ATTEMPTS = 20
+const CONNECT_BACKOFF_MS = 250
+const CONNECT_BACKOFF_MAX_MS = 2000
 const SEARCH_PATH = 'public, public, extensions'
 const WRITE_METHODS = new Set(['insert', 'upsert', 'update', 'delete'])
 const FILTER_METHODS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains', 'containedBy', 'overlaps', 'not', 'or', 'filter', 'match'])
@@ -192,7 +196,14 @@ interface CatalogRow {
 }
 
 async function readCatalog(db: Pool): Promise<SqlCatalog> {
-  const { rows } = await db.query<CatalogRow>(CATALOG_SQL)
+  const client = await connect(db)
+  let rows: CatalogRow[]
+  try {
+    rows = (await client.query<CatalogRow>(CATALOG_SQL)).rows
+  }
+  finally {
+    client.release()
+  }
   const row = rows[0]
   const columns = new Map<string, QueryColumn[]>()
   for (const column of row.columns) {
@@ -327,6 +338,28 @@ function normalizeRequest(catalog: SqlCatalog, request: ConsoleQueryRequest): Co
   return { ...request, operations: request.operations.map(operation => normalizeOperation(catalog, request.name, operation)) }
 }
 
+const ORDER_COLUMN = /^[a-z_][a-z0-9_]*$/
+
+// PostgREST orders a set-returning RPC's rows before paging; the console
+// compiler has no RPC ordering, so .order() is applied around its output.
+function orderRpcRows(request: ConsoleQueryRequest, compile: (request: ConsoleQueryRequest) => CompiledConsoleQuery): CompiledConsoleQuery {
+  const orders = request.operations.filter(operation => operation.method === 'order')
+  const compiled = compile({ ...request, operations: request.operations.filter(operation => operation.method !== 'order') })
+  if (!orders.length)
+    return compiled
+  const terms = orders.map(({ args }) => {
+    const [column, options] = args as [unknown, { ascending?: boolean, nullsFirst?: boolean } | undefined]
+    if (typeof column !== 'string' || !ORDER_COLUMN.test(column))
+      throw new ConsoleQueryError('PGRST100', 'Invalid order')
+    const nulls = options?.nullsFirst === true ? ' NULLS FIRST' : options?.nullsFirst === false ? ' NULLS LAST' : ''
+    return `q."${column}" ${options?.ascending === false ? 'DESC' : 'ASC'}${nulls}`
+  })
+  const page = ' AS q LIMIT '
+  if (!compiled.returnsSet || compiled.text.split(page).length !== 2)
+    throw new ConsoleQueryError('PGRST100', 'Ordering is only supported on functions returning rows')
+  return { ...compiled, text: compiled.text.replace(page, ` AS q ORDER BY ${terms.join(', ')} LIMIT `) }
+}
+
 // Same SQLSTATE to HTTP status table as PostgREST.
 function statusForSqlState(code: string, role: DbRole): number {
   if (code === '42501')
@@ -393,7 +426,8 @@ async function connect(db: Pool): Promise<PoolClient> {
     catch (error) {
       if ((error as { code?: string }).code !== '53300' || attempt >= CONNECT_ATTEMPTS)
         throw error
-      await new Promise(resolve => setTimeout(resolve, 250 * attempt))
+      const delay = Math.min(CONNECT_BACKOFF_MS * attempt, CONNECT_BACKOFF_MAX_MS) + Math.floor(Math.random() * CONNECT_BACKOFF_MS)
+      await new Promise(resolve => setTimeout(resolve, delay))
     }
   }
 }
@@ -457,7 +491,7 @@ export async function executeDataRequest(request: ConsoleQueryRequest, identity:
     const refused = unfilteredWrite(normalized)
     if (refused)
       return toResponse(refused, refused.status)
-    const compiled = bindComposites(catalog, compileConsoleQuery(catalog, normalized))
+    const compiled = bindComposites(catalog, orderRpcRows(normalized, next => compileConsoleQuery(catalog, next)))
     const result = await runInTransaction(db, setupSql(catalog, identity, normalized), compiled)
     // A void function answers 204 with no body; supabase-js reports data null.
     if (normalized.kind === 'rpc' && catalog.voidFunctions.has(normalized.name) && !result.error)
