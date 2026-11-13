@@ -269,8 +269,6 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
   customerId: string,
 ): Promise<SyncPendingTrialPlanScheduleResult> {
   let outcome: SyncPendingTrialPlanScheduleResult = 'no_schedule'
-  let scheduleId: string | undefined
-  let startsAt: string | undefined
   try {
     await withTrialPlanLockForScheduleSync(c, customerId, async () => {
       const trialAtNow = await loadStripeInfoTrialAt(c, customerId)
@@ -281,7 +279,6 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
         return
       }
       const primary = schedules[0]!
-      scheduleId = primary.id
       if (!lockedStart) {
         await cancelAllPendingTrialPlanSchedules(c, stripe, customerId, 'trial plan schedule canceled because trial ended')
         outcome = 'canceled'
@@ -326,8 +323,14 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
         primary.id,
         'duplicate trial plan schedule canceled during trial end sync',
       )
-      startsAt = lockedStart.toISOString()
       outcome = 'updated'
+      cloudlog({
+        requestId: c.get('requestId'),
+        message: 'trial plan schedule start synced to trial end',
+        customerId,
+        scheduleId: primary.id,
+        startsAt: lockedStart.toISOString(),
+      })
     })
   }
   catch (error) {
@@ -335,19 +338,9 @@ export async function syncPendingTrialPlanScheduleWithTrialAt(
       requestId: c.get('requestId'),
       message: 'trial plan schedule start sync failed',
       customerId,
-      scheduleId,
       error,
     })
     return 'failed'
-  }
-  if (outcome === 'updated') {
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: 'trial plan schedule start synced to trial end',
-      customerId,
-      scheduleId,
-      startsAt,
-    })
   }
   return outcome
 }
