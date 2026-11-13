@@ -1745,7 +1745,7 @@ export default {
     }
   },
   async queue(batch: MessageBatch<TranslationQueuePayload>, env: TranslationWorkerBindings, _ctx: ExecutionContext) {
-    for (const message of batch.messages) {
+    await Promise.all(batch.messages.map(async (message) => {
       try {
         await processTranslationQueueBatch(env, message.body, message.attempts)
         message.ack()
@@ -1759,7 +1759,7 @@ export default {
         })
         message.retry({ delaySeconds: translationRetryDelay(error, message.attempts) })
       }
-    }
+    }))
   },
 }
 
