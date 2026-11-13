@@ -1284,7 +1284,7 @@ const simulatorTools: McpTool[] = [
     }),
     run: async (input, ctx) => simulatorSessionResult(await ctx.call({
       method: 'POST',
-      path: `/build/simulator/${enc(String(input.session_id))}`,
+      path: `/build/simulator/${enc(String(input.session_id))}/stop`,
       body: { app_id: input.appId },
     })),
   },

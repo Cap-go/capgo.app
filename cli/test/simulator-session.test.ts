@@ -1,5 +1,8 @@
+import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'bun:test'
-import { simulatorApiRequest, simulatorCommandTextOutput, simulatorStartOptions, simulatorTextOutput } from '../src/simulator/session'
+import { simulatorApiRequest, simulatorCommandTextOutput, simulatorStartOptions, simulatorTextOutput, writeSimulatorScreenshot } from '../src/simulator/session'
 
 describe('simulator CLI requests', () => {
   it('starts, reads, and stops one session', () => {
@@ -52,6 +55,25 @@ describe('simulator CLI requests', () => {
       text: 'simulator-session-1.jpg\n',
       screenshot: { name: 'simulator-session-1.jpg', base64: 'aW1n' },
     })
+  })
+
+  it('writes a screenshot file and refuses to follow a symlink', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'simulator-shot-'))
+    const outside = join(dir, 'outside.txt')
+    const file = join(dir, 'simulator-session-2.jpg')
+    const link = join(dir, 'simulator-session-1.jpg')
+    writeFileSync(outside, 'secret')
+    symlinkSync(outside, link)
+    try {
+      writeSimulatorScreenshot(file, Buffer.from('jpeg-bytes').toString('base64'))
+      expect(readFileSync(file).toString()).toBe('jpeg-bytes')
+      expect(() => writeSimulatorScreenshot(link, Buffer.from('jpeg-bytes').toString('base64'))).toThrow('symbolic link')
+      expect(readFileSync(outside, 'utf8')).toBe('secret')
+      expect(lstatSync(link).isSymbolicLink()).toBe(true)
+    }
+    finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('prints the session id before the URL', () => {

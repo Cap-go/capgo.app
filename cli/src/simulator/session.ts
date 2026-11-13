@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { closeSync, constants, lstatSync, openSync, writeSync } from 'node:fs'
 import { stdout } from 'node:process'
 import { log } from '@clack/prompts'
 import { buildCliRequestHeaders } from '../analytics/cli-headers'
@@ -167,6 +167,39 @@ export function simulatorStartOptions(options: SimulatorCommandOptions & { build
   return { ...options, buildJobId: options.buildJobId ?? options.buildJob }
 }
 
+function refuseScreenshotSymlink(filePath: string) {
+  try {
+    if (lstatSync(filePath).isSymbolicLink())
+      throw new Error(`Refusing to write screenshot through a symbolic link: ${filePath}`)
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error
+  }
+}
+
+export function writeSimulatorScreenshot(filePath: string, base64: string) {
+  const bytes = Buffer.from(base64, 'base64')
+  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
+  if (noFollow === 0)
+    refuseScreenshotSymlink(filePath)
+  let fd: number
+  try {
+    fd = openSync(filePath, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | noFollow, 0o644)
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP')
+      throw new Error(`Refusing to write screenshot through a symbolic link: ${filePath}`)
+    throw error
+  }
+  try {
+    writeSync(fd, bytes)
+  }
+  finally {
+    closeSync(fd)
+  }
+}
+
 async function callSimulator(command: 'start' | 'stop' | 'get' | 'command', appId: string, sessionId: string | undefined, options: SimulatorCommandOptions) {
   const payload = await executeSimulator(command, appId, sessionId, options)
   if (options.json) {
@@ -176,7 +209,7 @@ async function callSimulator(command: 'start' | 'stop' | 'get' | 'command', appI
   if (command === 'command') {
     const output = simulatorCommandTextOutput(payload)
     if (output.screenshot)
-      writeFileSync(output.screenshot.name, Buffer.from(output.screenshot.base64, 'base64'))
+      writeSimulatorScreenshot(output.screenshot.name, output.screenshot.base64)
     stdout.write(output.text)
     return
   }
