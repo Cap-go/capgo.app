@@ -1,7 +1,7 @@
 SET default_transaction_isolation = 'repeatable read';
 BEGIN;
 
-SELECT plan(38);
+SELECT plan(37);
 
 SELECT hasnt_table(
     'public', 'bento_event_dispatches',
