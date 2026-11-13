@@ -4,6 +4,8 @@ SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
 SELECT plan(4);
 
+-- Parallel safe: scope queue assertions to wake_context, never delete q_cron_email.
+
 CREATE TEMP VIEW cron_email_dispatch_requests AS
 SELECT count(*) AS requests
 FROM net.http_request_queue
