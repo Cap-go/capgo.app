@@ -144,4 +144,23 @@ describe('console client transport', () => {
 
     expect(() => client().storage.from('other')).toThrow('Unsupported console storage bucket')
   })
+
+  it('reconnects the events stream after a retryable 503 and stops when no events backend exists', async () => {
+    vi.useFakeTimers()
+    try {
+      const statuses: string[] = []
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({ error: 'events_retryable' }, 503))
+        .mockResolvedValueOnce(jsonResponse({ error: 'events_unavailable' }, 503))
+      client().channel('cli-events:org:org-1').on('broadcast', { event: 'cli-activity' }, () => {}).subscribe(status => statuses.push(status))
+      await vi.advanceTimersByTimeAsync(5_000)
+
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.com/private/console/events?org_id=org-1')
+      expect(statuses).toEqual(['CHANNEL_ERROR', 'CHANNEL_ERROR'])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
 })
