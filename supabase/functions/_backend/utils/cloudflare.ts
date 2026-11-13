@@ -72,6 +72,8 @@ export type Bindings = {
   NOTIFICATION_QUEUE?: Queue
   AUTH_EMAIL?: SendEmail
   CONSOLE_EVENTS?: DurableObjectNamespace
+  // Self-hosted GoTrue (cloudflare_workers/gotrue); bound only in the local_gotrue API env.
+  GOTRUE?: Fetcher
   QUEUE_DISPATCHER?: DurableObjectNamespace
   DB_STOREAPPS: D1Database
   CHANNEL_SELF_STORE?: KVNamespace

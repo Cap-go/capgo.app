@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(10);
 
 SELECT ok(
   (SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname = 'gotrue_cf'),
@@ -38,6 +38,16 @@ SELECT ok(
 SELECT ok(
   NOT pg_catalog.has_schema_privilege('public', 'auth_cf', 'CREATE'),
   'PUBLIC cannot create objects in auth_cf'
+);
+
+SELECT ok(
+  pg_catalog.has_function_privilege('gotrue_cf', 'public.hook_send_email(jsonb)', 'EXECUTE'),
+  'gotrue_cf can call the send-email auth hook'
+);
+
+SELECT ok(
+  pg_catalog.has_function_privilege('gotrue_cf', 'public.hook_before_user_created(jsonb)', 'EXECUTE'),
+  'gotrue_cf can call the before-user-created auth hook'
 );
 
 SELECT * FROM finish();

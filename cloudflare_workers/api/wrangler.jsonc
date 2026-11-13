@@ -411,6 +411,37 @@
           "bucket_name": "local-plugin-state-pointers"
         }
       ]
+    },
+    "local_gotrue": {
+      "name": "capgo_api-local",
+      "durable_objects": { "bindings": [{ "name": "CONSOLE_EVENTS", "class_name": "ConsoleEvents" }] },
+      "services": [{ "binding": "GOTRUE", "service": "capgo_gotrue-prod", "remote": true }],
+      "ai": {
+        "binding": "AI"
+      },
+      "vars": {
+        "ENV_NAME": "capgo_api-local"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "CHANNEL_SELF_STORE",
+          "id": "local-channel-self-store"
+        },
+        {
+          "binding": "PLUGIN_NOTIFICATION_QUEUE",
+          "id": "local-plugin-notification-queue"
+        },
+        {
+          "binding": "PLUGIN_STATE",
+          "id": "local-plugin-state"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PLUGIN_STATE_POINTERS",
+          "bucket_name": "local-plugin-state-pointers"
+        }
+      ]
     }
   }
 }
