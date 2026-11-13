@@ -241,6 +241,8 @@ describe('[GET] /channel_self tests', () => {
     const response = await fetchGetChannels(data as any)
 
     expect(response.ok).toBe(true)
+    if (env.PLUGIN_STATE_KV_TESTS === 'true')
+      expect(response.headers.get('X-Plugin-State')).toBe('kv')
     const json = await response.json<ChannelsListResponse>()
 
     expect(json).toBeDefined()
@@ -264,6 +266,8 @@ describe('[GET] /channel_self tests', () => {
     const response = await fetchGetChannels(data as any)
 
     expect(response.ok).toBe(true)
+    if (env.PLUGIN_STATE_KV_TESTS === 'true')
+      expect(response.headers.get('X-Plugin-State')).toBe('kv')
     const json = await response.json() as ChannelsListResponse
 
     expect(json).toBeDefined()
@@ -708,6 +712,8 @@ it('[PUT] /channel_self (no overwrite)', async () => {
 
   const response = await fetchEndpoint('PUT', data)
   expect(response.ok).toBe(true)
+  if (env.PLUGIN_STATE_KV_TESTS === 'true')
+    expect(response.headers.get('X-Plugin-State')).toBe('kv')
 
   const responseJSON = await response.json<{ channel: string, status: string }>()
   const channel = responseJSON.channel

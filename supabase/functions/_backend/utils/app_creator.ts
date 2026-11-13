@@ -37,3 +37,18 @@ export function buildAppCreatorEventDetails(onboarding: unknown): Record<string,
     ...(email ? { created_by_email: email } : {}),
   }
 }
+
+/**
+ * Identity for the server-side `App Created` PostHog event. Every creation path (console,
+ * CLI, hosted MCP, public API) inserts through `public.apps`, so the insert trigger is the
+ * one place it fires. Use the creator's user id, which is the distinct_id the console
+ * identifies with, so the event lands on the same person; fall back to the org for rows
+ * without a recorded creator (service-side inserts).
+ */
+export function buildAppCreatedTrackingIdentity(onboarding: unknown, orgId: string): { user_id: string, source: string } {
+  // applyAppOnboardingPatch moves `source` under `setup`; older rows keep it at the top level.
+  const setupSource = isRecord(onboarding) && isRecord(onboarding.setup) ? onboarding.setup.source : undefined
+  const legacySource = isRecord(onboarding) ? onboarding.source : undefined
+  const source = typeof setupSource === 'string' ? setupSource : typeof legacySource === 'string' ? legacySource : 'unknown'
+  return { user_id: getAppCreatorUserId(onboarding) ?? orgId, source }
+}

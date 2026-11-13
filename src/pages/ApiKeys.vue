@@ -1756,6 +1756,9 @@ getKeys()
                   <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
                     {{ t('cli-login-guidance-description') }}
                   </p>
+                  <RouterLink to="/mcp" data-test="cli-login-guidance-mcp-link" class="mt-2 inline-block text-sm font-medium text-primary-500 hover:underline dark:text-primary-400">
+                    {{ t('cli-login-guidance-mcp-link') }}
+                  </RouterLink>
                 </div>
               </div>
 

@@ -7,7 +7,7 @@ import { getEnv } from './utils.ts'
 // Event schemas: https://developers.openai.com/ads/supported-events
 const OPENAI_ADS_EVENTS_URL = 'https://bzr.openai.com/v1/events'
 // Same Pixel ID as the website measurement pixel; events must share it to deduplicate.
-const DEFAULT_OPENAI_ADS_PIXEL_ID = '5Fiq7Kwp18THe1MThKS7GL'
+const DEFAULT_OPENAI_ADS_PIXEL_ID = '2Hvm75NK5qA45jWSMVWAdK'
 const REGISTRATION_SOURCE_URL = 'https://capgo.app/register/'
 // Used when WEBAPP_URL (the console, whose plans page starts the first payment) is not a public https URL.
 const DEFAULT_SUBSCRIPTION_SOURCE_URL = 'https://capgo.app/'

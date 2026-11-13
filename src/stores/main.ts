@@ -16,6 +16,7 @@ import {
 import { getDaysBetweenDates } from '~/services/conversion'
 import { normalizeToUtcStartOfDay } from '~/services/date'
 import { reset } from '~/services/posthog'
+import { clearSimulatorSessions } from '~/services/simulatorSessions'
 import { setWebsitePaidUserCookie } from '~/services/websiteAuthCookie'
 import { createDeferredPromise } from '../utils/promise'
 
@@ -99,8 +100,10 @@ export const useMainStore = defineStore('main', () => {
     return resolvePlatformAdminStatus()
   }
 
-  watch(auth, () => {
+  watch(auth, (next, previous) => {
     authGeneration.value += 1
+    if (previous?.id !== next?.id)
+      clearSimulatorSessions()
     dashboardOrgId.value = null
     dashboardPlanOrgId.value = null
     bestPlan.value = ''

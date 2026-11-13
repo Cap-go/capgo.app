@@ -25,14 +25,6 @@ import { closeClient, getDrizzleClient, getPgClient } from './pg.ts'
 import { waitAuthPgRetryJitter } from './pg_auth_retry.ts'
 import { isTransientPgError } from './pg_errors.ts'
 
-/**
- * Hyperdrive caches read results for 60s and never invalidates them on writes, so a
- * permission checked before an app existed would keep being denied after creation and
- * a revoked permission would keep passing. Hyperdrive never caches a query that calls a
- * STABLE function; PostgreSQL does not evaluate this unused CTE.
- */
-const BYPASS_HYPERDRIVE_CACHE = sql.raw('WITH capgo_fresh_read AS (SELECT now())')
-
 // =============================================================================
 // Types
 // =============================================================================
@@ -220,7 +212,7 @@ export async function checkPermission(
         return false
 
       const rbacOnlyResult = await drizzleClient.execute(
-        sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+        sql`SELECT public.rbac_check_permission_direct(
           ${permission},
           ${userId}::uuid,
           ${orgId}::uuid,
@@ -243,7 +235,7 @@ export async function checkPermission(
 
     // Use the unified SQL function for JWT checks and non-key fallbacks.
     const result = await drizzleClient.execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+      sql`SELECT public.rbac_check_permission_direct(
         ${permission},
         ${userId}::uuid,
         ${orgId}::uuid,
@@ -295,7 +287,7 @@ export async function checkPermissionInMemberOrgs(
   try {
     pgClient = await getPgClient(c)
     const result = await getDrizzleClient(pgClient).execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT EXISTS (
+      sql`SELECT EXISTS (
         SELECT 1
         FROM public.org_users ou
         WHERE ou.user_id = ${memberUserId}::uuid
@@ -354,7 +346,7 @@ export async function getDeniedChannelIdsForPermission(
     pgClient = await getPgClient(c)
     const drizzleClient = getDrizzleClient(pgClient)
     const result = await drizzleClient.execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT ch.id
+      sql`SELECT ch.id
         FROM (
           SELECT
             a.app_id,
@@ -505,7 +497,7 @@ export async function checkPermissionPg(
         return false
 
       const rbacOnlyResult = await drizzleClient.execute(
-        sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+        sql`SELECT public.rbac_check_permission_direct(
           ${permission},
           ${userId}::uuid,
           ${orgId}::uuid,
@@ -528,7 +520,7 @@ export async function checkPermissionPg(
 
     // Use the unified SQL function for JWT checks and non-key fallbacks.
     const result = await drizzleClient.execute(
-      sql`${BYPASS_HYPERDRIVE_CACHE} SELECT public.rbac_check_permission_direct(
+      sql`SELECT public.rbac_check_permission_direct(
         ${permission},
         ${userId}::uuid,
         ${orgId}::uuid,
@@ -746,7 +738,6 @@ export async function callerHoldsAllRolePermissions(
 
   const result = await drizzleClient.execute(
     sql`
-      ${BYPASS_HYPERDRIVE_CACHE}
       SELECT EXISTS (
         SELECT 1
         FROM public.role_permissions AS role_permission

@@ -164,6 +164,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].ci-cd': RouteRecordInfo<
+      '/app/[app].ci-cd',
+      '/app/:app/ci-cd',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].device.[device]': RouteRecordInfo<
       '/app/[app].device.[device]',
       '/app/:app/device/:device',
@@ -234,6 +241,13 @@ declare module 'vue-router/auto-routes' {
       { app: ParamValue<false> },
       | never
     >,
+    '/app/[app].observe.security': RouteRecordInfo<
+      '/app/[app].observe.security',
+      '/app/:app/observe/security',
+      { app: ParamValue<true> },
+      { app: ParamValue<false> },
+      | never
+    >,
     '/app/[app].settings': RouteRecordInfo<
       '/app/[app].settings',
       '/app/:app/settings',
@@ -265,6 +279,13 @@ declare module 'vue-router/auto-routes' {
     '/apps': RouteRecordInfo<
       '/apps',
       '/apps',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/changelog': RouteRecordInfo<
+      '/changelog',
+      '/changelog',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -342,6 +363,13 @@ declare module 'vue-router/auto-routes' {
     '/login-cli': RouteRecordInfo<
       '/login-cli',
       '/login-cli',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/mcp': RouteRecordInfo<
+      '/mcp',
+      '/mcp',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -766,6 +794,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].ci-cd.vue': {
+      routes:
+        | '/app/[app].ci-cd'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/[app].device.[device].vue': {
       routes:
         | '/app/[app].device.[device]'
@@ -849,6 +885,14 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | 'app'
     }
+    'src/pages/app/[app].observe.security.vue': {
+      routes:
+        | '/app/[app].observe.security'
+      views:
+        | never
+      pathParamNames:
+        | 'app'
+    }
     'src/pages/app/[app].settings.vue': {
       routes:
         | '/app/[app].settings'
@@ -884,6 +928,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/apps.vue': {
       routes:
         | '/apps'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/changelog.vue': {
+      routes:
+        | '/changelog'
       views:
         | never
       pathParamNames:
@@ -972,6 +1024,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/login-cli.vue': {
       routes:
         | '/login-cli'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/mcp.vue': {
+      routes:
+        | '/mcp'
       views:
         | never
       pathParamNames:

@@ -34,6 +34,13 @@ const DO_CALL_TIMEOUT = 1000 * 60 * 30 // 30 minutes
 const DO_FETCH_RETRY_ATTEMPTS = 3
 const DO_FETCH_RETRY_DELAY_MS = 250
 
+/** Disable runtime DO stub retries so only our replay aware loop counts (Workers runtime default is 4 retries). */
+export const DO_STUB_DISABLE_RUNTIME_RETRY = { retry: { maxRetries: 0 } } as const
+
+export function getAttachmentUploadDurableObjectStub(ns: DurableObjectNamespace, id: DurableObjectId): DurableObjectStub {
+  return ns.get(id, DO_STUB_DISABLE_RUNTIME_RETRY as Parameters<DurableObjectNamespace['get']>[1])
+}
+
 // # test deploy
 
 const ATTACHMENT_PREFIX = 'attachments'
@@ -100,10 +107,15 @@ function canReplayUploadRequest(request: Request): boolean {
 }
 
 function buildDurableObjectRequest(request: Request): Request {
+  const timeoutSignal = AbortSignal.timeout(DO_CALL_TIMEOUT)
+  const clientSignal = request.signal
+  const combinedSignal = typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([timeoutSignal, clientSignal])
+    : timeoutSignal
   const requestInit: RequestInit & { duplex?: 'half' } = {
     headers: request.headers,
     method: request.method,
-    signal: AbortSignal.timeout(DO_CALL_TIMEOUT),
+    signal: combinedSignal,
   }
 
   const uploadBody = getForwardedUploadBody(request)
@@ -875,7 +887,7 @@ async function uploadHandler(c: Context) {
     throw simpleError('invalid_bucket_configuration', 'Invalid bucket configuration')
   }
 
-  const handler = durableObjNs.get(durableObjNs.idFromName(normalizedRequestId))
+  const handler = getAttachmentUploadDurableObjectStub(durableObjNs, durableObjNs.idFromName(normalizedRequestId))
   cloudlog({ requestId: c.get('requestId'), message: 'upload handler - forwarding to DO', method: c.req.raw.method, url: c.req.url })
 
   const method = c.req.raw.method
@@ -891,6 +903,7 @@ async function uploadHandler(c: Context) {
     // HEAD must not forward a request body and must preserve the verb (Hono/tiny maps HEAD to GET).
     method,
     headers,
+    signal: c.req.raw.signal,
   }
   const uploadBody = getForwardedUploadBody(c.req.raw)
   if (uploadBody != null) {
@@ -1416,4 +1429,6 @@ export const filesTestUtils = {
   fetchUploadHandlerWithRetry,
   isRetryableDurableObjectFetchError,
   retryableUploadUnavailableResponse,
+  DO_STUB_DISABLE_RUNTIME_RETRY,
+  getAttachmentUploadDurableObjectStub,
 }

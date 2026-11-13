@@ -103,7 +103,7 @@ const adminClient = {
   },
 }
 
-function acceptRequest(extraBody: Record<string, unknown> = {}) {
+function acceptRequest(extraBody: Record<string, unknown> = {}, country?: string) {
   return app.request(new Request('http://localhost/', {
     body: JSON.stringify({
       magic_invite_string: invitation.invite_magic_string,
@@ -111,7 +111,7 @@ function acceptRequest(extraBody: Record<string, unknown> = {}) {
       password: 'Password1!',
       ...extraBody,
     }),
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(country ? { 'cf-ipcountry': country } : {}) },
     method: 'POST',
   }))
 }
@@ -171,12 +171,14 @@ describe('magic-link invitation acceptance telemetry', () => {
   })
 
   it('emits created only after a new account membership is finalized', async () => {
-    getPgClientMock.mockResolvedValue(buildPgClient())
+    const pg = buildPgClient()
+    getPgClientMock.mockResolvedValue(pg)
     createUserMock.mockResolvedValue({ data: { user: { id: FUTURE_USER_ID } }, error: null })
 
-    const response = await acceptRequest()
+    const response = await acceptRequest({}, 'BR')
 
     expect(response.status).toBe(200)
+    expect(pg.query).toHaveBeenCalledWith(expect.stringContaining('country'), expect.arrayContaining(['BR']))
     expect(deleteUserMock).not.toHaveBeenCalled()
     expect(captureInvitationEventMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       accountState: 'created',

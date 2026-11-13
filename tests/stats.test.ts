@@ -66,6 +66,8 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST] /stats Cloudflare write guard', () => {
 
     const response = await postStats(baseData)
     expect(response.status).toBe(200)
+    if (env.PLUGIN_STATE_KV_TESTS === 'true')
+      expect(response.headers.get('X-Plugin-State')).toBe('kv')
     expect(await response.json<StatsRes>()).toEqual({ status: 'ok' })
     await expectNoPrimaryStatsRows(APP_NAME_STATS, [uuid])
   })
@@ -89,6 +91,8 @@ describe.skipIf(!USE_CLOUDFLARE)('[POST] /stats Cloudflare write guard', () => {
 
     const response = await postStats([baseData1, baseData2])
     expect(response.status).toBe(200)
+    if (env.PLUGIN_STATE_KV_TESTS === 'true')
+      expect(response.headers.get('X-Plugin-State')).toBe('kv')
     const responseData = await response.json<BatchStatsRes>()
     expect(responseData.status).toBe('ok')
     expect(responseData.results).toHaveLength(2)

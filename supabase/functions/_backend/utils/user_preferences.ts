@@ -3,6 +3,7 @@ import type { EmailType } from './emailClassification.ts'
 import type { EmailPreferenceKey, EmailPreferences } from './org_email_notifications.ts'
 import type { Database } from './supabase.types.ts'
 import { syncBentoSubscriberTags } from './bento.ts'
+import { SECURITY_UPDATES_BENTO_TAG, syncSecurityUpdatesBento } from './security_updates_bento.ts'
 import { classifyEmailAddress } from './emailClassification.ts'
 import { cloudlog } from './logging.ts'
 
@@ -18,7 +19,7 @@ const EMAIL_TYPE_TAGS: Record<EmailType, string> = {
 
 // Email preference disabled tags - when a user opts OUT, we add these tags
 // Bento automations should exclude users with these tags
-const EMAIL_PREF_DISABLED_TAGS: Record<EmailPreferenceKey, string> = {
+const EMAIL_PREF_DISABLED_TAGS: Record<Exclude<EmailPreferenceKey, 'security_updates'>, string> = {
   usage_limit: 'usage_limit_disabled',
   credit_usage: 'credit_usage_disabled',
   onboarding: 'onboarding_disabled',
@@ -41,7 +42,7 @@ const EMAIL_PREF_DISABLED_TAGS: Record<EmailPreferenceKey, string> = {
 const ALL_LEGACY_TAGS = [NOTIFICATION_TAG, NEWSLETTER_TAG]
 const ALL_EMAIL_PREF_DISABLED_TAGS = Object.values(EMAIL_PREF_DISABLED_TAGS)
 const ALL_EMAIL_TYPE_TAGS = Object.values(EMAIL_TYPE_TAGS)
-const ALL_TAGS = [...ALL_LEGACY_TAGS, ...ALL_EMAIL_PREF_DISABLED_TAGS, ...ALL_EMAIL_TYPE_TAGS]
+const ALL_TAGS = [...ALL_LEGACY_TAGS, ...ALL_EMAIL_PREF_DISABLED_TAGS, ...ALL_EMAIL_TYPE_TAGS, SECURITY_UPDATES_BENTO_TAG]
 
 /** Fields used for Bento preference tag sync — partial selects are enough. */
 type UserPreferenceRecord = {
@@ -62,6 +63,8 @@ function buildDesiredTags(email: string, record: UserPreferenceRecord | null | u
   const emailPrefs = (record?.email_preferences ?? {}) as EmailPreferences
   for (const [key, disabledTag] of Object.entries(EMAIL_PREF_DISABLED_TAGS)) {
     const prefKey = key as EmailPreferenceKey
+    if (prefKey === 'security_updates')
+      continue
     const isEnabled = emailPrefs[prefKey] ?? true
     if (!isEnabled)
       tags.add(disabledTag)
@@ -113,6 +116,14 @@ export async function syncUserPreferenceTags(
     if (segments.segments.length === 0 && segments.deleteSegments.length === 0)
       return
     await syncBentoSubscriberTags(c, { email, ...segments })
+    const emailChanged = Boolean(previousEmail && previousEmail !== email)
+    await syncSecurityUpdatesBento(
+      c,
+      email,
+      record?.email_preferences as EmailPreferences | null | undefined,
+      previousRecord?.email_preferences as EmailPreferences | null | undefined,
+      { force: emailChanged },
+    )
   }
   catch (error) {
     cloudlog({ requestId: c.get('requestId'), message: 'syncUserPreferenceTags error', error })

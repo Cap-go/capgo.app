@@ -21,6 +21,7 @@ const OnboardingExploreBanner = defineAsyncComponent(() => import('~/components/
 const OnboardingExploreReminder = defineAsyncComponent(() => import('~/components/dashboard/OnboardingExploreReminder.vue'))
 const PastDueBanner = defineAsyncComponent(() => import('~/components/dashboard/PastDueBanner.vue'))
 const TrialCardPrompt = defineAsyncComponent(() => import('~/components/dashboard/TrialCardPrompt.vue'))
+const ConsoleUpdatePrompt = defineAsyncComponent(() => import('~/components/changelog/ConsoleUpdatePrompt.vue'))
 
 const sidebarOpen = ref(false)
 const sidebarCollapsedPreference = useLocalStorage('capgo-sidebar-collapsed', false)
@@ -45,7 +46,7 @@ async function refreshPendingOnboardingApp() {
   const lookupRun = ++onboardingLookupRun
   pendingOnboardingAppId.value = ''
 
-  if (/^\/app\/new\/?$/.test(route.path) || /^\/app\/[^/]+\/getting-started\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
+  if (/^\/app\/new\/?$/.test(route.path) || /^\/app\/[^/]+\/getting-started\/?$/.test(route.path) || /^\/app\/[^/]+\/ci-cd\/?$/.test(route.path) || route.path === '/onboarding' || route.path.startsWith('/onboarding/'))
     return
 
   await organizationStore.awaitInitialLoad()
@@ -163,5 +164,7 @@ useEdgeSwipeBack(contentShell, {
     </div>
     <AssistantChat />
     <TrialCardPrompt />
+    <!-- Web only: the native app receives console updates through Capgo live updates. -->
+    <ConsoleUpdatePrompt />
   </div>
 </template>

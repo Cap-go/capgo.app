@@ -45,7 +45,7 @@ Use this skill for OTA update workflows in Capgo Cloud.
   - Bundle version must be greater than `0.0.0` and unique.
   - Deleted versions cannot be reused.
   - External URL mode is useful for very large or privacy-sensitive bundles.
-  - Encryption is recommended for trustless distribution.
+  - Most apps can skip bundle encryption. Enable it for an explicit user request or a concrete requirement for end-to-end encrypted delivery of the code/assets. Handling sensitive runtime/API data alone is not a reason to enable it. Plan for private-key backup, CI key configuration, and a native rebuild to ship the public key.
   - Interactive prompts are disabled automatically in CI and other non-interactive sessions so uploads do not block automation.
   - Optional upload prompts can remember the user's answer on the current machine so future uploads can skip the same question.
   - `--channel` accepts a single channel or a comma-separated list such as `production,beta`.

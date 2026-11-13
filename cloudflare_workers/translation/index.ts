@@ -4,19 +4,16 @@ import sourceMessages from '../../messages/en.json' with { type: 'json' }
 import { translationStyleGuide } from './style_guides.ts'
 
 const CACHE_TTL_SECONDS = 5 * 60
-const PENDING_TRANSLATION_STORE_TTL_SECONDS = 60 * 60
+// Keep unfinished catalogs through the queue's 96-hour retention window.
+const PENDING_TRANSLATION_STORE_TTL_SECONDS = 97 * 60 * 60
 const READY_TRANSLATION_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
-// Picked from a French benchmark against Workers AI models (see the PR introducing it):
-// Gemma 4 drafts with thinking disabled, then DeepSeek V4.1 Flash reviews against the
-// style guide with its reasoning on.
-const DEFAULT_TRANSLATION_MODEL = '@cf/google/gemma-4-26b-a4b-it'
-const DEFAULT_TRANSLATION_REVIEW_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
+// Workers AI catalog checked 2026-11-13; neither model has planned deprecation.
+const DEFAULT_TRANSLATION_MODEL = '@cf/qwen/qwen3.8-27b' // created_at: 2026-08-17
+const DEFAULT_TRANSLATION_REVIEW_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017' // created_at: 2026-10-17
 // Bump when the prompt, style guides or default models change so every locale is
 // translated again instead of serving catalogs made by the previous pipeline.
-const TRANSLATION_PIPELINE_VERSION = 4
-// Hybrid reasoning models think before answering by default. The first translation
-// pass does not need it (same benchmark score, a fraction of the latency and cost);
-// the optional review pass keeps it, since reviewing without thinking changed nothing.
+const TRANSLATION_PIPELINE_VERSION = 5
+// Both passes return short structured translations, without reasoning tokens.
 const THINKING_MODEL_PREFIXES = [
   '@cf/deepseek-ai/deepseek-v4',
   '@cf/google/gemma-4',
@@ -31,6 +28,8 @@ const TRANSLATION_STORE_CLEANUP_INTERVAL_SECONDS = 60
 const TRANSLATION_REQUEUE_AFTER_SECONDS = 60
 const TRANSLATION_BATCH_LEASE_SECONDS = 15 * 60
 const TRANSLATION_STORE_TABLE = 'translation_messages_cache'
+const TRANSLATION_COOLDOWN_TABLE = 'translation_queue_cooldowns'
+const MAX_RATE_LIMIT_DELAY_SECONDS = 60 * 60
 // Translation memory: one row per translated string, keyed by a hash of its English
 // text, translator context and pipeline version. A catalog change only sends new or
 // edited strings to Workers AI; every other string is reused from here.
@@ -229,12 +228,13 @@ function errorResponse(status: number, code: string, message: string) {
   return jsonResponse({ error: code, message }, status)
 }
 
-function serializeError(error: unknown) {
+function serializeError(error: unknown): unknown {
   if (error instanceof Error) {
     return {
       message: error.message,
       name: error.name,
       stack: error.stack,
+      ...(error.cause ? { cause: serializeError(error.cause) } : {}),
     }
   }
   return error
@@ -278,6 +278,8 @@ function translationPipelineModel(env: TranslationWorkerBindings, model: string)
 }
 
 function modelRequestOptions(model: string) {
+  if (model.startsWith('@cf/deepseek-ai/deepseek-v4'))
+    return { reasoning_effort: 'none' }
   return THINKING_MODEL_PREFIXES.some(prefix => model.startsWith(prefix))
     ? { chat_template_kwargs: { enable_thinking: false } }
     : {}
@@ -611,9 +613,8 @@ function reviewBatchPayload(batch: MessageEntry[], drafts: Record<string, string
   return { messages }
 }
 
-function reviewRequest(targetLanguage: string, batch: MessageEntry[], drafts: Record<string, string>) {
-  // Room for the reviewer's reasoning tokens on top of the JSON answer.
-  return translationRequestBody(reviewPrompt(targetLanguage), reviewBatchPayload(batch, drafts), { max_tokens: 16384 })
+function reviewRequest(model: string, targetLanguage: string, batch: MessageEntry[], drafts: Record<string, string>) {
+  return translationRequestBody(reviewPrompt(targetLanguage), reviewBatchPayload(batch, drafts), modelRequestOptions(model))
 }
 
 // Accepted translations by key; null marks a missing or invalid entry.
@@ -644,6 +645,26 @@ function acceptedOnly(translations: AcceptedTranslations) {
   return Object.fromEntries(Object.entries(translations).filter((entry): entry is [string, string] => entry[1] !== null))
 }
 
+class TranslationCooldownError extends Error {
+  constructor(readonly delaySeconds: number, cause?: unknown) {
+    super('Translation is waiting for its rate-limit cooldown', { cause })
+  }
+}
+
+function isAiRateLimitError(error: unknown) {
+  const record = recordOf(error)
+  return record?.status === 429 || record?.statusCode === 429 || record?.code === 3021
+    || /\b(?:429|3021)\b|rate[ -]?limit|too many requests/i.test(error instanceof Error ? error.message : String(error))
+}
+
+function translationRetryDelay(error: unknown, attempts: number) {
+  if (error instanceof TranslationCooldownError)
+    return error.delaySeconds
+  if (!isAiRateLimitError(error))
+    return 30
+  return Math.min(MAX_RATE_LIMIT_DELAY_SECONDS, 120 * 2 ** Math.min(5, Math.max(0, attempts - 1)) + Math.floor(Math.random() * 30))
+}
+
 function normalizeTranslationError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error))
 }
@@ -660,6 +681,8 @@ async function runTranslationRequest(ai: AiBinding, model: string, request: unkn
       return translatedBatch(batch, translations)
     }
     catch (error) {
+      if (isAiRateLimitError(error))
+        throw error
       lastError = normalizeTranslationError(error)
       cloudlog({
         ...logContext,
@@ -675,15 +698,17 @@ async function runTranslationRequest(ai: AiBinding, model: string, request: unkn
 }
 
 // Second pass: a reviewer model fixes the draft against the same style guide.
-// Returns null when the review fails, so the caller keeps the draft.
+// Rate limits defer the batch; other review failures retain the draft.
 async function reviewTranslatedBatch(ai: AiBinding, reviewModel: string, targetLanguage: string, batch: MessageEntry[], drafts: Record<string, string>) {
   try {
-    return await runTranslationRequest(ai, reviewModel, reviewRequest(targetLanguage, batch, drafts), batch, {
+    return await runTranslationRequest(ai, reviewModel, reviewRequest(reviewModel, targetLanguage, batch, drafts), batch, {
       message: 'Message translation review failed',
       targetLanguage,
     })
   }
-  catch {
+  catch (error) {
+    if (isAiRateLimitError(error))
+      throw error
     return null
   }
 }
@@ -813,6 +838,14 @@ async function ensureTranslationStore(db: D1Database) {
        PRIMARY KEY (target_language, source_hash)
      )`,
   ).run()
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS ${TRANSLATION_COOLDOWN_TABLE} (
+       target_language TEXT NOT NULL,
+       checksum TEXT NOT NULL,
+       retry_after INTEGER NOT NULL,
+       PRIMARY KEY (target_language, checksum)
+     )`,
+  ).run()
   translationStoreInitialized = true
 }
 
@@ -900,7 +933,31 @@ async function deleteExpiredTranslationStoreEntries(db: D1Database) {
     return
 
   await db.prepare(`DELETE FROM ${TRANSLATION_STORE_TABLE} WHERE expires_at <= unixepoch()`).run()
+  await db.prepare(`DELETE FROM ${TRANSLATION_COOLDOWN_TABLE} WHERE retry_after <= unixepoch()`).run()
   lastTranslationStoreCleanupAt = now
+}
+
+// Persist the delay separately from the batch lease: browsers and duplicate queue
+// deliveries must not turn a scheduled retry into an immediate inference request.
+async function translationCooldownSeconds(env: TranslationWorkerBindings, checksum: string, targetLanguage: string) {
+  const db = getTranslationStore(env)
+  await ensureTranslationStore(db)
+  const row = await db.prepare(
+    `SELECT retry_after - unixepoch() AS delay_seconds FROM ${TRANSLATION_COOLDOWN_TABLE}
+     WHERE target_language = ? AND checksum = ? AND retry_after > unixepoch()`,
+  ).bind(targetLanguage, checksum).first<{ delay_seconds: number }>()
+  return row?.delay_seconds ?? 0
+}
+
+async function saveTranslationCooldown(env: TranslationWorkerBindings, body: TranslationQueuePayload, delaySeconds: number) {
+  const db = getTranslationStore(env)
+  await ensureTranslationStore(db)
+  await db.prepare(
+    `INSERT INTO ${TRANSLATION_COOLDOWN_TABLE} (target_language, checksum, retry_after)
+     VALUES (?, ?, unixepoch() + ?)
+     ON CONFLICT (target_language, checksum) DO UPDATE
+     SET retry_after = MAX(retry_after, excluded.retry_after)`,
+  ).bind(body.targetLanguage, body.checksum, delaySeconds).run()
 }
 
 async function readTranslationStoreEntry(env: TranslationWorkerBindings, checksum: string, targetLanguage: string) {
@@ -1045,8 +1102,12 @@ async function claimTranslationBatch(env: TranslationWorkerBindings, checksum: s
        AND checksum = ?
        AND status = 'pending'
        AND next_batch_index = ?
-       AND expires_at > unixepoch()`,
-  ).bind(translationBatchClaimMarker(batchIndex), PENDING_TRANSLATION_STORE_TTL_SECONDS, targetLanguage, checksum, batchIndex).run()
+       AND expires_at > unixepoch()
+       AND NOT EXISTS (
+         SELECT 1 FROM ${TRANSLATION_COOLDOWN_TABLE}
+         WHERE target_language = ? AND checksum = ? AND retry_after > unixepoch()
+       )`,
+  ).bind(translationBatchClaimMarker(batchIndex), PENDING_TRANSLATION_STORE_TTL_SECONDS, targetLanguage, checksum, batchIndex, targetLanguage, checksum).run()
 
   return result.meta.changes > 0
 }
@@ -1317,6 +1378,9 @@ async function readyOrLatestTranslationResponse(requestId: string | undefined, r
 }
 
 async function requeueStaleTranslation(env: TranslationWorkerBindings, storedEntry: TranslationStoreEntry, checksum: string, targetLanguage: string, requestId: string) {
+  if (await translationCooldownSeconds(env, checksum, targetLanguage))
+    return
+
   const claimedBatchIndex = claimedTranslationBatchIndex(storedEntry.nextBatchIndex)
   if (claimedBatchIndex !== null && !isTranslationBatchLeaseExpired(storedEntry))
     return
@@ -1510,16 +1574,6 @@ async function writeReadyTranslation(input: ReadyTranslationWriteInput) {
   return true
 }
 
-async function translateOwnedBatch(ai: AiBinding, env: TranslationWorkerBindings, checksum: string, targetLanguage: string, model: string, batch: MessageEntry[], batchIndex: number) {
-  try {
-    return await translateBatch(ai, model, targetLanguage, batch, getTranslationReviewModel(env))
-  }
-  catch (error) {
-    await releaseTranslationBatchClaim(env, checksum, targetLanguage, batchIndex).catch(() => {})
-    throw error
-  }
-}
-
 async function persistTranslatedBatch(input: TranslatedBatchPersistenceInput) {
   const {
     batchIndex,
@@ -1563,7 +1617,7 @@ async function persistTranslatedBatch(input: TranslatedBatchPersistenceInput) {
   await enqueueTranslationBatch(env, translationQueuePayload(checksum, targetLanguage, model, followingBatchIndex), requestId)
 }
 
-async function processTranslationQueueBatch(env: TranslationWorkerBindings, body: TranslationQueuePayload, requestId?: string) {
+async function processTranslationQueueBatch(env: TranslationWorkerBindings, body: TranslationQueuePayload, attempts: number, requestId?: string) {
   const targetLanguage = queuedTargetLanguage(body, requestId)
   if (!targetLanguage)
     return
@@ -1587,12 +1641,13 @@ async function processTranslationQueueBatch(env: TranslationWorkerBindings, body
   if (storedEntry?.status !== 'pending')
     return
 
+  const cooldownSeconds = await translationCooldownSeconds(env, checksum, targetLanguage)
+  if (cooldownSeconds > 0)
+    throw new TranslationCooldownError(cooldownSeconds)
+
   const batchIndex = normalizeBatchIndex(body.batchIndex)
   const nextBatchIndex = await nextProcessableBatchIndex(env, storedEntry, checksum, targetLanguage, batchIndex)
   if (nextBatchIndex === null)
-    return
-
-  if (batchIndex < nextBatchIndex)
     return
 
   if (batchIndex !== nextBatchIndex) {
@@ -1604,46 +1659,61 @@ async function processTranslationQueueBatch(env: TranslationWorkerBindings, body
   if (!claimed)
     return
 
-  // Each queue step translates the next batch of strings still missing from this
-  // catalog. The first step fills in every string already in translation memory, so
-  // an en.json change only sends its new or edited strings to Workers AI.
-  const messages = batchIndex === 0
-    ? await reuseTranslationMemory(env, targetLanguage, model, storedEntry.messages, requestId)
-    : storedEntry.messages
-  const batch = buildBatches(untranslatedMessages(messages))[0]
-  if (!batch) {
-    await writeReadyTranslation({
-      batchCount: batchIndex,
+  try {
+    // Each queue step translates the next batch of strings still missing from this
+    // catalog. The first step fills in every string already in translation memory, so
+    // an en.json change only sends its new or edited strings to Workers AI.
+    const messages = batchIndex === 0
+      ? await reuseTranslationMemory(env, targetLanguage, model, storedEntry.messages, requestId)
+      : storedEntry.messages
+    const batch = buildBatches(untranslatedMessages(messages))[0]
+    if (!batch) {
+      await writeReadyTranslation({
+        batchCount: batchIndex,
+        checksum,
+        claimedBatchIndex: batchIndex,
+        env,
+        messages,
+        model,
+        nextBatchIndex: batchIndex + 1,
+        readyRequest,
+        requestId,
+        targetLanguage,
+      })
+      return
+    }
+
+    const translatedBatch = await translateBatch(ai, model, targetLanguage, batch, getTranslationReviewModel(env))
+    await rememberTranslatedBatch(env, targetLanguage, model, translatedBatch.remembered, requestId)
+
+    const mergedMessages = {
+      ...messages,
+      ...translatedBatch.messages,
+    }
+    await persistTranslatedBatch({
+      batchIndex,
       checksum,
-      claimedBatchIndex: batchIndex,
       env,
-      messages,
+      mergedMessages,
       model,
-      nextBatchIndex: batchIndex + 1,
       readyRequest,
       requestId,
       targetLanguage,
     })
-    return
   }
-
-  const translatedBatch = await translateOwnedBatch(ai, env, checksum, targetLanguage, model, batch, batchIndex)
-  await rememberTranslatedBatch(env, targetLanguage, model, translatedBatch.remembered, requestId)
-
-  const mergedMessages = {
-    ...messages,
-    ...translatedBatch.messages,
+  catch (error) {
+    try {
+      if (isAiRateLimitError(error)) {
+        const delaySeconds = translationRetryDelay(error, attempts)
+        await saveTranslationCooldown(env, body, delaySeconds)
+        throw new TranslationCooldownError(delaySeconds, error)
+      }
+    }
+    finally {
+      await releaseTranslationBatchClaim(env, checksum, targetLanguage, batchIndex)
+    }
+    throw error
   }
-  await persistTranslatedBatch({
-    batchIndex,
-    checksum,
-    env,
-    mergedMessages,
-    model,
-    readyRequest,
-    requestId,
-    targetLanguage,
-  })
 }
 
 async function fetchHandler(request: Request, env: TranslationWorkerBindings) {
@@ -1675,9 +1745,9 @@ export default {
     }
   },
   async queue(batch: MessageBatch<TranslationQueuePayload>, env: TranslationWorkerBindings, _ctx: ExecutionContext) {
-    for (const message of batch.messages) {
+    await Promise.all(batch.messages.map(async (message) => {
       try {
-        await processTranslationQueueBatch(env, message.body)
+        await processTranslationQueueBatch(env, message.body, message.attempts)
         message.ack()
       }
       catch (error) {
@@ -1685,10 +1755,11 @@ export default {
           message: 'Translation queue consumer error',
           error: serializeError(error),
           queueMessage: message.body,
+          attempt: message.attempts,
         })
-        message.retry({ delaySeconds: 30 })
+        message.retry({ delaySeconds: translationRetryDelay(error, message.attempts) })
       }
-    }
+    }))
   },
 }
 
@@ -1705,6 +1776,7 @@ export const __translationWorkerTestUtils__ = {
   normalizeBatchIndex,
   parseTranslationObject,
   reviewPrompt,
+  reviewRequest,
   translateBatch,
   translationBatchPayload,
   translationBatchClaimMarker,
@@ -1712,6 +1784,7 @@ export const __translationWorkerTestUtils__ = {
   translationMemoryHash,
   translationPrompt,
   translationRequest,
+  translationRetryDelay,
   translationStoreTtlSeconds,
   unwrapTranslatedMessage,
 }

@@ -189,6 +189,7 @@ export const useCors = cors({
     'x-cli-command',
     'x-cli-node',
     'x-cli-os',
+    'x-cli-ci',
     'x-image-path',
     'x-image-upsert',
   ],
