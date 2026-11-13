@@ -166,6 +166,14 @@ fits one immutable KV document. Tests cover that size and a separate
 local checks, not a production throughput benchmark.
 
 Source reads use at most four concurrent primary transactions per drain.
+Queue claims, acknowledgements, garbage-collection progress and explicit repair
+enqueue calls also use separate short read-write transactions. These functions
+mutate queue state even though they are invoked with `SELECT`; allowing
+Hyperdrive to cache a custom function's result can replay a settled lease rather
+than claim new work. Each mutation commits before KV/R2 operations start. The
+writer does not hold a database transaction across provider I/O or disable
+shared Hyperdrive caching.
+
 Each bounded app snapshot, manifest, or source page uses
 `REPEATABLE READ, READ ONLY` through `withPgTransaction`. Its data is
 materialized, the transaction commits, and the checked-out client is released

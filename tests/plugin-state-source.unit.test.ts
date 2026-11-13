@@ -3,9 +3,9 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../supabase/functions/_backend/utils/hono.ts'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import { Hono } from 'hono/tiny'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { pluginStateVersionKey } from '../supabase/functions/_backend/plugin_runtime/utils/pluginStateFormat.ts'
-import { buildManifestDoc, createPluginStateSourceReader, drainPluginStateSync } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
+import { app as syncApp, buildManifestDoc, createPluginStateSourceReader, drainPluginStateSync } from '../supabase/functions/_backend/triggers/plugin_state_sync.ts'
 import { publicationProviders } from './plugin-state-publication-fixture.ts'
 
 interface Connection { id: number, inTransaction: boolean }
@@ -41,9 +41,10 @@ beforeEach(() => {
   peakTransactions = 0
   nextConnection = 0
   provider.connect.mockImplementation(async () => ({ id: nextConnection++, inTransaction: false }))
-  provider.transaction.mockImplementation(async <T>(client: Connection, run: (client: Connection) => Promise<T>, options: { appendSql?: string }) => {
+  provider.transaction.mockImplementation(async <T>(client: Connection, run: (client: Connection) => Promise<T>, options?: { appendSql?: string }) => {
     expect(client.inTransaction).toBe(false)
-    expect(options.appendSql).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+    if (options)
+      expect(options.appendSql).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
     client.inTransaction = true
     activeTransactions++
     peakTransactions = Math.max(peakTransactions, activeTransactions)
@@ -60,6 +61,10 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 async function inContext(run: (context: Context<MiddlewareKeyVariables>) => Promise<void>) {
   const app = new Hono<MiddlewareKeyVariables>()
   app.get('/', async (c) => {
@@ -72,13 +77,13 @@ async function inContext(run: (context: Context<MiddlewareKeyVariables>) => Prom
 }
 
 describe('fresh plugin snapshot source transactions', () => {
-  it('publishes the fresh primary row and commits before provider I/O or ACK', async () => {
+  it('commits the source snapshot before provider I/O and acknowledges in its own transaction', async () => {
     const storage = publicationProviders()
     let claims = 0
     provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
       const statement = dialect.sqlToQuery(query)
       if (statement.sql.includes('public.claim_plugin_state_sync(')) {
-        expect(client.inTransaction).toBe(false)
+        expect(client.inTransaction).toBe(true)
         claims++
         return { rows: [{ result: { status: 'ok', lease_token: 'fixture-lease', generation: '1', has_more: false,
           apps: [{ app_id: 'com.test.freshsnapshot', jobs: [{ kind: 'version', ref: '1.0.0' }], attempts: 1 }],
@@ -88,8 +93,8 @@ describe('fresh plugin snapshot source transactions', () => {
         // Plain queries emulate a previously warmed Hyperdrive result.
         return { rows: [{ id: client.inTransaction ? 202 : 101, owner_org: 'fixture-org', name: '1.0.0', deleted: false }] }
       }
-      expect(client.inTransaction).toBe(false)
-      expect(activeTransactions).toBe(0)
+      expect(client.inTransaction).toBe(true)
+      expect(activeTransactions).toBe(1)
       return { rows: [] }
     })
     const originalPut = storage.namespace.put.getMockImplementation()!
@@ -108,7 +113,7 @@ describe('fresh plugin snapshot source transactions', () => {
     expect(await response.json()).toEqual({ claims: 1, apps: 1, failed: 0 })
     expect(claims).toBe(1)
     expect(storage.publishedValue(await pluginStateVersionKey('com.test.freshsnapshot', '1.0.0'))).toMatchObject({ id: 202 })
-    expect(provider.transaction).toHaveBeenCalledTimes(1)
+    expect(provider.transaction).toHaveBeenCalledTimes(4)
     expect(provider.close).toHaveBeenCalledTimes(2)
   })
 
@@ -187,6 +192,167 @@ describe('fresh plugin snapshot source transactions', () => {
       expect(activeTransactions).toBe(0)
       expect(provider.close).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+describe('plugin state queue mutation transactions', () => {
+  it('acquires new leases and publishes the next work item when plain RPC results would be cached', async () => {
+    const storage = publicationProviders()
+    const appId = 'com.test.mutationqueue'
+    const names = ['1.0.0', '2.0.0']
+    const acknowledged: string[] = []
+    let completed = 0
+    let cachedClaims = 0
+    const claimResult = (index: number) => ({
+      status: 'ok',
+      lease_token: `fixture-lease-${index + 1}`,
+      generation: String(index + 1),
+      has_more: true,
+      apps: [{ app_id: appId, jobs: [{ kind: 'version', ref: names[index] }], attempts: 1 }],
+    })
+    const cachedFirstClaim = claimResult(0)
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      if (statement.sql.includes('public.claim_plugin_state_sync(')) {
+        if (!client.inTransaction) {
+          // Stop a broken drain quickly after demonstrating replay of an old lease.
+          if (++cachedClaims > 2)
+            throw new Error('cached mutation claim repeated after its ACK')
+          return { rows: [{ result: cachedFirstClaim }] }
+        }
+        return { rows: [{ result: completed < names.length ? claimResult(completed) : { status: 'empty' } }] }
+      }
+      if (statement.sql.includes('public.ack_plugin_state_sync(')) {
+        const lease = statement.params[0]
+        if (client.inTransaction && lease === `fixture-lease-${completed + 1}`) {
+          acknowledged.push(lease)
+          completed++
+        }
+        return { rows: [] }
+      }
+      if (statement.sql.includes('public.claim_plugin_state_gc(')) {
+        expect(client.inTransaction).toBe(true)
+        return { rows: [{ result: null }] }
+      }
+      if (statement.sql.includes('FROM public.app_versions av')) {
+        expect(client.inTransaction).toBe(true)
+        const name = names.find(value => statement.params.some(param => Array.isArray(param) && param.includes(value)))
+        if (!name)
+          throw new Error('expected a queued version name')
+        return { rows: [{ id: name === names[0] ? 101 : 202, owner_org: 'fixture-org', name, deleted: false }] }
+      }
+      throw new Error(`unexpected queue query: ${statement.sql}`)
+    })
+    const originalGet = storage.pointers.get.getMockImplementation()!
+    storage.pointers.get.mockImplementation(async (...args) => {
+      expect(activeTransactions).toBe(0)
+      return originalGet(...args)
+    })
+    const originalPut = storage.namespace.put.getMockImplementation()!
+    storage.namespace.put.mockImplementation(async (...args) => {
+      expect(activeTransactions).toBe(0)
+      return originalPut(...args)
+    })
+    const originalPointerPut = storage.pointers.put.getMockImplementation()!
+    storage.pointers.put.mockImplementation(async (...args) => {
+      expect(activeTransactions).toBe(0)
+      return originalPointerPut(...args)
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(await response.json()).toEqual({ claims: 2, apps: 2, failed: 0 })
+    expect(acknowledged).toEqual(['fixture-lease-1', 'fixture-lease-2'])
+    expect(cachedClaims).toBe(0)
+    expect(storage.publishedValue(await pluginStateVersionKey(appId, names[0]))).toMatchObject({ id: 101 })
+    expect(storage.publishedValue(await pluginStateVersionKey(appId, names[1]))).toMatchObject({ id: 202 })
+    expect(activeTransactions).toBe(0)
+  })
+
+  it('commits each garbage-collection lease and cursor before resuming the next page', async () => {
+    const storage = publicationProviders()
+    let cursor: string | null = null
+    let complete = false
+    let lease = 0
+    const acknowledgements: unknown[][] = []
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      expect(client.inTransaction).toBe(true)
+      if (statement.sql.includes('public.claim_plugin_state_sync('))
+        return { rows: [{ result: { status: 'empty' } }] }
+      if (statement.sql.includes('public.claim_plugin_state_gc(')) {
+        lease++
+        return { rows: [{ result: complete ? null : { lease_token: `fixture-gc-${lease}`, cursor } }] }
+      }
+      if (statement.sql.includes('public.ack_plugin_state_gc(')) {
+        expect(statement.params[0]).toBe(`fixture-gc-${lease}`)
+        const nextCursor = statement.params[1]
+        if (nextCursor !== null && typeof nextCursor !== 'string')
+          throw new Error('invalid GC cursor')
+        cursor = nextCursor
+        complete = statement.params[2] === true
+        acknowledgements.push(statement.params)
+        return { rows: [] }
+      }
+      throw new Error(`unexpected garbage-collection query: ${statement.sql}`)
+    })
+    const listedCursors: (string | undefined)[] = []
+    storage.namespace.list.mockImplementation(async (options) => {
+      expect(activeTransactions).toBe(0)
+      listedCursors.push(options.cursor)
+      return options.cursor
+        ? { keys: [], list_complete: true, cursor: undefined }
+        : { keys: [], list_complete: false, cursor: 'fixture-gc-page-2' }
+    })
+    const app = new Hono<MiddlewareKeyVariables>()
+    app.post('/', async c => c.json(await drainPluginStateSync(c)))
+    for (let pass = 0; pass < 2; pass++) {
+      const response = await app.request('/', { method: 'POST' }, { PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+      expect(await response.json()).toEqual({ claims: 0, apps: 0, failed: 0 })
+    }
+    expect(listedCursors).toEqual([undefined, 'fixture-gc-page-2'])
+    expect(acknowledgements).toEqual([
+      ['fixture-gc-1', 'fixture-gc-page-2', false],
+      ['fixture-gc-2', null, true],
+    ])
+    expect(complete).toBe(true)
+    expect(activeTransactions).toBe(0)
+  })
+
+  it('commits an explicit repair enqueue before the request begins draining', async () => {
+    vi.stubEnv('API_SECRET', 'fixture-api-secret')
+    const storage = publicationProviders()
+    const operations: string[] = []
+    const appId = 'com.test.explicitmutationrepair'
+    provider.execute.mockImplementation(async (client: Connection, query: SQL) => {
+      const statement = dialect.sqlToQuery(query)
+      expect(client.inTransaction).toBe(true)
+      expect(activeTransactions).toBe(1)
+      if (statement.sql.includes('public.enqueue_plugin_state_full_sync(')) {
+        operations.push('enqueue')
+        expect(statement.params).toEqual([[appId]])
+        return { rows: [] }
+      }
+      if (statement.sql.includes('public.claim_plugin_state_sync(')) {
+        operations.push('sync-claim')
+        return { rows: [{ result: { status: 'empty' } }] }
+      }
+      if (statement.sql.includes('public.claim_plugin_state_gc(')) {
+        operations.push('gc-claim')
+        return { rows: [{ result: null }] }
+      }
+      throw new Error(`unexpected repair query: ${statement.sql}`)
+    })
+    const response = await syncApp.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apisecret': 'fixture-api-secret' },
+      body: JSON.stringify({ apps: [appId], drain: true }),
+    }, { API_SECRET: 'fixture-api-secret', PLUGIN_STATE: storage.namespace, PLUGIN_STATE_POINTERS: storage.pointers })
+    expect(response.status, await response.clone().text()).toBe(200)
+    expect(await response.json()).toEqual({ status: 'ok', claims: 0, apps: 0, failed: 0 })
+    expect(operations).toEqual(['enqueue', 'sync-claim', 'gc-claim'])
+    expect(provider.close).toHaveBeenCalledTimes(2)
+    expect(activeTransactions).toBe(0)
   })
 })
 

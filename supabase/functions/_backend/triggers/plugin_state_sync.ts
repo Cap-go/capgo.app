@@ -69,7 +69,15 @@ const FORWARD_TIMEOUT_MS = 25_000
 const FORWARDED_HEADER = 'x-capgo-plugin-state-forwarded'
 
 type Db = ReturnType<typeof getDrizzleClient>
+type Pg = Awaited<ReturnType<typeof getPgClient>>
 type SyncContext = Context<MiddlewareKeyVariables>
+
+// These RPCs acquire leases or commit queue progress. A bare SELECT can be
+// cached by Hyperdrive even though its custom function mutates the database.
+// Commit each mutation before doing any KV/R2 work; keep shared read caching.
+function mutate<T>(pg: Pg, run: (db: Db) => Promise<T>): Promise<T> {
+  return withPgTransaction(pg, client => run(getDrizzleClient(client, { logger: false })))
+}
 
 interface ClaimedApp {
   app_id: string
@@ -834,8 +842,8 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
   }
 }
 
-async function claim(db: Db): Promise<ClaimResult> {
-  const [row] = await rows<{ result: ClaimResult }>(db, sql`SELECT public.claim_plugin_state_sync(p_limit => ${CLAIM_LIMIT}::integer) AS result`)
+async function claim(pg: Pg): Promise<ClaimResult> {
+  const [row] = await mutate(pg, db => rows<{ result: ClaimResult }>(db, sql`SELECT public.claim_plugin_state_sync(p_limit => ${CLAIM_LIMIT}::integer) AS result`))
   return row?.result ?? { status: 'empty' }
 }
 
@@ -896,14 +904,15 @@ export async function collectPluginStateGarbage(namespace: KvStore, pointers: Po
   }
 }
 
-async function drainPluginStateGarbage(db: Db, namespace: KvStore, pointers: PointerStore, budget: PublicationBudget, deadline: number) {
-  const [claimed] = await rows<{ result: { lease_token: string, cursor: string | null } | null }>(db, sql`SELECT public.claim_plugin_state_gc() AS result`)
-  if (!claimed?.result)
+async function drainPluginStateGarbage(pg: Pg, namespace: KvStore, pointers: PointerStore, budget: PublicationBudget, deadline: number) {
+  const [claimed] = await mutate(pg, db => rows<{ result: { lease_token: string, cursor: string | null } | null }>(db, sql`SELECT public.claim_plugin_state_gc() AS result`))
+  const lease = claimed?.result
+  if (!lease)
     return
-  const progress = await collectPluginStateGarbage(namespace, pointers, { budget, deadline, cursor: claimed.result.cursor })
-  await db.execute(sql`SELECT public.ack_plugin_state_gc(
-    ${claimed.result.lease_token}::uuid, ${progress.cursor}::text, ${progress.complete}::boolean
-  )`)
+  const progress = await collectPluginStateGarbage(namespace, pointers, { budget, deadline, cursor: lease.cursor })
+  await mutate(pg, db => db.execute(sql`SELECT public.ack_plugin_state_gc(
+    ${lease.lease_token}::uuid, ${progress.cursor}::text, ${progress.complete}::boolean
+  )`))
 }
 
 export interface PluginStateDrainResult {
@@ -929,10 +938,9 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
-    const db = getDrizzleClient(pg, { logger: false })
     let busyRetries = 0
     while (Date.now() < deadline && budget.remaining > 0) {
-      const claimed = await claim(db)
+      const claimed = await claim(pg)
       if (claimed.status === 'busy') {
         if (++busyRetries > MAX_BUSY_RETRIES)
           break
@@ -970,7 +978,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       // ACK validates the lease and persists the next cursor atomically. A
       // stale drain must never enqueue an older continuation after replacement.
       const continuations = Object.fromEntries(done.filter(outcome => outcome.continuation !== undefined).map(outcome => [outcome.appId, outcome.continuation]))
-      await db.execute(sql`SELECT public.ack_plugin_state_sync(
+      await mutate(pg, db => db.execute(sql`SELECT public.ack_plugin_state_sync(
         p_lease_token => ${claimed.lease_token}::uuid,
         p_done => ${sql.param(done.map(outcome => outcome.appId))}::text[],
         p_failed => ${sql.param(failed.map(outcome => outcome.appId))}::text[],
@@ -982,7 +990,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         p_changed_apps => ${sql.param(outcomes.filter(outcome => outcome.changed).map(outcome => outcome.appId))}::text[],
         p_continuations => ${JSON.stringify(continuations)}::jsonb,
         p_app_published => ${sql.param(done.filter(outcome => outcome.appPublished).map(outcome => outcome.appId))}::text[]
-      )`)
+      )`))
       result.apps += done.length
       result.failed += failed.length
 
@@ -994,7 +1002,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         break
     }
     if (Date.now() < deadline && budget.remaining >= 3)
-      await drainPluginStateGarbage(db, namespace, pointers, budget, deadline)
+      await drainPluginStateGarbage(pg, namespace, pointers, budget, deadline)
   }
   catch (error) {
     result.failed++
@@ -1046,7 +1054,7 @@ app.post('/', middlewareAPISecret, async (c) => {
   if (apps.length > 0) {
     const pg = await getPgClient(c)
     try {
-      await getDrizzleClient(pg, { logger: false }).execute(sql`SELECT public.enqueue_plugin_state_full_sync(${sql.param(apps)}::text[])`)
+      await mutate(pg, db => db.execute(sql`SELECT public.enqueue_plugin_state_full_sync(${sql.param(apps)}::text[])`))
     }
     finally {
       closeClient(c, pg)
