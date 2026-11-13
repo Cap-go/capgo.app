@@ -13,7 +13,7 @@ import {
 import { DEPLOY_REPORT_CONSUME_SQL, DEPLOY_REPORT_RELEASE_SQL, DEPLOY_REPORT_SELECT_SQL } from '../utils/deploy_report.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
+import { prepareEmailToOrgMembers, sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { queryJson } from '../utils/pg_rls.ts'
 import { findBestPlan } from '../utils/plans.ts'
@@ -275,13 +275,18 @@ async function handleDeployInstallStats(
       return c.json({ status: 'deferred', reason: 'not_enough_installs' })
     }
 
+    // Connection and recipient lookup failures leave the original claim retryable.
+    const delivery = await prepareEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', deploy.owner_org, undefined, { requireCompleteRecipients: true })
+    if (!delivery)
+      return c.json({ status: 'skipped', reason: 'no_eligible_recipients' })
+
     const [current] = await queryJson<DeployReportState>(pg, DEPLOY_REPORT_CONSUME_SQL, [
       ...claim, deploy.version_id, deploy.version_name, deploy.owner_org, deploy.deployed_at,
     ])
     if (!current)
       return c.json({ status: 'skipped', reason: 'deployment_changed_or_claim_consumed' })
 
-    await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', {
+    delivery.send({
       report_schema_version: '2',
       app_id: current.app_id,
       app_name: current.app_name || current.app_id,
@@ -297,7 +302,7 @@ async function handleDeployInstallStats(
       install_count_24h: installs.toString(),
       install_count_is_estimate: c.env.VERSION_USAGE ? 'true' : 'false',
       window_hours: '24',
-    }, current.owner_org)
+    })
     return c.json(BRES)
   }
   finally {

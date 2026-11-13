@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   queryJson: vi.fn(),
   query: vi.fn(),
   stats: vi.fn(),
+  prepare: vi.fn(),
   send: vi.fn(),
   close: vi.fn(),
 }))
@@ -19,7 +20,7 @@ vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
 vi.mock('../supabase/functions/_backend/utils/pg.ts', () => ({ getPgClient: async () => ({ query: mocks.query }), closeClient: mocks.close }))
 vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({ queryJson: mocks.queryJson }))
 vi.mock('../supabase/functions/_backend/utils/stats.ts', () => ({ readStatsVersion: mocks.stats }))
-vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({ sendEmailToOrgMembers: mocks.send }))
+vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () => ({ prepareEmailToOrgMembers: mocks.prepare, sendEmailToOrgMembers: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({ cloudlog: vi.fn(), cloudlogErr: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/plans.ts', () => ({ findBestPlan: vi.fn() }))
 vi.mock('../supabase/functions/_backend/utils/supabase.ts', () => ({ getCurrentPlanNameOrg: vi.fn(), getOrgExtraMau: vi.fn() }))
@@ -42,6 +43,7 @@ function run(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  mocks.prepare.mockResolvedValue({ send: mocks.send })
   mocks.queryJson.mockResolvedValue([deploy])
   mocks.query.mockResolvedValue({ rows: [] })
   mocks.stats.mockResolvedValue([
@@ -57,12 +59,13 @@ describe('24h report sending safeguards', () => {
     expect(mocks.queryJson).toHaveBeenNthCalledWith(1, expect.anything(), DEPLOY_REPORT_SELECT_SQL, claim)
     expect(mocks.stats).toHaveBeenCalledWith(expect.anything(), deploy.app_id, deploy.deployed_at, '2026-11-11T18:15:00.000Z', undefined, { throwOnError: true })
     expect(mocks.queryJson).toHaveBeenNthCalledWith(2, expect.anything(), DEPLOY_REPORT_CONSUME_SQL, [...claim, 456, '2.0.0', deploy.owner_org, deploy.deployed_at])
-    expect(mocks.send).toHaveBeenCalledWith(expect.anything(), 'bundle:install_stats_24h', 'deploy_stats_24h', expect.objectContaining({
+    expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'bundle:install_stats_24h', 'deploy_stats_24h', deploy.owner_org, undefined, { requireCompleteRecipients: true })
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
       report_schema_version: '2', install_count_24h: '13', install_count_is_estimate: 'true',
       window_start: deploy.deployed_at, window_end: '2026-11-11T18:15:00.000Z',
       app_name: deploy.app_name, channel_name: deploy.channel_name, version_name: '2.0.0',
-    }), deploy.owner_org)
-    expect(mocks.send.mock.calls[0][3]).not.toHaveProperty('adoption_percent')
+    }))
+    expect(mocks.send.mock.calls[0][0]).not.toHaveProperty('adoption_percent')
     expect(mocks.close).toHaveBeenCalledOnce()
   })
 
@@ -122,5 +125,24 @@ describe('24h report sending safeguards', () => {
     expect((await run()).status).toBe(500)
     expect(mocks.send).not.toHaveBeenCalled()
     expect(mocks.close).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the original claim retryable when recipient preparation fails', async () => {
+    mocks.prepare.mockRejectedValueOnce(new Error('Recipient DB unavailable'))
+    expect((await run()).status).toBe(500)
+    expect(mocks.queryJson).toHaveBeenCalledTimes(1)
+    expect(mocks.queryJson).not.toHaveBeenCalledWith(expect.anything(), DEPLOY_REPORT_CONSUME_SQL, expect.anything())
+    expect(mocks.send).not.toHaveBeenCalled()
+    expect(mocks.close).toHaveBeenCalledOnce()
+
+    expect((await run()).status).toBe(200)
+    expect(mocks.send).toHaveBeenCalledOnce()
+  })
+
+  it('does not consume the claim when no recipient can receive a report', async () => {
+    mocks.prepare.mockResolvedValue(null)
+    expect(await (await run()).json()).toEqual({ status: 'skipped', reason: 'no_eligible_recipients' })
+    expect(mocks.queryJson).toHaveBeenCalledTimes(1)
+    expect(mocks.send).not.toHaveBeenCalled()
   })
 })
