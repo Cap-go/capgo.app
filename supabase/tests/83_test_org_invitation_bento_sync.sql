@@ -1,7 +1,7 @@
 SET default_transaction_isolation = 'repeatable read';
 BEGIN;
 
-SELECT plan(32);
+SELECT plan(38);
 
 SELECT hasnt_table(
     'public', 'bento_event_dispatches',
@@ -62,6 +62,45 @@ SELECT is(
         'public.trigger_queue_org_invitation_bento_sync()',
         'EXECUTE'
     ), false, 'anonymous callers cannot execute the sync trigger directly'
+);
+SELECT is(
+    pg_catalog.has_function_privilege(
+        'authenticated',
+        'public.queue_org_invitation_email(text, bigint, uuid)',
+        'EXECUTE'
+    ), false, 'authenticated callers cannot queue invitation email directly'
+);
+SELECT is(
+    pg_catalog.has_function_privilege(
+        'anon',
+        'public.queue_org_invitation_email(text, bigint, uuid)',
+        'EXECUTE'
+    ), false, 'anonymous callers cannot queue invitation email directly'
+);
+SELECT is(
+    pg_catalog.has_function_privilege(
+        'authenticated',
+        'public.accept_tmp_user_invitation(text, uuid)',
+        'EXECUTE'
+    ), false, 'authenticated callers cannot accept tmp invitations directly'
+);
+SELECT is(
+    pg_catalog.has_function_privilege(
+        'anon',
+        'public.accept_tmp_user_invitation(text, uuid)',
+        'EXECUTE'
+    ), false, 'anonymous callers cannot accept tmp invitations directly'
+);
+SELECT ok(
+    (
+        SELECT bool_and(prosecdef AND proconfig @> ARRAY['search_path=""'])
+        FROM pg_catalog.pg_proc
+        WHERE oid IN (
+            'public.accept_tmp_user_invitation(text,uuid)'::regprocedure,
+            'public.queue_org_invitation_email(text,bigint,uuid)'::regprocedure
+        )
+    ),
+    'invitation accept and queue functions keep definer security'
 );
 
 CREATE FUNCTION pg_temp.bento_syncs(p_email text)
@@ -191,14 +230,25 @@ SELECT is(
     0::bigint, 'the current account email is not used for the sync'
 );
 
+INSERT INTO public.org_invitation_email_requests (
+    org_user_id, invited_by_user_id, sent_at
+)
+VALUES (
+    830002, tests.get_supabase_uid('bento_sync_actor'), pg_catalog.now()
+)
+ON CONFLICT (org_user_id) DO UPDATE
+SET
+    sent_at = pg_catalog.now(),
+    bento_email = NULL,
+    bento_synced_at = NULL;
 CREATE TEMPORARY TABLE bento_sync_baseline AS
 SELECT pg_temp.all_bento_syncs() AS count;
 DELETE FROM public.org_users
 WHERE id = 830002;
 SELECT is(
-    pg_temp.all_bento_syncs(),
-    (SELECT count FROM pg_temp.bento_sync_baseline),
-    'removing an invite Bento never saw queues no sync for any address'
+    pg_temp.bento_syncs('bento-sync-unsynced@example.com'),
+    1::bigint,
+    'removing a delivered existing-user invite syncs the account email when bento_email was never stored'
 );
 
 SET LOCAL lock_timeout = '50ms';

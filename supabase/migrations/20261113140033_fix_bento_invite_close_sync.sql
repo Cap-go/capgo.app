@@ -340,5 +340,7 @@ END;
 $$;
 
 ALTER FUNCTION public.accept_tmp_user_invitation(text, uuid) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.accept_tmp_user_invitation(text, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.accept_tmp_user_invitation(text, uuid) FROM PUBLIC,
+anon,
+authenticated;
 GRANT EXECUTE ON FUNCTION public.accept_tmp_user_invitation(text, uuid) TO service_role;
