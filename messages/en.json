@@ -2682,6 +2682,8 @@
   "organization-onboarding-intent-option-publish-label": "Convert my webapp to a mobile app",
   "organization-onboarding-intent-option-publish-desc": "Turn my existing website into an iOS and Android app.",
   "organization-onboarding-intent-required": "Pick what you'd like to do first.",
+  "organization-onboarding-initializing": "Loading organization setup...",
+  "organization-onboarding-load-failed": "Could not load organization setup. Please try again.",
   "organization-onboarding-logo-helper": "Recommended: square image, 256x256 or larger",
   "organization-onboarding-logo-alt": "{name} logo",
   "organization-onboarding-logo-preview-alt": "{name} logo preview",

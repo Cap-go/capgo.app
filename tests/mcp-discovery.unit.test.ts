@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import { MCP_SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage } from '../supabase/functions/_backend/mcp/protocol.ts'
+import { API_CONTENT_SECURITY_POLICY } from '../supabase/functions/_backend/utils/hono.ts'
 
 const env = { MCP_OAUTH_API_ORIGIN: 'https://api.capgo.app', MCP_OAUTH_ISSUER: 'https://capgo.app' }
 const endpoint = `${env.MCP_OAUTH_API_ORIGIN}/mcp`
@@ -21,6 +22,7 @@ describe('public MCP discovery', () => {
     expect(response.headers.get('access-control-allow-origin')).toBe('*')
     expect(response.headers.get('access-control-expose-headers')).toContain('ETag')
     expect(response.headers.get('cache-control')).toBe('public, max-age=3600')
+    expect(response.headers.get('content-security-policy')).toBe(API_CONTENT_SECURITY_POLICY)
     const card = await response.json() as { name: string, description: string }
     expect(card).toMatchObject({
       $schema: 'https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json',
@@ -91,10 +93,40 @@ describe('public MCP discovery', () => {
 })
 
 describe('MCP setup page and transport', () => {
+  it.concurrent('allows only the setup stylesheet with a fresh CSP nonce for each response', async () => {
+    const responses = await Promise.all([request('/mcp'), request('/mcp')])
+    const nonces = await Promise.all(responses.map(async (response) => {
+      expect(response.status).toBe(200)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      const body = await response.text()
+      const nonce = body.match(/<style nonce="([\w-]+)">/)?.[1] ?? ''
+      expect(Buffer.from(nonce, 'base64url').byteLength).toBeGreaterThanOrEqual(16)
+      const policy = response.headers.get('content-security-policy') ?? ''
+      const directives = policy.split('; ')
+      expect(directives.filter(value => value.startsWith('style-src '))).toEqual([`style-src 'nonce-${nonce}'`])
+      expect(directives.filter(value => !value.startsWith('style-src ')))
+        .toEqual(API_CONTENT_SECURITY_POLICY.split('; ').filter(value => !value.startsWith('style-src ')))
+      return nonce
+    }))
+    expect(new Set(nonces).size).toBe(responses.length)
+  })
+
   it.concurrent.each([
     undefined,
     '*/*',
     'text/html,application/xhtml+xml',
+    'text/html, text/event-stream',
+    'text/event-stream;q=0,text/html',
+    'Text/HTML',
+    'text/event-stream;Q=0,text/html',
+    'Text/Event-Stream;Q="0",Text/HTML',
+    'text/event-stream;Q=NaN,text/html',
+    'text/event-stream;Q="\t0",text/html',
+    'text/event-stream;q=0;note="keep;Q=1,Text/HTML",text/html',
+    'text/event-stream;Q=0;note="escaped\\\";Q=1,Text/HTML",text/html',
+    'TEXT/EVENT-STREAM;Q=0.1,text/html',
+    'text/html;q=0.5,text/event-stream;Q=0.5',
+    'text/html;Q=0.5,text/event-stream;q=0.5',
     'text/html;q=1,application/json;q=0.5',
     'text/*',
     'text/*;q=1, application/json;q=0.5',
@@ -106,6 +138,7 @@ describe('MCP setup page and transport', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/html')
     expect(response.headers.get('vary')).toContain('Accept')
+    expect(response.headers.get('cache-control')).toBe('no-store')
     const body = await response.text()
     expect(body).toContain('Connect with OAuth')
     expect(body).toContain(endpoint)
@@ -117,6 +150,13 @@ describe('MCP setup page and transport', () => {
 
   it.concurrent.each([
     'text/event-stream',
+    'Text/Event-Stream,text/html',
+    'TEXT/EVENT-STREAM;Q=0.1,text/html;q=0.05',
+    'text/event-stream;q=0.5,text/html;Q=0.5',
+    'Text/Event-Stream;Q=0.5,Text/HTML;q=0.5',
+    'text/event-stream;Q=0.5,text/html;Q=0.5',
+    'text/event-stream;q=0.5,text/html;q=0.5',
+    'Text/HTML;Q=0,*/*',
     'application/json',
     'application/json, text/event-stream',
     'application/*;q=1, text/html;q=0.5',
@@ -132,12 +172,15 @@ describe('MCP setup page and transport', () => {
     expect(response.status).toBe(405)
     expect(response.headers.get('allow')).toBe('POST, OPTIONS')
     expect(response.headers.get('vary')).toContain('Accept')
+    expect(response.headers.get('cache-control')).toBe('no-store')
     expect(await response.json()).toMatchObject({ jsonrpc: '2.0', error: { code: -32600 } })
+    expect(response.headers.get('content-security-policy')).toBe(API_CONTENT_SECURITY_POLICY)
   })
 
   it.concurrent('still requires authentication for MCP POST requests', async () => {
     const response = await request('/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) })
     expect(response.status).toBe(401)
+    expect(response.headers.get('content-security-policy')).toBe(API_CONTENT_SECURITY_POLICY)
     expect(response.headers.get('www-authenticate')).toContain('resource_metadata="https://api.capgo.app/.well-known/oauth-protected-resource/mcp"')
   })
 

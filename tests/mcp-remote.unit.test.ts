@@ -273,13 +273,13 @@ describe('hosted MCP protocol', () => {
     expect(text).toContain('index.html')
   })
 
-  it.concurrent('maps channel deploys to POST /channel without undefined fields', async () => {
+  it.concurrent.each(['capgo_add_channel', 'capgo_update_channel'])('maps %s deploys to POST /channel without undefined fields', async (name) => {
     const { ctx, calls } = fakeContext()
     await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 5,
       method: 'tools/call',
-      params: { name: 'capgo_update_channel', arguments: { appId: 'com.example.app', channel: 'production', version: '1.2.3' } },
+      params: { name, arguments: { appId: 'com.example.app', channel: 'production', version: '1.2.3' } },
     }, ctx)
     expect(calls).toEqual([{ method: 'POST', path: '/channel', body: { app_id: 'com.example.app', channel: 'production', version: '1.2.3' } }])
   })

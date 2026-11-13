@@ -166,10 +166,10 @@ const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint
 // Writes that reach a system outside Capgo: an email inbox, a third-party URL, devices or push providers.
 const EXTERNAL = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } satisfies McpToolAnnotations
 
-const appId = z.string().min(1).describe('Select the app this operation should access. Copy app_id from capgo_list_apps; when registering an app, use appId from its Capacitor configuration.')
-const orgId = z.string().uuid().describe('Select the organization whose resources this operation should access. Copy id from capgo_list_organizations.')
-const page = z.number().int().min(0).optional().describe('Select a page of matching records. Omit for the first page; increment the returned/requested page while preserving filters and page size. The first page is numbered zero.')
-const dateString = z.string().min(1)
+const appId = z.string().min(1).describe('Capgo app_id from capgo_list_apps; when creating an app, use its configured Capacitor app ID, e.g. com.example.app')
+const orgId = z.string().uuid().describe('Organization id from capgo_list_organizations.')
+const page = z.number().int().min(0).optional().describe('Page index starting at zero; omit for the first page. Keep the same filters and limit when advancing pages.')
+const dateString = z.string().min(1).describe('Usage reporting date, e.g. 2026-01-31 or an ISO timestamp')
 const webhookEvents = z.array(z.enum(['apps', 'app_versions', 'channels', 'org_users', 'orgs'])).min(1)
 const disableAutoUpdate = z.enum(['major', 'minor', 'patch', 'version_number', 'none'])
   .describe('Choose the native compatibility gate: major blocks a higher major version; minor requires matching major/minor; patch requires matching major/minor/patch; version_number uses the bundle min_update_version requirement; none removes this version gate.')
@@ -237,7 +237,8 @@ const uploadCommandTool: McpTool = {
   title: 'Get bundle upload command',
   description: 'Get a ready-to-run Capgo CLI command that uploads a local web build (zip and, with delta=true, the per-file manifest for delta updates). '
     + 'The command authenticates with the same API key this MCP connection uses, so run it in your own shell and do not share or log it. '
-    + 'Use this when you have a shell but the Capgo CLI is not logged in.',
+    + 'Use this when you have a shell but the Capgo CLI is not logged in.'
+    + ' Returns command, apikeyExpiresAt and a usage note; generating the command does not execute it or upload files.',
   inputSchema: z.object({
     appId,
     projectDir: z.string().trim().min(1).optional().describe('Absolute local Capacitor app directory, not the MCP server directory or workspace root. The command changes into this folder before uploading.'),
@@ -329,10 +330,11 @@ const bundleUploadTools: McpTool[] = [
       + 'Native compatibility per channel is skipped when native_packages is omitted and ignore_metadata_check is true (complete can still deploy without a server-side native check). '
       + 'When version_exists_ok is true and the version already exists, the response is { skipped: true, reason: "VERSION_EXISTS" } with no upload_token or signed URLs: stop there and do not PUT or call capgo_complete_bundle_upload. '
       + 'No channel deploy and no device update until capgo_complete_bundle_upload. Cancel a pending upload with capgo_abort_bundle_upload (removes the unfinished version and staged files). '
-      + 'Step 2: upload with `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<url>"` (and the delta pack to its own URL). Step 3: capgo_complete_bundle_upload with upload_token.',
+      + 'Step 2: upload with `curl -fsS -X PUT -H "Content-Type: application/zip" --upload-file <zip> "<url>"` (and the delta pack to its own URL). Step 3: capgo_complete_bundle_upload with upload_token.'
+      + ' Returns upload_token, expiry, bundle identifiers, bundle_upload and optional delta_pack_upload URL details, per-channel compatibility results and warnings.',
     input: {
       appId,
-      version: z.string().min(1).describe('Bundle version (semver), e.g. 1.2.3: the "bundle" field of bundle zip --json'),
+      version: z.string().min(1).describe('Semver release name to publish, e.g. 1.2.3, from the bundle field of the CLI packaging output.'),
       channel: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional().describe('Channel(s) to deploy to after upload. Defaults to the app default upload channel'),
       comment: z.string().optional().describe('Comment or release note to attach to the bundle.'),
       link: z.string().optional().describe('Reference link to attach to the bundle, such as its changelog.'),
@@ -342,7 +344,7 @@ const bundleUploadTools: McpTool[] = [
       native_packages: z.array(nativePackage).optional().describe('native_packages printed by bundle zip --for-upload --json; without it the native compatibility check cannot run'),
       updater_version: z.string().optional().describe('Installed @capgo/capacitor-updater version printed by bundle zip --for-upload --json (selects checksum format and delta features)'),
       updater_package: z.string().optional().describe('Updater package name printed by bundle zip, for Cordova projects'),
-      checksum_algorithm: z.enum(['sha256', 'crc32']).optional().describe('checksum_algorithm printed by bundle zip --for-upload --json (keeps --force-crc32-checksum)'),
+      checksum_algorithm: z.enum(['sha256', 'crc32']).optional().describe('Checksum method from the CLI packaging output; copy it with checksum. Capgo verifies the archive checksum only for unencrypted bundles; encrypted uploads retain the supplied checksum without inspecting the archive.'),
       size_bytes: z.number().int().positive().optional().describe('Zip archive size in bytes, from size_bytes in the CLI packaging output.'),
       cli_version: z.string().optional().describe('Version of the CLI that packaged the archive, from cli_version in its output.'),
       delta: z.boolean().optional().describe('Also publish the per-file manifest for delta updates. Capgo builds it from the zip; encrypted bundles need delta_pack'),
@@ -357,8 +359,8 @@ const bundleUploadTools: McpTool[] = [
       code_check: z.boolean().optional().describe('false skips the index.html / notifyAppReady checks (like --no-code-check)'),
       ignore_notify_app_ready: z.boolean().optional().describe('true skips only the notifyAppReady check'),
       self_assign: z.boolean().optional().describe('Let devices self-assign to the channel'),
-      rollout_percentage: z.number().min(0).max(100).optional().describe('Deploy as a progressive rollout instead of to everyone'),
-      rollout_percentage_bps: z.number().int().min(0).max(10000).optional().describe('Same as rollout_percentage in basis points (100 = 1%)'),
+      rollout_percentage: z.number().min(0).max(100).optional().describe('Percentage of eligible devices to receive this bundle in a progressive rollout.'),
+      rollout_percentage_bps: z.number().int().min(0).max(10000).optional().describe('Rollout share expressed in basis points rather than percent (100 basis points = 1%).'),
       advance_rollout: z.boolean().optional().describe('Promote the current rollout to stable before rolling out the uploaded bundle.'),
       rollout_paused: z.boolean().optional().describe('Create the progressive rollout in a paused state.'),
       rollout_cache_ttl_seconds: z.number().int().min(60).max(31536000).optional().describe('How long a device rollout assignment stays cached, in seconds. A longer duration keeps assignments stable but delays rollout changes for cached devices.'),
@@ -432,7 +434,7 @@ const accountTools: McpTool[] = [
       discord_username: z.string().max(100).nullable().optional().describe('Discord username associated with the account; null clears it.'),
       format_locale: z.string().max(35).nullable().optional().describe('Choose the profile formatting convention for numbers and dates, such as en-US or fr-FR; null clears the saved preference and omission leaves it unchanged.'),
       enable_notifications: z.boolean().optional().describe('Receive product notification emails'),
-      opt_for_newsletters: z.boolean().optional().describe('Subscribe the authenticated account to newsletter emails when true, or unsubscribe when false. Omit to keep the saved subscription choice.'),
+      opt_for_newsletters: z.boolean().optional().describe('Subscribe the account email to Capgo newsletters; false opts out, and omission keeps the current preference.'),
       email_preferences: emailPreferences.optional().describe('Only the personal email toggles to change, e.g. {"weekly_stats":false}. Keys: usage_limit, credit_usage, bundle_created, bundle_deployed, deploy_stats_24h, weekly_stats, monthly_stats, billing_period_stats, device_error, channel_self_rejected, bundle_incompatible, cli_realtime_feed, security_updates, onboarding, builder_onboarding'),
     },
     annotations: DESTRUCTIVE,
@@ -467,7 +469,7 @@ const accountTools: McpTool[] = [
     input: {
       name: z.string().min(3).describe('Name shown for the new organization in the console and organization listings.'),
       email: z.string().email().optional().describe('Management email, defaults to the account email'),
-      website: z.string().optional().describe('Organization website address.'),
+      website: z.string().optional().describe('Organization homepage, e.g. https://example.com. A bare domain is normalized to an HTTPS URL.'),
     },
     annotations: WRITE,
     request: input => ({ method: 'POST', path: '/organization', body: compact(input) }),
@@ -477,7 +479,8 @@ const accountTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_organization,
     title: 'Update organization',
     description: 'Update organization settings (name, website, management email, API key policies, bundle encryption, 2FA enforcement, password policy and org email notifications).'
-      + ' Changes apply to the whole organization; security policies can restrict member and API key access. Omitted settings remain unchanged.',
+      + ' Changes apply to the whole organization; security policies can restrict member and API key access. Omitted settings remain unchanged.'
+      + ' Requires organization settings permission; enabling 2FA enforcement also requires the caller to have 2FA enabled.',
     input: {
       orgId,
       name: z.string().optional().describe('Replacement organization display name.'),
@@ -487,7 +490,7 @@ const accountTools: McpTool[] = [
       max_apikey_expiration_days: z.number().int().min(1).max(365).nullable().optional().describe('Maximum permitted API key lifetime in days; null removes the lifetime limit.'),
       enforce_hashed_api_keys: z.boolean().optional().describe('Require hashed API keys when accessing this organization.'),
       enforce_encrypted_bundles: z.boolean().optional().describe('Require encrypted bundle uploads for apps in this organization.'),
-      required_encryption_key: z.string().nullable().optional().describe('Fingerprint of the encryption key permitted for bundle uploads. Copy key_id from the CLI bundle packaging output; never pass a private key. Null clears the requirement; omission retains it.'),
+      required_encryption_key: z.string().nullable().optional().describe('Encryption key fingerprint matching key_id in the CLI bundle zip --for-upload --json output; pass the fingerprint, not the key material. Null clears the fingerprint requirement.'),
       enforcing_2fa: z.boolean().optional().describe('Require organization members to use two-factor authentication.'),
       password_policy_config: z.object({
         enabled: z.boolean().describe('Enable the organization password policy.'),
@@ -529,7 +532,7 @@ const accountTools: McpTool[] = [
     input: {
       orgId,
       email: z.string().email().describe('Email address of the person to invite.'),
-      invite_type: orgRole.describe('Role granted to the invited user'),
+      invite_type: orgRole.describe('Organization-wide permission level the invitee receives when joining; choose the role appropriate to their responsibilities.'),
     },
     annotations: EXTERNAL,
     request: input => ({ method: 'POST', path: '/organization/members', body: input }),
@@ -539,7 +542,7 @@ const accountTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_organization_member_role,
     title: 'Change organization member role',
     description: 'Change the organization role of an existing member. You cannot change your own role, the owner role, or assign a role above your own.',
-    input: { orgId, email: z.string().email().describe('Member email from capgo_list_organization_members.'), role: orgRole.describe('Choose the access level this member should have after the change. Replaces their existing organization role.') },
+    input: { orgId, email: z.string().email().describe('Member email from capgo_list_organization_members.'), role: orgRole.describe('Replacement organization-wide permission level for the member; changes which resources and settings they can access or manage.') },
     annotations: DESTRUCTIVE,
     request: input => ({ method: 'PUT', path: '/organization/members', body: input }),
   }),
@@ -548,7 +551,8 @@ const accountTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_remove_organization_member,
     title: 'Remove organization member',
     description: 'Remove a member from an organization.'
-      + ' Revokes membership access; callers cannot remove members with a higher role than their own.',
+      + ' Revokes membership access; callers cannot remove members with a higher role than their own.'
+      + ' Returns { status: "ok" } when membership removal succeeds.',
     input: { orgId, email: z.string().email().describe('Member email from capgo_list_organization_members.') },
     annotations: DESTRUCTIVE,
     request: input => ({ method: 'DELETE', path: '/organization/members', body: input }),
@@ -564,7 +568,7 @@ const accountTools: McpTool[] = [
       tableName: z.string().optional().describe('Filter by table, e.g. apps, channels, app_versions'),
       operation: z.string().optional().describe('Filter by operation: INSERT, UPDATE or DELETE'),
       page,
-      limit: z.number().int().min(1).max(100).optional().describe('Control the page size when inspecting matching records. Keep this value unchanged when advancing pages.'),
+      limit: z.number().int().min(1).max(100).optional().describe('Number of records to request per page; omitted uses 50.'),
     },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/organization/audit', query: input }),
@@ -671,7 +675,7 @@ const addAppTool: McpTool = {
     appId,
     name: z.string().min(1).describe('App display name in Capgo.'),
     orgId,
-    ios_store_url: z.string().optional().describe('App Store listing URL for this app.'),
+    ios_store_url: z.string().optional().describe('Public App Store listing URL, e.g. https://apps.apple.com/app/id123456789; not an App Store Connect management URL.'),
     android_store_url: z.string().optional().describe('Google Play listing URL for this app.'),
   }) as unknown as z.ZodObject<z.ZodRawShape>,
   annotations: { title: 'Create app', ...WRITE },
@@ -708,7 +712,7 @@ const appTools: McpTool[] = [
     title: 'List apps',
     description: 'List the apps this connection can access, optionally for one organization.'
       + ' Returns app records with app_id, name, owner_org and settings.',
-    input: { org_id: orgId.optional(), page, limit: z.number().int().min(1).max(100).optional().describe('Control the page size when inspecting matching records. Keep this value unchanged when advancing pages.') },
+    input: { org_id: orgId.optional(), page, limit: z.number().int().min(1).max(100).optional().describe('Number of records to request per page; omitted uses 50.') },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/app', query: input }),
   }),
@@ -733,13 +737,13 @@ const appTools: McpTool[] = [
     input: {
       appId,
       name: z.string().optional().describe('App display name in Capgo.'),
-      retention: z.number().int().min(0).max(63113903).optional().describe('Time in seconds before an unused bundle becomes eligible for automatic deletion; reducing it can remove older unused bundles. Omit to keep current retention.'),
+      retention: z.number().int().min(0).max(63113903).optional().describe('Seconds to keep unused bundles before automatic deletion; omitted preserves the current retention setting.'),
       expose_metadata: z.boolean().optional().describe('Expose bundle metadata through public plugin responses.'),
       allow_device_custom_id: z.boolean().optional().describe('Allow the app to attach its own custom identifier to devices.'),
       allow_preview: z.boolean().optional().describe('Allow bundle and channel previews with the Capgo preview app'),
       block_provider_infra_requests: z.boolean().optional().describe('Block update requests coming from cloud provider infrastructure'),
       build_timeout_seconds: z.number().int().min(300).max(21600).optional().describe('Native cloud build timeout in seconds.'),
-      default_upload_channel: z.string().min(1).optional().describe('Existing channel name that CLI uploads link to by default'),
+      default_upload_channel: z.string().min(1).optional().describe('Channel name that CLI uploads link to by default; choose a channel returned by capgo_list_channels.'),
       device_data_collection: deviceDataCollection.optional(),
       ios_store_url: z.string().nullable().optional().describe('App Store listing URL for this app. Use null to clear it.'),
       android_store_url: z.string().nullable().optional().describe('Google Play listing URL for this app. Use null to clear it.'),
@@ -759,9 +763,10 @@ const appTools: McpTool[] = [
   apiTool({
     name: 'capgo_create_demo_app',
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_create_demo_app,
-    title: 'Create demo app',
-    description: 'Create a demo app pre-filled with sample bundles, channels and devices to explore Capgo.',
-    input: { orgId, appId: appId.optional() },
+    title: 'Seed demo app data',
+    description: 'Seed sample bundles, channels and devices into an existing app whose onboarding is incomplete. This does not create an app. Pass appId to choose the target; if omitted, the most recently created pending app in the organization is selected. The request fails if no eligible app exists.'
+      + ' Returns status, app_id, name and a completion message so the app can be inspected with capgo_get_app.',
+    input: { orgId, appId: appId.optional().describe('Existing app_id with incomplete onboarding, from capgo_list_apps. Omit to seed the most recently created pending app in the organization.') },
     annotations: WRITE,
     request: input => ({ method: 'POST', path: '/app/demo', body: compact({ owner_org: input.orgId, app_id: input.appId }) }),
   }),
@@ -791,8 +796,8 @@ const bundleTools: McpTool[] = [
     input: {
       appId,
       page,
-      version: z.string().min(1).optional().describe('Exact bundle version name (app_versions.name), e.g. 1.2.3'),
-      id: z.number().int().positive().optional().describe('Select a particular bundle using id from capgo_list_bundles for this app.'),
+      version: z.string().min(1).optional().describe('Match the bundle name returned by capgo_list_bundles, e.g. 1.2.3, to retrieve its full record.'),
+      id: z.number().int().positive().optional().describe('Match the bundle id returned by capgo_list_bundles to retrieve its full record.'),
     },
     annotations: READ,
     request: (input) => {
@@ -815,7 +820,7 @@ const bundleTools: McpTool[] = [
       appId,
       version: z.string().min(1).describe('Semver version name, e.g. 1.2.3'),
       external_url: z.string().url().startsWith('https://').describe('User-provided location of the hosted bundle zip.'),
-      checksum: z.string().min(1).describe('Checksum of the zip as produced by the Capgo CLI'),
+      checksum: z.string().min(1).describe('Copy checksum from npx @capgo/cli@latest bundle zip <appId> --for-upload --json for the hosted archive. Preserve the CLI encoding, including the signed checksum for an encrypted bundle.'),
       session_key: z.string().optional().describe('Encryption session key from the CLI packaging output. Omit for an unencrypted bundle; no session key is recorded.'),
       key_id: z.string().optional().describe('Encryption key fingerprint from the CLI packaging output; identifies the key used to encrypt this bundle.'),
     },
@@ -842,7 +847,8 @@ const bundleTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_set_bundle_channel,
     title: 'Set bundle to channel',
     description: 'Point a channel to a bundle by numeric ids (from capgo_list_bundles and capgo_list_channels). capgo_update_channel with a version name does the same by name.'
-      + ' Changes the bundle offered to eligible devices on that channel. Confirm the target channel and bundle before deploying.',
+      + ' Changes the bundle offered to eligible devices on that channel. Confirm the target channel and bundle before deploying.'
+      + ' Requires channel.promote_bundle permission and a bundle and channel belonging to the specified app.',
     input: { appId, version_id: z.number().int().positive().describe('Bundle id from capgo_list_bundles for this app.'), channel_id: z.number().int().positive().describe('Channel id from capgo_list_channels for this app.') },
     annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'PUT', path: '/bundle', body: { app_id: id, ...rest } }),
@@ -852,7 +858,7 @@ const bundleTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_delete_bundle,
     title: 'Delete bundle',
     description: 'Delete one bundle version. Bundles linked to a channel cannot be deleted.',
-    input: { appId, version: z.string().min(1).describe('Select the bundle to delete using name from capgo_list_bundles for this app, rather than its row id.') },
+    input: { appId, version: z.string().min(1).describe('Name of the release to delete, from capgo_list_bundles (the name field, not its id). The version must be unlinked from channels first.') },
     annotations: DESTRUCTIVE,
     request: input => ({ method: 'DELETE', path: '/bundle', body: { app_id: input.appId, version: input.version } }),
   }),
@@ -862,7 +868,7 @@ const bundleTools: McpTool[] = [
 // Channels
 // ---------------------------------------------------------------------------
 const channelSettings = {
-  version: z.string().nullable().optional().describe('Bundle version name to serve on this channel; null unlinks it'),
+  version: z.string().nullable().optional().describe('Bundle name from capgo_list_bundles to serve on this channel; null unlinks it. For an existing channel, omission keeps the current bundle.'),
   public: z.boolean().optional().describe('Make this the default channel for devices without an override'),
   disableAutoUpdate: disableAutoUpdate.optional(),
   disableAutoUpdateUnderNative: z.boolean().optional().describe('Block bundles older than the native app version'),
@@ -871,10 +877,10 @@ const channelSettings = {
   electron: z.boolean().optional().describe('Allow Electron clients to receive updates from this channel.'),
   allow_device_self_set: z.boolean().optional().describe('Let devices switch themselves to this channel'),
   allow_emulator: z.boolean().optional().describe('Allow emulator and simulator devices to receive channel updates.'),
-  allow_device: z.boolean().optional().describe('Whether physical devices are eligible to receive updates from this channel, separately from emulator eligibility.'),
-  allow_dev: z.boolean().optional().describe('Whether apps identified by the updater as development builds can receive channel updates.'),
-  allow_prod: z.boolean().optional().describe('Whether apps identified by the updater as production builds can receive channel updates.'),
-  updatePackage: z.enum(['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin']).optional().describe('Choose archive or delta delivery, or restrict that format to devices updating from their built-in bundle. all permits both delivery formats.'),
+  allow_device: z.boolean().optional().describe('Allow channel updates on physical devices, independently of the emulator setting.'),
+  allow_dev: z.boolean().optional().describe('Allow channel updates for development builds of the native app.'),
+  allow_prod: z.boolean().optional().describe('Allow channel updates for production builds of the native app.'),
+  updatePackage: z.enum(['all', 'zip', 'delta', 'zip_from_builtin', 'delta_from_builtin']).optional().describe('Delivery format: zip for a full archive, delta for changed files, or all for either. The _from_builtin modes restrict only devices still on the bundled native version; afterward either format is allowed.'),
   paused: z.boolean().optional().describe('Pause the channel: devices keep their current bundle and get no new update until resumed'),
 }
 
@@ -899,45 +905,51 @@ const channelTools: McpTool[] = [
     annotations: READ,
     request: input => ({ method: 'GET', path: '/channel', query: { app_id: input.appId, channel: input.channel } }),
   }),
-  apiTool({
-    name: 'capgo_add_channel',
-    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_add_channel,
-    title: 'Create channel',
-    description: 'Create a channel (or update it if it already exists).'
-      + ' Supplied settings overwrite an existing channel; setting version changes the bundle offered to eligible devices. Confirm the deployment target first.',
-    input: { appId, channel: z.string().min(1).describe('Name the release channel to create or configure, such as production or beta. Reusing a name updates that channel.'), ...channelSettings },
+  ...([
+    {
+      name: 'capgo_add_channel',
+      outputSchema: MCP_OUTPUT_SCHEMAS.capgo_add_channel,
+      title: 'Create channel',
+      description: 'Create a channel (or update it if it already exists).'
+        + ' Supplied settings overwrite an existing channel; setting version changes the bundle offered to eligible devices. Confirm the deployment target first.',
+      channelDescription: 'Channel name, e.g. production or beta',
+    },
+    {
+      name: 'capgo_update_channel',
+      outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_channel,
+      title: 'Update channel',
+      description: 'Change channel settings or deploy a bundle to it by setting version. For progressive rollouts use capgo_update_channel_rollout.'
+        + ' This endpoint also creates the named channel if absent. Changing version changes the bundle offered to eligible devices; confirm the target first.',
+      channelDescription: 'Channel name from capgo_list_channels for this app.',
+    },
+  ] as const).map(({ channelDescription, ...spec }) => apiTool({
+    ...spec,
+    description: spec.description
+      + ' Requires channel settings permission for an existing channel or app.create_channel for a new one. Making a channel public changes default update routing and requires app.update_settings; assigning a bundle also requires promotion permission.',
+    input: { appId, channel: z.string().min(1).describe(channelDescription), ...channelSettings },
     annotations: DESTRUCTIVE,
     request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/channel', body: compact({ app_id: id, ...rest }) }),
-  }),
-  apiTool({
-    name: 'capgo_update_channel',
-    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_channel,
-    title: 'Update channel',
-    description: 'Change channel settings or deploy a bundle to it by setting version. For progressive rollouts use capgo_update_channel_rollout.'
-      + ' This endpoint also creates the named channel if absent. Changing version changes the bundle offered to eligible devices; confirm the target first.',
-    input: { appId, channel: z.string().min(1).describe('Select the release channel within this app. Copy name from capgo_list_channels.'), ...channelSettings },
-    annotations: DESTRUCTIVE,
-    request: ({ appId: id, ...rest }) => ({ method: 'POST', path: '/channel', body: compact({ app_id: id, ...rest }) }),
-  }),
+  })),
   apiTool({
     name: 'capgo_update_channel_rollout',
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_channel_rollout,
     title: 'Update channel progressive rollout',
     description: 'Start, adjust, pause, resume, promote or roll back a progressive rollout on a channel, and configure automatic pause on failures.'
-      + ' Changes which eligible devices receive the rollout bundle. Promotion replaces the stable bundle; rollback stops offering the rollout bundle. Confirm the target and intended rollout action first.',
+      + ' Changes which eligible devices receive the rollout bundle. Promotion replaces the stable bundle; rollback stops offering the rollout bundle. Confirm the target and intended rollout action first.'
+      + ' Requires channel settings permission; changing the target, promoting or rolling back also requires channel.promote_bundle. Starting a rollout requires a stable bundle on the channel.',
     input: {
       appId,
-      channel: z.string().min(1).describe('Select the release channel within this app. Copy name from capgo_list_channels.'),
-      rolloutVersion: z.union([z.string(), z.number().int()]).nullable().optional().describe('Choose the rollout bundle using name or id from capgo_list_bundles for this app. Omit to retain the current rollout target; null unlinks it.'),
-      rolloutPercentage: z.number().min(0).max(100).optional().describe('Percentage of eligible devices assigned the rollout bundle.'),
-      rolloutPercentageBps: z.number().int().min(0).max(10000).optional().describe('Rollout share in basis points (100 = 1%). If omitted, rolloutPercentage is used; if both are omitted, the existing share is unchanged.'),
-      rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional().describe('How long a device rollout assignment stays cached, in seconds. A longer duration keeps assignments stable but delays rollout changes for cached devices.'),
+      channel: z.string().min(1).describe('Channel name from capgo_list_channels for this app.'),
+      rolloutVersion: z.union([z.string(), z.number().int()]).nullable().optional().describe('Bundle name or id from capgo_list_bundles to offer as the rollout target. Omit to keep the existing target unless promoting, rolling back or disabling the rollout; advancing requires a new target.'),
+      rolloutPercentage: z.number().min(0).max(100).optional().describe('Percentage of eligible devices assigned the rollout bundle. rolloutPercentageBps takes precedence when both are supplied. If neither is supplied, the current share is retained, including when advanceRollout starts a new target. promoteToStable and rollback reset the share to zero.'),
+      rolloutPercentageBps: z.number().int().min(0).max(10000).optional().describe('Rollout share in basis points (100 = 1%); takes precedence over rolloutPercentage. If omitted, rolloutPercentage is used. If neither is supplied, the current share is retained, including when advanceRollout starts a new target. promoteToStable and rollback reset the share to zero.'),
+      rolloutCacheTtlSeconds: z.number().int().min(60).max(31536000).optional().describe('Seconds devices keep their rollout assignment. Omit to retain the channel setting.'),
       rolloutEnabled: z.boolean().optional().describe('Enable or disable the progressive rollout on this channel.'),
       rolloutPaused: z.boolean().optional().describe('Pause or resume the progressive rollout.'),
       rolloutPauseReason: z.string().nullable().optional().describe('Explanation to record for a paused rollout; null clears it.'),
       promoteToStable: z.boolean().optional().describe('Make the rollout bundle the channel bundle for everyone'),
       rollback: z.boolean().optional().describe('Cancel the rollout; everyone stays on the channel bundle'),
-      advanceRollout: z.boolean().optional().describe('Promote the current rollout to stable and start rolling out rolloutVersion'),
+      advanceRollout: z.boolean().optional().describe('Promote the current rollout to stable and start rolling out rolloutVersion. When both percentage fields are omitted, the new target starts at the current rollout share.'),
       autoPauseEnabled: z.boolean().optional().describe('Enable automatic evaluation of rollout failures.'),
       autoPauseWindowMinutes: z.number().int().min(1).max(10080).optional().describe('Lookback window in minutes for evaluating rollout failures.'),
       autoPauseFailureRateBps: z.number().int().min(0).max(10000).nullable().optional().describe('Failure rate threshold in basis points (100 = 1%)'),
@@ -1003,8 +1015,9 @@ const deviceTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_set_device_channel,
     title: 'Force device channel',
     description: 'Force a device onto a (non default) channel, e.g. to test a bundle on one phone.'
-      + ' Persists an override used on subsequent update checks, changing which channel supplies updates to that device.',
-    input: { appId, device_id: z.string().min(1).describe('Select a device within this app using device_id from capgo_list_devices. Notification registration keys are separate identifiers.'), channel: z.string().min(1).describe('Select the release channel within this app. Copy name from capgo_list_channels.') },
+      + ' Persists an override used on subsequent update checks, changing which channel supplies updates to that device.'
+      + ' Requires channel.manage_forced_devices permission on an existing non-default channel; it does not trigger an immediate download.',
+    input: { appId, device_id: z.string().min(1).describe('Updater device_id from capgo_list_devices for this app.'), channel: z.string().min(1).describe('Channel name from capgo_list_channels for this app.') },
     annotations: DESTRUCTIVE,
     request: input => ({ method: 'POST', path: '/device', body: { app_id: input.appId, device_id: input.device_id, channel: input.channel } }),
   }),
@@ -1024,8 +1037,8 @@ const deviceTools: McpTool[] = [
 // Statistics & observability
 // ---------------------------------------------------------------------------
 const statsRange = {
-  from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'),
-  to: dateString.describe('End of the usage reporting window. Use the same date or timestamp convention as from so the requested period is unambiguous.'),
+  from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'),
+  to: dateString.describe('For date-only inputs, exclusive end date; use 2026-02-01 to include January 31. ISO timestamps are also accepted.'),
   noAccumulate: z.boolean().optional().describe('Return daily values instead of cumulative totals; omitted or false returns accumulated usage.'),
 }
 
@@ -1076,7 +1089,7 @@ const statsTools: McpTool[] = [
     title: 'Bundle adoption',
     description: 'Per-day share of devices on each bundle version (adoption of a release).'
       + ' Returns date labels and version datasets in labels and datasets.',
-    input: { appId, from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'), to: statsRange.to },
+    input: { appId, from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'), to: dateString.describe('For date-only inputs, inclusive end date; use 2026-01-31 to include January 31. ISO timestamps are also accepted.') },
     annotations: READ,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/bundle_usage`, query: rest }),
   }),
@@ -1086,7 +1099,7 @@ const statsTools: McpTool[] = [
     title: 'Native version usage',
     description: 'Native app versions and platforms used by devices.'
       + ' Returns date labels, version datasets, latest version share, active-device summaries and daily platform activity.',
-    input: { appId, from: dateString.describe('Start of the usage reporting window. Supply a calendar date such as 2026-01-31 or an ISO timestamp with its timezone.'), to: statsRange.to },
+    input: { appId, from: dateString.describe('Start of the usage reporting period, e.g. 2026-01-01 or an ISO timestamp.'), to: dateString.describe('For date-only inputs, inclusive end date; use 2026-01-31 to include January 31. ISO timestamps are also accepted.') },
     annotations: READ,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: `/statistics/app/${enc(id)}/native_usage`, query: rest }),
   }),
@@ -1098,14 +1111,14 @@ const statsTools: McpTool[] = [
     input: {
       appId,
       view: z.enum(['summary', 'metrics', 'events', 'device', 'versions', 'routes', 'logs', 'errors', 'release']).optional().describe('Health view to inspect. Omit to start with summary; choose device for a timeline or release for deployment health.'),
-      source: z.enum(['native', 'updater', 'all']).optional().describe('Select native telemetry, updater events or both when reading logs, errors or a device timeline. Omit to combine both sources.'),
-      channelId: z.number().int().positive().optional().describe('Choose the channel whose rollout and adoption the release view should monitor. Copy id from capgo_list_channels; omit to inspect the app default channel.'),
-      days: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(30)]).optional().describe('Choose how many days of recent telemetry to analyze in this health view. Omit to use the view default.'),
+      source: z.enum(['native', 'updater', 'all']).optional().describe('For logs, errors, device (default all)'),
+      channelId: z.number().int().positive().optional().describe('Channel id from capgo_list_channels for the release view; omitted selects the app default channel.'),
+      days: z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(30)]).optional().describe('Health reporting lookback in days; omitted uses 7. Ignored for view=release, which uses a release-based window capped at 72 hours.'),
       action: z.string().optional().describe('Filter events by stats action, e.g. update_fail'),
       deviceId: z.string().optional().describe('Updater device_id from capgo_list_devices to inspect or filter by.'),
       versionName: z.string().optional().describe('Bundle version name from capgo_list_bundles to inspect or filter by.'),
-      sort: z.enum(['slowest', 'fastest', 'newest', 'oldest']).optional().describe('Sort samples by event timestamp (newest or oldest) or measured duration (slowest or fastest). Duration ordering is useful for investigating slow operations.'),
-      limit: z.number().int().min(1).max(100).optional().describe('Bound the samples returned by the selected health view; use filters to investigate a smaller set when results are truncated.'),
+      sort: z.enum(['slowest', 'fastest', 'newest', 'oldest']).optional().describe('Order samples in metrics, routes, logs and errors by measured duration (slowest/fastest) or event time (newest/oldest). Device always uses oldest; summary, events, versions and release ignore this setting.'),
+      limit: z.number().int().min(1).max(100).optional().describe('Maximum records requested for the selected view.'),
     },
     annotations: READ,
     request: input => ({ method: 'POST', path: '/private/observe', body: compact(input) }),
@@ -1127,11 +1140,11 @@ const requestBuildTool: McpTool = {
     + ' The result contains job_id, upload details and next_step. If URL creation fails after requesting a job, the error retains job_id so the agent can retry upload setup or cancel it.',
   inputSchema: z.object({
     appId,
-    platform,
+    platform: platform.describe('Native platform of the project archive to build.'),
     build_mode: z.enum(['release', 'debug']).optional().describe('Native compilation mode; omitted uses release.'),
     build_options: z.record(z.string(), z.unknown()).optional().describe('build_options printed by build zip --json, optionally overridden, e.g. {"iosDistribution":"ad_hoc","submitToStoreReview":true,"storeReleaseNotes":"..."}'),
     ios_dependency_manager: z.enum(['cocoapods', 'spm']).optional().describe('Dependency manager used by the iOS project, from ios_dependency_manager in the CLI build zip output.'),
-    cache: z.boolean().optional().describe('false disables the compilation cache'),
+    cache: z.boolean().optional().describe('Set false to bypass the compilation cache; omission leaves cache behavior to the builder default.'),
     cache_key: z.string().min(1).optional().describe('Extra cache fingerprint used to separate compilation caches; change it to invalidate a previous cache.'),
   }) as unknown as z.ZodObject<z.ZodRawShape>,
   annotations: { title: 'Request native build', ...WRITE },
@@ -1251,8 +1264,9 @@ const buildTools: McpTool[] = [
       + 'iOS JSON keys: BUILD_CERTIFICATE_BASE64 (distribution .p12), P12_PASSWORD, CAPGO_IOS_PROVISIONING_MAP (base64 provisioning profiles per bundle id), optional Apple API keys (APPLE_KEY_ID, APPLE_ISSUER_ID, APPLE_KEY_CONTENT) and APP_STORE_CONNECT_TEAM_ID for App Store upload. '
       + 'Android JSON keys: ANDROID_KEYSTORE_FILE (base64 .jks or .keystore), KEYSTORE_KEY_ALIAS, KEYSTORE_KEY_PASSWORD, KEYSTORE_STORE_PASSWORD, optional PLAY_CONFIG_JSON (base64 Play service account JSON for Play upload). '
       + 'Step 2: `curl -fsS -X PUT -H "Content-Type: application/json" --data-binary @credentials.json "<upload_url>"` then delete the local file. mode replace overwrites stored credentials for that platform; merge only updates keys present in the JSON. '
-      + 'Confirm with the user before replace. Users with a logged-in CLI can instead run `npx @capgo/cli@latest build credentials push`.',
-    input: { appId, platform, mode: z.enum(['replace', 'merge']).optional().describe('Choose how the uploaded credential file affects stored signing credentials: replace discards keys absent from the file; merge retains them. Omit to replace.') },
+      + 'Confirm with the user before replace. Users with a logged-in CLI can instead run `npx @capgo/cli@latest build credentials push`.'
+      + ' Returns upload_url, method, content_type, expiry, size limit and an example curl command. Never print the secrets.',
+    input: { appId, platform: platform.describe('Native platform whose stored signing credentials this upload will change.'), mode: z.enum(['replace', 'merge']).optional().describe('Controls how the uploaded file changes stored credentials: replace discards the previous set; merge retains keys absent from the file. Omission uses replace.') },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     request: input => ({ method: 'POST', path: '/build/credentials/upload-url', body: compact({ app_id: input.appId, platform: input.platform, mode: input.mode }) }),
   }),
@@ -1365,7 +1379,7 @@ const webhookTools: McpTool[] = [
       name: z.string().min(1).describe('Label shown for this webhook in the console and webhook listings.'),
       url: z.string().url().describe('Endpoint that will receive webhook HTTP deliveries.'),
       events: webhookEvents.describe('Capgo database resources whose changes should trigger webhook deliveries.'),
-      enabled: z.boolean().optional().describe('Start delivering matching events to this webhook when true. Omit to enable the new webhook.'),
+      enabled: z.boolean().optional().describe('Whether event deliveries start for this webhook; omitted enables delivery.'),
     },
     annotations: EXTERNAL,
     request: input => ({ method: 'POST', path: '/webhooks', body: compact(input) }),
@@ -1375,14 +1389,15 @@ const webhookTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_webhook,
     title: 'Update webhook',
     description: 'Update a webhook name, URL, events or enabled state.'
-      + ' Changes future delivery routing and event selection; changing the URL sends subsequent events to the new receiver.',
+      + ' Changes future delivery routing and event selection; changing the URL sends subsequent events to the new receiver.'
+      + ' Requires organization webhook access; app-scoped API keys cannot manage organization webhooks. Omitted settings are retained.',
     input: {
       orgId,
       webhookId: z.string().uuid().describe('Webhook id from capgo_list_webhooks.'),
       name: z.string().min(1).optional().describe('Label shown for this webhook in the console and webhook listings.'),
       url: z.string().url().optional().describe('Endpoint that will receive webhook HTTP deliveries.'),
-      events: webhookEvents.optional().describe('Replace the resource types whose changes trigger deliveries to this webhook. Omit to retain the current event selection.'),
-      enabled: z.boolean().optional().describe('Enable or suspend matching event delivery to this webhook. Omit to retain its current enabled state.'),
+      events: webhookEvents.optional().describe('Replace the resources whose changes trigger deliveries; omitted keeps the existing event selection.'),
+      enabled: z.boolean().optional().describe('Enable or disable delivery; omitted keeps the current state.'),
     },
     annotations: { ...DESTRUCTIVE, openWorldHint: true },
     request: input => ({ method: 'PUT', path: '/webhooks', body: compact(input) }),
@@ -1413,7 +1428,7 @@ const webhookTools: McpTool[] = [
     title: 'List webhook deliveries',
     description: 'List recent deliveries of a webhook.'
       + ' Returns deliveries with attempt and response details plus pagination containing page, per_page, total and has_more.',
-    input: { orgId, webhookId: z.string().uuid().describe('Webhook id from capgo_list_webhooks.'), status: z.enum(['pending', 'success', 'failed']).optional().describe('Inspect deliveries awaiting an attempt or retry (pending), accepted by the receiver (success), or marked unsuccessful (failed). Omit to include all delivery states.'), page },
+    input: { orgId, webhookId: z.string().uuid().describe('Webhook id from capgo_list_webhooks.'), status: z.enum(['pending', 'success', 'failed']).optional().describe('Filter by delivery outcome: pending is queued or in flight, success was delivered, failed can be inspected and retried.'), page },
     annotations: READ,
     request: input => ({ method: 'GET', path: '/webhooks/deliveries', query: input }),
   }),
@@ -1453,8 +1468,8 @@ const mcpEventTools: McpTool[] = [
       url: z.string().url().describe('Webhook receiver endpoint that handles MCP event delivery and verification challenges.'),
       secret: z.string().optional().describe('Webhook signing secret shared with the receiver; omit to generate one and return it once.'),
       app_id: appId.optional(),
-      channel: z.string().min(1).optional().describe('Restrict delivery to events for this channel. Use a channel name from capgo_list_channels and an event that supports channel filtering according to capgo_list_event_types.'),
-      ttlMs: z.number().int().min(60_000).max(24 * 60 * 60 * 1000).optional().describe('How long this event subscription remains active, in milliseconds. Omit for 24 hours. Renew before the returned refreshBefore time to avoid a delivery gap.'),
+      channel: z.string().min(1).optional().describe('Channel name used to filter events that support a channel argument; see capgo_list_event_types.'),
+      ttlMs: z.number().int().min(60_000).max(24 * 60 * 60 * 1000).optional().describe('Subscription lifetime in milliseconds; omitted uses 24 hours. Renew before the returned refreshBefore time.'),
     }) as unknown as z.ZodObject<z.ZodRawShape>,
     annotations: { title: 'Subscribe to MCP events', ...EXTERNAL },
     run: async (input, ctx) => {
@@ -1546,7 +1561,7 @@ const notificationTools: McpTool[] = [
   apiTool({
     name: 'capgo_update_notification_settings',
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_notification_settings,
-    title: 'Configure push-triggered live updates',
+    title: 'Replace push-triggered update settings',
     description: 'Enable or configure push-triggered live updates for an app.'
       + ' Replaces all three push update settings: omitted values reset to disabled, next-launch installation and no channel. Read current settings first and pass values that should be retained.',
     input: {
@@ -1576,10 +1591,10 @@ const notificationTools: McpTool[] = [
     input: {
       appId,
       target: notificationTarget,
-      name: z.string().max(180).optional().describe('Label for identifying this send in capgo_list_notification_campaigns; it is separate from the notification text displayed on devices.'),
+      name: z.string().max(180).optional().describe('Label to identify this send in the app campaign history.'),
       kind: z.enum(['alert', 'background', 'badge', 'update_check']).optional().describe('Push behavior: visible alert, background delivery, badge change, or update check.'),
-      payload: z.record(z.string(), z.unknown()).optional().describe('Content passed to the notification provider for the selected kind. For an alert, supply title and body, for example {"title":"Release ready","body":"Open the app for details"}.'),
-      limit: z.number().int().positive().optional().describe('Cap how many matching device registrations this send may select. Omit to use normal audience selection without a caller-specified cap; delivery batching still applies.'),
+      payload: z.record(z.string(), z.unknown()).optional().describe('Notification payload, e.g. {"title":"Hi","body":"..."}'),
+      limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this send; omit to process the entire matching audience.'),
     },
     annotations: EXTERNAL,
     request: input => ({ method: 'POST', path: '/notifications/send', body: compact(input) }),
@@ -1589,13 +1604,14 @@ const notificationTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_trigger_update_check,
     title: 'Trigger update check',
     description: 'Send a silent push asking devices to check for a live update now. Requires push updates to be enabled.'
-      + ' Omitting target broadcasts to all notification registrations for this app. It can apply an update immediately with installMode="set"; confirm the audience and installation mode first.',
+      + ' Omitting target broadcasts to all notification registrations for this app. It can apply an update immediately with installMode="set"; confirm the audience and installation mode first.'
+      + ' Returns campaignId, queued and queuedBuckets with targeted=null. This acknowledges queueing, not device delivery or completed installation.',
     input: {
       appId,
       target: notificationTarget.optional(),
       installMode: z.enum(['next', 'set']).optional().describe('Install on the next launch (next) or apply immediately (set); omitted uses the app push update setting.'),
       channel: z.string().nullable().optional().describe('Channel name to check; omitted or null uses the app push update channel setting.'),
-      limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this update check.'),
+      limit: z.number().int().positive().optional().describe('Maximum matching device registrations to select for this update check; omit to process the entire matching audience.'),
     },
     annotations: { ...EXTERNAL, destructiveHint: true },
     request: input => ({ method: 'POST', path: '/notifications/update-check', body: compact(input) }),
@@ -1615,8 +1631,8 @@ const notificationTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_get_notification_stats,
     title: 'Push statistics',
     description: 'Push delivery statistics of an app, optionally for one campaign.'
-      + ' Returns aggregated notification event counts for the requested period and optional campaign.',
-    input: { appId, days: z.number().int().min(1).max(92).optional().describe('Choose how many days of recent notification events to aggregate, rather than a calendar date range.'), campaign_id: z.string().optional().describe('Campaign id from capgo_list_notification_campaigns; omit for app-wide statistics.') },
+      + ' Returns data containing event/count pairs for the requested period and optional campaign. An empty list may also indicate unavailable analytics, so it does not prove there were no deliveries.',
+    input: { appId, days: z.number().int().min(1).max(92).optional().describe('Lookback in days from now for delivery event counts; omitted uses 30.'), campaign_id: z.string().optional().describe('Campaign id from capgo_list_notification_campaigns; omit for app-wide statistics.') },
     annotations: READ,
     request: ({ appId: id, ...rest }) => ({ method: 'GET', path: '/notifications/stats', query: { app_id: id, ...rest } }),
   }),
@@ -1664,10 +1680,11 @@ const docsTools: McpTool[] = [
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_search_docs,
     title: 'Search Capgo docs',
     description: 'Search the Capgo documentation (capgo.app/docs) and get matching pages with their URLs. '
-      + 'Use it to find how a feature, CLI command, plugin option or API route works before acting, then fetch the URL for full details.',
+      + 'Use it to find how a feature, CLI command, plugin option or API route works before acting, then fetch the URL for full details.'
+      + ' Returns matching page titles, URLs and optional text snippets, or an empty results list with a message when nothing matches.',
     inputSchema: z.object({
-      query: z.string().trim().min(1).max(200).describe('Describe the Capgo feature, error message or workflow you need documentation for, such as progressive rollout or encryption key.'),
-      limit: z.number().int().min(1).max(DOCS_SEARCH_MAX_RESULTS).optional().describe('Control how many relevant documentation pages are returned. Omit to receive up to eight pages.'),
+      query: z.string().trim().min(1).max(200).describe('Search terms, e.g. "progressive rollout" or "encryption key"'),
+      limit: z.number().int().min(1).max(DOCS_SEARCH_MAX_RESULTS).optional().describe('Number of matching documentation pages to return; omitted uses 8.'),
     }) as unknown as z.ZodObject<z.ZodRawShape>,
     annotations: { title: 'Search Capgo docs', ...READ, openWorldHint: true },
     run: async (input) => {

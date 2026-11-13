@@ -23,6 +23,8 @@ The API host also publishes public, cacheable discovery documents:
 
 The card, `server/discover` and legacy `initialize` share the server identity `app.capgo/capgo` and version. The card lists both modern and legacy protocol versions. Cards contain public connection metadata only; tools, resources and skills are listed through authenticated MCP requests. Discovery uses the configured canonical API origin, like OAuth protected-resource metadata, and supports ETag revalidation.
 
+These discovery documents do not establish marketplace approval or listing in ChatGPT, Claude, Cursor or Muse. Those listings require separate submission and verification with each provider.
+
 ## Skills
 
 The hosted server publishes seven public workflow guides from this repository: `check-update-health`, `ship-live-update`, `native-builds`, `observe`, `organization-management`, `release-management` and `usage`.
@@ -108,6 +110,8 @@ The hosted server has 77 tools. They cover:
 - documentation search and skill discovery.
 
 API tools use typed zod schemas over existing public API routes. The route is replayed inside the API worker with the caller's API key, so RBAC, rate limits and audit logs behave exactly like the REST API. Skill tools read the bundled public catalog without calling those routes.
+
+API tool results contain text blocks, including serialized JSON. Those tools do not return MCP `structuredContent` and do not advertise `outputSchema`. The two skill tools return structured content with matching output schemas, as described above.
 
 Tool annotations tell clients how careful to be:
 - `readOnlyHint` marks tools that only read data.

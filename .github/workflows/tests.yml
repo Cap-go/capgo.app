@@ -907,7 +907,7 @@ jobs:
           tail -n 400 "${{ steps.start_cloudflare_workers.outputs.log_path }}" || true
           echo "::endgroup::"
       - name: Upload background service logs
-        if: failure()
+        if: failure() && (steps.bootstrap_edge_server.outputs.log_path != '' || steps.start_cloudflare_workers.outputs.log_path != '')
         uses: actions/upload-artifact@v6
         with:
           name: test-cloudflare-background-service-logs-${{ strategy.job-index }}
@@ -1060,7 +1060,7 @@ jobs:
           tail -n 400 "${{ steps.start_cloudflare_workers.outputs.log_path }}" || true
           echo "::endgroup::"
       - name: Upload background service logs
-        if: failure()
+        if: failure() && (steps.bootstrap_edge_server.outputs.log_path != '' || steps.start_cloudflare_workers.outputs.log_path != '')
         uses: actions/upload-artifact@v6
         with:
           name: test-cloudflare-plugin-${{ matrix.name }}-background-service-logs

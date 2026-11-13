@@ -2,9 +2,10 @@ import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import { html } from 'hono/html'
 import { Hono } from 'hono/tiny'
+import { API_CONTENT_SECURITY_POLICY } from '../utils/hono.ts'
 import { MCP_SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from './metadata.ts'
 import { getApiOrigin, getResourceUrl, MCP_PATH } from './oauth_shared.ts'
-import { sha256Hex } from './oauth_utils.ts'
+import { randomToken, sha256Hex } from './oauth_utils.ts'
 
 const CARD_TYPE = 'application/mcp-server-card+json'
 const DOCS_URL = 'https://capgo.app/docs/ai/mcp/'
@@ -64,7 +65,9 @@ export function createMcpDiscoveryApp() {
 export function mcpSetupPage(c: Context) {
   const endpoint = getResourceUrl(c)
   const config = JSON.stringify({ mcpServers: { capgo: { url: endpoint } } }, null, 2)
-  c.header('Cache-Control', 'public, max-age=3600')
+  const styleNonce = randomToken()
+  c.header('Cache-Control', 'no-store')
+  c.header('Content-Security-Policy', API_CONTENT_SECURITY_POLICY.replace('style-src \'none\'', `style-src 'nonce-${styleNonce}'`))
   return c.html(html`<!doctype html>
 <html lang="en">
 <head>
@@ -72,6 +75,16 @@ export function mcpSetupPage(c: Context) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Connect your AI assistant to Capgo to build and release Capacitor apps.">
   <title>Connect to Capgo MCP</title>
+  <link rel="icon" href="https://capgo.app/favicon.svg" type="image/svg+xml">
+  <link rel="alternate" type="application/mcp-server-card+json" href="${endpoint}/server-card">
+  <style nonce="${styleNonce}">
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
+    body { max-width: 48rem; margin: 4rem auto; padding: 0 1.5rem; }
+    h1, h2 { line-height: 1.2; }
+    code { overflow-wrap: anywhere; }
+    pre { white-space: pre-wrap; }
+    li { margin-block: 0.75rem; }
+  </style>
 </head>
 <body>
   <main>
@@ -88,8 +101,8 @@ export function mcpSetupPage(c: Context) {
     <h2>Connect with an API key</h2>
     <p>If your client uses header authentication, create a key in
       <a href="https://console.capgo.app/apikeys">Capgo API keys</a> and configure
-      <code>Authorization: Bearer &lt;Capgo API key&gt;</code> in the client's secret settings.</p>
-    <p>Start by asking your assistant to list your Capgo apps.</p>
+      <code>Authorization: Bearer &lt;Capgo API key&gt;</code> in the client's secret settings. Keep the key out of chat and shared configuration files.</p>
+    <p>Ask your agent to run <code>capgo_whoami</code> to confirm its connection, then <code>capgo_list_apps</code> to find your apps. Access is limited by the connected API key's permissions. Confirm deployments, destructive actions and push notifications before running them.</p>
     <h2>Local CLI</h2>
     <p>To use the local MCP server, run <code>npx @capgo/cli@latest login</code>,
       then configure your client to launch <code>npx @capgo/cli@latest mcp</code>.</p>
