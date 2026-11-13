@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { ALLOWED_STATS_ACTIONS } from '../plugins/stats_actions.ts'
+import { isPluginStateServed } from './pluginStateSwitch.ts'
 import { PROVIDER_INFRA_ASNS } from './providerAsns.ts'
 import { edgeCacheTtlForReplicaLag } from './replicaFreshness.ts'
 import { updatesAppCacheTag, updatesVersionsCacheTag } from './updatesCacheTag.ts'
@@ -128,6 +129,9 @@ export function getSnippetEdgeAnswerTtlSeconds(c: Context) {
 }
 
 async function fillBase(c: Context, appId: string, blockProviderInfraRequests: boolean, planValidUntil: number | null, replicaSource?: string | null): Promise<SnippetFillBase | null> {
+  // A KV canary must never teach the shared snippet, even after rollback.
+  if (isPluginStateServed(c))
+    return null
   // A replayed request has no snippet in front of it.
   if (getSnippetEdgeReplay(c))
     return null

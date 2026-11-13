@@ -175,7 +175,7 @@ describe('hosted MCP protocol', () => {
       idempotentHint: false,
     })
     expect(byName.get('capgo_get_build_status')?.annotations).toMatchObject({
-      readOnlyHint: false,
+      readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
       idempotentHint: true,
@@ -196,7 +196,7 @@ describe('hosted MCP protocol', () => {
     } as any
     const apikeyRow = { key: 'test-key', user_id: '00000000-0000-0000-0000-000000000001' } as any
     const spy = vi.spyOn(buildStatus, 'getBuildStatus').mockResolvedValue(
-      new Response(JSON.stringify({ status: 'running', persisted: false }), { status: 200 }),
+      new Response(JSON.stringify({ job_id: 'job-1', status: 'running', persisted: false }), { status: 200 }),
     )
     const ctx: McpToolContext = {
       call: async (request) => {
@@ -213,9 +213,11 @@ describe('hosted MCP protocol', () => {
       method: 'tools/call',
       params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
     }, ctx)
-    const body = JSON.parse((response?.result as { content: Array<{ text: string }> }).content[0].text)
+    if (!response)
+      throw new Error('Build status tool did not return a JSON-RPC response')
+    const body = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text)
     expect(response?.error).toBeUndefined()
-    expect(body).toMatchObject({ status: 'running', persisted: false })
+    expect(body).toMatchObject({ job_id: 'job-1', status: 'running', persisted: false })
     expect(calls.filter(call => call.path === '/build/status')).toHaveLength(0)
     expect(spy).toHaveBeenCalledWith(
       hono,
@@ -243,7 +245,7 @@ describe('hosted MCP protocol', () => {
   })
 
   it.concurrent('replays tool calls as public API requests', async () => {
-    const { ctx, calls } = fakeContext([{ id: 1, name: '1.0.0' }])
+    const { ctx, calls } = fakeContext([{ id: 1, app_id: 'com.example.app', name: '1.0.0' }])
     const response = await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 4,
@@ -256,7 +258,7 @@ describe('hosted MCP protocol', () => {
   })
 
   it.concurrent('keeps full bundle rows for single-bundle lookups', async () => {
-    const { ctx, calls } = fakeContext([{ id: 1, name: '1.0.0', native_packages: [{ name: '@capacitor/camera', version: '6.0.0' }], manifest: [{ file_name: 'index.html' }] }])
+    const { ctx, calls } = fakeContext([{ id: 1, app_id: 'com.example.app', name: '1.0.0', native_packages: [{ name: '@capacitor/camera', version: '6.0.0' }], manifest: [{ file_name: 'index.html' }] }])
     const response = await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 41,
@@ -264,7 +266,9 @@ describe('hosted MCP protocol', () => {
       params: { name: 'capgo_list_bundles', arguments: { appId: 'com.example.app', version: '1.0.0' } },
     }, ctx)
     expect(calls).toEqual([{ method: 'GET', path: '/bundle', query: { app_id: 'com.example.app', version: '1.0.0' } }])
-    const text = (response?.result as { content: { text: string }[] }).content[0].text
+    if (!response)
+      throw new Error('Bundle lookup tool did not return a JSON-RPC response')
+    const text = (response.result as { content: { text: string }[] }).content[0].text
     expect(text).toContain('@capacitor/camera')
     expect(text).toContain('index.html')
   })
@@ -493,7 +497,7 @@ describe('hosted MCP signed-URL upload and build tools', () => {
         calls.push(request)
         const data = request.path === '/build/request'
           ? { job_id: 'job-1' }
-          : { upload_url: 'https://builder.example/builder_upload_direct_input/x', method: 'PUT' }
+          : { job_id: 'job-1', upload_url: 'https://builder.example/builder_upload_direct_input/x', method: 'PUT', headers: { 'Content-Type': 'application/zip' }, expires_at: '2026-12-01T00:00:00Z', max_bytes: 1000000 }
         return { ok: true, status: 200, data }
       },
       caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },

@@ -15,6 +15,10 @@ TanStack Intent skills should stay focused and under the validator line limit, s
 - `native-builds`: native cloud build request and build-credential workflows.
 - `organization-management`: organization, account, and deprecated organisation-alias workflows.
 
+## MCP skill discovery
+
+Both MCP servers advertise five workflow guides: `check-update-health`, `ship-live-update`, `native-builds`, `organization-management`, and `usage`. The detailed CLI guides remain available through `resources/list` and `capgo_get_skill` at `skill://capgo/observe/SKILL.md` and `skill://capgo/release-management/SKILL.md`. Read the appropriate guide before using its commands.
+
 ## Shared invocation rules
 
 - Prefer `npx @capgo/cli@latest ...` in user-facing examples in this repo.
@@ -127,3 +131,7 @@ npx @capgo/cli@latest app list --filter-by-org-id YOUR_ORG_ID --show-org --show-
 npx @capgo/cli@latest get-qr com.example.app --channel production
 npx @capgo/cli@latest star-all
 ```
+
+## Hosted MCP result contracts
+
+Every hosted account tool publishes an output schema. Read successful API payloads from `structuredContent.data`; other hosted tools return the object described by their output schema. Legacy text remains available. Check `isError` before using a result. A result-size error calls for pagination or narrower filters; inspect current state before retrying a write. This describes the hosted server, not every local CLI tool.

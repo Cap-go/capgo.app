@@ -1,23 +1,23 @@
 import type { Context } from 'hono'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
+import type { DeployReportState } from '../utils/deploy_report.ts'
 import type { PgClient } from '../utils/pg.ts'
 import { Hono } from 'hono/tiny'
 import {
   buildWeeklyEmailMetadata,
   computeWeeklyInstallStats,
   getPreviousMonthUtcRange,
-  shouldRetryDeployInstallStats,
   shouldSendDeployInstallStatsEmail,
-  summarizeDeviceVersionAdoption,
   sumVersionInstalls,
 } from '../utils/cron_email_stats.ts'
+import { DEPLOY_REPORT_CONSUME_SQL, DEPLOY_REPORT_RELEASE_SQL, DEPLOY_REPORT_SELECT_SQL } from '../utils/deploy_report.ts'
 import { BRES, middlewareAPISecret, parseBody, simpleError } from '../utils/hono.ts'
 import { cloudlog, cloudlogErr } from '../utils/logging.ts'
-import { sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
+import { prepareEmailToOrgMembers, sendEmailToOrgMembers } from '../utils/org_email_notifications.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
 import { queryJson } from '../utils/pg_rls.ts'
 import { findBestPlan } from '../utils/plans.ts'
-import { readDeviceVersionCounts, readStatsVersion } from '../utils/stats.ts'
+import { readStatsVersion } from '../utils/stats.ts'
 import { getCurrentPlanNameOrg, getOrgExtraMau } from '../utils/supabase.ts'
 
 export const app = new Hono<MiddlewareKeyVariables>()
@@ -54,13 +54,8 @@ app.post('/', middlewareAPISecret, async (c) => {
     orgId,
     type,
     deployId,
-    versionId,
-    versionName,
-    channelId,
-    channelName,
-    platform,
+    reportClaimedAt,
     appName,
-    deployedAt,
     cycleStart,
     cycleEnd,
     totalInstalls,
@@ -73,13 +68,8 @@ app.post('/', middlewareAPISecret, async (c) => {
     orgId?: string
     type: string
     deployId?: number
-    versionId?: number
-    versionName?: string
-    channelId?: number
-    channelName?: string
-    platform?: string
+    reportClaimedAt?: string
     appName?: string
-    deployedAt?: string
     cycleStart?: string
     cycleEnd?: string
     totalInstalls?: number
@@ -127,17 +117,13 @@ app.post('/', middlewareAPISecret, async (c) => {
     return await handleMonthlyCreateStats(c, appId)
   }
   else if (type === 'deploy_install_stats') {
+    return c.json({ status: 'skipped', reason: 'legacy_report_job' })
+  }
+  else if (type === 'deploy_install_stats_v2') {
     return await handleDeployInstallStats(c, {
       appId,
-      orgId,
       deployId,
-      versionId,
-      versionName,
-      channelId,
-      channelName,
-      platform,
-      appName,
-      deployedAt,
+      reportClaimedAt,
     })
   }
   else {
@@ -251,158 +237,77 @@ async function sendMonthlyCreateStats(c: Context, pg: PgClient, appId: string) {
   return c.json(BRES)
 }
 
-async function loadDeployVersionAdoption(
-  c: Context,
-  appId: string,
-  versionName?: string,
-  versionId?: number,
-  channelName?: string,
-) {
-  try {
-    const deviceCounts = await readDeviceVersionCounts(c, appId, channelName)
-    return summarizeDeviceVersionAdoption(deviceCounts, versionName, versionId)
-  }
-  catch (error) {
-    cloudlogErr({
-      requestId: c.get('requestId'),
-      message: 'Failed to read device version counts for deploy stats email',
-      error,
-      metadata: { appId, versionName, versionId, channelName },
-    })
-    return summarizeDeviceVersionAdoption({}, versionName, versionId)
-  }
-}
-
 async function handleDeployInstallStats(
   c: Context,
-  payload: {
-    appId: string
-    orgId?: string
-    deployId?: number
-    versionId?: number
-    versionName?: string
-    channelId?: number
-    channelName?: string
-    platform?: string
-    appName?: string
-    deployedAt?: string
-  },
+  payload: { appId: string, deployId?: number, reportClaimedAt?: string },
 ) {
-  const {
-    appId,
-    orgId,
-    deployId,
-    versionId,
-    versionName,
-    channelId,
-    channelName,
-    platform,
-    appName,
-    deployedAt,
-  } = payload
+  const { appId, deployId, reportClaimedAt } = payload
+  // Older jobs have no claim token and cannot safely authorize a report.
+  if (!Number.isSafeInteger(deployId) || !reportClaimedAt || !Number.isFinite(Date.parse(reportClaimedAt)))
+    return c.json({ status: 'skipped', reason: 'invalid_report_claim' })
 
-  if (!versionId) {
-    throw simpleError('missing_version_id', 'Missing versionId', { appId, deployId })
-  }
+  const pg = await getPgClient(c)
+  const claim = [deployId, appId, reportClaimedAt]
+  try {
+    const [deploy] = await queryJson<DeployReportState>(pg, DEPLOY_REPORT_SELECT_SQL, claim)
+    if (!deploy)
+      return c.json({ status: 'skipped', reason: 'deployment_no_longer_eligible' })
 
-  let deployTime = deployedAt ? new Date(deployedAt) : null
-  if (!deployTime || Number.isNaN(deployTime.getTime())) {
-    if (deployId) {
-      let deploy: { deployed_at: string | null } | null = null
-      let deployError: unknown = null
-      const pg = await getPgClient(c)
-      try {
-        const rows = await queryJson<{ deployed_at: string | null }>(pg, 'SELECT deployed_at FROM public.deploy_history WHERE id = $1', [deployId])
-        if (rows.length === 1)
-          deploy = rows[0]
-        else
-          deployError = { code: 'PGRST116', message: `Expected 1 deploy_history row, got ${rows.length}` }
-      }
-      catch (error) {
-        deployError = error
-      }
-      finally {
-        closeClient(c, pg)
-      }
-      if (deployError || !deploy?.deployed_at) {
-        throw simpleError('missing_deployed_at', 'Missing deployedAt', { appId, deployId, deployError })
-      }
-      deployTime = new Date(deploy.deployed_at)
-    }
-    else {
-      throw simpleError('missing_deployed_at', 'Missing deployedAt', { appId, deployId, versionId })
-    }
-  }
-
-  const windowStart = deployTime.toISOString()
-  const windowEnd = new Date(deployTime.getTime() + 24 * 60 * 60 * 1000).toISOString()
-  // Do not filter by channel here: older VERSION_USAGE rows may lack channel blobs,
-  // and this email counts installs for the deployed version across the app.
-  const versionStats = await readStatsVersion(c, appId, windowStart, windowEnd)
-  // Filter by version_name (new format) OR version_id as string (old Cloudflare format).
-  // Coerce installs with Number() — Analytics Engine sum() can arrive as stringy Float64.
-  const installs = sumVersionInstalls(versionStats, versionName, versionId)
-
-  if (shouldSendDeployInstallStatsEmail(installs)) {
-    const adoption = await loadDeployVersionAdoption(c, appId, versionName, versionId, channelName)
-
-    await sendEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', {
-      app_id: appId,
-      app_name: appName ?? '',
-      deploy_id: deployId?.toString(),
-      version_id: versionId?.toString(),
-      version_name: versionName ?? '',
-      channel_id: channelId?.toString(),
-      channel_name: channelName ?? '',
-      platform: platform ?? '',
-      deployed_at: windowStart,
-      install_count_24h: installs.toString(),
-      window_hours: '24',
-      device_count: adoption.device_count.toString(),
-      total_devices: adoption.total_devices.toString(),
-      adoption_percent: adoption.adoption_percent,
-    }, orgId ?? await getOrgIdForApp(c, appId))
-    return c.json(BRES)
-  }
-
-  // SQL claims install_stats_email_sent_at before the worker runs. If analytics
-  // lagged or returned unusable counts, release the claim so cron can retry
-  // while this deploy is still the latest within the retry window.
-  if (deployId && shouldRetryDeployInstallStats(deployTime)) {
-    let releaseError: unknown = null
-    const pg = await getPgClient(c)
+    const windowStart = new Date(deploy.deployed_at).toISOString()
+    const windowEnd = new Date(Date.parse(windowStart) + 24 * 60 * 60 * 1000).toISOString()
+    let installs: number
     try {
-      await pg.query('UPDATE public.deploy_history SET install_stats_email_sent_at = NULL WHERE id = $1', [deployId])
+      // This is app-wide bundle activity, including legacy rows without channels.
+      const rows = await readStatsVersion(c, appId, windowStart, windowEnd, undefined, { throwOnError: true })
+      if (rows.some(row => row.app_id !== appId))
+        throw new Error('Analytics returned rows for another app')
+      installs = sumVersionInstalls(rows, deploy.version_name, deploy.version_id)
     }
     catch (error) {
-      releaseError = error
+      cloudlogErr({ requestId: c.get('requestId'), message: 'Deploy report analytics unavailable or invalid; deferring email', deployId, error })
+      // The hourly producer can re-enqueue within 48h without spending queue retries.
+      await pg.query(DEPLOY_REPORT_RELEASE_SQL, claim)
+      return c.json({ status: 'deferred', reason: 'invalid_or_unavailable_analytics' })
     }
-    finally {
-      closeClient(c, pg)
-    }
-    if (releaseError) {
-      cloudlogErr({
-        requestId: c.get('requestId'),
-        message: 'Failed to release deploy install stats email claim for retry',
-        error: releaseError,
-        metadata: { appId, deployId, installs },
-      })
-      // Fail the job so the queue can retry instead of permanently keeping the claim.
-      throw simpleError('cannot_release_deploy_stats_claim', 'Cannot release deploy install stats email claim', {
-        error: releaseError,
-        appId,
-        deployId,
-        installs,
-      })
-    }
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: 'Released deploy install stats email claim for retry',
-      metadata: { appId, deployId, installs },
-    })
-  }
 
-  return c.json({ status: 'Not enough installs for deploy stats email', installs }, 200)
+    if (!shouldSendDeployInstallStatsEmail(installs)) {
+      await pg.query(DEPLOY_REPORT_RELEASE_SQL, claim)
+      return c.json({ status: 'deferred', reason: 'not_enough_installs' })
+    }
+
+    // Connection and recipient lookup failures leave the original claim retryable.
+    const delivery = await prepareEmailToOrgMembers(c, 'bundle:install_stats_24h', 'deploy_stats_24h', deploy.owner_org, undefined, { requireCompleteRecipients: true })
+    if (!delivery)
+      return c.json({ status: 'skipped', reason: 'no_eligible_recipients' })
+
+    const [current] = await queryJson<DeployReportState>(pg, DEPLOY_REPORT_CONSUME_SQL, [
+      ...claim, deploy.version_id, deploy.version_name, deploy.owner_org, deploy.deployed_at,
+    ])
+    if (!current)
+      return c.json({ status: 'skipped', reason: 'deployment_changed_or_claim_consumed' })
+
+    delivery.send({
+      report_schema_version: '2',
+      app_id: current.app_id,
+      app_name: current.app_name || current.app_id,
+      deploy_id: current.id.toString(),
+      version_id: current.version_id.toString(),
+      version_name: current.version_name,
+      channel_id: current.channel_id.toString(),
+      channel_name: current.channel_name,
+      platform: current.platform,
+      deployed_at: windowStart,
+      window_start: windowStart,
+      window_end: windowEnd,
+      install_count_24h: installs.toString(),
+      install_count_is_estimate: c.env.VERSION_USAGE ? 'true' : 'false',
+      window_hours: '24',
+    })
+    return c.json(BRES)
+  }
+  finally {
+    closeClient(c, pg)
+  }
 }
 
 /**

@@ -79,7 +79,7 @@ const ORG_ID = 'b0dfb856-7ed2-4420-bfca-64d67fe65a4e'
 const USER_ID = 'a1bb59b7-34b3-4e06-a0f1-2cc696f043dc'
 const PENDING_ID = `pending_${ORG_ID}`
 const LOCAL_ID = `cus_local_${ORG_ID.replaceAll('-', '')}`
-const CUSTOMER_ID = 'cus_VAgMn1agG4iQSC'
+const CUSTOMER_ID = 'cus_example_customer'
 const SOLO_PLAN = {
   name: 'Solo',
   stripe_id: 'prod_solo',
@@ -100,8 +100,8 @@ function createOrg(customerId: string | null) {
     id: ORG_ID,
     created_by: USER_ID,
     customer_id: customerId,
-    management_email: 'dmitriy.kurakin@wn.media',
-    name: 'WN Hub',
+    management_email: 'org-owner@example.com',
+    name: 'Example Organization',
   } as any
 }
 
@@ -134,6 +134,7 @@ function mockSupabase(options: {
   deleteError?: { message?: string } | null
   appMetadata?: Record<string, unknown>
   userLookupError?: Error
+  country?: string | null
 }) {
   const orgState = { customer_id: options.orgCustomerId }
   const stripeInfoInsert = vi.fn(async () => ({ error: options.insertError ?? null }))
@@ -161,7 +162,7 @@ function mockSupabase(options: {
           select: () => ({
             eq: () => ({
               single: async () => ({
-                data: createOrg(orgState.customer_id),
+                data: { ...createOrg(orgState.customer_id), creator_country: options.country ?? null },
                 error: null,
               }),
             }),
@@ -293,11 +294,21 @@ describe('createStripeCustomer', () => {
       expect.anything(),
       expect.anything(),
       'ee',
+      null,
     )
     expect(orgUpdate).toHaveBeenCalledWith({ customer_id: CUSTOMER_ID }, expect.objectContaining({
       id: ORG_ID,
       customer_id: LOCAL_ID,
     }))
+  })
+
+  it.each(['ee', 'us'] as const)('uses the stored creator country for queued creation on %s', async (account) => {
+    mockSupabase({ orgCustomerId: PENDING_ID, country: 'IN' })
+    getStripeCustomerMock.mockResolvedValue({ product_id: 'prod_solo', billing_account: account })
+    const context = createContext()
+    context.req = { raw: { cf: { country: 'US' } } }
+    await createStripeCustomer(context, createOrg(PENDING_ID))
+    expect(createCustomerMock).toHaveBeenCalledWith(context, 'org-owner@example.com', USER_ID, ORG_ID, 'Example Organization', account, 'IN')
   })
 
   it('uses pending stripe_info billing_account when finalizing a pending org', async () => {
@@ -316,6 +327,7 @@ describe('createStripeCustomer', () => {
       expect.anything(),
       expect.anything(),
       'us',
+      null,
     )
     expect(stripeInfoInsert).toHaveBeenCalledWith(expect.objectContaining({
       billing_account: 'us',
@@ -339,6 +351,7 @@ describe('createStripeCustomer', () => {
       expect.anything(),
       expect.anything(),
       'us',
+      null,
     )
   })
 

@@ -21,6 +21,7 @@ import { convertQueryToBody, makeDevice, parsePluginBody } from '../utils/plugin
 import { sendStatsAndDevice } from '../utils/plugin_stats.ts'
 import { channelSelfGetRequestSchema, channelSelfRequestSchema, isDevicePlatform } from '../utils/plugin_validation.ts'
 import { getAppOwnerWithEdgeCache, getChannelByNameWithEdgeCache, getCompatibleChannelsWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
+import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, markPluginStateResponse, startPluginStateRequest } from '../utils/pluginState.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { buildRateLimitInfo, onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { logSkippedSupabaseWrite, shouldSkipChannelSelfPostgresFallback } from '../utils/supabase_write_guard.ts'
@@ -750,6 +751,40 @@ async function runChannelSelfWithLazyPgClient(
   }
 }
 
+/**
+ * /channel_self answered from the KV plugin state (pluginState.ts): the same
+ * handler with every query answered by the session. Null when a key it needs
+ * is not synced yet (the caller then uses the database and records the
+ * request itself).
+ */
+async function runChannelSelfWithPluginState(
+  c: Context,
+  pluginState: NonNullable<Awaited<ReturnType<typeof startPluginStateRequest>>>,
+  run: (drizzleClient: ReturnType<typeof getDrizzleClient>) => Promise<Response>,
+  record: () => Promise<void>,
+) {
+  const { drizzle, lazy } = createPluginStateDatabase(c, pluginState)
+  let fallback = false
+  try {
+    const response = await run(drizzle)
+    markPluginStateResponse(response, lazy.isConnected() ? 'kv-escaped' : 'kv')
+    return response
+  }
+  catch (error) {
+    if (!isPluginStateMiss(error))
+      throw error
+    fallback = true
+    abandonPluginStateRequest(c)
+    return null
+  }
+  finally {
+    await lazy.close()
+    // Do not block the response on rate-limit Cache writes (P999 wall time).
+    if (!fallback)
+      await backgroundTask(c, record())
+  }
+}
+
 async function runChannelSelfDeviceOperation(
   c: Context,
   bodyParsed: DeviceLink,
@@ -778,7 +813,13 @@ async function runChannelSelfDeviceOperation(
     await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
   }
 
-  // The edge cache only serves read-replica requests; the primary fallback is unchanged.
+  // The KV plugin state and the edge cache only serve read-replica requests; the primary fallback is unchanged.
+  const pluginState = canUseReadReplica ? await startPluginStateRequest(c, bodyParsed.app_id, bodyParsed.device_id) : null
+  if (pluginState) {
+    const stateResponse = await runChannelSelfWithPluginState(c, pluginState, drizzleClient => run(drizzleClient, false), record)
+    if (stateResponse)
+      return stateResponse
+  }
   if (canUseReadReplica && shouldUseUpdatesEdgeCache(c, bodyParsed.app_id, bodyParsed.device_id))
     return await runChannelSelfWithLazyPgClient(c, drizzleClient => run(drizzleClient, true), record)
 
@@ -897,6 +938,13 @@ app.get('/', async (c) => {
       await recordChannelSelfRequestSafely(c, bodyParsed.app_id, bodyRaw.device_id, 'list')
     }
     await recordChannelSelfIPRateLimitSafely(c, bodyParsed.app_id)
+  }
+
+  const pluginState = await startPluginStateRequest(c, bodyParsed.app_id, bodyRaw.device_id ?? '')
+  if (pluginState) {
+    const stateResponse = await runChannelSelfWithPluginState(c, pluginState, drizzleClient => listCompatibleChannels(c, drizzleClient, bodyParsed, appStatus), record)
+    if (stateResponse)
+      return stateResponse
   }
 
   // Without a device id there is no per-device bucket: keep the live path.

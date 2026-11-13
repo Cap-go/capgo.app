@@ -806,7 +806,7 @@ onUnmounted(() => {
 
         <div v-if="initializationState === 'failed'" role="alert" class="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300" data-test="onboarding-organization-load-error">
           {{ t('organization-onboarding-load-failed') }}
-          <button type="button" class="ml-2 min-h-11 font-semibold underline" data-test="onboarding-organization-retry" @click="initializeOrganization">
+          <button type="button" class="d-btn d-btn-ghost d-btn-sm ml-2 min-h-11" data-test="onboarding-organization-retry" @click="initializeOrganization">
             {{ t('retry') }}
           </button>
         </div>
@@ -1067,6 +1067,15 @@ onUnmounted(() => {
                 <BillingRegionChoice v-model="billingAccount" />
 
                 <OnboardingSupportUsernames v-model:discord-username="discordUsername" :is-new-user-onboarding="!isAdditionalOrgFlow" />
+
+                <p
+                  v-if="initializationState === 'loading' || initializationState === 'pending'"
+                  class="text-sm text-slate-600 dark:text-slate-300"
+                  data-test="onboarding-organization-initializing"
+                  role="status"
+                >
+                  {{ t('organization-onboarding-initializing') }}
+                </p>
 
                 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:justify-between dark:border-white/15">
                   <button type="button" class="d-btn min-h-11" :class="whiteCardSecondaryButtonClass()" @click="goBack">
