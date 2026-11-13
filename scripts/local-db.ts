@@ -9,6 +9,7 @@ import { getSupabaseWorktreeConfig } from './supabase-worktree-config'
  *
  *   bun run db:up         start this worktree's Postgres container
  *   bun run db:provision  bootstrap, apply pending migrations, seed a fresh database
+ *   bun run db:test       run the pgTAP tests in supabase/tests
  *   bun run db:url        print the connection URL
  *   bun run db:down       stop the container and delete its data
  *
@@ -105,6 +106,36 @@ UNION ALL
 SELECT 'seed:' || path FROM supabase_migrations.seed_files;
 `
 
+export interface TapSummary {
+  ok: number
+  notOk: number
+  planned: number | null
+  failure: string | null
+}
+
+/**
+ * Judges one pgTAP file from its psql output, the way pg_prove (`supabase test db`) does:
+ * any `not ok`, a missing or unmet plan, or a SQL error (psql exits non-zero under
+ * ON_ERROR_STOP) fails the file.
+ */
+export function summarizeTap(output: string, exitCode: number): TapSummary {
+  const lines = output.split('\n').map(line => line.trim())
+  const ok = lines.filter(line => /^ok \d+/.test(line)).length
+  const notOk = lines.filter(line => /^not ok \d+/.test(line)).length
+  const plan = lines.map(line => /^1\.\.(\d+)$/.exec(line)).find(match => match !== null)
+  const planned = plan ? Number(plan[1]) : null
+  let failure: string | null = null
+  if (exitCode !== 0)
+    failure = `psql exited with ${exitCode} (SQL error)`
+  else if (notOk > 0)
+    failure = `${notOk} not ok`
+  else if (planned === null)
+    failure = 'no plan'
+  else if (planned !== ok + notOk)
+    failure = `planned ${planned}, ran ${ok + notOk}`
+  return { ok, notOk, planned, failure }
+}
+
 export interface History {
   applied: Set<string>
   seeded: boolean
@@ -136,10 +167,15 @@ type DbUser = 'postgres' | 'supabase_admin'
  * Run SQL from stdin inside the container (no host psql, no TLS) and return stdout.
  * `psqlArgs` adds flags such as `--single-transaction` or `-A -t`.
  */
-function psql(cfg: LocalDbConfig, user: DbUser, sql: string, label: string, psqlArgs: string[]): string {
+function runPsql(cfg: LocalDbConfig, user: DbUser, sql: string, label: string, psqlArgs: string[]) {
   const res = compose(cfg, ['exec', '-T', 'db', 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-U', user, '-d', 'postgres', ...psqlArgs, '-f', '-'], { input: sql })
   if (res.error)
     throw new Error(`${label}: could not run docker compose: ${res.error.message}`)
+  return res
+}
+
+function psql(cfg: LocalDbConfig, user: DbUser, sql: string, label: string, psqlArgs: string[]): string {
+  const res = runPsql(cfg, user, sql, label, psqlArgs)
   if (res.status !== 0) {
     const failing = (res.stdout || '').split('\n').filter(line => line.startsWith(`${APPLYING} `)).pop()
     const errors = (res.stderr || '').split('\n').filter(line => /ERROR|FATAL|DETAIL|HINT|CONTEXT|LINE \d/.test(line))
@@ -195,7 +231,41 @@ function provision(cfg: LocalDbConfig): number {
   return 0
 }
 
-const USAGE = 'Usage: bun scripts/local-db.ts <up|provision|url|down>'
+// Lines worth showing for a failed file: failed tests, pgTAP diagnostics and SQL errors.
+const FAILURE_DETAIL = /^(not ok|#)|ERROR|DETAIL|HINT|CONTEXT|LINE \d/
+
+/** Runs every supabase/tests/*.sql file, in name order, like `supabase test db`. */
+function test(cfg: LocalDbConfig): number {
+  if (!isRunning(cfg)) {
+    console.error('Local Postgres is not running. Start it with `bun run db:up && bun run db:provision`.')
+    return 1
+  }
+  psql(cfg, 'postgres', 'CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;', 'pgtap install', [])
+
+  const testsDir = resolve(cfg.repoRoot, 'supabase/tests')
+  const files = readdirSync(testsDir).filter(file => file.endsWith('.sql')).sort()
+  const failed: string[] = []
+  let assertions = 0
+  for (const file of files) {
+    const res = runPsql(cfg, 'postgres', readFileSync(resolve(testsDir, file), 'utf8'), file, ['-A', '-t'])
+    const summary = summarizeTap(res.stdout || '', res.status ?? 1)
+    assertions += summary.ok
+    if (summary.failure === null) {
+      console.log(`ok   ${file} (${summary.ok})`)
+      continue
+    }
+    failed.push(file)
+    console.log(`FAIL ${file}: ${summary.failure}`)
+    const detail = `${res.stdout || ''}\n${res.stderr || ''}`.split('\n').filter(line => FAILURE_DETAIL.test(line))
+    console.log(detail.slice(0, 30).map(line => `     ${line}`).join('\n'))
+  }
+  console.log(`pgTAP: ${files.length - failed.length}/${files.length} files passed, ${assertions} ok.`)
+  if (failed.length > 0)
+    console.error(`Failed: ${failed.join(', ')}`)
+  return failed.length > 0 ? 1 : 0
+}
+
+const USAGE = 'Usage: bun scripts/local-db.ts <up|provision|test|url|down>'
 
 function main(): number {
   try {
@@ -205,6 +275,8 @@ function main(): number {
         return up(cfg)
       case 'provision':
         return provision(cfg)
+      case 'test':
+        return test(cfg)
       case 'url':
         console.log(localDbUrl(cfg))
         return 0

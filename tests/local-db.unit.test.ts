@@ -1,7 +1,7 @@
 import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { getLocalDbConfig, migrationsScript, parseHistory, parseMigrationFiles, pendingMigrations, seedWithHistory } from '../scripts/local-db'
+import { getLocalDbConfig, migrationsScript, parseHistory, parseMigrationFiles, pendingMigrations, seedWithHistory, summarizeTap } from '../scripts/local-db'
 import { getSupabaseWorktreeConfig } from '../scripts/supabase-worktree-config'
 
 describe('parseMigrationFiles', () => {
@@ -70,6 +70,28 @@ describe('seedWithHistory', () => {
     expect(seedWithHistory('SELECT 1;')).toBe(
       'SELECT 1;\n;\nINSERT INTO supabase_migrations.seed_files (path, hash) VALUES (\'supabase/seed.sql\', \'17db4fd369edb9244b9f91d9aeed145c3d04ad8ba6e95d06247f07a63527d11a\');\n',
     )
+  })
+})
+
+describe('summarizeTap', () => {
+  it('passes a file whose plan matches its ok lines', () => {
+    expect(summarizeTap('1..2\nok 1 - first\nok 2 - second\n', 0)).toEqual({ ok: 2, notOk: 0, planned: 2, failure: null })
+  })
+
+  it('fails on any not ok line', () => {
+    expect(summarizeTap('1..2\nok 1 - first\nnot ok 2 - second\n# Failed test 2: "second"\n', 0).failure).toBe('1 not ok')
+  })
+
+  it('fails when fewer tests ran than planned', () => {
+    expect(summarizeTap('1..3\nok 1 - first\nok 2 - second\n# Looks like you planned 3 tests but ran 2\n', 0).failure).toBe('planned 3, ran 2')
+  })
+
+  it('fails when the file has no plan', () => {
+    expect(summarizeTap('ok 1 - first\n', 0).failure).toBe('no plan')
+  })
+
+  it('fails on a SQL error even when every printed test passed', () => {
+    expect(summarizeTap('1..1\nok 1 - first\n', 3).failure).toBe('psql exited with 3 (SQL error)')
   })
 })
 
