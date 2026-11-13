@@ -38,7 +38,6 @@ const errorCases: Array<[string, string, Record<string, unknown>, number | null,
   ['type is missing', 'cron_email', { email: 'test@example.com', appId: APPNAME }, 400, 'missing_email_type'],
   ['orgId is missing for billing_period_stats type', 'cron_email', { email: 'test@example.com', type: 'billing_period_stats' }, 400, 'missing_orgId'],
   ['email type is invalid', 'cron_email', { email: USER_EMAIL, appId: APPNAME, type: 'invalid_type' }, 400, 'invalid_stats_type'],
-  ['deploy stats are missing versionId', 'cron_email', { email: 'test@example.com', appId: 'nonexistent-app', type: 'deploy_install_stats' }, 400, 'missing_version_id'],
   ['no version is given to cleanup', 'cron_clear_versions', {}, null, 'no_version'],
   ['channel update has no app id', 'on_channel_update', { table: 'channels', type: 'UPDATE', record: { id: 'nonexistent-channel' }, old_record: {} }, null, 'no_app_id'],
   ['channel update targets another table', 'on_channel_update', { table: 'not_channels', type: 'UPDATE', record: {}, old_record: {} }, 400, 'table_not_match'],
@@ -60,6 +59,18 @@ describe('[POST] /triggers/* - Error Cases', () => {
       expect(response.status).toBe(status)
     const data = await response.json() as { error: string }
     expect(data.error).toBe(error)
+  })
+
+  it.concurrent.each([
+    ['deploy_install_stats', {}, 'legacy_report_job'],
+    ['deploy_install_stats_v2', {}, 'invalid_report_claim'],
+    ['deploy_install_stats_v2', { deployId: 1, reportClaimedAt: 'invalid' }, 'invalid_report_claim'],
+  ])('acknowledges unsafe %s jobs without retrying them (%j)', async (type, fields, reason) => {
+    const response = await postTrigger('cron_email', {
+      email: 'test@example.com', appId: 'nonexistent-app', type, ...fields,
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ status: 'skipped', reason })
   })
 
   it.concurrent('acknowledges size lookups queued for legacy manifest rows', async () => {
