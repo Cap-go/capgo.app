@@ -136,6 +136,17 @@ testing against Cloudflare Workers.
 - `bun backend` - Start Supabase functions locally
 - `bun reset` - Reset Supabase database
 
+### Local Postgres without the Supabase stack
+
+For work that only needs the database (SQL tests, checking that a migration applies), use one Docker container instead of `supabase start`. No Supabase CLI involved.
+
+- `bun run db:up` - Start this worktree's Postgres (`supabase/local-db.compose.yml`, the same `supabase/postgres` image `supabase start` uses)
+- `bun run db:provision` - Run `supabase/bootstrap.sql`, apply pending migrations (recorded in `supabase_migrations.schema_migrations`), and run `seed.sql` on a fresh database. Safe to re-run.
+- `bun run db:url` - Print the connection URL
+- `bun run db:down` - Stop it and delete its data (`db:down && db:up && db:provision` gives a fresh database)
+
+It is a separate database from `supabase start`'s, with no GoTrue, Storage, PostgREST or edge functions, so the app and the vitest integration suites still need `bun run supabase:start`. `supabase/bootstrap.sql` adds only the `auth`/`storage` objects GoTrue and storage-api would create; if a new migration or seed needs another one, add it there.
+
 ## Architecture Overview
 
 ### Frontend Architecture
