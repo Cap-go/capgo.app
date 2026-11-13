@@ -2,29 +2,17 @@
 SELECT
   pgmq.create ('test_queue_consumer');
 
--- Create secrets
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'admin_users') THEN
-        PERFORM vault.create_secret('["c591b04e-cf29-4945-b9a0-776d0672061a"]', 'admin_users', 'admins user id');
-    END IF;
-
-    IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'db_url') THEN
-        -- Used by DB-side cron jobs to call edge functions. `kong:8000` is stable inside the local Docker network
-        -- (unlike host-mapped ports which may differ per git worktree).
-        PERFORM vault.create_secret('http://kong:8000', 'db_url', 'db url');
-    END IF;
-
-    IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'CAPGO_MFA_EMAIL_OTP_ENFORCED_AT') THEN
-        -- RFC3339 cutoff string. Empty means no enforcement cutoff by default.
-        PERFORM vault.create_secret('', 'CAPGO_MFA_EMAIL_OTP_ENFORCED_AT', 'mfa email otp enforcement cutoff');
-    END IF;
-
-    IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'apikey') THEN
-        PERFORM vault.create_secret('testsecret', 'apikey', 'admin user id');
-    END IF;
-
-END $$;
+-- Runtime settings (private.settings replaces Supabase Vault)
+INSERT INTO private.settings (name, value) VALUES
+    -- Platform admin user ids
+    ('admin_users', '["c591b04e-cf29-4945-b9a0-776d0672061a"]'),
+    -- Used by DB-side cron jobs to call edge functions. `kong:8000` is stable inside the local Docker network
+    -- (unlike host-mapped ports which may differ per git worktree).
+    ('db_url', 'http://kong:8000'),
+    -- RFC3339 cutoff string. Empty means no enforcement cutoff by default.
+    ('CAPGO_MFA_EMAIL_OTP_ENFORCED_AT', ''),
+    ('apikey', 'testsecret')
+ON CONFLICT (name) DO NOTHING;
 
 -- We cannot use SET search_path = 'public, extensions' because the digest function is not available in the public schema
 CREATE OR REPLACE FUNCTION "public"."reset_and_seed_data" () RETURNS "void" LANGUAGE "plpgsql"
