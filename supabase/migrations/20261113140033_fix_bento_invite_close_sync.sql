@@ -41,7 +41,7 @@ BEGIN
     END IF;
 
     v_sync_email := pg_catalog.lower(
-        pg_catalog.btrim(pg_catalog.coalesce(v_bento_email, v_invitee_email))
+        pg_catalog.btrim(COALESCE(v_bento_email, v_invitee_email))
     );
 
     IF v_sync_email IS NOT NULL
@@ -166,7 +166,7 @@ BEGIN
 
     v_previous_sync_email := pg_catalog.lower(
         pg_catalog.btrim(
-            pg_catalog.coalesce(v_previous_bento_email, v_invitee_email)
+            COALESCE(v_previous_bento_email, v_invitee_email)
         )
     );
     IF v_previous_sync_email IS NOT NULL
