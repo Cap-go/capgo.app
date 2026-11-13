@@ -905,7 +905,7 @@ const channelTools: McpTool[] = [
     annotations: READ,
     request: input => ({ method: 'GET', path: '/channel', query: { app_id: input.appId, channel: input.channel } }),
   }),
-  ...[
+  ...([
     {
       name: 'capgo_add_channel',
       outputSchema: MCP_OUTPUT_SCHEMAS.capgo_add_channel,
@@ -922,7 +922,7 @@ const channelTools: McpTool[] = [
         + ' This endpoint also creates the named channel if absent. Changing version changes the bundle offered to eligible devices; confirm the target first.',
       channelDescription: 'Channel name from capgo_list_channels for this app.',
     },
-  ].map(({ channelDescription, ...spec }) => apiTool({
+  ] as const).map(({ channelDescription, ...spec }) => apiTool({
     ...spec,
     description: spec.description
       + ' Requires channel settings permission for an existing channel or app.create_channel for a new one. Making a channel public changes default update routing and requires app.update_settings; assigning a bundle also requires promotion permission.',

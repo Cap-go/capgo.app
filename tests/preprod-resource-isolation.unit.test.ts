@@ -1,4 +1,3 @@
-import type { Unstable_Config } from 'wrangler'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { unstable_readConfig } from 'wrangler'
@@ -10,7 +9,7 @@ const resourceConfig = z.object({
   r2_buckets: z.array(z.object({ binding: z.string(), bucket_name: z.string() })),
 })
 
-function config(worker: string, env: string): Unstable_Config {
+function config(worker: string, env: string) {
   return resourceConfig.parse(unstable_readConfig({
     config: fileURLToPath(new URL(`../cloudflare_workers/${worker}/wrangler.jsonc`, import.meta.url)),
     env,
