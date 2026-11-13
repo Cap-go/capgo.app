@@ -1,7 +1,7 @@
 SET default_transaction_isolation = 'repeatable read';
 BEGIN;
 
-SELECT plan(28);
+SELECT plan(32);
 
 SELECT hasnt_table(
     'public', 'bento_event_dispatches',
@@ -318,6 +318,68 @@ SELECT ok(
         WHERE queue_name LIKE '%bento%'
     ),
     'Bento sync uses the existing send_email queue'
+);
+
+INSERT INTO public.org_users (id, org_id, user_id, rbac_role_name, is_invite)
+VALUES (
+    830002, '83000000-0000-4000-8000-000000000001',
+    tests.get_supabase_uid('bento_sync_unsynced'),
+    public.rbac_role_org_member(), true
+);
+INSERT INTO public.org_invitation_email_requests (org_user_id, invited_by_user_id, sent_at)
+VALUES (
+    830002, tests.get_supabase_uid('bento_sync_actor'),
+    pg_catalog.now()
+);
+UPDATE pg_temp.bento_sync_baseline SET count = pg_temp.all_bento_syncs();
+UPDATE public.org_users SET is_invite = false
+WHERE id = 830002;
+SELECT is(
+    pg_temp.bento_syncs('bento-sync-unsynced@example.com'),
+    1::bigint,
+    'accepting before bento_email is set still queues a field sync'
+);
+
+INSERT INTO public.tmp_users (
+    id, email, org_id, first_name, last_name, invite_magic_string
+)
+VALUES (
+    830005, 'bento-sync-sent-unsynced@example.com',
+    '83000000-0000-4000-8000-000000000001',
+    'Sent', 'Unsynced', 'bento-sync-token-5'
+);
+INSERT INTO public.org_invitation_email_requests (tmp_user_id, invited_by_user_id, sent_at)
+VALUES (
+    830005, tests.get_supabase_uid('bento_sync_actor'),
+    pg_catalog.now()
+);
+UPDATE pg_temp.bento_sync_baseline SET count = pg_temp.all_bento_syncs();
+DELETE FROM public.tmp_users
+WHERE id = 830005;
+SELECT is(
+    pg_temp.bento_syncs('bento-sync-sent-unsynced@example.com'),
+    1::bigint,
+    'deleting a sent tmp invite without bento_email still queues a field sync'
+);
+
+UPDATE public.org_invitation_email_requests
+SET
+    requested_at = pg_catalog.now() - interval '6 minutes',
+    sent_at = pg_catalog.now(),
+    bento_synced_at = NULL,
+    bento_email = NULL
+WHERE tmp_user_id = 830004;
+UPDATE public.tmp_users SET invite_magic_string = 'bento-sync-token-4-pending'
+WHERE id = 830004;
+SELECT is(
+    public.queue_org_invitation_email('new', 830004, tests.get_supabase_uid('bento_sync_actor')),
+    'QUEUED',
+    'a resend of a sent-but-unsynced generation returns queued'
+);
+SELECT is(
+    pg_temp.bento_syncs('bento-sync-resend@example.com'),
+    2::bigint,
+    'a resend of a sent-but-unsynced generation queues a field sync'
 );
 
 SELECT tests.clear_authentication();
