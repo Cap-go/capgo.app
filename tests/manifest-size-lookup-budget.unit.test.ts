@@ -21,7 +21,7 @@ function mockManifestQueueContext(perMessageBudget: number): Context {
   return {
     get: (key: string) => values.get(key),
     set: (key: string, value: unknown) => values.set(key, value),
-  } as Context
+  } as unknown as Context
 }
 
 function transientDiagnosticsForPath(s3Path: string): StorageSizeDiagnostics {
