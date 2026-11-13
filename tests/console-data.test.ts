@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto'
+import type { ConsoleQueryRequest } from '../supabase/functions/_backend/private/console_query_sql.ts'
 import { describe, expect, it } from 'vitest'
-import { getAuthHeaders, getEndpointUrl, USER_EMAIL, USER_ID, USER_ID_NONMEMBER, USER_PASSWORD } from './test-utils'
+import { getAuthHeaders, getAuthHeadersForCredentials, getEndpointUrl, getSupabaseClient, USER_EMAIL, USER_ID, USER_ID_NONMEMBER, USER_PASSWORD } from './test-utils'
 
 interface QueryResponse {
   data: unknown
@@ -17,6 +19,38 @@ async function query(body: unknown, headers: Record<string, string> = {}) {
 }
 
 describe('[POST] /private/console/query', () => {
+  it.concurrent('defaults the first-login profile country and preserves it on later upserts', async () => {
+    const admin = getSupabaseClient()
+    const email = `country-${randomUUID()}@example.com`
+    const password = 'Password123!'
+    const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true })
+    expect(error).toBeNull()
+    const userId = data.user!.id
+    try {
+      const headers = await getAuthHeadersForCredentials(email, password)
+      const payload: ConsoleQueryRequest = {
+        kind: 'table',
+        name: 'users',
+        args: [],
+        operations: [
+          { method: 'insert', args: [{ id: userId, email, country: null }] },
+          { method: 'select', args: ['id, country'] },
+          { method: 'single', args: [] },
+        ],
+      }
+      const inserted = await query(payload, { ...headers, 'cf-ipcountry': 'BR' })
+      const result = await inserted.json() as { error: unknown, data: { id: string, country: string } }
+      expect(result).toMatchObject({ error: null, data: { id: userId, country: process.env.USE_CLOUDFLARE_WORKERS === 'true' ? expect.stringMatching(/^[A-Z]{2}$/) : 'BR' } })
+
+      payload.operations[0] = { method: 'upsert', args: [{ id: userId, email }, { onConflict: 'id' }] }
+      const updated = await query(payload, { ...headers, 'cf-ipcountry': 'US' })
+      expect(await updated.json()).toMatchObject({ error: null, data: { id: userId, country: result.data.country } })
+    }
+    finally {
+      await admin.auth.admin.deleteUser(userId)
+    }
+  })
+
   it('runs an allowlisted table query with the caller session', async () => {
     const response = await query({
       kind: 'table',

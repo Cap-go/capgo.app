@@ -201,7 +201,16 @@ export function sumVersionInstalls(
         return true
       return false
     })
-    .reduce((sum, row) => sum + toStatNumber(row.install), 0)
+    .reduce((sum, row) => {
+      const value = row.install
+      if ((typeof value !== 'number' && typeof value !== 'string')
+        || (typeof value === 'string' && !/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value.trim())))
+        throw new Error('Missing or malformed install count')
+      const count = Number(value)
+      if (!Number.isSafeInteger(count) || count < 0 || !Number.isSafeInteger(sum + count))
+        throw new Error('Invalid install count')
+      return sum + count
+    }, 0)
 }
 
 /** Keep retrying 24h deploy emails while analytics may still be catching up. */
@@ -213,7 +222,7 @@ export function shouldRetryDeployInstallStats(deployedAt: Date, now: Date = new 
 }
 
 export function shouldSendDeployInstallStatsEmail(installs: number): boolean {
-  return installs > 1
+  return Number.isSafeInteger(installs) && installs > 1
 }
 
 export interface DeviceVersionAdoptionSummary {

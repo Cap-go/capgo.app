@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { AppInfos } from './types.ts'
 import { parse, tryParse } from '@std/semver'
 import { CacheHelper } from './cache.ts'
+import { isPluginStateServed } from './pluginStateSwitch.ts'
 import { usesCurrentEncryptionKeyIdFormat } from './plugin_compatibility.ts'
 import { updatesCacheTags } from './updatesEdgeCache.ts'
 import { backgroundTask, fixSemver, isDeprecatedPluginVersion } from './utils.ts'
@@ -51,6 +52,8 @@ export async function getUpdateReadCache(c: Context, key: UpdateReadCacheKey): P
 }
 
 export function setUpdateReadCache(c: Context, key: UpdateReadCacheKey, payload: UpdateReadCachePayload) {
+  if (isPluginStateServed(c))
+    return Promise.resolve()
   return backgroundTask(c, (async () => {
     const ttl = payload.planValidUntil === null
       ? UPDATE_READ_CACHE_TTL_SECONDS

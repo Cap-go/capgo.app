@@ -656,6 +656,27 @@ describe('cloudflare snippet on-prem fallback', () => {
     expect(edgeCachePuts(cache).length).toBeGreaterThan(0)
   })
 
+  it.each([
+    ['on-prem', { error: 'on_premise_app' }],
+    ['plan-upgrade', { error: 'need_plan_upgrade' }],
+    ['stats on-prem', { isOnprem: true }],
+  ])('never learns a KV-sourced %s answer for the DB/control cohort', async (_kind, responseBody) => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(responseBody), {
+      status: 429,
+      headers: { 'X-Plugin-State': 'kv', 'Cache-Control': 'public, max-age=60' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const body = { app_id: 'com.example.canary' }
+    const first = await snippet.fetch(onPremRequest(body))
+    expect(first.status).toBe(429)
+    expect(await first.json()).toEqual(responseBody)
+    expect(edgeCachePuts(cache)).toEqual([])
+    const control = await snippet.fetch(onPremRequest(body))
+    expect(await control.json()).toEqual(responseBody)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(edgeCachePuts(cache)).toEqual([])
+  })
+
   it('returns on-prem from a fallback worker without caching when the primary fails', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       const target = new URL(String(url))
