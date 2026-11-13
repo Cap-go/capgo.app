@@ -80,6 +80,7 @@ BEGIN
     END LOOP;
 
     IF v_sent > 0 THEN
+        -- Same dispatch path as function_queue cron tasks (http_dispatch_post).
         PERFORM public.process_function_queue('cron_email');
     END IF;
 END;
