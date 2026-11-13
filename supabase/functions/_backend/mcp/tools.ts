@@ -1230,11 +1230,10 @@ function simulatorCommandResult(data: unknown): McpToolResult {
   const image = typeof inner.image_base64 === 'string' ? inner.image_base64 : undefined
   const media = typeof inner.image_media_type === 'string' ? inner.image_media_type : 'image/jpeg'
   const { image_base64: _image, image_media_type: _media, ...rest } = inner
-  const structuredContent = { data: rest }
-  const content: McpToolResult['content'] = [{ type: 'text', text: JSON.stringify(structuredContent, null, 1) }]
-  if (image)
-    content.push({ type: 'image', data: image, mimeType: media })
-  return { content, structuredContent }
+  const result = textResult({ data: rest })
+  if (result.isError || !image)
+    return result
+  return { ...result, content: [...result.content, { type: 'image', data: image, mimeType: media }] }
 }
 
 const simulatorTools: McpTool[] = [

@@ -50,11 +50,14 @@ describe('simulator CLI requests', () => {
       data: { id: 'session-1', command: 'snapshot', result: { nodes: 1 } },
     }).text).toBe('{\n  "nodes": 1\n}\n')
     expect(simulatorCommandTextOutput({
-      data: { id: 'session-1', command: 'screenshot', image_base64: 'aW1n' },
+      data: { id: '11111111-1111-4111-8111-111111111111', command: 'screenshot', image_base64: 'aW1n' },
     })).toEqual({
-      text: 'simulator-session-1.jpg\n',
-      screenshot: { name: 'simulator-session-1.jpg', base64: 'aW1n' },
+      text: 'simulator-11111111-1111-4111-8111-111111111111.jpg\n',
+      screenshot: { name: 'simulator-11111111-1111-4111-8111-111111111111.jpg', base64: 'aW1n' },
     })
+    expect(simulatorCommandTextOutput({
+      data: { id: 'cache/shot', command: 'screenshot', image_base64: 'aW1n' },
+    }).screenshot?.name).toBe('simulator-screenshot.jpg')
   })
 
   it('writes a screenshot file and refuses to follow a symlink', () => {

@@ -155,7 +155,8 @@ export function simulatorMcpContent(payload: SimulatorPayload) {
 export function simulatorCommandTextOutput(payload: SimulatorPayload): { text: string, screenshot?: { name: string, base64: string } } {
   const data = payload.data
   if (data?.image_base64) {
-    const name = `simulator-${data.id ?? 'screenshot'}.jpg`
+    const id = typeof data.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.id) ? data.id : 'screenshot'
+    const name = `simulator-${id}.jpg`
     return { text: `${name}\n`, screenshot: { name, base64: data.image_base64 } }
   }
   if (data?.result !== undefined)

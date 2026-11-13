@@ -564,7 +564,7 @@ export async function commandSimulator(c: Context, sessionId: string, body: Simu
     signal: AbortSignal.timeout(SIMULATOR_HOST_TIMEOUT_MS),
   })
   const payload = await response.json().catch(() => undefined) as { result?: { data?: unknown }, error?: { message?: string } } | undefined
-  if (!response.ok || payload?.error) {
+  if (!response.ok || !payload || payload.error || !('result' in payload)) {
     throw quickError(502, 'simulator_unavailable', payload?.error?.message || `Simulator request failed (${response.status})`, { app_id: appId }, undefined, { alert: false })
   }
   let image: string | undefined
