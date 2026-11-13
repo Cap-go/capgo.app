@@ -73,6 +73,7 @@ describe('org invitation Bento close sync', () => {
       `,
       [tmpUserId],
     )
+    await setServiceRoleClaim(client.query.bind(client))
     const before = await bentoSyncCount(client, email)
     await client.query(
       `UPDATE public.tmp_users SET cancelled_at = pg_catalog.now() WHERE id = $1`,

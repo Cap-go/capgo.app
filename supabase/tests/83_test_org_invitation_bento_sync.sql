@@ -365,8 +365,6 @@ SET
     bento_synced_at = NULL,
     bento_email = NULL
 WHERE tmp_user_id = 830004;
-UPDATE public.tmp_users SET invite_magic_string = 'bento-sync-token-4-pending'
-WHERE id = 830004;
 SELECT is(
     public.queue_org_invitation_email('new', 830004, tests.get_supabase_uid('bento_sync_actor')),
     'QUEUED',
