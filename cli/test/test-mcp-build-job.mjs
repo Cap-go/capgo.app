@@ -55,13 +55,15 @@ function makeDeps(overrides = {}) {
     clearedPaths: [],
     cloudCancelled: [],
     lastChild: null,
+    lastSpawnArgs: null,
     clock: 0,
   }
   const deps = {
-    spawnBuild: () => {
+    spawnBuild: (spawnArgs) => {
       state.spawnCount++
       const c = makeChild()
       state.lastChild = c
+      state.lastSpawnArgs = spawnArgs
       return c
     },
     buildRecordPath: (appId, platform) => `/rec/${platform}/${appId}.json`,
@@ -153,6 +155,28 @@ await test('wait returns failed when the child exits without writing a record', 
   const r = await waitBuild(deps, { jobId: r0.jobId, timeoutSeconds: 5 })
   eq(r.status, 'failed')
   ok(/exited/i.test(r.error || ''), 'reports the silent crash as failed')
+})
+
+await test('spawn start error surfaces in status, logs fallback, and log file text', async () => {
+  const failMsg = '[capgo] Failed to start build process: ENOENT spawn npx ENOENT'
+  const { deps, state } = makeDeps({
+    spawnBuild: ({ onProcessFailure, logPath }) => {
+      state.spawnCount++
+      state.log = `[capgo] Starting cloud build: npx … (cwd /proj)\n${failMsg}\n`
+      queueMicrotask(() => onProcessFailure?.(failMsg))
+      const exited = Promise.resolve(null)
+      return { pid: -1, kill() {}, exited }
+    },
+    readLogSlice: async (_p, cursor) => ({ text: state.log.slice(cursor), nextCursor: state.log.length, eof: true }),
+  })
+  const r0 = await startBuild(deps, { appId: 'com.acme.app', platform: 'android' })
+  await flush()
+  const waited = await waitBuild(deps, { jobId: r0.jobId, timeoutSeconds: 1 })
+  eq(waited.status, 'failed')
+  eq(waited.error, failMsg)
+  const logs = await buildLogs(deps, { jobId: r0.jobId, cursor: 0 })
+  ok(logs.text.includes('Failed to start build process'), 'log slice carries spawn failure text')
+  ok(/Failed to start build process/.test(logs.text))
 })
 
 await test('logs drain by cursor; eof only once the build is terminal', async () => {
