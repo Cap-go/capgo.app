@@ -213,7 +213,9 @@ describe('hosted MCP protocol', () => {
       method: 'tools/call',
       params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
     }, ctx)
-    const body = JSON.parse((response?.result as { content: Array<{ text: string }> }).content[0].text)
+    if (!response)
+      throw new Error('Build status tool did not return a JSON-RPC response')
+    const body = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text)
     expect(response?.error).toBeUndefined()
     expect(body).toMatchObject({ job_id: 'job-1', status: 'running', persisted: false })
     expect(calls.filter(call => call.path === '/build/status')).toHaveLength(0)
@@ -264,7 +266,9 @@ describe('hosted MCP protocol', () => {
       params: { name: 'capgo_list_bundles', arguments: { appId: 'com.example.app', version: '1.0.0' } },
     }, ctx)
     expect(calls).toEqual([{ method: 'GET', path: '/bundle', query: { app_id: 'com.example.app', version: '1.0.0' } }])
-    const text = (response?.result as { content: { text: string }[] }).content[0].text
+    if (!response)
+      throw new Error('Bundle lookup tool did not return a JSON-RPC response')
+    const text = (response.result as { content: { text: string }[] }).content[0].text
     expect(text).toContain('@capacitor/camera')
     expect(text).toContain('index.html')
   })

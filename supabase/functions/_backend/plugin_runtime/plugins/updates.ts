@@ -65,7 +65,7 @@ app.post('/manifest_size', async (c) => {
     return simpleRateLimit({ app_id: body.app_id })
 
   const parsedBody = parsePluginBody<AppInfos>(c, body, updateRequestSchema)
-  const size = await getManifestDownloadSize(c, parsedBody.app_id, typeof body.version === 'string' ? body.version : undefined, parseManifestSizeVersionId(body.version_id), files)
+  const size = await getManifestDownloadSize(c, parsedBody.app_id, typeof body.version === 'string' ? body.version : undefined, parseManifestSizeVersionId(body.version_id), files, parsedBody.device_id)
   return c.json(size)
 })
 

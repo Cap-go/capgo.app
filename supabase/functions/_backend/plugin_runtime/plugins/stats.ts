@@ -16,6 +16,8 @@ import { createStatsMau, createStatsVersion, onPremStats, sendStatsAndDevice } f
 import { statsRequestSchema } from '../utils/plugin_validation.ts'
 import { countsAsBundleFailure } from '../utils/legacyDownloadFail.ts'
 import { getAppOwnerWithEdgeCache, getAppVersionWithEdgeCache } from '../utils/pluginEdgeCacheReads.ts'
+import { abandonPluginStateRequest, createPluginStateDatabase, isPluginStateMiss, PluginStateMiss, markPluginStateResponse, startPluginStateRequest } from '../utils/pluginState.ts'
+import { MAX_PLUGIN_STATE_DOCUMENTS } from '../utils/pluginStateReadBudget.ts'
 import { getClientIP } from '../utils/rate_limit.ts'
 import { onPremiseAppResponse } from '../utils/rateLimitInfo.ts'
 import { getSnippetEdgeAnswerBps, getSnippetEdgeReplay, setSnippetStatsFill } from '../utils/snippetEdgeAnswer.ts'
@@ -383,6 +385,14 @@ app.post('/', async (c) => {
   // One decision per request: a batch follows its first event's device. A
   // request without a device id keeps the live path (no per-device bucket).
   const firstDeviceId = (firstEvent as AppStats).device_id
+  const pluginState = typeof firstDeviceId === 'string' && firstDeviceId !== ''
+    ? await startPluginStateRequest(c, firstAppId, firstDeviceId)
+    : null
+  if (pluginState) {
+    const stateResponse = await statsWithPluginState(c, pluginState, events, isBatch, appStatus, appStatusByAppId, requestIp)
+    if (stateResponse)
+      return stateResponse
+  }
   // A replay has no device waiting on it: it always takes the cached reads,
   // so most replayed events open no database connection.
   if ((getSnippetEdgeReplay(c) && isUpdatesEdgeCacheEnabled(c))
@@ -402,6 +412,65 @@ app.post('/', async (c) => {
       await closeClient(c, pgClient)
   }
 })
+
+/**
+ * /stats answered from the KV plugin state (pluginState.ts): every query of
+ * processStatsEvents is answered by the session. Null when a key it needs
+ * is not synced yet (the caller then uses the database).
+ */
+async function statsWithPluginState(
+  c: Context,
+  pluginState: NonNullable<Awaited<ReturnType<typeof startPluginStateRequest>>>,
+  events: AppStats[],
+  isBatch: boolean,
+  appStatus: AppStatusResult,
+  appStatusByAppId: Map<string, AppStatusResult>,
+  requestIp: string,
+) {
+  const { drizzle, lazy } = createPluginStateDatabase(c, pluginState)
+  try {
+    // Resolve all network-dependent reads before recording any event. Retrying
+    // a partially recorded batch via the replica would otherwise count it twice.
+    const versions = new Set<string>()
+    const devices = new Set<string>()
+    for (const event of events) {
+      let parsed: AppStats
+      try {
+        parsed = parsePluginBody<AppStats>(c, event, statsRequestSchema)
+      }
+      catch {
+        // processStatsEvents preserves the existing per-event validation response.
+        continue
+      }
+      const version = parsed.version_name.split(':', 1)[0]
+      if (!isInternalVersionName(version))
+        versions.add(version)
+      if (parsed.old_version_name)
+        versions.add(parsed.old_version_name)
+      if (parsed.device_id && Number(pluginState.doc.owner?.channel_device_count) > 0)
+        devices.add(parsed.device_id)
+    }
+    const deviceDocuments = pluginState.doc.overrides === null ? devices.size : 0
+    if (versions.size + deviceDocuments + 1 > MAX_PLUGIN_STATE_DOCUMENTS)
+      throw new PluginStateMiss('stats batch exceeds document budget')
+    await Promise.all([
+      ...[...versions].map(name => pluginState.versionByName(name)),
+      ...[...devices].map(id => pluginState.overrideChannelId(id)),
+    ])
+    const response = await processStatsEvents(c, drizzle, events, isBatch, appStatus, appStatusByAppId, requestIp, false)
+    markPluginStateResponse(response, lazy.isConnected() ? 'kv-escaped' : 'kv')
+    return response
+  }
+  catch (error) {
+    if (!isPluginStateMiss(error))
+      throw error
+    abandonPluginStateRequest(c)
+    return null
+  }
+  finally {
+    await lazy.close()
+  }
+}
 
 /**
  * /stats with the edge cache on (same UPDATES_EDGE_CACHE gate and device
@@ -531,6 +600,8 @@ async function processStatsEvents(
       }
     }
     catch (e) {
+      if (isPluginStateMiss(e))
+        throw e
       const err = e as Error & { cause?: { error?: string } }
       results.push({
         status: 'error',
