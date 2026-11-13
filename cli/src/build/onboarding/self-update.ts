@@ -1,5 +1,5 @@
 import type { PackageManagerType } from '@capgo/find-package-manager'
-import { spawnSync } from 'node:child_process'
+import { spawnCommandSync } from '../../init/command-execution.js'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { constants as osConstants } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -264,7 +264,7 @@ export function runUpdateAndReexec(latest: string): void {
 
     log.info(`Updating @capgo/cli to ${latest} via ${pm} install…`)
     const install = buildInstallCommand(pm)
-    const installResult = spawnSync(install.cmd, install.args, { stdio: 'inherit', cwd: strategy.installRoot, env: childEnv })
+    const installResult = spawnCommandSync(install.cmd, install.args, { stdio: 'inherit', cwd: strategy.installRoot, env: childEnv })
     // A spawn error, a signal-kill (status null + signal set), OR a non-zero
     // exit all count as failure — a signal-interrupted install must NOT slip
     // through to a re-exec against a half-updated tree. On any failure, restore
@@ -287,7 +287,7 @@ export function runUpdateAndReexec(latest: string): void {
     // Re-exec the freshly-installed binary with the SAME node/bun runtime and
     // the original cwd, so onboarding stays pointed at the right app and
     // resumes from the persisted step.
-    const child = spawnSync(process.execPath, [updatedEntry, ...forwardArgs], { stdio: 'inherit', cwd, env: childEnv })
+    const child = spawnCommandSync(process.execPath, [updatedEntry, ...forwardArgs], { stdio: 'inherit', cwd, env: childEnv })
     if (child.error)
       throw child.error
     exitMirroringChild(child)
@@ -296,7 +296,7 @@ export function runUpdateAndReexec(latest: string): void {
   // Ephemeral: nothing on disk to mutate — re-run via the runner with @latest.
   log.info(`Fetching @capgo/cli@${latest}…`)
   const reexec = buildEphemeralReexec(pm, forwardArgs)
-  const child = spawnSync(reexec.cmd, reexec.args, { stdio: 'inherit', cwd, env: childEnv })
+  const child = spawnCommandSync(reexec.cmd, reexec.args, { stdio: 'inherit', cwd, env: childEnv })
   if (child.error)
     throw child.error
   exitMirroringChild(child)
