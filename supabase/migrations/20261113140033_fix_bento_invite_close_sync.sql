@@ -203,7 +203,6 @@ DECLARE
     v_role_id uuid;
     v_rbac_role_name text;
     v_inviter_id uuid;
-    v_finalize_rows integer;
 BEGIN
     SELECT tmp_users.org_id
     INTO v_org_id
@@ -330,7 +329,7 @@ BEGIN
             AND org_users.channel_id IS NULL
             AND org_users.is_invite IS FALSE
     ) THEN
-        RETURN 'MEMBERSHIP_NOT_FINALIZED';
+        RAISE EXCEPTION 'MEMBERSHIP_NOT_FINALIZED';
     END IF;
 
     DELETE FROM public.tmp_users
