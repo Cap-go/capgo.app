@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawnCommandSync } from '../init/command-execution'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { version as nodeVersion } from 'node:process'
@@ -246,7 +246,7 @@ export function runOutdatedDependencyUpdates(
     throw new Error('Cannot determine package manager install command')
 
   const specs = packages.map(dep => `${dep.name}@latest`)
-  const result = spawnSync(command, [...baseArgs, ...specs], {
+  const result = spawnCommandSync(command, [...baseArgs, ...specs], {
     stdio: 'pipe',
     cwd: projectRoot,
   })

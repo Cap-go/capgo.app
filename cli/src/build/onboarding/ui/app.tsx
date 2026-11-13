@@ -14,7 +14,7 @@ import type { AiResultKind } from './components.js'
 import type { NoMatchReason } from './steps/ios-import.js'
 import type { OnboardingBeforeExit } from './exit.js'
 import { Buffer } from 'node:buffer'
-import { spawn } from 'node:child_process'
+import { spawnCommand } from '../../../init/command-execution.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -309,7 +309,7 @@ async function runRunnerCommand(runner: string, args: string[]): Promise<{ succe
   }
 
   return new Promise((resolve) => {
-    const child = spawn(command, [...runnerArgs, ...args], {
+    const child = spawnCommand(command, [...runnerArgs, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const output: string[] = []

@@ -27,7 +27,8 @@ import { formatRunnerCommand } from '../../runner-command.js'
 import { checkIosSimulatorCompatibility, formatIosSimulatorGuidance } from '../../run/ios-compatibility.js'
 import { addChannelInternal } from '../../channel/add.js'
 import { uploadBundleInternal } from '../../bundle/upload.js'
-import { execSync, spawnSync } from 'node:child_process'
+import { execSync } from 'node:child_process'
+import { spawnCommandSync } from '../command-execution.js'
 import type { NextStepResult, Platform } from './contract.js'
 import { renderResult } from './contract.js'
 import type { EngineDeps } from './engine.js'
@@ -163,9 +164,13 @@ export function buildDeps(
           const resolved = await resolveCompatibleUpdaterInstall(packageJsonPath, pm)
           if (!resolved.ok)
             throw new Error(resolved.error)
-          const install = spawnSync(pm.pm, ['add', `@capgo/capacitor-updater@${resolved.version}`], { cwd: projectDir, stdio: 'pipe' })
-          if (install.status !== 0)
-            throw new Error(install.stderr?.toString() || 'Package install failed')
+          const install = spawnCommandSync(pm.pm, ['add', `@capgo/capacitor-updater@${resolved.version}`], { cwd: projectDir, stdio: 'pipe' })
+          if (install.error)
+            throw install.error
+          if (install.status !== 0) {
+            const stderr = install.stderr?.toString().trim()
+            throw new Error(stderr || `Package install failed with code ${install.status ?? 'unknown'}`)
+          }
         }
         const delta = false
         await updateConfigUpdater(getInitUpdaterPluginConfig(appId, delta))

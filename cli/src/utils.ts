@@ -9,7 +9,6 @@ import type { CapacitorConfig, ExtConfigPairs } from './config'
 import type { Compatibility, CompatibilityDetails, IncompatibilityReason, NativePackage } from './schemas/common'
 import type { Organization } from './types/api'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir, platform as osPlatform } from 'node:os'
 import path, { dirname, join, relative, resolve, sep } from 'node:path'
@@ -22,6 +21,7 @@ import { isCI } from 'ci-info'
 // Native fetch is available in Node.js >= 18
 import prettyjson from 'prettyjson'
 import * as tus from 'tus-js-client'
+import { runPackageRunner, waitForCommandResult } from './init/command-execution'
 import { buildCliRequestHeaders, validateCliRequestHeaderValue } from './analytics/cli-headers'
 import { getGlobalAnalyticsProps } from './analytics/global-props'
 import { createTimedFetch, isApiInstrumentationEnabled } from './analytics/api-perf'
@@ -3160,22 +3160,10 @@ export async function promptAndSyncCapacitor(
     let syncError: unknown
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn(pm.runner, ['cap', 'sync'], { stdio: 'pipe' })
-
-        child.on('close', (code) => {
-          if (code === 0) {
-            resolve()
-          }
-          else {
-            reject(new Error(`Command failed with exit code ${code}`))
-          }
-        })
-
-        child.on('error', (error) => {
-          reject(error)
-        })
-      })
+      const child = runPackageRunner(pm.runner, ['cap', 'sync'], { stdio: 'pipe' })
+      const result = await waitForCommandResult(child)
+      if (!result.success)
+        throw result.error ?? new Error('Capacitor sync failed')
     }
     catch (error) {
       syncError = error
