@@ -5,7 +5,7 @@ import { cloudlogErr } from '../../utils/logging.ts'
 import type { PgQueryClient } from '../../utils/pg.ts'
 import { beginWriteTransaction, checkoutPgClient, closeClient, getPgClient, releasePgClient } from '../../utils/pg.ts'
 import { recordBuildTime } from '../../utils/supabase.ts'
-import { getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
+import { backgroundTask, getEnv, trimTrailingSlashes } from '../../utils/utils.ts'
 import { reserveSimulatorSlot } from './concurrency.ts'
 import { savedOutputsForJobs } from './outputs.ts'
 import { ensureBuildPermission, ensureBuildTimePlanAllowed, getBuildOwnerOrg } from './request.ts'
@@ -34,6 +34,19 @@ const SIMULATOR_SCREENSHOT_MAX_BYTES = 1_500_000
 export function simulatorDeviceUrl(sessionUrl: string, path: string): string {
   const base = sessionUrl.endsWith('/') ? sessionUrl : `${sessionUrl}/`
   return new URL(path.replace(/^\//, ''), base).href
+}
+
+async function wakeSimulatorDevice(sessionUrl: string, accessKey: string) {
+  try {
+    const response = await fetch(simulatorDeviceUrl(sessionUrl, 'api/status'), {
+      headers: { Authorization: `Bearer ${accessKey}` },
+      signal: AbortSignal.timeout(120_000),
+    })
+    await response.body?.cancel()
+  }
+  catch {
+    // The container keeps booting after the request that started it.
+  }
 }
 
 export function simulatorCommandRpc(input: { command: string, x?: number, y?: number, bundleId?: string }) {
@@ -440,6 +453,8 @@ export async function startSimulator(c: Context, body: SimulatorBody, userId: st
       emulatorId = created.data.id
     const device = openedSimulator(created.data)
     await markSession(c, slot.id, 'in-progress', { url: device.url, emulatorId: device.id })
+    if (platform === 'ios')
+      await backgroundTask(c, wakeSimulatorDevice(device.url, accessKey))
     const installError = await savedBuildInstallError({ c, principal, appId, ownerOrg: orgId, jobId: body.build_job_id, platform, sessionUrl: device.url, accessKey })
     return c.json({
       data: {
