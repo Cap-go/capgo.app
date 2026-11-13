@@ -67,10 +67,11 @@ describe('org invitation Bento close sync', () => {
     const tmpUserId = invite.rows[0]!.id
     await client.query(
       `
-        INSERT INTO public.org_invitation_email_requests (tmp_user_id, invited_by_user_id, sent_at)
-        VALUES ($1, $2::uuid, pg_catalog.now())
+        UPDATE public.org_invitation_email_requests
+        SET sent_at = pg_catalog.now(), bento_email = NULL
+        WHERE tmp_user_id = $1
       `,
-      [tmpUserId, USER_ID],
+      [tmpUserId],
     )
     const before = await bentoSyncCount(client, email)
     await client.query(
@@ -99,10 +100,11 @@ describe('org invitation Bento close sync', () => {
     const tmpUserId = invite.rows[0]!.id
     await client.query(
       `
-        INSERT INTO public.org_invitation_email_requests (tmp_user_id, invited_by_user_id, sent_at)
-        VALUES ($1, $2::uuid, pg_catalog.now())
+        UPDATE public.org_invitation_email_requests
+        SET sent_at = pg_catalog.now(), bento_email = NULL
+        WHERE tmp_user_id = $1
       `,
-      [tmpUserId, USER_ID],
+      [tmpUserId],
     )
     await client.query('SAVEPOINT accept_tmp_invite')
     const accept = await client.query<{ status: string }>(

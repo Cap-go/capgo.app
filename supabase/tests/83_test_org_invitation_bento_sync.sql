@@ -326,11 +326,9 @@ VALUES (
     tests.get_supabase_uid('bento_sync_unsynced'),
     public.rbac_role_org_member(), true
 );
-INSERT INTO public.org_invitation_email_requests (org_user_id, invited_by_user_id, sent_at)
-VALUES (
-    830002, tests.get_supabase_uid('bento_sync_actor'),
-    pg_catalog.now()
-);
+UPDATE public.org_invitation_email_requests
+SET sent_at = pg_catalog.now(), bento_email = NULL
+WHERE org_user_id = 830002;
 UPDATE pg_temp.bento_sync_baseline SET count = pg_temp.all_bento_syncs();
 UPDATE public.org_users SET is_invite = false
 WHERE id = 830002;
@@ -348,11 +346,9 @@ VALUES (
     '83000000-0000-4000-8000-000000000001',
     'Sent', 'Unsynced', 'bento-sync-token-5'
 );
-INSERT INTO public.org_invitation_email_requests (tmp_user_id, invited_by_user_id, sent_at)
-VALUES (
-    830005, tests.get_supabase_uid('bento_sync_actor'),
-    pg_catalog.now()
-);
+UPDATE public.org_invitation_email_requests
+SET sent_at = pg_catalog.now(), bento_email = NULL
+WHERE tmp_user_id = 830005;
 UPDATE pg_temp.bento_sync_baseline SET count = pg_temp.all_bento_syncs();
 DELETE FROM public.tmp_users
 WHERE id = 830005;
