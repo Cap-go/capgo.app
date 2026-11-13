@@ -1730,7 +1730,7 @@ jobs:
       - name: Run published CLI contract unit checks
         run: bunx vitest run tests/published-cli-rpc-contract.unit.test.ts
       - name: Run published CLI contract against PR schema
-        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/published-cli-rpc-contract.test.ts --no-file-parallelism --maxWorkers=1 --hookTimeout=120000
+        run: bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/published-cli-rpc-contract.test.ts --no-file-parallelism --maxWorkers=1
       - name: Show published CLI Edge server logs after failure
         if: failure() && steps.bootstrap_published_cli_edge_server.outputs.log_path != ''
         run: |

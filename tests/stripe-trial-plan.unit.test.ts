@@ -534,7 +534,7 @@ describe('sync pending trial plan schedule with trial end', () => {
     vi.setSystemTime(fixedNow)
     adminRows.override = (text: string) => {
       if (text.includes('SELECT trial_at FROM public.stripe_info'))
-        return [{ trial_at: newTrialAt }]
+        return [{ row: { trial_at: newTrialAt } }]
       return []
     }
   })
@@ -559,7 +559,7 @@ describe('sync pending trial plan schedule with trial end', () => {
     const list = vi.fn(async () => ({ data: [pendingSchedule()], has_more: false }))
     const stripe = { subscriptionSchedules: { list, update } } as unknown as Stripe
     stripeClientMock.stripe = stripe
-    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('updated')
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('updated')
     expect(update).toHaveBeenCalledWith('sub_sched_trial', {
       phases: [{
         items: [{ price: 'price_solo_m', quantity: 1 }],
@@ -593,7 +593,7 @@ describe('sync pending trial plan schedule with trial end', () => {
     })
     const stripe = { subscriptionSchedules: { list, update } } as unknown as Stripe
     stripeClientMock.stripe = stripe
-    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('failed')
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('failed')
     expect(update).toHaveBeenCalled()
   })
 
@@ -602,19 +602,37 @@ describe('sync pending trial plan schedule with trial end', () => {
     const update = vi.fn()
     const stripe = { subscriptionSchedules: { list, update } } as unknown as Stripe
     stripeClientMock.stripe = stripe
-    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('unchanged')
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('unchanged')
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('cancels the pending schedule when the trial end is missing or past', async () => {
-    adminRows.override = null
+  it('cancels the pending schedule when stripe_info.trial_at is missing or past', async () => {
     const cancel = vi.fn(async (id: string) => ({ id }))
     const list = vi.fn(async () => ({ data: [pendingSchedule()], has_more: false }))
     const stripe = { subscriptionSchedules: { list, cancel } } as unknown as Stripe
     stripeClientMock.stripe = stripe
-    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', null)).toBe('canceled')
-    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', '2020-01-01T00:00:00.000Z')).toBe('canceled')
+    adminRows.override = (text: string) => {
+      if (text.includes('SELECT trial_at FROM public.stripe_info'))
+        return [{ row: { trial_at: null } }]
+      return []
+    }
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('canceled')
+    adminRows.override = (text: string) => {
+      if (text.includes('SELECT trial_at FROM public.stripe_info'))
+        return [{ row: { trial_at: '2020-01-01T00:00:00.000Z' } }]
+      return []
+    }
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('canceled')
     expect(cancel).toHaveBeenCalledWith('sub_sched_trial')
+  })
+
+  it('ignores a stale queue trialAt when stripe_info still has a future trial end', async () => {
+    const update = vi.fn(async () => pendingSchedule(newStartUnix))
+    const list = vi.fn(async () => ({ data: [pendingSchedule()], has_more: false }))
+    const stripe = { subscriptionSchedules: { list, update } } as unknown as Stripe
+    stripeClientMock.stripe = stripe
+    await syncTrialPlanScheduleForCustomer(context, 'cus_1', '2020-01-01T00:00:00.000Z')
+    expect(update).toHaveBeenCalled()
   })
 
   it('cancels duplicate pending schedules when the start already matches the trial end', async () => {
@@ -628,7 +646,7 @@ describe('sync pending trial plan schedule with trial end', () => {
     const update = vi.fn()
     const stripe = { subscriptionSchedules: { list, update, cancel } } as unknown as Stripe
     stripeClientMock.stripe = stripe
-    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('unchanged')
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('unchanged')
     expect(update).not.toHaveBeenCalled()
     expect(cancel).toHaveBeenCalledWith('sub_sched_dup')
   })
@@ -644,7 +662,7 @@ describe('sync pending trial plan schedule with trial end', () => {
     const list = vi.fn(async () => ({ data: [pendingSchedule(), duplicate], has_more: false }))
     const stripe = { subscriptionSchedules: { list, update, cancel } } as unknown as Stripe
     stripeClientMock.stripe = stripe
-    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1', newTrialAt)).toBe('updated')
+    expect(await syncPendingTrialPlanScheduleWithTrialAt(context, stripe, 'cus_1')).toBe('updated')
     expect(update).toHaveBeenCalled()
     expect(cancel).toHaveBeenCalledWith('sub_sched_dup')
     expect(cancel).not.toHaveBeenCalledWith('sub_sched_trial')

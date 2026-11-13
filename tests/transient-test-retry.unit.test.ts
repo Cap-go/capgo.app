@@ -7,7 +7,6 @@ describe('transient integration test retry classifier', () => {
     ['FAIL tests/example.test.ts > example\nError: Your worker restarted mid-request', 'workerd_restart'],
     ['FAIL tests/example.test.ts > example\nAssertionError: expected 502 to be 200 // Object.is equality', 'gateway_502_503'],
     ['FAIL tests/example.test.ts > example\nAssertionError: expected 503 to be 204 // Object.is equality', 'gateway_502_503'],
-    ['FAIL tests/published-cli-rpc-contract.test.ts > cRITICAL published CLI RPC contract\nError: Hook timed out in 30000ms.', 'hook_timeout'],
   ] as const)('retries %s', (output, expected) => {
     expect(getTransientTestFailure(output)).toBe(expected)
   })
