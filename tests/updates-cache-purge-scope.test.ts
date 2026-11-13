@@ -7,19 +7,19 @@ import { getPostgresClient, resetAndSeedAppData, resetAppData } from './test-uti
  * Purge scopes of the plugin edge cache queue (updates_cache_purge_pending):
  * bundle-name lookups (versions tag) are purged on any app_versions identity
  * change, the app's main tag keeps its channel-served gate. Every scenario
- * runs in its own rolled-back transaction with the Vault switch on.
+ * runs in its own rolled-back transaction with the purge switch on.
  */
 
 const APP_ID = `com.test.edgecachescope.${randomUUID().slice(0, 8)}`
 let client: PoolClient
 
-/** Sets the Vault switch inside the current transaction (it may already exist locally). */
+/** Sets the purge switch inside the current transaction (it may already exist locally). */
 async function setPurgeSwitch(value: 'true' | 'false') {
-  const { rows } = await client.query<{ id: string }>(`SELECT id FROM vault.secrets WHERE name = 'CAPGO_UPDATES_CACHE_PURGE_ENABLED'`)
-  if (rows[0])
-    await client.query('SELECT vault.update_secret($1, $2)', [rows[0].id, value])
-  else
-    await client.query(`SELECT vault.create_secret($1, 'CAPGO_UPDATES_CACHE_PURGE_ENABLED', 'purge scope test')`, [value])
+  await client.query(
+    `INSERT INTO private.settings (name, value) VALUES ('CAPGO_UPDATES_CACHE_PURGE_ENABLED', $1)
+     ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`,
+    [value],
+  )
 }
 
 async function inTransaction(run: () => Promise<void>, purgeSwitch: 'true' | 'false' = 'true') {
@@ -151,7 +151,7 @@ describe('updates cache purge scopes', () => {
     })
   })
 
-  it('queues nothing while the Vault switch is off', async () => {
+  it('queues nothing while the purge switch is off', async () => {
     await inTransaction(async () => {
       await clearPending()
       await insertBundle('9.9.6-scope')

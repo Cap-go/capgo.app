@@ -569,10 +569,13 @@ Then in your test file, use ONLY these dedicated resources for modifications.
   process_all_cron_tasks function in a new migration file to add your job if
   needed.
 - For runtime feature flags and security-related toggles, use runtime config from
-  Vault-backed settings and avoid mutable singleton tables in application code.
+  `private.settings` (postgres-only table, replaced Supabase Vault) and avoid
+  mutable singleton tables in application code.
 - Do not store environment-driven behavior in singleton tables.
-- Use Vault-backed configuration values as the source of truth and runtime
-  environment values only for deployment-time overrides.
+- Use `private.settings` configuration values as the source of truth and runtime
+  environment values only for deployment-time overrides. Read them only through
+  `SECURITY DEFINER` functions; never grant the table or the `private` schema to
+  `anon`, `authenticated` or `service_role`.
 - Never use the Supabase admin SDK (with service key) for user-facing APIs.
   Always use the client SDK with user authentication so RLS policies are
   enforced. The admin SDK should only be used when accessing data that is not
@@ -732,8 +735,9 @@ Platform admin is **NOT** a general-purpose superuser capability.
 - Never use platform admin as a shortcut around normal auth/RLS for mutating
   APIs. If an action could cause privilege elevation, do not expose it behind
   platform admin.
-- Platform admins are defined from runtime Vault-backed configuration, not from
-  mutable database state.
+- Platform admins are defined from the `admin_users` runtime setting in
+  `private.settings` (writable by the `postgres` role only), not from
+  application-writable database state.
 - There must be no API, UI, or database path to grant/revoke platform admin
   dynamically. The only supported way to change platform admins is to publish a
   new runtime version with updated environment configuration.

@@ -25,7 +25,7 @@ beforeEach(() => {
 describe('standalone plugin state benchmark prerequisites', () => {
   it.each([false, undefined])('fails before creating fixtures when sync is not enabled (%s)', async (enabled) => {
     provider.query.mockResolvedValue(enabled === undefined ? [] : [{ enabled }])
-    await expect(runPluginStateBenchmark(5)).rejects.toThrow('CAPGO_PLUGIN_STATE_SYNC_ENABLED in local Vault')
+    await expect(runPluginStateBenchmark(5)).rejects.toThrow('CAPGO_PLUGIN_STATE_SYNC_ENABLED in local private.settings')
     expect(provider.query).toHaveBeenCalledExactlyOnceWith('SELECT public.plugin_state_sync_enabled() AS enabled')
     expect(provider.seed).not.toHaveBeenCalled()
   })
