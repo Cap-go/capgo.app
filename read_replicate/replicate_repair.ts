@@ -343,7 +343,7 @@ async function repairTable(table: string, apply: boolean) {
 
 async function main() {
   const apply = process.argv.includes('--apply')
-  const replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL')
+  const replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL', true)
   try {
     const requested = list(arg('--tables'))
     const skip = new Set(arg('--skip') === undefined ? DEFAULT_SKIP : list(arg('--skip')))
