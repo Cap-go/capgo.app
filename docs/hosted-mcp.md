@@ -25,7 +25,7 @@ The card, `server/discover` and legacy `initialize` share the server identity `a
 
 ## Skills
 
-The hosted server publishes seven public workflow guides from this repository: `check-update-health`, `ship-live-update`, `native-builds`, `observe`, `organization-management`, `release-management` and `usage`.
+The hosted server advertises five workflow skills: `check-update-health`, `ship-live-update`, `native-builds`, `organization-management` and `usage`. The detailed `observe` and `release-management` guides remain readable resources, without adding names to the skill discovery catalog.
 
 For clients using ordinary MCP tools:
 
@@ -38,7 +38,7 @@ Both tools return text and matching structured content with an output schema. Th
 
 For MCP `2026-07-28` clients, `server/discover` declares `resources` and the beta [`io.modelcontextprotocol/skills` extension](https://skills.extensions.modelcontextprotocol.io/specification/beta/skills):
 
-- `skills/list` returns all seven entries in one page, without file contents. Each entry contains the original YAML frontmatter as JSON and a complete manifest of file URIs, byte sizes and SHA-256 digests.
+- `skills/list` returns the five discoverable entries in one page, without file contents. Each entry contains the original YAML frontmatter as JSON and a complete manifest of file URIs, byte sizes and SHA-256 digests.
 - `skills/get` retrieves one entry using its `SKILL.md` URI.
 - `resources/read` retrieves the exact file content. For example, `skill://capgo/ship-live-update/SKILL.md`.
 - `resources/directory/read` is not implemented or advertised; clients can navigate the complete manifest instead.
@@ -95,7 +95,7 @@ Tool wrappers for clients without protocol support: `capgo_list_event_types`, `c
 
 ## Tools
 
-The hosted server has 77 tools. They cover:
+The hosted tools cover:
 - account and organizations, including members, audit logs and API keys,
 - apps,
 - bundles,
@@ -103,6 +103,7 @@ The hosted server has 77 tools. They cover:
 - devices and channel overrides,
 - statistics and Observe,
 - build status, logs and cancel,
+- cloud simulator sessions and commands,
 - webhooks,
 - push notifications,
 - documentation search and skill discovery.
@@ -114,6 +115,12 @@ Tool annotations tell clients how careful to be:
 - `destructiveHint` marks tools that delete, cancel or overwrite data (channel deploys, rollouts, settings updates). Clients should ask the user for confirmation before calling them.
 
 Code: `supabase/functions/_backend/mcp/` (transport, protocol, tools and OAuth) and `supabase/functions/_backend/private/mcp_oauth.ts` (consent API). The console page is `src/pages/oauth/authorize.vue`.
+
+### Signing credentials
+
+`capgo_prepare_build_credentials_upload` accepts only an app ID, platform and optional mode. Confirm these choices with the user before calling it. It requires `app.update_settings` and returns a single-use signed upload URL valid for 10 minutes. Preparing the URL does not read a local file or change stored credential values.
+
+The separate upload sends a user-prepared JSON file directly to Capgo, where credentials are encrypted at rest. `replace` is the default and removes stored keys absent from the uploaded file; `merge` preserves those keys. Permissions are checked again when the file is uploaded. Keep signing secrets out of chat and MCP arguments, keep the signed URL private, and leave local files under the user's control. If the client cannot transfer a local file, the user can run `npx @capgo/cli@latest build credentials push` from their project. Preparing or reading MCP metadata does not enable credential collection.
 
 ## ChatGPT / Codex plugin
 

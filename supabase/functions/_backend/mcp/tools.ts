@@ -1354,12 +1354,11 @@ const buildTools: McpTool[] = [
     name: 'capgo_prepare_build_credentials_upload',
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_prepare_build_credentials_upload,
     title: 'Prepare build credentials upload',
-    description: 'Step 1 of 2 to store native cloud build signing credentials for one app and platform in Capgo (encrypted at rest). '
-      + 'This tool only returns a 10 minute signed PUT URL on api.capgo.app. Secrets never pass through chat or MCP. '
-      + 'iOS JSON keys: BUILD_CERTIFICATE_BASE64 (distribution .p12), P12_PASSWORD, CAPGO_IOS_PROVISIONING_MAP (base64 provisioning profiles per bundle id), optional Apple API keys (APPLE_KEY_ID, APPLE_ISSUER_ID, APPLE_KEY_CONTENT) and APP_STORE_CONNECT_TEAM_ID for App Store upload. '
-      + 'Android JSON keys: ANDROID_KEYSTORE_FILE (base64 .jks or .keystore), KEYSTORE_KEY_ALIAS, KEYSTORE_KEY_PASSWORD, KEYSTORE_STORE_PASSWORD, optional PLAY_CONFIG_JSON (base64 Play service account JSON for Play upload). '
-      + 'Step 2: `curl -fsS -X PUT -H "Content-Type: application/json" --data-binary @credentials.json "<upload_url>"` then delete the local file. mode replace overwrites stored credentials for that platform; merge only updates keys present in the JSON. '
-      + 'Confirm with the user before replace. Users with a logged-in CLI can instead run `npx @capgo/cli@latest build credentials push`.',
+    description: 'Create a single-use signed PUT URL, valid for 10 minutes, to upload a prepared native signing credentials file directly to Capgo for one app and platform. Requires app.update_settings permission. '
+      + 'Before calling, confirm the target app, platform and replace or merge mode with the user. Inputs contain only appId, platform and mode, never credential values. '
+      + 'Returns upload_url, method, content_type, max_bytes, expires_at and a curl command; this call does not read a local file, upload credentials or change stored credential values. '
+      + 'A separate, user-authorized file transfer stores credentials encrypted at rest. Replace removes stored keys absent from the uploaded file; merge retains those keys. Omitting mode selects replace. '
+      + 'Never ask the user to paste signing secrets into chat or MCP arguments. Keep the signed URL private and leave local files under the user\'s control. Without authorized local file-transfer access, direct the user to npx @capgo/cli@latest build credentials push. Use capgo_search_docs for platform-specific file formats.',
     input: { appId, platform, mode: z.enum(['replace', 'merge']).optional().describe('Choose how the uploaded credential file affects stored signing credentials: replace discards keys absent from the file; merge retains them. Omit to replace.') },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     request: input => ({ method: 'POST', path: '/build/credentials/upload-url', body: compact({ app_id: input.appId, platform: input.platform, mode: input.mode }) }),
