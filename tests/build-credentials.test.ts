@@ -154,7 +154,10 @@ describe('/build/credentials stored native build credentials', () => {
     response = await fetch(`${BASE_URL}/build/credentials/upload/${retryToken}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ PLAY_STORE_TRACK: 'beta' }) })
     expect(response.status).toBe(200)
 
-    response = await fetch(`${BASE_URL}/build/credentials/upload/${token.slice(0, -2)}xx`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    // Change signature bits rather than potentially unused base64url padding bits.
+    const signatureStart = token.lastIndexOf('.') + 1
+    const invalidToken = `${token.slice(0, signatureStart)}${token[signatureStart] === 'A' ? 'B' : 'A'}${token.slice(signatureStart + 1)}`
+    response = await fetch(`${BASE_URL}/build/credentials/upload/${invalidToken}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' })
     expect(response.status).toBe(401)
 
     // Audit rows carry summaries only.
@@ -220,7 +223,11 @@ describe('/build/credentials stored native build credentials', () => {
   })
 
   it('POST /build/request with use_stored_credentials validates the merged set', async () => {
-    // No stored android credentials (other test deletes them; ios-only seed here keeps this independent).
+    // Establish this fixture independently of whether an earlier test completed.
+    const deleted = await fetch(`${BASE_URL}/build/credentials`, {
+      method: 'DELETE', headers: headers(adminKey), body: JSON.stringify({ app_id: appId, platform: 'android' }),
+    })
+    expect([200, 404]).toContain(deleted.status)
     let response = await fetch(`${BASE_URL}/build/request`, {
       method: 'POST',
       headers: headers(adminKey),
