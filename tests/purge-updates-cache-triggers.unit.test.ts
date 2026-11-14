@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  purgeUpdatesCache: vi.fn(async () => ({ purged: true })),
+  purgeUpdatesCache: vi.fn(async () => ({ nudged: true, purgedApps: 1, purged: true, enqueued: true })),
   purgeOnPremCache: vi.fn(async () => undefined),
   pgQuery: vi.fn(async () => ({ rows: [], rowCount: 0 })),
   getPgClient: vi.fn(async () => ({ query: vi.fn() })),
@@ -40,6 +40,25 @@ vi.mock('../supabase/functions/_backend/utils/org_email_notifications.ts', () =>
 vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   cloudlog: vi.fn(),
   cloudlogErr: vi.fn(),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/manifest_cleanup.ts', () => ({
+  deleteVersionManifestBatch: vi.fn(async () => {}),
+}))
+
+vi.mock('../supabase/functions/_backend/utils/s3.ts', () => ({
+  getPath: vi.fn(),
+  s3: { moveObjectToTrash: vi.fn(async () => true), deleteObject: vi.fn() },
+}))
+
+vi.mock('../supabase/functions/_backend/files/file_read_cache.ts', () => ({
+  purgeFileReadCache: vi.fn(async () => {}),
+  isVersionDeleted: (row: { deleted?: boolean | null, deleted_at?: string | null }) =>
+    row?.deleted === true || row?.deleted_at != null,
+}))
+
+vi.mock('../supabase/functions/_backend/utils/pg_rls.ts', () => ({
+  queryJsonOne: vi.fn(async () => ({ size: 0 })),
 }))
 
 vi.mock('../supabase/functions/_backend/utils/hono.ts', () => ({
@@ -101,5 +120,74 @@ describe('purgeUpdatesCache on change paths', () => {
     })
     expect(response.status).toBe(200)
     expect(mocks.purgeUpdatesCache).toHaveBeenCalledWith(expect.anything(), 'com.example.bundle')
+  })
+
+  it('on_version_update calls purgeUpdatesCache when the bundle payload is empty', async () => {
+    const { app } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
+    const response = await app.request('http://local/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', apisecret: 'purge-trigger-secret' },
+      body: JSON.stringify({
+        type: 'UPDATE',
+        table: 'app_versions',
+        record: {
+          id: 3,
+          app_id: 'com.example.version',
+          owner_org: 'org',
+          name: '2.0.0',
+          deleted: false,
+          deleted_at: null,
+          r2_path: null,
+          manifest: null,
+        },
+        old_record: {
+          id: 3,
+          app_id: 'com.example.version',
+          deleted: false,
+          deleted_at: null,
+        },
+      }),
+    })
+    expect(response.status).toBe(200)
+    expect(mocks.purgeUpdatesCache).toHaveBeenCalledWith(expect.anything(), 'com.example.version')
+  })
+
+  it('on_version_update deleteIt calls purgeUpdatesCache for the bundle app', async () => {
+    mocks.pgQuery.mockImplementation(async (...args: unknown[]) => {
+      const sql = String(args[0] ?? '')
+      if (sql.includes('SELECT size FROM public.app_versions_meta'))
+        return { rows: [{ size: 0 }] }
+      if (sql.startsWith('UPDATE public.channels'))
+        return { rowCount: 0, rows: [] }
+      return { rows: [], rowCount: 0 }
+    })
+    const { app } = await import('../supabase/functions/_backend/triggers/on_version_update.ts')
+    const response = await app.request('http://local/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', apisecret: 'purge-trigger-secret' },
+      body: JSON.stringify({
+        type: 'UPDATE',
+        table: 'app_versions',
+        record: {
+          id: 4,
+          app_id: 'com.example.deleted',
+          owner_org: 'org',
+          name: '3.0.0',
+          deleted: true,
+          deleted_at: '2026-01-01T00:00:00.000Z',
+          r2_path: null,
+          manifest: [],
+          manifest_count: 0,
+        },
+        old_record: {
+          id: 4,
+          app_id: 'com.example.deleted',
+          deleted: false,
+          deleted_at: null,
+        },
+      }),
+    })
+    expect(response.status).toBe(200)
+    expect(mocks.purgeUpdatesCache).toHaveBeenCalledWith(expect.anything(), 'com.example.deleted')
   })
 })

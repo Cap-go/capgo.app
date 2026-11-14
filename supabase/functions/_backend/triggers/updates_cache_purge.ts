@@ -223,10 +223,11 @@ export async function drainUpdatesCachePurge(
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
   let purgedApps = 0
+  const purgedAppIds: string[] = []
   // Claiming without a target would only lease rows we cannot purge.
   if (!hasPurgeTarget(c)) {
     cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)' })
-    return { purgedApps }
+    return { purgedApps, purgedAppIds }
   }
   let claimed = false
   let throttledBeforeClaim = 0
@@ -264,18 +265,42 @@ export async function drainUpdatesCachePurge(
     if (ackError)
       cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge ack failed', error: serializeError(ackError) })
     cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: apps.length, calls: result.calls, failed: result.failed })
-    if (ok)
+    if (ok) {
       purgedApps += apps.length
+      for (const row of apps)
+        purgedAppIds.push(row.app_id)
+    }
     if (!claim.has_more)
       break
   }
-  return { purgedApps }
+  return { purgedApps, purgedAppIds }
 }
 
 const PURGE_RPC_SQL = {
   claim_updates_cache_purge: 'SELECT public.claim_updates_cache_purge(p_limit => $1::integer) AS result',
   ack_updates_cache_purge: 'SELECT public.ack_updates_cache_purge(p_lease_token => $1::uuid, p_success => $2::boolean, p_retry_after_seconds => $3::integer) AS result',
 } as const
+
+/** Records a pending app-scope purge and wakes the shared drain (service_role SQL). */
+export async function enqueueUpdatesEdgeCachePurge(c: Context, appId: string, scope: 'app' | 'versions' | 'plugin_state' = 'app') {
+  let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
+  try {
+    pg = await getPgClient(c)
+    await pg.query(
+      'SELECT public.notify_updates_edge_cache_purge($1::text[], $2::text)',
+      [[appId], scope],
+    )
+    return true
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'enqueue updates cache purge failed', appId, error: serializeError(error) })
+    return false
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
+}
 
 /** Drains on one service connection; RPC failures come back as `error` like supabase-js did. */
 export async function nudgeUpdatesCachePurgeDrain(c: Context) {
@@ -298,7 +323,7 @@ export async function nudgeUpdatesCachePurgeDrain(c: Context) {
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge claim failed', error: serializeError(error) })
-    return { purgedApps: 0 }
+    return { purgedApps: 0, purgedAppIds: [] as string[] }
   }
   finally {
     if (pg)
