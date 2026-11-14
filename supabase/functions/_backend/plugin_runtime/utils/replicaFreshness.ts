@@ -86,17 +86,25 @@ export const REPLICA_LAG_QUERY = `
     FROM public.read_replica_commit_marker
     WHERE id = 1
   )
-  SELECT CASE
-    WHEN (SELECT lag_seconds FROM primary_commit_lag) IS NULL
-      THEN (SELECT lag_seconds FROM upstream_lag)
-    WHEN (SELECT lag_seconds FROM upstream_lag) IS NULL
-      THEN (SELECT lag_seconds FROM primary_commit_lag)
-    ELSE GREATEST(
-      (SELECT lag_seconds FROM upstream_lag),
-      (SELECT lag_seconds FROM primary_commit_lag)
-    )
-  END AS lag_seconds
+  SELECT
+    (SELECT lag_seconds FROM upstream_lag) AS upstream_lag_seconds,
+    (SELECT lag_seconds FROM primary_commit_lag) AS primary_commit_lag_seconds
 `
+
+export function replicationLagSecondsFromQueryRow(row: {
+  upstream_lag_seconds?: unknown
+  primary_commit_lag_seconds?: unknown
+} | undefined): number | null {
+  const upstream = row?.upstream_lag_seconds
+  const primaryCommit = row?.primary_commit_lag_seconds
+  const toSeconds = (value: unknown): number | null => {
+    if (value === null || value === undefined)
+      return null
+    const lagSeconds = Number(value)
+    return Number.isFinite(lagSeconds) ? lagSeconds : null
+  }
+  return combineReplicaLagSeconds(toSeconds(upstream), toSeconds(primaryCommit))
+}
 
 const REPLICATION_LAG_CACHE_PATH = '/cache/replication-lag'
 

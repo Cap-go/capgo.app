@@ -20,50 +20,45 @@ VALUES (1, pg_catalog.now());
 ALTER TABLE public.read_replica_commit_marker OWNER TO postgres;
 ALTER TABLE public.read_replica_commit_marker ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.read_replica_commit_marker FROM PUBLIC;
-GRANT SELECT ON TABLE public.read_replica_commit_marker TO anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.read_replica_commit_marker FROM anon;
+REVOKE ALL ON TABLE public.read_replica_commit_marker FROM authenticated;
+GRANT SELECT ON TABLE public.read_replica_commit_marker TO service_role;
 GRANT ALL ON TABLE public.read_replica_commit_marker TO postgres;
 
-CREATE POLICY "Allow read on read_replica_commit_marker"
+CREATE POLICY "Allow service role read on read_replica_commit_marker"
 ON public.read_replica_commit_marker
 FOR SELECT
-TO anon, authenticated, service_role
+TO service_role
 USING (true);
-
-CREATE POLICY "Deny insert on read_replica_commit_marker"
-ON public.read_replica_commit_marker
-AS RESTRICTIVE
-FOR INSERT
-TO anon, authenticated
-WITH CHECK (false);
-
-CREATE POLICY "Deny update on read_replica_commit_marker"
-ON public.read_replica_commit_marker
-AS RESTRICTIVE
-FOR UPDATE
-TO anon, authenticated
-USING (false)
-WITH CHECK (false);
-
-CREATE POLICY "Deny delete on read_replica_commit_marker"
-ON public.read_replica_commit_marker
-AS RESTRICTIVE
-FOR DELETE
-TO anon, authenticated
-USING (false);
 
 CREATE OR REPLACE FUNCTION public.touch_read_replica_commit_marker()
 RETURNS void
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+DECLARE
+    prior_at timestamp with time zone;
+    stall_threshold interval := interval '60 seconds';
+BEGIN
+    SELECT committed_at INTO prior_at
+    FROM public.read_replica_commit_marker
+    WHERE id = 1;
+
+    IF prior_at IS NOT NULL AND prior_at < pg_catalog.now() - stall_threshold THEN
+        RAISE WARNING 'read_replica_commit_marker stale before touch: age %', pg_catalog.now() - prior_at;
+    END IF;
+
     UPDATE public.read_replica_commit_marker
     SET committed_at = pg_catalog.now()
     WHERE id = 1;
+END;
 $$;
 
 ALTER FUNCTION public.touch_read_replica_commit_marker() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.touch_read_replica_commit_marker() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.touch_read_replica_commit_marker() FROM anon;
+REVOKE EXECUTE ON FUNCTION public.touch_read_replica_commit_marker() FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.touch_read_replica_commit_marker() TO service_role;
 
 INSERT INTO public.cron_tasks (

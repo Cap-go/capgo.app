@@ -7,6 +7,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import { getRuntimeKey } from 'hono/adapter'
 // @ts-types="npm:@types/pg"
 import { Client, Pool } from 'pg'
+import { replicationLagSecondsFromQueryRow } from '../plugin_runtime/utils/replicaFreshness.ts'
 import { BEGIN_WRITE_TRANSACTION_SQL, configureTransactionAccessMode, getPgAccessMode, inheritPgAccessMode, readOnlyStartupOptions, setPgAccessMode, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
 export { BEGIN_WRITE_TRANSACTION_SQL, TRANSACTION_IDLE_TIMEOUT_MS } from '../plugin_runtime/utils/pg_transaction_mode.ts'
 import { serializePostgresError } from '../plugin_runtime/utils/postgres_error.ts'
@@ -361,13 +362,6 @@ function setReplicationLagMemoryEntry(cacheKey: string, status: ReplicationLagSt
   })
 }
 
-function toReplicationLagSeconds(value: unknown): number | null {
-  if (value === null || value === undefined)
-    return null
-  const lagSeconds = Number(value)
-  return Number.isFinite(lagSeconds) ? lagSeconds : null
-}
-
 /**
  * Replica lag SQL: logical subscriber (pg_stat_subscription) or physical
  * standby (replay position / timestamp). Same query as
@@ -397,16 +391,9 @@ const REPLICA_LAG_QUERY = `
     FROM public.read_replica_commit_marker
     WHERE id = 1
   )
-  SELECT CASE
-    WHEN (SELECT lag_seconds FROM primary_commit_lag) IS NULL
-      THEN (SELECT lag_seconds FROM upstream_lag)
-    WHEN (SELECT lag_seconds FROM upstream_lag) IS NULL
-      THEN (SELECT lag_seconds FROM primary_commit_lag)
-    ELSE GREATEST(
-      (SELECT lag_seconds FROM upstream_lag),
-      (SELECT lag_seconds FROM primary_commit_lag)
-    )
-  END AS lag_seconds
+  SELECT
+    (SELECT lag_seconds FROM upstream_lag) AS upstream_lag_seconds,
+    (SELECT lag_seconds FROM primary_commit_lag) AS primary_commit_lag_seconds
 `
 
 /**
@@ -417,7 +404,7 @@ const REPLICA_LAG_QUERY = `
 async function queryReplicaLag(c: Context, pool: Pool): Promise<ReplicationLagStatus> {
   try {
     const result = await pool.query(REPLICA_LAG_QUERY)
-    const lagSeconds = toReplicationLagSeconds(result.rows[0]?.lag_seconds)
+    const lagSeconds = replicationLagSecondsFromQueryRow(result.rows[0])
 
     let status: ReplicationStatus = 'unknown'
     if (lagSeconds !== null) {
