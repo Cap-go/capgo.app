@@ -208,7 +208,18 @@ describe('translation queue helpers', () => {
     // Unreviewed drafts are served but not remembered, so a later catalog change reviews them.
     await expect(__translationWorkerTestUtils__.translateBatch(failingReviewAi, 'translator', 'fr', batch, 'reviewer'))
       .resolves
-      .toEqual({ messages: { channel: 'Canal', observe: 'Observe', save: 'Enregistrer' }, remembered: {} })
+      .toEqual({ messages: { channel: 'Canal', save: 'Enregistrer' }, remembered: {} })
+  })
+
+  it.concurrent('leaves invalid placeholder answers missing while retaining valid reviewed answers', async () => {
+    const ai = {
+      run: vi.fn()
+        .mockResolvedValueOnce({ response: JSON.stringify({ translations: { usage: 'Utilisé', save: 'Sauvegarder' } }) })
+        .mockResolvedValueOnce({ response: JSON.stringify({ translations: { usage: 'Utilisation', save: 'Enregistrer' } }) }),
+    }
+    await expect(__translationWorkerTestUtils__.translateBatch(ai, 'translator', 'fr', [
+      ['usage', 'Used {count} times', ''], ['save', 'Save', ''],
+    ], 'reviewer')).resolves.toEqual({ messages: { save: 'Enregistrer' }, remembered: { save: 'Enregistrer' } })
   })
 
   it.concurrent('reviews with DeepSeek V4.1 Flash by default and lets env override or disable it', () => {
@@ -540,17 +551,18 @@ describe('translation queue helpers', () => {
     expect(readyCatalogWrite(writes)?.dashboard).toBe('fr:dashboard')
   })
 
-  it('does not remember strings that fell back to English', async () => {
+  it('keeps missing answers pending while remembering explicit unchanged answers', async () => {
     const memory = await rememberAllMessagesExcept(['account', 'password'])
     const ai = {
       run: vi.fn(async () => ({ response: JSON.stringify({ translations: { password: 'Password' } }) })),
     }
 
-    const { writes } = await runQueueStep(memory, ai)
+    const { queue, writes } = await runQueueStep(memory, ai)
 
-    // A missing answer falls back to English and is not remembered; a valid answer equal
+    // A missing answer is neither completed nor remembered; a valid answer equal
     // to the source (a name kept in English) is.
-    expect(readyCatalogWrite(writes)?.account).toBe('Account')
+    expect(readyCatalogWrite(writes)).toBeNull()
+    expect(queue.send).toHaveBeenCalledWith(expect.objectContaining({ batchIndex: 1 }), { contentType: 'json' })
     const remembered = writes.filter(item => item.sql.includes('INSERT INTO translation_memory'))
     expect(remembered.map(item => item.params[2])).toEqual(['Password'])
   })
