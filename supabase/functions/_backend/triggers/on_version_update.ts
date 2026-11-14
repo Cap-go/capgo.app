@@ -19,7 +19,7 @@ function schedulePurgeUpdatesCache(c: Context, appId: string | null | undefined)
   if (!appId)
     return
   const task = purgeUpdatesCache(c, appId)
-  if (c.req?.header)
+  if (c.req)
     void backgroundTask(c, task)
   else
     void task
