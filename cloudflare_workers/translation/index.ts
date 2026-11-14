@@ -773,9 +773,10 @@ async function translateBatch(ai: AiBinding, model: string, targetLanguage: stri
   if (!Object.keys(messages).length)
     throw new Error('Workers AI returned no valid translations')
 
+  const remembered = reviewed?.remember ? reviewedMessages : {}
   return {
     messages,
-    remembered: reviewModel ? (reviewed?.remember ? reviewedMessages : {}) : draftMessages,
+    remembered: reviewModel ? remembered : draftMessages,
   }
 }
 
