@@ -117,7 +117,9 @@ CREATE TABLE public.apps (
     onboarding_completed_at timestamp with time zone,
     onboarding jsonb DEFAULT '{}'::jsonb NOT NULL,
     device_data_collection jsonb DEFAULT '{"country": true, "is_prod": true, "platform": true, "os_version": true, "is_emulator": true, "version_build": true, "install_source": true, "plugin_version": true}'::jsonb NOT NULL,
-    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600)))
+    bundle_incompatible_alert text DEFAULT 'default'::text NOT NULL,
+    CONSTRAINT apps_build_timeout_seconds_check CHECK (((build_timeout_seconds >= 300) AND (build_timeout_seconds <= 21600))),
+    CONSTRAINT apps_bundle_incompatible_alert_check CHECK ((bundle_incompatible_alert = ANY (ARRAY['default'::text, 'all'::text])))
 );
 
 ALTER TABLE ONLY public.apps REPLICA IDENTITY FULL;

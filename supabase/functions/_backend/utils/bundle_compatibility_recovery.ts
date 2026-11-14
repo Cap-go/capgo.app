@@ -29,7 +29,34 @@ export function isCliTrueTag(value: unknown): boolean {
   return value === true || value === 'true'
 }
 
-export type BundleIncompatibleEmailOutcome = 'skipped_accepted' | 'sent_expected' | 'sent'
+export type BundleIncompatibleEmailOutcome = 'skipped_accepted' | 'skipped_non_default_channel' | 'sent_expected' | 'sent'
+
+/** Email the warning only for the app's default upload channel. */
+export const BUNDLE_INCOMPATIBLE_ALERT_DEFAULT = 'default'
+/** Email the warning for every channel the incompatible bundle overwrites. */
+export const BUNDLE_INCOMPATIBLE_ALERT_ALL = 'all'
+
+export function isBundleIncompatibleAlert(value: unknown): value is typeof BUNDLE_INCOMPATIBLE_ALERT_DEFAULT | typeof BUNDLE_INCOMPATIBLE_ALERT_ALL {
+  return value === BUNDLE_INCOMPATIBLE_ALERT_DEFAULT || value === BUNDLE_INCOMPATIBLE_ALERT_ALL
+}
+
+/**
+ * `all` emails every overwritten channel. Any other value, including the
+ * product default `default`, emails only the app's default upload channel.
+ * A missing channel or default channel cannot be proven out of scope, so the
+ * warning still sends.
+ */
+export function isBundleIncompatibleAlertForChannel(input: {
+  alert: string | null | undefined
+  channel: string | undefined
+  defaultChannel: string | null | undefined
+}): boolean {
+  if (input.alert === BUNDLE_INCOMPATIBLE_ALERT_ALL)
+    return true
+  if (!input.channel || !input.defaultChannel)
+    return true
+  return input.channel === input.defaultChannel
+}
 
 /** PostHog `Bundle Incompatible Email` outcome recorded by `/private/events`. */
 export function bundleIncompatibleEmailOutcome(

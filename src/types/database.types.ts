@@ -439,6 +439,7 @@ export type Database = {
           block_provider_infra_requests: boolean
           build_timeout_seconds: number
           build_timeout_updated_at: string
+          bundle_incompatible_alert: string
           channel_device_count: number
           created_at: string | null
           created_from_onboarding: boolean
@@ -471,6 +472,7 @@ export type Database = {
           block_provider_infra_requests?: boolean
           build_timeout_seconds?: number
           build_timeout_updated_at?: string
+          bundle_incompatible_alert?: string
           channel_device_count?: number
           created_at?: string | null
           created_from_onboarding?: boolean
@@ -503,6 +505,7 @@ export type Database = {
           block_provider_infra_requests?: boolean
           build_timeout_seconds?: number
           build_timeout_updated_at?: string
+          bundle_incompatible_alert?: string
           channel_device_count?: number
           created_at?: string | null
           created_from_onboarding?: boolean
@@ -4762,6 +4765,7 @@ export type Database = {
           block_provider_infra_requests: boolean
           build_timeout_seconds: number
           build_timeout_updated_at: string
+          bundle_incompatible_alert: string
           channel_device_count: number
           created_at: string | null
           created_from_onboarding: boolean
