@@ -7,8 +7,10 @@ const CACHE_TTL_SECONDS = 5 * 60
 // Keep unfinished catalogs through the queue's 96-hour retention window.
 const PENDING_TRANSLATION_STORE_TTL_SECONDS = 97 * 60 * 60
 const READY_TRANSLATION_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
-// Workers AI catalog checked 2026-11-13; neither model has planned deprecation.
+// Workers AI catalog checked 2026-11-14; neither model has planned deprecation.
 const DEFAULT_TRANSLATION_MODEL = '@cf/qwen/qwen3.8-27b' // created_at: 2026-08-17
+// Qwen has a separate, higher quota than the primary paid reviewer.
+const DEFAULT_TRANSLATION_REVIEW_FALLBACK_MODEL = DEFAULT_TRANSLATION_MODEL
 const DEFAULT_TRANSLATION_REVIEW_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017' // created_at: 2026-10-17
 // Bump when the prompt, style guides or default models change so every locale is
 // translated again instead of serving catalogs made by the previous pipeline.
@@ -41,6 +43,14 @@ const TRANSLATION_MEMORY_TABLE = 'translation_memory'
 const TRANSLATION_MEMORY_LOOKUP_CHUNK = 90
 const CLAIMED_TRANSLATION_BATCH_INDEX_OFFSET = 1_000_000_000
 const PLACEHOLDER_PATTERN = /\{[\w.]+\}|%\w+%?|\$\d+/g
+// Dollar syntax is ambiguous: these catalog keys contain literal prices, whereas
+// e.g. confirm-overwrite-msg uses $1/$2 replacements. Keep all other keys strict.
+const LITERAL_DOLLAR_AMOUNT_KEYS = new Set([
+  'credits-auto-top-up-min',
+  'credits-auto-top-up-threshold-invalid',
+  'expert-service-desc',
+  'channel-self-assign-home-balance',
+])
 
 const SUPPORTED_LANGUAGES = new Set([
   'de',
@@ -110,6 +120,7 @@ interface TranslationWorkerBindings {
   TRANSLATION_MESSAGES_QUEUE?: Queue<Required<TranslationQueuePayload>>
   TRANSLATION_MODEL?: string
   TRANSLATION_REVIEW_MODEL?: string
+  TRANSLATION_REVIEW_FALLBACK_MODEL?: string
 }
 
 interface TranslationBody {
@@ -272,6 +283,12 @@ function getTranslationModel(env: TranslationWorkerBindings) {
 function getTranslationReviewModel(env: TranslationWorkerBindings) {
   const reviewModel = env.TRANSLATION_REVIEW_MODEL?.trim() || DEFAULT_TRANSLATION_REVIEW_MODEL
   return reviewModel === 'none' ? null : reviewModel
+}
+
+// TRANSLATION_REVIEW_FALLBACK_MODEL overrides the backup; "none" disables it.
+function getTranslationReviewFallbackModel(env: TranslationWorkerBindings) {
+  const model = env.TRANSLATION_REVIEW_FALLBACK_MODEL?.trim() || DEFAULT_TRANSLATION_REVIEW_FALLBACK_MODEL
+  return model === 'none' ? null : model
 }
 
 // Identifies the models behind a translation, for catalog checksums and translation memory.
@@ -479,13 +496,15 @@ function normalizeTranslatedText(text: string) {
 }
 
 // The model's translation, or null when it is missing, empty or drops a placeholder.
-function acceptedTranslation(source: string, translated: unknown) {
+function acceptedTranslation(source: string, translated: unknown, key = '') {
   const unwrapped = unwrapTranslatedMessage(translated)
   const candidate = unwrapped ? normalizeTranslatedText(unwrapped) : null
   if (!candidate)
     return null
 
-  const missingPlaceholder = (source.match(PLACEHOLDER_PATTERN) ?? []).some(token => !candidate.includes(token))
+  const placeholders = (source.match(PLACEHOLDER_PATTERN) ?? [])
+    .filter(token => !token.startsWith('$') || !LITERAL_DOLLAR_AMOUNT_KEYS.has(key))
+  const missingPlaceholder = placeholders.some(token => !candidate.includes(token))
   return missingPlaceholder ? null : candidate
 }
 
@@ -636,7 +655,7 @@ function translatedBatch(batch: MessageEntry[], translations: Record<string, str
 
   return Object.fromEntries(batch.map(([key, source]) => [
     key,
-    acceptedTranslation(source, translations[key]),
+    acceptedTranslation(source, translations[key], key),
   ] as const))
 }
 
@@ -674,10 +693,10 @@ function normalizeTranslationError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error))
 }
 
-async function runTranslationRequest(ai: AiBinding, model: string, request: unknown, batch: MessageEntry[], logContext: Record<string, unknown>) {
+async function runTranslationRequest(ai: AiBinding, model: string, request: unknown, batch: MessageEntry[], logContext: Record<string, unknown>, maxAttempts = TRANSLATION_ATTEMPTS) {
   let lastError: Error | null = null
 
-  for (let attempt = 1; attempt <= TRANSLATION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const result = await ai.run(model, request)
       const translations = parseTranslationObject(extractAiText(result) || result)
@@ -702,19 +721,33 @@ async function runTranslationRequest(ai: AiBinding, model: string, request: unkn
   throw lastError ?? new Error('Message translation failed')
 }
 
-// Second pass: a reviewer model fixes the draft against the same style guide.
-// Rate limits defer the batch; other review failures retain the draft.
-async function reviewTranslatedBatch(ai: AiBinding, reviewModel: string, targetLanguage: string, batch: MessageEntry[], drafts: Record<string, string>) {
+// Keep the second pass even when the primary reviewer has exhausted its quota.
+// Fallback output is served but not stored as primary-reviewed translation memory.
+async function reviewTranslatedBatch(ai: AiBinding, reviewModel: string, targetLanguage: string, batch: MessageEntry[], drafts: Record<string, string>, fallbackModel: string | null) {
+  const review = (model: string, maxAttempts = TRANSLATION_ATTEMPTS) => runTranslationRequest(ai, model, reviewRequest(model, targetLanguage, batch, drafts), batch, {
+    message: 'Message translation review failed',
+    targetLanguage,
+  }, maxAttempts)
   try {
-    return await runTranslationRequest(ai, reviewModel, reviewRequest(reviewModel, targetLanguage, batch, drafts), batch, {
-      message: 'Message translation review failed',
-      targetLanguage,
-    })
+    return { translations: await review(reviewModel), remember: true }
   }
   catch (error) {
-    if (isAiRateLimitError(error))
+    if (!isAiRateLimitError(error))
+      return null
+    if (!fallbackModel || fallbackModel === reviewModel)
       throw error
-    return null
+    cloudlog({ message: 'Using fallback translation reviewer after rate limit', targetLanguage, reviewModel, fallbackModel })
+    try {
+      const translations = await review(fallbackModel, 1)
+      if (!Object.values(translations).some(value => value !== null))
+        throw new Error('Fallback reviewer returned no valid translations')
+      return { translations, remember: false }
+    }
+    catch {
+      // A failed fallback must not downgrade a rate-limited review to an
+      // unreviewed ready catalog. Retain the primary cooldown and queue budget.
+      throw error
+    }
   }
 }
 
@@ -722,24 +755,27 @@ async function reviewTranslatedBatch(ai: AiBinding, reviewModel: string, targetL
 // such as Observe stay in English). A missing or invalid review entry keeps the draft.
 // Drafts from a failed review are served but not remembered, so a later catalog change
 // gets them reviewed.
-async function translateBatch(ai: AiBinding, model: string, targetLanguage: string, batch: MessageEntry[], reviewModel: string | null = null): Promise<TranslatedBatch> {
+async function translateBatch(ai: AiBinding, model: string, targetLanguage: string, batch: MessageEntry[], reviewModel: string | null = null, fallbackModel: string | null = null): Promise<TranslatedBatch> {
   const drafts = await runTranslationRequest(ai, model, translationRequest(model, targetLanguage, batch), batch, {
     message: 'Message translation batch failed',
     targetLanguage,
   })
   const draftMessages = acceptedOnly(drafts)
   const reviewed = reviewModel
-    ? await reviewTranslatedBatch(ai, reviewModel, targetLanguage, batch, draftMessages)
+    ? await reviewTranslatedBatch(ai, reviewModel, targetLanguage, batch, draftMessages, fallbackModel)
     : null
-  const reviewedMessages = reviewed ? acceptedOnly(reviewed) : {}
-  const messages = { ...draftMessages, ...reviewedMessages }
+  const reviewedMessages = reviewed ? acceptedOnly(reviewed.translations) : {}
+  // A rate-limit fallback must actually review an entry before it can complete it.
+  const messages = reviewed && !reviewed.remember
+    ? reviewedMessages
+    : { ...draftMessages, ...reviewedMessages }
   // Never enqueue an endless chain of new jobs for the same invalid response.
   if (!Object.keys(messages).length)
     throw new Error('Workers AI returned no valid translations')
 
   return {
     messages,
-    remembered: reviewModel ? reviewedMessages : draftMessages,
+    remembered: reviewModel ? (reviewed?.remember ? reviewedMessages : {}) : draftMessages,
   }
 }
 
@@ -1693,7 +1729,7 @@ async function processTranslationQueueBatch(env: TranslationWorkerBindings, body
       return
     }
 
-    const translatedBatch = await translateBatch(ai, model, targetLanguage, batch, getTranslationReviewModel(env))
+    const translatedBatch = await translateBatch(ai, model, targetLanguage, batch, getTranslationReviewModel(env), getTranslationReviewFallbackModel(env))
     await rememberTranslatedBatch(env, targetLanguage, model, translatedBatch.remembered, requestId)
 
     const mergedMessages = {
@@ -1779,6 +1815,7 @@ export const __translationWorkerTestUtils__ = {
   currentSourceChecksum,
   escapeVueI18nAtSigns,
   getTranslationReviewModel,
+  getTranslationReviewFallbackModel,
   isReadyTranslationFresh,
   isTranslationBatchLeaseExpired,
   keepTranslation,
