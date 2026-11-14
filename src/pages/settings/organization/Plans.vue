@@ -16,6 +16,7 @@ import RbacPermissionOnlyModal from '~/components/RbacPermissionOnlyModal.vue'
 import { useBillingPaidAt } from '~/composables/useBillingPaidAt'
 import { getCreditPricingSteps, getCurrentPlanNameOrg } from '~/services/console'
 import { ENTERPRISE_MAU_STOPS, formatMau, getOrgExtraMau, quoteEnterpriseScale } from '~/services/enterpriseScale'
+import { observeEventsForPlan } from '~/services/observePlanAllowance'
 import { formatNumberValue, getFormatLocale } from '~/services/formatLocale'
 import { isNativeAppStoreContext } from '~/services/nativeCompliance'
 import { shouldShowExpiredTrialPlansState, shouldShowPlanFailureBanner } from '~/services/paymentRequired'
@@ -110,6 +111,10 @@ function planFeatures(plan: Plan) {
   const mauFeature = t('plan-mau', { count: formatNumberValue(displayedPlanMau(plan)) }, displayedPlanMau(plan))
   const storageFeature = t('plan-storage', { count: formatNumberValue(plan.storage) })
   const bandwidthFeature = t('plan-bandwidth', { count: formatNumberValue(plan.bandwidth) })
+  const observeEvents = observeEventsForPlan(plan)
+  const observeFeature = observeEvents > 0
+    ? planFeature(t('plan-observe-events', { count: formatNumberValue(observeEvents) }))
+    : null
 
   const buildTimeFeature = buildTimeDisplay ? planFeature(buildTimeDisplay, true) : null
   const nativeBuildConcurrencyFeature = plan.native_build_concurrency
@@ -127,6 +132,7 @@ function planFeatures(plan: Plan) {
     planFeature(mauFeature),
     planFeature(storageFeature),
     planFeature(bandwidthFeature),
+    observeFeature,
     buildTimeFeature,
     nativeBuildConcurrencyFeature,
     nativeBuildQueuePriorityFeature,
