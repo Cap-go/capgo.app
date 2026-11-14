@@ -1,15 +1,27 @@
 import type { Context } from 'hono'
-import { nudgeUpdatesCachePurgeDrain } from '../triggers/updates_cache_purge.ts'
+import { hasPurgeTarget, nudgeUpdatesCachePurgeDrain } from '../triggers/updates_cache_purge.ts'
 import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 
 const purgedAppIdsByContext = new WeakMap<Context, Set<string>>()
 
-/** Test hook. */
-export function resetPurgeUpdatesCacheDedupe() {
-  // WeakMap entries drop with their contexts; tests use fresh mock contexts.
+export type PurgeUpdatesCacheOptions = {
+  /**
+   * When true (default), allow at most one nudge per app_id on this Hono context.
+   * Manual callers should pass false so repeated button clicks always run.
+   */
+  dedupe?: boolean
 }
 
-function shouldPurgeAppForRequest(c: Context, appId: string) {
+export type PurgeUpdatesCacheResult = {
+  purged: boolean
+  reason?: 'invalid_app_id' | 'deduped' | 'not_configured' | 'nothing_claimed' | 'drain_failed'
+}
+
+/** Test hook (WeakMap drops entries with the context). */
+export function resetPurgeUpdatesCacheDedupe() {
+}
+
+function shouldPurgeAppForContext(c: Context, appId: string) {
   let seen = purgedAppIdsByContext.get(c)
   if (!seen) {
     seen = new Set()
@@ -22,19 +34,38 @@ function shouldPurgeAppForRequest(c: Context, appId: string) {
 }
 
 /**
- * Best-effort nudge of the shared updates cache purge drain for one app.
- * Statement triggers already enqueue purges; this runs the throttled drain path
- * (claim_updates_cache_purge -> purgeUpdatesCacheTags -> ack) so Cloudflare
- * rate limits stay bounded. Never throws.
+ * Shared entry point to refresh the plugin /updates edge cache for one app
+ * (Cloudflare Cache-Tag capgo-updates-<app_id>). Used from change triggers and
+ * from manual console actions. Enqueues are handled by invalidate_updates_edge_cache;
+ * this nudges the throttled shared drain (claim, purgeUpdatesCacheTags, ack).
+ * Never throws.
  */
-export async function purgeUpdatesCache(c: Context, appId: string) {
-  if (!appId?.trim() || !shouldPurgeAppForRequest(c, appId))
-    return
+export async function purgeUpdatesCache(
+  c: Context,
+  appId: string,
+  options: PurgeUpdatesCacheOptions = {},
+): Promise<PurgeUpdatesCacheResult> {
+  const trimmed = appId?.trim()
+  if (!trimmed)
+    return { purged: false, reason: 'invalid_app_id' }
+
+  if (options.dedupe !== false && !shouldPurgeAppForContext(c, trimmed))
+    return { purged: false, reason: 'deduped' }
+
+  if (!hasPurgeTarget(c)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'purgeUpdatesCache skipped (not configured)', appId: trimmed })
+    return { purged: false, reason: 'not_configured' }
+  }
+
   try {
     const { purgedApps } = await nudgeUpdatesCachePurgeDrain(c)
-    cloudlog({ requestId: c.get('requestId'), message: 'purgeUpdatesCache drain nudged', appId, purgedApps })
+    cloudlog({ requestId: c.get('requestId'), message: 'purgeUpdatesCache drain nudged', appId: trimmed, purgedApps })
+    if (purgedApps > 0)
+      return { purged: true }
+    return { purged: false, reason: 'nothing_claimed' }
   }
   catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'purgeUpdatesCache error', appId, error: serializeError(error) })
+    cloudlogErr({ requestId: c.get('requestId'), message: 'purgeUpdatesCache error', appId: trimmed, error: serializeError(error) })
+    return { purged: false, reason: 'drain_failed' }
   }
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  purgeUpdatesCache: vi.fn(async () => undefined),
+  purgeUpdatesCache: vi.fn(async () => ({ purged: true })),
   purgeOnPremCache: vi.fn(async () => undefined),
   pgQuery: vi.fn(async () => ({ rows: [], rowCount: 0 })),
   getPgClient: vi.fn(async () => ({ query: vi.fn() })),
