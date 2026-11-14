@@ -381,6 +381,40 @@ describe('auth guard SSO provisioning', () => {
     })
   })
 
+  it.concurrent.each([false, true])('allows a direct-offer user to open plans with an unfinished app (already authenticated: %s)', async (alreadyAuthenticated) => {
+    await withTestContext(async (context) => {
+      const user = {
+        id: 'user-direct-offer-billing',
+        email: 'customer-onboarding@example.com',
+        created_at: '2026-08-04T14:01:00.000Z',
+        email_confirmed_at: '2026-08-04T14:01:00.000Z',
+        app_metadata: { provider: 'email', providers: ['email'], offer: 'direct' },
+      }
+      context.userRecord.id = user.id
+      context.userRecord.email = user.email
+      context.mockGetSession.mockResolvedValue({ data: { session: { access_token: 'test-token', user } } })
+      context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
+      if (alreadyAuthenticated) {
+        context.mainStore.auth = user
+        context.mainStore.user = context.userRecord
+        context.organizationStore.organizations = [{ gid: 'org-123', role: 'admin' }]
+        context.organizationStore.hasOrganizations = true
+      }
+      const guard = await getGuard()
+      const next = vi.fn()
+
+      await guard(
+        { path: '/settings/organization/plans', fullPath: '/settings/organization/plans?success=true', meta: { middleware: 'auth' }, query: { success: 'true' } },
+        alreadyAuthenticated
+          ? { path: '/app/com.test.pending-onboarding/getting-started', fullPath: '/app/com.test.pending-onboarding/getting-started', meta: { middleware: 'auth' }, query: {} }
+          : LOGIN_ROUTE,
+        next,
+      )
+
+      expect(next).toHaveBeenCalledWith()
+    })
+  })
+
   it.concurrent('allows an eligible user to explore the dashboard until refresh', async () => {
     await withTestContext(async (context) => {
       context.mockApps.push({ app_id: 'com.test.pending-onboarding', need_onboarding: true })
