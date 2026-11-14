@@ -25,3 +25,11 @@ The manifest's publication object contains release notes. Leave reviewer credent
 ## Submission
 
 Follow https://developers.openai.com/plugins/deploy/submission. Save private review information, reconnect and rescan the deployed MCP server, and inspect every blocking finding before submitting. Approval and publication are separate steps; a successful ZIP upload or metadata scan does not mean the plugin is published.
+
+## Held MCP definitions
+
+Open the affected tool or Server instructions in the existing plugin's MCP tab and inspect the scanned definition. A generic "needs further review" finding does not identify a schema error or establish which part of the definition caused the hold. Preserve the active submission while investigating; do not create a duplicate plugin or label a hold resolved based on local tests.
+
+For signing credential uploads, verify that the scanned definition states the actual boundary: only app ID, platform and mode enter MCP, a single-use upload URL expires after 10 minutes, and a separate authorized upload stores the user's file encrypted at rest. The user confirms the destination and mode. Credential contents must not be requested in chat, passed as tool arguments or exposed in logs. Preparing the upload does not grant additional app permissions or authorize deleting a local file.
+
+After a metadata correction is deployed, use Rescan and inspect the new findings. If a tool hold remains without a specific defect, use the portal's Appeal action when available, with the implementation and permission checks as evidence. Tool appeals do not cover shared server instructions; follow the active review or contact OpenAI support for that hold. Include the plugin ID privately. See [MCP review requirements](https://developers.openai.com/plugins/deploy/app-review) and [submission and appeals](https://developers.openai.com/plugins/deploy/submission).
