@@ -32,7 +32,7 @@ use subscription-only reconnect after an upgrade.
 
 Both commands read `internal/cloudflare/.env.prod` for DB URLs and use the
 baked-in Capgo EU2 publication/subscription/slot names (`capgo_google_eu_2_pub` /
-`capgo_google_eu_2_sub` / live slot), with no shell exports.
+`capgo_google_eu_2_sub` / live slot) — no shell exports.
 
 `public.manifest_per_version` is primary-only while the encoded format is not
 used by plugin reads. The migration removing it from the EU2 publication stops
@@ -62,52 +62,56 @@ and copied fresh by `REFRESH PUBLICATION`); pass `--tables a,b` or `--skip`
 to change that. Rows that changed during the repair are reported; run it again
 to settle them.
 
-## Release and CI guardrails
+## Release reconciliation
 
-Production deploy no longer runs automatic Google subscriber DDL from GitHub
-Actions (see #4007). Schema drift is prevented in the repository instead:
+The release job rebuilds the selected schema catalog from the checked-out local
+migrations through Tinbase/PGlite. It never reads
+`schema_replicate.catalog.json` as a release input.
 
-1. **Before every PR merge and before `supabase db push` in production**, CI
-   runs `bun scripts/check-read-replica-migrations-catalog.ts`. It builds the
-   replicated-table catalog from all local migrations through PGlite/Tinbase and
-   requires an exact match with the committed
-   `read_replicate/schema_replicate.catalog.json`. Any migration that adds or
-   alters columns on a replicated table without updating the snapshot fails the
-   job.
+Before primary Supabase migrations run, the job reads the bounded subscriber
+catalog through Cloud SQL Data API and builds the complete reconciliation plan.
+For an approved non-empty plan, the job writes one `BEGIN`/DDL/`COMMIT`
+transaction to the dedicated private Cloud Storage bucket, invokes Cloud SQL's
+server-side import as its existing `postgres` user, removes that object, and
+then re-reads the catalog. The bucket grants the CI service account only
+bucket-scoped object access and the Cloud SQL service agent only read access.
+Any skipped, unsupported, or non-transactional change stops the release before
+it can mutate either database.
 
-2. **On Supabase integration CI**, `bun run readreplicate:check-schema`
-   regenerates `read_replicate/schema_replicate.sql` and
-   `read_replicate/schema_replicate.catalog.json` from a freshly migrated local
-   Postgres dump and fails when those files drift.
+New replicated tables are only created when they are listed in
+`ALLOWED_NEW_REPLICA_TABLES` (`schema_additive_sync.ts`), which pins their exact
+`CREATE TABLE` SQL and catalog shape; any other missing table stops the
+release. After primary migrations, the `read_replica_subscription` job lists
+the tables `capgo_google_eu_2_sub` streams and, when a replicated table is
+missing, runs `ALTER SUBSCRIPTION ... REFRESH PUBLICATION WITH (copy_data =
+true)` as a single Data API statement (it cannot run inside the import's
+transaction), then checks the table is streamed.
 
-When a migration touches replicated tables, update the snapshot before merge:
+This path has no direct PostgreSQL connection from GitHub Actions, no runner IP
+allowlist, no temporary Worker, and no database-side helper, database role,
+privilege, or object-owner setup.
+
+Verification is directional rather than exact schema equality. The subscriber must
+contain every required publisher object, but it may retain safe legacy
+subscriber-only nullable/default-backed columns, supporting types, sequences,
+functions, and ordinary non-unique indexes. The release stops on incompatible or
+missing publisher objects, extra tables or constraints, unique indexes, and
+subscriber-only required columns that can reject replicated rows.
+
+| GitHub repository secret | Value                               |
+| ------------------------ | ----------------------------------- |
+| `GOOGLE_SERVICE_ACCOUNT` | Base64-encoded service-account JSON |
+
+The project, instance, database, and import configuration are fixed in the
+sync script, not supplied as GitHub variables.
 
 ```bash
-bun run readreplicate:prepare
-git add read_replicate/schema_replicate.sql read_replicate/schema_replicate.catalog.json
+bun scripts/sync-read-replica-schema.ts
 ```
 
-New replicated tables must be listed in `REPLICA_TABLES` (`schema_catalog.ts`)
-and, when first introduced, in `ALLOWED_NEW_REPLICA_TABLES`
-(`schema_additive_sync.ts`) with their exact `CREATE TABLE` SQL.
-
-Manual Google reconciliation (copy, repair, subscription refresh, upgrade
-teardown) still uses the scripts in this directory with
-`internal/cloudflare/.env.prod`. Those paths are operator-only; they are not
-invoked from the release workflow.
-
-### Plugin replication lag
-
-The primary updates `public.read_replica_commit_marker` on a schedule. Plugin
-workers on regional replicas combine upstream WAL statistics with the age of that
-row so a subscriber stuck in an apply loop (fresh `last_msg_receipt_time`, no
-applied commits) still reports lag and tightens edge cache TTL.
-
-Optional operator sync against a live Google subscriber (not used in release CI):
+For a no-write check of the local catalog, live subscriber catalog, and complete
+plan preflight:
 
 ```bash
 bun scripts/sync-read-replica-schema.ts --dry-run
 ```
-
-Requires `GOOGLE_SERVICE_ACCOUNT` and manual credentials; production release
-does not call this script anymore.
