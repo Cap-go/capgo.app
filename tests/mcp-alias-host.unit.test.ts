@@ -1,13 +1,15 @@
 import { writeFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Bindings } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import { LATEST_LEGACY_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage } from '../supabase/functions/_backend/mcp/protocol.ts'
 
-const env = {
+const stubEnv = {
   MCP_OAUTH_API_ORIGIN: 'https://api.capgo.app',
   MCP_OAUTH_ISSUER: 'https://capgo.app',
 }
+const env = stubEnv as unknown as Bindings
 
 const initBody = JSON.stringify({
   jsonrpc: '2.0',
@@ -55,7 +57,7 @@ vi.mock('../supabase/functions/_backend/utils/utils.ts', async original => ({
 vi.mock('../supabase/functions/_backend/utils/posthog.ts', () => ({ trackPosthogEvent: async () => {} }))
 
 beforeEach(() => {
-  for (const [key, value] of Object.entries(env))
+  for (const [key, value] of Object.entries(stubEnv))
     vi.stubEnv(key, value)
 })
 
@@ -95,7 +97,7 @@ describe('mcp.capgo.app alias host', () => {
       expect(initJson).toMatchObject({ jsonrpc: '2.0', id: 1, result: { protocolVersion: expect.any(String) } })
       const list = await post(path, listBody, auth)
       expect(list.status).toBe(200)
-      const listJson = await list.json()
+      const listJson = await list.json() as { result: { tools: unknown[] } }
       expect(listJson).toMatchObject({ jsonrpc: '2.0', id: 2, result: { tools: expect.any(Array) } })
       expect(listJson.result.tools.length).toBeGreaterThan(10)
     }
@@ -146,7 +148,7 @@ describe('mcp alias initialize parity', () => {
       call: async () => ({ ok: true, status: 200, data: {} }),
     })
     const response = await post('https://mcp.capgo.app/mcp', initBody, { authorization: 'Bearer alias-test-key' })
-    const workerJson = await response.json()
+    const workerJson = await response.json() as { result: { protocolVersion?: string } }
     expect(workerJson.result).toMatchObject({ protocolVersion: init?.result && (init.result as { protocolVersion?: string }).protocolVersion })
   })
 })

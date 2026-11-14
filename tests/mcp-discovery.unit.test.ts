@@ -1,14 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import type { Bindings } from '../supabase/functions/_backend/utils/cloudflare.ts'
 import apiWorker from '../cloudflare_workers/api/index.ts'
 import { MCP_SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage } from '../supabase/functions/_backend/mcp/protocol.ts'
 
-const env = { MCP_OAUTH_API_ORIGIN: 'https://api.capgo.app', MCP_OAUTH_ISSUER: 'https://capgo.app' }
-const endpoint = `${env.MCP_OAUTH_API_ORIGIN}/mcp`
+const stubEnv = { MCP_OAUTH_API_ORIGIN: 'https://api.capgo.app', MCP_OAUTH_ISSUER: 'https://capgo.app' }
+const env = stubEnv as unknown as Bindings
+const endpoint = `${stubEnv.MCP_OAUTH_API_ORIGIN}/mcp`
 const request = (path: string, init?: RequestInit) => apiWorker.fetch(new Request(`https://api.usecapgo.com${path}`, init), env)
 
 beforeAll(() => {
-  for (const [key, value] of Object.entries(env))
+  for (const [key, value] of Object.entries(stubEnv))
     vi.stubEnv(key, value)
 })
 afterAll(() => vi.unstubAllEnvs())

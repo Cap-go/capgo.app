@@ -320,11 +320,11 @@ createAllCatch(appScheduled, functionNameScheduled)
 export { ConsoleEvents } from './console_events.ts'
 export { QueueDispatcher } from './queue_dispatcher.ts'
 export default {
-  fetch(request: Request, env: Bindings, ctx: ExecutionContext) {
+  fetch(request: Request, env?: Bindings, ctx?: ExecutionContext) {
     const routed = handleMcpAliasRequest(request)
     if (routed instanceof Response)
       return routed
-    return app.fetch(routed, env, ctx)
+    return app.fetch(routed, env ?? ({} as Bindings), ctx)
   },
   queue: processApiQueueBatch,
   scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext) {
