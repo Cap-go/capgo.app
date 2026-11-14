@@ -1,9 +1,11 @@
 import { MCP_ALIAS_HOST, MCP_PUBLIC_PATH_HEADER } from '../../supabase/functions/_backend/mcp/oauth_shared.ts'
 
-const NOT_FOUND = new Response(JSON.stringify({ error: 'not_found' }), {
-  status: 404,
-  headers: { 'content-type': 'application/json' },
-})
+function mcpAliasNotFound(): Response {
+  return new Response(JSON.stringify({ error: 'not_found' }), {
+    status: 404,
+    headers: { 'content-type': 'application/json' },
+  })
+}
 
 export function isMcpAliasRequest(request: Request): boolean {
   const host = request.headers.get('host')?.split(':')[0]?.toLowerCase()
@@ -36,7 +38,7 @@ export function handleMcpAliasRequest(request: Request): Request | Response {
     return request
   const url = new URL(request.url)
   if (!isAllowedMcpAliasPath(url.pathname))
-    return NOT_FOUND
+    return mcpAliasNotFound()
 
   const headers = new Headers(request.headers)
   headers.set(MCP_PUBLIC_PATH_HEADER, mcpAliasPublicPath(url.pathname))

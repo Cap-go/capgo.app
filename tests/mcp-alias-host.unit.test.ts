@@ -69,6 +69,22 @@ describe('mcp.capgo.app alias host', () => {
     expect(response.status).toBe(404)
   })
 
+  it('returns a fresh 404 body for each rejected alias request', async () => {
+    const first = await apiWorker.fetch(new Request('https://mcp.capgo.app/ok'), env)
+    const second = await apiWorker.fetch(new Request('https://mcp.capgo.app/ok'), env)
+    expect(first.status).toBe(404)
+    expect(second.status).toBe(404)
+    await expect(first.json()).resolves.toEqual({ error: 'not_found' })
+    await expect(second.json()).resolves.toEqual({ error: 'not_found' })
+  })
+
+  it.concurrent('serves server-card links without a double slash on the alias host', async () => {
+    const catalog = await apiWorker.fetch(new Request('https://mcp.capgo.app/.well-known/ai-catalog.json'), env)
+    await expect(catalog.json()).resolves.toMatchObject({
+      entries: [{ url: 'https://mcp.capgo.app/mcp/server-card' }],
+    })
+  })
+
   it.concurrent('routes POST / to the MCP handler with root resource metadata', async () => {
     const response = await post('https://mcp.capgo.app/', initBody)
     expect(response.status).toBe(401)

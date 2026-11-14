@@ -73,6 +73,33 @@ export function getResourceUrl(c: Context): string {
   return `${getApiOrigin(c)}${MCP_PATH}`
 }
 
+/** Stable MCP server card URL (never append paths to getResourceUrl, which may end with `/`). */
+export function getMcpServerCardUrl(c: Context): string {
+  return `${getApiOrigin(c)}${MCP_PATH}/server-card`
+}
+
+/** OAuth resource parameter: alias root `/` and `/mcp` refer to the same MCP resource. */
+export function canonicalMcpResourceUrl(url: string): string {
+  const trimmed = url.trim()
+  if (!trimmed)
+    return trimmed
+  try {
+    const parsed = new URL(trimmed)
+    const path = parsed.pathname.replace(/\/+$/, '') || '/'
+    if (isMcpAliasHost(parsed.hostname) && (path === '/' || path === MCP_PATH))
+      return `${parsed.origin}${MCP_PATH}`
+    const suffix = path === '/' ? '' : path
+    return `${parsed.origin}${suffix}`.replace(/\/+$/, '') || `${parsed.origin}${MCP_PATH}`
+  }
+  catch {
+    return trimmed.replace(/\/+$/, '')
+  }
+}
+
+export function mcpResourceUrlsMatch(requested: string, expected: string): boolean {
+  return canonicalMcpResourceUrl(requested) === canonicalMcpResourceUrl(expected)
+}
+
 /** RFC 6749 §5.2 / RFC 7591 §3.2.2 error body. These shapes are mandated by the OAuth specs. */
 
 export function oauthError(c: McpContext, status: 400 | 401 | 403 | 404 | 429 | 500 | 503, error: string, description: string) {

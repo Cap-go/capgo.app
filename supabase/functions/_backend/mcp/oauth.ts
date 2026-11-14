@@ -7,7 +7,7 @@ import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
 import { agentAuthMetadata, app as agentIdentityApp, handleAgentClaimGrant } from './agent_identity.ts'
 import { AGENT_AUTH_CLAIM_GRANT } from './agent_identity_utils.ts'
-import { getApiOrigin, getClientIpHash, getIssuer, getRequestOrigin, getResourceUrl, insertWithIpLimit, MCP_OAUTH_PATH, MCP_PATH, oauthError, readParams, withPg } from './oauth_shared.ts'
+import { getApiOrigin, getClientIpHash, getIssuer, getRequestOrigin, getResourceUrl, insertWithIpLimit, MCP_OAUTH_PATH, MCP_PATH, mcpResourceUrlsMatch, oauthError, readParams, withPg } from './oauth_shared.ts'
 import {
   buildRedirectUrl,
   decryptWithCode,
@@ -286,7 +286,7 @@ app.get(`${MCP_OAUTH_PATH}/authorize`, async (c) => {
   const requestedScopes = (query.scope ?? MCP_OAUTH_SCOPE).split(' ').filter(Boolean)
   if (requestedScopes.some(scope => scope !== MCP_OAUTH_SCOPE))
     return redirectError('invalid_scope', `Supported scope: ${MCP_OAUTH_SCOPE}`)
-  if (query.resource && query.resource.replace(/\/+$/, '') !== getResourceUrl(c))
+  if (query.resource && !mcpResourceUrlsMatch(query.resource, getResourceUrl(c)))
     return redirectError('invalid_target', `resource must be ${getResourceUrl(c)}`)
 
   const webAppUrl = getEnv(c, 'WEBAPP_URL').replace(/\/+$/, '')
