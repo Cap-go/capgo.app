@@ -99,10 +99,13 @@ describe('plugin state partial-key ACK contracts', () => {
       await blocker.query('BEGIN')
       await blocker.query(`UPDATE public.plugin_state_sync_pending SET lease_token = $2
         WHERE app_id = $1`, [APP_ID, state === 'replaced' ? randomUUID() : TOKEN])
+      // Start with an activity snapshot that cannot contain the ACK.
+      await blocker.query('SELECT pid FROM pg_catalog.pg_stat_activity')
       // Start the stale ACK while its row is locked by the replacement.
       const ack = partial([{ kind: 'manifest', ref: '101' }])
       let waiting = false
       for (let attempt = 0; attempt < 100 && !waiting; attempt++) {
+        await blocker.query('SELECT pg_catalog.pg_stat_clear_snapshot()')
         const result = await blocker.query(`SELECT 1 FROM pg_catalog.pg_stat_activity
           WHERE wait_event_type = 'Lock' AND query LIKE 'SELECT public.ack_plugin_state_sync_progress(%'`)
         waiting = result.rows.length > 0
