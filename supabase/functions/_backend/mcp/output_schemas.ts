@@ -3,6 +3,7 @@ import { skillContentSchema, skillSchema } from './skills.ts'
 
 const text = (description: string) => z.string().describe(description)
 const number = (description: string) => z.number().describe(description)
+const jsonValue = z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.unknown()), z.record(z.string(), z.unknown())])
 const metadata = z
   .record(z.string(), z.unknown())
   .describe(
@@ -11,6 +12,7 @@ const metadata = z
 const timestamp = text('ISO timestamp.').nullable()
 const status = text('Operation acknowledgement from the API.')
 const ack = z.object({ status }).passthrough()
+const completedAck = ack.extend({ status: text('The value ok acknowledges that the requested API operation completed.') })
 const app = z
   .object({
     app_id: text('Capacitor app identifier; use as appId in subsequent tools.'),
@@ -912,15 +914,15 @@ const observe = z
   .passthrough()
 const usageDay = z
   .object({
-    date: text('Date of this usage bucket.'),
-    mau: number('Active devices in the reporting bucket.'),
-    storage: number('Stored bytes.'),
+    date: text('UTC date of this usage bucket, serialized as an ISO timestamp.'),
+    mau: number('Active device usage for this bucket; cumulative across buckets unless noAccumulate is true.'),
+    storage: number('Storage metric in bytes, reconstructed from storage changes; cumulative unless noAccumulate is true.'),
     storage_byte_hours: z
       .number()
       .optional()
-      .describe('Stored bytes integrated over time, measured in byte-hours.'),
-    bandwidth: number('Transferred bytes.'),
-    build_time_seconds: number('Native build time in seconds.'),
+      .describe('Storage integrated over time in byte-hours; cumulative unless noAccumulate is true. Account aggregation retains the first record when dates overlap.'),
+    bandwidth: number('Transferred bytes; cumulative unless noAccumulate is true.'),
+    build_time_seconds: number('Native build time in seconds; cumulative unless noAccumulate is true.'),
     get: z
       .number()
       .optional()
@@ -994,6 +996,25 @@ const versionUsage = z
       ),
   })
   .passthrough()
+const nativeActiveDevices = z.object({
+  android: number('Active Android devices in this reporting period.'),
+  ios: number('Active iOS devices in this reporting period.'),
+  electron: number('Active Electron devices in this reporting period.'),
+  unknown: number('Active devices whose platform is not recognized.'),
+  total: number('Active devices summed across these platforms.'),
+})
+const nativeUsage = versionUsage.extend({
+  activeDevices: nativeActiveDevices.optional().describe('Platform totals for the selected period. A failed secondary summary read produces zeros, so zeros do not prove inactivity.'),
+  previousPeriodActiveDevices: nativeActiveDevices.optional().describe('Platform totals for the preceding period of the same duration. A failed secondary summary read produces zeros.'),
+  dailyPlatformActive: z.object({
+    labels: z.array(z.string()).describe('UTC date labels for the daily platform counts.'),
+    android: z.array(z.number()).describe('Daily Android device counts aligned with labels.'),
+    ios: z.array(z.number()).describe('Daily iOS device counts aligned with labels.'),
+    electron: z.array(z.number()).describe('Daily Electron device counts aligned with labels.'),
+    unknown: z.array(z.number()).describe('Daily counts for unrecognized platforms aligned with labels.'),
+    total: z.array(z.number()).describe('Daily counts summed across platforms and aligned with labels.'),
+  }).optional().describe('Platform activity by day; a failed secondary read produces zero-filled counts.'),
+})
 const signedUpload = z
   .object({
     job_id: text('Cloud build job identifier.'),
@@ -1118,6 +1139,14 @@ const notificationSettings = z.object({
 const campaign = z
   .object({
     id: text('Push campaign id.'),
+    owner_org: text('Organization that owns this campaign.').optional(),
+    audience: jsonValue.optional().describe('Saved targeting specification for this campaign.'),
+    payload: jsonValue.optional().describe('Notification content or update-check payload saved for this campaign.'),
+    counters: jsonValue.optional().describe('Stored campaign counters; keys depend on campaign processing and are not computed by this read.'),
+    updated_at: timestamp.optional().describe('Last update to the campaign record, or null when unavailable.'),
+    scheduled_at: timestamp.optional().describe('Scheduled send time; null when no schedule is saved.'),
+    queued_at: timestamp.optional().describe('When campaign processing was queued; null when not recorded.'),
+    completed_at: timestamp.optional().describe('When campaign processing completed; null when not recorded.'),
     app_id: z
       .string()
       .optional()
@@ -1128,7 +1157,7 @@ const campaign = z
       .string()
       .nullable()
       .optional()
-      .describe('Display or lookup name of this record.'),
+      .describe('Campaign name chosen when it was created; null when unnamed.'),
     kind: z
       .string()
       .optional()
@@ -1138,7 +1167,7 @@ const campaign = z
     status: z
       .string()
       .optional()
-      .describe('Current lifecycle or delivery state for this resource.'),
+      .describe('Stored campaign lifecycle state; not confirmation that every target device received a push.'),
     created_at: timestamp
       .optional()
       .describe(
@@ -1275,7 +1304,7 @@ export const MCP_OUTPUT_SCHEMAS = {
     }),
     'Updated organization settings.',
   ),
-  capgo_delete_organization: api(ack, 'Deletion acknowledgement.'),
+  capgo_delete_organization: api(completedAck, 'Deletion acknowledgement.'),
   capgo_list_organization_members: api(
     z.array(
       z.object({
@@ -1307,11 +1336,11 @@ export const MCP_OUTPUT_SCHEMAS = {
     'Invitation acknowledgement; does not imply the invitation was accepted.',
   ),
   capgo_update_organization_member_role: api(
-    ack,
+    completedAck,
     'Role-change acknowledgement.',
   ),
   capgo_remove_organization_member: api(
-    ack,
+    completedAck,
     'Membership removal acknowledgement.',
   ),
   capgo_list_audit_logs: api(
@@ -1441,7 +1470,7 @@ export const MCP_OUTPUT_SCHEMAS = {
     ),
     'Manageable API key metadata; no API key secrets.',
   ),
-  capgo_delete_api_key: api(ack, 'API key revocation acknowledgement.'),
+  capgo_delete_api_key: api(completedAck, 'API key revocation acknowledgement.'),
   capgo_list_apps: api(z.array(app), 'Accessible apps on this page.'),
   capgo_get_app: api(app, 'Requested app configuration.'),
   capgo_add_app: api(
@@ -1449,7 +1478,7 @@ export const MCP_OUTPUT_SCHEMAS = {
       status: z
         .literal('already_exists')
         .optional()
-        .describe('Current lifecycle or delivery state for this resource.'),
+        .describe('Present as already_exists when this app is already registered in the requested organization; omitted for a newly created app.'),
       message: z
         .string()
         .optional()
@@ -1461,10 +1490,10 @@ export const MCP_OUTPUT_SCHEMAS = {
           'Suggested follow-up checks or operations; execution still requires the appropriate authorization.',
         ),
     }),
-    'Newly registered app.',
+    'Created app record, or an already_exists acknowledgement with app_id, owner_org, message and next_steps for an app already in the requested organization.',
   ),
   capgo_update_app: api(app, 'Updated app configuration.'),
-  capgo_delete_app: api(ack, 'App deletion acknowledgement.'),
+  capgo_delete_app: api(completedAck, 'App deletion acknowledgement.'),
   capgo_create_demo_app: api(
     z.object({
       status,
@@ -1540,28 +1569,28 @@ export const MCP_OUTPUT_SCHEMAS = {
     z.object({ status, bundle }),
     'Bundle registered from its external archive URL.',
   ),
-  capgo_update_bundle_metadata: api(ack, 'Metadata update acknowledgement.'),
+  capgo_update_bundle_metadata: api(completedAck, 'Metadata update acknowledgement.'),
   capgo_set_bundle_channel: api(
     z.object({
-      status,
+      status: text('The value success confirms that the channel now points to the requested bundle.'),
       message: z
         .string()
-        .describe('Human-readable explanation of the operation outcome.'),
+        .describe('Message naming the deployed bundle and target channel.'),
     }),
     'Channel deployment acknowledgement.',
   ),
   capgo_delete_bundle: api(
-    ack.extend({
+    completedAck.extend({
       id: z
         .number()
         .optional()
         .describe(
-          'Identifier of this record; use it with the corresponding resource tool.',
+          'Numeric id of the deleted bundle, when returned by the selected API version.',
         ),
       name: z
         .string()
         .optional()
-        .describe('Display or lookup name of this record.'),
+        .describe('Version name of the deleted bundle, when returned by the selected API version.'),
     }),
     'Bundle deletion acknowledgement.',
   ),
@@ -1788,8 +1817,8 @@ export const MCP_OUTPUT_SCHEMAS = {
     'Channel creation acknowledgement and created channel fields when returned.',
   ),
   capgo_update_channel: api(ack, 'Channel update acknowledgement.'),
-  capgo_update_channel_rollout: api(ack, 'Rollout update acknowledgement.'),
-  capgo_delete_channel: api(ack, 'Channel deletion acknowledgement.'),
+  capgo_update_channel_rollout: api(completedAck, 'Rollout update acknowledgement.'),
+  capgo_delete_channel: api(completedAck, 'Channel deletion acknowledgement.'),
   capgo_list_devices: api(
     z.object({
       data: z
@@ -1812,15 +1841,15 @@ export const MCP_OUTPUT_SCHEMAS = {
   ),
   capgo_get_device: api(device, 'Requested device information.'),
   capgo_set_device_channel: api(
-    ack,
+    completedAck,
     'Forced channel override acknowledgement.',
   ),
   capgo_unset_device_channel: api(
-    ack,
+    completedAck,
     'Channel override removal acknowledgement.',
   ),
   capgo_get_app_statistics: api(
-    usage,
+    z.array(usageDay),
     'Daily or cumulative app usage, according to noAccumulate.',
   ),
   capgo_get_organization_statistics: api(
@@ -1828,11 +1857,11 @@ export const MCP_OUTPUT_SCHEMAS = {
     'Daily/cumulative organization usage; breakdown includes global and byApp series.',
   ),
   capgo_get_account_statistics: api(
-    usage,
+    z.array(usageDay),
     'Daily/cumulative usage across the account.',
   ),
   capgo_get_bundle_usage: api(versionUsage, 'OTA version usage series.'),
-  capgo_get_native_usage: api(versionUsage, 'Native version usage series.'),
+  capgo_get_native_usage: api(nativeUsage, 'Native adoption chart, current and previous period active-device totals, and daily platform counts.'),
   capgo_observe: api(
     observe,
     'View-specific telemetry. Read sample_scan and aggregate_scope before interpreting counts.',
@@ -1859,11 +1888,11 @@ export const MCP_OUTPUT_SCHEMAS = {
         ),
       status: z
         .string()
-        .describe('Current lifecycle or delivery state for this resource.'),
+        .describe('Builder lifecycle state returned after starting or inspecting an already-started job. Poll capgo_get_build_status to determine its outcome.'),
       logs_url: z
         .string()
         .optional()
-        .describe('Live build log stream location when available.'),
+        .describe('Direct live log stream URL when available; authenticate with logs_token.'),
       logs_token: text('Sensitive job-scoped stream token.').optional(),
     }),
     'Started or already-running build state.',
@@ -2091,12 +2120,12 @@ export const MCP_OUTPUT_SCHEMAS = {
   ),
   capgo_delete_webhook: api(
     z.object({
-      status,
+      status: text('The value Webhook deleted acknowledges removal of the webhook and its delivery history.'),
       webhookId: z
         .string()
         .describe('Webhook identity removed by this operation.'),
     }),
-    'Deleted webhook id.',
+    'Deletion acknowledgement with status and webhookId identifying the removed configuration.',
   ),
   capgo_test_webhook: api(
     z.object({
@@ -2197,7 +2226,7 @@ export const MCP_OUTPUT_SCHEMAS = {
   ),
   capgo_retry_webhook_delivery: api(
     z.object({
-      status,
+      status: text('The value Delivery queued for retry acknowledges queue acceptance, not receiver delivery.'),
       deliveryId: z
         .string()
         .describe(
@@ -2284,19 +2313,17 @@ export const MCP_OUTPUT_SCHEMAS = {
               id: z
                 .string()
                 .describe(
-                  'Identifier of this record; use it with the corresponding resource tool.',
+                  'Stored push provider configuration id.',
                 ),
-              provider: z
-                .string()
-                .optional()
-                .describe(
-                  'Push service provider associated with this configuration.',
-                ),
-              enabled: z
-                .boolean()
-                .optional()
-                .describe('Whether this configuration is active.'),
-              config: metadata.optional(),
+              app_id: text('App whose push provider this configures.').optional(),
+              owner_org: text('Organization that owns this provider configuration.').optional(),
+              platform: text('Native platform served by this provider configuration.').optional(),
+              status: text('Saved configuration state, such as draft, configured, disabled or error; not a live credential validity check.').optional(),
+              config: metadata.optional().describe('Public provider configuration; stored signing secrets are excluded.'),
+              secret_ref: text('Reference to provider credentials, not the credential value.').nullable().optional(),
+              has_secret: z.boolean().optional().describe('Whether encrypted provider credentials are stored; does not confirm their validity.'),
+              created_at: timestamp.optional().describe('Provider configuration creation time, or null when unavailable.'),
+              updated_at: timestamp.optional().describe('Last provider configuration update time, or null when unavailable.'),
             })
             .passthrough(),
         )
@@ -2322,7 +2349,7 @@ export const MCP_OUTPUT_SCHEMAS = {
           'Recent push campaign records; limited to the last 100 campaigns.',
         ),
     }),
-    'Last 100 notification campaigns.',
+    'Stored notification campaign records in data, newest first, limited to the last 100. Queue and lifecycle states do not confirm device delivery.',
   ),
   capgo_get_notification_stats: api(
     z.object({
@@ -2396,7 +2423,7 @@ export const MCP_OUTPUT_SCHEMAS = {
     z.object({
       id: z.string().describe('Simulator session id that received the command.'),
       command: z.string().describe('agent-device command that ran.'),
-      result: z.unknown().describe('agent-device command result. A screenshot is also returned as image content.'),
+      result: jsonValue.describe('Command-specific JSON forwarded from agent-device result.data, or null when absent. The device service owns its internal fields. Screenshot bytes are returned separately as MCP JPEG image content.'),
     }).passthrough(),
     'Result of one agent-device command on a running simulator.',
   ),

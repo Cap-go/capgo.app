@@ -279,7 +279,12 @@ const payloads = {
   },
   capgo_get_account_statistics: [day],
   capgo_get_bundle_usage: versionUsage,
-  capgo_get_native_usage: versionUsage,
+  capgo_get_native_usage: {
+    ...versionUsage,
+    activeDevices: { android: 1, ios: 2, electron: 0, unknown: 0, total: 3 },
+    previousPeriodActiveDevices: { android: 0, ios: 1, electron: 0, unknown: 0, total: 1 },
+    dailyPlatformActive: { labels: versionUsage.labels, android: [1], ios: [2], electron: [0], unknown: [0], total: [3] },
+  },
   capgo_observe: {
     app_id: appId,
     view: 'errors',
@@ -396,13 +401,13 @@ const payloads = {
   capgo_update_notification_settings: settings,
   capgo_list_notification_providers: {
     data: [
-      { id: 'example-provider', provider: 'fcm', status: 'active', config: {} },
+      { id: 'example-provider', app_id: appId, owner_org: orgId, platform: 'android', status: 'configured', config: {}, secret_ref: null, has_secret: true, created_at: stamp, updated_at: stamp },
     ],
   },
   capgo_send_notification: send,
   capgo_trigger_update_check: send,
   capgo_list_notification_campaigns: {
-    data: [{ id: 'example-campaign', app_id: appId, name: null }],
+    data: [{ id: 'example-campaign', app_id: appId, owner_org: orgId, name: null, kind: 'alert', status: 'queued', audience: { broadcast: true }, payload: { title: 'Example alert' }, counters: {}, created_at: stamp, updated_at: stamp, scheduled_at: null, queued_at: stamp, completed_at: null }],
   },
   capgo_get_notification_stats: { data: [{ event: 'delivered', count: 1 }] },
   capgo_list_skills: { skills: listSkills() },
@@ -557,6 +562,26 @@ describe('every hosted MCP tool has a usable output contract', () => {
         tool.outputSchema.safeParse(result.structuredContent).success,
         name,
       ).toBe(true)
+    },
+  )
+
+  it.concurrent.each([null, { devices: [] }, [{ name: 'Example device' }], 'ok', 1, true])(
+    'preserves command-specific JSON from the device service: %j',
+    async (commandResult) => {
+      const tool = MCP_TOOLS_BY_NAME.get('capgo_simulator_command')!
+      const data = { id: 'example-session', command: 'devices', result: commandResult }
+      const result = await tool.run({ appId, session_id: data.id, command: data.command }, context({ data }))
+      expect(result.isError).not.toBe(true)
+      expect(result.structuredContent).toEqual({ data })
+    },
+  )
+
+  it.concurrent.each(['capgo_get_app_statistics', 'capgo_get_account_statistics'])(
+    '%s declares dated records rather than an organization breakdown',
+    (name) => {
+      const schema = MCP_TOOLS_BY_NAME.get(name)!.outputSchema
+      expect(schema.safeParse({ data: [day] }).success).toBe(true)
+      expect(schema.safeParse({ data: { global: [day], byApp: [] } }).success).toBe(false)
     },
   )
 

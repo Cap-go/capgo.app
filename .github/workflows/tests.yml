@@ -950,6 +950,11 @@ jobs:
           - name: kv-2
             state: kv
             shard: 2/2
+          # This file took 124s on its own; combining it with the other KV
+          # tests exhausted the five-minute job budget after service startup.
+          - name: kv-state
+            state: kv
+            shard: 1/1
     permissions:
       contents: read
     concurrency:
@@ -1048,8 +1053,10 @@ jobs:
           done
       - name: Run Cloudflare plugin integration tests (serial)
         run: |
-          if [ "${{ matrix.state }}" = "kv" ]; then
-            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin:kv --shard=${{ matrix.shard }}
+          if [ "${{ matrix.name }}" = "kv-state" ]; then
+            USE_CLOUDFLARE_WORKERS=true bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bunx vitest run tests/plugin-kv-state.test.ts --config vitest.config.cloudflare-plugin-kv.ts
+          elif [ "${{ matrix.state }}" = "kv" ]; then
+            bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin:kv --exclude=tests/plugin-kv-state.test.ts --shard=${{ matrix.shard }}
           else
             bun scripts/run-tests-with-infra-retry.ts -- bun run supabase:with-env -- bun run test:cloudflare:plugin
           fi
