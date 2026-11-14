@@ -314,3 +314,22 @@ npx @capgo/cli@latest bundle zip com.example.app --path ./dist
 | **--package-json** | <code>string</code> | Paths to package.json files for monorepos (comma-separated) |
 | **--node-modules** | <code>string</code> | Paths to node_modules directories for monorepos (comma-separated) |
 
+
+## Recommend a release version
+
+Paid organizations can ask Cloudflare AI to suggest their next version and optionally draft release notes:
+
+```sh
+npx @capgo/cli@latest bundle recommend com.example.app --since v1.2.3 --changelog
+npx @capgo/cli@latest bundle recommend com.example.app --repo example/app --since v1.2.3 --ref main --changelog --json
+```
+
+The command prints a recommendation; it does not upload, modify files, create a tag, or publish a release. Review the result before using it. Native changes may still require a store rebuild.
+
+- Local mode reads up to 100 commit subjects, tracked-file change statistics, and 50 tags. It defaults to the latest reachable tag through HEAD, including tracked working-tree changes. It never reads untracked file contents. A shallow checkout may need `--since` after fetching the relevant history.
+- GitHub mode requires an authenticated `gh` CLI and explicit `--repo`, `--since`, and `--ref`. Authentication stays in `gh`; no GitHub token is sent to Capgo. Only the requested comparison is used.
+- The backend includes the latest 30 Capgo release names, short release comments, and minimum update versions. Use `--base-version` to choose a baseline, or supply it when no Capgo releases exist.
+- Historical naming, including prereleases and custom names, informs the suggestion. Semver recommendations must be newer and all suggestions are checked for existing names, including deleted bundles. Recommendations do not reserve a name; another upload can still claim it.
+- `--changelog` includes a Markdown draft in the response. `--json` emits machine-readable JSON. `--dry-run` prints the local payload without an AI request so you can inspect what will be shared.
+
+This command sends context to Capgo and Cloudflare AI. Commit subjects and paths can contain sensitive information: inspect them before submitting. Source file contents, author identities, and GitHub credentials are not collected. Capgo persists only daily request counters, not submitted context or generated text. Failed inference attempts count; rejected authorization and plan checks do not. Access requires an active paid subscription, excluding trials and overdue or cancelled subscriptions. Errors are reported instead of silently choosing a version.

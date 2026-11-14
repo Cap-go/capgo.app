@@ -152,5 +152,8 @@ export type {
   ZipBundleOptions,
 } from './sdk'
 
+// Simulator
+export { mcpGetSimulatorInputSchema, mcpSimulatorCommandInputSchema, mcpStartSimulatorInputSchema, mcpStopSimulatorInputSchema } from './simulator'
+
 // Validation
 export { validateOptions } from './validate'

@@ -408,6 +408,35 @@ const payloads = {
   capgo_list_skills: { skills: listSkills() },
   capgo_get_skill: { skill: getSkill(uri), contents: [readSkillResource(uri)] },
   capgo_search_docs: { results: [docsPage] },
+  capgo_start_simulator: {
+    id: '11111111-1111-4111-8111-111111111111',
+    url: 'https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/',
+    status: 'in-progress',
+    platform: 'ios',
+    kind: 'simulator',
+  },
+  capgo_get_simulator: {
+    id: '11111111-1111-4111-8111-111111111111',
+    url: 'https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/',
+    status: 'in-progress',
+    platform: 'ios',
+    kind: 'simulator',
+  },
+  capgo_stop_simulator: {
+    id: '11111111-1111-4111-8111-111111111111',
+    url: 'https://ios-emulator.capgo.app/s/11111111-1111-4111-8111-111111111111/',
+    status: 'stopped',
+    platform: 'ios',
+    kind: 'simulator',
+    build_time_seconds: 30,
+  },
+  capgo_simulator_command: {
+    data: {
+      id: '11111111-1111-4111-8111-111111111111',
+      command: 'devices',
+      result: { devices: [] },
+    },
+  },
 } satisfies Record<McpToolName, unknown>
 
 function context(payload: unknown): McpToolContext {
@@ -516,6 +545,9 @@ describe('every hosted MCP tool has a usable output contract', () => {
           name: 'build.succeeded',
           uri,
           subscriptionId: subscription.id,
+          session_id: '11111111-1111-4111-8111-111111111111',
+          platform: 'ios',
+          command: 'devices',
         },
         context(payload),
       )

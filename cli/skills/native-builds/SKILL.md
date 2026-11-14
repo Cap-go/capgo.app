@@ -355,7 +355,23 @@ npx @capgo/cli@latest simulator start com.example.app --platform android --name 
 - `--json`: print the session JSON instead of the session id and URL.
 - `-a, --apikey <apikey>` and `--api-host <apiHost>`: same authentication override as the other commands.
 
-The command prints the session id, then the session URL. `simulator get` and `simulator stop` need that id. An iOS session boots a slim device. An Android session uses a small profile: 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
+The command prints the session id, then the session URL. `--json` also prints `remoteConfig` in the Expo device-run shape: `agentDeviceRemoteSessionUrl`, `agentDeviceRemoteSessionToken`, `webPreviewUrl`, `webPreviewToken`, and `previewApiUrl`. `simulator get`, `simulator command`, and `simulator stop` need the session id. An iOS session boots a slim device. An Android session uses a small profile: 1536 MB RAM, 2 cores, no audio, no snapshot, and no boot animation.
+
+- `--build-job <buildJobId>`: install that saved iOS build into the new simulator.
+
+Both the hosted Capgo MCP and `capgo mcp` expose `capgo_start_simulator`, `capgo_get_simulator`, `capgo_simulator_command`, and `capgo_stop_simulator`. `capgo_simulator_command` speaks the same agent-device commands as an Expo simulator session: `devices`, `screenshot`, `snapshot`, `home`, `lock`, `tap`, and `open`.
+
+### `simulator command <deviceCommand> [sessionId] [appId]`
+
+```bash
+npx @capgo/cli@latest simulator command screenshot <session-id> com.example.app
+npx @capgo/cli@latest simulator command tap <session-id> com.example.app --x 0.5 --y 0.4
+npx @capgo/cli@latest simulator command open <session-id> com.example.app --bundle-id app.capgo.capdemo
+```
+
+- `<deviceCommand>`: `devices`, `screenshot`, `snapshot`, `home`, `lock`, `tap`, or `open`.
+- `--x <x>` and `--y <y>`: tap position. `0` to `1` is a fraction of the screen. A number above `1` is a point.
+- `--bundle-id <bundleId>`: bundle id for `open`.
 
 ### `simulator get [sessionId] [appId]`
 

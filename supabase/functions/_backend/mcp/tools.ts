@@ -55,8 +55,11 @@ export interface McpToolContext {
   apikeyRow?: Database['public']['Tables']['apikeys']['Row']
 }
 
+export type McpTextContent = { type: 'text', text: string }
+export type McpImageContent = { type: 'image', data: string, mimeType: string }
+
 export interface McpToolResult {
-  content: Array<{ type: 'text', text: string }>
+  content: [McpTextContent, ...(McpTextContent | McpImageContent)[]]
   structuredContent?: Record<string, unknown>
   isError?: boolean
 }
@@ -1210,6 +1213,111 @@ function buildUploadUrlGuidance(jobId: string, signed: McpApiResponse) {
   }
 }
 
+const simulatorSessionId = z.string().uuid().describe('Simulator session id returned by capgo_start_simulator.')
+const simulatorCommand = z.enum(['devices', 'screenshot', 'snapshot', 'home', 'lock', 'tap', 'open'])
+
+function simulatorSessionResult(response: McpApiResponse): McpToolResult {
+  if (!response.ok)
+    return apiResult(response)
+  const body = response.data && typeof response.data === 'object' ? response.data as { data?: unknown } : {}
+  const session = body.data ?? response.data
+  return textResult({ data: session })
+}
+
+function simulatorCommandResult(data: unknown): McpToolResult {
+  const envelope = data && typeof data === 'object' ? data as { data?: Record<string, unknown> } : {}
+  const inner = envelope.data ?? {}
+  const image = typeof inner.image_base64 === 'string' ? inner.image_base64 : undefined
+  const media = typeof inner.image_media_type === 'string' ? inner.image_media_type : 'image/jpeg'
+  const { image_base64: _image, image_media_type: _media, ...rest } = inner
+  const result = textResult({ data: rest })
+  if (result.isError || !image)
+    return result
+  return { ...result, content: [...result.content, { type: 'image', data: image, mimeType: media }] }
+}
+
+const simulatorTools: McpTool[] = [
+  {
+    ...apiTool({
+      name: 'capgo_start_simulator',
+      outputSchema: MCP_OUTPUT_SCHEMAS.capgo_start_simulator,
+      title: 'Start simulator',
+      description: 'Start an iOS or Android cloud simulator for an app. It uses one builder slot and build minutes. The result includes the session id, viewer URL, and remoteConfig in the Expo device-run shape (agentDeviceRemoteSessionUrl, agentDeviceRemoteSessionToken, webPreviewUrl, webPreviewToken, previewApiUrl). Drive the device with capgo_simulator_command. Pass build_job_id to install a saved iOS build.',
+      input: {
+        appId,
+        platform: z.enum(['ios', 'android']).describe('Simulator platform.'),
+        name: z.string().min(1).max(255).optional().describe('Session name shown with the simulator.'),
+        build_job_id: z.string().min(1).optional().describe('Saved iOS build job to install into the new simulator.'),
+      },
+      annotations: WRITE,
+      request: input => ({ method: 'POST', path: '/build/simulator', body: compact({ app_id: input.appId, platform: input.platform, name: input.name, build_job_id: input.build_job_id }) }),
+    }),
+    run: async (input, ctx) => simulatorSessionResult(await ctx.call({
+      method: 'POST',
+      path: '/build/simulator',
+      body: compact({ app_id: input.appId, platform: input.platform, name: input.name, build_job_id: input.build_job_id }),
+    })),
+  },
+  {
+    ...apiTool({
+      name: 'capgo_get_simulator',
+      outputSchema: MCP_OUTPUT_SCHEMAS.capgo_get_simulator,
+      title: 'Read simulator',
+      description: 'Read one simulator session. A running session includes Expo remoteConfig so a client can connect to the same agent-device endpoints.',
+      input: { appId, session_id: simulatorSessionId },
+      annotations: READ,
+      request: input => ({ method: 'GET', path: `/build/simulator/${enc(input.session_id)}`, query: { app_id: input.appId } }),
+    }),
+    run: async (input, ctx) => simulatorSessionResult(await ctx.call({
+      method: 'GET',
+      path: `/build/simulator/${enc(String(input.session_id))}`,
+      query: { app_id: input.appId },
+    })),
+  },
+  {
+    ...apiTool({
+      name: 'capgo_stop_simulator',
+      outputSchema: MCP_OUTPUT_SCHEMAS.capgo_stop_simulator,
+      title: 'Stop simulator',
+      description: 'Stop a simulator session and record its build minutes.',
+      input: { appId, session_id: simulatorSessionId },
+      annotations: DESTRUCTIVE,
+      request: input => ({ method: 'POST', path: `/build/simulator/${enc(input.session_id)}/stop`, body: { app_id: input.appId } }),
+    }),
+    run: async (input, ctx) => simulatorSessionResult(await ctx.call({
+      method: 'POST',
+      path: `/build/simulator/${enc(String(input.session_id))}/stop`,
+      body: { app_id: input.appId },
+    })),
+  },
+  {
+    name: 'capgo_simulator_command',
+    outputSchema: MCP_OUTPUT_SCHEMAS.capgo_simulator_command,
+    title: 'Control simulator',
+    description: 'Send one command to a running simulator over the same agent-device channel an Expo simulator session exposes. Commands: devices, screenshot, snapshot, home, lock, tap, open. tap uses x and y from 0 to 1, or points above 1. open uses bundle_id. screenshot returns the JPEG.',
+    inputSchema: z.object({
+      appId,
+      session_id: simulatorSessionId,
+      command: simulatorCommand.describe('agent-device command.'),
+      x: z.number().min(0).max(2000).optional().describe('Tap x. 0 to 1 is a fraction of the screen. A number above 1 is a point.'),
+      y: z.number().min(0).max(2000).optional().describe('Tap y. 0 to 1 is a fraction of the screen. A number above 1 is a point.'),
+      bundle_id: z.string().min(1).max(200).optional().describe('Bundle id for open, e.g. app.capgo.capdemo.'),
+    }),
+    annotations: { title: 'Control simulator', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    run: async (input, ctx) => {
+      const { appId: id, session_id, command, x, y, bundle_id } = input as { appId: string, session_id: string, command: string, x?: number, y?: number, bundle_id?: string }
+      const response = await ctx.call({
+        method: 'POST',
+        path: `/build/simulator/${enc(session_id)}/command`,
+        body: compact({ app_id: id, command, x, y, bundle_id }),
+      })
+      if (!response.ok)
+        return apiResult(response)
+      return simulatorCommandResult(response.data)
+    },
+  },
+]
+
 const buildTools: McpTool[] = [
   requestBuildTool,
   apiTool({
@@ -1704,6 +1812,7 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...deviceTools,
   ...statsTools,
   ...buildTools,
+  ...simulatorTools,
   ...webhookTools,
   ...mcpEventTools,
   ...notificationTools,

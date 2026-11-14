@@ -1,5 +1,8 @@
+import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'bun:test'
-import { simulatorApiRequest, simulatorTextOutput } from '../src/simulator/session'
+import { simulatorApiRequest, simulatorCommandTextOutput, simulatorStartOptions, simulatorTextOutput, writeSimulatorScreenshot } from '../src/simulator/session'
 
 describe('simulator CLI requests', () => {
   it('starts, reads, and stops one session', () => {
@@ -24,6 +27,56 @@ describe('simulator CLI requests', () => {
       url: 'https://api.capgo.app/build/simulator/session-1/stop',
       body: { app_id: 'ee.forgr.capgo' },
     })
+    expect(simulatorApiRequest('https://api.capgo.app', 'command', {
+      appId: 'ee.forgr.capgo',
+      id: 'session-1',
+      deviceCommand: 'tap',
+      x: 0.5,
+      y: 0.2,
+    })).toEqual({
+      method: 'POST',
+      url: 'https://api.capgo.app/build/simulator/session-1/command',
+      body: { app_id: 'ee.forgr.capgo', command: 'tap', x: 0.5, y: 0.2 },
+    })
+  })
+
+  it('maps the Commander buildJob flag onto buildJobId', () => {
+    expect(simulatorStartOptions({ buildJob: 'job-1' }).buildJobId).toBe('job-1')
+    expect(simulatorStartOptions({ buildJobId: 'job-2', buildJob: 'job-1' }).buildJobId).toBe('job-2')
+  })
+
+  it('prints a command result and writes a screenshot path', () => {
+    expect(simulatorCommandTextOutput({
+      data: { id: 'session-1', command: 'snapshot', result: { nodes: 1 } },
+    }).text).toBe('{\n  "nodes": 1\n}\n')
+    expect(simulatorCommandTextOutput({
+      data: { id: '11111111-1111-4111-8111-111111111111', command: 'screenshot', image_base64: 'aW1n' },
+    })).toEqual({
+      text: 'simulator-11111111-1111-4111-8111-111111111111.jpg\n',
+      screenshot: { name: 'simulator-11111111-1111-4111-8111-111111111111.jpg', base64: 'aW1n' },
+    })
+    expect(simulatorCommandTextOutput({
+      data: { id: 'cache/shot', command: 'screenshot', image_base64: 'aW1n' },
+    }).screenshot?.name).toBe('simulator-screenshot.jpg')
+  })
+
+  it('writes a screenshot file and refuses to follow a symlink', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'simulator-shot-'))
+    const outside = join(dir, 'outside.txt')
+    const file = join(dir, 'simulator-session-2.jpg')
+    const link = join(dir, 'simulator-session-1.jpg')
+    writeFileSync(outside, 'secret')
+    symlinkSync(outside, link)
+    try {
+      writeSimulatorScreenshot(file, Buffer.from('jpeg-bytes').toString('base64'))
+      expect(readFileSync(file).toString()).toBe('jpeg-bytes')
+      expect(() => writeSimulatorScreenshot(link, Buffer.from('jpeg-bytes').toString('base64'))).toThrow('symbolic link')
+      expect(readFileSync(outside, 'utf8')).toBe('secret')
+      expect(lstatSync(link).isSymbolicLink()).toBe(true)
+    }
+    finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('prints the session id before the URL', () => {
