@@ -117,7 +117,7 @@ BEGIN
 
   UPDATE public.plugin_state_sync_apps
   SET full_synced_at = NULL
-  WHERE app_id = ANY (COALESCE(p_removed, '{}'));
+  WHERE app_id = ANY (COALESCE(p_removed, '{}')) AND app_id = ANY (p_done);
 
   -- Purges and all whole-app/cursor decisions above still saw the live
   -- owning rows. Delete only those exact completed rows, never a newer producer

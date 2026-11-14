@@ -125,6 +125,33 @@ describe('plugin state partial-key ACK contracts', () => {
     }
   })
 
+  it.each(['expired', 'replaced'])('preserves a replacement full-sync marker when a deletion lease is %s', async (state) => {
+    await transaction(async () => {
+      const previous = (await client.query(`INSERT INTO public.plugin_state_sync_apps
+        (app_id, synced_at, app_synced_at, full_synced_at) VALUES ($1, now(), now(), now())
+        RETURNING synced_at, app_synced_at, full_synced_at`, [APP_ID])).rows
+      await job('app', '', state === 'expired' ? { expired: true } : { token: randomUUID() })
+      await client.query(`SELECT public.ack_plugin_state_sync_progress(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_removed => ARRAY[$2]::text[])`, [TOKEN, APP_ID])
+      expect((await client.query(`SELECT synced_at, app_synced_at, full_synced_at
+        FROM public.plugin_state_sync_apps WHERE app_id = $1`, [APP_ID])).rows).toEqual(previous)
+      expect(await purges()).toEqual([])
+    })
+  })
+
+  it('clears the full-sync marker for a live deletion ACK', async () => {
+    await transaction(async () => {
+      await client.query(`INSERT INTO public.plugin_state_sync_apps
+        (app_id, synced_at, app_synced_at, full_synced_at) VALUES ($1, now(), now(), now())`, [APP_ID])
+      await job('app', '')
+      await client.query(`SELECT public.ack_plugin_state_sync_progress(
+        p_lease_token => $1::uuid, p_done => ARRAY[$2]::text[], p_removed => ARRAY[$2]::text[])`, [TOKEN, APP_ID])
+      expect((await client.query(`SELECT full_synced_at FROM public.plugin_state_sync_apps WHERE app_id = $1`, [APP_ID])).rows)
+        .toEqual([{ full_synced_at: null }])
+      expect(await purges()).toEqual([{ scope: 'plugin_state' }])
+    })
+  })
+
   it('retains a newer full request when a live continuation and partial keys settle together', async () => {
     await transaction(async () => {
       await job('version', '1.0.0')
