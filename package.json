@@ -1,7 +1,7 @@
 {
   "name": "capgo-app",
   "type": "module",
-  "version": "22.50.1",
+  "version": "22.50.4",
   "private": true,
   "workspaces": [
     "cli",
@@ -21,7 +21,8 @@
     "readreplicate:upgrade:teardown": "bash read_replicate/replicate_upgrade_teardown.sh",
     "readreplicate:upgrade:reconnect": "READ_REPLICA_FULL_RESET=1 bash read_replicate/replicate_to_replica.sh",
     "readreplicate:check-schema": "bash scripts/check-read-replica-schema.sh",
-    "readreplicate:sync-schema": "bun scripts/sync-read-replica-schema.ts",
+    "readreplicate:sync-schema": "bun --preload ./read_replicate/preload_replica_env.ts scripts/sync-read-replica-schema.ts",
+    "readreplicate:sync-schema:apply": "bun --preload ./read_replicate/preload_replica_env.ts scripts/sync-read-replica-schema.ts --apply",
     "supabase:reset-postgres-config": "bash scripts/reset_supabase_postgres_config_defaults.sh",
     "cloudsql:allow-cloudflare": "bash scripts/update_cloudsql_authorized_networks.sh",
     "supabase:start": "bun scripts/supabase-worktree.ts start",

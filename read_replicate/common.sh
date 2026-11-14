@@ -5,7 +5,7 @@
 # handles replication from that instance to downstream regional replicas.
 
 REPLICA_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPLICA_ENV_FILE="${REPLICA_ENV_FILE:-${REPLICA_SCRIPT_DIR}/../internal/cloudflare/.env.prod}"
+REPLICA_ENV_FILE="${READ_REPLICA_ENV_FILE:-${REPLICA_ENV_FILE:-${REPLICA_SCRIPT_DIR}/../internal/cloudflare/.env.prod}}"
 
 # Capgo production defaults for the single Google Cloud SQL eu-2 subscriber.
 # DB URLs come from .env.prod; pub/sub/region are fixed so bun scripts need zero exports.
@@ -50,8 +50,12 @@ REPLICA_DEFERRED_TABLES=(
 
 ensure_env_file() {
   if [[ ! -f "$REPLICA_ENV_FILE" ]]; then
-    echo "Error: $REPLICA_ENV_FILE not found"
+    echo "Error: read-replica env file not found: $REPLICA_ENV_FILE" >&2
     exit 1
+  fi
+  if [[ -z "${REPLICA_ENV_FILE_ANNOUNCED:-}" ]]; then
+    export REPLICA_ENV_FILE_ANNOUNCED=1
+    echo "Using read-replica env file: $REPLICA_ENV_FILE" >&2
   fi
 }
 
@@ -78,20 +82,25 @@ get_env_value() {
   return 1
 }
 
-ensure_sslrootcert_system() {
+ensure_google_replica_ssl() {
   local url="$1"
-  if [[ "$url" == *"sslmode=require"* ]]; then
+  url="$(normalize_cloudsql_ssl "$url")"
+  if [[ "$url" == *"sslmode="* ]]; then
+    if [[ "$url" == *"sslmode=require"* && "$url" == *"sslrootcert=system"* ]]; then
+      url="${url//&sslrootcert=system/}"
+      url="${url//\?sslrootcert=system&/?}"
+      url="${url//\?sslrootcert=system/}"
+    fi
     printf "%s" "$url"
     return 0
   fi
-  if [[ "$url" == *"sslrootcert="* ]]; then
-    printf "%s" "$url"
-    return 0
-  fi
+  url="${url//&sslrootcert=system/}"
+  url="${url//\?sslrootcert=system&/?}"
+  url="${url//\?sslrootcert=system/}"
   if [[ "$url" == *"?"* ]]; then
-    printf "%s" "${url}&sslrootcert=system"
+    printf "%s" "${url}&sslmode=require"
   else
-    printf "%s" "${url}?sslrootcert=system"
+    printf "%s" "${url}?sslmode=require"
   fi
 }
 
@@ -258,7 +267,7 @@ load_replica_target() {
       exit 1
     fi
     REPLICA_TARGET_ENV="$forced_key"
-    REPLICA_TARGET_DB_URL="$(ensure_connect_timeout "$(ensure_sslrootcert_system "$(normalize_cloudsql_ssl "$value")")" 10)"
+    REPLICA_TARGET_DB_URL="$(ensure_connect_timeout "$(ensure_google_replica_ssl "$value")" 10)"
     REPLICA_TARGET_HOST="$(extract_host "$value")"
     return 0
   fi
@@ -280,7 +289,7 @@ load_replica_target() {
     key="${preferred_matches[0]}"
     value="$(get_env_value "$key")"
     REPLICA_TARGET_ENV="$key"
-    REPLICA_TARGET_DB_URL="$(ensure_connect_timeout "$(ensure_sslrootcert_system "$(normalize_cloudsql_ssl "$value")")" 10)"
+    REPLICA_TARGET_DB_URL="$(ensure_connect_timeout "$(ensure_google_replica_ssl "$value")" 10)"
     REPLICA_TARGET_HOST="$(extract_host "$value")"
     return 0
   fi
@@ -295,7 +304,7 @@ load_replica_target() {
     rm -f "$matches_file"
     value="$(get_env_value "$key")"
     REPLICA_TARGET_ENV="$key"
-    REPLICA_TARGET_DB_URL="$(ensure_connect_timeout "$(ensure_sslrootcert_system "$(normalize_cloudsql_ssl "$value")")" 10)"
+    REPLICA_TARGET_DB_URL="$(ensure_connect_timeout "$(ensure_google_replica_ssl "$value")" 10)"
     REPLICA_TARGET_HOST="$(extract_host "$value")"
     return 0
   fi

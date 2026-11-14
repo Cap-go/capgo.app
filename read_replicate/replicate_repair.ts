@@ -22,8 +22,9 @@
 //   bun run readreplicate:repair [--apply] [--tables a,b] [--skip a,b]
 // --unsubscribed skips the subscription checks (local tests only).
 import process from 'node:process'
-import type { ClientConfig } from 'pg'
 import { Client } from 'pg'
+import { googleReplicaPgClientConfig } from './google_replica_connection.ts'
+import { connectionConfig } from './postgres_connection_config.ts'
 
 const DEFAULT_SKIP = ['delta_files', 'version_files']
 const BATCH = 1000
@@ -46,45 +47,17 @@ function list(value: string | undefined): string[] {
 
 const unsubscribed = process.argv.includes('--unsubscribed')
 
-function decode(value: string) {
-  try {
-    return decodeURIComponent(value)
-  }
-  catch {
-    return value
-  }
-}
+export { connectionConfig } from './postgres_connection_config.ts'
 
-// psql accepts URLs whose password holds unencoded characters such as "?";
-// pg's URL parser does not. Split credentials at the last "@" instead.
-export function connectionConfig(url: string): ClientConfig {
-  const match = /^postgres(?:ql)?:\/\/(.*)@([^@/]+)\/([^?]*)(?:\?(.*))?$/s.exec(url)
-  if (!match)
-    throw new Error('unsupported connection string (expected postgresql://user:password@host:port/db)')
-  const [, credentials, hostPort, database, query = ''] = match
-  const colon = credentials.indexOf(':')
-  const portSeparator = hostPort.lastIndexOf(':')
-  const params = new Map(query.split('&').filter(Boolean).map((pair) => {
-    const equals = pair.indexOf('=')
-    return [pair.slice(0, equals), decode(pair.slice(equals + 1))] as const
-  }))
-  // libpq treats sslrootcert=system without sslmode as verify-full.
-  const sslmode = params.get('sslmode') ?? (params.get('sslrootcert') === 'system' ? 'verify-full' : 'prefer')
-  return {
-    user: decode(colon >= 0 ? credentials.slice(0, colon) : credentials),
-    password: colon >= 0 ? decode(credentials.slice(colon + 1)) : undefined,
-    host: portSeparator >= 0 ? hostPort.slice(0, portSeparator) : hostPort,
-    port: portSeparator >= 0 ? Number(hostPort.slice(portSeparator + 1)) : 5432,
-    database: decode(database) || 'postgres',
-    ssl: sslmode === 'disable' ? false : { rejectUnauthorized: sslmode === 'verify-full' || sslmode === 'verify-ca' },
-    connectionTimeoutMillis: params.has('connect_timeout') ? Number(params.get('connect_timeout')) * 1000 : 15_000,
-  }
-}
-
-async function connect(url: string | undefined, label: string): Promise<Client> {
+async function connect(
+  url: string | undefined,
+  label: string,
+  googleReplica = false,
+): Promise<Client> {
   if (!url)
     throw new Error(`${label} URL is not set`)
-  const client = new Client({ ...connectionConfig(url), application_name: 'capgo_replica_repair' })
+  const base = googleReplica ? googleReplicaPgClientConfig(url) : connectionConfig(url)
+  const client = new Client({ ...base, application_name: 'capgo_replica_repair' })
   await client.connect()
   try {
     // Same text output on both sides, so row hashes compare.
@@ -359,7 +332,7 @@ async function repairTable(table: string, apply: boolean) {
   let replica: Client | undefined
   try {
     source = await connect(process.env.SOURCE_DB_URL, 'SOURCE_DB_URL')
-    replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL')
+    replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL', true)
     await repair(source, replica, table, apply)
     console.log(`[${table}] done in ${((Date.now() - started) / 1000).toFixed(1)} s`)
   }
@@ -370,7 +343,7 @@ async function repairTable(table: string, apply: boolean) {
 
 async function main() {
   const apply = process.argv.includes('--apply')
-  const replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL')
+  const replica = await connect(process.env.REPLICA_TARGET_DB_URL, 'REPLICA_TARGET_DB_URL', true)
   try {
     const requested = list(arg('--tables'))
     const skip = new Set(arg('--skip') === undefined ? DEFAULT_SKIP : list(arg('--skip')))
