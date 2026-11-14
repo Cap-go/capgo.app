@@ -13,6 +13,9 @@ const DEFAULT_TRANSLATION_REVIEW_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-10
 // Bump when the prompt, style guides or default models change so every locale is
 // translated again instead of serving catalogs made by the previous pipeline.
 const TRANSLATION_PIPELINE_VERSION = 5
+// Refresh catalogs made before missing answers stayed pending, without invalidating
+// reviewed translation memory or regenerating every string in every locale.
+const TRANSLATION_CATALOG_VERSION = 1
 // Both passes return short structured translations, without reasoning tokens.
 const THINKING_MODEL_PREFIXES = [
   '@cf/deepseek-ai/deepseek-v4',
@@ -620,8 +623,8 @@ function reviewRequest(model: string, targetLanguage: string, batch: MessageEntr
 // Accepted translations by key; null marks a missing or invalid entry.
 type AcceptedTranslations = Record<string, string | null>
 
-// messages is complete (English where nothing valid came back); remembered holds only
-// the strings worth reusing from translation memory.
+// Only valid AI answers count as completed messages. Missing answers remain absent
+// so the next queue step can retry them; remembered holds reusable reviewed strings.
 interface TranslatedBatch {
   messages: Record<string, string>
   remembered: Record<string, string>
@@ -637,10 +640,6 @@ function translatedBatch(batch: MessageEntry[], translations: Record<string, str
   ] as const))
 }
 
-function withSourceFallback(batch: MessageEntry[], translations: AcceptedTranslations) {
-  return Object.fromEntries(batch.map(([key, source]) => [key, translations[key] ?? source] as const))
-}
-
 function acceptedOnly(translations: AcceptedTranslations) {
   return Object.fromEntries(Object.entries(translations).filter((entry): entry is [string, string] => entry[1] !== null))
 }
@@ -651,6 +650,12 @@ class TranslationCooldownError extends Error {
   }
 }
 
+class TranslationLeaseBusyError extends Error {
+  constructor(readonly delaySeconds: number) {
+    super('Translation batch lease has not expired')
+  }
+}
+
 function isAiRateLimitError(error: unknown) {
   const record = recordOf(error)
   return record?.status === 429 || record?.statusCode === 429 || record?.code === 3021
@@ -658,7 +663,7 @@ function isAiRateLimitError(error: unknown) {
 }
 
 function translationRetryDelay(error: unknown, attempts: number) {
-  if (error instanceof TranslationCooldownError)
+  if (error instanceof TranslationCooldownError || error instanceof TranslationLeaseBusyError)
     return error.delaySeconds
   if (!isAiRateLimitError(error))
     return 30
@@ -722,17 +727,19 @@ async function translateBatch(ai: AiBinding, model: string, targetLanguage: stri
     message: 'Message translation batch failed',
     targetLanguage,
   })
-  const draftMessages = withSourceFallback(batch, drafts)
-  if (!reviewModel)
-    return { messages: draftMessages, remembered: acceptedOnly(drafts) }
-
-  const reviewed = await reviewTranslatedBatch(ai, reviewModel, targetLanguage, batch, draftMessages)
-  if (!reviewed)
-    return { messages: draftMessages, remembered: {} }
+  const draftMessages = acceptedOnly(drafts)
+  const reviewed = reviewModel
+    ? await reviewTranslatedBatch(ai, reviewModel, targetLanguage, batch, draftMessages)
+    : null
+  const reviewedMessages = reviewed ? acceptedOnly(reviewed) : {}
+  const messages = { ...draftMessages, ...reviewedMessages }
+  // Never enqueue an endless chain of new jobs for the same invalid response.
+  if (!Object.keys(messages).length)
+    throw new Error('Workers AI returned no valid translations')
 
   return {
-    messages: Object.fromEntries(batch.map(([key]) => [key, reviewed[key] ?? draftMessages[key]] as const)),
-    remembered: acceptedOnly(reviewed),
+    messages,
+    remembered: reviewModel ? reviewedMessages : draftMessages,
   }
 }
 
@@ -1112,7 +1119,7 @@ async function claimTranslationBatch(env: TranslationWorkerBindings, checksum: s
   return result.meta.changes > 0
 }
 
-async function releaseTranslationBatchClaim(env: TranslationWorkerBindings, checksum: string, targetLanguage: string, batchIndex: number) {
+async function releaseTranslationBatchClaim(env: TranslationWorkerBindings, checksum: string, targetLanguage: string, batchIndex: number, expectedUpdatedAt: number | null = null) {
   const db = getTranslationStore(env)
   await ensureTranslationStore(db)
   const result = await db.prepare(
@@ -1123,8 +1130,9 @@ async function releaseTranslationBatchClaim(env: TranslationWorkerBindings, chec
      WHERE target_language = ?
        AND checksum = ?
        AND status = 'pending'
-       AND next_batch_index = ?`,
-  ).bind(batchIndex, PENDING_TRANSLATION_STORE_TTL_SECONDS, targetLanguage, checksum, translationBatchClaimMarker(batchIndex)).run()
+       AND next_batch_index = ?
+       AND (? IS NULL OR updated_at = ?)`,
+  ).bind(batchIndex, PENDING_TRANSLATION_STORE_TTL_SECONDS, targetLanguage, checksum, translationBatchClaimMarker(batchIndex), expectedUpdatedAt, expectedUpdatedAt).run()
 
   return result.meta.changes > 0
 }
@@ -1341,7 +1349,7 @@ async function currentSourceChecksum(env: TranslationWorkerBindings) {
   const pipeline = translationPipelineModel(env, getTranslationModel(env))
   let checksum = pipelineChecksums.get(pipeline)
   if (!checksum) {
-    checksum = sourceCatalogChecksumPromise.then(source => sha256Hex(JSON.stringify([source, pipeline])))
+    checksum = sourceCatalogChecksumPromise.then(source => sha256Hex(JSON.stringify([source, pipeline, TRANSLATION_CATALOG_VERSION])))
     pipelineChecksums.set(pipeline, checksum)
   }
   return checksum
@@ -1527,10 +1535,12 @@ async function nextProcessableBatchIndex(env: TranslationWorkerBindings, storedE
   if (batchIndex !== claimedBatchIndex)
     return null
 
-  if (!isTranslationBatchLeaseExpired(storedEntry))
-    return null
+  if (!isTranslationBatchLeaseExpired(storedEntry)) {
+    const remainingSeconds = TRANSLATION_BATCH_LEASE_SECONDS - (nowSeconds() - storedEntry.updatedAt)
+    throw new TranslationLeaseBusyError(Math.max(1, remainingSeconds))
+  }
 
-  const released = await releaseTranslationBatchClaim(env, checksum, targetLanguage, batchIndex)
+  const released = await releaseTranslationBatchClaim(env, checksum, targetLanguage, batchIndex, storedEntry.updatedAt)
   return released ? claimedBatchIndex : null
 }
 

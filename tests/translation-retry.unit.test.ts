@@ -1,19 +1,21 @@
 import type { D1Database } from '@cloudflare/workers-types'
+import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import translationWorker, { __translationWorkerTestUtils__ as utils } from '../cloudflare_workers/translation/index.ts'
 import sourceMessages from '../messages/en.json'
+import sourceContexts from '../messages/en.context.json'
 
 // Execute the worker's real SQL so claims, persisted progress and HTTP polling
 // exercise the same state instead of assuming every D1 write succeeds.
 const sqlite = new DatabaseSync(':memory:')
-let beforeRun: ((sql: string) => void) | undefined
+let beforeRun: ((sql: string, params: unknown[]) => void) | undefined
 function statement(sql: string, params: unknown[] = []) {
   return {
     bind: (...values: unknown[]) => statement(sql, values),
     first: async () => sqlite.prepare(sql).get(...params as never[]),
     run: async () => {
-      beforeRun?.(sql)
+      beforeRun?.(sql, params)
       return { meta: { changes: Number(sqlite.prepare(sql).run(...params as never[]).changes) } }
     },
     all: async () => ({ results: sqlite.prepare(sql).all(...params as never[]) }),
@@ -31,9 +33,9 @@ const env = {
   TRANSLATION_REVIEW_MODEL: 'reviewer',
 }
 let checksum: string
-const request = () => new Request('https://api.capgo.app/translation/messages', {
+const request = (clientChecksum?: string) => new Request('https://api.capgo.app/translation/messages', {
   method: 'POST',
-  body: JSON.stringify({ targetLanguage: 'fr' }),
+  body: JSON.stringify({ targetLanguage: 'fr', checksum: clientChecksum }),
 })
 function message(attempts = 1) {
   return {
@@ -145,6 +147,126 @@ describe('translation queue recovery', () => {
     expect(pending().next_batch_index).toBe(1)
     expect(JSON.parse(pending().messages as string)).not.toHaveProperty('account')
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM translation_memory').get()?.count).toBe(0)
+  })
+
+  it('refreshes legacy fallback catalogs while reusing their reviewed translation memory', async () => {
+    const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    const messages = Object.fromEntries(Object.entries(sourceMessages).filter(([key, value]) => key !== '$schema' && typeof value === 'string'))
+    const contexts = Object.fromEntries(Object.entries(sourceContexts).filter(([key, value]) => key !== '$schema' && typeof value === 'string'))
+    const pipeline = 'draft-model reviewed by reviewer'
+    // Use the pre-fix checksum and memory format, as existing clients/D1 do.
+    const legacyChecksum = hash([hash({ contexts, messages, pipelineVersion: 5 }), pipeline])
+    expect(checksum).not.toBe(legacyChecksum)
+    sqlite.prepare(`UPDATE translation_messages_cache SET checksum = ?, status = 'ready',
+      messages = json_set(messages, '$.account', 'Account', '$.password', 'Mot de passe'),
+      updated_at = unixepoch() - 301`).run(legacyChecksum)
+    const insert = sqlite.prepare(`INSERT OR REPLACE INTO translation_memory (target_language, source_hash, translated, model)
+      VALUES ('fr', ?, ?, ?)`)
+    for (const [key, text] of Object.entries(messages)) {
+      if (key !== 'account')
+        insert.run(hash([5, text, contexts[key]?.trim() ?? '']), `fr:${key}`, pipeline)
+    }
+
+    const stale = await translationWorker.fetch(request(legacyChecksum), env as any)
+    expect(stale.headers.get('x-capgo-translation-stale')).toBe('1')
+    expect((await stale.json() as any).checksum).toBe(legacyChecksum)
+    expect(env.TRANSLATION_MESSAGES_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({ checksum, batchIndex: 0 }), { contentType: 'json' })
+
+    env.AI.run.mockResolvedValue({ response: '{"translations":{"account":"Compte"}}' })
+    const refresh = message()
+    refresh.body.batchIndex = 0
+    await consume(refresh)
+    expect(refresh.ack).toHaveBeenCalledTimes(1)
+    const input = env.AI.run.mock.calls[0][1] as { messages: { content: string }[] }
+    expect(Object.keys(JSON.parse(input.messages[1].content).messages)).toEqual(['account'])
+    expect(pending().status).toBe('ready')
+
+    const fresh = await translationWorker.fetch(request(legacyChecksum), env as any)
+    const payload = await fresh.json() as any
+    expect(payload.checksum).toBe(checksum)
+    expect(payload.messages.account).toBe('Compte')
+    expect(await (await translationWorker.fetch(request(checksum), env as any)).json())
+      .toEqual({ checksum, status: 'not_modified' })
+  })
+
+  it('keeps missing AI answers pending and translates only those strings on the next delivery', async () => {
+    env.AI.run.mockResolvedValue({ response: '{"translations":{"password":"Mot de passe"}}' })
+    const partial = message()
+    await consume(partial)
+
+    expect(partial.ack).toHaveBeenCalledTimes(1)
+    expect(pending().status).toBe('pending')
+    expect(JSON.parse(pending().messages as string)).not.toHaveProperty('account')
+    expect(JSON.parse(pending().messages as string).password).toBe('Mot de passe')
+    expect(env.TRANSLATION_MESSAGES_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({ batchIndex: 2 }), { contentType: 'json' })
+
+    env.AI.run.mockClear().mockResolvedValue({ response: '{"translations":{"account":"Compte"}}' })
+    const resumed = message()
+    resumed.body.batchIndex = 2
+    await consume(resumed)
+    const input = env.AI.run.mock.calls[0][1] as { messages: { content: string }[] }
+    expect(Object.keys(JSON.parse(input.messages[1].content).messages)).toEqual(['account'])
+    expect(resumed.ack).toHaveBeenCalledTimes(1)
+    expect(pending().status).toBe('ready')
+    expect(JSON.parse(pending().messages as string).account).toBe('Compte')
+  })
+
+  it('uses the existing retry budget when a batch makes no valid progress', async () => {
+    env.AI.run.mockResolvedValue({ response: '{"translations":{"account":"","password":""}}' })
+    const failed = message(5)
+    await consume(failed)
+    expect(failed.ack).not.toHaveBeenCalled()
+    expect(failed.retry).toHaveBeenCalledTimes(1)
+    expect(pending().status).toBe('pending')
+    expect(pending().next_batch_index).toBe(1)
+    expect(env.TRANSLATION_MESSAGES_QUEUE.send).not.toHaveBeenCalled()
+    expect(JSON.parse(pending().messages as string)).not.toHaveProperty('account')
+  })
+
+  it('waits out an orphaned lease after D1 fails to release it, then resumes without polling', async () => {
+    beforeRun = (sql, params) => {
+      if (sql.includes('SET next_batch_index = ?') && params[0] === 1) {
+        beforeRun = undefined
+        throw new Error('D1 unavailable during claim release')
+      }
+    }
+    env.AI.run.mockRejectedValue(new Error('AI temporarily unavailable'))
+    const failed = message()
+    await consume(failed)
+    expect(failed.retry).toHaveBeenCalledTimes(1)
+    expect(pending().next_batch_index).toBe(utils.translationBatchClaimMarker(1))
+    const aiCalls = env.AI.run.mock.calls.length
+
+    const earlyRetry = message(2)
+    await consume(earlyRetry)
+    expect(earlyRetry.ack).not.toHaveBeenCalled()
+    const delaySeconds = earlyRetry.retry.mock.calls[0][0].delaySeconds
+    expect(Math.floor(Date.now() / 1000) + delaySeconds).toBeGreaterThanOrEqual(Number(pending().updated_at) + 15 * 60)
+    expect(delaySeconds).toBeLessThanOrEqual(15 * 60)
+    expect(env.AI.run).toHaveBeenCalledTimes(aiCalls)
+
+    sqlite.exec('UPDATE translation_messages_cache SET updated_at = unixepoch() - 901')
+    env.AI.run.mockResolvedValue({ response: '{"translations":{"account":"Compte","password":"Mot de passe"}}' })
+    const resumed = message(3)
+    await consume(resumed)
+    expect(resumed.ack).toHaveBeenCalledTimes(1)
+    expect(resumed.retry).not.toHaveBeenCalled()
+    expect(pending().status).toBe('ready')
+    expect(env.TRANSLATION_MESSAGES_QUEUE.send).not.toHaveBeenCalled()
+  })
+
+  it('does not release a lease renewed after an expired-lease read', async () => {
+    sqlite.prepare('UPDATE translation_messages_cache SET next_batch_index = ?, updated_at = unixepoch() - 901')
+      .run(utils.translationBatchClaimMarker(1))
+    beforeRun = (sql, params) => {
+      if (sql.includes('SET next_batch_index = ?') && params[0] === 1) {
+        beforeRun = undefined
+        sqlite.exec('UPDATE translation_messages_cache SET updated_at = unixepoch()')
+      }
+    }
+    await consume(message(2))
+    expect(env.AI.run).not.toHaveBeenCalled()
+    expect(pending().next_batch_index).toBe(utils.translationBatchClaimMarker(1))
   })
 
   it('recovers a continuation send failure on redelivery without repeating AI work', async () => {
