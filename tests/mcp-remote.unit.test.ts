@@ -18,7 +18,7 @@ import {
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
 import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
 import { LATEST_LEGACY_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
-import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
+import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools, SERVER_INSTRUCTIONS } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
 import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
 
@@ -155,6 +155,13 @@ describe('hosted MCP protocol', () => {
       if (destructiveHint || idempotentHint === false)
         expect(readOnlyHint, tool.name).toBe(false)
     }
+  })
+
+  it.concurrent('keeps agent-facing metadata within the Claude Code UTF-8 byte limit', () => {
+    const encoder = new TextEncoder()
+    expect(encoder.encode(SERVER_INSTRUCTIONS).byteLength, 'server instructions').toBeLessThanOrEqual(2048)
+    for (const tool of MCP_TOOLS)
+      expect(encoder.encode(tool.description).byteLength, tool.name).toBeLessThanOrEqual(2048)
   })
 
   it.concurrent('uses delta terms, never the deprecated partial ones, in hosted and local MCP tools', () => {
