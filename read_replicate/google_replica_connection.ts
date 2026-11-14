@@ -1,28 +1,24 @@
 import type { ClientConfig } from 'pg'
-import { connectionConfig, encodePostgresUrlPasswordIfNeeded } from './postgres_connection_config.ts'
-
-function splitPostgresUrl(url: string): { base: string, query: string } {
-  const match = /^postgres(?:ql)?:\/\/(.*)@([^@/]+)\/([^?]*)(?:\?(.*))?$/s.exec(url)
-  if (!match)
-    return { base: url, query: '' }
-  const scheme = url.startsWith('postgresql://') ? 'postgresql' : 'postgres'
-  const [, credentials, hostPort, database, query = ''] = match
-  return {
-    base: `${scheme}://${credentials}@${hostPort}/${database}`,
-    query,
-  }
-}
+import {
+  buildPostgresUrl,
+  connectionConfig,
+  encodePostgresUrlPasswordIfNeeded,
+  parsePostgresConnectionUrl,
+} from './postgres_connection_config.ts'
 
 /** Google Cloud SQL subscriber: encrypt without implicit verify-full from sslrootcert=system. */
 export function normalizeGoogleReplicaDatabaseUrl(url: string): string {
-  const { base, query } = splitPostgresUrl(encodePostgresUrlPasswordIfNeeded(url))
-  const params = new URLSearchParams(query)
+  const encoded = encodePostgresUrlPasswordIfNeeded(url)
+  const parts = parsePostgresConnectionUrl(encoded)
+  if (!parts)
+    return encoded
 
-  if (params.has('sslrootcert') && !params.has('sslmode')) {
-    params.delete('sslrootcert')
-  }
+  const params = new URLSearchParams(parts.query)
 
   if (!params.has('sslmode')) {
+    if (params.get('sslrootcert') === 'system') {
+      params.delete('sslrootcert')
+    }
     params.set('sslmode', 'require')
     params.set('uselibpqcompat', 'true')
   }
@@ -34,8 +30,10 @@ export function normalizeGoogleReplicaDatabaseUrl(url: string): string {
     params.delete('sslrootcert')
   }
 
-  const serialized = params.toString()
-  return serialized ? `${base}?${serialized}` : base
+  return buildPostgresUrl({
+    ...parts,
+    query: params.toString(),
+  })
 }
 
 export function googleReplicaPgClientConfig(url: string): ClientConfig {
@@ -54,17 +52,13 @@ export function googleReplicaPgClientConfig(url: string): ClientConfig {
     }
   }
 
-  const rejectUnauthorized = typeof config.ssl === 'object'
-    ? config.ssl.rejectUnauthorized
-    : false
-
   return {
     user: config.user,
     password: config.password,
     host: config.host,
     port: config.port,
     database: config.database,
-    ssl: { rejectUnauthorized },
+    ssl: config.ssl,
     connectionTimeoutMillis: config.connectionTimeoutMillis,
   }
 }

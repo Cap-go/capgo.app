@@ -1,3 +1,6 @@
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import {
   googleReplicaPgClientConfig,
@@ -42,5 +45,28 @@ describe('google replica database connections', () => {
     const raw = 'postgresql://replica:secret@host:5432/postgres?sslmode=verify-full'
     const config = googleReplicaPgClientConfig(raw)
     expect(config.ssl).toEqual({ rejectUnauthorized: true })
+  })
+
+  it.concurrent('honors a configured sslrootcert CA file path', () => {
+    const caPath = join(tmpdir(), `replica-ca-${Date.now()}.pem`)
+    writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n')
+    const raw = `postgresql://replica:secret@host:5432/postgres?sslmode=verify-ca&sslrootcert=${encodeURIComponent(caPath)}`
+    expect(normalizeGoogleReplicaDatabaseUrl(raw)).toContain(`sslrootcert=${encodeURIComponent(caPath)}`)
+    const config = googleReplicaPgClientConfig(raw)
+    expect(config.ssl).toMatchObject({ rejectUnauthorized: true })
+    expect((config.ssl as { ca: Buffer }).ca).toBeInstanceOf(Buffer)
+  })
+
+  it.concurrent('parses user and password from query-string auth URLs', () => {
+    const raw = 'postgresql://10.0.0.1:5432/postgres?user=replica&password=sec%24ret&sslmode=disable'
+    const config = googleReplicaPgClientConfig(raw)
+    expect(config).toMatchObject({
+      user: 'replica',
+      password: 'sec$ret',
+      host: '10.0.0.1',
+      port: 5432,
+      database: 'postgres',
+      ssl: false,
+    })
   })
 })

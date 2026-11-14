@@ -12,24 +12,23 @@ describe('read-replica env loading', () => {
     )
   })
 
-  it('url-encodes the password when it contains ?', () => {
+  it('keeps authority URLs that already parse for pg when password contains ?', () => {
     const raw = 'postgresql://replica:123?word@10.0.0.1:5432/postgres'
-    expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(
-      'postgresql://replica:123%3Fword@10.0.0.1:5432/postgres',
-    )
+    expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(raw)
   })
 
-  it('url-encodes the password when the URL fails to parse', () => {
+  it('keeps authority URLs that already parse for pg when password contains $ and \\', () => {
     const raw = 'postgresql://replica_user:p$a$s?word\\tail@10.0.0.1:5432/postgres'
-    const normalized = encodePostgresUrlPasswordIfNeeded(raw)
-    expect(normalized).toBe(
-      'postgresql://replica_user:p%24a%24s%3Fword%5Ctail@10.0.0.1:5432/postgres',
-    )
-    expect(() => new URL(normalized)).not.toThrow()
+    expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(raw)
   })
 
   it('keeps already-parseable postgres URLs unchanged', () => {
     const raw = 'postgresql://replica_user:plain@10.0.0.1:5432/postgres'
+    expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(raw)
+  })
+
+  it('does not double-encode passwords that are already percent-encoded', () => {
+    const raw = 'postgresql://replica_user:p%24a%24s%3Fx@10.0.0.1:5432/postgres'
     expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(raw)
   })
 })

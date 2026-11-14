@@ -45,6 +45,9 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('Missing READ_REPLICATE_GOOGLE_EU1')
       expect(workflow).toContain('GOOGLE_SERVICE_ACCOUNT only authenticates gcloud')
       expect(workflow).not.toContain('check-read-replica-hyperdrive-schema')
+      expect(workflow).toContain('sync-read-replica-schema.ts --apply --allow-drop')
+      expect(workflow).toContain('read_replica_subscription:')
+      expect(workflow).toContain('sync-read-replica-schema.ts --refresh-subscription')
       expect(workflow).toContain('sync-read-replica-schema.ts --guard')
       expect(workflow).toContain(
         [
@@ -88,7 +91,7 @@ describe('production read-replica release gate', () => {
       }
       for (const job of ['deploy_api', 'deploy_files', 'deploy_plugin_regions']) {
         expect(workflow).toMatch(
-          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema\\]`),
+          new RegExp(`\\n  ${job}:\\n    needs: \\[changes, supabase_deploy, read_replica_schema, read_replica_subscription\\]`),
         )
       }
     },

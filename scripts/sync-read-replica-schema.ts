@@ -29,6 +29,7 @@ import {
 } from '../read_replicate/load_replica_env.ts'
 import {
   filterReadReplicaSchemaPlanForApply,
+  partitionGuardSkipped,
   resolveReadReplicaSchemaSyncMode,
 } from '../read_replicate/schema_sync_apply.ts'
 import { readReplicaSubscriberCompatibilityIssues } from '../read_replicate/schema_compatibility.ts'
@@ -182,9 +183,17 @@ async function main(): Promise<void> {
 
     if (mode === 'dry-run' || mode === 'guard') {
       if (mode === 'guard') {
-        if (plan.skipped.length) {
+        const { blocking, warned } = partitionGuardSkipped(plan.skipped)
+        if (warned.length) {
+          console.warn(
+            'Read-replica schema guard: subscriber has legacy indexes not present in migrations '
+            + '(drops require --allow-drop and are not run in guard mode): '
+            + stableStringify(warned),
+          )
+        }
+        if (blocking.length) {
           throw new Error(
-            `Read-replica schema guard found unsupported drift: ${stableStringify(plan.skipped)}`,
+            `Read-replica schema guard found unsupported drift: ${stableStringify(blocking)}`,
           )
         }
         if (plan.statements.length) {
