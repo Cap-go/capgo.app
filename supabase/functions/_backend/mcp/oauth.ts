@@ -7,7 +7,7 @@ import { isIPRateLimited, recordFailedAuth } from '../utils/rate_limit.ts'
 import { getEnv } from '../utils/utils.ts'
 import { agentAuthMetadata, app as agentIdentityApp, handleAgentClaimGrant } from './agent_identity.ts'
 import { AGENT_AUTH_CLAIM_GRANT } from './agent_identity_utils.ts'
-import { getApiOrigin, getClientIpHash, getIssuer, getRequestOrigin, getResourceUrl, insertWithIpLimit, MCP_OAUTH_PATH, MCP_PATH, mcpResourceUrlsMatch, oauthError, readParams, withPg } from './oauth_shared.ts'
+import { getApiOrigin, getClientIpHash, getIssuer, getMcpPublicPath, getRequestOrigin, getResourceUrl, insertWithIpLimit, MCP_OAUTH_PATH, MCP_PATH, mcpResourceUrlsMatch, oauthError, readParams, withPg } from './oauth_shared.ts'
 import {
   buildRedirectUrl,
   decryptWithCode,
@@ -37,7 +37,10 @@ export interface McpOAuthClient {
 export const CONSENT_PAGE_PATH = '/oauth/authorize'
 
 export function getProtectedResourceMetadataUrl(c: Context): string {
-  return `${getApiOrigin(c)}/.well-known/oauth-protected-resource${MCP_PATH}`
+  const origin = getApiOrigin(c)
+  if (getMcpPublicPath(c) === '/')
+    return `${origin}/.well-known/oauth-protected-resource`
+  return `${origin}/.well-known/oauth-protected-resource${MCP_PATH}`
 }
 
 function authorizationServerMetadata(c: Context) {

@@ -37,6 +37,10 @@ export function getMcpPublicPath(c: Context): '/' | '/mcp' | null {
   if (header === '/' || header === '/mcp')
     return header
   const path = new URL(c.req.url).pathname.replace(/\/+$/, '') || '/'
+  if (path === `/.well-known/oauth-protected-resource${MCP_PATH}`)
+    return '/mcp'
+  if (path === '/.well-known/oauth-protected-resource')
+    return '/'
   if (path === '/mcp' || path.startsWith('/mcp/'))
     return '/mcp'
   if (path === '/')

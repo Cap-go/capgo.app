@@ -26,9 +26,14 @@ function isAllowedMcpAliasPath(pathname: string): boolean {
 }
 
 function mcpAliasPublicPath(pathname: string): '/' | '/mcp' {
-  if (pathname === '/' || pathname === '')
+  const path = pathname.replace(/\/+$/, '') || '/'
+  if (path === '/.well-known/oauth-protected-resource/mcp')
+    return '/mcp'
+  if (path === '/.well-known/oauth-protected-resource')
     return '/'
-  if (pathname === '/mcp' || pathname.startsWith('/mcp/'))
+  if (path === '/' || path === '')
+    return '/'
+  if (path === '/mcp' || path.startsWith('/mcp/'))
     return '/mcp'
   return '/'
 }

@@ -88,8 +88,8 @@ describe('mcp.capgo.app alias host', () => {
   it.concurrent('routes POST / to the MCP handler with root resource metadata', async () => {
     const response = await post('https://mcp.capgo.app/', initBody)
     expect(response.status).toBe(401)
-    expect(response.headers.get('www-authenticate')).toContain('resource_metadata="https://mcp.capgo.app/.well-known/oauth-protected-resource/mcp"')
-    const prm = await apiWorker.fetch(new Request('https://mcp.capgo.app/.well-known/oauth-protected-resource/mcp'), env)
+    expect(response.headers.get('www-authenticate')).toContain('resource_metadata="https://mcp.capgo.app/.well-known/oauth-protected-resource"')
+    const prm = await apiWorker.fetch(new Request('https://mcp.capgo.app/.well-known/oauth-protected-resource'), env)
     await expect(prm.json()).resolves.toMatchObject({
       resource: 'https://mcp.capgo.app/',
       authorization_servers: ['https://capgo.app'],
@@ -100,6 +100,8 @@ describe('mcp.capgo.app alias host', () => {
     const response = await post('https://mcp.capgo.app/mcp', initBody)
     expect(response.status).toBe(401)
     expect(response.headers.get('www-authenticate')).toContain('resource_metadata="https://mcp.capgo.app/.well-known/oauth-protected-resource/mcp"')
+    const prm = await apiWorker.fetch(new Request('https://mcp.capgo.app/.well-known/oauth-protected-resource/mcp'), env)
+    await expect(prm.json()).resolves.toMatchObject({ resource: 'https://mcp.capgo.app/mcp' })
     const authed = await post('https://mcp.capgo.app/mcp', initBody, { authorization: 'Bearer alias-test-key' })
     expect(authed.status).toBe(200)
   })
