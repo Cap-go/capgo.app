@@ -26,7 +26,7 @@ export const apps = pgTable('apps', {
   allow_device_custom_id: boolean('allow_device_custom_id').notNull().default(true),
   allow_preview: boolean('allow_preview').notNull().default(false),
   default_upload_channel: varchar('default_upload_channel').notNull().default('production'),
-  bundle_incompatible_alert: text('bundle_incompatible_alert').$type<'default' | 'all'>().notNull().default('default'),
+  bundle_incompatible_alert: text('bundle_incompatible_alert').notNull().default('default'),
   device_data_collection: jsonb('device_data_collection').notNull().default({
     country: true,
     platform: true,
