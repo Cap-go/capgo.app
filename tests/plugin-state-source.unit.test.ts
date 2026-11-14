@@ -222,7 +222,7 @@ describe('plugin state queue mutation transactions', () => {
         }
         return { rows: [{ result: completed < names.length ? claimResult(completed) : { status: 'empty' } }] }
       }
-      if (statement.sql.includes('public.ack_plugin_state_sync(')) {
+      if (statement.sql.includes('public.ack_plugin_state_sync_progress(')) {
         const lease = statement.params[0]
         if (client.inTransaction && lease === `fixture-lease-${completed + 1}`) {
           acknowledged.push(lease)
@@ -379,7 +379,7 @@ describe('competing full backfills', () => {
           id: after + index, owner_org: 'fixture-org', name: `v-${String(after + index).padStart(5, '0')}`, deleted: false,
         })) }
       }
-      if (statement.sql.includes('public.ack_plugin_state_sync(')) {
+      if (statement.sql.includes('public.ack_plugin_state_sync_progress(')) {
         const match = /p_continuations\s*=>\s*\$(\d+)/.exec(statement.sql)
         if (!match)
           throw new Error('continuations were not sent atomically with ACK')

@@ -94,6 +94,8 @@ interface ClaimResult {
   retry_after_ms?: number
 }
 
+type CompletedKey = ClaimedApp['jobs'][number] & { kind: 'version' | 'manifest' }
+
 interface AppOutcome {
   appId: string
   ok: boolean
@@ -108,7 +110,9 @@ interface AppOutcome {
   versionsChanged?: boolean
   changed?: boolean
   error?: unknown
-  /** No provider failure: release the untouched work when this invocation is full. */
+  /** Independently published keys that can settle even if later work stops. */
+  completed?: CompletedKey[]
+  /** No provider failure: release unfinished work when this invocation is full. */
   deferred?: boolean
 }
 
@@ -488,13 +492,15 @@ export function pluginStateManifestPublication(doc: PluginStateManifestDoc | Plu
   }
 }
 
-async function syncManifests(source: SourceReader, store: SyncStore, versionIds: number[]) {
+async function syncManifests(source: SourceReader, store: SyncStore, versionIds: number[], completed?: (versionId: number) => void) {
   await runLimited(versionIds, MANIFEST_CONCURRENCY, versionId => source.manifest(async () => {
     const doc = await buildManifestDoc(source, versionId)
     if (doc)
       await putJson(store, pluginStateManifestKey(versionId), pluginStateManifestPublication(doc))
     else
       await store.delete(pluginStateManifestKey(versionId))
+    if (store.hasPublished(pluginStateManifestKey(versionId)))
+      completed?.(versionId)
   }))
 }
 
@@ -591,7 +597,7 @@ async function writeAppDoc(source: SourceReader, store: SyncStore, appId: string
   return { doc }
 }
 
-async function syncVersionNames(source: SourceReader, store: SyncStore, appId: string, names: string[]) {
+async function syncVersionNames(source: SourceReader, store: SyncStore, appId: string, names: string[], completed: (name: string) => void) {
   const unique = [...new Set(names)]
   const found = await sourceRows<{ id: string | number, owner_org: string, name: string, deleted: boolean | null }>(source, sql`
     SELECT av.id, av.owner_org, av.name, av.deleted
@@ -605,6 +611,8 @@ async function syncVersionNames(source: SourceReader, store: SyncStore, appId: s
       await putJson(store, key, { id: Number(row.id), owner_org: row.owner_org, deleted: row.deleted } satisfies PluginStateVersionDoc)
     else
       await store.delete(key)
+    if (store.hasPublished(key))
+      completed(name)
   })
 }
 
@@ -785,6 +793,7 @@ async function readSyncStatus(source: SourceReader, appId: string) {
 
 async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp, deadline: number): Promise<AppOutcome> {
   const appId = item.app_id
+  const completed: CompletedKey[] = []
   try {
     const refsOf = (kind: ClaimedApp['jobs'][number]['kind']) => item.jobs.filter(job => job.kind === kind).map(job => job.ref).filter(Boolean)
     const fullJobs = item.jobs.filter(job => job.kind === 'full')
@@ -798,11 +807,11 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     // Single keys first: they read the database now, so they are never older
     // than what a concurrent full sync wrote.
     if (versionNames.length > 0)
-      await syncVersionNames(source, store, appId, versionNames)
+      await syncVersionNames(source, store, appId, versionNames, ref => completed.push({ kind: 'version', ref }))
     if (deviceIds.length > 0)
       await syncDevices(source, store, appId, deviceIds)
     if (manifestIds.length > 0)
-      await syncManifests(source, store, manifestIds)
+      await syncManifests(source, store, manifestIds, id => completed.push({ kind: 'manifest', ref: String(id) }))
 
     // A pending or failed history scan must not freeze current overrides,
     // channels, plan or app deletion. Publish the bounded app snapshot without
@@ -838,7 +847,7 @@ async function syncApp(source: SourceReader, store: SyncStore, item: ClaimedApp,
     return { appId, ok: true, versionsChanged: versionNames.length > 0 }
   }
   catch (error) {
-    return { appId, ok: false, error, deferred: error instanceof KvBudgetExhausted }
+    return { appId, ok: false, error, completed, deferred: error instanceof KvBudgetExhausted }
   }
 }
 
@@ -978,7 +987,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
       // ACK validates the lease and persists the next cursor atomically. A
       // stale drain must never enqueue an older continuation after replacement.
       const continuations = Object.fromEntries(done.filter(outcome => outcome.continuation !== undefined).map(outcome => [outcome.appId, outcome.continuation]))
-      await mutate(pg, db => db.execute(sql`SELECT public.ack_plugin_state_sync(
+      await mutate(pg, db => db.execute(sql`SELECT public.ack_plugin_state_sync_progress(
         p_lease_token => ${claimed.lease_token}::uuid,
         p_done => ${sql.param(done.map(outcome => outcome.appId))}::text[],
         p_failed => ${sql.param(failed.map(outcome => outcome.appId))}::text[],
@@ -989,7 +998,8 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
         p_versions_changed => ${sql.param(done.filter(outcome => outcome.versionsChanged).map(outcome => outcome.appId))}::text[],
         p_changed_apps => ${sql.param(outcomes.filter(outcome => outcome.changed).map(outcome => outcome.appId))}::text[],
         p_continuations => ${JSON.stringify(continuations)}::jsonb,
-        p_app_published => ${sql.param(done.filter(outcome => outcome.appPublished).map(outcome => outcome.appId))}::text[]
+        p_app_published => ${sql.param(done.filter(outcome => outcome.appPublished).map(outcome => outcome.appId))}::text[],
+        p_completed => ${JSON.stringify(Object.fromEntries(outcomes.filter(outcome => outcome.completed?.length).map(outcome => [outcome.appId, outcome.completed])))}::jsonb
       )`))
       result.apps += done.length
       result.failed += failed.length
@@ -1012,7 +1022,7 @@ export async function drainPluginStateSync(c: SyncContext, options: { budgetMs?:
     if (pg)
       closeClient(c, pg)
   }
-  if (result.apps > 0 || result.failed > 0)
+  if (result.claims > 0 || result.failed > 0)
     cloudlog({ requestId: c.get('requestId'), message: 'plugin state synced', ...result })
   return result
 }

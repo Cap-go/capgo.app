@@ -135,6 +135,7 @@ Capgo continues to load the root config while writing only the selected source. 
 - 🔑 [Login](#login)
 - 🔹 [Get-qr](#get-qr)
 - 📦 [Bundle](#bundle)
+  - [Recommend](#bundle-recommend)
   - [Upload](#bundle-upload)
   - [Compatibility](#bundle-compatibility)
   - [ReleaseType](#bundle-releaseType)
@@ -220,6 +221,7 @@ Capgo continues to load the root config while writing only the selected source. 
 - 🔹 [Simulator](#simulator)
   - [Start](#simulator-start)
   - [Get](#simulator-get)
+  - [Command](#simulator-command)
   - [Stop](#simulator-stop)
 
 ## <a id="init"></a> 🚀 **Init**
@@ -400,6 +402,28 @@ Examples:
 ## <a id="bundle"></a> 📦 **Bundle**
 
 📦 Manage app bundles for deployment in Capgo Cloud, including upload, compatibility checks, and encryption.
+
+### <a id="bundle-recommend"></a> 🔹 **Recommend**
+
+```bash
+npx @capgo/cli@latest bundle recommend
+```
+
+Suggest the next version using Cloudflare AI (active paid subscription required)
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+| **--base-version** | <code>string</code> | Override the latest Capgo version as the release baseline |
+| **--since** | <code>string</code> | Git ref to compare from (defaults to the latest reachable local tag) |
+| **--ref** | <code>string</code> | Git ref to compare to (defaults to HEAD locally; required for GitHub) |
+| **--repo** | <code>string</code> | Use GitHub comparison history through your authenticated gh CLI |
+| **--changelog** | <code>boolean</code> | Also draft a Markdown changelog |
+| **--json** | <code>boolean</code> | Print the recommendation as JSON |
+| **--dry-run** | <code>boolean</code> | Print local context without sending it to Capgo or AI |
 
 ### <a id="bundle-upload"></a> ⬆️ **Upload**
 
@@ -2624,6 +2648,7 @@ Start an iOS or Android simulator and print its session URL.
 | -------------- | ------------- | -------------------- |
 | **-p** | <code>string</code> | ios or android |
 | **-n** | <code>string</code> | Session name |
+| **--build-job** | <code>string</code> | Saved iOS build job to install into the simulator |
 | **--json** | <code>boolean</code> | Print the session JSON |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
@@ -2641,6 +2666,25 @@ Read one simulator session.
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
 | **--json** | <code>boolean</code> | Print the session JSON |
+| **-a** | <code>string</code> | API key to link to your account |
+| **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
+
+### <a id="simulator-command"></a> 🔹 **Command**
+
+```bash
+npx @capgo/cli@latest simulator command
+```
+
+Send one agent-device command to a running simulator: devices, screenshot, snapshot, home, lock, tap, or open.
+
+**Options:**
+
+| Param          | Type          | Description          |
+| -------------- | ------------- | -------------------- |
+| **--x** | <code>string</code> | Tap x. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--y** | <code>string</code> | Tap y. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--bundle-id** | <code>string</code> | Bundle id for open |
+| **--json** | <code>boolean</code> | Print the command JSON |
 | **-a** | <code>string</code> | API key to link to your account |
 | **--api-host** | <code>string</code> | Custom Capgo API URL for self-hosting or testing, e.g. https://api.example.com or http://127.0.0.1:8787 (env: CAPGO_API_HOST) |
 

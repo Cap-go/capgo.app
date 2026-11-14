@@ -47,7 +47,7 @@ Read one simulator session.
 ### <a id="simulator-command"></a> 🔹 **Command**
 
 ```bash
-npx @capgo/cli@latest simulator command screenshot <session-id> com.example.app
+npx @capgo/cli@latest simulator command
 ```
 
 Send one agent-device command to a running simulator: devices, screenshot, snapshot, home, lock, tap, or open.
@@ -56,8 +56,8 @@ Send one agent-device command to a running simulator: devices, screenshot, snaps
 
 | Param          | Type          | Description          |
 | -------------- | ------------- | -------------------- |
-| **--x** | <code>number</code> | Tap x. 0 to 1 is a fraction of the screen. Above 1 is a point. |
-| **--y** | <code>number</code> | Tap y. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--x** | <code>string</code> | Tap x. 0 to 1 is a fraction of the screen. Above 1 is a point. |
+| **--y** | <code>string</code> | Tap y. 0 to 1 is a fraction of the screen. Above 1 is a point. |
 | **--bundle-id** | <code>string</code> | Bundle id for open |
 | **--json** | <code>boolean</code> | Print the command JSON |
 | **-a** | <code>string</code> | API key to link to your account |
