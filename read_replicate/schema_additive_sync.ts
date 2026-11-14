@@ -221,7 +221,7 @@ export const ALLOWED_NEW_REPLICA_TABLES: Readonly<Record<string, AllowedNewRepli
   read_replica_commit_marker: {
     sql: [
       'CREATE TABLE public."read_replica_commit_marker" (',
-      '  "id" smallint NOT NULL,',
+      '  "id" smallint PRIMARY KEY,',
       '  "committed_at" timestamp with time zone NOT NULL,',
       '  CONSTRAINT "read_replica_commit_marker_singleton" CHECK (id = 1)',
       ')',
