@@ -223,7 +223,7 @@ export const ALLOWED_NEW_REPLICA_TABLES: Readonly<Record<string, AllowedNewRepli
       'CREATE TABLE public."read_replica_commit_marker" (',
       '  "id" smallint NOT NULL,',
       '  "committed_at" timestamp with time zone NOT NULL,',
-      '  CONSTRAINT "read_replica_commit_marker_singleton" CHECK ((id = 1))',
+      '  CONSTRAINT "read_replica_commit_marker_singleton" CHECK (id = 1)',
       ')',
     ].join('\n'),
     catalog: {
@@ -232,7 +232,7 @@ export const ALLOWED_NEW_REPLICA_TABLES: Readonly<Record<string, AllowedNewRepli
         { default: null, generated: '', identity: '', name: 'committed_at', notNull: true, table: 'read_replica_commit_marker', type: 'timestamp with time zone' },
       ],
       constraints: [
-        { definition: 'CHECK ((id = 1))', name: 'read_replica_commit_marker_singleton', table: 'read_replica_commit_marker', type: 'c', valid: true },
+        { definition: 'CHECK (id = 1)', name: 'read_replica_commit_marker_singleton', table: 'read_replica_commit_marker', type: 'c', valid: true },
         { definition: 'PRIMARY KEY (id)', name: 'read_replica_commit_marker_pkey', table: 'read_replica_commit_marker', type: 'p', valid: true },
       ],
       indexes: [
