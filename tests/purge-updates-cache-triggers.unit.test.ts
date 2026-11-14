@@ -83,7 +83,8 @@ describe('purgeUpdatesCache on change paths', () => {
   })
 
   it('on_version_create calls purgeUpdatesCache for the bundle app', async () => {
-    mocks.pgQuery.mockImplementation(async (sql: string) => {
+    mocks.pgQuery.mockImplementation(async (...args: unknown[]) => {
+      const sql = String(args[0] ?? '')
       if (sql.startsWith('UPDATE public.apps'))
         return { rowCount: 1, rows: [] }
       return { rows: [], rowCount: 0 }
