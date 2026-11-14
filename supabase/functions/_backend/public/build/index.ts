@@ -27,7 +27,7 @@ import {
 } from './credentials.ts'
 import { streamBuildLogs } from './logs.ts'
 import { requestBuild } from './request.ts'
-import { readSimulator, startSimulator, stopSimulator, type SimulatorBody } from './simulator.ts'
+import { commandSimulator, readSimulator, startSimulator, stopSimulator, type SimulatorBody } from './simulator.ts'
 import { startBuild } from './start.ts'
 import { getBuildStatus } from './status.ts'
 import { uploadSupportLogs } from './support_logs.ts'
@@ -60,6 +60,12 @@ app.post('/simulator/:id/stop', middlewareKey(['all', 'write']), async (c) => {
   const body = await getBodyOrQuery<SimulatorBody>(c)
   const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
   return stopSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
+})
+
+app.post('/simulator/:id/command', middlewareKey(['all', 'write']), async (c) => {
+  const body = await getBodyOrQuery<SimulatorBody>(c)
+  const apikey = c.get('apikey') as Database['public']['Tables']['apikeys']['Row']
+  return commandSimulator(c, c.req.param('id'), body, apikey.user_id, apikeyPrincipal(c, apikey.key))
 })
 
 // POST /build/request - Request a new native build

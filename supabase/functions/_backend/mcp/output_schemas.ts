@@ -1206,6 +1206,17 @@ const subscription = z
       ),
   })
   .passthrough()
+const simulatorSession = z.object({
+  id: z.string().describe('Simulator session id.'),
+  url: z.string().nullable().describe('Viewer URL for this session.'),
+  status: z.string().describe('Session status, such as in-progress or stopped.'),
+  platform: z.string().describe('Simulator platform, ios or android.'),
+  kind: z.string().describe('Resource kind. Simulator sessions use simulator.'),
+  remoteConfig: z.record(z.string(), z.unknown()).nullable().optional().describe('Expo device-run endpoints and tokens while the session is running.'),
+  build_time_seconds: z.number().optional().describe('Billable seconds recorded when the session stops.'),
+  install_error: z.string().nullable().optional().describe('Saved build install error, when installation was requested.'),
+}).passthrough()
+
 const api = (payload: z.ZodType, description: string) =>
   z
     .object({ data: payload.describe(description) })
@@ -2365,6 +2376,26 @@ export const MCP_OUTPUT_SCHEMAS = {
       .optional()
       .describe('Human-readable explanation of the operation outcome.'),
   }),
+  capgo_start_simulator: api(
+    simulatorSession,
+    'Started cloud simulator session, including Expo remoteConfig while it is running.',
+  ),
+  capgo_get_simulator: api(
+    simulatorSession,
+    'Cloud simulator session, including Expo remoteConfig while it is running.',
+  ),
+  capgo_stop_simulator: api(
+    simulatorSession,
+    'Stopped cloud simulator session and any recorded build minutes.',
+  ),
+  capgo_simulator_command: api(
+    z.object({
+      id: z.string().describe('Simulator session id that received the command.'),
+      command: z.string().describe('agent-device command that ran.'),
+      result: z.unknown().describe('agent-device command result. A screenshot is also returned as image content.'),
+    }).passthrough(),
+    'Result of one agent-device command on a running simulator.',
+  ),
 } satisfies Record<string, z.ZodObject>
 
 export type McpToolName = keyof typeof MCP_OUTPUT_SCHEMAS
