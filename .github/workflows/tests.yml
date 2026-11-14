@@ -369,7 +369,7 @@ jobs:
     if: needs.changes.outputs.run_capgo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    name: Provision local Postgres (no Supabase stack)
+    name: Local Postgres provision and pgTAP (no Supabase stack)
     permissions:
       contents: read
     steps:
@@ -383,6 +383,8 @@ jobs:
         run: bun run db:provision
       - name: Provision again (must be a no-op)
         run: bun run db:provision
+      - name: Run pgTAP tests (supabase/tests)
+        run: bun run db:test
 
   test_backend:
     needs: changes

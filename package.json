@@ -34,6 +34,7 @@
     "supabase:with-env": "bun scripts/supabase-worktree.ts with-env",
     "db:up": "bun scripts/local-db.ts up",
     "db:provision": "bun scripts/local-db.ts provision",
+    "db:test": "bun scripts/local-db.ts test",
     "db:url": "bun scripts/local-db.ts url",
     "db:down": "bun scripts/local-db.ts down",
     "env:hard-setup": "bun run supabase:stop && bun run supabase:start && bun run supabase:db:reset",
