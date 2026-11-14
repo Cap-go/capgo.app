@@ -75,7 +75,8 @@ SELECT ok(
   'the obsolete transaction-controlling catch-up procedure is removed'
 );
 
-SELECT vault.create_secret('true', 'CAPGO_DELTA_FILES_COMPACT_ENABLED');
+INSERT INTO private.settings (name, value) VALUES ('CAPGO_DELTA_FILES_COMPACT_ENABLED', 'true')
+ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value;
 -- Earlier rows (seed) are not part of this test.
 INSERT INTO public.backfill_progress (job_name, scope_key, cutover_at, last_processed_id)
 SELECT 'delta_files_compact', 'all', now(), pg_catalog.min(df.id) - 1
@@ -161,7 +162,8 @@ SELECT is(
 );
 
 -- GC lists every prefix the app's files live under, compacted or not.
-SELECT vault.create_secret('true', 'CAPGO_DELTA_STORAGE_GC_ENABLED');
+INSERT INTO private.settings (name, value) VALUES ('CAPGO_DELTA_STORAGE_GC_ENABLED', 'true')
+ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value;
 UPDATE public.app_versions SET manifest = NULL WHERE app_id = (SELECT app_id FROM slim_app);
 INSERT INTO public.delta_gc_state (app_id, next_run_at)
 SELECT app_id, now() - interval '1 minute' FROM slim_app

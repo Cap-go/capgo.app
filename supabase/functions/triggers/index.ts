@@ -33,6 +33,8 @@ import { app as queue_consumer } from '../_backend/triggers/queue_consumer.ts'
 import { app as send_email } from '../_backend/triggers/send_email.ts'
 import { app as stripe_event } from '../_backend/triggers/stripe_event.ts'
 import { app as stripe_event_us } from '../_backend/triggers/stripe_event_us.ts'
+import { app as sync_trial_plan_schedule } from '../_backend/triggers/sync_trial_plan_schedule.ts'
+import { app as plugin_state_sync } from '../_backend/triggers/plugin_state_sync.ts'
 import { app as updates_cache_purge } from '../_backend/triggers/updates_cache_purge.ts'
 import { app as webhook_delivery } from '../_backend/triggers/webhook_delivery.ts'
 import { app as webhook_dispatcher } from '../_backend/triggers/webhook_dispatcher.ts'
@@ -57,7 +59,10 @@ appGlobal.route('/on_version_delete', on_version_delete)
 appGlobal.route('/on_manifest_create', on_manifest_create)
 appGlobal.route('/stripe_event', stripe_event)
 appGlobal.route('/stripe_event_us', stripe_event_us)
+appGlobal.route('/sync_trial_plan_schedule', sync_trial_plan_schedule)
 appGlobal.route('/updates_cache_purge', updates_cache_purge)
+// Forwards to the Cloudflare API worker, which holds the PLUGIN_STATE binding.
+appGlobal.route('/plugin_state_sync', plugin_state_sync)
 appGlobal.route('/on_organization_create', on_organization_create)
 appGlobal.route('/on_org_update', on_org_update)
 appGlobal.route('/cron_stat_app', cron_stat_app)

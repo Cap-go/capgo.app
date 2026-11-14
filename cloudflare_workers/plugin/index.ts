@@ -8,7 +8,10 @@ import { app as latency } from '../../supabase/functions/_backend/plugin_runtime
 import { app as ok } from '../../supabase/functions/_backend/plugin_runtime/public/ok.ts'
 import { createAllCatch, createHono, useCors } from '../../supabase/functions/_backend/plugin_runtime/utils/hono.ts'
 import { cloudlog } from '../../supabase/functions/_backend/plugin_runtime/utils/logging.ts'
+import { startPluginStateReadMetrics } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateStore.ts'
+import { parsePluginStateShareBps, pluginStateBucket } from '../../supabase/functions/_backend/plugin_runtime/utils/pluginStateSwitch.ts'
 import { handleSnippetEdgeStatsMessage } from '../../supabase/functions/_backend/plugin_runtime/utils/snippetEdgeReplay.ts'
+import { getEnv } from '../../supabase/functions/_backend/plugin_runtime/utils/utils.ts'
 import { version } from '../../supabase/functions/_backend/plugin_runtime/utils/version.ts'
 
 const functionName = 'plugin'
@@ -28,6 +31,31 @@ app.use('*', async (c, next) => {
 })
 
 app.use('*', useCors)
+
+// Sample both read paths during rollout. This measures Worker wall time;
+// external probes measure device-to-edge latency and release propagation.
+app.use('*', async (c, next) => {
+  const share = parsePluginStateShareBps(getEnv(c, 'PLUGIN_STATE_TIMING'))
+  if (share === 0 || pluginStateBucket('timing', c.get('requestId')) >= share) {
+    await next()
+    return
+  }
+  const startedAt = performance.now()
+  const reads = startPluginStateReadMetrics(c)
+  await next()
+  cloudlog({
+    requestId: c.get('requestId'),
+    message: 'plugin_state_request_timing',
+    path: c.req.path,
+    method: c.req.method,
+    source: c.res.headers.get('X-Plugin-State') ?? 'db-or-prevalidation',
+    status: c.res.status,
+    duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+    colo: c.req.raw.cf?.colo ?? null,
+    sample_bps: share,
+    ...reads,
+  })
+})
 
 // TODO: deprecated remove when everyone use the new endpoint
 app.route('/plugin/ok', ok)

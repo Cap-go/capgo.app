@@ -194,6 +194,23 @@ describe('sumVersionInstalls', () => {
   })
 })
 
+describe('deploy report count validation', () => {
+  it.concurrent.each([null, undefined, '', '  ', '0x10', 'invalid', -1, '-5', Number.NaN, Number.POSITIVE_INFINITY, 'Infinity', 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid install count %s', (install) => {
+    expect(() => sumVersionInstalls([{ version_name: '1.0.0', install }], '1.0.0')).toThrow()
+  })
+
+  it.concurrent('rejects an overflowing total instead of rounding it', () => {
+    expect(() => sumVersionInstalls([
+      { version_name: '1.0.0', install: Number.MAX_SAFE_INTEGER },
+      { version_name: '1.0.0', install: 1 },
+    ], '1.0.0')).toThrow()
+  })
+
+  it.concurrent.each([Number.POSITIVE_INFINITY, Number.NaN, -10, 1.5, Number.MAX_SAFE_INTEGER + 1])('does not send invalid total %s', installs => {
+    expect(shouldSendDeployInstallStatsEmail(installs)).toBe(false)
+  })
+})
+
 describe('shouldRetryDeployInstallStats', () => {
   it.concurrent('retries within 48 hours of deploy', () => {
     const deployedAt = new Date('2026-07-25T00:00:00.000Z')

@@ -79,7 +79,9 @@ async function readEventStream(body: ReadableStream<Uint8Array>, onEvent: (paylo
 
 export function createConsoleClient(options: { persistSession?: boolean } = {}) {
   const baseURL = resolveBaseURL()
-  const auth = createConsoleAuthClient({ baseURL, persistSession: options.persistSession })
+  // Dev only: VITE_AUTH_API_HOST sends auth to another API (e.g. a local relay to our GoTrue).
+  const authBaseURL = resolveConsoleApiBase((import.meta.env.VITE_AUTH_API_HOST as string | undefined) || baseURL)
+  const auth = createConsoleAuthClient({ baseURL: authBaseURL, persistSession: options.persistSession })
 
   async function bearer(): Promise<string | null> {
     const { data } = await auth.getSession()

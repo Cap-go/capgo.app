@@ -1,6 +1,6 @@
 import type { Database } from '../src/types/database.types'
 import { randomUUID } from 'node:crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from './sql-data-client'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ssoAttributeClaimKey } from '../supabase/functions/_backend/private/sso/role-mapping.ts'
@@ -913,7 +913,7 @@ describe('[POST] /private/sso/provision-user', () => {
 
       const response = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
         method: 'POST',
-        headers: ssoAuthHeaders,
+        headers: { ...ssoAuthHeaders, 'cf-ipcountry': 'IN' },
         body: JSON.stringify({}),
       })
 
@@ -926,13 +926,23 @@ describe('[POST] /private/sso/provision-user', () => {
 
       const { data: publicUser, error: publicUserError } = await getSupabaseClient()
         .from('users')
-        .select('id, email')
+        .select('id, email, country')
         .eq('id', createdUser.user.id)
         .maybeSingle()
 
       expect(publicUserError).toBeNull()
       expect(publicUser?.id).toBe(createdUser.user.id)
       expect(publicUser?.email).toBe(email)
+      expect(publicUser?.country).toEqual(process.env.USE_CLOUDFLARE_WORKERS === 'true' ? expect.stringMatching(/^[A-Z]{2}$/) : 'IN')
+
+      const repeated = await fetchTestRequest(getEndpointUrl('/private/sso/provision-user'), {
+        method: 'POST',
+        headers: { ...ssoAuthHeaders, 'cf-ipcountry': 'US' },
+        body: JSON.stringify({}),
+      })
+      expect(repeated.status).toBe(200)
+      const { data: preserved } = await getSupabaseClient().from('users').select('country').eq('id', createdUser.user.id).single()
+      expect(preserved?.country).toBe(publicUser?.country)
 
       const { data: membership, error: membershipError } = await getSupabaseClient()
         .from('org_users')

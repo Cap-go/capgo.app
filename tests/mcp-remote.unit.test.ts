@@ -17,6 +17,7 @@ import {
   verifyPkceS256,
 } from '../supabase/functions/_backend/mcp/oauth_utils.ts'
 import { hostedMcpToolEvent } from '../supabase/functions/_backend/mcp/index.ts'
+import { LATEST_LEGACY_PROTOCOL_VERSION } from '../supabase/functions/_backend/mcp/metadata.ts'
 import { handleJsonRpcMessage, LATEST_PROTOCOL_VERSION, listTools } from '../supabase/functions/_backend/mcp/protocol.ts'
 import { MCP_TOOLS } from '../supabase/functions/_backend/mcp/tools.ts'
 import * as buildStatus from '../supabase/functions/_backend/public/build/status.ts'
@@ -103,7 +104,7 @@ describe('hosted MCP protocol', () => {
       protocolVersion: '2025-06-18',
       capabilities: { tools: { listChanged: false }, events: { list: true, subscribe: true, unsubscribe: true } },
       serverInfo: {
-        name: 'capgo',
+        name: 'app.capgo/capgo',
         title: 'Capgo',
         version: expect.any(String),
         websiteUrl: 'https://capgo.app',
@@ -113,7 +114,7 @@ describe('hosted MCP protocol', () => {
       instructions: expect.stringContaining('Start with capgo_whoami and capgo_list_apps'),
     })
     const unknown = await handleJsonRpcMessage({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } }, ctx)
-    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION })
+    expect(unknown?.result).toMatchObject({ protocolVersion: LATEST_LEGACY_PROTOCOL_VERSION })
   })
 
   it.concurrent('does not answer notifications', async () => {
@@ -174,7 +175,7 @@ describe('hosted MCP protocol', () => {
       idempotentHint: false,
     })
     expect(byName.get('capgo_get_build_status')?.annotations).toMatchObject({
-      readOnlyHint: false,
+      readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
       idempotentHint: true,
@@ -195,7 +196,7 @@ describe('hosted MCP protocol', () => {
     } as any
     const apikeyRow = { key: 'test-key', user_id: '00000000-0000-0000-0000-000000000001' } as any
     const spy = vi.spyOn(buildStatus, 'getBuildStatus').mockResolvedValue(
-      new Response(JSON.stringify({ status: 'running', persisted: false }), { status: 200 }),
+      new Response(JSON.stringify({ job_id: 'job-1', status: 'running', persisted: false }), { status: 200 }),
     )
     const ctx: McpToolContext = {
       call: async (request) => {
@@ -212,9 +213,11 @@ describe('hosted MCP protocol', () => {
       method: 'tools/call',
       params: { name: 'capgo_get_build_status', arguments: { appId: 'com.example.app', job_id: 'job-9' } },
     }, ctx)
-    const body = JSON.parse((response?.result as { content: Array<{ text: string }> }).content[0].text)
+    if (!response)
+      throw new Error('Build status tool did not return a JSON-RPC response')
+    const body = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text)
     expect(response?.error).toBeUndefined()
-    expect(body).toMatchObject({ status: 'running', persisted: false })
+    expect(body).toMatchObject({ job_id: 'job-1', status: 'running', persisted: false })
     expect(calls.filter(call => call.path === '/build/status')).toHaveLength(0)
     expect(spy).toHaveBeenCalledWith(
       hono,
@@ -242,7 +245,7 @@ describe('hosted MCP protocol', () => {
   })
 
   it.concurrent('replays tool calls as public API requests', async () => {
-    const { ctx, calls } = fakeContext([{ id: 1, name: '1.0.0' }])
+    const { ctx, calls } = fakeContext([{ id: 1, app_id: 'com.example.app', name: '1.0.0' }])
     const response = await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 4,
@@ -255,7 +258,7 @@ describe('hosted MCP protocol', () => {
   })
 
   it.concurrent('keeps full bundle rows for single-bundle lookups', async () => {
-    const { ctx, calls } = fakeContext([{ id: 1, name: '1.0.0', native_packages: [{ name: '@capacitor/camera', version: '6.0.0' }], manifest: [{ file_name: 'index.html' }] }])
+    const { ctx, calls } = fakeContext([{ id: 1, app_id: 'com.example.app', name: '1.0.0', native_packages: [{ name: '@capacitor/camera', version: '6.0.0' }], manifest: [{ file_name: 'index.html' }] }])
     const response = await handleJsonRpcMessage({
       jsonrpc: '2.0',
       id: 41,
@@ -263,7 +266,9 @@ describe('hosted MCP protocol', () => {
       params: { name: 'capgo_list_bundles', arguments: { appId: 'com.example.app', version: '1.0.0' } },
     }, ctx)
     expect(calls).toEqual([{ method: 'GET', path: '/bundle', query: { app_id: 'com.example.app', version: '1.0.0' } }])
-    const text = (response?.result as { content: { text: string }[] }).content[0].text
+    if (!response)
+      throw new Error('Bundle lookup tool did not return a JSON-RPC response')
+    const text = (response.result as { content: { text: string }[] }).content[0].text
     expect(text).toContain('@capacitor/camera')
     expect(text).toContain('index.html')
   })
@@ -492,7 +497,7 @@ describe('hosted MCP signed-URL upload and build tools', () => {
         calls.push(request)
         const data = request.path === '/build/request'
           ? { job_id: 'job-1' }
-          : { upload_url: 'https://builder.example/builder_upload_direct_input/x', method: 'PUT' }
+          : { job_id: 'job-1', upload_url: 'https://builder.example/builder_upload_direct_input/x', method: 'PUT', headers: { 'Content-Type': 'application/zip' }, expires_at: '2026-12-01T00:00:00Z', max_bytes: 1000000 }
         return { ok: true, status: 200, data }
       },
       caller: { userId: 'u', apikeyId: 1, apikeyName: 'k', apikeyExpiresAt: null },
@@ -661,6 +666,8 @@ describe('hosted MCP errors always give a way out', () => {
     const localTools = new Set([
       'capgo_whoami',
       'capgo_search_docs',
+      'capgo_list_skills',
+      'capgo_get_skill',
       'capgo_get_build_status',
       'capgo_list_event_types',
       'capgo_subscribe_events',

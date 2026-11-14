@@ -25,7 +25,7 @@ it('runs a recommendation HTTP flow against PostgreSQL and accounts for valid an
       INSERT INTO public.orgs VALUES ('00000000-0000-4000-8000-000000000001');
       INSERT INTO public.apps VALUES ('com.example.release', '00000000-0000-4000-8000-000000000001');
       INSERT INTO public.app_versions VALUES (1, 'com.example.release', '1.2.3', 'Previous release', '1.0.0');`)
-    await db.exec(await readFile(new URL('../supabase/migrations/20261111212918_ai_release_usage.sql', import.meta.url), 'utf8'))
+    await db.exec(await readFile(new URL('../supabase/migrations/20261114013028_ai_release_usage.sql', import.meta.url), 'utf8'))
     const run = vi.fn().mockResolvedValue({ response: JSON.stringify({ nextVersion: '1.2.4', level: 'patch', reason: 'Fix', changelog: '- Fixed rendering' }) })
     // The router parses JSON before handing it to the command handler.
     const router = new Hono()

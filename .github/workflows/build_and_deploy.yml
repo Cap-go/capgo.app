@@ -26,6 +26,7 @@ jobs:
     outputs:
       api: ${{ steps.scope.outputs.api }}
       files: ${{ steps.scope.outputs.files }}
+      gotrue: ${{ steps.scope.outputs.gotrue }}
       plugins: ${{ steps.scope.outputs.plugins }}
       supabase: ${{ steps.scope.outputs.supabase }}
       translation: ${{ steps.scope.outputs.translation }}
@@ -337,6 +338,35 @@ jobs:
       - name: Retire removed CF Workers
         if: ${{ env.ENV == 'prod' }}
         run: bun scripts/retire-cloudflare-workers.ts
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  # Self-hosted GoTrue (auth migration). Production only, and no route yet: nothing reaches it
+  # until the API binds it. Secrets are pushed by hand (deploy:cloudflare_env:gotrue:prod).
+  deploy_gotrue_worker:
+    needs: [changes]
+    if: ${{ needs.changes.result == 'success' && needs.changes.outputs.gotrue == 'true' && needs.changes.outputs.is_alpha != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.changes.outputs.deploy_sha }}
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Reject stale deployment retry
+        if: ${{ github.run_attempt > 1 }}
+        run: bun scripts/resolve-deploy-tag.ts --assert-current "${{ needs.changes.outputs.deploy_tag }}"
+      - name: Install dependencies
+        run: bun install
+      - name: Deploy CF Worker GoTrue
+        run: bun run deploy:cloudflare:gotrue:prod
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

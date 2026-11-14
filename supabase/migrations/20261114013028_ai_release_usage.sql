@@ -12,6 +12,10 @@ CREATE TABLE public.ai_release_usage_daily (
   CHECK (changelog_requests <= requests)
 );
 ALTER TABLE public.ai_release_usage_daily ENABLE ROW LEVEL SECURITY;
+-- Only the backend and the admin's privileged database connection may access counters.
+-- Restrictive denial also protects against accidental grants or permissive policies.
+CREATE POLICY "Deny all direct access" ON public.ai_release_usage_daily
+  AS RESTRICTIVE FOR ALL TO PUBLIC USING (false) WITH CHECK (false);
 REVOKE ALL ON public.ai_release_usage_daily FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.ai_release_usage_daily TO service_role;
 COMMENT ON TABLE public.ai_release_usage_daily IS 'AI release recommendation attempts by UTC day. Requests minus successes and failures are unfinished or interrupted attempts. No prompt or response retention.';
