@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type { BundleIncompatibleEmailOutcome } from '../utils/bundle_compatibility_recovery.ts'
 import type { AcceptedEventIdentity } from '../utils/event_identity.ts'
 import type { MiddlewareKeyVariables } from '../utils/hono.ts'
 import type { PgClient } from '../utils/pg.ts'
@@ -10,7 +11,7 @@ import { markAppOnboardingLoginFromTracking } from '../utils/app_onboarding_logi
 import { APP_TOO_LARGE_EVENT, buildAppTooLargeBentoEvent } from '../utils/app_too_large_tracking.ts'
 import { markBuilderChecklistFromAnalytics } from '../utils/builder_onboarding_checklist.ts'
 import { buildBuilderOnboardingBentoEvent, BUILDER_RECOVERY_MILESTONES } from '../utils/builder_onboarding_recovery.ts'
-import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
+import { buildBundleCompatibilityBentoEvent, BUNDLE_INCOMPATIBLE_EVENT, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isBundleIncompatibleAlertForChannel, isCliTrueTag } from '../utils/bundle_compatibility_recovery.ts'
 import { buildPlanCheckoutStartedBentoEvent, PLAN_CHECKOUT_STARTED_EVENT } from '../utils/checkout_tracking.ts'
 import { acceptEventIdentity, isValidClientEventId } from '../utils/event_identity.ts'
 import { BRES, parseBody, quickError, simpleError, useCors } from '../utils/hono.ts'
@@ -395,12 +396,13 @@ async function trackBundleIncompatibleEmail(
     channelName: string | undefined
     incompatibilityAccepted: boolean
     gatedByStrategy: boolean
+    outcome?: BundleIncompatibleEmailOutcome
     updateStrategy?: string | null
     apikeyId: string | undefined
   },
 ) {
   const tags: Record<string, string | number | boolean> = {
-    outcome: bundleIncompatibleEmailOutcome(input.incompatibilityAccepted, input.gatedByStrategy),
+    outcome: input.outcome ?? bundleIncompatibleEmailOutcome(input.incompatibilityAccepted, input.gatedByStrategy),
     app_id: input.appId,
   }
   if (input.updateStrategy !== undefined)
@@ -487,6 +489,32 @@ async function buildBundleIncompatibleBentoEvent(
     return undefined
   }
 
+  const appResult = await single<{ name: string, default_upload_channel: string, bundle_incompatible_alert: string }>(
+    db,
+    'SELECT name, default_upload_channel, bundle_incompatible_alert FROM public.apps WHERE app_id = $1 LIMIT 2',
+    [appId],
+  )
+  if (appResult.error || !appResult.data) {
+    cloudlog({ requestId: c.get('requestId'), message: 'bundle incompatible bento lookup failed; skipping signal', app: appResult.error })
+    return undefined
+  }
+
+  // Default is the default upload channel. Staging and other channels stay quiet
+  // unless the app opts into every channel.
+  if (!isBundleIncompatibleAlertForChannel({
+    alert: appResult.data.bundle_incompatible_alert,
+    channel: incompatibleChannel,
+    defaultChannel: appResult.data.default_upload_channel,
+  })) {
+    await trackBundleIncompatibleEmail(c, {
+      ...emailBase,
+      incompatibilityAccepted: false,
+      gatedByStrategy: false,
+      outcome: 'skipped_non_default_channel',
+    })
+    return undefined
+  }
+
   const updateStrategy = await lookupChannelUpdateStrategy(db, appId, incompatibleChannel)
   const versionNewName = optionalNonEmptyTagString(tags.version_new_name)
   const versionOldName = optionalTagString(tags.version_old_name)
@@ -502,11 +530,10 @@ async function buildBundleIncompatibleBentoEvent(
   })
 
   const orgResult = await single<{ id: string, name: string }>(db, ORG_ID_NAME_SQL, [onboardingOrgId])
-  const appResult = await single<{ name: string }>(db, APP_NAME_SQL, [appId])
-  if (orgResult.error || appResult.error) {
+  if (orgResult.error || !orgResult.data) {
     // Best-effort signal: never fail the CLI's request, and don't emit a Bento
     // event with empty org/app context. Log and skip instead.
-    cloudlog({ requestId: c.get('requestId'), message: 'bundle incompatible bento lookup failed; skipping signal', org: orgResult.error, app: appResult.error })
+    cloudlog({ requestId: c.get('requestId'), message: 'bundle incompatible bento lookup failed; skipping signal', org: orgResult.error })
     return undefined
   }
 

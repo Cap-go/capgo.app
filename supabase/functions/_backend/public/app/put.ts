@@ -24,6 +24,7 @@ import { trackPosthogEvent } from '../../utils/posthog.ts'
 import { checkPermission, checkPermissionPg } from '../../utils/rbac.ts'
 import { createSignedImageUrl, getStorageAllowedOrigins, resolveWritableImageValue } from '../../utils/storage.ts'
 import { MAX_BUILD_TIMEOUT_SECONDS, MIN_BUILD_TIMEOUT_SECONDS, normalizeBuildTimeoutSeconds } from '../../utils/build_timeout.ts'
+import { isBundleIncompatibleAlert } from '../../utils/bundle_compatibility_recovery.ts'
 import { backgroundTask, isValidAppId } from '../../utils/utils.ts'
 
 interface UpdateApp {
@@ -35,6 +36,7 @@ interface UpdateApp {
   allow_preview?: boolean
   build_timeout_seconds?: number
   default_upload_channel?: string
+  bundle_incompatible_alert?: 'default' | 'all'
   need_onboarding?: boolean
   existing_app?: boolean
   block_provider_infra_requests?: boolean
@@ -46,7 +48,7 @@ interface UpdateApp {
 
 type AppSettings = Pick<Database['public']['Tables']['apps']['Update'], 'name' | 'icon_url' | 'retention' | 'expose_metadata' | 'allow_device_custom_id'
   | 'need_onboarding' | 'existing_app' | 'block_provider_infra_requests' | 'device_data_collection'
-  | 'allow_preview' | 'build_timeout_seconds' | 'default_upload_channel'
+  | 'allow_preview' | 'build_timeout_seconds' | 'default_upload_channel' | 'bundle_incompatible_alert'
   | 'ios_store_url' | 'android_store_url'>
 
 function validateDeviceDataCollectionPatch(patch: unknown): Record<string, boolean> {
@@ -262,6 +264,8 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     throw quickError(400, 'invalid_allow_preview', 'allow_preview must be a boolean', { allow_preview: body.allow_preview })
   if (body.default_upload_channel !== undefined && (typeof body.default_upload_channel !== 'string' || body.default_upload_channel.trim() === ''))
     throw quickError(400, 'invalid_default_upload_channel', 'default_upload_channel must be a channel name', { default_upload_channel: body.default_upload_channel })
+  if (body.bundle_incompatible_alert !== undefined && !isBundleIncompatibleAlert(body.bundle_incompatible_alert))
+    throw quickError(400, 'invalid_bundle_incompatible_alert', 'bundle_incompatible_alert must be default or all', { bundle_incompatible_alert: body.bundle_incompatible_alert })
 
   if (body.build_timeout_seconds !== undefined) {
     // Validate the raw value: normalizeBuildTimeoutSeconds clamps, so checking after it never fails.
@@ -329,6 +333,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     body.allow_preview,
     body.build_timeout_seconds,
     body.default_upload_channel,
+    body.bundle_incompatible_alert,
     body.existing_app,
     body.block_provider_infra_requests,
     body.allow_preview,
@@ -394,6 +399,7 @@ export async function put(c: Context<MiddlewareKeyVariables>, appId: string, bod
     allow_preview: body.allow_preview,
     build_timeout_seconds: body.build_timeout_seconds,
     default_upload_channel: body.default_upload_channel,
+    bundle_incompatible_alert: body.bundle_incompatible_alert,
     need_onboarding: body.need_onboarding,
     existing_app: body.existing_app,
     block_provider_infra_requests: body.block_provider_infra_requests,

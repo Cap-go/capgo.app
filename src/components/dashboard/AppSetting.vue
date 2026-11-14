@@ -293,6 +293,7 @@ const exposeMetadataInput = ref(false)
 const allowPreviewInput = ref(false)
 const allowDeviceCustomIdInput = ref(false)
 const blockProviderInfraRequestsInput = ref(false)
+const bundleIncompatibleAlertInput = ref<'default' | 'all'>('default')
 const collectInputs = reactive<DeviceDataCollection>(parseAppRowDeviceDataCollection(null))
 const isAppFormVisible = computed(() => !isFirstLoading.value && !isLoading.value)
 
@@ -305,6 +306,7 @@ function seedAppForm() {
   allowPreviewInput.value = appRef.value?.allow_preview ?? false
   allowDeviceCustomIdInput.value = appRef.value?.allow_device_custom_id ?? false
   blockProviderInfraRequestsInput.value = appRef.value?.block_provider_infra_requests ?? false
+  bundleIncompatibleAlertInput.value = appRef.value?.bundle_incompatible_alert === 'all' ? 'all' : 'default'
   Object.assign(collectInputs, deviceDataCollection.value)
 }
 watch(isAppFormVisible, (visible) => {
@@ -343,6 +345,7 @@ async function submitAppForm() {
     allow_preview: allowPreviewInput.value,
     allow_device_custom_id: allowDeviceCustomIdInput.value,
     block_provider_infra_requests: blockProviderInfraRequestsInput.value,
+    bundle_incompatible_alert: bundleIncompatibleAlertInput.value,
     collect_country: collectInputs.country,
     collect_platform: collectInputs.platform,
     collect_os_version: collectInputs.os_version,
@@ -363,6 +366,7 @@ async function submit(form: {
   allow_preview: boolean
   allow_device_custom_id: boolean
   block_provider_infra_requests: boolean
+  bundle_incompatible_alert: 'default' | 'all'
   collect_country: boolean
   collect_platform: boolean
   collect_os_version: boolean
@@ -434,6 +438,13 @@ async function submit(form: {
   try {
     if (typeof form.block_provider_infra_requests === 'boolean')
       await updateBlockProviderInfraRequests(form.block_provider_infra_requests)
+  }
+  catch (error) {
+    toast.error(error as string)
+  }
+
+  try {
+    await updateBundleIncompatibleAlert(form.bundle_incompatible_alert)
   }
   catch (error) {
     toast.error(error as string)
@@ -663,6 +674,20 @@ async function updateExposeMetadata(newExposeMetadata: boolean) {
   toast.success(t('changed-expose-metadata'))
   if (appRef.value)
     appRef.value.expose_metadata = newExposeMetadata
+}
+
+async function updateBundleIncompatibleAlert(next: 'default' | 'all') {
+  const current = appRef.value?.bundle_incompatible_alert === 'all' ? 'all' : 'default'
+  if (next === current)
+    return
+
+  const { error } = await capgo.from('apps').update({ bundle_incompatible_alert: next }).eq('app_id', props.appId)
+  if (error)
+    throw t('cannot-change-bundle-incompatible-alert')
+
+  toast.success(t('changed-bundle-incompatible-alert'))
+  if (appRef.value)
+    appRef.value.bundle_incompatible_alert = next
 }
 
 async function updateAllowPreview(newAllowPreview: boolean) {
@@ -1564,6 +1589,28 @@ async function transferAppOwnership() {
                       </button>
                     </template>
                   </FormField>
+                </div>
+                <div class="mb-4">
+                  <label for="bundle-incompatible-alert" class="inline-flex mb-1 text-sm font-bold text-neutral-700 dark:text-neutral-300">{{ t('bundle-incompatible-alert') }}</label>
+                  <div class="flex items-center w-full px-3 py-2 text-base border border-neutral-400 rounded-lg shadow bg-white dark:bg-transparent dark:border-neutral-500 focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
+                    <IconGearSix class="mr-2 -ml-1 w-[1em] h-[1em] shrink-0 text-neutral-600 dark:text-neutral-300" aria-hidden="true" />
+                    <select
+                      id="bundle-incompatible-alert"
+                      v-model="bundleIncompatibleAlertInput"
+                      name="bundle_incompatible_alert"
+                      class="w-full min-w-0 p-0 text-base bg-transparent border-none outline-hidden focus:ring-0 text-neutral-700 dark:text-neutral-300"
+                    >
+                      <option value="default">
+                        {{ t('bundle-incompatible-alert-default') }}
+                      </option>
+                      <option value="all">
+                        {{ t('bundle-incompatible-alert-all') }}
+                      </option>
+                    </select>
+                  </div>
+                  <p class="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                    {{ t('bundle-incompatible-alert-help') }}
+                  </p>
                 </div>
                 <div
                   :key="`download-${forceDownloadBump}`"

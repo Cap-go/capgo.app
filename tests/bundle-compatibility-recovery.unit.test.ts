@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isCliTrueTag } from '../supabase/functions/_backend/utils/bundle_compatibility_recovery.ts'
+import { BUNDLE_INCOMPATIBLE_EVENT, buildBundleCompatibilityBentoEvent, bundleIncompatibleEmailOutcome, isBreakingChangeGatedByChannelStrategy, isBundleIncompatibleAlert, isBundleIncompatibleAlertForChannel, isCliTrueTag } from '../supabase/functions/_backend/utils/bundle_compatibility_recovery.ts'
 
 const base = {
   event: BUNDLE_INCOMPATIBLE_EVENT,
@@ -126,6 +126,20 @@ describe('buildBundleCompatibilityBentoEvent', () => {
 // The channel's update strategy decides which of the two Bento signals fires:
 // when the version bump keeps the bundle off devices still running the previous
 // (incompatible) native build, the breaking change was done correctly.
+describe('isBundleIncompatibleAlertForChannel', () => {
+  it.concurrent('emails only the default upload channel unless the app opts into every channel', () => {
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: 'production', defaultChannel: 'production' })).toBe(true)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: 'staging', defaultChannel: 'production' })).toBe(false)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'all', channel: 'staging', defaultChannel: 'production' })).toBe(true)
+    expect(isBundleIncompatibleAlertForChannel({ alert: undefined, channel: 'staging', defaultChannel: 'production' })).toBe(false)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: undefined, defaultChannel: 'production' })).toBe(true)
+    expect(isBundleIncompatibleAlertForChannel({ alert: 'default', channel: 'staging', defaultChannel: undefined })).toBe(true)
+    expect(isBundleIncompatibleAlert('default')).toBe(true)
+    expect(isBundleIncompatibleAlert('all')).toBe(true)
+    expect(isBundleIncompatibleAlert('staging')).toBe(false)
+  })
+})
+
 describe('isBreakingChangeGatedByChannelStrategy', () => {
   it.concurrent.each([
     // strategy, old, new, gated
