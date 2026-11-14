@@ -31,4 +31,9 @@ describe('read-replica env loading', () => {
     const raw = 'postgresql://replica_user:p%24a%24s%3Fx@10.0.0.1:5432/postgres'
     expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(raw)
   })
+
+  it('preserves mixed percent escapes and literal characters in passwords', () => {
+    const raw = 'postgresql://replica:p%40ss$word@10.0.0.1:5432/postgres'
+    expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(raw)
+  })
 })
