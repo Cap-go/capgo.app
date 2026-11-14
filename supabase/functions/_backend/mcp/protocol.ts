@@ -21,7 +21,7 @@ export const SERVER_INSTRUCTIONS = 'Capgo manages Capacitor live updates and nat
   + 'Before capgo_prepare_build_credentials_upload, confirm the app, platform and replace or merge mode. It accepts no credential values and returns a single-use URL for a separate authorized upload to Capgo. '
   + 'The hosted server cannot access the user\'s local files or shell. Without authorized local file-transfer access, explain the CLI steps instead of claiming an upload. '
   + 'OTA: package with npx @capgo/cli@latest bundle zip --for-upload --json, call capgo_prepare_bundle_upload, PUT the archive to the signed URL, then capgo_complete_bundle_upload. If prepare returns skipped with reason VERSION_EXISTS, stop without uploading or completing. '
-  + 'Native build: package with npx @capgo/cli@latest build zip --json, call capgo_request_build, upload the archive, then capgo_start_build. Starting a build consumes build minutes.'
+  + 'Native build: package with npx @capgo/cli@latest build zip <appId> --platform <ios|android> --json, call capgo_request_build, upload the archive, then capgo_start_build. Starting a build consumes build minutes.'
 
 export const JSON_RPC_ERRORS = {
   parseError: -32700,
