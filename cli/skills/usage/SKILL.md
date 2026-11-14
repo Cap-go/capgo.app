@@ -103,7 +103,7 @@ Load `skills/native-builds/SKILL.md` when working with:
 
 - `build request`
 - `build needed`
-- `simulator start`, `simulator get`, `simulator stop`
+- `simulator start`, `simulator get`, `simulator command`, `simulator stop`
 - `build credentials save`
 - `build credentials list`
 - `build credentials clear`

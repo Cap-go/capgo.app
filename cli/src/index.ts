@@ -76,7 +76,7 @@ import { testRunDeviceCommand } from './run/device'
 import { CliUserError } from './shared/cli-user-error'
 import { ORG_EMAIL_PREFERENCE_KEYS, USER_EMAIL_PREFERENCE_KEYS } from './shared/email-preferences'
 import { TwoFactorComplianceNetworkError } from './shared/two-factor-compliance'
-import { getSimulatorCommand, startSimulatorCommand, stopSimulatorCommand } from './simulator/session'
+import { getSimulatorCommand, sendSimulatorCommand, startSimulatorCommand, stopSimulatorCommand } from './simulator/session'
 import { getAccount, setAccount } from './user/settings'
 import { whoami } from './user/whoami'
 import { formatError, setCapgoHostOverride } from './utils'
@@ -1853,6 +1853,7 @@ simulator
   .action(startSimulatorCommand)
   .option('-p, --platform <platform>', 'ios or android', 'ios')
   .option('-n, --name <name>', 'Session name')
+  .option('--build-job <buildJobId>', 'Saved iOS build job to install into the simulator')
   .option('--json', 'Print the session JSON')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--api-host <apiHost>', optionDescriptions.apiHost)
@@ -1862,6 +1863,17 @@ simulator
   .description('Read one simulator session.')
   .action(getSimulatorCommand)
   .option('--json', 'Print the session JSON')
+  .option('-a, --apikey <apikey>', optionDescriptions.apikey)
+  .option('--api-host <apiHost>', optionDescriptions.apiHost)
+
+simulator
+  .command('command <deviceCommand> [sessionId] [appId]')
+  .description('Send one agent-device command to a running simulator: devices, screenshot, snapshot, home, lock, tap, or open.')
+  .action(sendSimulatorCommand)
+  .option('--x <x>', 'Tap x. 0 to 1 is a fraction of the screen. Above 1 is a point.', value => Number(value))
+  .option('--y <y>', 'Tap y. 0 to 1 is a fraction of the screen. Above 1 is a point.', value => Number(value))
+  .option('--bundle-id <bundleId>', 'Bundle id for open')
+  .option('--json', 'Print the command JSON')
   .option('-a, --apikey <apikey>', optionDescriptions.apikey)
   .option('--api-host <apiHost>', optionDescriptions.apiHost)
 
