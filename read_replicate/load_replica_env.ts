@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
+import { normalizeGoogleReplicaDatabaseUrl } from './google_replica_connection.ts'
 
 export const READ_REPLICA_DATABASE_ENV_KEYS = [
   'READ_REPLICATE_GOOGLE_EU1',
@@ -109,7 +110,7 @@ export function ensureReadReplicaEnvLoaded(): ReadReplicaEnvLoadResult {
     const raw = parsed[key]
     if (!raw)
       continue
-    process.env[key] = encodePostgresUrlPasswordIfNeeded(raw)
+    process.env[key] = finalizeReplicaDatabaseUrl(raw)
     appliedKeys.push(key)
   }
 
@@ -124,11 +125,15 @@ export function ensureReadReplicaEnvLoaded(): ReadReplicaEnvLoadResult {
   return { loadedFrom: envFile, appliedKeys }
 }
 
+function finalizeReplicaDatabaseUrl(url: string): string {
+  return normalizeGoogleReplicaDatabaseUrl(encodePostgresUrlPasswordIfNeeded(url))
+}
+
 export function readReplicaDatabaseUrlFromEnv(): string | undefined {
   for (const key of READ_REPLICA_DATABASE_ENV_KEYS) {
     const value = process.env[key]?.trim()
     if (value)
-      return encodePostgresUrlPasswordIfNeeded(value)
+      return finalizeReplicaDatabaseUrl(value)
   }
   return undefined
 }

@@ -8,6 +8,7 @@ import type { Queryable } from '../read_replicate/schema_catalog.ts'
 import type { SchemaCompatibilityIssue } from '../read_replicate/schema_compatibility.ts'
 import { randomUUID } from 'node:crypto'
 import { Client } from 'pg'
+import { googleReplicaPgClientConfig } from '../read_replicate/google_replica_connection.ts'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -239,7 +240,7 @@ async function main(): Promise<void> {
 
 async function connectGoogleReplica(deadline: number): Promise<Queryable & { close: () => Promise<void> }> {
   const client = new Client({
-    connectionString: replicaConnectionString(),
+    ...googleReplicaPgClientConfig(replicaConnectionString()),
     connectionTimeoutMillis: 10_000,
   })
   await client.connect()
