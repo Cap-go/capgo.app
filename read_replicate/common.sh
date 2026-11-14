@@ -5,7 +5,7 @@
 # handles replication from that instance to downstream regional replicas.
 
 REPLICA_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPLICA_ENV_FILE="${REPLICA_ENV_FILE:-${REPLICA_SCRIPT_DIR}/../internal/cloudflare/.env.prod}"
+REPLICA_ENV_FILE="${READ_REPLICA_ENV_FILE:-${REPLICA_ENV_FILE:-${REPLICA_SCRIPT_DIR}/../internal/cloudflare/.env.prod}}"
 
 # Capgo production defaults for the single Google Cloud SQL eu-2 subscriber.
 # DB URLs come from .env.prod; pub/sub/region are fixed so bun scripts need zero exports.
@@ -50,8 +50,12 @@ REPLICA_DEFERRED_TABLES=(
 
 ensure_env_file() {
   if [[ ! -f "$REPLICA_ENV_FILE" ]]; then
-    echo "Error: $REPLICA_ENV_FILE not found"
+    echo "Error: read-replica env file not found: $REPLICA_ENV_FILE" >&2
     exit 1
+  fi
+  if [[ -z "${REPLICA_ENV_FILE_ANNOUNCED:-}" ]]; then
+    export REPLICA_ENV_FILE_ANNOUNCED=1
+    echo "Using read-replica env file: $REPLICA_ENV_FILE"
   fi
 }
 

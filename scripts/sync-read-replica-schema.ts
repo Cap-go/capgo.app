@@ -21,6 +21,7 @@ import {
   stableStringify,
 } from '../read_replicate/schema_catalog.ts'
 import { readReplicaSchemaCatalogFromMigrations } from '../read_replicate/schema_catalog_from_migrations.ts'
+import { ensureReadReplicaEnvLoaded, readReplicaDatabaseUrlFromEnv } from '../read_replicate/load_replica_env.ts'
 import { readReplicaSubscriberCompatibilityIssues } from '../read_replicate/schema_compatibility.ts'
 
 interface BunSubprocess {
@@ -138,12 +139,14 @@ async function refreshSubscription(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  ensureReadReplicaEnvLoaded()
   if (process.argv.includes('--refresh-subscription')) {
     await refreshSubscription()
     return
   }
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
-  const dryRun = process.argv.includes('--dry-run')
+  const guard = process.argv.includes('--guard')
+  const dryRun = process.argv.includes('--dry-run') || guard
   console.log(
     'Building the read-replica schema catalog from local migrations through Tinbase/PGlite...',
   )
@@ -165,6 +168,28 @@ async function main(): Promise<void> {
     }
 
     if (dryRun) {
+      if (guard) {
+        if (plan.skipped.length) {
+          throw new Error(
+            `Read-replica schema guard found unsupported drift: ${stableStringify(plan.skipped)}`,
+          )
+        }
+        if (plan.statements.length) {
+          throw new Error(
+            `Read-replica schema guard found pending additive changes: ${stableStringify(
+              plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
+            )}`,
+          )
+        }
+        if (preflightIssues.length) {
+          throw new Error(
+            `Read-replica schema guard found residual drift: ${stableStringify(preflightIssues)}`,
+          )
+        }
+        console.log('Read-replica schema guard passed: subscriber matches migrations.')
+        return
+      }
+
       console.log('Read-replica schema dry run result:')
       console.log(stableStringify({
         statements: plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
@@ -246,9 +271,7 @@ function deadlineBoundCatalogClient(client: Queryable, deadline: number): Querya
 }
 
 function replicaConnectionString(): string {
-  const connectionString = process.env.READ_REPLICATE_GOOGLE_EU1
-    ?? process.env.READ_REPLICA_DB_URL
-    ?? process.env.GOOGLE_READ_REPLICA_DB_URL
+  const connectionString = readReplicaDatabaseUrlFromEnv()
 
   if (!connectionString) {
     throw new Error(
