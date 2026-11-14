@@ -859,6 +859,7 @@ describe('hosted simulator MCP', () => {
     expect(shot.calls[0]?.body).toMatchObject({ command: 'screenshot' })
     expect(result.content[0] && 'text' in result.content[0] ? result.content[0].text : '').not.toContain('aW1n')
     expect(result.content[1]).toEqual({ type: 'image', data: 'aW1n', mimeType: 'image/jpeg' })
+    expect(result.structuredContent).toEqual({ data: { id: sessionId, command: 'screenshot', result: { width: 402, height: 874 } } })
   })
 
   it('stops a simulator on the stop route', async () => {
