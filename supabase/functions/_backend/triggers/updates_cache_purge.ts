@@ -267,7 +267,8 @@ export async function drainUpdatesCachePurge(
     cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: apps.length, calls: result.calls, failed: result.failed })
     if (ok) {
       purgedApps += apps.length
-      purgedAppIds.push(...apps.map(app => app.app_id))
+      for (const row of apps)
+        purgedAppIds.push(row.app_id)
     }
     if (!claim.has_more)
       break
@@ -279,6 +280,27 @@ const PURGE_RPC_SQL = {
   claim_updates_cache_purge: 'SELECT public.claim_updates_cache_purge(p_limit => $1::integer) AS result',
   ack_updates_cache_purge: 'SELECT public.ack_updates_cache_purge(p_lease_token => $1::uuid, p_success => $2::boolean, p_retry_after_seconds => $3::integer) AS result',
 } as const
+
+/** Records a pending app-scope purge and wakes the shared drain (service_role SQL). */
+export async function enqueueUpdatesEdgeCachePurge(c: Context, appId: string, scope: 'app' | 'versions' | 'plugin_state' = 'app') {
+  let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
+  try {
+    pg = await getPgClient(c)
+    await pg.query(
+      'SELECT public.notify_updates_edge_cache_purge($1::text[], $2::text)',
+      [[appId], scope],
+    )
+    return true
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'enqueue updates cache purge failed', appId, error: serializeError(error) })
+    return false
+  }
+  finally {
+    if (pg)
+      closeClient(c, pg)
+  }
+}
 
 /** Drains on one service connection; RPC failures come back as `error` like supabase-js did. */
 export async function nudgeUpdatesCachePurgeDrain(c: Context) {

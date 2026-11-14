@@ -10,7 +10,7 @@ Cache entries typically live about one hour. After you change channels, bundles,
 
 On **App settings**, users with app write or admin rights can click **Purge edge cache**. That calls `POST /private/purge_updates_edge_cache` with `{ "app_id": "..." }`, which runs `purgeAppUpdatesCache(app_id)`: enqueue the app's `capgo-updates` tag, then nudge the shared `claim` / `purgeUpdatesCacheTags` / `ack` drain (same path as `triggers/updates_cache_purge`).
 
-**Depends on [#4118](https://github.com/Cap-go/capgo.app/pull/4118)** for trigger-side `purgeUpdatesCache` hooks. After #4118 merges, rebase this branch onto `main` and collapse `purgeAppUpdatesCache.ts` into Teo's helper if the export moves there.
+Console and trigger paths share `purgeAppUpdatesCache` in `supabase/functions/_backend/utils/purgeUpdatesCache.ts` (from [#4118](https://github.com/Cap-go/capgo.app/pull/4118)).
 
 Rate limit: once per minute per app.
 

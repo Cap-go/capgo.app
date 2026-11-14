@@ -4,7 +4,7 @@ import { BRES, parseBody, quickError, simpleError } from '../utils/hono.ts'
 import { middlewareAuth } from '../utils/hono_jwt.ts'
 import { cloudlog, cloudlogErr, serializeError } from '../utils/logging.ts'
 import { closeClient, getPgClient } from '../utils/pg.ts'
-import { purgeAppUpdatesCache } from '../utils/purgeAppUpdatesCache.ts'
+import { purgeAppUpdatesCache } from '../utils/purgeUpdatesCache.ts'
 import { checkPermission } from '../utils/rbac.ts'
 import { hasPurgeTarget } from '../triggers/updates_cache_purge.ts'
 
@@ -73,7 +73,7 @@ app.post('/', middlewareAuth, async (c) => {
     ...result,
   })
 
-  if (result.nudged && !result.purged && result.purgedApps === 0)
+  if (result.nudged && !result.purged)
     return c.json({ ...BRES, nudged: result.nudged, purged: false, purged_apps: result.purgedApps, queued: true })
 
   return c.json({
