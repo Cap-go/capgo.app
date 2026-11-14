@@ -54,6 +54,10 @@
         {
           "pattern": "api.usecapgo.com",
           "custom_domain": true
+        },
+        {
+          "pattern": "mcp.capgo.app",
+          "custom_domain": true
         }
       ],
       "observability": {

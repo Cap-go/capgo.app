@@ -10,17 +10,48 @@ export type McpContext = Context<MiddlewareKeyVariables>
 
 export const MCP_PATH = '/mcp'
 export const MCP_OAUTH_PATH = '/mcp/oauth'
+export const MCP_ALIAS_HOST = 'mcp.capgo.app'
+export const MCP_PUBLIC_PATH_HEADER = 'x-capgo-mcp-public-path'
 
 export function getRequestOrigin(c: Context): string {
   return new URL(c.req.url).origin
 }
 
+export function isMcpAliasHost(hostname: string): boolean {
+  return hostname.toLowerCase() === MCP_ALIAS_HOST
+}
+
+function requestHostname(c: Context): string {
+  return new URL(c.req.url).hostname
+}
+
+/**
+ * On the MCP alias host, the resource URL is the path the client used (`/` or `/mcp`).
+ * The API worker sets MCP_PUBLIC_PATH_HEADER when it rewrites `/` to `/mcp`.
+ */
+
+export function getMcpPublicPath(c: Context): '/' | '/mcp' | null {
+  if (!isMcpAliasHost(requestHostname(c)))
+    return null
+  const header = c.req.header(MCP_PUBLIC_PATH_HEADER)?.trim()
+  if (header === '/' || header === '/mcp')
+    return header
+  const path = new URL(c.req.url).pathname.replace(/\/+$/, '') || '/'
+  if (path === '/mcp' || path.startsWith('/mcp/'))
+    return '/mcp'
+  if (path === '/')
+    return '/'
+  return '/'
+}
+
 /**
  * Canonical origin of the OAuth endpoints and the MCP resource. Production sets MCP_OAUTH_API_ORIGIN=https://api.capgo.app
- * so every hostname routed to this worker advertises the same resource; unset, the request origin is used (local workers).
+ * for the API host; the MCP alias host uses the request origin. Unset, the request origin is used (local workers).
  */
 
 export function getApiOrigin(c: Context): string {
+  if (isMcpAliasHost(requestHostname(c)))
+    return getRequestOrigin(c)
   return getEnv(c, 'MCP_OAUTH_API_ORIGIN').trim().replace(/\/+$/, '') || getRequestOrigin(c)
 }
 
@@ -34,6 +65,11 @@ export function getIssuer(c: Context): string {
 }
 
 export function getResourceUrl(c: Context): string {
+  const aliasPath = getMcpPublicPath(c)
+  if (aliasPath !== null) {
+    const origin = getRequestOrigin(c)
+    return aliasPath === '/' ? `${origin}/` : `${origin}${MCP_PATH}`
+  }
   return `${getApiOrigin(c)}${MCP_PATH}`
 }
 
