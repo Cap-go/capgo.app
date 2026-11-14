@@ -21,6 +21,15 @@ describe('google replica database connections', () => {
     expect(googleReplicaPgClientConfig(raw).ssl).toEqual({ rejectUnauthorized: false })
   })
 
+  it.concurrent('keeps passwords with unencoded ? when normalizing SSL params', () => {
+    const raw = 'postgresql://replica:p?word@10.0.0.1:5432/postgres'
+    expect(() => googleReplicaPgClientConfig(raw)).not.toThrow()
+    expect(googleReplicaPgClientConfig(raw)).toMatchObject({
+      password: 'p?word',
+      ssl: { rejectUnauthorized: false },
+    })
+  })
+
   it.concurrent('keeps explicit verify modes when callers set them', () => {
     const raw = 'postgresql://replica:secret@host:5432/postgres?sslmode=verify-full'
     const config = googleReplicaPgClientConfig(raw)

@@ -1,26 +1,22 @@
 import type { ClientConfig } from 'pg'
-import { connectionConfig } from './postgres_connection_config.ts'
+import { connectionConfig, encodePostgresUrlPasswordIfNeeded } from './postgres_connection_config.ts'
 
 function splitPostgresUrl(url: string): { base: string, query: string } {
-  const question = url.indexOf('?')
-  if (question === -1)
+  const match = /^postgres(?:ql)?:\/\/(.*)@([^@/]+)\/([^?]*)(?:\?(.*))?$/s.exec(url)
+  if (!match)
     return { base: url, query: '' }
-  return { base: url.slice(0, question), query: url.slice(question + 1) }
-}
-
-function parseQuery(query: string): URLSearchParams {
-  return new URLSearchParams(query.replace(/&/gu, '&'))
-}
-
-function serializeQuery(params: URLSearchParams): string {
-  const value = params.toString()
-  return value ? `?${value}` : ''
+  const scheme = url.startsWith('postgresql://') ? 'postgresql' : 'postgres'
+  const [, credentials, hostPort, database, query = ''] = match
+  return {
+    base: `${scheme}://${credentials}@${hostPort}/${database}`,
+    query,
+  }
 }
 
 /** Google Cloud SQL subscriber: encrypt without implicit verify-full from sslrootcert=system. */
 export function normalizeGoogleReplicaDatabaseUrl(url: string): string {
-  const { base, query } = splitPostgresUrl(url)
-  const params = parseQuery(query)
+  const { base, query } = splitPostgresUrl(encodePostgresUrlPasswordIfNeeded(url))
+  const params = new URLSearchParams(query)
 
   if (params.has('sslrootcert') && !params.has('sslmode')) {
     params.delete('sslrootcert')
@@ -38,7 +34,8 @@ export function normalizeGoogleReplicaDatabaseUrl(url: string): string {
     params.delete('sslrootcert')
   }
 
-  return `${base}${serializeQuery(params)}`
+  const serialized = params.toString()
+  return serialized ? `${base}?${serialized}` : base
 }
 
 export function googleReplicaPgClientConfig(url: string): ClientConfig {

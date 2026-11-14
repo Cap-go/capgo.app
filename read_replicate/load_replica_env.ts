@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
+import { encodePostgresUrlPasswordIfNeeded } from './postgres_connection_config.ts'
 import { normalizeGoogleReplicaDatabaseUrl } from './google_replica_connection.ts'
 
 export const READ_REPLICA_DATABASE_ENV_KEYS = [
   'READ_REPLICATE_GOOGLE_EU1',
+  'READ_REPLICA_DB_URL',
   'READ_REPLICATE_DB_URL',
   'GOOGLE_READ_REPLICA_DB_URL',
 ] as const
@@ -36,37 +37,19 @@ export function parseReplicaEnvFile(text: string): Record<string, string> {
   return values
 }
 
-function postgresUrlFailsStandardParse(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    return !/^postgres(?:ql)?$/iu.test(parsed.protocol.replace(/:$/u, ''))
-  }
-  catch {
-    return true
-  }
-}
-
-export function encodePostgresUrlPasswordIfNeeded(url: string): string {
-  if (!postgresUrlFailsStandardParse(url))
-    return url
-
-  const match = /^postgres(?:ql)?:\/\/([^:@/]+):(.*)@(.+)$/isu.exec(url)
-  if (!match)
-    return url
-
-  const [, user, password, rest] = match
-  const encoded = encodeURIComponent(password)
-  return `postgresql://${user}:${encoded}@${rest}`
-}
+export { encodePostgresUrlPasswordIfNeeded } from './postgres_connection_config.ts'
 
 export function resolveGitRepoRoot(): string | undefined {
-  const child = spawnSync('git', ['rev-parse', '--show-toplevel'], {
-    encoding: 'utf8',
-  })
-  if (child.status !== 0)
-    return undefined
-  const root = child.stdout.trim()
-  return root || undefined
+  let dir = resolve(moduleDir, '..')
+  for (let depth = 0; depth < 12; depth++) {
+    if (existsSync(join(dir, '.git')))
+      return dir
+    const parent = dirname(dir)
+    if (parent === dir)
+      break
+    dir = parent
+  }
+  return undefined
 }
 
 export function defaultReadReplicaEnvFilePath(): string {
@@ -97,7 +80,7 @@ export function ensureReadReplicaEnvLoaded(): ReadReplicaEnvLoadResult {
   if (!existsSync(envFile)) {
     throw new Error(
       `Read-replica database URL is unset and env file not found: ${envFile}. `
-      + `Set READ_REPLICATE_GOOGLE_EU1, READ_REPLICATE_DB_URL, or GOOGLE_READ_REPLICA_DB_URL, `
+      + `Set READ_REPLICATE_GOOGLE_EU1, READ_REPLICA_DB_URL, READ_REPLICATE_DB_URL, or GOOGLE_READ_REPLICA_DB_URL, `
       + `or point READ_REPLICA_ENV_FILE at a file that defines one.`,
     )
   }
@@ -121,7 +104,7 @@ export function ensureReadReplicaEnvLoaded(): ReadReplicaEnvLoadResult {
     )
   }
 
-  console.log(`Loaded read-replica environment from ${envFile}`)
+  console.error(`Loaded read-replica environment from ${envFile}`)
   return { loadedFrom: envFile, appliedKeys }
 }
 

@@ -55,7 +55,7 @@ ensure_env_file() {
   fi
   if [[ -z "${REPLICA_ENV_FILE_ANNOUNCED:-}" ]]; then
     export REPLICA_ENV_FILE_ANNOUNCED=1
-    echo "Using read-replica env file: $REPLICA_ENV_FILE"
+    echo "Using read-replica env file: $REPLICA_ENV_FILE" >&2
   fi
 }
 
@@ -88,14 +88,14 @@ ensure_google_replica_ssl() {
   if [[ "$url" == *"sslmode="* ]]; then
     if [[ "$url" == *"sslmode=require"* && "$url" == *"sslrootcert=system"* ]]; then
       url="${url//&sslrootcert=system/}"
-      url="${url//\?sslrootcert=system&/?\?}"
+      url="${url//\?sslrootcert=system&/?}"
       url="${url//\?sslrootcert=system/}"
     fi
     printf "%s" "$url"
     return 0
   fi
   url="${url//&sslrootcert=system/}"
-  url="${url//\?sslrootcert=system&/?\?}"
+  url="${url//\?sslrootcert=system&/?}"
   url="${url//\?sslrootcert=system/}"
   if [[ "$url" == *"?"* ]]; then
     printf "%s" "${url}&sslmode=require"

@@ -1,5 +1,28 @@
 import type { ClientConfig } from 'pg'
 
+function postgresUrlFailsStandardParse(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return !/^postgres(?:ql)?$/iu.test(parsed.protocol.replace(/:$/u, ''))
+  }
+  catch {
+    return true
+  }
+}
+
+export function encodePostgresUrlPasswordIfNeeded(url: string): string {
+  if (!postgresUrlFailsStandardParse(url))
+    return url
+
+  const match = /^postgres(?:ql)?:\/\/([^:@/]+):(.*)@(.+)$/isu.exec(url)
+  if (!match)
+    return url
+
+  const [, user, password, rest] = match
+  const encoded = encodeURIComponent(password)
+  return `postgresql://${user}:${encoded}@${rest}`
+}
+
 function decode(value: string) {
   try {
     return decodeURIComponent(value)

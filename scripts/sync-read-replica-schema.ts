@@ -140,11 +140,11 @@ async function refreshSubscription(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  ensureReadReplicaEnvLoaded()
   if (process.argv.includes('--refresh-subscription')) {
     await refreshSubscription()
     return
   }
+  ensureReadReplicaEnvLoaded()
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
   const guard = process.argv.includes('--guard')
   const dryRun = process.argv.includes('--dry-run') || guard
