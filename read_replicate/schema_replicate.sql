@@ -705,6 +705,13 @@ ALTER TABLE ONLY public.version_files
 
 
 --
+-- Name: app_versions_app_id_id_desc_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX app_versions_app_id_id_desc_idx ON public.app_versions USING btree (app_id, id DESC);
+
+
+--
 -- Name: app_versions_cli_version_idx; Type: INDEX; Schema: public; Owner: -
 --
 

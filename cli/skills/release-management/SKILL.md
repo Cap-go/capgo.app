@@ -296,3 +296,12 @@ Use this skill for OTA update workflows in Capgo Cloud.
 ### `key delete_old`
 
 - Example: `npx @capgo/cli@latest key delete_old`
+
+## AI release recommendations
+
+- `npx @capgo/cli@latest bundle recommend [appId] --since <ref> --changelog` suggests a next version using local Git summaries plus Capgo metadata. Requires an active paid subscription and upload permission.
+- For GitHub history: add `--repo owner/repo --since <ref> --ref <ref>`; requires authenticated `gh`, and no GitHub token is sent to Capgo.
+- Inspect `--dry-run` before sharing potentially sensitive commit subjects or paths. No source contents or untracked contents are collected.
+- Use `--base-version` for the first release or a different baseline; otherwise the latest Capgo release is the baseline.
+- `--json` emits JSON; `--changelog` adds a Markdown draft. Review the output. The command does not modify files, upload, tag, or publish, and does not reserve the suggested name.
+- History is bounded and truncation is disclosed. AI/provider errors are surfaced, never silently converted to a version.
