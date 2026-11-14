@@ -541,7 +541,7 @@ function logSupabasePortDiagnostics(ports: number[]): void {
   const filter = ports.map(port => `sport = :${port}`).join(' or ')
   const commands = [
     { cmd: 'sysctl', args: ['net.ipv4.ip_local_port_range', 'net.ipv4.ip_local_reserved_ports'] },
-    { cmd: 'sudo', args: ['-n', 'ss', '-Htanpo', 'state', 'all', `(${filter})`] },
+    { cmd: 'sudo', args: ['-n', 'ss', '-Htanpo', 'state', 'all', `( ${filter} )`] },
     { cmd: 'docker', args: ['ps', '-a', '--format', '{{.ID}} {{.Names}} {{.Status}} {{.Ports}}'] },
   ]
 
