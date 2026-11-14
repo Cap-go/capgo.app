@@ -1,19 +1,19 @@
 import { env } from 'node:process'
-import { createClient } from '@supabase/supabase-js'
-import { getSupabaseWorktreeConfig } from '../../scripts/supabase-worktree-config'
 import { getSupabaseStatus } from '../../scripts/supabase-worktree-status'
+import { createClient } from '../../tests/sql-data-client'
 import { expect, test } from '../support/commands'
 
 const APP_ID = 'com.bundlealert.e2e'
 
 function localAdminClient() {
-  const { ports } = getSupabaseWorktreeConfig()
-  const configured = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY
-  const status = configured ? null : getSupabaseStatus()
-  const key = configured || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
-  if (!key)
-    throw new Error('Local Supabase service key is required for the alert-scope fixture')
-  return createClient(`http://127.0.0.1:${ports.api}`, key, { auth: { persistSession: false } })
+  const status = getSupabaseStatus()
+  const url = env.SUPABASE_URL || status?.API_URL
+  const key = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || status?.SERVICE_ROLE_KEY || status?.SECRET_KEY
+  const dbUrl = env.SUPABASE_DB_URL || env.DB_URL || status?.DB_URL
+  if (!url || !key || !dbUrl)
+    throw new Error('Local Supabase URL, service key, and database URL are required for the alert-scope fixture')
+  env.SUPABASE_DB_URL ??= dbUrl
+  return createClient(url, key, { auth: { persistSession: false } })
 }
 
 test('saves and reloads the incompatible-bundle alert scope', async ({ page }) => {
