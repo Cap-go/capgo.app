@@ -12,6 +12,7 @@ export const MCP_PATH = '/mcp'
 export const MCP_OAUTH_PATH = '/mcp/oauth'
 export const MCP_ALIAS_HOST = 'mcp.capgo.app'
 export const MCP_PUBLIC_PATH_HEADER = 'x-capgo-mcp-public-path'
+const MCP_API_HOSTS = new Set(['api.capgo.app', 'api.usecapgo.com'])
 
 export function getRequestOrigin(c: Context): string {
   return new URL(c.req.url).origin
@@ -82,18 +83,47 @@ export function getMcpServerCardUrl(c: Context): string {
   return `${getApiOrigin(c)}${MCP_PATH}/server-card`
 }
 
-/** OAuth resource parameter: alias root `/` and `/mcp` refer to the same MCP resource. */
-export function canonicalMcpResourceUrl(url: string): string {
+type ParsedMcpResource =
+  | { ok: false, reason: 'invalid' | 'fragment' }
+  | { ok: true, role: 'alias' | 'api', query: string }
+
+function parseMcpResourceUrl(url: string): ParsedMcpResource {
   const trimmed = url.trim()
   if (!trimmed)
-    return trimmed
+    return { ok: false, reason: 'invalid' }
   try {
     const parsed = new URL(trimmed)
+    if (parsed.hash)
+      return { ok: false, reason: 'fragment' }
     const path = parsed.pathname.replace(/\/+$/, '') || '/'
-    if (isMcpAliasHost(parsed.hostname) && (path === '/' || path === MCP_PATH))
-      return `${parsed.origin}${MCP_PATH}`
+    const host = parsed.hostname.toLowerCase()
+    if (isMcpAliasHost(host) && (path === '/' || path === MCP_PATH))
+      return { ok: true, role: 'alias', query: parsed.search }
+    if (MCP_API_HOSTS.has(host) && path === MCP_PATH)
+      return { ok: true, role: 'api', query: parsed.search }
+    return { ok: false, reason: 'invalid' }
+  }
+  catch {
+    return { ok: false, reason: 'invalid' }
+  }
+}
+
+/** OAuth resource parameter: alias root `/` and `/mcp` refer to the same MCP resource; queries are compared. */
+export function canonicalMcpResourceUrl(url: string): string {
+  const parsed = parseMcpResourceUrl(url)
+  if (parsed.ok) {
+    const origin = parsed.role === 'alias' ? `https://${MCP_ALIAS_HOST}` : new URL(url.trim()).origin
+    return `${origin}${MCP_PATH}${parsed.query}`
+  }
+  const trimmed = url.trim()
+  try {
+    const u = new URL(trimmed)
+    if (u.hash)
+      return trimmed
+    const path = u.pathname.replace(/\/+$/, '') || '/'
     const suffix = path === '/' ? '' : path
-    return `${parsed.origin}${suffix}`.replace(/\/+$/, '') || `${parsed.origin}${MCP_PATH}`
+    const base = `${u.origin}${suffix}`.replace(/\/+$/, '') || `${u.origin}${MCP_PATH}`
+    return `${base}${u.search}`
   }
   catch {
     return trimmed.replace(/\/+$/, '')
@@ -101,7 +131,15 @@ export function canonicalMcpResourceUrl(url: string): string {
 }
 
 export function mcpResourceUrlsMatch(requested: string, expected: string): boolean {
-  return canonicalMcpResourceUrl(requested) === canonicalMcpResourceUrl(expected)
+  const a = parseMcpResourceUrl(requested)
+  const b = parseMcpResourceUrl(expected)
+  if (!a.ok || !b.ok)
+    return false
+  if (a.query !== b.query)
+    return false
+  if (a.role === b.role)
+    return true
+  return (a.role === 'alias' && b.role === 'api') || (a.role === 'api' && b.role === 'alias')
 }
 
 /** RFC 6749 §5.2 / RFC 7591 §3.2.2 error body. These shapes are mandated by the OAuth specs. */
