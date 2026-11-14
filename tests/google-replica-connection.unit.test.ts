@@ -95,4 +95,9 @@ describe('google replica database connections', () => {
       ssl: false,
     })
   })
+
+  it.concurrent('decodes query-string auth passwords only once', () => {
+    const raw = 'postgresql://10.0.0.1:5432/postgres?user=replica&password=pa%25ss&sslmode=disable'
+    expect(googleReplicaPgClientConfig(raw).password).toBe('pa%ss')
+  })
 })

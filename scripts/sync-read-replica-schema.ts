@@ -426,7 +426,8 @@ function googleDataApiClient(
 export function assertGoogleReadReplicaSchemaPlan(
   plan: ReadReplicaSchemaSyncPlan,
 ): void {
-  const skipped = plan.skipped[0]
+  const { blocking } = partitionGuardSkipped(plan.skipped)
+  const skipped = blocking[0]
   if (skipped) {
     throw new Error(
       `Cloud SQL server-side import cannot reconcile skipped ${skipped.kind} ${skipped.table}.${skipped.name} (${skipped.reason}) before primary migrations.`,

@@ -12,6 +12,9 @@ export function resolveReadReplicaSchemaSyncMode(
     return 'refresh-subscription'
   if (argv.includes('--guard'))
     return 'guard'
+  // sync-schema:apply passes both flags; dry-run must never mutate the subscriber.
+  if (argv.includes('--dry-run'))
+    return 'dry-run'
   if (argv.includes('--apply'))
     return 'apply'
   return 'dry-run'

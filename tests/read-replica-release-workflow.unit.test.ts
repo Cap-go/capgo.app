@@ -66,6 +66,8 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('needs.supabase_deploy.result == \'success\'')
       // The sync script must preflight subscriber compatibility before applying anything.
       // Import-path internals are covered by read-replica-schema-import-sync.unit.test.ts.
+      expect(syncScript).toContain('preflightCompatibilityIssues')
+      expect(syncScript).toContain('await applyPlan(plan)')
       expect(syncScript.indexOf('preflightCompatibilityIssues')).toBeLessThan(
         syncScript.indexOf('await applyPlan(plan)'),
       )

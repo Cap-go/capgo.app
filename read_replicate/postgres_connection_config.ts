@@ -167,9 +167,15 @@ export function connectionConfig(url: string): ClientConfig {
   // libpq treats sslrootcert=system without sslmode as verify-full.
   const sslmode = params.get('sslmode') ?? (sslrootcert === 'system' ? 'verify-full' : 'prefer')
 
+  const rawUser = colon >= 0 ? parts.credentials.slice(0, colon) : parts.credentials
+  const rawPassword = colon >= 0 ? parts.credentials.slice(colon + 1) : undefined
   return {
-    user: decode(colon >= 0 ? parts.credentials.slice(0, colon) : parts.credentials),
-    password: colon >= 0 ? decode(parts.credentials.slice(colon + 1)) : undefined,
+    user: parts.authInQuery ? rawUser : decode(rawUser),
+    password: rawPassword === undefined
+      ? undefined
+      : parts.authInQuery
+        ? rawPassword
+        : decode(rawPassword),
     host: portSeparator >= 0 ? parts.hostPort.slice(0, portSeparator) : parts.hostPort,
     port: portSeparator >= 0 ? Number(parts.hostPort.slice(portSeparator + 1)) : 5432,
     database: decode(parts.database) || 'postgres',
