@@ -621,6 +621,7 @@ BEGIN
     INSERT INTO "public"."apps" ("created_at", "app_id", "icon_url", "name", "last_version", "updated_at", "owner_org", "user_id") VALUES
     (NOW(), 'com.demoadmin.app', '', 'Demo Admin app', '1.0.0', NOW(), '22dbad8a-b885-4309-9b3b-a09f8460fb6d', 'c591b04e-cf29-4945-b9a0-776d0672061a'),
     (NOW(), 'com.demo.app', '', 'Demo app', '1.0.0', NOW(), '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097'),
+    (NOW(), 'com.bundlealert.e2e', '', 'Bundle alert e2e', '1.0.0', NOW(), '046a36ac-e03c-4590-9257-bd6c9dba9ee8', '6aa76066-55ef-4238-ade6-0b32334a4097'),
     (NOW(), 'com.stats.app', '', 'Stats Test App', '1.0.0', NOW(), 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', '7a1b2c3d-4e5f-4a6b-7c8d-9e0f1a2b3c4d'),
     (NOW(), 'com.rls.app', '', 'RLS Test App', '1.0.0', NOW(), 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f', '8b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e'),
     (NOW(), 'com.encrypted.app', '', 'Encrypted Test App', '1.0.0', NOW(), 'a7b8c9d0-e1f2-4a3b-9c4d-5e6f7a8b9ca4', 'f6a7b8c9-d0e1-4f2a-9b3c-4d5e6f708193'),

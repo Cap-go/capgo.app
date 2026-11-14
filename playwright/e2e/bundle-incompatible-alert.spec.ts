@@ -1,8 +1,10 @@
 import { expect, test } from '../support/commands'
 
+const APP_ID = 'com.bundlealert.e2e'
+
 test('saves and reloads the incompatible-bundle alert scope', async ({ page }) => {
   await page.login('test@capgo.app', 'testtest')
-  await page.goto('/app/com.demo.app/settings')
+  await page.goto(`/app/${APP_ID}/settings`)
 
   const scope = page.locator('#bundle-incompatible-alert')
   await expect(scope).toBeVisible()
