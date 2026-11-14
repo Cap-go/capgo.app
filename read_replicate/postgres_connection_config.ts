@@ -1,5 +1,10 @@
 import { readFileSync } from 'node:fs'
+import type { ConnectionOptions } from 'node:tls'
 import type { ClientConfig } from 'pg'
+
+function skipTlsHostnameVerification(): ConnectionOptions['checkServerIdentity'] {
+  return () => undefined
+}
 
 export type ParsedPostgresUrl = {
   scheme: 'postgres' | 'postgresql'
@@ -127,15 +132,22 @@ export function buildPostgresSslOptions(
   if (sslmode === 'disable')
     return false
 
-  const verify = sslmode === 'verify-full' || sslmode === 'verify-ca'
-  if (sslrootcert && sslrootcert !== 'system') {
-    return {
-      rejectUnauthorized: verify,
-      ca: readFileSync(sslrootcert),
+  const hasCustomCa = Boolean(sslrootcert && sslrootcert !== 'system')
+  const verifyCertificate = sslmode === 'verify-full'
+    || sslmode === 'verify-ca'
+    || (sslmode === 'require' && hasCustomCa)
+
+  if (hasCustomCa) {
+    const ssl: ConnectionOptions = {
+      rejectUnauthorized: verifyCertificate,
+      ca: readFileSync(sslrootcert!),
     }
+    if (sslmode === 'require' || sslmode === 'verify-ca')
+      ssl.checkServerIdentity = skipTlsHostnameVerification()
+    return ssl
   }
 
-  return { rejectUnauthorized: verify }
+  return { rejectUnauthorized: sslmode === 'verify-full' || sslmode === 'verify-ca' }
 }
 
 // psql accepts URLs whose password holds unencoded characters such as "?";

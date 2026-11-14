@@ -1,11 +1,18 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import type { ConnectionOptions } from 'node:tls'
 import { describe, expect, it } from 'vitest'
 import {
   googleReplicaPgClientConfig,
   normalizeGoogleReplicaDatabaseUrl,
 } from '../read_replicate/google_replica_connection.ts'
+
+function replicaCaPath(): string {
+  const caPath = join(tmpdir(), `replica-ca-${Date.now()}-${Math.random()}.pem`)
+  writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n')
+  return caPath
+}
 
 describe('google replica database connections', () => {
   it.concurrent('defaults missing sslmode to libpq-compatible require', () => {
@@ -47,14 +54,33 @@ describe('google replica database connections', () => {
     expect(config.ssl).toEqual({ rejectUnauthorized: true })
   })
 
-  it.concurrent('honors a configured sslrootcert CA file path', () => {
-    const caPath = join(tmpdir(), `replica-ca-${Date.now()}.pem`)
-    writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n')
-    const raw = `postgresql://replica:secret@host:5432/postgres?sslmode=verify-ca&sslrootcert=${encodeURIComponent(caPath)}`
+  it.concurrent('verify-ca with a custom CA verifies the cert but not the hostname', () => {
+    const caPath = replicaCaPath()
+    const raw = `postgresql://replica:secret@10.0.0.1:5432/postgres?sslmode=verify-ca&sslrootcert=${encodeURIComponent(caPath)}`
+    const ssl = googleReplicaPgClientConfig(raw).ssl as ConnectionOptions
+    expect(ssl.rejectUnauthorized).toBe(true)
+    expect(ssl.ca).toBeInstanceOf(Buffer)
+    expect(ssl.checkServerIdentity!('10.0.0.1', {} as never)).toBeUndefined()
+  })
+
+  it.concurrent('require with a custom CA matches libpq verify-ca (cert only, IP host)', () => {
+    const caPath = replicaCaPath()
+    const raw = `postgresql://replica:secret@10.0.0.1:5432/postgres?sslmode=require&sslrootcert=${encodeURIComponent(caPath)}`
+    const ssl = googleReplicaPgClientConfig(raw).ssl as ConnectionOptions
+    expect(ssl.rejectUnauthorized).toBe(true)
+    expect(ssl.ca).toBeInstanceOf(Buffer)
+    expect(ssl.checkServerIdentity!('10.0.0.1', {} as never)).toBeUndefined()
+  })
+
+  it.concurrent('sslrootcert alone normalizes to require and verifies against the CA', () => {
+    const caPath = replicaCaPath()
+    const raw = `postgresql://replica:secret@10.0.0.1:5432/postgres?sslrootcert=${encodeURIComponent(caPath)}`
+    expect(normalizeGoogleReplicaDatabaseUrl(raw)).toContain('sslmode=require')
     expect(normalizeGoogleReplicaDatabaseUrl(raw)).toContain(`sslrootcert=${encodeURIComponent(caPath)}`)
-    const config = googleReplicaPgClientConfig(raw)
-    expect(config.ssl).toMatchObject({ rejectUnauthorized: true })
-    expect((config.ssl as { ca: Buffer }).ca).toBeInstanceOf(Buffer)
+    const ssl = googleReplicaPgClientConfig(raw).ssl as ConnectionOptions
+    expect(ssl.rejectUnauthorized).toBe(true)
+    expect(ssl.ca).toBeInstanceOf(Buffer)
+    expect(ssl.checkServerIdentity!('10.0.0.1', {} as never)).toBeUndefined()
   })
 
   it.concurrent('parses user and password from query-string auth URLs', () => {
