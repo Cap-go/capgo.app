@@ -138,7 +138,7 @@
           }
         ]
       },
-      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "90986b85f1234bbb84df43578d138260" }],
+      "kv_namespaces": [{ "binding": "CHANNEL_SELF_STORE", "id": "2860ca0f6b1e416fb8651792895cbffa" }, { "binding": "PLUGIN_NOTIFICATION_QUEUE", "id": "655e307469ba496f9131556709b5a765" }, { "binding": "PLUGIN_STATE", "id": "302b855c0d474d2fb19878583f195e42" }],
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE_CAPGO_DIRECT_EU",
@@ -148,7 +148,7 @@
       "r2_buckets": [
         {
           "binding": "PLUGIN_STATE_POINTERS",
-          "bucket_name": "capgo-plugin-state-pointers-prod-20261113"
+          "bucket_name": "capgo-plugin-state-pointers-prod-20261114-recovery"
         }
       ]
     },
