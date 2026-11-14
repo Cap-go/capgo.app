@@ -1711,6 +1711,26 @@
       "type": "text"
     },
     {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "table": "read_replica_commit_marker",
+      "type": "smallint"
+    },
+    {
+      "default": null,
+      "generated": "",
+      "identity": "",
+      "name": "committed_at",
+      "notNull": true,
+      "position": 2,
+      "table": "read_replica_commit_marker",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -2289,6 +2309,20 @@
       "valid": true
     },
     {
+      "definition": "PRIMARY KEY (id)",
+      "name": "read_replica_commit_marker_pkey",
+      "table": "read_replica_commit_marker",
+      "type": "p",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (id = 1)",
+      "name": "read_replica_commit_marker_singleton",
+      "table": "read_replica_commit_marker",
+      "type": "c",
+      "valid": true
+    },
+    {
       "definition": "CHECK (billing_account = ANY (ARRAY['ee'::text, 'us'::text]))",
       "name": "stripe_info_billing_account_check",
       "table": "stripe_info",
@@ -2795,6 +2829,13 @@
       "valid": true
     },
     {
+      "constraintOwned": true,
+      "definition": "CREATE UNIQUE INDEX read_replica_commit_marker_pkey ON public.read_replica_commit_marker USING btree (id)",
+      "name": "read_replica_commit_marker_pkey",
+      "table": "read_replica_commit_marker",
+      "valid": true
+    },
+    {
       "constraintOwned": false,
       "definition": "CREATE INDEX finx_orgs_stripe_info ON public.stripe_info USING btree (product_id)",
       "name": "finx_orgs_stripe_info",
@@ -2996,6 +3037,11 @@
     {
       "kind": "r",
       "name": "orgs",
+      "reloptions": []
+    },
+    {
+      "kind": "r",
+      "name": "read_replica_commit_marker",
       "reloptions": []
     },
     {

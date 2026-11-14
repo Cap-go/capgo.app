@@ -150,6 +150,8 @@ jobs:
           echo "SUPABASE_PROJECT_ID=${{ secrets.SUPABASE_PROJECT_ID_PROD }}" >> $GITHUB_ENV
       - name: Install dependencies
         run: bun install
+      - name: Check read-replica schema matches migrations
+        run: bun scripts/check-read-replica-migrations-catalog.ts
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v2.0.0
         with:

@@ -375,19 +375,36 @@ function toReplicationLagSeconds(value: unknown): number | null {
  * isolation, see plugin_runtime/README.md): keep both in sync.
  */
 const REPLICA_LAG_QUERY = `
+  WITH upstream_lag AS (
+    SELECT CASE
+      WHEN pg_is_in_recovery() THEN
+        CASE
+          WHEN pg_last_wal_receive_lsn() IS NOT NULL
+            AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
+            AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
+            THEN 0::double precision
+          ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
+        END
+      ELSE (
+        SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
+        FROM pg_stat_subscription
+        WHERE last_msg_receipt_time IS NOT NULL
+      )
+    END AS lag_seconds
+  ),
+  primary_commit_lag AS (
+    SELECT EXTRACT(EPOCH FROM (now() - committed_at)) AS lag_seconds
+    FROM public.read_replica_commit_marker
+    WHERE id = 1
+  )
   SELECT CASE
-    WHEN pg_is_in_recovery() THEN
-      CASE
-        WHEN pg_last_wal_receive_lsn() IS NOT NULL
-          AND pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn()
-          AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver WHERE pid IS NOT NULL AND (status IS NULL OR status = 'streaming'))
-          THEN 0
-        ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))
-      END
-    ELSE (
-      SELECT MAX(EXTRACT(EPOCH FROM (now() - last_msg_receipt_time)))
-      FROM pg_stat_subscription
-      WHERE last_msg_receipt_time IS NOT NULL
+    WHEN (SELECT lag_seconds FROM primary_commit_lag) IS NULL
+      THEN (SELECT lag_seconds FROM upstream_lag)
+    WHEN (SELECT lag_seconds FROM upstream_lag) IS NULL
+      THEN (SELECT lag_seconds FROM primary_commit_lag)
+    ELSE GREATEST(
+      (SELECT lag_seconds FROM upstream_lag),
+      (SELECT lag_seconds FROM primary_commit_lag)
     )
   END AS lag_seconds
 `

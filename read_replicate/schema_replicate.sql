@@ -381,6 +381,18 @@ CREATE TABLE public.onboarding_demo_data (
 
 
 --
+-- Name: read_replica_commit_marker; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.read_replica_commit_marker (
+    id smallint NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    CONSTRAINT read_replica_commit_marker_pkey PRIMARY KEY (id),
+    CONSTRAINT read_replica_commit_marker_singleton CHECK (id = 1)
+);
+
+
+--
 -- Name: org_users; Type: TABLE; Schema: public; Owner: -
 --
 
