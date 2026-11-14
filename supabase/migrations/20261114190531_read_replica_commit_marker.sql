@@ -18,9 +18,38 @@ INSERT INTO public.read_replica_commit_marker (id, committed_at)
 VALUES (1, pg_catalog.now());
 
 ALTER TABLE public.read_replica_commit_marker OWNER TO postgres;
+ALTER TABLE public.read_replica_commit_marker ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.read_replica_commit_marker FROM PUBLIC;
 GRANT SELECT ON TABLE public.read_replica_commit_marker TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.read_replica_commit_marker TO postgres;
+
+CREATE POLICY "Allow read on read_replica_commit_marker"
+ON public.read_replica_commit_marker
+FOR SELECT
+TO anon, authenticated, service_role
+USING (true);
+
+CREATE POLICY "Deny insert on read_replica_commit_marker"
+ON public.read_replica_commit_marker
+AS RESTRICTIVE
+FOR INSERT
+TO anon, authenticated
+WITH CHECK (false);
+
+CREATE POLICY "Deny update on read_replica_commit_marker"
+ON public.read_replica_commit_marker
+AS RESTRICTIVE
+FOR UPDATE
+TO anon, authenticated
+USING (false)
+WITH CHECK (false);
+
+CREATE POLICY "Deny delete on read_replica_commit_marker"
+ON public.read_replica_commit_marker
+AS RESTRICTIVE
+FOR DELETE
+TO anon, authenticated
+USING (false);
 
 CREATE OR REPLACE FUNCTION public.touch_read_replica_commit_marker()
 RETURNS void

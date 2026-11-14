@@ -386,9 +386,7 @@ CREATE TABLE public.onboarding_demo_data (
 
 CREATE TABLE public.read_replica_commit_marker (
     id smallint NOT NULL,
-    committed_at timestamp with time zone NOT NULL,
-    CONSTRAINT read_replica_commit_marker_pkey PRIMARY KEY (id),
-    CONSTRAINT read_replica_commit_marker_singleton CHECK (id = 1)
+    committed_at timestamp with time zone NOT NULL
 );
 
 
@@ -636,6 +634,22 @@ ALTER TABLE ONLY public.notifications
 
 ALTER TABLE ONLY public.onboarding_demo_data
     ADD CONSTRAINT onboarding_demo_data_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: read_replica_commit_marker read_replica_commit_marker_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.read_replica_commit_marker
+    ADD CONSTRAINT read_replica_commit_marker_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: read_replica_commit_marker read_replica_commit_marker_singleton; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.read_replica_commit_marker
+    ADD CONSTRAINT read_replica_commit_marker_singleton CHECK (id = 1);
 
 
 --
