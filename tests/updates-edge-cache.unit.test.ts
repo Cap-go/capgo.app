@@ -450,7 +450,7 @@ describe('updates cache purge drain', () => {
       { status: 'ok', lease_token: 'lease-2', apps: [{ app_id: 'com.c', initial: true }], has_more: false },
     ])
 
-    await expect(drainUpdatesCachePurge(makeContext(), rpc, { sleep })).resolves.toEqual({ purgedApps: 3 })
+    await expect(drainUpdatesCachePurge(makeContext(), rpc, { sleep })).resolves.toEqual({ purgedApps: 3, purgedAppIds: ['com.a', 'com.b', 'com.c'] })
     expect(sleep).toHaveBeenCalledWith(450)
     const acks = calls.filter(call => call.fn === 'ack_updates_cache_purge').map(call => call.args)
     // Re-purges for first purges are scheduled in SQL from the leased rows.
@@ -466,7 +466,7 @@ describe('updates cache purge drain', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 429, headers: { 'Retry-After': '12' } })))
     const { rpc, calls } = rpcFrom([{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }], has_more: false }])
 
-    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0 })
+    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0, purgedAppIds: [] })
     expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toEqual({ p_lease_token: 'lease-1', p_success: false, p_retry_after_seconds: 12 })
   })
 
@@ -486,7 +486,7 @@ describe('updates cache purge drain', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })))
     const { rpc, calls } = rpcFrom([{ status: 'ok', lease_token: 'lease-1', apps: [{ app_id: 'com.a', initial: true }], has_more: false }])
 
-    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0 })
+    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 0, purgedAppIds: [] })
     expect(calls.find(call => call.fn === 'ack_updates_cache_purge')?.args).toMatchObject({ p_lease_token: 'lease-1', p_success: false })
   })
 
@@ -507,7 +507,7 @@ describe('updates cache purge drain', () => {
       { status: 'throttled', wait_ms: 700 },
       { status: 'ok', apps: [{ app_id: 'com.never', initial: true }], has_more: false },
     ])
-    await expect(drainUpdatesCachePurge(makeContext(), rpc, { sleep })).resolves.toEqual({ purgedApps: 0 })
+    await expect(drainUpdatesCachePurge(makeContext(), rpc, { sleep })).resolves.toEqual({ purgedApps: 0, purgedAppIds: [] })
     expect(sleep).toHaveBeenCalledTimes(1)
     expect(calls.filter(call => call.fn === 'claim_updates_cache_purge')).toHaveLength(2)
   })
@@ -668,7 +668,7 @@ describe('updates cache purge scopes', () => {
       ? { data: { status: 'ok', lease_token: 'lease-1', has_more: false, apps }, error: null }
       : { data: null, error: null })
 
-    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 3 })
+    await expect(drainUpdatesCachePurge(makeContext(), rpc)).resolves.toEqual({ purgedApps: 3, purgedAppIds: ['com.a', 'com.a', 'com.b'] })
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).tags).toEqual(['capgo-updates-com.a', 'capgo-updates-com.a:versions', 'capgo-updates-com.b'])
   })
 })

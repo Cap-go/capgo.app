@@ -223,10 +223,11 @@ export async function drainUpdatesCachePurge(
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
   const deadline = Date.now() + (options.budgetMs ?? DRAIN_BUDGET_MS)
   let purgedApps = 0
+  const purgedAppIds: string[] = []
   // Claiming without a target would only lease rows we cannot purge.
   if (!hasPurgeTarget(c)) {
     cloudlog({ requestId: c.get('requestId'), message: 'updates cache purge skipped (not configured)' })
-    return { purgedApps }
+    return { purgedApps, purgedAppIds }
   }
   let claimed = false
   let throttledBeforeClaim = 0
@@ -264,12 +265,14 @@ export async function drainUpdatesCachePurge(
     if (ackError)
       cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge ack failed', error: serializeError(ackError) })
     cloudlog({ requestId: c.get('requestId'), message: 'updates cache purged', apps: apps.length, calls: result.calls, failed: result.failed })
-    if (ok)
+    if (ok) {
       purgedApps += apps.length
+      purgedAppIds.push(...apps.map(app => app.app_id))
+    }
     if (!claim.has_more)
       break
   }
-  return { purgedApps }
+  return { purgedApps, purgedAppIds }
 }
 
 const PURGE_RPC_SQL = {
@@ -278,7 +281,7 @@ const PURGE_RPC_SQL = {
 } as const
 
 /** Drains on one service connection; RPC failures come back as `error` like supabase-js did. */
-async function drainUpdatesCachePurgeWithPg(c: Context) {
+export async function nudgeUpdatesCachePurgeDrain(c: Context) {
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
@@ -298,7 +301,7 @@ async function drainUpdatesCachePurgeWithPg(c: Context) {
   }
   catch (error) {
     cloudlogErr({ requestId: c.get('requestId'), message: 'updates cache purge claim failed', error: serializeError(error) })
-    return { purgedApps: 0 }
+    return { purgedApps: 0, purgedAppIds: [] as string[] }
   }
   finally {
     if (pg)
@@ -339,6 +342,6 @@ app.post('/', middlewareAPISecret, async (c) => {
     return c.json({ ...BRES, forwarded: true })
   }
   // Answer the wake right away; draining runs in the background.
-  await backgroundTask(c, drainUpdatesCachePurgeWithPg(c))
+  await backgroundTask(c, nudgeUpdatesCachePurgeDrain(c))
   return c.json(BRES)
 })

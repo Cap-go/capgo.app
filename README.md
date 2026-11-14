@@ -78,6 +78,7 @@ When a hosted MCP poll sees a job still `running` past the app's configured time
   your app updates or yours.
 - 📦 Bundle Management: Download, assign to channel, rollback.
 - 📺 Channel Support: Use channels to manage different environments.
+- 🌐 Edge cache control: Purge stale `/updates` edge cache for your app from the console (app settings), or rely on automatic purges when channels and bundles change.
 - 🎯 Set Channel to specific device to do QA or debug one user.
 - 🔄 Auto Update: Automatically download and set the latest bundle for the app.
 - ✅ Official Appflow alternative: our Capacitor updater plugin is the official alternative to Ionic Appflow.
