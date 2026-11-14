@@ -531,6 +531,16 @@
       "type": "jsonb"
     },
     {
+      "default": "'default'::text",
+      "generated": "",
+      "identity": "",
+      "name": "bundle_incompatible_alert",
+      "notNull": true,
+      "position": 31,
+      "table": "apps",
+      "type": "text"
+    },
+    {
       "default": "now()",
       "generated": "",
       "identity": "",
@@ -2029,6 +2039,13 @@
     {
       "definition": "CHECK (build_timeout_seconds >= 300 AND build_timeout_seconds <= 21600)",
       "name": "apps_build_timeout_seconds_check",
+      "table": "apps",
+      "type": "c",
+      "valid": true
+    },
+    {
+      "definition": "CHECK (bundle_incompatible_alert = ANY (ARRAY['default'::text, 'all'::text]))",
+      "name": "apps_bundle_incompatible_alert_check",
       "table": "apps",
       "type": "c",
       "valid": true

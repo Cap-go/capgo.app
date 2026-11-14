@@ -99,6 +99,24 @@ describe('app put settings fields', () => {
     mocks.callerChannelSelect.mockResolvedValue({ data: { id: 7 }, error: null })
   })
 
+  it('persists the incompatible-bundle alert scope', async () => {
+    const response = await put(createContext(), 'com.example.app', {
+      bundle_incompatible_alert: 'all',
+    }, { key: 'test-key' } as any)
+
+    expect(response.status).toBe(200)
+    expect(mocks.updatePayload).toHaveBeenCalledWith(expect.objectContaining({
+      bundle_incompatible_alert: 'all',
+    }))
+  })
+
+  it('rejects an incompatible-bundle alert scope other than default or all', async () => {
+    await expect(put(createContext(), 'com.example.app', {
+      bundle_incompatible_alert: 'staging' as 'all',
+    }, { key: 'test-key' } as any)).rejects.toMatchObject({ status: 400, cause: { error: 'invalid_bundle_incompatible_alert' } })
+    expect(mocks.updatePayload).not.toHaveBeenCalled()
+  })
+
   it('persists allow_preview, build_timeout_seconds, and default_upload_channel', async () => {
     const response = await put(createContext(), 'com.example.app', {
       allow_preview: true,

@@ -30,6 +30,10 @@ const app = z
         'When this resource last changed, as an ISO timestamp; null means unavailable.',
       ),
     retention: number('Bundle retention period in seconds.').optional(),
+    bundle_incompatible_alert: z
+      .enum(['default', 'all'])
+      .optional()
+      .describe('Which channels email members when an incompatible bundle goes live. default = only the default upload channel. all = every channel.'),
     need_onboarding: z
       .boolean()
       .optional()

@@ -733,7 +733,7 @@ const appTools: McpTool[] = [
     name: 'capgo_update_app',
     outputSchema: MCP_OUTPUT_SCHEMAS.capgo_update_app,
     title: 'Update app',
-    description: 'Update app settings such as name, bundle retention, metadata exposure, preview, build timeout, default upload channel, store URLs and which optional device fields are collected. '
+    description: 'Update app settings such as name, bundle retention, metadata exposure, preview, build timeout, default upload channel, incompatible-bundle alert scope, store URLs and which optional device fields are collected. '
       + 'The default download channel is a channel setting: use capgo_update_channel with public=true.'
       + ' Changes affect future updates, retention cleanup and device metadata storage; reducing retention can cause unused bundles to be deleted.',
     input: {
@@ -746,6 +746,7 @@ const appTools: McpTool[] = [
       block_provider_infra_requests: z.boolean().optional().describe('Block update requests coming from cloud provider infrastructure'),
       build_timeout_seconds: z.number().int().min(300).max(21600).optional().describe('Native cloud build timeout in seconds.'),
       default_upload_channel: z.string().min(1).optional().describe('Existing channel that CLI uploads use when no channel is supplied. Omit to retain the saved upload channel.'),
+      bundle_incompatible_alert: z.enum(['default', 'all']).optional().describe('Which channels email members when an incompatible bundle goes live. default = only the default upload channel. all = every channel.'),
       device_data_collection: deviceDataCollection.optional(),
       ios_store_url: z.string().nullable().optional().describe('App Store listing URL for this app. Use null to clear it.'),
       android_store_url: z.string().nullable().optional().describe('Google Play listing URL for this app. Use null to clear it.'),

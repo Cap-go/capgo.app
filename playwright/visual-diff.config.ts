@@ -48,6 +48,23 @@ async function prepareSecurityUpdatesEmailPreferences(page: Page, viewport: { wi
   }
 }
 
+async function prepareIncompatibleAlertSection(page: Page, viewport: { width: number, height: number }) {
+  await page.setViewportSize(viewport)
+  await dismissRemindMeLater(page)
+  // Before the change the select does not exist, so center the default upload channel field it sits under.
+  const target = process.env.VISUAL_DIFF_PHASE === 'after'
+    ? page.locator('#bundle-incompatible-alert')
+    : page.locator('input[name="default_upload_channel"]')
+  try {
+    await target.waitFor({ state: 'visible', timeout: process.env.VISUAL_DIFF_PHASE === 'after' ? 120_000 : 15_000 })
+    await target.evaluate(element => element.scrollIntoView({ block: 'center' }))
+  }
+  catch (error) {
+    if (process.env.VISUAL_DIFF_PHASE === 'after' || !(error instanceof Error) || error.name !== 'TimeoutError')
+      throw error
+  }
+}
+
 export interface VisualDiffRoute {
   slug: string
   path: string
@@ -942,6 +959,22 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
           return
         throw error
       }
+    },
+  },
+  {
+    slug: 'app-settings-incompatible-alert-desktop',
+    path: '/app/com.demo.app/settings',
+    auth: true,
+    prepare: async (page) => {
+      await prepareIncompatibleAlertSection(page, { width: 1440, height: 900 })
+    },
+  },
+  {
+    slug: 'app-settings-incompatible-alert-mobile',
+    path: '/app/com.demo.app/settings',
+    auth: true,
+    prepare: async (page) => {
+      await prepareIncompatibleAlertSection(page, { width: 390, height: 844 })
     },
   },
   { slug: 'app-settings-access', path: '/app/com.demo.app/settings/access', auth: true },
