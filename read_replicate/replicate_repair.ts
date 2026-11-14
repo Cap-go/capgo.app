@@ -22,9 +22,9 @@
 //   bun run readreplicate:repair [--apply] [--tables a,b] [--skip a,b]
 // --unsubscribed skips the subscription checks (local tests only).
 import process from 'node:process'
-import type { ClientConfig } from 'pg'
 import { Client } from 'pg'
 import { googleReplicaPgClientConfig } from './google_replica_connection.ts'
+import { connectionConfig } from './postgres_connection_config.ts'
 
 const DEFAULT_SKIP = ['delta_files', 'version_files']
 const BATCH = 1000
