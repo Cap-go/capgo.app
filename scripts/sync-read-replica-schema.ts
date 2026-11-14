@@ -8,6 +8,7 @@ import type { Queryable } from '../read_replicate/schema_catalog.ts'
 import type { SchemaCompatibilityIssue } from '../read_replicate/schema_compatibility.ts'
 import { randomUUID } from 'node:crypto'
 import { Client } from 'pg'
+import { googleReplicaPgClientConfig } from '../read_replicate/google_replica_connection.ts'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,6 +22,16 @@ import {
   stableStringify,
 } from '../read_replicate/schema_catalog.ts'
 import { readReplicaSchemaCatalogFromMigrations } from '../read_replicate/schema_catalog_from_migrations.ts'
+import {
+  assertReadReplicaSubscriberUrlConfigured,
+  ensureReadReplicaEnvLoaded,
+  readReplicaDatabaseUrlFromEnv,
+} from '../read_replicate/load_replica_env.ts'
+import {
+  filterReadReplicaSchemaPlanForApply,
+  partitionGuardSkipped,
+  resolveReadReplicaSchemaSyncMode,
+} from '../read_replicate/schema_sync_apply.ts'
 import { readReplicaSubscriberCompatibilityIssues } from '../read_replicate/schema_compatibility.ts'
 
 interface BunSubprocess {
@@ -138,12 +149,15 @@ async function refreshSubscription(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (process.argv.includes('--refresh-subscription')) {
+  const mode = resolveReadReplicaSchemaSyncMode(process.argv, process.env)
+  if (mode === 'refresh-subscription') {
     await refreshSubscription()
     return
   }
+  ensureReadReplicaEnvLoaded()
+  assertReadReplicaSubscriberUrlConfigured('read-replica schema sync')
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
-  const dryRun = process.argv.includes('--dry-run')
+  const allowDrop = process.argv.includes('--allow-drop')
   console.log(
     'Building the read-replica schema catalog from local migrations through Tinbase/PGlite...',
   )
@@ -152,7 +166,10 @@ async function main(): Promise<void> {
   const replica = googleDataApiClient(GOOGLE_READ_REPLICA, deadline)
   try {
     const actual = await readReplicaSchemaCatalog(replicaRead)
-    const plan = planReadReplicaSchemaSync(expected, actual)
+    const plan = filterReadReplicaSchemaPlanForApply(
+      planReadReplicaSchemaSync(expected, actual),
+      allowDrop,
+    )
 
     // Both checks run before the SQL object is uploaded or Cloud SQL is asked to
     // import anything. The import receives this exact already-reviewed plan.
@@ -164,12 +181,47 @@ async function main(): Promise<void> {
       )
     }
 
-    if (dryRun) {
+    if (mode === 'dry-run' || mode === 'guard') {
+      if (mode === 'guard') {
+        const { blocking, warned } = partitionGuardSkipped(plan.skipped)
+        if (warned.length) {
+          console.warn(
+            'Read-replica schema guard: subscriber has legacy indexes not present in migrations '
+            + '(drops require --allow-drop and are not run in guard mode): '
+            + stableStringify(warned),
+          )
+        }
+        if (blocking.length) {
+          throw new Error(
+            `Read-replica schema guard found unsupported drift: ${stableStringify(blocking)}`,
+          )
+        }
+        if (plan.statements.length) {
+          throw new Error(
+            `Read-replica schema guard found pending additive changes: ${stableStringify(
+              plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
+            )}`,
+          )
+        }
+        if (preflightIssues.length) {
+          throw new Error(
+            `Read-replica schema guard found residual drift: ${stableStringify(preflightIssues)}`,
+          )
+        }
+        console.log('Read-replica schema guard passed: subscriber matches migrations.')
+        return
+      }
+
       console.log('Read-replica schema dry run result:')
       console.log(stableStringify({
         statements: plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
         skipped: plan.skipped,
       }))
+      if (mode === 'dry-run') {
+        console.error(
+          'No subscriber changes were applied. Pass --apply to mutate the Google subscriber (never implied by loading internal/cloudflare/.env.prod).',
+        )
+      }
       return
     }
 
@@ -214,7 +266,7 @@ async function main(): Promise<void> {
 
 async function connectGoogleReplica(deadline: number): Promise<Queryable & { close: () => Promise<void> }> {
   const client = new Client({
-    connectionString: replicaConnectionString(),
+    ...googleReplicaPgClientConfig(replicaConnectionString()),
     connectionTimeoutMillis: 10_000,
   })
   await client.connect()
@@ -246,9 +298,7 @@ function deadlineBoundCatalogClient(client: Queryable, deadline: number): Querya
 }
 
 function replicaConnectionString(): string {
-  const connectionString = process.env.READ_REPLICATE_GOOGLE_EU1
-    ?? process.env.READ_REPLICA_DB_URL
-    ?? process.env.GOOGLE_READ_REPLICA_DB_URL
+  const connectionString = readReplicaDatabaseUrlFromEnv()
 
   if (!connectionString) {
     throw new Error(
@@ -376,7 +426,8 @@ function googleDataApiClient(
 export function assertGoogleReadReplicaSchemaPlan(
   plan: ReadReplicaSchemaSyncPlan,
 ): void {
-  const skipped = plan.skipped[0]
+  const { blocking } = partitionGuardSkipped(plan.skipped)
+  const skipped = blocking[0]
   if (skipped) {
     throw new Error(
       `Cloud SQL server-side import cannot reconcile skipped ${skipped.kind} ${skipped.table}.${skipped.name} (${skipped.reason}) before primary migrations.`,
