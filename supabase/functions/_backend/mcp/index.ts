@@ -14,7 +14,7 @@ import { checkKey } from '../utils/supabase.ts'
 import { backgroundTask } from '../utils/utils.ts'
 import { createMcpDiscoveryApp, mcpSetupPage } from './discovery.ts'
 import { isModernRequest, modernErrorStatus, record, validateModernHttpRequest } from './modern_protocol.ts'
-import { getProtectedResourceMetadataUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
+import { getProtectedResourceMetadataUrl, getResourceUrl, MCP_PATH, app as oauthApp } from './oauth.ts'
 import { withPg } from './oauth_shared.ts'
 import { handleJsonRpcMessage, JSON_RPC_ERRORS, jsonRpcError } from './protocol.ts'
 
@@ -218,7 +218,7 @@ export function createMcpApp(dispatch: McpDispatch) {
     if (representation === 'text/html')
       return mcpSetupPage(c)
     c.header('Allow', 'POST, OPTIONS')
-    return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, 'Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL https://api.capgo.app/mcp and the HTTP transport.'), 405)
+    return c.json(jsonRpcError(null, JSON_RPC_ERRORS.invalidRequest, `Use POST for MCP requests (Streamable HTTP, stateless). Configure your MCP client with the URL ${getResourceUrl(c)} and the HTTP transport.`), 405)
   })
   app.delete(MCP_PATH, (c) => {
     c.header('Allow', 'POST, OPTIONS')

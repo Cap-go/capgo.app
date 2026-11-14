@@ -6,7 +6,7 @@ import IconSparkles from '~icons/heroicons/sparkles'
 import { sendEvent } from '~/services/tracking'
 import { useOrganizationStore } from '~/stores/organization'
 
-const HOSTED_MCP_URL = 'https://api.capgo.app/mcp'
+const HOSTED_MCP_URL = 'https://mcp.capgo.app/'
 const { t } = useI18n()
 const organizationStore = useOrganizationStore()
 
