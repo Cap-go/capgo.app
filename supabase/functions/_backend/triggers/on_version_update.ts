@@ -18,7 +18,11 @@ import { backgroundTask } from '../utils/utils.ts'
 function schedulePurgeUpdatesCache(c: Context, appId: string | null | undefined) {
   if (!appId)
     return
-  void backgroundTask(c, purgeUpdatesCache(c, appId))
+  const task = purgeUpdatesCache(c, appId)
+  if (c.req?.header)
+    void backgroundTask(c, task)
+  else
+    void task
 }
 
 async function respondWithUpdatesPurge(c: Context, appId: string | null | undefined) {
