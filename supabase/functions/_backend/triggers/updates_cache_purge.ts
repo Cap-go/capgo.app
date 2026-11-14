@@ -278,7 +278,7 @@ const PURGE_RPC_SQL = {
 } as const
 
 /** Drains on one service connection; RPC failures come back as `error` like supabase-js did. */
-async function drainUpdatesCachePurgeWithPg(c: Context) {
+export async function nudgeUpdatesCachePurgeDrain(c: Context) {
   let pg: Awaited<ReturnType<typeof getPgClient>> | null = null
   try {
     pg = await getPgClient(c)
@@ -339,6 +339,6 @@ app.post('/', middlewareAPISecret, async (c) => {
     return c.json({ ...BRES, forwarded: true })
   }
   // Answer the wake right away; draining runs in the background.
-  await backgroundTask(c, drainUpdatesCachePurgeWithPg(c))
+  await backgroundTask(c, nudgeUpdatesCachePurgeDrain(c))
   return c.json(BRES)
 })
