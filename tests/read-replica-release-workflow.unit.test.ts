@@ -42,6 +42,8 @@ describe('production read-replica release gate', () => {
       expect(workflow).toContain('gcloud auth activate-service-account')
       expect(workflow).not.toContain('vars.GOOGLE_')
       expect(workflow).toContain('READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).toContain('Missing READ_REPLICATE_GOOGLE_EU1')
+      expect(workflow).toContain('GOOGLE_SERVICE_ACCOUNT only authenticates gcloud')
       expect(workflow).not.toContain('check-read-replica-hyperdrive-schema')
       expect(workflow).toContain('sync-read-replica-schema.ts --guard')
       expect(workflow).toContain(

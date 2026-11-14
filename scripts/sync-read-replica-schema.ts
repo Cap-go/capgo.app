@@ -22,7 +22,15 @@ import {
   stableStringify,
 } from '../read_replicate/schema_catalog.ts'
 import { readReplicaSchemaCatalogFromMigrations } from '../read_replicate/schema_catalog_from_migrations.ts'
-import { ensureReadReplicaEnvLoaded, readReplicaDatabaseUrlFromEnv } from '../read_replicate/load_replica_env.ts'
+import {
+  assertReadReplicaSubscriberUrlConfigured,
+  ensureReadReplicaEnvLoaded,
+  readReplicaDatabaseUrlFromEnv,
+} from '../read_replicate/load_replica_env.ts'
+import {
+  filterReadReplicaSchemaPlanForApply,
+  resolveReadReplicaSchemaSyncMode,
+} from '../read_replicate/schema_sync_apply.ts'
 import { readReplicaSubscriberCompatibilityIssues } from '../read_replicate/schema_compatibility.ts'
 
 interface BunSubprocess {
@@ -140,14 +148,15 @@ async function refreshSubscription(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (process.argv.includes('--refresh-subscription')) {
+  const mode = resolveReadReplicaSchemaSyncMode(process.argv, process.env)
+  if (mode === 'refresh-subscription') {
     await refreshSubscription()
     return
   }
   ensureReadReplicaEnvLoaded()
+  assertReadReplicaSubscriberUrlConfigured('read-replica schema sync')
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
-  const guard = process.argv.includes('--guard')
-  const dryRun = process.argv.includes('--dry-run') || guard
+  const allowDrop = process.argv.includes('--allow-drop')
   console.log(
     'Building the read-replica schema catalog from local migrations through Tinbase/PGlite...',
   )
@@ -156,7 +165,10 @@ async function main(): Promise<void> {
   const replica = googleDataApiClient(GOOGLE_READ_REPLICA, deadline)
   try {
     const actual = await readReplicaSchemaCatalog(replicaRead)
-    const plan = planReadReplicaSchemaSync(expected, actual)
+    const plan = filterReadReplicaSchemaPlanForApply(
+      planReadReplicaSchemaSync(expected, actual),
+      allowDrop,
+    )
 
     // Both checks run before the SQL object is uploaded or Cloud SQL is asked to
     // import anything. The import receives this exact already-reviewed plan.
@@ -168,8 +180,8 @@ async function main(): Promise<void> {
       )
     }
 
-    if (dryRun) {
-      if (guard) {
+    if (mode === 'dry-run' || mode === 'guard') {
+      if (mode === 'guard') {
         if (plan.skipped.length) {
           throw new Error(
             `Read-replica schema guard found unsupported drift: ${stableStringify(plan.skipped)}`,
@@ -196,6 +208,11 @@ async function main(): Promise<void> {
         statements: plan.statements.map(({ kind, table, name }) => ({ kind, table, name })),
         skipped: plan.skipped,
       }))
+      if (mode === 'dry-run') {
+        console.error(
+          'No subscriber changes were applied. Pass --apply to mutate the Google subscriber (never implied by loading internal/cloudflare/.env.prod).',
+        )
+      }
       return
     }
 

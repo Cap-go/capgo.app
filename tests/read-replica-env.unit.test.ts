@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import {
-  encodePostgresUrlPasswordIfNeeded,
-  parseReplicaEnvFile,
-} from '../read_replicate/load_replica_env.ts'
+import { encodePostgresUrlPasswordIfNeeded } from '../read_replicate/postgres_connection_config.ts'
+import { parseReplicaEnvFile } from '../read_replicate/load_replica_env.ts'
 
 describe('read-replica env loading', () => {
   it('parses env values literally without expanding $', () => {
@@ -11,6 +9,13 @@ describe('read-replica env loading', () => {
     )
     expect(parsed.READ_REPLICATE_GOOGLE_EU1).toBe(
       'postgresql://u:p$a$s?word\\tail@10.0.0.1:5432/postgres',
+    )
+  })
+
+  it('url-encodes the password when it contains ?', () => {
+    const raw = 'postgresql://replica:123?word@10.0.0.1:5432/postgres'
+    expect(encodePostgresUrlPasswordIfNeeded(raw)).toBe(
+      'postgresql://replica:123%3Fword@10.0.0.1:5432/postgres',
     )
   })
 

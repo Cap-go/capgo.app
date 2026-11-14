@@ -42,16 +42,29 @@ export function googleReplicaPgClientConfig(url: string): ClientConfig {
   const connectionString = normalizeGoogleReplicaDatabaseUrl(url)
   const config = connectionConfig(connectionString)
 
-  if (config.ssl === false)
-    return { ...config, connectionString }
+  if (config.ssl === false) {
+    return {
+      user: config.user,
+      password: config.password,
+      host: config.host,
+      port: config.port,
+      database: config.database,
+      ssl: false,
+      connectionTimeoutMillis: config.connectionTimeoutMillis,
+    }
+  }
 
   const rejectUnauthorized = typeof config.ssl === 'object'
     ? config.ssl.rejectUnauthorized
     : false
 
   return {
-    ...config,
-    connectionString,
+    user: config.user,
+    password: config.password,
+    host: config.host,
+    port: config.port,
+    database: config.database,
     ssl: { rejectUnauthorized },
+    connectionTimeoutMillis: config.connectionTimeoutMillis,
   }
 }

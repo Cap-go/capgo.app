@@ -1,26 +1,45 @@
 import type { ClientConfig } from 'pg'
 
-function postgresUrlFailsStandardParse(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    return !/^postgres(?:ql)?$/iu.test(parsed.protocol.replace(/:$/u, ''))
-  }
-  catch {
-    return true
+function splitPostgresAuthority(url: string): {
+  scheme: string
+  credentials: string
+  hostPort: string
+  database: string
+  query: string
+} | undefined {
+  const match = /^postgres(?:ql)?:\/\/(.*)@([^@/]+)\/([^?]*)(?:\?(.*))?$/s.exec(url)
+  if (!match)
+    return undefined
+  return {
+    scheme: url.startsWith('postgresql://') ? 'postgresql' : 'postgres',
+    credentials: match[1]!,
+    hostPort: match[2]!,
+    database: match[3]!,
+    query: match[4] ?? '',
   }
 }
 
+function passwordNeedsUrlEncoding(password: string): boolean {
+  return /[?#@\\]/.test(password) || password.includes('$')
+}
+
 export function encodePostgresUrlPasswordIfNeeded(url: string): string {
-  if (!postgresUrlFailsStandardParse(url))
+  const parts = splitPostgresAuthority(url)
+  if (!parts)
     return url
 
-  const match = /^postgres(?:ql)?:\/\/([^:@/]+):(.*)@(.+)$/isu.exec(url)
-  if (!match)
+  const colon = parts.credentials.indexOf(':')
+  if (colon < 0)
     return url
 
-  const [, user, password, rest] = match
+  const user = parts.credentials.slice(0, colon)
+  const password = parts.credentials.slice(colon + 1)
+  if (!passwordNeedsUrlEncoding(password))
+    return url
+
   const encoded = encodeURIComponent(password)
-  return `postgresql://${user}:${encoded}@${rest}`
+  const query = parts.query ? `?${parts.query}` : ''
+  return `${parts.scheme}://${user}:${encoded}@${parts.hostPort}/${parts.database}${query}`
 }
 
 function decode(value: string) {
