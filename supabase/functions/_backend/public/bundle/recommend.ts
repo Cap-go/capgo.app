@@ -14,7 +14,7 @@ import { extractAiText, parseJsonObjectFromAiText } from '../../utils/workers_ai
 
 // Live Workers AI catalog: created 2026-10-17; no planned deprecation (checked 2026-11-11).
 export const DEFAULT_RELEASE_MODEL = '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
-const versionName = z.string().min(1).max(128).regex(/^[\w][\w.+-]*$/)
+const versionName = z.string().min(1).max(128).regex(/^\w[\w.+-]*$/)
 export const recommendationInput = z.object({
   appId: z.string().max(200).refine(isValidAppId),
   baseVersion: versionName.optional(),
