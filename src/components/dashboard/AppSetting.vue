@@ -10,6 +10,7 @@ import { toast } from 'vue-sonner'
 import ArrowDownTray from '~icons/heroicons/arrow-down-tray'
 import ArrowUpTray from '~icons/heroicons/arrow-up-tray'
 import Pencil from '~icons/heroicons/pencil-square'
+import IconRefresh from '~icons/lucide/refresh-cw'
 import IconTransfer from '~icons/mingcute/transfer-horizontal-line'
 import IconGearSix from '~icons/ph/gear-six'
 import IconName from '~icons/ph/user'
@@ -18,7 +19,7 @@ import FormCheckbox from '~/components/forms/FormCheckbox.vue'
 import FormField from '~/components/forms/FormField.vue'
 import Toggle from '~/components/Toggle.vue'
 import { invokeCapgoApi } from '~/services/capgoApi'
-import { useConsole } from '~/services/console'
+import { defaultApiHost, useConsole } from '~/services/console'
 import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
 import { sendOnboardingEvent } from '~/services/onboardingTracking'
 import { checkPermissions } from '~/services/permissions'
@@ -66,6 +67,7 @@ const deletionDetail = ref<AppDeletionDetail | null>(null)
 const deletionNote = ref('')
 const deletionConfirmation = ref('')
 const isDeletingApp = ref(false)
+const isPurgingEdgeCache = ref(false)
 
 const canUpdateSettings = computedAsync(async () => {
   if (!appRef.value)
@@ -78,6 +80,52 @@ const canDeleteApp = computedAsync(async () => {
     return false
   return await checkPermissions('app.delete', { appId: props.appId })
 }, false)
+
+async function purgeUpdatesEdgeCache() {
+  if (isPurgingEdgeCache.value)
+    return
+  isPurgingEdgeCache.value = true
+  try {
+    const { data: sessionData } = await capgo.auth.getSession()
+    if (!sessionData.session)
+      throw new Error('not_authenticated')
+
+    const response = await fetch(`${defaultApiHost}/private/purge_updates_edge_cache`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': `Bearer ${sessionData.session.access_token}`,
+      },
+      body: JSON.stringify({ app_id: props.appId }),
+    })
+
+    const payload = await response.json().catch(() => ({})) as {
+      error?: string
+      moreInfo?: { retryAfterSeconds?: number }
+      purged?: boolean
+      queued?: boolean
+    }
+
+    if (response.status === 429) {
+      toast.error(t('purge-updates-edge-cache-rate-limited', { seconds: payload.moreInfo?.retryAfterSeconds ?? 60 }))
+      return
+    }
+    if (!response.ok)
+      throw new Error(payload.error ?? `purge_updates_edge_cache HTTP ${response.status}`)
+
+    if (payload.queued || payload.purged === false)
+      toast.success(t('purge-updates-edge-cache-queued'))
+    else
+      toast.success(t('purge-updates-edge-cache-success'))
+  }
+  catch (err) {
+    toast.error(t('purge-updates-edge-cache-failed'))
+    console.error(err)
+  }
+  finally {
+    isPurgingEdgeCache.value = false
+  }
+}
 
 const DEFAULT_BUILD_TIMEOUT_SECONDS = 15 * 60
 const MIN_BUILD_TIMEOUT_MINUTES = 5
@@ -1715,6 +1763,29 @@ async function transferAppOwnership() {
                   :label="t('block-provider-infra-requests')"
                   :help="t('block-provider-infra-requests-help')"
                 />
+                <div
+                  v-if="canUpdateSettings"
+                  class="p-4 space-y-2 border rounded-lg border-slate-200 dark:border-slate-700"
+                  data-test="purge-updates-edge-cache"
+                >
+                  <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                    {{ t('purge-updates-edge-cache-title') }}
+                  </h3>
+                  <p class="text-xs text-slate-500 dark:text-slate-300">
+                    {{ t('purge-updates-edge-cache-help') }}
+                  </p>
+                  <button
+                    type="button"
+                    class="d-btn d-btn-outline d-btn-sm w-fit"
+                    :disabled="isPurgingEdgeCache || isLoading || isDeletingApp"
+                    :aria-label="t('purge-updates-edge-cache-button')"
+                    @click="purgeUpdatesEdgeCache"
+                  >
+                    <Spinner v-if="isPurgingEdgeCache" size="w-4 h-4" color="fill-gray-500 text-gray-200 dark:text-gray-600" />
+                    <IconRefresh v-else class="w-4 h-4" aria-hidden="true" />
+                    {{ t('purge-updates-edge-cache-button') }}
+                  </button>
+                </div>
                 <details
                   id="device-data-collection"
                   class="pt-2 group"

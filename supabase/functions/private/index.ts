@@ -32,6 +32,7 @@ import { app as onboarding_ab_tests } from '../_backend/private/onboarding_ab_te
 import { app as onboarding_progress } from '../_backend/private/onboarding_progress.ts'
 import { app as org_notification_stats } from '../_backend/private/org_notification_stats.ts'
 import { app as organization_invitation } from '../_backend/private/organization_invitation.ts'
+import { app as purge_updates_edge_cache } from '../_backend/private/purge_updates_edge_cache.ts'
 // Webapps API
 import { app as plans } from '../_backend/private/plans.ts'
 import { app as publicStats } from '../_backend/private/public_stats.ts'
@@ -90,6 +91,7 @@ appGlobal.route('/create_device', create_device)
 appGlobal.route('/channel_stats', channel_stats)
 appGlobal.route('/bundle_install_stats', bundle_install_stats)
 appGlobal.route('/release_live', release_live)
+appGlobal.route('/purge_updates_edge_cache', purge_updates_edge_cache)
 appGlobal.route('/native_observe_stats', native_observe_stats)
 appGlobal.route('/observe', observe)
 appGlobal.route('/onboarding_ab_tests', onboarding_ab_tests)
