@@ -86,24 +86,16 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Install dependencies
         run: bun install
-      - name: Require read-replica subscriber PostgreSQL URL secret
-        env:
-          READ_REPLICATE_GOOGLE_EU1: ${{ secrets.READ_REPLICATE_GOOGLE_EU1 }}
-        run: |
-          if [ -z "${READ_REPLICATE_GOOGLE_EU1}" ]; then
-            echo "::error title=Missing READ_REPLICATE_GOOGLE_EU1::Add repository secret READ_REPLICATE_GOOGLE_EU1 with the direct Cloud SQL eu-2 subscriber postgres URL before merging. GOOGLE_SERVICE_ACCOUNT only authenticates gcloud; it cannot replace this libpq URL."
-            exit 1
-          fi
       - name: Reconcile the Google subscriber through server-side Cloud SQL import
         env:
           GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-          READ_REPLICATE_GOOGLE_EU1: ${{ secrets.READ_REPLICATE_GOOGLE_EU1 }}
         run: |
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
           gcloud auth activate-service-account --key-file="$credentials_file"
-          bun --preload ./read_replicate/preload_replica_env.ts scripts/sync-read-replica-schema.ts --apply --allow-drop
+          gcloud config set project capgo-394818
+          bun scripts/sync-read-replica-schema.ts --apply --allow-drop
 
   supabase_deploy:
     needs: [changes, read_replica_schema]
@@ -163,26 +155,17 @@ jobs:
       - name: Setup Google Cloud CLI
         if: env.SUPA_ENV == 'PROD'
         uses: google-github-actions/setup-gcloud@v2
-      - name: Require read-replica subscriber PostgreSQL URL secret
-        if: env.SUPA_ENV == 'PROD'
-        env:
-          READ_REPLICATE_GOOGLE_EU1: ${{ secrets.READ_REPLICATE_GOOGLE_EU1 }}
-        run: |
-          if [ -z "${READ_REPLICATE_GOOGLE_EU1}" ]; then
-            echo "::error title=Missing READ_REPLICATE_GOOGLE_EU1::Add repository secret READ_REPLICATE_GOOGLE_EU1 with the direct Cloud SQL eu-2 subscriber postgres URL before merging. GOOGLE_SERVICE_ACCOUNT only authenticates gcloud; it cannot replace this libpq URL."
-            exit 1
-          fi
       - name: Guard read-replica schema against primary migrations
         if: env.SUPA_ENV == 'PROD'
         env:
           GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-          READ_REPLICATE_GOOGLE_EU1: ${{ secrets.READ_REPLICATE_GOOGLE_EU1 }}
         run: |
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
           gcloud auth activate-service-account --key-file="$credentials_file"
-          bun --preload ./read_replicate/preload_replica_env.ts scripts/sync-read-replica-schema.ts --guard
+          gcloud config set project capgo-394818
+          bun scripts/sync-read-replica-schema.ts --guard
       - name: Update functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
@@ -234,24 +217,16 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
       - name: Install dependencies
         run: bun install
-      - name: Require read-replica subscriber PostgreSQL URL secret
-        env:
-          READ_REPLICATE_GOOGLE_EU1: ${{ secrets.READ_REPLICATE_GOOGLE_EU1 }}
-        run: |
-          if [ -z "${READ_REPLICATE_GOOGLE_EU1}" ]; then
-            echo "::error title=Missing READ_REPLICATE_GOOGLE_EU1::Add repository secret READ_REPLICATE_GOOGLE_EU1 with the direct Cloud SQL eu-2 subscriber postgres URL before merging. GOOGLE_SERVICE_ACCOUNT only authenticates gcloud; it cannot replace this libpq URL."
-            exit 1
-          fi
       - name: Refresh subscription for newly published tables
         env:
           GOOGLE_SERVICE_ACCOUNT_BASE64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-          READ_REPLICATE_GOOGLE_EU1: ${{ secrets.READ_REPLICATE_GOOGLE_EU1 }}
         run: |
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_BASE64" | base64 --decode > "$credentials_file"
           gcloud auth activate-service-account --key-file="$credentials_file"
-          bun --preload ./read_replicate/preload_replica_env.ts scripts/sync-read-replica-schema.ts --refresh-subscription
+          gcloud config set project capgo-394818
+          bun scripts/sync-read-replica-schema.ts --refresh-subscription
 
   # Build the web app while the backend deploys; only publishing waits for it.
   build_webapp:

@@ -24,7 +24,7 @@ import {
 import { readReplicaSchemaCatalogFromMigrations } from '../read_replicate/schema_catalog_from_migrations.ts'
 import {
   assertReadReplicaSubscriberUrlConfigured,
-  ensureReadReplicaEnvLoaded,
+  loadLocalReadReplicaEnvIfNeeded,
   readReplicaDatabaseUrlFromEnv,
 } from '../read_replicate/load_replica_env.ts'
 import {
@@ -154,16 +154,15 @@ async function main(): Promise<void> {
     await refreshSubscription()
     return
   }
-  ensureReadReplicaEnvLoaded()
-  assertReadReplicaSubscriberUrlConfigured('read-replica schema sync')
+  loadLocalReadReplicaEnvIfNeeded()
   const deadline = Date.now() + DEFAULT_SYNC_MAX_SECONDS * 1000
   const allowDrop = process.argv.includes('--allow-drop')
   console.log(
     'Building the read-replica schema catalog from local migrations through Tinbase/PGlite...',
   )
   const expected = await readReplicaSchemaCatalogFromMigrations()
-  const replicaRead = await connectGoogleReplica(deadline)
   const replica = googleDataApiClient(GOOGLE_READ_REPLICA, deadline)
+  const replicaRead = await openReplicaSchemaCatalogClient(deadline, replica)
   try {
     const actual = await readReplicaSchemaCatalog(replicaRead)
     const plan = filterReadReplicaSchemaPlanForApply(
@@ -264,9 +263,44 @@ async function main(): Promise<void> {
   }
 }
 
-async function connectGoogleReplica(deadline: number): Promise<Queryable & { close: () => Promise<void> }> {
+async function openReplicaSchemaCatalogClient(
+  deadline: number,
+  dataApi: ReadReplicaSchemaSyncClient,
+): Promise<Queryable & { close: () => Promise<void> }> {
+  const connectionString = readReplicaDatabaseUrlFromEnv()
+  if (connectionString) {
+    console.log('Reading subscriber schema catalog over direct PostgreSQL.')
+    return connectGoogleReplica(deadline, connectionString)
+  }
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    console.log(
+      'Reading subscriber schema catalog through gcloud sql execute-sql (GOOGLE_SERVICE_ACCOUNT).',
+    )
+    return googleDataApiCatalogQueryable(dataApi)
+  }
+  assertReadReplicaSubscriberUrlConfigured('read-replica schema sync')
+  throw new Error('unreachable')
+}
+
+function googleDataApiCatalogQueryable(
+  dataApi: ReadReplicaSchemaSyncClient,
+): Queryable & { close: () => Promise<void> } {
+  const query = dataApi.query
+  if (!query) {
+    throw new Error('Cloud SQL Data API client cannot read the schema catalog.')
+  }
+  return {
+    query,
+    close: async () => {},
+  }
+}
+
+async function connectGoogleReplica(
+  deadline: number,
+  connectionString: string,
+): Promise<Queryable & { close: () => Promise<void> }> {
   const client = new Client({
-    ...googleReplicaPgClientConfig(replicaConnectionString()),
+    ...googleReplicaPgClientConfig(connectionString),
     connectionTimeoutMillis: 10_000,
   })
   await client.connect()
@@ -295,18 +329,6 @@ function deadlineBoundCatalogClient(client: Queryable, deadline: number): Querya
       }
     },
   }
-}
-
-function replicaConnectionString(): string {
-  const connectionString = readReplicaDatabaseUrlFromEnv()
-
-  if (!connectionString) {
-    throw new Error(
-      'Set READ_REPLICATE_GOOGLE_EU1 to the direct Google subscriber PostgreSQL URL.',
-    )
-  }
-
-  return connectionString
 }
 
 export function preflightCompatibilityIssues(
