@@ -31,6 +31,7 @@ const env = {
   TRANSLATION_MESSAGES_QUEUE: { send: vi.fn() },
   TRANSLATION_MODEL: 'draft-model',
   TRANSLATION_REVIEW_MODEL: 'reviewer',
+  TRANSLATION_REVIEW_FALLBACK_MODEL: 'none',
 }
 let checksum: string
 const request = (clientChecksum?: string) => new Request('https://api.capgo.app/translation/messages', {
@@ -66,6 +67,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.resetAllMocks()
   beforeRun = undefined
+  env.TRANSLATION_REVIEW_FALLBACK_MODEL = 'none'
   sqlite.exec('DELETE FROM translation_messages_cache; DELETE FROM translation_memory')
   if (sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'translation_queue_cooldowns'").get())
     sqlite.exec('DELETE FROM translation_queue_cooldowns')
@@ -147,6 +149,57 @@ describe('translation queue recovery', () => {
     expect(pending().next_batch_index).toBe(1)
     expect(JSON.parse(pending().messages as string)).not.toHaveProperty('account')
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM translation_memory').get()?.count).toBe(0)
+  })
+
+  it('completes the stranded currency catalog through a fallback review after the primary is throttled', async () => {
+    env.TRANSLATION_REVIEW_FALLBACK_MODEL = '@cf/qwen/qwen3.8-27b'
+    const translations = {
+      'credits-auto-top-up-min': 'Le minimum est de 10 $.',
+      'credits-auto-top-up-threshold-invalid': 'Saisissez un montant d’au moins 10 $.',
+      'expert-service-desc': 'Aide pratique pour votre application Capacitor, facturée 250 $/heure.',
+      'channel-self-assign-home-balance': '24 680,40 $',
+    }
+    const messages = Object.fromEntries(Object.keys(sourceMessages)
+      .filter(key => key !== '$schema' && !(key in translations))
+      .map(key => [key, `fr:${key}`]))
+    sqlite.prepare('UPDATE translation_messages_cache SET messages = ?, updated_at = unixepoch() - 120').run(JSON.stringify(messages))
+    // Queue retries were exhausted. A normal poll resumes only the missing work.
+    await translationWorker.fetch(request(), env as any)
+    expect(env.TRANSLATION_MESSAGES_QUEUE.send).toHaveBeenCalledWith(expect.objectContaining({ checksum, batchIndex: 1 }), { contentType: 'json' })
+    env.AI.run.mockResolvedValueOnce({ response: JSON.stringify({ translations }) })
+      .mockRejectedValueOnce(rateLimit())
+      .mockResolvedValueOnce({ response: JSON.stringify({ translations }) })
+    const resumed = message()
+    await consume(resumed)
+    expect(env.AI.run.mock.calls.map(([model]) => model)).toEqual(['draft-model', 'reviewer', '@cf/qwen/qwen3.8-27b'])
+    expect(Object.keys(JSON.parse((env.AI.run.mock.calls[0][1] as any).messages[1].content).messages).sort()).toEqual(Object.keys(translations).sort())
+    expect(resumed.ack).toHaveBeenCalledTimes(1)
+    expect(resumed.retry).not.toHaveBeenCalled()
+    expect(pending().status).toBe('ready')
+    expect(JSON.parse(pending().messages as string)).toMatchObject(translations)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM translation_memory').get()?.count).toBe(0)
+    const payload = await (await translationWorker.fetch(request('old-checksum'), env as any)).json() as any
+    expect(payload.messages).toMatchObject(translations)
+    expect(await (await translationWorker.fetch(request(checksum), env as any)).json()).toEqual({ checksum, status: 'not_modified' })
+  })
+
+  it.each(['rate limit', 'invalid JSON'])('keeps progress pending when the fallback fails with %s', async (failure) => {
+    env.TRANSLATION_REVIEW_FALLBACK_MODEL = 'fallback'
+    env.AI.run.mockResolvedValueOnce({ response: '{"translations":{"account":"Compte","password":"Mot de passe"}}' })
+      .mockRejectedValueOnce(rateLimit())
+    if (failure === 'rate limit')
+      env.AI.run.mockRejectedValue(rateLimit())
+    else
+      env.AI.run.mockResolvedValue({ response: 'invalid' })
+    const item = message(3)
+    await consume(item)
+    expect(env.AI.run).toHaveBeenCalledTimes(3)
+    expect(item.ack).not.toHaveBeenCalled()
+    expect(item.retry.mock.calls[0][0].delaySeconds).toBeGreaterThanOrEqual(480)
+    expect(pending().status).toBe('pending')
+    expect(pending().next_batch_index).toBe(1)
+    expect(JSON.parse(pending().messages as string)).not.toHaveProperty('account')
+    expect(env.TRANSLATION_MESSAGES_QUEUE.send).not.toHaveBeenCalled()
   })
 
   it('refreshes legacy fallback catalogs while reusing their reviewed translation memory', async () => {

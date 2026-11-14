@@ -188,7 +188,7 @@ describe('translation queue helpers', () => {
         .mockResolvedValueOnce({ response: JSON.stringify({ translations: { channel: 'Canal', observe: 'Observe' } }) }),
     }
     // A review back to the English source is kept; a missing review entry keeps the draft.
-    await expect(__translationWorkerTestUtils__.translateBatch(reviewedAi, 'translator', 'fr', batch, 'reviewer'))
+    await expect(__translationWorkerTestUtils__.translateBatch(reviewedAi, 'translator', 'fr', batch, 'reviewer', 'fallback'))
       .resolves
       .toEqual({
         messages: { channel: 'Canal', observe: 'Observe', save: 'Enregistrer' },
@@ -206,9 +206,10 @@ describe('translation queue helpers', () => {
         .mockRejectedValue(new Error('review unavailable')),
     }
     // Unreviewed drafts are served but not remembered, so a later catalog change reviews them.
-    await expect(__translationWorkerTestUtils__.translateBatch(failingReviewAi, 'translator', 'fr', batch, 'reviewer'))
+    await expect(__translationWorkerTestUtils__.translateBatch(failingReviewAi, 'translator', 'fr', batch, 'reviewer', 'fallback'))
       .resolves
       .toEqual({ messages: { channel: 'Canal', save: 'Enregistrer' }, remembered: {} })
+    expect(failingReviewAi.run.mock.calls.map(([model]) => model)).toEqual(['translator', 'reviewer', 'reviewer', 'reviewer'])
   })
 
   it.concurrent('leaves invalid placeholder answers missing while retaining valid reviewed answers', async () => {
@@ -226,6 +227,58 @@ describe('translation queue helpers', () => {
     expect(__translationWorkerTestUtils__.getTranslationReviewModel({})).toBe('@cf/deepseek-ai/deepseek-v4.1-flash-1017')
     expect(__translationWorkerTestUtils__.getTranslationReviewModel({ TRANSLATION_REVIEW_MODEL: '@cf/custom/model' })).toBe('@cf/custom/model')
     expect(__translationWorkerTestUtils__.getTranslationReviewModel({ TRANSLATION_REVIEW_MODEL: 'none' })).toBeNull()
+  })
+
+  it.concurrent('accepts localized currency while preserving positional dollar placeholders', async () => {
+    const translations = {
+      'credits-auto-top-up-min': 'Le minimum est de 10 $.',
+      'credits-auto-top-up-threshold-invalid': 'Saisissez un montant d’au moins 10 $.',
+      'expert-service-desc': 'Aide pratique pour votre application Capacitor, facturée 250 $/heure.',
+      'channel-self-assign-home-balance': '24 680,40 $',
+    }
+    const batch = Object.keys(translations).map(key => [key, (sourceMessages as Record<string, string>)[key], ''] as [string, string, string])
+    const ai = { run: vi.fn().mockResolvedValue({ response: JSON.stringify({ translations }) }) }
+    await expect(__translationWorkerTestUtils__.translateBatch(ai, 'translator', 'fr', batch, 'reviewer'))
+      .resolves.toEqual({ messages: translations, remembered: translations })
+    expect(__translationWorkerTestUtils__.keepTranslation('Device: $1, channel: $2', 'Appareil, canal')).toBe('Device: $1, channel: $2')
+    expect(__translationWorkerTestUtils__.keepTranslation('Value: $10', 'Valeur')).toBe('Value: $10')
+  })
+
+  it.concurrent('uses a fallback reviewer only after a rate limit and never remembers it as the primary reviewer', async () => {
+    const ai = { run: vi.fn()
+      .mockResolvedValueOnce({ response: '{"translations":{"save":"Sauvegarder"}}' })
+      .mockRejectedValueOnce(new Error('3021: rate limiting'))
+      .mockResolvedValueOnce({ response: '{"translations":{"save":"Enregistrer"}}' }) }
+    await expect(__translationWorkerTestUtils__.translateBatch(ai, 'translator', 'fr', [['save', 'Save', '']], 'reviewer', 'fallback'))
+      .resolves.toEqual({ messages: { save: 'Enregistrer' }, remembered: {} })
+    expect(ai.run.mock.calls.map(([model]) => model)).toEqual(['translator', 'reviewer', 'fallback'])
+    expect(ai.run.mock.calls[2][1]).toEqual(__translationWorkerTestUtils__.reviewRequest('fallback', 'fr', [['save', 'Save', '']], { save: 'Sauvegarder' }))
+  })
+
+  it.concurrent('leaves entries with missing or invalid fallback reviews unfinished', async () => {
+    const ai = { run: vi.fn()
+      .mockResolvedValueOnce({ response: '{"translations":{"save":"Sauvegarder","usage":"Utilisé {count} fois"}}' })
+      .mockRejectedValueOnce(new Error('3021: rate limiting'))
+      .mockResolvedValueOnce({ response: '{"translations":{"usage":"Utilisé"}}' }) }
+    await expect(__translationWorkerTestUtils__.translateBatch(ai, 'translator', 'fr', [['save', 'Save', ''], ['usage', 'Used {count} times', '']], 'reviewer', 'fallback'))
+      .rejects.toThrow('3021')
+  })
+
+  it.concurrent('does not retry a throttled reviewer as its own fallback', async () => {
+    const ai = { run: vi.fn()
+      .mockResolvedValueOnce({ response: '{"translations":{"save":"Enregistrer"}}' })
+      .mockRejectedValue(new Error('3021: rate limiting')) }
+    await expect(__translationWorkerTestUtils__.translateBatch(ai, 'translator', 'fr', [['save', 'Save', '']], 'reviewer', 'reviewer'))
+      .rejects.toThrow('3021')
+    expect(ai.run).toHaveBeenCalledTimes(2)
+  })
+
+  it.concurrent('supports an explicit fallback model override or opt-out without invalidating existing catalogs', async () => {
+    expect(__translationWorkerTestUtils__.getTranslationReviewFallbackModel({})).toBe('@cf/qwen/qwen3.8-27b')
+    expect(__translationWorkerTestUtils__.getTranslationReviewFallbackModel({ TRANSLATION_REVIEW_FALLBACK_MODEL: 'other' })).toBe('other')
+    expect(__translationWorkerTestUtils__.getTranslationReviewFallbackModel({ TRANSLATION_REVIEW_FALLBACK_MODEL: 'none' })).toBeNull()
+    expect(await __translationWorkerTestUtils__.currentSourceChecksum({ TRANSLATION_REVIEW_FALLBACK_MODEL: 'other' }))
+      .toBe(await __translationWorkerTestUtils__.currentSourceChecksum({}))
   })
 
   it.concurrent('replaces typographic non-breaking hyphens in translations', () => {
