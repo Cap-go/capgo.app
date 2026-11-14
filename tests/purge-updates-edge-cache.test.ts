@@ -45,9 +45,9 @@ describe('/private/purge_updates_edge_cache', () => {
 
     const second = await postPurge(APPNAME)
     expect(second.status).toBe(429)
-    const secondBody = await second.json() as { error?: string, retry_after_seconds?: number }
+    const secondBody = await second.json() as { error?: string, moreInfo?: { retryAfterSeconds?: number } }
     expect(secondBody.error).toBe('purge_rate_limited')
-    expect(secondBody.retry_after_seconds).toBeGreaterThan(0)
+    expect(secondBody.moreInfo?.retryAfterSeconds).toBeGreaterThan(0)
   })
 
   it('rejects callers without app write rights', async () => {

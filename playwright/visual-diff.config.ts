@@ -927,6 +927,23 @@ export const visualDiffRoutes: VisualDiffRoute[] = [
   },
   { slug: 'app-getting-started', path: '/app/com.demo.app/getting-started', auth: true },
   {
+    slug: 'app-settings-purge-edge-cache',
+    path: '/app/com.demo.app/settings',
+    auth: true,
+    prepare: async (page) => {
+      const card = page.locator('[data-test="purge-updates-edge-cache"]')
+      try {
+        await card.waitFor({ state: 'visible', timeout: 15_000 })
+        await card.scrollIntoViewIfNeeded()
+      }
+      catch (error) {
+        if (error instanceof Error && error.name === 'TimeoutError')
+          return
+        throw error
+      }
+    },
+  },
+  {
     slug: 'app-settings',
     path: '/app/com.demo.app/settings',
     auth: true,

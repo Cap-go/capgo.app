@@ -10,6 +10,7 @@ import { toast } from 'vue-sonner'
 import ArrowDownTray from '~icons/heroicons/arrow-down-tray'
 import ArrowUpTray from '~icons/heroicons/arrow-up-tray'
 import Pencil from '~icons/heroicons/pencil-square'
+import IconRefresh from '~icons/lucide/refresh-cw'
 import IconTransfer from '~icons/mingcute/transfer-horizontal-line'
 import IconGearSix from '~icons/ph/gear-six'
 import IconName from '~icons/ph/user'
@@ -17,7 +18,6 @@ import AppSetupGuides from '~/components/dashboard/AppSetupGuides.vue'
 import FormCheckbox from '~/components/forms/FormCheckbox.vue'
 import FormField from '~/components/forms/FormField.vue'
 import Toggle from '~/components/Toggle.vue'
-import IconRefresh from '~icons/lucide/refresh-cw'
 import { invokeCapgoApi } from '~/services/capgoApi'
 import { defaultApiHost, useConsole } from '~/services/console'
 import { DEVICE_DATA_COLLECTION_KEYS, parseAppRowDeviceDataCollection } from '~/services/deviceDataCollection'
@@ -94,20 +94,20 @@ async function purgeUpdatesEdgeCache() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        authorization: `Bearer ${sessionData.session.access_token}`,
+        'authorization': `Bearer ${sessionData.session.access_token}`,
       },
       body: JSON.stringify({ app_id: props.appId }),
     })
 
     const payload = await response.json().catch(() => ({})) as {
       error?: string
-      retry_after_seconds?: number
+      moreInfo?: { retryAfterSeconds?: number }
       purged?: boolean
       queued?: boolean
     }
 
     if (response.status === 429) {
-      toast.error(t('purge-updates-edge-cache-rate-limited', { seconds: payload.retry_after_seconds ?? 60 }))
+      toast.error(t('purge-updates-edge-cache-rate-limited', { seconds: payload.moreInfo?.retryAfterSeconds ?? 60 }))
       return
     }
     if (!response.ok)

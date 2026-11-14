@@ -59,7 +59,7 @@ app.post('/', middlewareAuth, async (c) => {
   if (!claim.allowed)
     return quickError(429, 'purge_rate_limited', 'Edge cache purge is rate limited to once per minute per app', {
       app_id: appId,
-      retry_after_seconds: claim.retryAfterSeconds ?? 60,
+      retryAfterSeconds: claim.retryAfterSeconds ?? 60,
     })
 
   if (!hasPurgeTarget(c))

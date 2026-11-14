@@ -9,6 +9,8 @@ CREATE TABLE public.app_manual_updates_edge_purge (
 
 ALTER TABLE public.app_manual_updates_edge_purge OWNER TO postgres;
 
+ALTER TABLE public.app_manual_updates_edge_purge ENABLE ROW LEVEL SECURITY;
+
 CREATE POLICY "Deny all direct access"
 ON public.app_manual_updates_edge_purge
 AS RESTRICTIVE
