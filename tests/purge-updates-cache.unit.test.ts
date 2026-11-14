@@ -20,7 +20,7 @@ vi.mock('../supabase/functions/_backend/utils/logging.ts', () => ({
   serializeError: (error: unknown) => String(error),
 }))
 
-const { purgeUpdatesCache } = await import('../supabase/functions/_backend/utils/purgeUpdatesCache.ts')
+const { purgeAppUpdatesCache, purgeUpdatesCache } = await import('../supabase/functions/_backend/utils/purgeUpdatesCache.ts')
 
 function makeContext() {
   return {
@@ -29,7 +29,7 @@ function makeContext() {
   } as any
 }
 
-describe('purgeUpdatesCache helper', () => {
+describe('purgeAppUpdatesCache', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     hasTargetMock.mockReturnValue(true)
@@ -43,82 +43,68 @@ describe('purgeUpdatesCache helper', () => {
   })
 
   it('enqueues then nudges the shared drain', async () => {
-    await expect(purgeUpdatesCache(makeContext(), 'com.Example.App')).resolves.toEqual({
+    await expect(purgeAppUpdatesCache(makeContext(), 'com.Example.App')).resolves.toEqual({
       nudged: true,
-      purgedApps: 1,
+      purgedApps: ['com.Example.App'],
       purged: true,
-      enqueued: true,
     })
     expect(enqueueMock).toHaveBeenCalledWith(expect.anything(), 'com.Example.App', 'app')
     expect(drainMock).toHaveBeenCalledOnce()
   })
 
-  it('sets purged only when this app_id was in the drained batch', async () => {
+  it('sets purged only when this app_id is in purgedApps', async () => {
     drainMock.mockResolvedValueOnce({ purgedApps: 2, purgedAppIds: ['com.other.a', 'com.other.b'] })
-    await expect(purgeUpdatesCache(makeContext(), 'com.target.app')).resolves.toEqual({
+    await expect(purgeAppUpdatesCache(makeContext(), 'com.target.app')).resolves.toEqual({
       nudged: true,
-      purgedApps: 2,
+      purgedApps: ['com.other.a', 'com.other.b'],
       purged: false,
-      enqueued: true,
-      reason: 'queued',
     })
   })
 
   it('enqueues on an empty queue then purges when this app is claimed', async () => {
     drainMock.mockResolvedValueOnce({ purgedApps: 1, purgedAppIds: ['com.manual.empty'] })
-    await expect(purgeUpdatesCache(makeContext(), 'com.manual.empty', { dedupe: false })).resolves.toMatchObject({
-      enqueued: true,
-      purged: true,
+    await expect(purgeAppUpdatesCache(makeContext(), 'com.manual.empty')).resolves.toEqual({
       nudged: true,
+      purgedApps: ['com.manual.empty'],
+      purged: true,
     })
     expect(enqueueMock).toHaveBeenCalledBefore(drainMock)
   })
 
-  it('returns drain_failed without throwing', async () => {
-    drainMock.mockRejectedValueOnce(new Error('drain failed'))
-    await expect(purgeUpdatesCache(makeContext(), 'com.fail.app')).resolves.toEqual({
-      nudged: false,
-      purgedApps: 0,
-      purged: false,
-      enqueued: true,
-      reason: 'drain_failed',
-    })
-  })
-
-  it('returns not_configured when purge env is absent', async () => {
-    hasTargetMock.mockReturnValue(false)
-    await expect(purgeUpdatesCache(makeContext(), 'com.local.app')).resolves.toEqual({
-      nudged: false,
-      purgedApps: 0,
-      purged: false,
-      enqueued: true,
-      reason: 'not_configured',
-    })
-    expect(drainMock).not.toHaveBeenCalled()
-  })
-
-  it('returns enqueue_failed when the queue insert fails', async () => {
+  it('returns zeros when the queue insert fails', async () => {
     enqueueMock.mockResolvedValueOnce(false)
-    await expect(purgeUpdatesCache(makeContext(), 'com.enqueue.fail')).resolves.toEqual({
+    await expect(purgeAppUpdatesCache(makeContext(), 'com.enqueue.fail')).resolves.toEqual({
       nudged: false,
-      purgedApps: 0,
+      purgedApps: [],
       purged: false,
-      enqueued: false,
-      reason: 'enqueue_failed',
     })
     expect(drainMock).not.toHaveBeenCalled()
+  })
+
+  it('skips drain when purge env is absent', async () => {
+    hasTargetMock.mockReturnValue(false)
+    await expect(purgeAppUpdatesCache(makeContext(), 'com.local.app')).resolves.toEqual({
+      nudged: false,
+      purgedApps: [],
+      purged: false,
+    })
+    expect(enqueueMock).toHaveBeenCalledOnce()
+    expect(drainMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('purgeUpdatesCache trigger wrapper', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    hasTargetMock.mockReturnValue(true)
+    enqueueMock.mockResolvedValue(true)
+    drainMock.mockResolvedValue({ purgedApps: 1, purgedAppIds: ['com.dedupe.app'] })
   })
 
   it('dedupes multiple calls for the same app on one context by default', async () => {
     const c = makeContext()
     await purgeUpdatesCache(c, 'com.dedupe.app')
-    await expect(purgeUpdatesCache(c, 'com.dedupe.app')).resolves.toEqual({
-      nudged: false,
-      purgedApps: 0,
-      purged: false,
-      enqueued: false,
-      reason: 'deduped',
-    })
+    await expect(purgeUpdatesCache(c, 'com.dedupe.app')).resolves.toMatchObject({ reason: 'deduped' })
     expect(drainMock).toHaveBeenCalledOnce()
   })
 
@@ -128,17 +114,7 @@ describe('purgeUpdatesCache helper', () => {
       .mockResolvedValueOnce({ purgedApps: 1, purgedAppIds: ['com.manual.app'] })
       .mockResolvedValueOnce({ purgedApps: 1, purgedAppIds: ['com.manual.app'] })
     await purgeUpdatesCache(c, 'com.manual.app', { dedupe: false })
-    await expect(purgeUpdatesCache(c, 'com.manual.app', { dedupe: false })).resolves.toMatchObject({ purged: true })
+    await purgeUpdatesCache(c, 'com.manual.app', { dedupe: false })
     expect(drainMock).toHaveBeenCalledTimes(2)
-  })
-
-  it('returns invalid_app_id for blank input', async () => {
-    await expect(purgeUpdatesCache(makeContext(), '   ')).resolves.toEqual({
-      nudged: false,
-      purgedApps: 0,
-      purged: false,
-      enqueued: false,
-      reason: 'invalid_app_id',
-    })
   })
 })

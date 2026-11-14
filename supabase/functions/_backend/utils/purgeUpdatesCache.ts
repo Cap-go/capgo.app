@@ -4,6 +4,13 @@ import { cloudlog, cloudlogErr, serializeError } from './logging.ts'
 
 const DEDUPE_KEY = Symbol('purgeUpdatesCache.dedupe')
 
+/** Stable console and API contract (bc-e3173a70). */
+export type PurgeAppUpdatesCacheResult = {
+  nudged: boolean
+  purgedApps: string[]
+  purged: boolean
+}
+
 export type PurgeUpdatesCacheOptions = {
   /**
    * When true (default), allow at most one nudge per app_id on this Hono context.
@@ -12,13 +19,7 @@ export type PurgeUpdatesCacheOptions = {
   dedupe?: boolean
 }
 
-export type PurgeUpdatesCacheResult = {
-  /** A drain attempt ran in this runtime (may have claimed zero apps). */
-  nudged: boolean
-  /** Apps successfully purged in this drain call (any app_id). */
-  purgedApps: number
-  /** True only when this app_id was in a successfully purged claim batch in this call. */
-  purged: boolean
+export type PurgeUpdatesCacheResult = PurgeAppUpdatesCacheResult & {
   /** This app_id was inserted into updates_cache_purge_pending before the nudge. */
   enqueued: boolean
   reason?: 'invalid_app_id' | 'deduped' | 'not_configured' | 'enqueue_failed' | 'drain_failed' | 'queued'
@@ -43,53 +44,61 @@ function shouldPurgeAppForContext(c: Context, appId: string) {
 }
 
 /**
- * Shared entry point to refresh the plugin /updates edge cache for one app
- * (Cloudflare Cache-Tag capgo-updates-<app_id>). Used from change triggers and
- * from manual console actions. Enqueues the app tag on updates_cache_purge_pending,
- * then nudges the throttled shared drain (claim, purgeUpdatesCacheTags, ack).
+ * Shared entry point for one app's capgo-updates-<app_id> edge cache purge.
+ * Enqueues on updates_cache_purge_pending, then nudges the throttled drain.
  * Never throws.
  */
+export async function purgeAppUpdatesCache(c: Context, appId: string): Promise<PurgeAppUpdatesCacheResult> {
+  const trimmed = appId?.trim()
+  if (!trimmed)
+    return { nudged: false, purgedApps: [], purged: false }
+
+  const enqueued = await enqueueUpdatesEdgeCachePurge(c, trimmed, 'app')
+  if (!enqueued)
+    return { nudged: false, purgedApps: [], purged: false }
+
+  if (!hasPurgeTarget(c)) {
+    cloudlog({ requestId: c.get('requestId'), message: 'purgeAppUpdatesCache skipped drain (not configured)', appId: trimmed })
+    return { nudged: false, purgedApps: [], purged: false }
+  }
+
+  try {
+    const { purgedAppIds } = await nudgeUpdatesCachePurgeDrain(c)
+    const purged = purgedAppIds.includes(trimmed)
+    cloudlog({
+      requestId: c.get('requestId'),
+      message: 'purgeAppUpdatesCache drain nudged',
+      appId: trimmed,
+      purged,
+      purgedAppIds,
+    })
+    return { nudged: true, purgedApps: purgedAppIds, purged }
+  }
+  catch (error) {
+    cloudlogErr({ requestId: c.get('requestId'), message: 'purgeAppUpdatesCache error', appId: trimmed, error: serializeError(error) })
+    return { nudged: false, purgedApps: [], purged: false }
+  }
+}
+
+/** Trigger helper: per-request dedupe on top of purgeAppUpdatesCache. */
 export async function purgeUpdatesCache(
   c: Context,
   appId: string,
   options: PurgeUpdatesCacheOptions = {},
 ): Promise<PurgeUpdatesCacheResult> {
   const trimmed = appId?.trim()
-  if (!trimmed) {
-    return { nudged: false, purgedApps: 0, purged: false, enqueued: false, reason: 'invalid_app_id' }
-  }
+  if (!trimmed)
+    return { nudged: false, purgedApps: [], purged: false, enqueued: false, reason: 'invalid_app_id' }
 
-  if (options.dedupe !== false && !shouldPurgeAppForContext(c, trimmed)) {
-    return { nudged: false, purgedApps: 0, purged: false, enqueued: false, reason: 'deduped' }
-  }
+  if (options.dedupe !== false && !shouldPurgeAppForContext(c, trimmed))
+    return { nudged: false, purgedApps: [], purged: false, enqueued: false, reason: 'deduped' }
 
-  const enqueued = await enqueueUpdatesEdgeCachePurge(c, trimmed, 'app')
-  if (!enqueued) {
-    return { nudged: false, purgedApps: 0, purged: false, enqueued: false, reason: 'enqueue_failed' }
-  }
-
-  if (!hasPurgeTarget(c)) {
-    cloudlog({ requestId: c.get('requestId'), message: 'purgeUpdatesCache skipped drain (not configured)', appId: trimmed })
-    return { nudged: false, purgedApps: 0, purged: false, enqueued: true, reason: 'not_configured' }
-  }
-
-  try {
-    const { purgedApps, purgedAppIds } = await nudgeUpdatesCachePurgeDrain(c)
-    const purged = purgedAppIds.includes(trimmed)
-    cloudlog({
-      requestId: c.get('requestId'),
-      message: 'purgeUpdatesCache drain nudged',
-      appId: trimmed,
-      purgedApps,
-      purged,
-      purgedAppIds,
-    })
-    if (purged)
-      return { nudged: true, purgedApps, purged, enqueued: true }
-    return { nudged: true, purgedApps, purged: false, enqueued: true, reason: 'queued' }
-  }
-  catch (error) {
-    cloudlogErr({ requestId: c.get('requestId'), message: 'purgeUpdatesCache error', appId: trimmed, error: serializeError(error) })
-    return { nudged: false, purgedApps: 0, purged: false, enqueued: true, reason: 'drain_failed' }
-  }
+  const core = await purgeAppUpdatesCache(c, trimmed)
+  if (!core.nudged && !core.purged && core.purgedApps.length === 0 && !hasPurgeTarget(c))
+    return { ...core, enqueued: true, reason: 'not_configured' }
+  if (!core.nudged && !core.purged && core.purgedApps.length === 0)
+    return { ...core, enqueued: false, reason: 'enqueue_failed' }
+  if (core.nudged && !core.purged)
+    return { ...core, enqueued: true, reason: 'queued' }
+  return { ...core, enqueued: true }
 }
